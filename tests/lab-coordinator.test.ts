@@ -384,6 +384,7 @@ await test('the tools reach nothing that assigns, stops, starts, asks, plans, or
       'verifold_board',
       'verifold_thread',
       'verifold_brief',
+      'verifold_story',
       'verifold_notice',
       'verifold_answer',
     ],
@@ -1382,16 +1383,34 @@ await test('what a session changes itself counts as seen: a quiet lab gets one u
     ],
   });
   await lab.endTurn();
+  // The close brings the thread's story, and that session gives no brief.
+  await lab.tick();
+  assert.equal(lab.started.length, 3);
+  assert.match(lab.started[2]?.input.prompt ?? '', /Give no brief\./);
+  await lab.call('verifold_story', {
+    thread: id,
+    lines: [{ kind: 'outcome', plain: 'It does.', posts: [post.id] }],
+  });
+  await lab.endTurn();
+  await lab.tick();
+  await lab.call('verifold_line_check', {
+    lines: lab.store.pending().map((entry) => ({
+      id: entry.id,
+      claims: [{ claim: 'It does.', verdict: 'supported' }],
+      dropped: [],
+    })),
+  });
+  await lab.endTurn();
   for (let turn = 0; turn < 3; turn++) await lab.tick();
-  assert.equal(lab.started.length, 2);
+  assert.equal(lab.started.length, 4);
   // A restart reads the same state.
   lab.coordinator.loaded();
   await lab.tick();
-  assert.equal(lab.started.length, 2);
+  assert.equal(lab.started.length, 4);
   // Someone else's change still counts.
   lab.directions[0] = direction('d-1', 'leading');
   await lab.tick();
-  assert.equal(lab.started.length, 3);
+  assert.equal(lab.started.length, 5);
 });
 
 await test('a lab whose paths the deny rules cannot express keeps no plain words: quotes only, with one note', async (t) => {
@@ -1490,7 +1509,9 @@ await test('the snapshot keeps the first lines of a brief, tests numbers again, 
       [null, 'withheld'],
     ],
   );
-  assert.equal(brief?.lines[3]?.quote, 'It reached 64.5%. (p-1)');
+  assert.deepEqual(brief?.lines[3]?.quotes, [
+    { post: 'p-1', text: 'It reached 64.5%.' },
+  ]);
 });
 
 await test('a slot session ends on an exit that leaves it paused, on its limits, and with no call back from end', async (t) => {
@@ -1974,10 +1995,9 @@ await test('plain words reach the wire only once they passed, and never an agent
   assert.equal(brief.ok, true, brief.text);
   let wire = await whole.wire();
   assert.equal(wire.brief?.lines[0]?.plain, null);
-  assert.equal(
-    wire.brief?.lines[0]?.quote,
-    `Seed 2 reached 64.5%. Which seed comes next? (${id})`,
-  );
+  assert.deepEqual(wire.brief?.lines[0]?.quotes, [
+    { post: id, text: 'Seed 2 reached 64.5%. Which seed comes next?' },
+  ]);
   assert.equal(
     wire.brief?.lines[0]?.evidence,
     "One agent's post. No check yet.",
@@ -2226,7 +2246,7 @@ await test('a project path that deny rules cannot express keeps no plain words, 
   const line = (await whole.wire()).brief?.lines[0];
   assert.equal(line?.plain, null);
   assert.equal(line?.check.state, 'withheld');
-  assert.ok(line?.quote);
+  assert.ok(line?.quotes.length);
 });
 
 await test('the reserved place holds one session, with no built-in tools, in the folder that a session record accepts', async (t) => {

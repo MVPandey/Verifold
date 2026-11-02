@@ -12,6 +12,7 @@ import {
   type HistoryTask,
   type HistoryTurns,
   type PostThread,
+  type ThreadPage,
   type RunDetail,
   type Snapshot,
   type TurnDetail,
@@ -116,6 +117,9 @@ export const paths = {
     `/api/v1/directions/${encodeURIComponent(direction)}/bring/diff?${new URLSearchParams({ file, commit }).toString()}`,
   /** A post and the replies below it. */
   thread: (post: string): string => `/api/v1/posts/${encodeURIComponent(post)}`,
+  /** A thread with its story and its newest posts, or the posts before one. */
+  threadPage: (thread: string, before?: string): string =>
+    `/api/v1/threads/${encodeURIComponent(thread)}${before ? `?before=${encodeURIComponent(before)}` : ''}`,
   /** The figure that a post cites, such as p-12.0, as the post pinned it. */
   figure: (proof: string): string =>
     `/api/v1/figures/${encodeURIComponent(proof)}`,
@@ -208,6 +212,16 @@ export function isPostThread(value: unknown): value is PostThread {
     object(value) &&
     Array.isArray(value.posts) &&
     value.posts.length > 0 &&
+    typeof value.more === 'boolean'
+  );
+}
+
+export function isThreadPage(value: unknown): value is ThreadPage {
+  return (
+    object(value) &&
+    object(value.thread) &&
+    typeof value.thread.id === 'string' &&
+    Array.isArray(value.posts) &&
     typeof value.more === 'boolean'
   );
 }

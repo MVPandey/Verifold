@@ -7,10 +7,11 @@
 import type { Post as BoardPost } from '../core/board.ts';
 import {
   briefTop,
+  briefTopIds,
   evidenceLabel,
   evidencePosts,
   plainNumbersMatch,
-  quoteOf,
+  quotesOf,
 } from '../core/lab/brief.ts';
 import type { BriefLine as StoredLine, LabView } from '../core/lab/schema.ts';
 import type {
@@ -19,6 +20,7 @@ import type {
   LabList,
   Notice,
   Question,
+  ThreadStory,
 } from '../protocol/api.ts';
 
 /** A line as the wire has it. */
@@ -38,8 +40,9 @@ function lineItem(
     kind: line.kind,
     at: line.at,
     plain: state === 'passed' ? line.plain : null,
-    quote: quoteOf(cited),
+    quotes: quotesOf(cited),
     posts: [...line.posts],
+    thread: cited.find((post) => post.thread)?.thread ?? null,
     evidence: evidenceLabel(evidencePosts(cited, view.posts), view.checks),
     check: { state, by, sameHarness },
   };
@@ -61,14 +64,16 @@ export function briefItems(
   const stored = view.brief;
   if (!stored) return { brief: null, notices: [], questions: [] };
   const posts = new Map(view.posts.map((post) => [post.id, post]));
+  const records = {
+    directions: view.state.directions,
+    calls: view.state.calls,
+    runs: view.ledger,
+  };
   return {
     brief: {
       at: stored.brief?.at ?? null,
-      top: briefTop({
-        directions: view.state.directions,
-        calls: view.state.calls,
-        runs: view.ledger,
-      }),
+      top: briefTop(records),
+      topIds: briefTopIds(records),
       lines: keep(stored.brief?.lines ?? [], 'briefLines', false).map((line) =>
         lineItem(line, view, posts),
       ),
@@ -87,5 +92,27 @@ export function briefItems(
       state: question.state,
       answer: question.answer ? lineItem(question.answer, view, posts) : null,
     })),
+  };
+}
+
+/** A thread's story on the wire, or null when it has none. A line shows who wrote its first cited post. */
+export function storyItem(view: LabView, thread: string): ThreadStory | null {
+  const stored = view.brief?.stories.find((story) => story.thread === thread);
+  if (!stored) return null;
+  const posts = new Map(view.posts.map((post) => [post.id, post]));
+  return {
+    at: stored.at,
+    posts: [...stored.posts],
+    outcome: stored.outcome,
+    lines: stored.lines.map((line) => {
+      const first = posts.get(line.posts[0] ?? '');
+      const author = first?.author ?? 'verifold';
+      return {
+        ...lineItem(line, view, posts),
+        author,
+        handle: view.handles[author] ?? null,
+        harness: first?.harness ?? null,
+      };
+    }),
   };
 }

@@ -614,6 +614,9 @@ async function labAction(
     case 'lab-ask':
       await lab.askCoordinator(body.text);
       return 200;
+    case 'lab-story':
+      await lab.wantStory(body.thread);
+      return 200;
     case 'lab-budget':
       await lab.extend(body.hours);
       return 200;
@@ -623,6 +626,7 @@ async function labAction(
         kind: body.kind,
         direction: body.direction,
         replyTo: body.replyTo,
+        thread: body.thread,
       });
       return 200;
     case 'lab-direction-add':

@@ -172,9 +172,13 @@ export const longShotLimits = {
  * at once", in one place of their own, so these bounds hold at any lab size.
  */
 export const briefLimits = {
-  /** Sessions in one hour of the lab's clock. */
+  /**
+   * Sessions in one hour of the lab's clock: at most 20, with the questions.
+   * Stories have their own budget, so they never use an update of the brief.
+   */
   updatesPerHour: 4,
   checksPerHour: 6,
+  storiesPerHour: 4,
   /** Questions of the person, which can each start a session. */
   questionsPerHour: 6,
   /** Turns and minutes of one session. */
@@ -187,9 +191,13 @@ export const briefLimits = {
   /** Newest posts in a session's first prompt, and characters of each. */
   promptPosts: 120,
   promptPost: 1000,
-  /** Lines of one brief, and posts that one line cites. */
+  /** Lines of one brief or story, and posts that one line cites. */
   lines: 12,
   linePosts: 6,
+  /** Stories that a lab keeps, threads that one session tells, and posts of each that its prompt holds. */
+  stories: 500,
+  storiesPerSession: 2,
+  storyPosts: 40,
   /** Characters of a plain line, of the person's question, and of an answer. */
   plain: 400,
   question: 500,
@@ -206,6 +214,9 @@ export const briefLimits = {
 
 /** What a line of a brief is about. */
 export const briefKinds = ['decided', 'failed', 'held', 'open', 'new'] as const;
+
+/** What a line of a thread's story is: a step of how it got there, its outcome, or a later fact. */
+export const storyKinds = ['step', 'outcome', 'later'] as const;
 
 /** What the Coordinator can tell agents, and nothing more. */
 export const noticeKinds = ['overlap', 'missing-answer', 'no-search'] as const;
@@ -414,7 +425,7 @@ Proof is a file or a figure in your folder, a diff of paths that you changed, or
   {
     name: 'verifold_status',
     description:
-      'Set your line on the home page: what you do now, why, and what comes next. This is not a post. It replaces your last line and wakes no one. Use it for progress.',
+      'Set your line on the home page: what you do now, why, and what comes next. The person reads this line, so write each field in one plain sentence, with no internal IDs. This is not a post. It replaces your last line and wakes no one. Use it for progress.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1024,6 +1035,33 @@ export const labCoordinatorToolSpecs: readonly AgentTool[] = [
     },
   },
   {
+    name: 'verifold_story',
+    description: `Tell how one thread went, for the person, in up to ${briefLimits.lines} plain lines, oldest first. step: one step of how it got there. outcome: what the thread ended with, and who disagreed. later: a fact after the outcome that changes it. Each line cites the posts that it rests on. A line can cite a post of another thread. Verifold quotes those posts and has a second session check each line. A new call for a thread replaces its last story.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        thread: threadIdSchema,
+        lines: {
+          type: 'array',
+          minItems: 1,
+          maxItems: briefLimits.lines,
+          items: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', enum: storyKinds },
+              plain: { type: 'string', maxLength: briefLimits.plain },
+              posts: citedPosts,
+            },
+            required: ['kind', 'plain', 'posts'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['thread', 'lines'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'verifold_notice',
     description: `Tell agents what the record shows, in their next turn. It wakes no one. You give a kind and posts, and Verifold writes the words. overlap: two or more posts of different agents may cover the same work. missing-answer: an ask or an objection has no answer yet. no-search: a post shows "No search yet". A notice states the record and suggests no work. A lab sends at most ${briefLimits.noticesPerHour} notices in an hour.`,
     inputSchema: {
@@ -1167,7 +1205,7 @@ const factsSchema = {
 /** A call for the person: cost, scope, access, or go, with options, a pick, and an undo window. */
 export const askPersonToolSpec: AgentTool = {
   name: 'verifold_ask_person',
-  description: `Ask the person for a call that only they make: cost (money, such as a GPU pod or more lab hours), scope (open or stop a direction, or, before the plan of record, a choice that changes the plan), access (network for your shell, or GPU pods), or go (more time for the lab). Never ask the person to settle a technical question: post an objection on the board, and a check settles it. Give 2 to 4 options, each with its dollars and minutes when you know them, and an effect that Verifold applies when the person picks it. pod goes with cost, podsAtOnce with cost, hours with cost or go, direction with scope, and domains with access. An option without an effect changes no setting: the person's pick only tells you their choice, and Verifold says so to the person. When an option promises a change, give it the effect that makes the change. A scope call before the plan has no effects: the plan opens the directions. pick is the option that you advise, and why says why. facts lists the facts behind the call that change over time, each with its source and the source's date. The person's answer applies at once, and they can undo it within undoMinutes (default 10). The person can also answer in their own words instead of an option: then no option applies, and their words are the decision. When another agent's open call asks for the same thing (the same kind and need, or the same effects), your call joins it, and its answer reaches you too. Verifold wakes you with the answer. At most ${callLimits.open} calls wait for the person at once.`,
+  description: `Write the call for the person, in plain words, with no internal IDs: the person decides on your exact words. Ask the person for a call that only they make: cost (money, such as a GPU pod or more lab hours), scope (open or stop a direction, or, before the plan of record, a choice that changes the plan), access (network for your shell, or GPU pods), or go (more time for the lab). Never ask the person to settle a technical question: post an objection on the board, and a check settles it. Give 2 to 4 options, each with its dollars and minutes when you know them, and an effect that Verifold applies when the person picks it. pod goes with cost, podsAtOnce with cost, hours with cost or go, direction with scope, and domains with access. An option without an effect changes no setting: the person's pick only tells you their choice, and Verifold says so to the person. When an option promises a change, give it the effect that makes the change. A scope call before the plan has no effects: the plan opens the directions. pick is the option that you advise, and why says why. facts lists the facts behind the call that change over time, each with its source and the source's date. The person's answer applies at once, and they can undo it within undoMinutes (default 10). The person can also answer in their own words instead of an option: then no option applies, and their words are the decision. When another agent's open call asks for the same thing (the same kind and need, or the same effects), your call joins it, and its answer reaches you too. Verifold wakes you with the answer. At most ${callLimits.open} calls wait for the person at once.`,
   inputSchema: {
     type: 'object',
     properties: {

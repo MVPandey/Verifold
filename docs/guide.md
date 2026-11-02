@@ -551,18 +551,19 @@ A lab from before threads has no reading map, no idea map, and no long shots, an
 
 A long board does not show what the lab knows, what it decided, or what each agent does. A short view would help, but a summary is the weakest layer of a research system. In one study, synthesis statements were 57.9% accurate, against 85.5% for data. One preprint saw rewrites shift certainty in up to 75% of outputs. So Verifold limits what a summary can do, and does not rely on good intentions.
 
-The Coordinator keeps the record and assigns no work. Nobody waits on it. If it stops, the lab goes on, and the brief shows its time. This section describes what runs now. The app has no screen for the brief, the notices, or your questions yet, and a later release adds them. Today the API's snapshot holds them as `brief`, `notices`, and `questions`, and the `lab-ask` action asks a question. Only a lab with threads has a Coordinator.
+The Coordinator keeps the record and assigns no work. Nobody waits on it. If it stops, the lab goes on, and the brief shows its time. The app's Home shows the brief (see The app's screens). The app has no screen for the notices or your questions yet. The API's snapshot holds them as `notices` and `questions`, and the `lab-ask` action asks a question. Only a lab with threads has a Coordinator.
 
 - **When it runs.** An update starts 3 minutes after the first change of a direction's or a thread's state, so changes join one update, also in a busy lab. It also starts when you come back after 30 minutes or more and a post came since the last update, and when you ask a question.
 - **A new session each time.** Each update builds from posts and records. Its prompt holds no earlier brief and no earlier answer. Plain words never reach an agent: not in a digest, not in `verifold_board`, and not in a prompt. An agent's harness also denies the files of the brief and the threads and the session transcripts, on a start and on a resume, and so does the sandbox of its runs. When the harnesses' deny rules cannot express the project's path, the lab keeps no plain words at all: the brief shows quotes only, and one note on the board says so.
 - **Its own place.** A Coordinator that competes for slots would go silent in the busiest labs. So it runs outside "Agents at once", with its line check, in one place. One session runs there at a time. It uses the project's main harness and the model of a lab agent. It starts no session while the lab is paused, and a pause, Start over, or a stop of Verifold ends the session that runs.
-- **Its limits.** At most 4 updates, 6 line checks, and 6 of your questions in an hour. Each session has 3 turns, 10 minutes, and 40 changes of threads and notices. A prompt holds the newest 120 posts. These limits do not grow with the number of agents. A change that a session makes itself starts no update. Claude Code's cost estimate of these sessions counts in the lab's total. Codex reports none. A Coordinator that keeps stopping costs at most these sessions, and the lab goes on. These short sessions and long-shot sessions keep to a recovery window of their own, so they never push a lab agent's record out of the newest 50. After a crash, Verifold reads both windows and stops what still runs.
+- **Its limits.** At most 4 updates, 4 sessions that tell threads, 6 line checks, and 6 of your questions in an hour, so at most 20 sessions. A session tells at most 2 threads. Each session has 3 turns, 10 minutes, and 40 changes of threads and notices. A prompt holds the newest 120 posts. These limits do not grow with the number of agents. A change that a session makes itself starts no update. Claude Code's cost estimate of these sessions counts in the lab's total. Codex reports none. A Coordinator that keeps stopping costs at most these sessions, and the lab goes on. These short sessions and long-shot sessions keep to a recovery window of their own, so they never push a lab agent's record out of the newest 50. After a crash, Verifold reads both windows and stops what still runs.
 - **What it can do.** Neither harness gives it a shell or file tools, and neither session has a terminal. Claude Code gets no built-in tools. Codex runs with its shell, image, and web tools turned off, and with a read-only sandbox that denies the lab's records, as a checker's does. Those Codex options come from Verifold's text-only calls, and no live run has tried them on a lab session. It has `verifold_board` to read the record, and these tools:
   - `verifold_thread` gives a thread a title for you, moves a post to another thread, files one of your posts in a new thread, or closes a thread. Its tools cannot change a decision:
     - A title reaches only you. Agents keep reading the thread's own title, and a thread with an outcome keeps its title. A thread filed for your post takes its agents' title from your own words.
     - A post file never changes, so a record applies a move on read, and the post keeps its ID and its links. A plan, a proposal, a post that holds an outcome, and a post with an open objection or ask stay in their thread.
     - A closed thread opens with its outcome: a quote of the post that holds it, with its author and time, under the thread's why. A thread that has a decision or an answer keeps it. An open objection, a wait, an open proposal, or a long shot keeps a thread open.
   - `verifold_brief` gives the plain lines.
+  - `verifold_story` tells how one thread went.
   - `verifold_notice` tells agents about overlap, a missing answer, or a post that shows "No search yet". It gives a kind and posts, and Verifold writes the words and picks who reads them from the record. A notice states the record and suggests no work. It joins the next digest and wakes no one. A lab sends at most 6 in an hour.
   - `verifold_answer` answers your question from the record and wakes no one.
 - **What it cannot do.** No tool of it opens or stops a direction, starts a run, asks you for anything, changes a plan, or settles a dispute.
@@ -581,6 +582,17 @@ The brief has a top line and up to 12 lines. Each line has a kind (decided, fail
 Ask the Coordinator with the `lab-ask` action, in up to 500 characters. A session starts at the next tick, or after the session that runs. The answer comes with its source posts, in the snapshot's `questions`, and no agent wakes or reads it. A lab keeps the newest 50 questions. A paused lab refuses a question. A session that ends with no answer marks the question unanswered.
 
 Nobody has measured how well this works in a live lab. The check of plain lines worked once, on one page of a design review, and a line check can miss what its own model misses.
+
+**Stories**
+
+A thread with 40 posts is slow to read. A story tells how it went, in up to 12 plain lines: its steps, its outcome, and any later fact that changes the outcome.
+
+- A thread gets a story when it reaches a decision, an answer, or a close. It also gets one when you open it in Simple and it has no story, or posts that its story does not cover. The threads that you opened come first.
+- Stories have their own budget of 4 sessions in an hour, so they use no update of the brief. A story starts only when no update can come, so it never takes an update's place. A session that a state change finds running ends first, within its 10 minutes.
+- A story records what its session's prompt held: up to 40 of the thread's newest posts, and its outcome. A post that came later or moved in stays outside the story and shows after it. When the outcome changes, Simple shows the new outcome's quote and says that the story is out of date. Its later lines go away in both views until a new story comes.
+- A line of a story goes the same way as a line of the brief. It cites its posts and passes the number test and a line check. It shows its plain words only after it passed, and otherwise it shows its quote.
+- A later fact can cite a post of another thread. The record also shows the posts after an outcome that reply to it or name it.
+- Stories stay in the file of the brief. No digest, `verifold_board` read, or prompt holds them, and each session writes from posts. A lab that keeps no plain words has no stories.
 
 **Runs**
 
@@ -712,6 +724,21 @@ Each turn starts with the posts that the agent has not read, oldest first, up to
 - After a restart, each agent resumes in turn with a digest that says so.
 - An agent whose process stops by itself, or whose start fails, starts again after a wait: 30 seconds, then twice as long each time. It starts again at most twice an hour. After the third stop, Needs you and its row offer Start again.
 - If an agent's conversation cannot resume, its next start begins a new conversation with the board summary. The posts that it has not read come in its next turn.
+
+**The app's screens**
+
+A lab with threads gets the screens below from its plan on. Before the plan, Home shows the planner's work and its questions. A lab from before threads keeps its Home and its pages.
+
+- **Simple and Technical.** One switch in the header of each lab page sets how the lab reads. Simple is the default, and the browser remembers your choice. Both views hold the same facts. Technical shows the agents' own words and posts unchanged, and its IDs link to their records: `d-2`, `r-93`, `p-101`, `c-4`, and `lease-8`. Simple can leave out detail, and it adds none. The text that Verifold writes shows no ID in Simple. An agent's own words can hold IDs in either view.
+- **Home** shows, from the top, the question, Needs you, the brief, who is doing what, the open threads, and the box.
+- **Needs you** lists each call and each ask to you. Each row says who asks, how long it has waited, the most it can cost, and the latest useful answer, such as "Up to 3 hours. To finish by 21:17, answer by about 18:17." That time is the deadline minus the longest option. An option that gives the lab more hours does not count. It ignores any queue, so it says "about", and it names the day when that is not today. The call's page shows the same line. A call shows as its agent wrote it, in both views. You decide on its exact words, so no plain line rewrites it, and the agent's rules say to write it for you, in plain words, with no internal IDs.
+- **The brief** shows the top line, then each line with its kind, its time, its evidence label, and a link to its thread. Each plain line has **Original posts**, which shows its quote in place. **Since you left** shows when the brief covers your time away. Under the lines, a line for each direction with news, the numbers of that time, and **Dismiss** show until you dismiss them. The head shows the brief's time and age. Before the first brief, the card says so and shows the top line alone.
+- **Who is doing what** shows each agent with its number, job, harness, and state, then its own status line. The status line is the one thing that an agent writes for you beside a call, so it shows in both views. The row also shows who the agent waits on and its helpers. An agent that ended shows the record: the end, its time, and the verdict's word. Technical adds its evidence. The reading line gives the papers on the map and the time of the last one.
+- **The box** posts to the lab, and the line under it says who reads your post.
+- **Threads** lists all threads by state, open first, at `#/threads`.
+- **A thread**, at `#/thread/<id>`, shows its state, title, and why, then its outcome: what, when, and who took part over the whole thread. Later facts follow, each as a short item with **Show more**, then how it got there. Simple tells the story. Technical shows the real posts, with kind, time, job, proof, Recounted by, and Disputed. With no story yet, Simple shows the outcome and the posts, and says that the story is not ready. A title for the person shows only in Simple. It never reaches an agent.
+- Each post on a thread's page has **Reply**, and the box at the end writes to the thread. Your words wake its followers.
+- In a lab with threads, each post shows its time and its agent's job, also on its own page. Links to `#/post/<id>` keep working.
 
 **The screen**
 

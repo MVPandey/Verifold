@@ -35,7 +35,7 @@ export interface TopRecords {
   readonly directions: readonly Pick<Direction, 'id' | 'state' | 'verdict'>[];
   readonly calls: readonly Pick<
     Call,
-    'state' | 'by' | 'direction' | 'joined'
+    'id' | 'state' | 'by' | 'direction' | 'joined'
   >[];
   readonly runs: readonly Pick<RunRecord, 'direction' | 'status'>[];
 }
@@ -53,6 +53,18 @@ const standings = {
 
 type Standing = keyof typeof standings;
 
+/** The one reading of the records that both top lines take. */
+interface TopReading {
+  /** Each direction, in the order of `standings`, with the call that it waits on. */
+  readonly rows: readonly {
+    readonly id: string;
+    readonly standing: Standing;
+    readonly call: string | null;
+  }[];
+  /** The open calls of no direction, such as Verifold's own. */
+  readonly loose: readonly string[];
+}
+
 function standingOf(
   direction: TopRecords['directions'][number],
   waiting: ReadonlySet<string | null>,
@@ -67,6 +79,34 @@ function standingOf(
   return own.length ? 'ran' : 'unrun';
 }
 
+function readTop(records: TopRecords): TopReading {
+  const open = records.calls.filter((call) => call.state === 'open');
+  const waiting = new Set(open.flatMap(askerDirections));
+  const order = Object.keys(standings);
+  return {
+    rows: records.directions
+      .map((direction) => {
+        const standing = standingOf(direction, waiting, records.runs);
+        return {
+          id: direction.id,
+          standing,
+          call:
+            standing === 'decision'
+              ? (open.find((call) =>
+                  askerDirections(call).includes(direction.id),
+                )?.id ?? null)
+              : null,
+        };
+      })
+      .sort((a, b) => order.indexOf(a.standing) - order.indexOf(b.standing)),
+    loose: open
+      .filter((call) =>
+        askerDirections(call).every((direction) => direction === null),
+      )
+      .map((call) => call.id),
+  };
+}
+
 /**
  * The top line of a brief, from the records of directions, calls, and runs,
  * such as "One test failed, one is running, one needs your decision, and one
@@ -74,13 +114,10 @@ function standingOf(
  * as Verifold's own, adds a sentence.
  */
 export function briefTop(records: TopRecords): string {
-  const open = records.calls.filter((call) => call.state === 'open');
-  const waiting = new Set(open.flatMap(askerDirections));
+  const { rows, loose } = readTop(records);
   const counts = new Map<Standing, number>();
-  for (const direction of records.directions) {
-    const standing = standingOf(direction, waiting, records.runs);
+  for (const { standing } of rows)
     counts.set(standing, (counts.get(standing) ?? 0) + 1);
-  }
   const parts = (Object.keys(standings) as Standing[]).flatMap((standing) => {
     const count = counts.get(standing);
     return count
@@ -94,12 +131,27 @@ export function briefTop(records: TopRecords): string {
         ...rest.map(({ count, words }) => `${numberWord(count)} ${words}`),
       ])}.`
     : 'No test has started yet.';
-  const loose = open.filter((call) =>
-    askerDirections(call).every((direction) => direction === null),
-  ).length;
-  return loose
-    ? `${line} The lab also has ${numberWord(loose)} decision${loose > 1 ? 's' : ''} for you.`
+  return loose.length
+    ? `${line} The lab also has ${numberWord(loose.length)} decision${loose.length > 1 ? 's' : ''} for you.`
     : line;
+}
+
+/**
+ * The top line with the IDs of its records, for the Technical view, such as
+ * "d-1 failed. d-4 is running. d-2 waits on c-4. c-7 waits on you." It reads
+ * what `briefTop` reads, so the two say the same.
+ */
+export function briefTopIds(records: TopRecords): string {
+  const { rows, loose } = readTop(records);
+  return (
+    [
+      ...rows.map(
+        ({ id, standing, call }) =>
+          `${id} ${call ? `waits on ${call}` : standings[standing][0]}.`,
+      ),
+      ...loose.map((call) => `${call} waits on you.`),
+    ].join(' ') || 'No test has started yet.'
+  );
 }
 
 /** What makes an update due: the states of directions and threads, as one comparable text. */
@@ -113,9 +165,11 @@ export function stateKey(
   ]);
 }
 
-/** The cited posts quoted unchanged, each with its ID. Verifold builds this, and no model touches it. */
-export function quoteOf(posts: readonly Pick<Post, 'id' | 'text'>[]): string {
-  return posts.map((post) => `${post.text} (${post.id})`).join(' ');
+/** The cited posts quoted unchanged, each apart from its ID, so a view can show the ID or leave it out and touch no agent's words. Verifold builds this, and no model touches it. */
+export function quotesOf(
+  posts: readonly Pick<Post, 'id' | 'text'>[],
+): readonly { readonly post: string; readonly text: string }[] {
+  return posts.map(({ id, text }) => ({ post: id, text }));
 }
 
 /** One number of a text. */

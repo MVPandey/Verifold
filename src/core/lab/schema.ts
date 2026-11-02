@@ -28,6 +28,7 @@ import {
   handlePattern,
   noticeKinds,
   planLimits,
+  storyKinds,
   threadLimits,
   verdicts,
 } from '../lab-tools.ts';
@@ -625,6 +626,8 @@ export interface Reading {
 
 export type BriefKind = (typeof briefKinds)[number];
 
+export type StoryKind = (typeof storyKinds)[number];
+
 export type NoticeKind = (typeof noticeKinds)[number];
 
 /**
@@ -654,7 +657,7 @@ export interface LineCheck {
 export interface BriefLine {
   /** `l-N`. */
   readonly id: string;
-  readonly kind: BriefKind | 'answer';
+  readonly kind: BriefKind | StoryKind | 'answer';
   /** The time of its newest post. */
   readonly at: string;
   readonly plain: string;
@@ -670,6 +673,17 @@ export interface BriefRecord {
   readonly key: string;
   /** The newest post then. */
   readonly through: number;
+  readonly lines: readonly BriefLine[];
+}
+
+/** How a thread went, for the person. No agent reads it. */
+export interface ThreadStory {
+  readonly thread: string;
+  readonly at: string;
+  /** The posts of the thread that its session's prompt held. A post that came later or moved in is not among them. */
+  readonly posts: readonly string[];
+  /** The post with the thread's outcome in that prompt. Null: it had none. */
+  readonly outcome: string | null;
   readonly lines: readonly BriefLine[];
 }
 
@@ -697,7 +711,7 @@ export interface Question {
 /** A session of the place, for the hourly limits. */
 export interface SessionMark {
   readonly at: string;
-  readonly kind: 'update' | 'check';
+  readonly kind: 'update' | 'check' | 'story';
 }
 
 /** What the store holds. */
@@ -705,6 +719,7 @@ export interface BriefView {
   readonly brief: BriefRecord | null;
   readonly notices: readonly Notice[];
   readonly questions: readonly Question[];
+  readonly stories: readonly ThreadStory[];
   /** Newest last. */
   readonly sessions: readonly SessionMark[];
   /** Claude Code's cost estimate of the sessions. */
