@@ -336,6 +336,10 @@ export function backLabel(under: PageRoute | null, lab: Lab): string {
       return 'Back to the answer';
     case 'post':
       return 'Back to the post';
+    case 'thread':
+      return 'Back to the thread';
+    case 'threads':
+      return 'Back to the threads';
     case 'figure':
       return 'Back to the figure';
     case 'run':

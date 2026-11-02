@@ -55,6 +55,7 @@ const direction = (
 ): TopRecords['directions'][number] => ({ id, verdict, state });
 
 const openCall = (direction: string | null): TopRecords['calls'][number] => ({
+  id: 'c-1',
   state: 'open',
   by: direction ? 'a-1' : 'verifold',
   direction,

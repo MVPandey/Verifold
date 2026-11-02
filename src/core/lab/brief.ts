@@ -35,7 +35,7 @@ export interface TopRecords {
   readonly directions: readonly Pick<Direction, 'id' | 'state' | 'verdict'>[];
   readonly calls: readonly Pick<
     Call,
-    'state' | 'by' | 'direction' | 'joined'
+    'id' | 'state' | 'by' | 'direction' | 'joined'
   >[];
   readonly runs: readonly Pick<RunRecord, 'direction' | 'status'>[];
 }
@@ -100,6 +100,31 @@ export function briefTop(records: TopRecords): string {
   return loose
     ? `${line} The lab also has ${numberWord(loose)} decision${loose > 1 ? 's' : ''} for you.`
     : line;
+}
+
+/**
+ * The top line with the IDs of its records, for the Technical view, such as
+ * "d-1 failed. d-4 is running. d-2 waits on c-4." It says what `briefTop` says,
+ * for each direction, in the same order.
+ */
+export function briefTopIds(records: TopRecords): string {
+  const open = records.calls.filter((call) => call.state === 'open');
+  const waiting = new Set(open.flatMap(askerDirections));
+  const order = Object.keys(standings);
+  const parts = records.directions
+    .map((direction) => ({
+      direction,
+      standing: standingOf(direction, waiting, records.runs),
+    }))
+    .sort((a, b) => order.indexOf(a.standing) - order.indexOf(b.standing))
+    .map(({ direction, standing }) => {
+      const call =
+        standing === 'decision'
+          ? open.find((entry) => askerDirections(entry).includes(direction.id))
+          : undefined;
+      return `${direction.id} ${call ? `waits on ${call.id}` : standings[standing][0]}.`;
+    });
+  return parts.join(' ') || 'No test has started yet.';
 }
 
 /** What makes an update due: the states of directions and threads, as one comparable text. */

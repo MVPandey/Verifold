@@ -272,7 +272,16 @@ export interface LineCheck {
 
 /** One line of a brief, or an answer of the Coordinator. */
 export interface BriefLine {
-  readonly kind: 'decided' | 'failed' | 'held' | 'open' | 'new' | 'answer';
+  readonly kind:
+    | 'decided'
+    | 'failed'
+    | 'held'
+    | 'open'
+    | 'new'
+    | 'answer'
+    | 'step'
+    | 'outcome'
+    | 'later';
   /** The time of its newest post. */
   readonly at: string;
   /** The plain words, only once they passed their check. Null: show `quote`. */
@@ -280,9 +289,29 @@ export interface BriefLine {
   /** The cited posts unchanged, each with its ID. Verifold builds it. */
   readonly quote: string;
   readonly posts: readonly string[];
+  /** The thread of its first cited post that has one. Null: none. Added after version 1. */
+  readonly thread?: string | null;
   /** How strong the record is, from the record, never from the writer. */
   readonly evidence: string;
   readonly check: LineCheck;
+}
+
+/** A line of a thread's story, with the author of its first cited post. */
+export interface StoryLine extends BriefLine {
+  /** `person`, `verifold`, or an agent ID. */
+  readonly author: string;
+  /** The agent's handle. Null for the person and Verifold. */
+  readonly handle: string | null;
+  readonly harness: Harness | null;
+}
+
+/** How a thread went, in plain lines for the person. No agent reads it. */
+export interface ThreadStory {
+  /** When the Coordinator wrote it. */
+  readonly at: string;
+  /** The thread's newest post then. Newer posts are not in the story. */
+  readonly through: string;
+  readonly lines: readonly StoryLine[];
 }
 
 /** What the lab knows, in short. */
@@ -291,6 +320,8 @@ export interface Brief {
   readonly at: string | null;
   /** The top line, from the records now. No model writes it. */
   readonly top: string;
+  /** The same line with the IDs of its records, for the Technical view. Added after version 1. */
+  readonly topIds?: string;
   readonly lines: readonly BriefLine[];
 }
 
@@ -488,6 +519,12 @@ export interface Call {
   readonly why: string;
   /** The agents that asked, the first asker first. Empty when Verifold asks. */
   readonly askers: readonly Asker[];
+  /**
+   * The latest answer that lets the longest option end by the lab's deadline.
+   * It ignores any queue, so a screen says "about". Null or absent: the lab has
+   * no deadline, or no option gives minutes. Added after version 1.
+   */
+  readonly latestAt?: string | null;
   /** Verifold asks at the end of the time budget. Only an option can answer it. */
   readonly byVerifold: boolean;
   readonly options: readonly CallOption[];
@@ -876,15 +913,26 @@ export interface Thread {
     readonly by: string;
     readonly at: string;
   }[];
+  /** Its posts. Absent: an earlier server. Added after version 1. */
+  readonly posts?: number;
+  /** Its newest post's time. Null or absent: no post yet. Added after version 1. */
+  readonly lastAt?: string | null;
 }
 
-/** `GET /api/v1/threads/:id`: a thread and its newest posts, oldest first. Added after version 1. */
+/**
+ * `GET /api/v1/threads/:id`: a thread and its newest posts, oldest first, or
+ * with `?before=<post>` the posts before that one. Added after version 1.
+ */
 export interface ThreadPage {
   readonly thread: Thread;
   /** At most 50 posts. */
   readonly posts: readonly Post[];
   /** Older posts of the thread exist. */
   readonly more: boolean;
+  /** Its story. Null: the Coordinator wrote none yet. Absent: an earlier server. */
+  readonly story?: ThreadStory | null;
+  /** Posts after the outcome that reply to it or name it, in any thread, oldest first. Absent: an earlier server. */
+  readonly later?: readonly Post[];
 }
 
 export interface BoardPage {
@@ -1673,6 +1721,12 @@ export interface ActionBodies {
    * in the snapshot's `questions`. It wakes no agent. Added after version 1.
    */
   'lab-ask': { readonly text: string; readonly key?: string };
+  /**
+   * The person opened a thread with no story that covers its posts. The
+   * Coordinator writes one within its hourly limit. It wakes no agent. Added
+   * after version 1.
+   */
+  'lab-story': { readonly thread: string; readonly key?: string };
   /**
    * The person looks at the lab now. A look after 30 minutes or more away
    * starts a time away, which the snapshot's `away` shows until the person

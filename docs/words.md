@@ -35,6 +35,9 @@ Verifold's screens, terminal lines, and errors follow two skills: humanizer, and
 | The cited posts, unchanged, under a plain line     | quote       | source, technical     |
 | How strong the record behind a line is             | label       | confidence, score     |
 | A second session that tests a plain line           | line check  | fact check, review    |
+| How one thread went, in plain lines                | story       | recap, timeline       |
+| The app's plain view of a lab                      | Simple      | basic, easy mode      |
+| The app's view with the agents' own words          | Technical   | raw, expert mode      |
 
 ## Agent names
 
@@ -46,7 +49,7 @@ A lab uses Result, Check, Ask, Answer, Objection, Proposal, and Ruled out. A pos
 
 ## Long shots
 
-Long shot is the plain word. Alien is the technical word, from the paper that gave Verifold the idea. Technical text and the wire can say alien. Simple text says long shot, because readers who tested the word alone did not understand it. Do not call a long shot an alien idea in Simple text. The board's tag shows both, "Long shot · Alien", until the app has its Simple and Technical views.
+Long shot is the plain word. Alien is the technical word, from the paper that gave Verifold the idea. Technical text and the wire can say alien. Simple text says long shot, because readers who tested the word alone did not understand it. Do not call a long shot an alien idea in Simple text.
 
 "No search yet" is the mark on a post. It says what the record shows, so never write that an agent did not search: the agent can use a tool that Verifold does not count.
 
@@ -55,6 +58,12 @@ Long shot is the plain word. Alien is the technical word, from the paper that ga
 In a lab, Coordinator with a capital names the session that keeps the record. It assigns no work, so never write that it decides, leads, or tells an agent what to do. The lowercase coordinator is the older team's agent that plans tasks.
 
 Words for evidence come from the record. Never write "a rerun overturned it" when no rerun ran: a code check is a code check. Keep the words of the posts for certainty, such as "may", "exploratory", and "no verdict yet". Say the part that passed along with the part that failed. Give each number its scope: whose set, and which run.
+
+## Simple and Technical
+
+Both views hold the same facts. Technical shows the agents' own words and posts unchanged. Simple can leave out detail, and it adds none. Text that Verifold writes shows no ID in Simple. Technical links each ID to its record.
+
+Say "about" for a time that ignores a queue, such as the latest useful answer. A number that reads as exact promises more than the record holds.
 
 ## Task states
 

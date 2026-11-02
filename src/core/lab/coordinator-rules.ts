@@ -10,7 +10,6 @@
  */
 import { agentId, clip, object, postId, type Post } from '../board.ts';
 import {
-  briefKinds,
   briefLimits,
   claimVerdicts,
   noticeKinds,
@@ -21,7 +20,6 @@ import { openObjections } from './post-rules.ts';
 import {
   fail,
   text,
-  type BriefKind,
   type Check,
   type LineCheck,
   type NoticeKind,
@@ -52,33 +50,44 @@ export function citedPosts(
   return posts;
 }
 
-/** A line of `verifold_brief`. */
-export interface DraftLine {
-  readonly kind: BriefKind;
+/** A line of `verifold_brief` or `verifold_story`. */
+export interface DraftLine<Kind extends string> {
+  readonly kind: Kind;
   readonly plain: string;
   readonly posts: readonly Post[];
 }
 
-/** The lines of `verifold_brief`, checked. */
-export function parseLines(
+/** An ID of the lab's records. */
+const recordId = /\b(?:[prdtkcaqnl]|lease)-\d+\b/;
+
+/** Words for the person, on one line. A person reads no IDs in them. */
+function plainWords(value: unknown, limit: number, what: string): string {
+  const words = oneLine(text(value, limit, what));
+  if (recordId.test(words)) fail('Leave out IDs such as p-12 or d-3.');
+  return words;
+}
+
+/** The lines of `verifold_brief` or `verifold_story`, checked. `kinds`: what a line can be. */
+export function parseLines<Kind extends string>(
   value: unknown,
   post: (id: string) => Post | undefined,
   keepPlain: boolean,
-): readonly DraftLine[] {
+  kinds: readonly Kind[],
+): readonly DraftLine<Kind>[] {
   if (
     !Array.isArray(value) ||
     !value.length ||
     value.length > briefLimits.lines
   )
     fail(`Give 1 to ${briefLimits.lines} lines.`);
-  return value.map((item): DraftLine => {
+  return value.map((item) => {
     const entry = object(item) ?? {};
     return {
       kind:
-        briefKinds.find((kind) => kind === entry.kind) ??
-        fail(`A line's kind is one of: ${briefKinds.join(', ')}.`),
+        kinds.find((kind) => kind === entry.kind) ??
+        fail(`A line's kind is one of: ${kinds.join(', ')}.`),
       plain: keepPlain
-        ? oneLine(text(entry.plain, briefLimits.plain, 'the plain line'))
+        ? plainWords(entry.plain, briefLimits.plain, 'the plain line')
         : '',
       posts: citedPosts(entry.posts, post),
     };
@@ -143,7 +152,7 @@ export function checkedTitle(
   threads: readonly Thread[],
   posts: readonly Post[],
 ): string {
-  const title = oneLine(text(value, threadLimits.title, 'the title'));
+  const title = plainWords(value, threadLimits.title, 'the title');
   checkTitle(title, threads);
   const stray = strayNumbers(title, posts);
   if (stray.length)

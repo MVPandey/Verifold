@@ -28,8 +28,10 @@ import {
 } from '../call.ts';
 import { andList, noSettingWords } from '../../ui/call-words.ts';
 import { agentName, asked, roleName, since, usd } from '../format.ts';
+import { timeLine } from '../needs.ts';
 import { href, type Opener } from '../route.ts';
 import { useAction } from '../useAction.ts';
+import { useView } from '../view-mode.ts';
 import { AnswerLine } from '../components/AnswerLine.tsx';
 import { FactSource, uniqueFacts } from '../components/FactsList.tsx';
 import { showPost } from '../components/BoardThread.tsx';
@@ -121,6 +123,7 @@ function OpenCall({
   readonly onClose: () => void;
   readonly onWords: LabActions['words'];
 }): ReactNode {
+  const { threaded } = useView();
   const failure = failureOf(lab, call);
   // The call's reason, then each later asker's own, when it says more.
   const reasons = [
@@ -250,6 +253,11 @@ function OpenCall({
         maxLength={call.wordsLimit}
         onSend={(text, key) => onWords(call.id, text, key)}
       />
+      {threaded && call.latestAt && (
+        <p className="call__foot">
+          {timeLine(call, lab.budget?.deadline ?? null, now)}.
+        </p>
+      )}
       <p className="call__foot">{footLine(call, lab)}</p>
     </div>
   );

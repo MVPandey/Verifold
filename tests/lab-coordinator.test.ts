@@ -384,6 +384,7 @@ await test('the tools reach nothing that assigns, stops, starts, asks, plans, or
       'verifold_board',
       'verifold_thread',
       'verifold_brief',
+      'verifold_story',
       'verifold_notice',
       'verifold_answer',
     ],
@@ -1382,16 +1383,34 @@ await test('what a session changes itself counts as seen: a quiet lab gets one u
     ],
   });
   await lab.endTurn();
+  // The close brings the thread's story, and that session gives no brief.
+  await lab.tick();
+  assert.equal(lab.started.length, 3);
+  assert.match(lab.started[2]?.input.prompt ?? '', /Give no brief\./);
+  await lab.call('verifold_story', {
+    thread: id,
+    lines: [{ kind: 'outcome', plain: 'It does.', posts: [post.id] }],
+  });
+  await lab.endTurn();
+  await lab.tick();
+  await lab.call('verifold_line_check', {
+    lines: lab.store.pending().map((entry) => ({
+      id: entry.id,
+      claims: [{ claim: 'It does.', verdict: 'supported' }],
+      dropped: [],
+    })),
+  });
+  await lab.endTurn();
   for (let turn = 0; turn < 3; turn++) await lab.tick();
-  assert.equal(lab.started.length, 2);
+  assert.equal(lab.started.length, 4);
   // A restart reads the same state.
   lab.coordinator.loaded();
   await lab.tick();
-  assert.equal(lab.started.length, 2);
+  assert.equal(lab.started.length, 4);
   // Someone else's change still counts.
   lab.directions[0] = direction('d-1', 'leading');
   await lab.tick();
-  assert.equal(lab.started.length, 3);
+  assert.equal(lab.started.length, 5);
 });
 
 await test('a lab whose paths the deny rules cannot express keeps no plain words: quotes only, with one note', async (t) => {

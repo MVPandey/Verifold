@@ -187,9 +187,13 @@ export const briefLimits = {
   /** Newest posts in a session's first prompt, and characters of each. */
   promptPosts: 120,
   promptPost: 1000,
-  /** Lines of one brief, and posts that one line cites. */
+  /** Lines of one brief or story, and posts that one line cites. */
   lines: 12,
   linePosts: 6,
+  /** Stories that a lab keeps, one session writes, and posts of each that its prompt holds. */
+  stories: 500,
+  storiesPerSession: 2,
+  storyPosts: 40,
   /** Characters of a plain line, of the person's question, and of an answer. */
   plain: 400,
   question: 500,
@@ -206,6 +210,9 @@ export const briefLimits = {
 
 /** What a line of a brief is about. */
 export const briefKinds = ['decided', 'failed', 'held', 'open', 'new'] as const;
+
+/** What a line of a thread's story is: a step of how it got there, its outcome, or a later fact. */
+export const storyKinds = ['step', 'outcome', 'later'] as const;
 
 /** What the Coordinator can tell agents, and nothing more. */
 export const noticeKinds = ['overlap', 'missing-answer', 'no-search'] as const;
@@ -414,7 +421,7 @@ Proof is a file or a figure in your folder, a diff of paths that you changed, or
   {
     name: 'verifold_status',
     description:
-      'Set your line on the home page: what you do now, why, and what comes next. This is not a post. It replaces your last line and wakes no one. Use it for progress.',
+      'Set your line on the home page: what you do now, why, and what comes next. The person reads this line, so write each field in one plain sentence, with no internal IDs. This is not a post. It replaces your last line and wakes no one. Use it for progress.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1020,6 +1027,33 @@ export const labCoordinatorToolSpecs: readonly AgentTool[] = [
         },
       },
       required: ['lines'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_story',
+    description: `Tell how one thread went, for the person, in up to ${briefLimits.lines} plain lines, oldest first. step: one step of how it got there. outcome: what the thread ended with, and who disagreed. later: a fact after the outcome that changes it. Each line cites the posts that it rests on. A line can cite a post of another thread. Verifold quotes those posts and has a second session check each line. A new call for a thread replaces its last story.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        thread: threadIdSchema,
+        lines: {
+          type: 'array',
+          minItems: 1,
+          maxItems: briefLimits.lines,
+          items: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', enum: storyKinds },
+              plain: { type: 'string', maxLength: briefLimits.plain },
+              posts: citedPosts,
+            },
+            required: ['kind', 'plain', 'posts'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['thread', 'lines'],
       additionalProperties: false,
     },
   },
