@@ -1015,7 +1015,7 @@ export interface LabCompute {
     pods: number,
     only?: number,
   ): Promise<{ readonly before: number; readonly changed: boolean }>;
-  /** The person picked a pod in a call: the lease starts as one that they approved. */
+  /** The person picked a pod in a call: the lease starts as one that they approved. A pod that RunPod does not create comes back as a failed lease. */
   startPod(input: LabPod): Promise<Lease>;
   /** A key is stored and the person set a spend limit. */
   podsOn(): boolean;

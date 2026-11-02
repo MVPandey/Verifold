@@ -2,7 +2,9 @@ import type { Call, CallOption, Effect, Lab } from '../protocol/api.ts';
 import {
   costWords,
   effectWords,
+  heldWordsText,
   undoWords,
+  wordsBoxLabel,
   type EffectWords,
 } from '../ui/call-words.ts';
 import { roleName } from './format.ts';
@@ -109,6 +111,27 @@ export function footLine(call: Call, lab: Lab): string {
   return undoWords(call.undoMinutes, effect ? wordsOf(effect, lab) : null);
 }
 
+/** A call with a pod option: words on it start no pod, and it stays open. */
+function asksForPod(call: Call): boolean {
+  return call.options.some((option) => option.effect?.type === 'pod');
+}
+
+/** The label of the box under the options. */
+export function wordsLabel(call: Call): string {
+  return wordsBoxLabel(asksForPod(call));
+}
+
+/** The line after the person's words on a call that still waits for an option, or null. */
+export function heldWordsLine(call: Call): string | null {
+  return call.words
+    ? heldWordsText(
+        call.byVerifold,
+        asksForPod(call),
+        call.askers.map((asker) => roleName(asker.handle)),
+      )
+    : null;
+}
+
 /**
  * A pod option that cannot start yet: how many pod secrets this computer
  * does not store, and their names when Verifold sends them. Null: none is
@@ -181,7 +204,7 @@ export function failureOf(lab: Lab, call: Call): CallFailure | null {
 /** While Verifold applies an answer: what it does, never a final "You chose". */
 export function applyingText(option: CallOption): string {
   return option.effect?.type === 'pod'
-    ? `Starting the pod for “${option.label}”…`
+    ? `Starting the ${option.effect.gpu} pod…`
     : `Applying “${option.label}”…`;
 }
 
