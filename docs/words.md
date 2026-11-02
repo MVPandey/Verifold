@@ -4,40 +4,46 @@ Verifold's screens, terminal lines, and errors follow two skills: humanizer, and
 
 ## One word for each thing
 
-| Thing                                              | Word        | Not                   |
-| -------------------------------------------------- | ----------- | --------------------- |
-| A unit of work that one agent does                 | task        | assignment            |
-| The Claude Code or Codex process that does a task  | agent       | worker (in the desk)  |
-| An agent that the person drives without a task     | session     | chat                  |
-| What an agent does in a lab, as a short label      | job         | role, title           |
-| Directions that work together, as a short label    | team        | group, squad          |
-| The agent that plans and reviews tasks             | coordinator | lead, manager         |
-| The saved result of one turn of an agent           | version     | output, snapshot      |
-| A GPU machine on RunPod                            | pod         | lease (in the desk)   |
-| Something that waits for the person                | Needs you   | inbox, alerts         |
-| The coordinator's request to the person            | question    | blocker (in the desk) |
-| One conversation on the lab's board, with a title  | thread      | topic, channel        |
-| What an agent reports that it did, with proof      | result      | claim, finding        |
-| A recount or an audit of another agent's post      | check       | review                |
-| A question for one agent or the person             | ask         | question (agents)     |
-| A reply that closes an ask or an objection         | answer      | reply                 |
-| A choice that becomes a decision with no objection | proposal    | suggestion            |
-| What an agent says it does now, why, and what next | status line | update                |
-| A reaction to a post, with no post and no wake     | agree       | like, +1              |
-| One web read in a harness's record                 | lookup      | search (as a count)   |
-| The papers that the lab read, as one shared list   | reading map | bibliography          |
-| The lab's short ideas, from papers and lab work    | idea map    | concept list          |
-| A random mix of ideas, judged by another harness   | long shot   | moonshot              |
-| A subagent of an agent's harness                   | helper      | child, worker         |
-| The lab's session that keeps the record            | Coordinator | scribe, lead          |
-| What a person reads of the lab, from posts         | brief       | summary, digest       |
-| A brief's line for a reader outside the field      | plain line  | rewrite, TL;DR        |
-| The cited posts, unchanged, under a plain line     | quote       | source, technical     |
-| How strong the record behind a line is             | label       | confidence, score     |
-| A second session that tests a plain line           | line check  | fact check, review    |
-| How one thread went, in plain lines                | story       | recap, timeline       |
-| The app's plain view of a lab                      | Simple      | basic, easy mode      |
-| The app's view with the agents' own words          | Technical   | raw, expert mode      |
+| Thing                                              | Word         | Not                   |
+| -------------------------------------------------- | ------------ | --------------------- |
+| A unit of work that one agent does                 | task         | assignment            |
+| The Claude Code or Codex process that does a task  | agent        | worker (in the desk)  |
+| An agent that the person drives without a task     | session      | chat                  |
+| What an agent does in a lab, as a short label      | job          | role, title           |
+| Directions that work together, as a short label    | team         | group, squad          |
+| The agent that plans and reviews tasks             | coordinator  | lead, manager         |
+| The saved result of one turn of an agent           | version      | output, snapshot      |
+| A GPU machine on RunPod                            | pod          | lease (in the desk)   |
+| Something that waits for the person                | Needs you    | inbox, alerts         |
+| The coordinator's request to the person            | question     | blocker (in the desk) |
+| One conversation on the lab's board, with a title  | thread       | topic, channel        |
+| What an agent reports that it did, with proof      | result       | claim, finding        |
+| A recount or an audit of another agent's post      | check        | review                |
+| A question for one agent or the person             | ask          | question (agents)     |
+| A reply that closes an ask or an objection         | answer       | reply                 |
+| A choice that becomes a decision with no objection | proposal     | suggestion            |
+| What an agent says it does now, why, and what next | status line  | update                |
+| A reaction to a post, with no post and no wake     | agree        | like, +1              |
+| One web read in a harness's record                 | lookup       | search (as a count)   |
+| The papers that the lab read, as one shared list   | reading map  | bibliography          |
+| The lab's short ideas, from papers and lab work    | idea map     | concept list          |
+| A random mix of ideas, judged by another harness   | long shot    | moonshot              |
+| A subagent of an agent's harness                   | helper       | child, worker         |
+| The lab's session that keeps the record            | Coordinator  | scribe, lead          |
+| What a person reads of the lab, from posts         | brief        | summary, digest       |
+| A brief's line for a reader outside the field      | plain line   | rewrite, TL;DR        |
+| The cited posts, unchanged, under a plain line     | quote        | source, technical     |
+| How strong the record behind a line is             | label        | confidence, score     |
+| A second session that tests a plain line           | line check   | fact check, review    |
+| How one thread went, in plain lines                | story        | recap, timeline       |
+| The line under the box: who reads this and when    | reach line   | audience, recipients  |
+| The levels of the box                              | level        | scope, audience       |
+| What a person does to end a decision               | overturn     | revoke, cancel        |
+| What brings an ended direction's agent back        | Reopen       | restart, revive       |
+| What an agent found on earlier work                | prior work   | related work          |
+| An agent in trouble, past 6 agents                 | needs a look | alerts, issues        |
+| The app's plain view of a lab                      | Simple       | basic, easy mode      |
+| The app's view with the agents' own words          | Technical    | raw, expert mode      |
 
 ## Agent names
 
@@ -52,6 +58,14 @@ A lab uses Result, Check, Ask, Answer, Objection, Proposal, and Ruled out. A pos
 Long shot is the plain word. Alien is the technical word, from the paper that gave Verifold the idea. Technical text and the wire can say alien. Simple text says long shot, because readers who tested the word alone did not understand it. Do not call a long shot an alien idea in Simple text.
 
 "No search yet" is the mark on a post. It says what the record shows, so never write that an agent did not search: the agent can use a tool that Verifold does not count.
+
+## How they work together
+
+Say what the record shows, in counts of what changed: objections, accepted changes, and who needs whom. Never count messages. Write "Agent 3 needs Agent 2", not "Agent 3 is blocked". Verifold writes these lines. Do not say that an agent reports them.
+
+## The reach line
+
+Name who reads and when: "Agent 3 reads this after its current step." Name who does not and why: "Agent 1 is closed, so it won't." Say Ask the Coordinator for a question to the Coordinator, and say that no agent wakes for it. An answer says "No agent was disturbed".
 
 ## The brief
 

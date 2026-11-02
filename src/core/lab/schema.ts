@@ -349,6 +349,8 @@ export interface Check {
   readonly objections: readonly string[];
   /** The direction's agent asked for holds-up on this claim. */
   readonly holdsUp: boolean;
+  /** The person asked for this check. */
+  readonly byPerson?: true;
   readonly direction: string;
   /** The claim's run. The checker's folder holds the files of its commit. */
   readonly run: string;
@@ -849,6 +851,8 @@ export interface DirectionView {
     | 'crashed';
   /** When a wait ends. */
   readonly until: string | null;
+  /** It has no process now, so a wake needs a free slot. */
+  readonly parked?: boolean;
   /** The subagents of its harness. */
   readonly helpers?: readonly Helper[];
 }
@@ -875,6 +879,8 @@ export interface LabView {
   readonly reading?: Reading;
   /** The brief, the notices, and the person's questions. Absent: a lab from before threads. */
   readonly brief?: BriefView;
+  /** Every worker slot is taken. */
+  readonly slotsFull?: boolean;
 }
 
 /** The harness sessions of the lab: the project's worker slots. */
@@ -1070,6 +1076,7 @@ function parseCheck(value: unknown): Check | null {
           .slice(-20)
       : [],
     holdsUp: entry.holdsUp === true,
+    ...(entry.byPerson === true ? { byPerson: true as const } : {}),
     direction: entry.direction,
     run: entry.run,
     commit: entry.commit,

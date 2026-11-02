@@ -5,10 +5,24 @@
  * `openObjections` says which objections still stand. Together they replace a
  * switch on kinds in the lab.
  */
-import { object, type BoardAgent, type Post, type PostKind } from '../board.ts';
-import { postMethods, postOutcomes, threadLimits } from '../lab-tools.ts';
+import {
+  object,
+  parsePrior,
+  type BoardAgent,
+  type Post,
+  type PostKind,
+} from '../board.ts';
+import {
+  checkableKinds,
+  checkLimits,
+  postMethods,
+  postOutcomes,
+  threadLimits,
+} from '../lab-tools.ts';
+import { runActive, type RunRecord } from '../runs.ts';
+import { personReaders } from './reach.ts';
 import { fail, text, type Check, type Thread } from './schema.ts';
-import { checkTitle, planThread, reopeningKinds } from './threads.ts';
+import { checkTitle, reopeningKinds } from './threads.ts';
 
 /** What the rules read of the lab. */
 export interface PostContext {
@@ -27,7 +41,7 @@ export interface PostContext {
 
 /** A post's place and its fields beyond the text. */
 export interface PostShape
-  extends Pick<Post, 'outcome' | 'accepts' | 'method' | 'raters'> {
+  extends Pick<Post, 'outcome' | 'accepts' | 'method' | 'raters' | 'prior'> {
   /** An existing thread, or the title and the why of a new one. */
   readonly thread: string | { readonly title: string; readonly why: string };
 }
@@ -197,6 +211,18 @@ function methodOf(
   return { method, raters: raters as number };
 }
 
+/** What a post says of earlier work. Refuses it on a kind that has none. */
+function priorOf(
+  args: Record<string, unknown>,
+  kind: PostKind,
+): Pick<Post, 'prior'> {
+  if (args.prior === undefined) return {};
+  if (kind !== 'proposal' && kind !== 'ruled-out')
+    fail('Only a proposal or a ruled-out post gives prior.');
+  const prior = parsePrior(args.prior);
+  return prior ? { prior } : {};
+}
+
 /** Check a post of an agent. Throws a refusal that says what to change. */
 export function shapePost(
   args: Record<string, unknown>,
@@ -221,6 +247,7 @@ export function shapePost(
   return {
     thread: place(args, replied, context),
     ...methodOf(args, context.kind),
+    ...priorOf(args, context.kind),
     ...(outcome ? { outcome } : {}),
     ...(accepts ? { accepts: true } : {}),
   };
@@ -234,39 +261,20 @@ export interface WakeContext {
   readonly agents: readonly BoardAgent[];
 }
 
-/** Who the person's words are for: who they name, then the followers of the thread. */
-function personWakes(post: Post, context: WakeContext): readonly string[] {
-  const { agents, target, thread } = context;
-  if (post.mentions.includes('all')) return agents.map((agent) => agent.id);
-  const named = [
-    ...post.mentions,
-    ...(target ? [target.author] : []),
-    ...agents
-      .filter((agent) => post.direction && agent.direction === post.direction)
-      .map((agent) => agent.id),
-  ];
-  return post.mentions.length || thread?.id === planThread
-    ? named
-    : [...named, ...(thread?.followers ?? [])];
-}
-
 /**
  * The agent IDs that a post wakes. An objection wakes the author of its
  * target, or the owner of its direction when a checker wrote the target. An
  * ask wakes who it names. An answer wakes who wrote what it answers. The
- * person's words wake followers, and every agent that works when they would
- * reach no one, so they always reach someone. A plan, a rerun, and Verifold's
- * own notes wake who they mention. Other posts wait for each agent's next turn.
+ * person's words wake who `personReaders` says, the same rule as the reach line
+ * under the box. A plan, a rerun, and Verifold's own notes wake who they
+ * mention. Other posts wait for each agent's next turn.
  */
 export function wakeList(post: Post, context: WakeContext): readonly string[] {
   const { agents, target } = context;
+  if (post.author === 'person') return personReaders(post, context);
   const works = new Set(agents.map((agent) => agent.id));
   const live = (list: readonly string[]): readonly string[] =>
     [...new Set(list)].filter((id) => id !== post.author && works.has(id));
-  if (post.author === 'person') {
-    const reached = live(personWakes(post, context));
-    return reached.length ? reached : [...works];
-  }
   if (
     post.author === 'verifold' ||
     post.kind === 'plan' ||
@@ -324,6 +332,36 @@ export function openObjections(
     }
   }
   return open;
+}
+
+/** The run that a post cites, when the ledger has it. */
+export function citedRun(
+  post: Pick<Post, 'artifacts'>,
+  run: (id: string) => RunRecord | undefined,
+): RunRecord | undefined {
+  const cited = post.artifacts.find((artifact) => artifact.type === 'run');
+  return cited?.type === 'run' ? run(cited.run) : undefined;
+}
+
+/** Why no new check of a post can start now. */
+export type CheckBlock = 'kind' | 'no-run' | 'run-active' | 'limit' | 'going';
+
+/** Why the person cannot ask for a check of a post now. Null: they can. */
+export function checkBlock(
+  post: Pick<Post, 'id' | 'kind' | 'artifacts'>,
+  run: (id: string) => RunRecord | undefined,
+  checks: readonly Pick<Check, 'claim' | 'state'>[],
+): CheckBlock | null {
+  if (!checkableKinds.some((kind) => kind === post.kind)) return 'kind';
+  const cited = citedRun(post, run);
+  if (!cited) return 'no-run';
+  if (runActive(cited)) return 'run-active';
+  const own = checks.filter(
+    (check) => check.claim === post.id && check.state !== 'dropped',
+  );
+  if (own.some(({ state }) => state === 'queued' || state === 'running'))
+    return 'going';
+  return own.length >= checkLimits.perClaim ? 'limit' : null;
 }
 
 /** Why a post backs no verdict: it is a check that failed, or a check of it failed. Null when neither holds. */

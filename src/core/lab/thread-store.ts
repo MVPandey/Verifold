@@ -36,6 +36,7 @@ import {
   decided,
   dueProposals,
   followed,
+  overturned,
   parseMove,
   parseThread,
   placed,
@@ -210,7 +211,7 @@ export class ThreadStore {
     by: string,
     direction: string,
   ): Promise<
-    Pick<Post, 'thread' | 'outcome' | 'accepts' | 'method' | 'raters'>
+    Pick<Post, 'thread' | 'outcome' | 'accepts' | 'method' | 'raters' | 'prior'>
   > {
     const { thread, ...rest } = shape;
     return {
@@ -238,6 +239,24 @@ export class ThreadStore {
   async close(id: string, post: Post | undefined): Promise<void> {
     const at = new Date().toISOString();
     await this.change(id, (thread) => closed(thread, post, at));
+  }
+
+  /**
+   * The person overturned the thread's decision. Returns the decision's post.
+   * Refuses a thread with no decision. Unlike `change`, a save that fails
+   * changes nothing, so the person can try again.
+   */
+  async overturn(id: string): Promise<string | undefined> {
+    const thread = this.get(id);
+    if (!thread) return undefined;
+    const next = overturned(thread);
+    const before = this.threads;
+    this.threads = before.map((entry) => (entry === thread ? next : entry));
+    await this.file.save().catch((error: unknown) => {
+      this.threads = before;
+      throw error;
+    });
+    return thread.outcome?.post;
   }
 
   /**

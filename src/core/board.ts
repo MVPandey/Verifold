@@ -48,6 +48,28 @@ export type Artifact =
     }
   | { readonly type: 'run'; readonly run: string };
 
+/** What an agent says of earlier work on an idea. It holds what the agent gave. */
+export interface PriorWork {
+  /** The closest work that it found. */
+  readonly closest?: string;
+  /** What it looked for and did not find. */
+  readonly notFound?: string;
+  /** What this idea adds. */
+  readonly newHere?: string;
+}
+
+/** The lookups behind a post. */
+export interface PostSearch {
+  /** Since the author's last post with lookups. */
+  readonly lookups: number;
+  /** All lookups of the author so far, so its next post can count from here. */
+  readonly total: number;
+  /** Its newest lookup. */
+  readonly at: string;
+  /** The label of the helper that made the newest lookup, such as `agent-1.1`. */
+  readonly helper?: string;
+}
+
 export interface Post {
   readonly schemaVersion: 1;
   readonly id: string;
@@ -74,6 +96,10 @@ export interface Post {
   readonly noSearch?: true;
   /** A proposal from Verifold's draw of ideas, a long shot. It stays open: no window makes it a decision. */
   readonly alien?: true;
+  /** A proposal or a ruled-out post: what its author says of earlier work. */
+  readonly prior?: PriorWork;
+  /** A proposal or a ruled-out post: its author's lookups from harness records, never from its words. */
+  readonly search?: PostSearch;
   /** Agent IDs, `person`, or `all`. */
   readonly mentions: readonly string[];
   readonly artifacts: readonly Artifact[];
@@ -104,6 +130,8 @@ export const boardLimits = {
   paths: 10,
   /** Lines in one digest. */
   digest: 30,
+  /** Characters of each field of `prior`. */
+  prior: 300,
   /** Posts after an agent's read mark that it has read already, such as a post steered into its turn. */
   seen: 500,
 };
@@ -249,6 +277,43 @@ function parseArtifact(value: unknown): Artifact | null {
   return null;
 }
 
+/** A post's prior work, cut to its limit. Null: it holds no text. */
+export function parsePrior(value: unknown): PriorWork | null {
+  const entry = object(value);
+  const field = (name: keyof PriorWork): PriorWork => {
+    const words = entry?.[name];
+    return typeof words === 'string' && words.trim()
+      ? { [name]: words.trim().slice(0, boardLimits.prior) }
+      : {};
+  };
+  const prior = {
+    ...field('closest'),
+    ...field('notFound'),
+    ...field('newHere'),
+  };
+  return Object.keys(prior).length ? prior : null;
+}
+
+/** A post's lookups, or null. */
+function parseSearch(value: unknown): PostSearch | null {
+  const entry = object(value);
+  return entry &&
+    Number.isSafeInteger(entry.lookups) &&
+    (entry.lookups as number) > 0 &&
+    Number.isSafeInteger(entry.total) &&
+    typeof entry.at === 'string' &&
+    !Number.isNaN(Date.parse(entry.at))
+    ? {
+        lookups: entry.lookups as number,
+        total: entry.total as number,
+        at: entry.at,
+        ...(typeof entry.helper === 'string'
+          ? { helper: entry.helper.slice(0, 20) }
+          : {}),
+      }
+    : null;
+}
+
 /** The post, or why it is not valid. */
 function check(entry: Record<string, unknown>): Post | string {
   const author = entry.author;
@@ -334,6 +399,8 @@ function check(entry: Record<string, unknown>): Post | string {
     !(typeof key === 'string' && key.length > 0 && key.length <= 300)
   )
     return 'The key is not valid.';
+  const prior = parsePrior(entry.prior);
+  const search = parseSearch(entry.search);
   if (
     typeof entry.id !== 'string' ||
     !postId.test(entry.id) ||
@@ -358,6 +425,8 @@ function check(entry: Record<string, unknown>): Post | string {
     ...(accepts ? { accepts } : {}),
     ...(noSearch ? { noSearch } : {}),
     ...(alien ? { alien } : {}),
+    ...(prior ? { prior } : {}),
+    ...(search ? { search } : {}),
     mentions: mentions as string[],
     artifacts: artifacts as Artifact[],
     ...(key ? { key } : {}),

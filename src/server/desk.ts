@@ -627,6 +627,7 @@ async function labAction(
         direction: body.direction,
         replyTo: body.replyTo,
         thread: body.thread,
+        to: body.to,
       });
       return 200;
     case 'lab-direction-add':
@@ -638,6 +639,18 @@ async function labAction(
       return 200;
     case 'lab-direction-stop':
       await lab.stopDirection(body.direction);
+      return 200;
+    case 'lab-direction-reopen':
+      await lab.reopenDirection(body.direction, body.thread);
+      return 200;
+    case 'lab-check':
+      await lab.askCheck(body.post);
+      return 200;
+    case 'lab-overturn':
+      await lab.overturnDecision(body.thread);
+      return 200;
+    case 'lab-long-shots-stop':
+      await lab.stopLongShots();
       return 200;
     case 'lab-agent-restart':
       await lab.restartAgent(body.agent);

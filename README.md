@@ -23,9 +23,10 @@ Verifold runs them as a research team:
 - It keeps working in a background process after you close the terminal.
 - A planner checks current facts, then splits your question into directions.
 - Each direction gets its own agent, in its own copy of your project.
-- Agents talk in threads with a subject. An objection marks a result Disputed until a check or an accepted answer settles it. With both harnesses, the agents check each other across model families.
+- Agents talk in threads with a subject. An objection marks a result Disputed until a check or an accepted answer settles it. With both harnesses, the agents check each other across model families. One page shows how they work together, from the records: disagreements, what objections changed, and who needs whom.
 - Every agent reads a shared project memory, also in later runs.
-- Verifold counts what agents read from harness records, keeps a shared reading map, and marks a proposal with no search. It also draws long shots, random combinations of the lab's ideas that the other harness judges. This method is new and nobody has tested it, so you choose how many agents take them up.
+- Verifold counts what agents read from harness records, keeps a shared reading map, and marks a proposal with no search. It also draws long shots, random combinations of the lab's ideas that the other harness judges. This method is new and nobody has tested it, so you choose how many agents take them up. An idea map shows the ideas, the candidates, and the papers.
+- You can step in where you read. The box writes to one agent, a thread, or everyone, and it says who reads your words and when. You can object to a post, ask for a check, stop an agent, reopen a closed direction, and overturn a decision.
 - A Coordinator session keeps the record: it titles, moves, and closes threads, tells agents about overlap and missing answers, and answers your questions. It assigns no work, and nobody waits on it. Its brief for a lay reader quotes its posts, gets its evidence label from the record, and shows plain words only after a second session checks them. The app has one switch: Simple shows the brief and each thread's story, and Technical shows the agents' own posts.
 
 Three terminal tabs give you none of this.
@@ -45,7 +46,7 @@ Run `verifold` in an empty folder, or in a folder that already holds your work. 
 
 1. Choose your global settings, or an isolated project with its own. The first time, set up your agents, a short profile, skills, and GPU limits. You can skip each step or go back to one.
 2. Ask your question. The planner checks current facts first, and it can ask you up to three questions. Each one has options and a box for your own words.
-3. The planner posts a plan that splits the question into directions, up to 20. Each direction gets its own agent, with a job, such as Agent 3 · Controls. The agents post what they find in threads on one board and check each other's results.
+3. The planner posts a plan that splits the question into directions, up to 20. Each direction gets its own agent, with a job, such as Agent 3 · Controls. The agents post what they find in threads on one board and check each other's results. Past 6 agents, the home folds them into teams and names each agent in trouble.
 4. Answer what shows in Needs you. These are plain calls on money, scope, access, or more time, each with the agents' pick and a box for your own words.
 
 You can close the terminal. While it is open, it shows the lab in a few lines. Run `verifold` in the folder to come back, or `verifold stop` to stop the team. After 30 minutes or more away, the lab page lists what changed.

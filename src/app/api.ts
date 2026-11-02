@@ -5,13 +5,16 @@ import {
   type ActionResult,
   type BoardPage,
   type BringRead,
+  type CollabPage,
   type DirectionDiff,
   type FileDiff,
   type HistoryList,
   type HistoryRun,
   type HistoryTask,
   type HistoryTurns,
+  type IdeaPage,
   type PostThread,
+  type Reach,
   type ThreadPage,
   type RunDetail,
   type Snapshot,
@@ -120,6 +123,19 @@ export const paths = {
   /** A thread with its story and its newest posts, or the posts before one. */
   threadPage: (thread: string, before?: string): string =>
     `/api/v1/threads/${encodeURIComponent(thread)}${before ? `?before=${encodeURIComponent(before)}` : ''}`,
+  /** Who the person's words reach. */
+  reach: (query: object): string => {
+    const search = new URLSearchParams(
+      Object.entries(query).flatMap(([key, value]: [string, unknown]) =>
+        typeof value === 'string' && value ? [[key, value]] : [],
+      ),
+    ).toString();
+    return `/api/v1/reach${search ? `?${search}` : ''}`;
+  },
+  /** How the agents work together. */
+  collab: '/api/v1/collab',
+  /** The idea map, the reading map, and the draws. */
+  ideas: '/api/v1/ideas',
   /** The figure that a post cites, such as p-12.0, as the post pinned it. */
   figure: (proof: string): string =>
     `/api/v1/figures/${encodeURIComponent(proof)}`,
@@ -223,6 +239,31 @@ export function isThreadPage(value: unknown): value is ThreadPage {
     typeof value.thread.id === 'string' &&
     Array.isArray(value.posts) &&
     typeof value.more === 'boolean'
+  );
+}
+
+export function isReach(value: unknown): value is Reach {
+  return (
+    object(value) && Array.isArray(value.readers) && Array.isArray(value.missed)
+  );
+}
+
+export function isCollabPage(value: unknown): value is CollabPage {
+  return (
+    object(value) &&
+    Array.isArray(value.disagreements) &&
+    Array.isArray(value.needs) &&
+    object(value.objections) &&
+    object(value.gpu)
+  );
+}
+
+export function isIdeaPage(value: unknown): value is IdeaPage {
+  return (
+    object(value) &&
+    Array.isArray(value.ideas) &&
+    Array.isArray(value.sources) &&
+    Array.isArray(value.draws)
   );
 }
 

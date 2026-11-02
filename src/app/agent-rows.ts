@@ -208,33 +208,3 @@ export function agentsWord(handles: readonly string[]): string {
   const numbers = handles.map((handle) => roleOf(handle)?.number ?? handle);
   return `Agent${numbers.length > 1 ? 's' : ''} ${andList(numbers)}`;
 }
-
-/** How many names a reach line lists. Past that, it counts. */
-const namedAgents = 5;
-
-/** Who reads the person's post to the lab, and when. Every open agent reads the plan thread after its current step. */
-export function reachLine(lab: Lab): string {
-  const handles = (state: Direction['state']): readonly string[] =>
-    lab.directions
-      .filter((direction) => direction.state === state)
-      .flatMap(
-        (direction) =>
-          lab.agents.find((agent) => agent.id === direction.agent)?.handle ??
-          [],
-      );
-  const open = handles('open');
-  const ended = [...handles('closed'), ...handles('stopped')];
-  const readers = !open.length
-    ? 'No agent works now, so no agent reads this.'
-    : lab.paused
-      ? `${agentsWord(open)} read${open.length > 1 ? '' : 's'} this after the lab resumes.`
-      : open.length > namedAgents
-        ? `${open.length} agents read this after their current steps.`
-        : `${agentsWord(open)} read${open.length > 1 ? '' : 's'} this after ${open.length > 1 ? 'their current steps' : 'its current step'}.`;
-  if (!ended.length) return readers;
-  const others =
-    ended.length > namedAgents
-      ? `${ended.length} agents ended.`
-      : `${agentsWord(ended)} ended.`;
-  return `${readers} ${others}`;
-}
