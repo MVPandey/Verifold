@@ -3,12 +3,17 @@
  * thread page, and hold no state.
  */
 import type { openDisputes } from '../core/disputes.ts';
-import { clip, type Post as BoardPost } from '../core/board.ts';
-import { citedDispute } from '../core/lab/post-rules.ts';
+import {
+  clip,
+  type Post as BoardPost,
+  type PostSearch,
+} from '../core/board.ts';
+import { checkBlock, citedDispute } from '../core/lab/post-rules.ts';
 import { openWaits } from '../core/lab/waits.ts';
 import type { LabView, Thread as LabThread } from '../core/lab/schema.ts';
 import type {
   Post,
+  PostSearch as WireSearch,
   Recount,
   TakingPart,
   Thread,
@@ -18,7 +23,7 @@ import type {
 /** The marks of a post on the wire. */
 export type PostMarks = (
   post: BoardPost,
-) => Pick<Post, 'disputed' | 'citesDisputed' | 'recountedBy'>;
+) => Pick<Post, 'disputed' | 'citesDisputed' | 'recountedBy' | 'noCheck'>;
 
 export const noMarks: PostMarks = () => ({});
 
@@ -39,6 +44,22 @@ export function threadActivity(posts: readonly BoardPost[]): ThreadActivity {
   return activity;
 }
 
+/** The time of each author's newest post. Posts come oldest first. */
+export function lastPostTimes(
+  posts: readonly BoardPost[],
+): ReadonlyMap<string, string> {
+  return new Map(posts.map((post) => [post.author, post.at]));
+}
+
+/** A post's lookups on the wire. */
+export function searchItem(search: PostSearch): WireSearch {
+  return {
+    lookups: search.lookups,
+    at: search.at,
+    helper: search.helper ?? null,
+  };
+}
+
 /** A thread as the wire has it. */
 export function threadItem(entry: LabThread, activity: ThreadActivity): Thread {
   const own = activity.get(entry.id);
@@ -56,6 +77,7 @@ export function threadItem(entry: LabThread, activity: ThreadActivity): Thread {
     agreed: entry.agreed.map(({ post, by, at }) => ({ post, by, at })),
     posts: own?.posts ?? 0,
     lastAt: own?.lastAt ?? null,
+    ...(entry.overturned ? { overturned: entry.overturned } : {}),
   };
 }
 
@@ -110,6 +132,7 @@ export function postMarks(
 ): PostMarks {
   if (!view.threads?.length) return noMarks;
   const disputed = new Set(disputes.map((dispute) => dispute.target.id));
+  const runs = new Map(view.ledger.map((run) => [run.id, run]));
   const recounts = new Map<string, Recount[]>();
   for (const post of view.posts)
     if (post.kind === 'check' && post.replyTo && post.outcome)
@@ -123,10 +146,14 @@ export function postMarks(
   return (post) => {
     const cites = citedDispute(post, disputed);
     const by = recounts.get(post.id);
+    const noCheck = view.handles[post.author]
+      ? checkBlock(post, (id) => runs.get(id), view.checks)
+      : null;
     return {
       ...(disputed.has(post.id) ? { disputed: true } : {}),
       ...(cites ? { citesDisputed: cites } : {}),
       ...(by ? { recountedBy: by } : {}),
+      ...(noCheck ? { noCheck } : {}),
     };
   };
 }

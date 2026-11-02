@@ -17,6 +17,7 @@ import {
   noSearchYet,
   parseLookups,
   parseSource,
+  searchSince,
   type LookupRecord,
   type Source,
 } from './literature.ts';
@@ -109,6 +110,26 @@ export class LiteratureStore {
     );
   }
 
+  /**
+   * What the harness records say of the search behind a new post of `author`.
+   * An agent's own words never set these. `label`: a helper's label by its ID.
+   */
+  marks(
+    author: string,
+    kind: PostKind,
+    posts: readonly Post[],
+    label: (helper: string) => string | undefined,
+  ): Pick<Post, 'noSearch' | 'search'> {
+    if (kind !== 'proposal' && kind !== 'ruled-out') return {};
+    const search = searchSince(this.lookups.get(author), posts, author, label);
+    return {
+      ...(this.noSearch(author, kind, posts)
+        ? { noSearch: true as const }
+        : {}),
+      ...(search ? { search } : {}),
+    };
+  }
+
   /** The lab's reading, for a screen. */
   reading(): Reading {
     const lab = labLookups([...this.lookups.values()]);
@@ -192,5 +213,9 @@ export class LiteratureStore {
 
   ideas(): readonly Idea[] {
     return this.ideaMap;
+  }
+
+  sources(): readonly Source[] {
+    return this.map;
   }
 }

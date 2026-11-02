@@ -341,6 +341,10 @@ export interface Notice {
   readonly posts: readonly string[];
   /** Agent IDs. */
   readonly to: readonly string[];
+  /** The person can act on it: two agents may do the same work, or no agent answered them. Added after version 1. */
+  readonly forYou?: boolean;
+  /** The thread of its first cited post. Added after version 1. */
+  readonly thread?: string | null;
 }
 
 /** A question of the person to the Coordinator. It wakes no agent. */
@@ -742,6 +746,8 @@ export interface Agent {
   readonly line?: AgentLine | null;
   /** The subagents of its harness, from harness events. Added after version 1. */
   readonly helpers?: readonly Helper[];
+  /** The time of its newest post. Null or absent: none yet. Added after version 1. */
+  readonly lastPostAt?: string | null;
   /** Its newest turns. */
   readonly turns: TurnPage;
   /** Claude Code's cost estimate of its sessions. Null for Codex. */
@@ -860,6 +866,204 @@ export interface Post {
   readonly noSearch?: true;
   /** A long shot: a proposal from Verifold's draw of ideas. Added after version 1. */
   readonly alien?: true;
+  /** What the post's author says of earlier work. Added after version 1. */
+  readonly prior?: PriorWork;
+  /** The author's lookups behind the post, from harness records. Added after version 1. */
+  readonly search?: PostSearch;
+  /** Why the person cannot ask for a check of this post now. Absent: they can, or a lab from before threads. Added after version 1. */
+  readonly noCheck?: CheckBlock;
+}
+
+/**
+ * Why no new check of a post can start: `kind`: it is no result. `no-run`: it
+ * cites no run. `run-active`: its run has not ended. `limit`: it had its
+ * checks. `going`: a check waits or runs now.
+ */
+export type CheckBlock = 'kind' | 'no-run' | 'run-active' | 'limit' | 'going';
+
+/** What an agent says of earlier work on an idea. It holds what the agent gave. */
+export interface PriorWork {
+  readonly closest?: string;
+  readonly notFound?: string;
+  readonly newHere?: string;
+}
+
+/** The lookups behind a post. No agent writes these. */
+export interface PostSearch {
+  /** Since the author's last post with lookups. */
+  readonly lookups: number;
+  /** Its newest lookup. */
+  readonly at: string;
+  /** The label of the helper that made the newest lookup, such as `agent-1.1`. */
+  readonly helper: string | null;
+}
+
+/** When an agent reads the person's words. */
+export type ReachWhen =
+  | 'step'
+  | 'now'
+  | 'slot'
+  | 'usage'
+  | 'resume'
+  | 'more-time'
+  | 'terminal'
+  | 'plan';
+
+/**
+ * `GET /api/v1/reach`: who the person's words reach, from the rule that wakes
+ * agents. `thread`, `to` (an agent ID or `all`), and `replyTo` say where the
+ * words go, and `named` holds the `@` names of the text. Added after version 1.
+ */
+export interface Reach {
+  readonly readers: readonly {
+    readonly handle: string;
+    readonly when: ReachWhen;
+    /** When a wait ends. */
+    readonly until: string | null;
+  }[];
+  /** Agents that the words are for and that do not read them. */
+  readonly missed: readonly {
+    readonly handle: string;
+    readonly why: 'closed' | 'stopped' | 'crashed';
+  }[];
+}
+
+/** A thread's place in a page of records. */
+export type ThreadRef = Pick<Thread, 'id' | 'title' | 'plainTitle' | 'state'>;
+
+/** A post that an objection stands against. Handles: null for the person or Verifold. */
+export interface Disagreement {
+  readonly post: string;
+  readonly author: string;
+  readonly handle: string | null;
+  readonly thread: ThreadRef | null;
+  /** The start of the post, for a post with no thread. */
+  readonly text: string;
+  /** The objections that stand, oldest first. */
+  readonly objections: readonly {
+    readonly post: string;
+    readonly author: string;
+    readonly handle: string | null;
+  }[];
+  /** Its author answered an objection and did not accept it. */
+  readonly answered: boolean;
+  /** Its newest check. */
+  readonly check: Pick<CheckItem, 'id' | 'state' | 'outcome' | 'method'> | null;
+}
+
+/** A wait, and what stands behind it. */
+export interface Need extends Wait {
+  /** The one it waits on waits on the person. */
+  readonly blocked: boolean;
+  /** Why the agent that it waits on does not work now. Null: it works, or it is the person. */
+  readonly onEnded: 'closed' | 'stopped' | 'crashed' | null;
+  /** The Coordinator's title of its thread. */
+  readonly plainSubject: string | null;
+}
+
+/** A run on a pod. */
+export interface GpuRun {
+  readonly run: string;
+  readonly handle: string | null;
+  /** When it started, or when it queued. */
+  readonly since: string;
+}
+
+/**
+ * `GET /api/v1/collab`: how the agents work together, from the records. No
+ * agent and no Coordinator writes it. Added after version 1.
+ */
+export interface CollabPage {
+  /** The newest objection first. */
+  readonly disagreements: readonly Disagreement[];
+  readonly objections: {
+    readonly total: number;
+    readonly accepted: number;
+    /** No post replies to it, and no check took it. */
+    readonly unanswered: number;
+    /** Who raised them, most first. */
+    readonly by: readonly {
+      readonly author: string;
+      readonly handle: string | null;
+      readonly count: number;
+    }[];
+  };
+  readonly needs: readonly Need[];
+  readonly gpu: {
+    /** How many pods run at once. Null: no pods here. */
+    readonly atOnce: number | null;
+    readonly running: readonly GpuRun[];
+    readonly queued: readonly GpuRun[];
+    /** Pods that wait for the person. */
+    readonly requested: readonly {
+      readonly lease: string;
+      readonly at: string;
+    }[];
+    /** The pods that exist now. */
+    readonly pods: readonly string[];
+    /** The newest stretch with no run on a pod. */
+    readonly idle: { readonly from: string; readonly to: string } | null;
+  };
+  /** The handles of the directions' agents, so a page can say who raised none. */
+  readonly handles: readonly string[];
+}
+
+/** A long shot on the board, with what its session judged. */
+export interface Shot {
+  readonly thread: string;
+  readonly post: string;
+  readonly question: string;
+  /** The ideas that it combines. */
+  readonly ideas: readonly string[];
+  /** The harness of the session that judged it. */
+  readonly harness: Harness;
+  /** From 1, no sense, to 5. */
+  readonly sense: number;
+  readonly test: string;
+  readonly cost: string;
+  /** Papers that already combine the ideas. */
+  readonly prior: number;
+  /** The closest paper with its date, or the session's "none found". */
+  readonly closest: string;
+}
+
+/**
+ * `GET /api/v1/ideas`: the idea map, the reading map, and the draws of long
+ * shots. Added after version 1.
+ */
+export interface IdeaPage {
+  /** The newest ideas that the page keeps. */
+  readonly ideas: readonly {
+    readonly id: string;
+    readonly text: string;
+    readonly tried: boolean;
+    /** Papers of the reading map that hold it. */
+    readonly sources: number;
+  }[];
+  /** All ideas of the map. */
+  readonly ideaCount: number;
+  /** The newest papers that the page keeps. */
+  readonly sources: readonly {
+    readonly id: string;
+    readonly title: string;
+    readonly url: string;
+    readonly date: string;
+  }[];
+  /** All papers of the map. */
+  readonly sourceCount: number;
+  /** The newest first. */
+  readonly draws: readonly {
+    readonly at: string;
+    /** `ruled-out`: a failed line of work started it. */
+    readonly by: 'person' | 'ruled-out';
+    readonly shots: readonly Shot[];
+    /** A judgment came. */
+    readonly judged: boolean;
+  }[];
+  /** The person stopped long shots, until their next Draw again. */
+  readonly stopped: boolean;
+  /** A draw runs now, or waits for a free slot. */
+  readonly drawing: 'running' | 'waiting' | null;
 }
 
 /** A `check` post of another agent: who wrote it, and what it found. */
@@ -925,6 +1129,8 @@ export interface Thread {
   readonly posts?: number;
   /** Its newest post's time. Null or absent: no post yet. Added after version 1. */
   readonly lastAt?: string | null;
+  /** The decision that the person overturned, by its post. Added after version 1. */
+  readonly overturned?: string;
 }
 
 /**
@@ -1651,6 +1857,8 @@ export interface ActionBodies {
     readonly replyTo?: string;
     /** The thread that the post goes in. Added after version 1. */
     readonly thread?: string;
+    /** One agent, by its ID, or `all`. Added after version 1. */
+    readonly to?: string;
     readonly key?: string;
   };
   'lab-call-answer': {
@@ -1674,6 +1882,21 @@ export interface ActionBodies {
     readonly key?: string;
   };
   'lab-direction-stop': { readonly direction: string; readonly key?: string };
+  /**
+   * Bring back an ended direction's agent, with its folder and its record.
+   * `thread`: the thread that it comes back to. Added after version 1.
+   */
+  'lab-direction-reopen': {
+    readonly direction: string;
+    readonly thread?: string;
+    readonly key?: string;
+  };
+  /** Ask for a check of a post that cites a run. Added after version 1. */
+  'lab-check': { readonly post: string; readonly key?: string };
+  /** Overturn a thread's decision. The thread opens again. Added after version 1. */
+  'lab-overturn': { readonly thread: string; readonly key?: string };
+  /** Stop the draw of long shots and its session. Agents keep working. Added after version 1. */
+  'lab-long-shots-stop': { readonly key?: string };
   'lab-agent-restart': { readonly agent: string; readonly key?: string };
   'lab-run-cancel': { readonly run: string; readonly key?: string };
   'lab-signoff': { readonly note?: string; readonly key?: string };

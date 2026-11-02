@@ -556,8 +556,8 @@ await test('no candidate that makes sense means one note and no proposal', async
 await test('too few ideas mean no draw and one note, however often a line fails', async (t) => {
   const built = await planned(t);
   await ideas(built, 2);
-  await built.lab.drawAgain();
-  await built.lab.drawAgain();
+  await assert.rejects(built.lab.drawAgain(), /needs 3 ideas/);
+  await assert.rejects(built.lab.drawAgain(), /needs 3 ideas/);
   const notes = statusPosts(built).filter((text) =>
     /drew no long shots/.test(text),
   );

@@ -78,6 +78,11 @@ export class HelperStore {
     return this.helpers.get(agent) ?? [];
   }
 
+  /** The label of a helper of the agent, by its ID. */
+  labelOf(agent: string, helper: string): string | undefined {
+    return this.helpersOf(agent).find((entry) => entry.id === helper)?.label;
+  }
+
   /** A helper of the agent runs now. */
   helping(agent: string): boolean {
     return this.helpersOf(agent).some((helper) => helper.state === 'running');

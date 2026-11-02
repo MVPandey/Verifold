@@ -6,7 +6,13 @@
  * lookup counts once for each call. The reading map is what agents add with
  * `verifold_source`.
  */
-import { clip, object, type PostKind } from '../board.ts';
+import {
+  clip,
+  object,
+  type Post,
+  type PostKind,
+  type PostSearch,
+} from '../board.ts';
 import { readingLimits } from '../lab-tools.ts';
 import type { WebRead } from '../transcript.ts';
 
@@ -15,6 +21,8 @@ export interface Lookup {
   /** Its query or its address. */
   readonly title: string;
   readonly paper: boolean;
+  /** The helper that made it, by its ID. Absent: the agent itself. */
+  readonly helper?: string;
 }
 
 /** The lookups of one agent, with its subagents. */
@@ -24,7 +32,11 @@ export interface LookupRecord {
   readonly last: Lookup | null;
   readonly lastPaper: Lookup | null;
   /** Calls with no result yet, and the newest calls that counted, by launch and ID. Not saved: a call logs within one process. */
-  readonly pending: readonly { readonly key: string; readonly title: string }[];
+  readonly pending: readonly {
+    readonly key: string;
+    readonly title: string;
+    readonly helper?: string;
+  }[];
   readonly seen: readonly string[];
 }
 
@@ -84,10 +96,12 @@ export function afterRead(
   if (!read.named && !waiting) return record;
   const pending = record.pending.filter((entry) => entry !== waiting);
   const title = read.title || (waiting?.title ?? '');
+  const helper = read.helper ?? waiting?.helper;
+  const by = helper ? { helper } : {};
   if (read.status === 'running')
     return {
       ...record,
-      pending: [...pending, { key, title }].slice(-readingLimits.seen),
+      pending: [...pending, { key, title, ...by }].slice(-readingLimits.seen),
     };
   if (read.status === 'failed') return { ...record, pending };
   const paper = isPaperLookup(title);
@@ -95,6 +109,7 @@ export function afterRead(
     at,
     title: clip(title, readingLimits.lookup),
     paper,
+    ...by,
   };
   return {
     count: record.count + 1,
@@ -151,12 +166,38 @@ function parseLookup(value: unknown): Lookup | null {
         at: entry.at,
         title: entry.title.slice(0, readingLimits.lookup),
         paper: entry.paper === true,
+        ...(typeof entry.helper === 'string'
+          ? { helper: entry.helper.slice(0, 300) }
+          : {}),
       }
     : null;
 }
 
 const count = (value: unknown): number =>
   Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : 0;
+
+/**
+ * The lookups behind a new post of an agent: those since its last post that
+ * counted any. Null: it made none. `label`: a helper's label by its ID.
+ */
+export function searchSince(
+  record: LookupRecord | undefined,
+  posts: readonly Post[],
+  author: string,
+  label: (helper: string) => string | undefined,
+): PostSearch | null {
+  const base =
+    posts.findLast((post) => post.author === author && post.search)?.search
+      ?.total ?? 0;
+  if (!record?.last || record.count <= base) return null;
+  const helper = record.last.helper ? label(record.last.helper) : undefined;
+  return {
+    lookups: record.count - base,
+    total: record.count,
+    at: record.last.at,
+    ...(helper ? { helper } : {}),
+  };
+}
 
 /** A saved record, or null. A harness can write in the project, so every field is checked. */
 export function parseLookups(value: unknown): LookupRecord | null {

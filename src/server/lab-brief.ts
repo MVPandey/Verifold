@@ -13,7 +13,11 @@ import {
   plainNumbersMatch,
   quotesOf,
 } from '../core/lab/brief.ts';
-import type { BriefLine as StoredLine, LabView } from '../core/lab/schema.ts';
+import type {
+  BriefLine as StoredLine,
+  LabView,
+  Notice as StoredNotice,
+} from '../core/lab/schema.ts';
 import type {
   Brief,
   BriefLine,
@@ -22,6 +26,18 @@ import type {
   Question,
   ThreadStory,
 } from '../protocol/api.ts';
+
+/** The person can act on a notice: agents may do the same work, or no agent answered the person. */
+function concernsPerson(
+  notice: Pick<StoredNotice, 'kind' | 'posts'>,
+  posts: ReadonlyMap<string, BoardPost>,
+): boolean {
+  return (
+    notice.kind === 'overlap' ||
+    (notice.kind === 'missing-answer' &&
+      notice.posts.some((id) => posts.get(id)?.author === 'person'))
+  );
+}
 
 /** A line as the wire has it. */
 function lineItem(
@@ -84,6 +100,9 @@ export function briefItems(
       kind: notice.kind,
       posts: [...notice.posts],
       to: [...notice.to],
+      forYou: concernsPerson(notice, posts),
+      thread:
+        notice.posts.flatMap((id) => posts.get(id)?.thread ?? [])[0] ?? null,
     })),
     questions: keep(stored.questions, 'questions', true).map((question) => ({
       id: question.id,

@@ -16,12 +16,18 @@ import {
   clip,
   number,
   object,
+  postId,
+  threadId,
   type NewPost,
   type Post,
 } from '../board.ts';
 import type { HarnessName } from '../harness.ts';
 import { labShares, type LabShare } from '../lab-share.ts';
-import { longShotLimits, longShotToolSpecs } from '../lab-tools.ts';
+import {
+  longShotLimits,
+  longShotToolSpecs,
+  readingLimits,
+} from '../lab-tools.ts';
 import { loadPrompt } from '../prompts.ts';
 import { hostName, type SessionRecord } from '../session.ts';
 import {
@@ -30,6 +36,7 @@ import {
   rankCandidates,
   type Idea,
 } from './ideas.ts';
+import type { Source } from './literature.ts';
 import { readObject, RecordFile } from './record-file.ts';
 import { fail, text, type LabSessions, type labTiming } from './schema.ts';
 import { SlotSession, type SlotEnd } from './slot-session.ts';
@@ -148,7 +155,7 @@ function parseJudged(
 
 /** One long shot as a thread and a post. Verifold posts it, and a model judged it, so the post says which harness did. */
 function proposalOf(
-  judged: Judged,
+  judged: Omit<Judged, 'id'>,
   candidate: Candidate,
   harness: HarnessName,
 ): {
@@ -167,6 +174,16 @@ function proposalOf(
   };
 }
 
+/** A long shot on the board, with what its session judged. */
+export interface PostedShot extends Omit<Judged, 'id'> {
+  readonly thread: string;
+  readonly post: string;
+  /** The ideas that it combines. */
+  readonly ideas: readonly string[];
+  /** The harness of the session that judged it. */
+  readonly harness: HarnessName;
+}
+
 /** One draw of long shots. */
 export interface DrawRecord {
   readonly at: string;
@@ -176,6 +193,50 @@ export interface DrawRecord {
   readonly agent: string;
   /** The combinations that it drew, by key. */
   readonly drawn: readonly string[];
+  /** What went on the board. Absent: no judgment came yet. */
+  readonly posted?: readonly PostedShot[];
+}
+
+/** What the idea map's page reads. */
+export interface IdeaMapView extends ReturnType<LongShots['state']> {
+  readonly ideas: readonly Idea[];
+  readonly sources: readonly Source[];
+  readonly draws: readonly DrawRecord[];
+}
+
+function parseShot(value: unknown): PostedShot | null {
+  const entry = object(value);
+  const line = (name: string, most: number): string =>
+    typeof entry?.[name] === 'string' ? entry[name].slice(0, most) : '';
+  const count = (name: string, most: number): number =>
+    Number.isSafeInteger(entry?.[name]) &&
+    (entry?.[name] as number) >= 0 &&
+    (entry?.[name] as number) <= most
+      ? (entry?.[name] as number)
+      : 0;
+  return entry &&
+    typeof entry.thread === 'string' &&
+    threadId.test(entry.thread) &&
+    typeof entry.post === 'string' &&
+    postId.test(entry.post) &&
+    (entry.harness === 'claude' || entry.harness === 'codex') &&
+    Array.isArray(entry.ideas)
+    ? {
+        thread: entry.thread,
+        post: entry.post,
+        question: line('question', longShotLimits.question),
+        ideas: entry.ideas
+          .filter((idea): idea is string => typeof idea === 'string')
+          .slice(0, longShotLimits.size)
+          .map((idea) => idea.slice(0, readingLimits.idea)),
+        harness: entry.harness,
+        sense: count('sense', 5),
+        test: line('test', longShotLimits.test),
+        cost: line('cost', longShotLimits.cost),
+        prior: count('prior', longShotLimits.prior),
+        closest: line('closest', longShotLimits.closest),
+      }
+    : null;
 }
 
 function parseDraw(value: unknown): DrawRecord | null {
@@ -196,6 +257,13 @@ function parseDraw(value: unknown): DrawRecord | null {
             (key): key is string => typeof key === 'string' && key.length < 40,
           )
           .slice(0, longShotLimits.batch),
+        ...(Array.isArray(entry.posted)
+          ? {
+              posted: entry.posted
+                .slice(0, longShotLimits.top)
+                .flatMap((item) => parseShot(item) ?? []),
+            }
+          : {}),
       }
     : null;
 }
@@ -259,6 +327,8 @@ export class LongShots {
   private waiting: WaitingDraw | null = null;
   private running: RunningDraw | null = null;
   private list: readonly DrawRecord[] = [];
+  /** The person's Stop long shots: no failed line of work starts a draw until their next Draw again. */
+  private off = false;
   private readonly path: string;
   private readonly file: RecordFile;
   private readonly host: LongShotHost;
@@ -267,7 +337,9 @@ export class LongShots {
     this.host = host;
     this.path = join(host.root, '.verifold', 'lab', 'long-shots.json');
     this.file = new RecordFile(this.path, () =>
-      host.paused() ? null : { schemaVersion: 1, draws: this.list },
+      host.paused()
+        ? null
+        : { schemaVersion: 1, draws: this.list, stopped: this.off },
     );
   }
 
@@ -277,6 +349,7 @@ export class LongShots {
     this.list = (Array.isArray(saved?.draws) ? saved.draws : [])
       .slice(-longShotLimits.draws)
       .flatMap((item) => parseDraw(item) ?? []);
+    this.off = saved?.stopped === true;
   }
 
   /** Wait until the newest records are on disk. */
@@ -287,6 +360,17 @@ export class LongShots {
   /** The draws, oldest first. */
   draws(): readonly DrawRecord[] {
     return this.list;
+  }
+
+  /** What a screen shows of the draws now. */
+  state(): {
+    readonly stopped: boolean;
+    readonly drawing: 'running' | 'waiting' | null;
+  } {
+    return {
+      stopped: this.off,
+      drawing: this.running ? 'running' : this.waiting ? 'waiting' : null,
+    };
   }
 
   /** The session holds a slot now, so `giveSlot` can free it. */
@@ -316,15 +400,17 @@ export class LongShots {
     );
   }
 
-  /** Post a long shot in its own thread. */
-  private async propose(fields: ReturnType<typeof proposalOf>): Promise<void> {
+  /** Post a long shot in its own thread. Returns where it landed. */
+  private async propose(
+    fields: ReturnType<typeof proposalOf>,
+  ): Promise<{ readonly thread: string; readonly post: string }> {
     const { id } = await this.host.threads.open({
       title: fields.title,
       why: fields.why,
       openedBy: 'verifold',
       at: new Date().toISOString(),
     });
-    await this.host.add({
+    const post = await this.host.add({
       author: 'verifold',
       kind: 'proposal',
       thread: id,
@@ -333,6 +419,7 @@ export class LongShots {
       artifacts: [],
       alien: true,
     });
+    return { thread: id, post: post.id };
   }
 
   /**
@@ -342,7 +429,7 @@ export class LongShots {
    */
   async ruledOut(post: Post): Promise<void> {
     const share = this.host.share();
-    if (share && share !== 'close')
+    if (share && share !== 'close' && !this.off)
       await this.draw('ruled-out', post.harness ?? null).catch(() => {});
   }
 
@@ -350,7 +437,8 @@ export class LongShots {
    * Draw candidates, in the lab's queue. The session starts when a slot is
    * free and nothing else needs one. `person`: a draw that cannot happen
    * refuses, with the reason. A failed line of work starts no draw then, and
-   * says nothing. Too few ideas give a note on the board instead of a draw.
+   * says nothing. Too few ideas also give one note on the board. The
+   * person's draw turns long shots on again.
    */
   async draw(
     by: WaitingDraw['by'],
@@ -378,11 +466,13 @@ export class LongShots {
       new Set(this.list.flatMap((draw) => draw.drawn)),
     );
     if (!combinations.length) {
-      await this.note(
-        `Verifold drew no long shots: the idea map needs ${longShotLimits.size} ideas in a new combination, with at least one that the lab has not tried.`,
-        `long-shots-few-${ideas.length}`,
-      );
-      return;
+      const why = `Verifold drew no long shots: the idea map needs ${longShotLimits.size} ideas in a new combination, with at least one that the lab has not tried.`;
+      await this.note(why, `long-shots-few-${ideas.length}`);
+      return refused(why);
+    }
+    if (by === 'person' && this.off) {
+      this.off = false;
+      void this.file.save().catch(() => {});
     }
     this.waiting = {
       by,
@@ -497,21 +587,30 @@ export class LongShots {
     const best = rankCandidates(
       judged.filter((entry) => entry.sense >= longShotLimits.sense),
     ).slice(0, longShotLimits.top);
-    let posted = 0;
-    for (const entry of best) {
-      const candidate = run.candidates.find(({ id }) => id === entry.id);
+    const posted: PostedShot[] = [];
+    for (const { id, ...entry } of best) {
+      const candidate = run.candidates.find((shot) => shot.id === id);
       if (!candidate) continue;
       await this.propose(proposalOf(entry, candidate, run.harness))
-        .then(() => {
-          posted += 1;
+        .then((landed) => {
+          posted.push({
+            ...entry,
+            ...landed,
+            ideas: candidate.ideas.map((idea) => idea.text),
+            harness: run.harness,
+          });
         })
         .catch(() => {});
     }
-    if (!posted)
+    this.list = this.list.map((draw) =>
+      draw.agent === run.agent ? { ...draw, posted } : draw,
+    );
+    void this.file.save().catch(() => {});
+    if (!posted.length)
       await this.note(
         'No long shot goes on the board: no candidate made sense, or the lab holds the most threads.',
       );
-    return `Verifold posted ${posted} long shots. End your turn now.`;
+    return `Verifold posted ${posted.length} long shots. End your turn now.`;
   }
 
   /** A turn of the session ended, or its process stopped. Returns whether this session is the draw's. */
@@ -533,5 +632,16 @@ export class LongShots {
     this.waiting = null;
     this.running?.slot.end();
     this.running = null;
+  }
+
+  /**
+   * The person's Stop long shots, in the lab's queue: the draw that waits and
+   * the session that runs end, and no failed line of work starts a new draw.
+   * An agent that took up a long shot keeps working.
+   */
+  async halt(): Promise<void> {
+    this.stop();
+    this.off = true;
+    await this.file.save();
   }
 }

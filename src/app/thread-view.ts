@@ -140,6 +140,8 @@ export interface ThreadLayout {
   readonly posts: readonly Post[];
   /** One line at the end, or null. */
   readonly foot: string | null;
+  /** The words of the control that opens the story's posts here. Null: none. */
+  readonly showPosts: string | null;
 }
 
 /** A story tells the outcome that the thread has now. */
@@ -216,12 +218,14 @@ function outsideNote(left: number): string | null {
  * none yet, and Technical shows the real posts. A story that tells an earlier
  * outcome stays, but the current outcome's quote stands above it, and both
  * views leave out its later lines. `posts`: each post that the page read.
+ * `unfolded`: the person opened the story's posts, to act on one of them.
  */
 export function threadLayout(
   page: ThreadPage,
   posts: readonly Post[],
   mode: ViewMode,
   now: number,
+  unfolded = false,
 ): ThreadLayout {
   const { thread, story } = page;
   const told = mode === 'simple' && story ? story : null;
@@ -249,13 +253,18 @@ export function threadLayout(
       : mode === 'simple'
         ? 'The story of this thread is not ready yet. Here are its posts.'
         : null,
-    posts: told ? left : mode === 'simple' ? simplePosts(posts) : posts,
+    posts:
+      told && !unfolded ? left : mode === 'simple' ? simplePosts(posts) : posts,
     foot:
       told && count
         ? `The thread has ${counted(count, 'post')}. Technical shows ${count === 1 ? 'it' : 'each one'}.`
         : !posts.length
           ? 'This thread has no posts yet.'
           : null,
+    showPosts:
+      told && !unfolded && count
+        ? `Show ${count === 1 ? 'the post' : 'the posts'} here`
+        : null,
   };
 }
 

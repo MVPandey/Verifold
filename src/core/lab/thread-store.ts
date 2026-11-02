@@ -36,6 +36,7 @@ import {
   decided,
   dueProposals,
   followed,
+  overturned,
   parseMove,
   parseThread,
   placed,
@@ -210,7 +211,7 @@ export class ThreadStore {
     by: string,
     direction: string,
   ): Promise<
-    Pick<Post, 'thread' | 'outcome' | 'accepts' | 'method' | 'raters'>
+    Pick<Post, 'thread' | 'outcome' | 'accepts' | 'method' | 'raters' | 'prior'>
   > {
     const { thread, ...rest } = shape;
     return {
@@ -238,6 +239,13 @@ export class ThreadStore {
   async close(id: string, post: Post | undefined): Promise<void> {
     const at = new Date().toISOString();
     await this.change(id, (thread) => closed(thread, post, at));
+  }
+
+  /** The person overturned the thread's decision. Returns the decision's post. Refuses a thread with no decision. */
+  async overturn(id: string): Promise<string | undefined> {
+    const post = this.get(id)?.outcome?.post;
+    await this.change(id, overturned);
+    return post;
   }
 
   /**
