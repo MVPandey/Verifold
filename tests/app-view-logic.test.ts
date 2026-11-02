@@ -14,7 +14,6 @@ import type {
 } from '../src/protocol/api.ts';
 import {
   agentRows,
-  reachLine,
   readingWords,
   rowAge,
   rowDetail,
@@ -713,50 +712,6 @@ await test('an agent that waits on another shows it, and an agent with no line s
   assert.equal(rows[0]?.chip.label, 'Waits on Agent 2');
   assert.equal(rows[0]?.wait, 'Waits on Agent 2: Which seed comes first?');
   assert.match(rows[0]?.line ?? '', /^Running probe\.py/);
-});
-
-await test('the reach line says who reads a post to the lab', () => {
-  const directions = [
-    direction('d-1', { state: 'closed' }),
-    direction('d-2'),
-    direction('d-3'),
-    direction('d-4'),
-  ];
-  const agents = ['a-1', 'a-2', 'a-3', 'a-4'].map((id) => agent(id));
-  assert.equal(
-    reachLine(lab({ directions, agents })),
-    'Agents 2, 3 and 4 read this after their current steps. Agent 1 ended.',
-  );
-  assert.equal(
-    reachLine(
-      lab({
-        directions: [direction('d-2')],
-        agents,
-        paused: { at: ago(1), reason: 'person' },
-      }),
-    ),
-    'Agent 2 reads this after the lab resumes.',
-  );
-  assert.equal(
-    reachLine(lab({ directions: [direction('d-2')], agents })),
-    'Agent 2 reads this after its current step.',
-  );
-  assert.equal(
-    reachLine(
-      lab({ directions: [direction('d-1', { state: 'stopped' })], agents }),
-    ),
-    'No agent works now, so no agent reads this. Agent 1 ended.',
-  );
-  const many = [1, 2, 3, 4, 5, 6].map((number) => `a-${number}`);
-  assert.equal(
-    reachLine(
-      lab({
-        directions: many.map((id) => direction(`d-${id.slice(2)}`)),
-        agents: many.map((id) => agent(id)),
-      }),
-    ),
-    '6 agents read this after their current steps.',
-  );
 });
 
 await test('a title and a chip follow the view and the record', () => {

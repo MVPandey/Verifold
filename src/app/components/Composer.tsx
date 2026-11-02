@@ -46,7 +46,7 @@ export function sameSend(a: Send, b: Send): boolean {
  * while the person typed only the start of a name. `replying`: the post that
  * a send answers, shown above the box with a way to stop replying. A send
  * to another post is another intent, with its own key. `onSent` runs after
- * a send went through.
+ * a send went through. `onType` hears each change of the text, also a name that the list completes.
  */
 export function Composer({
   label,
@@ -58,6 +58,7 @@ export function Composer({
   names,
   replying,
   onSent,
+  onType,
 }: {
   readonly label: string;
   readonly placeholder: string;
@@ -70,6 +71,8 @@ export function Composer({
     | {
         /** The post's ID. */
         readonly post: string;
+        /** What the send does. Default: "Replying to". */
+        readonly verb?: string;
         /** Who wrote it. */
         readonly to: string;
         readonly text: string;
@@ -77,6 +80,7 @@ export function Composer({
       }
     | undefined;
   readonly onSent?: (() => void) | undefined;
+  readonly onType?: ((text: string) => void) | undefined;
 }): ReactNode {
   const id = useId();
   const listId = useId();
@@ -92,6 +96,10 @@ export function Composer({
     if (moveTo.current === null || !input.current) return;
     input.current.setSelectionRange(moveTo.current, moveTo.current);
     moveTo.current = null;
+  }, [text]);
+  useEffect(() => {
+    onType?.(text);
+    // The text alone says when the box changed.
   }, [text]);
   const action = useAction<Send>(
     (value, key) => onSend(value.text, key),
@@ -130,7 +138,11 @@ export function Composer({
       {action.error}
     </span>
   ) : (
-    hint && <span className="composer__hint">{hint}</span>
+    hint && (
+      <span className="composer__hint" aria-live="polite">
+        {hint}
+      </span>
+    )
   );
   if (multiline)
     return (
@@ -171,7 +183,8 @@ export function Composer({
       {replying && (
         <p className="composer__replying">
           <span>
-            Replying to <b>{replying.to}</b>: {replying.text}
+            {replying.verb ?? 'Replying to'} <b>{replying.to}</b>:{' '}
+            {replying.text}
           </span>
           <button
             type="button"

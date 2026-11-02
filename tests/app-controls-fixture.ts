@@ -8,6 +8,7 @@ const unread = (): Promise<{ error: string }> =>
 export const controls: LabControls = {
   addDirection: ok,
   stopDirection: ok,
+  reopenDirection: ok,
   restartAgent: ok,
   cancelRun: ok,
   moreTime: ok,
@@ -19,5 +20,15 @@ export const controls: LabControls = {
   threadPage: unread,
   askStory: ok,
   writeThread: ok,
+  writeTo: ok,
+  object: ok,
+  askCheck: ok,
+  overturn: ok,
+  askCoordinator: ok,
+  draw: ok,
+  stopLongShots: ok,
+  reach: unread,
+  collab: unread,
+  ideas: unread,
   figure: unread,
 };

@@ -849,6 +849,8 @@ export interface DirectionView {
     | 'crashed';
   /** When a wait ends. */
   readonly until: string | null;
+  /** It has no process now, so a wake needs a free slot. */
+  readonly parked?: boolean;
   /** The subagents of its harness. */
   readonly helpers?: readonly Helper[];
 }
@@ -875,6 +877,8 @@ export interface LabView {
   readonly reading?: Reading;
   /** The brief, the notices, and the person's questions. Absent: a lab from before threads. */
   readonly brief?: BriefView;
+  /** Every worker slot is taken. */
+  readonly slotsFull?: boolean;
 }
 
 /** The harness sessions of the lab: the project's worker slots. */

@@ -79,6 +79,7 @@ import {
 import type { FigureRead } from '../core/lab.ts';
 import type { PlanFact } from '../core/lab/schema.ts';
 import { latestAnswer } from '../core/lab/latest-answer.ts';
+import type { IdeaMapView } from '../core/lab/long-shots.ts';
 import { laterPosts } from '../core/lab/thread-story.ts';
 import { runSummary, type RunLogPart, type RunRecord } from '../core/runs.ts';
 import { loadWorkspace } from '../core/storage.ts';
@@ -153,14 +154,26 @@ import {
   type HistoryRun,
   type HistoryTask,
   type HistoryTurns,
+  type CollabPage,
+  type IdeaPage,
+  type Reach,
 } from '../protocol/api.ts';
 import { agentName } from '../ui/lab-lines.ts';
 import { figureHeaders, figurePixels, imageSize } from './figure.ts';
 import { briefItems, storyItem } from './lab-brief.ts';
 import { keptAgents, keptDirections } from './lab-lists.ts';
 import {
+  collabPage,
+  ideaPage,
+  reachItem,
+  reachQuery,
+  type ReachQuery,
+} from './lab-team.ts';
+import {
+  lastPostTimes,
   noMarks,
   postMarks,
+  searchItem,
   takingPart,
   threadActivity,
   threadItem,
@@ -364,7 +377,13 @@ const levels: readonly [Level, ...Level[]] = [
 export interface ApiSources {
   /** The project folder. Null before setup made it. */
   readonly root: string | null;
-  readonly lab: { view(): LabView | null } | undefined;
+  readonly lab:
+    | {
+        view(): LabView | null;
+        /** Absent in a reader of records only. */
+        ideaMap?(): IdeaMapView | null;
+      }
+    | undefined;
   readonly compute: { view(): ComputeView } | undefined;
   /** A session in a worker slot, or null. */
   readonly session: (id: string) => SessionView | null;
@@ -972,6 +991,8 @@ function post(
     ...(entry.accepts ? { accepts: entry.accepts } : {}),
     ...(entry.noSearch ? { noSearch: entry.noSearch } : {}),
     ...(entry.alien ? { alien: entry.alien } : {}),
+    ...(entry.prior ? { prior: entry.prior } : {}),
+    ...(entry.search ? { search: searchItem(entry.search) } : {}),
     ...marks(entry),
   };
 }
@@ -1624,6 +1645,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
   if (keptThreads.length < threads.length)
     omitted.threads = threads.length - keptThreads.length;
   const activity = threadActivity(view.posts);
+  const lastPosts = lastPostTimes(view.posts);
   const shown = keptAgents(loaded.agents, kept, level.agents);
   if (shown.length < loaded.agents.length)
     omitted.agents = loaded.agents.length - shown.length;
@@ -1653,6 +1675,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
       }),
       line: ref.line,
       helpers: ref.helpers,
+      lastPostAt: lastPosts.get(ref.id) ?? null,
       turns: pageOfTurns(ref, turns, level.turns, level.message, proof),
       spendUsd: ref.spend,
     };
@@ -1934,6 +1957,7 @@ export class ApiReader {
       view?.state,
       view?.threads,
       view?.brief,
+      view?.slotsFull,
       view?.runs,
       view?.claudeUsd,
       sources.works,
@@ -1968,7 +1992,7 @@ export class ApiReader {
       ...view.ledger,
     );
     for (const entry of view.directions)
-      parts.push(entry.agent, entry.status, entry.until);
+      parts.push(entry.agent, entry.status, entry.until, entry.parked);
     if (compute) parts.push(cents(labGpu(compute, view.state.startedAt).spent));
     const agents = shownAgents(view);
     const followed = await Promise.all(
@@ -2185,6 +2209,27 @@ export class ApiReader {
       postMarks(view, openDisputes(view)),
       before,
     );
+  }
+
+  /** Who the person's words reach. Null without a lab. Refuses nothing: a name that no agent has reaches no one. */
+  reach(query: ReachQuery): Reach | null {
+    const view = this.sources().lab?.view();
+    return view ? reachItem(view, query) : null;
+  }
+
+  /** How the agents work together. Null without a lab with threads. */
+  collab(): CollabPage | null {
+    const sources = this.sources();
+    const view = sources.lab?.view();
+    return view?.threads?.length
+      ? collabPage(view, sources.compute?.view() ?? null)
+      : null;
+  }
+
+  /** The idea map's page. Null without a lab with threads. */
+  ideas(): IdeaPage | null {
+    const map = this.sources().lab?.ideaMap?.();
+    return map ? ideaPage(map) : null;
   }
 
   /** A thread with its story and its later facts, and its newest posts, at most `apiLimits.posts`, or those before the post number `before`. Null without a lab, or when the lab has no such thread. */
@@ -2706,6 +2751,10 @@ const actionNames = new Set<string>([
   'lab-budget',
   'lab-direction-add',
   'lab-direction-stop',
+  'lab-direction-reopen',
+  'lab-check',
+  'lab-overturn',
+  'lab-long-shots-stop',
   'lab-agent-restart',
   'lab-run-cancel',
   'lab-signoff',
@@ -2996,6 +3045,23 @@ export async function answerApi(
     }
     const thread = reader.thread(second);
     if (thread) json(response, 200, thread);
+    else response.writeHead(404).end();
+    return;
+  }
+  if (first === 'reach' && parts.length === 1) {
+    const query = reachQuery(url.searchParams);
+    if (!query) {
+      response.writeHead(400).end();
+      return;
+    }
+    const reach = reader.reach(query);
+    if (reach) json(response, 200, reach);
+    else response.writeHead(404).end();
+    return;
+  }
+  if ((first === 'collab' || first === 'ideas') && parts.length === 1) {
+    const page = first === 'collab' ? reader.collab() : reader.ideas();
+    if (page) json(response, 200, page);
     else response.writeHead(404).end();
     return;
   }
