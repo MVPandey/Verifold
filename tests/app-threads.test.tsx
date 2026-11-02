@@ -172,6 +172,7 @@ const wait = (more: Partial<Wait>): Wait => ({
 
 await test('an agent’s row says who it waits on, and an ask for the person shows in Needs you', () => {
   const lab = {
+    directions: [],
     waits: [
       wait({ on: 'person', onHandle: null, post: 'p-9', text: 'Is it firm?' }),
       wait({ on: 'person', onHandle: null, post: 'p-10' }),
@@ -186,11 +187,11 @@ await test('an agent’s row says who it waits on, and an ask for the person sho
   } as unknown as Lab;
   assert.equal(waitLine(lab, 'a-3'), 'Waits on you: Does seed 2 agree?');
   assert.equal(
-    waitLine({ waits: [wait({})] } as unknown as Lab, 'a-3'),
+    waitLine({ directions: [], waits: [wait({})] } as unknown as Lab, 'a-3'),
     'Waits on Agent 2: Does seed 2 agree?',
   );
   assert.equal(waitLine(lab, 'a-9'), null);
-  assert.equal(waitLine({} as Lab, 'a-3'), null);
+  assert.equal(waitLine({ directions: [] } as unknown as Lab, 'a-3'), null);
   assert.deepEqual(
     askedOfYou(lab).map((entry) => entry.post),
     ['p-9', 'p-10'],

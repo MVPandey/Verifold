@@ -56,6 +56,16 @@ const woken = (built: Built, post: string): readonly string[] =>
     )
     .map(({ agent }) => agent.id);
 
+/** A wake joins each agent's own queue after its call returns, so this waits for `ids` first. */
+async function wokenAre(
+  built: Built,
+  post: string,
+  ids: readonly string[],
+): Promise<void> {
+  await until(() => woken(built, post).length >= ids.length);
+  assert.deepEqual(woken(built, post), ids);
+}
+
 await test('each level of the box reaches who the server says it reaches', async (t) => {
   const built = await planned(t);
   const { thread } = await opened(built, 0, 'ask', {
@@ -69,13 +79,13 @@ await test('each level of the box reaches who the server says it reaches', async
     [one.handle],
   );
   const toOne = await built.lab.post({ text: 'Look.', thread, to: one.id });
-  assert.deepEqual(woken(built, toOne.id), [one.id]);
+  await wokenAre(built, toOne.id, [one.id]);
   assert.deepEqual(
     reader.reach({ thread, to: 'all' })?.readers.map(({ handle }) => handle),
     built.view().directions.map(({ agent }) => agent.handle),
   );
   const toAll = await built.lab.post({ text: 'All.', thread, to: 'all' });
-  assert.equal(woken(built, toAll.id).length, 3);
+  await until(() => woken(built, toAll.id).length === 3);
   await assert.rejects(
     built.lab.post({ text: 'No.', to: 'a-99' }),
     /Choose an agent of the lab/,
@@ -97,7 +107,7 @@ await test('a name in the text changes the reach as it changes the wake', async 
     text: `@${one.handle} look`,
     thread,
   });
-  assert.deepEqual(woken(built, sent.id), [one.id]);
+  await wokenAre(built, sent.id, [one.id]);
 });
 
 await test('a post on the home narrows to a name in its text, as the reach says', async (t) => {
@@ -111,7 +121,7 @@ await test('a post on the home narrows to a name in its text, as the reach says'
     [one.handle],
   );
   const sent = await built.lab.post({ text: `@${one.handle} look` });
-  assert.deepEqual(woken(built, sent.id), [one.id]);
+  await wokenAre(built, sent.id, [one.id]);
 });
 
 await test('a reach counts the names that a post keeps', async (t) => {
@@ -159,7 +169,7 @@ await test("the person's objection takes the path of an agent's", async (t) => {
     replyTo: post,
   });
   assert.equal(objection.thread, thread);
-  assert.ok(woken(built, objection.id).includes(agentOf(built, 0).id));
+  await until(() => woken(built, objection.id).includes(agentOf(built, 0).id));
   const wire = built.reader().collab() ?? assert.fail('no page');
   assert.equal(wire.disagreements[0]?.post, post);
   assert.equal(wire.disagreements[0]?.objections[0]?.author, 'person');
@@ -342,6 +352,7 @@ await test('Overturn opens a decided thread, wakes its followers, and the propos
   assert.equal(record?.overturned, post);
   assert.equal(record?.outcome, undefined);
   assert.ok(built.view().posts.some((entry) => /overturned/.test(entry.text)));
+  await until(() => heardOverturn(built).length === 2);
   assert.deepEqual(
     [...heardOverturn(built)].sort(),
     [agentOf(built, 0).id, agentOf(built, 1).id].sort(),
@@ -362,6 +373,7 @@ await test('followers hear an overturn when the board is full', async (t) => {
   );
   await built.lab.overturnDecision(thread);
   assert.equal(threadOf(built, thread)?.state, 'open');
+  await until(() => heardOverturn(built).length > 0);
   assert.deepEqual(heardOverturn(built), [agentOf(built, 0).id]);
 });
 
@@ -495,7 +507,7 @@ await test("a person's check that fails says so in its own words, reaches the pe
   assert.doesNotMatch(note.text, /does not hold up yet/);
   assert.ok(note.mentions.includes('person'));
   assert.ok(note.mentions.includes(agentOf(built, 0).id));
-  assert.deepEqual(woken(built, note.id), [agentOf(built, 0).id]);
+  await wokenAre(built, note.id, [agentOf(built, 0).id]);
   const wire = (await built.reader().build()).data.lab?.checks.at(-1);
   assert.equal(wire?.byPerson, true);
 });

@@ -452,6 +452,7 @@ async function rig(
     plan: () => null,
     ideas: () => [],
     markTried: () => Promise.resolve(''),
+    freePlace: () => {},
     name: (author) => author,
     team: () => Promise.resolve(['claude', 'codex']),
     usedUp: () => false,

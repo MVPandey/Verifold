@@ -337,7 +337,7 @@ await test('a line passes only when each claim is supported and no caveat droppe
     ['passed', 'failed', 'failed', 'failed', 'failed'],
   );
   assert.deepEqual(checks.get('l-5')?.problems, [
-    'dropped-caveat: Part (a) passed in two seeds.',
+    { kind: 'dropped-caveat', claim: 'Part (a) passed in two seeds.' },
   ]);
   assert.throws(
     () => parseChecks([], ['l-1']),
@@ -518,6 +518,7 @@ async function rig(
     plan: () => null,
     ideas: () => [],
     markTried: () => Promise.resolve(''),
+    freePlace: () => {},
     name: (author) => author,
     team: () => Promise.resolve(more.team ?? ['claude', 'codex']),
     usedUp: (name) => more.usedUp?.(name) ?? false,
@@ -771,13 +772,13 @@ await test('a line check runs on the other harness, and its result decides what 
       { state: 'passed', problems: [], by: 'codex', sameHarness: false },
       {
         state: 'numbers',
-        problems: ['91.5%'],
+        problems: [{ kind: 'stray-number', claim: '91.5%' }],
         by: null,
         sameHarness: false,
       },
       {
         state: 'failed',
-        problems: ['added-fact: It may pass.'],
+        problems: [{ kind: 'added-fact', claim: 'It may pass.' }],
         by: 'codex',
         sameHarness: false,
       },
@@ -1480,6 +1481,7 @@ await test('the snapshot keeps the first lines of a brief, tests numbers again, 
   const view = {
     state: { directions: [], calls: [] },
     posts,
+    handles: {},
     ledger: [],
     checks: [],
     brief: {

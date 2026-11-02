@@ -4,7 +4,6 @@ import { lineHref, hasOriginal } from '../brief-view.ts';
 import { useControl } from '../controls.ts';
 import { href } from '../route.ts';
 import {
-  answerCheck,
   answerHead,
   checksForYou,
   newestQuestions,
@@ -113,7 +112,6 @@ function Answer({
   const { mode } = useView();
   const [original, setOriginal] = useState(false);
   const { answer } = question;
-  const check = answer && answerCheck(answer);
   return (
     <div className="answer">
       <div className="post__head">
@@ -127,16 +125,17 @@ function Answer({
       {answer && (
         <div className="answer__text">
           <LineWords line={answer} original={original} />{' '}
-          <a className="proof" href={lineHref(answer)}>
-            {sourceWords(answer.posts)}
-          </a>{' '}
+          {answer.posts.length > 0 && (
+            <a className="proof" href={lineHref(answer)}>
+              {sourceWords(answer.posts)}
+            </a>
+          )}{' '}
           {hasOriginal(answer, mode) && (
             <PlainToggle
               original={original}
               onToggle={() => setOriginal(!original)}
             />
           )}
-          {check && <p className="answer__check">{check}</p>}
         </div>
       )}
     </div>

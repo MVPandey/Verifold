@@ -6,20 +6,19 @@
  * its quote. An answer goes to the person who asked as written, with how its
  * check went.
  */
-import type { Post as BoardPost } from '../core/board.ts';
+import { clip, type Post as BoardPost } from '../core/board.ts';
 import {
   briefTop,
   briefTopIds,
-  checkReason,
   evidenceLabel,
   evidencePosts,
-  plainNumbersMatch,
   quotesOf,
   shownKind,
   wholePost,
 } from '../core/lab/brief.ts';
 import { noticeStands } from '../core/lab/coordinator-rules.ts';
 import { endedWhy } from '../core/lab/reach.ts';
+import { strayInRecord, type FactRecords } from '../core/lab/record-facts.ts';
 import { openWaits } from '../core/lab/waits.ts';
 import type {
   BriefLine as StoredLine,
@@ -50,11 +49,7 @@ function concernsPerson(
 /** Which notices the records still hold. It reads the records only when a lab has notices. */
 function standingNotices(view: LabView): (notice: StoredNotice) => boolean {
   if (!view.brief?.notices.length) return () => false;
-  const waits = openWaits(
-    view.posts,
-    view.threads ?? [],
-    view.state.directions,
-  );
+  const waits = openWaits(view.posts, view.threads ?? []);
   const working = new Set(
     view.directions
       .filter(({ status }) => !endedWhy(status))
@@ -62,6 +57,22 @@ function standingNotices(view: LabView): (notice: StoredNotice) => boolean {
   );
   return (notice) => noticeStands(notice, waits, working);
 }
+
+/** What a line's record facts read, as a snapshot sees them. */
+function factRecords(view: LabView): FactRecords {
+  const threads = view.threads ?? [];
+  return {
+    posts: view.posts,
+    directions: view.state.directions,
+    threads,
+    waits: openWaits(view.posts, threads),
+    checks: view.checks,
+    name: (author) => view.handles[author] ?? author,
+  };
+}
+
+/** Characters of a problem in an answer's one line. */
+const problemText = 160;
 
 /** A line as the wire has it. */
 function lineItem(
@@ -75,10 +86,15 @@ function lineItem(
   });
   const { by, sameHarness } = line.check;
   // The file can change after a check, so the numbers are tested again on the way out.
-  const state =
-    line.check.state === 'passed' && !plainNumbersMatch(line.plain, cited)
-      ? 'numbers'
-      : line.check.state;
+  const stray =
+    line.check.state === 'passed'
+      ? strayInRecord(line.plain, cited, () => factRecords(view))
+      : [];
+  const state = stray.length ? 'numbers' : line.check.state;
+  const problems = stray.length
+    ? stray.map((claim) => ({ kind: 'stray-number' as const, claim }))
+    : line.check.problems;
+  const [first] = problems;
   const answer = line.kind === 'answer';
   const record = evidencePosts(cited, view.posts);
   return {
@@ -96,7 +112,16 @@ function lineItem(
       state,
       by,
       sameHarness,
-      ...(answer ? { reason: checkReason(state, line.check.problems) } : {}),
+      ...(answer && (state === 'failed' || state === 'numbers')
+        ? {
+            failure: {
+              first: first
+                ? { ...first, claim: clip(first.claim, problemText) }
+                : null,
+              count: problems.length,
+            },
+          }
+        : {}),
     },
   };
 }

@@ -43,12 +43,12 @@ export function shownPlain(
     : line.plain;
 }
 
-/** A line has a way to its quote only where it shows plain words. */
+/** A line has a way to its quote only where it shows plain words and has a post to quote. */
 export function hasOriginal(
-  line: Pick<BriefLine, 'kind' | 'plain'>,
+  line: Pick<BriefLine, 'kind' | 'plain' | 'quotes'>,
   mode: ViewMode,
 ): boolean {
-  return shownPlain(line, mode, false) !== null;
+  return shownPlain(line, mode, false) !== null && line.quotes.length > 0;
 }
 
 /** Where a line's Thread link leads: its thread, or its first post in a lab's older posts. */

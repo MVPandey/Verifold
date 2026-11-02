@@ -6,9 +6,21 @@ function onName(wait: Wait): string {
   return wait.onHandle ? roleName(wait.onHandle) : 'you';
 }
 
+/** The waits that a row shows. An agent that ended waits on no one, and a reopen brings its waits back. */
+export function rowWaits(
+  lab: Pick<Lab, 'waits' | 'directions'>,
+): readonly Wait[] {
+  const ended = new Set(
+    lab.directions
+      .filter((direction) => direction.state !== 'open')
+      .map((direction) => direction.agent),
+  );
+  return (lab.waits ?? []).filter((wait) => !ended.has(wait.waiter));
+}
+
 /** The line on an agent's row: its oldest wait, such as "Waits on Agent 2: Does seed 2 agree?". Null when it waits on no one. */
 export function waitLine(lab: Lab, agent: string): string | null {
-  const wait = lab.waits?.find((entry) => entry.waiter === agent);
+  const wait = rowWaits(lab).find((entry) => entry.waiter === agent);
   return wait ? `Waits on ${onName(wait)}: ${wait.subject}` : null;
 }
 

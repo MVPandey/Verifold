@@ -5,17 +5,10 @@
  * tag, and the quote. The Coordinator writes only the plain words, and
  * `plainNumbersMatch` and a line check test those words against their posts.
  */
-import { clip, number, type Post, type PostKind } from '../board.ts';
+import { number, type Post, type PostKind } from '../board.ts';
 import { runActive, type RunRecord } from '../runs.ts';
-import { openObjections } from './post-rules.ts';
-import type {
-  Call,
-  Check,
-  Direction,
-  LineState,
-  PlanOfRecord,
-  Thread,
-} from './schema.ts';
+import { heldUp, openObjections } from './post-rules.ts';
+import type { Call, Check, Direction, PlanOfRecord, Thread } from './schema.ts';
 import { askerDirections } from './words.ts';
 
 const smallNumbers =
@@ -315,16 +308,22 @@ function postClock(at: string): string {
 /**
  * The numbers of a plain line that its posts do not hold, each as it counts
  * here, such as "91.5%". A percent needs a percent in a post: 12 of 60 does
- * not back 20%. A time can be the time of a post.
+ * not back 20%. A time can be the time of a post. `facts`: the line's record
+ * facts, so a true count of the record passes. A line check still fails such a
+ * number in a claim about a result.
  */
 export function strayNumbers(
   plain: string,
   posts: readonly Pick<Post, 'text' | 'at'>[],
+  facts: readonly string[] = [],
 ): readonly string[] {
-  const known = posts.flatMap((post) => [
-    ...figures(post.text),
-    { value: postClock(post.at), percent: false },
-  ]);
+  const known = [
+    ...posts.flatMap((post) => [
+      ...figures(post.text),
+      { value: postClock(post.at), percent: false },
+    ]),
+    ...facts.flatMap(figures),
+  ];
   return figures(plain)
     .filter(
       (figure) =>
@@ -397,7 +396,6 @@ interface Form {
   readonly target: string | null;
   readonly words: string;
   readonly rerun: boolean;
-  readonly held: boolean;
 }
 
 const outcomeWords = { holds: 'held', fails: 'failed', differs: 'differed' };
@@ -415,7 +413,6 @@ function checkForm(check: EvidenceCheck): Form {
     at: check.endedAt ?? check.queuedAt,
     target: check.claim,
     rerun,
-    held: check.outcome === 'holds',
     words: ending(
       rerun
         ? `${check.blind ? '' : 'not-blind '}rerun${check.sameHarness ? ' on the same harness' : ''}`
@@ -437,7 +434,6 @@ function postForm(post: Post): Form {
   return {
     ...base,
     rerun: post.method === 'rerun',
-    held: post.outcome === 'holds',
     words: ending(post.method ? words : 'an agent check', post.outcome),
   };
 }
@@ -457,39 +453,11 @@ function noCheckYet(subjects: readonly Post[]): string {
   return `${capitalized(numberWord(authors.size))} agent${authors.size > 1 ? "s'" : "'s"} ${noun}. No check yet.`;
 }
 
-/** What tested these posts, oldest first: each check of Verifold that ended, and each `check` post. */
-function formsOf(
-  posts: readonly Post[],
-  checks: readonly EvidenceCheck[],
-): readonly Form[] {
-  const ids = new Set(posts.map((post) => post.id));
-  return [
-    ...checks
-      .filter(
-        (check) =>
-          check.state === 'done' &&
-          (ids.has(check.claim) ||
-            (check.result !== null && ids.has(check.result))),
-      )
-      .map(checkForm),
-    ...posts.filter((post) => post.kind === 'check').map(postForm),
-  ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-}
-
-/** An objection stands against one of these posts. */
-function disputedAny(
-  posts: readonly Post[],
-  checks: readonly EvidenceCheck[],
-): boolean {
-  const ids = new Set(posts.map((post) => post.id));
-  return [...openObjections(posts, checks).keys()].some((id) => ids.has(id));
-}
-
 /**
- * A line's tag, from the record. The writer's `held` stands only when the
- * newest rerun of each of its results held and no objection stands. A code read
- * or a rating is no rerun, as for a direction's verdict. Any other `held` shows
- * as `result`: one model's report. `posts`: what `evidencePosts` gives.
+ * A line's tag, from the record. The writer's `held` stands only when `heldUp`
+ * holds for each of its results, so a tag cannot say more than a verdict can.
+ * Any other `held` shows as `result`: one model's report. `posts`: what
+ * `evidencePosts` gives.
  */
 export function shownKind<Kind extends string>(
   kind: Kind,
@@ -497,51 +465,10 @@ export function shownKind<Kind extends string>(
   checks: readonly EvidenceCheck[],
 ): Kind | 'result' {
   if (kind !== 'held') return kind;
-  const reruns = formsOf(posts, checks).filter((form) => form.rerun);
   const results = posts.filter((post) => resultKinds.has(post.kind));
-  const held =
-    results.length > 0 &&
-    results.every(
-      (post) => reruns.findLast((form) => form.target === post.id)?.held,
-    ) &&
-    !disputedAny(posts, checks);
-  return held ? kind : 'result';
-}
-
-/** The first words of each problem of a line check. */
-const problemWords: Readonly<Record<string, string>> = {
-  'added-fact': 'Its posts do not say',
-  'raised-certainty': 'It is more certain than its posts',
-  'number-out-of-scope': 'A number counts something else',
-  'dropped-caveat': 'It leaves out a caveat',
-};
-
-/**
- * Why an answer failed its check, in one line, from the check's first problem.
- * Null: it did not fail. A check gives `kind: claim`, and a number test gives
- * the numbers alone.
- */
-export function checkReason(
-  state: LineState,
-  problems: readonly string[],
-): string | null {
-  if (state === 'numbers')
-    return `Failed its check. ${
-      problems.length
-        ? `No cited post holds ${listed(problems)}.`
-        : 'A number is not in its cited posts.'
-    }`;
-  if (state !== 'failed') return null;
-  const [first = ''] = problems;
-  const split = first.indexOf(': ');
-  const words = problemWords[first.slice(0, split)];
-  const head =
-    problems.length > 1
-      ? `Failed its check, with ${problems.length} problems.`
-      : 'Failed its check.';
-  return words
-    ? `${head} ${words}: ${clip(first.slice(split + 2), 160)}`
-    : head;
+  return results.length && results.every((post) => heldUp(post, posts, checks))
+    ? kind
+    : 'result';
 }
 
 /**
@@ -558,9 +485,23 @@ export function evidenceLabel(
   checks: readonly EvidenceCheck[],
 ): string {
   if (!posts.length) return 'No cited post is on the board.';
-  const forms = formsOf(posts, checks);
+  const ids = new Set(posts.map((post) => post.id));
+  const forms = [
+    ...checks
+      .filter(
+        (check) =>
+          check.state === 'done' &&
+          (ids.has(check.claim) ||
+            (check.result !== null && ids.has(check.result))),
+      )
+      .map(checkForm),
+    ...posts.filter((post) => post.kind === 'check').map(postForm),
+  ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const results = posts.filter((post) => resultKinds.has(post.kind));
-  const open = disputedAny(posts, checks) ? ' Disputed.' : '';
+  const disputed = [...openObjections(posts, checks).keys()].some((id) =>
+    ids.has(id),
+  );
+  const open = disputed ? ' Disputed.' : '';
   if (!forms.length)
     return `${noCheckYet(results.length ? results : posts)}${open}`;
   const joined = (list: readonly Form[]): string =>

@@ -898,12 +898,6 @@ a.lit:hover {
   overflow-wrap: anywhere;
 }
 
-.answer__check {
-  margin: 4px 0 0;
-  color: var(--ink-2);
-  font-size: 13px;
-}
-
 .avatar--coordinator {
   background: #ffffff;
   color: var(--accent-ink);
