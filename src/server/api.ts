@@ -154,6 +154,7 @@ import {
 } from '../protocol/api.ts';
 import { agentName } from '../ui/lab-lines.ts';
 import { figureHeaders, figurePixels, imageSize } from './figure.ts';
+import { briefItems } from './lab-brief.ts';
 import { keptAgents, keptDirections } from './lab-lists.ts';
 import {
   noMarks,
@@ -203,6 +204,8 @@ export const apiLimits = {
   runs: 30,
   checks: 30,
   works: 20,
+  /** Lines of the brief, questions, and notices. */
+  brief: 12,
   /** Ended checks whose checkers show among the agents. */
   endedCheckers: 5,
   /** Characters of the question when the snapshot keeps nothing else. */
@@ -257,6 +260,8 @@ interface Level {
   readonly runs: number;
   readonly checks: number;
   readonly works: number;
+  /** Lines of the brief, and of each list that goes with it. */
+  readonly brief: number;
   /** It keeps the plan and the whole question. */
   readonly whole: boolean;
 }
@@ -277,6 +282,7 @@ const full: Level = {
   runs: apiLimits.runs,
   checks: apiLimits.checks,
   works: apiLimits.works,
+  brief: apiLimits.brief,
   whole: true,
 };
 
@@ -305,6 +311,7 @@ const levels: readonly [Level, ...Level[]] = [
     runs: 10,
     checks: 10,
     works: 5,
+    brief: 6,
   },
   {
     turns: 0,
@@ -323,6 +330,7 @@ const levels: readonly [Level, ...Level[]] = [
     runs: 0,
     checks: 0,
     works: 0,
+    brief: 3,
     whole: true,
   },
   {
@@ -341,6 +349,7 @@ const levels: readonly [Level, ...Level[]] = [
     runs: 0,
     checks: 0,
     works: 0,
+    brief: 0,
     whole: false,
   },
 ];
@@ -1651,6 +1660,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     startedAt: state.startedAt,
     share: state.share,
     reading: view.reading ?? null,
+    ...briefItems(view, (list, name) => keep(list, level.brief, name, true)),
     agentsHere: view.runs,
     paused: state.pausedAt
       ? { at: state.pausedAt, reason: state.pausedFor ?? 'person' }
@@ -1911,6 +1921,8 @@ export class ApiReader {
     const parts: unknown[] = [
       sources.root,
       view?.state,
+      view?.threads,
+      view?.brief,
       view?.runs,
       view?.claudeUsd,
       sources.works,
@@ -2685,6 +2697,7 @@ const actionNames = new Set<string>([
   'lab-look',
   'lab-skip-questions',
   'lab-draw',
+  'lab-ask',
   'lab-questions-answer',
   'compute-settings',
   'compute-gpus',

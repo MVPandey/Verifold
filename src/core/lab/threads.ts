@@ -88,6 +88,25 @@ function parseAgreement(value: unknown): Agreement | null {
     : null;
 }
 
+/** A post that reads in another thread now. Its file stays as it was. */
+export interface PostMove {
+  readonly post: string;
+  readonly to: string;
+  readonly at: string;
+}
+
+/** A saved move, or null. */
+export function parseMove(value: unknown): PostMove | null {
+  const entry = object(value);
+  return entry &&
+    isPost(entry.post) &&
+    typeof entry.to === 'string' &&
+    threadId.test(entry.to) &&
+    isTime(entry.at)
+    ? { post: entry.post, to: entry.to, at: entry.at }
+    : null;
+}
+
 /** A thread from its file, or null when it is not valid. A harness can write in the project, so every field is checked. */
 export function parseThread(value: unknown): Thread | null {
   const entry = object(value);
@@ -232,6 +251,19 @@ export function agreedWith(
           -threadLimits.agreed,
         ),
       };
+}
+
+/** The thread closed. `post` holds its outcome. Without one, it keeps the decision or the answer that it has. */
+export function closed(
+  thread: Thread,
+  post: Post | undefined,
+  at: string,
+): Thread {
+  return {
+    ...thread,
+    state: 'closed',
+    ...(post ? { outcome: outcomeOf(post, at) } : {}),
+  };
 }
 
 /** The thread after a proposal became its decision. */

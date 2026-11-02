@@ -106,7 +106,7 @@ const statuses: readonly RunStatus[] = [
 ];
 
 /** The run starts now or runs now. */
-export function runActive(run: RunRecord): boolean {
+export function runActive(run: Pick<RunRecord, 'status'>): boolean {
   return run.status === 'queued' || run.status === 'running';
 }
 

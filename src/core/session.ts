@@ -402,6 +402,7 @@ export function lastReply(record: SessionRecord): string | undefined {
 export function modeLabel(record: SessionRecord): string {
   if (record.mode === 'strict') return 'Strict (task)';
   if (record.mode === 'coordinator') return 'Coordinator (Verifold tools only)';
+  if (record.mode === 'tools') return 'Verifold tools only';
   const reported = record.reportedMode;
   if (!reported)
     return record.mode === 'auto' ? 'Auto (requested)' : 'Ask me (requested)';
@@ -599,7 +600,8 @@ function parseRecord(value: unknown): SessionRecord | null {
     record.mode === 'ask' ||
     record.mode === 'auto' ||
     record.mode === 'strict' ||
-    record.mode === 'coordinator'
+    record.mode === 'coordinator' ||
+    record.mode === 'tools'
       ? record.mode
       : null;
   const task = object(record.task);
@@ -665,8 +667,8 @@ function parseRecord(value: unknown): SessionRecord | null {
       ? { network: record.network as string[] }
       : {}),
     ...(typeof record.cwd === 'string' &&
-    // A task's or a direction's folder, or a lab check's or long-shot session's.
-    /^\.verifold\/(?:workspaces\/[a-z0-9][a-z0-9-]{0,80}|checks\/[kl]-[1-9]\d{0,5})$/.test(
+    // A task's or a direction's folder, or the folder of a lab check, a long-shot session, or the lab's Coordinator.
+    /^\.verifold\/(?:workspaces\/[a-z0-9][a-z0-9-]{0,80}|checks\/(?:[kl]-[1-9]\d{0,5}|lab-record))$/.test(
       record.cwd,
     )
       ? { cwd: record.cwd }
@@ -1308,6 +1310,8 @@ export class SessionManager {
     readonly denyRead?: readonly string[];
     /** The domains that its shell commands may reach, after the person's call. */
     readonly network?: readonly string[];
+    /** It acts only through `tools`: Claude Code gets no built-in tools, and Codex a read-only sandbox. */
+    readonly toolsOnly?: boolean;
   }): Promise<string> {
     this.ready();
     if (input.denyRead && !input.denyRead.every(denyPath))
@@ -1315,7 +1319,11 @@ export class SessionManager {
     if (input.network && !input.network.every(validDomain))
       fail('A domain that a session may reach is not valid.');
     const record: SessionRecord = {
-      ...fresh(input.host, input.model ?? null, 'strict'),
+      ...fresh(
+        input.host,
+        input.model ?? null,
+        input.toolsOnly ? 'tools' : 'strict',
+      ),
       agent: input.agent,
       cwd: relative(this.root, input.cwd).split('\\').join('/'),
       ...(input.denyRead?.length ? { denyRead: input.denyRead } : {}),
@@ -1328,7 +1336,9 @@ export class SessionManager {
     this.tools = input.tools;
     this.event(
       'status',
-      `Verifold started ${input.agent} in the folder of its direction, in Strict mode.`,
+      input.toolsOnly
+        ? `Verifold started ${input.agent}. It has no shell or file tools, only Verifold tools.`
+        : `Verifold started ${input.agent} in the folder of its direction, in Strict mode.`,
     );
     await this.launch(input.prompt);
     return record.id;
@@ -1727,7 +1737,9 @@ export class SessionManager {
         // A Codex lab agent or checker without a model gets Verifold's preferred model when Codex lists one. The lab names Claude Code's model.
         ...(record.agent && !record.model ? { bestModel: true } : {}),
         // Lab agents and checkers look up current facts on the live web.
-        ...(record.agent ? { liveSearch: true } : {}),
+        ...(record.agent && record.mode === 'strict'
+          ? { liveSearch: true }
+          : {}),
         ...(prompt === undefined ? {} : { prompt }),
         ...(native && (prompt === undefined || resume)
           ? { resume: native }
