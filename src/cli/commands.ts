@@ -573,6 +573,8 @@ interface DeskRun {
   readonly agency?: string;
   /** The time budget, in hours, of a lab that starts on `research`. */
   readonly hours?: number | undefined;
+  /** How far from known work that lab goes. */
+  readonly share?: string | undefined;
   /** Open the desk on this port, with this token, so the tab of a closed desk keeps working. */
   readonly reuse?: DeskPlace | undefined;
   /** This process is the background owner. Its control is saved under its owner ID while it owns the project. */
@@ -770,6 +772,9 @@ async function serveDesk(
         },
         // Lab agents' turns go to the lab. Task turns come through onTaskTurn.
         onTurnEnd: (record, outcome) => owned.lab?.turnEnded(record, outcome),
+        // The lab counts its lookups and helpers from harness records.
+        onTranscript: (record, update) =>
+          owned.lab?.harnessUpdate(record, update),
         // The person's own session that finds every slot taken gets the slot of a lab agent that had its turn. Tasks never do: a lab run has no tasks.
         makeRoom: () => owned.lab?.yieldSlot() ?? Promise.resolve(false),
         onTaskTurn: (task, turn, detail, reply) =>
@@ -1055,7 +1060,14 @@ async function serveDesk(
           );
         // The question of setup starts a lab: the lab is the default. --lab still starts one in a project that exists.
         if (research || run.lab)
-          labProblem = await startLab(root, lab, research ?? {}, io, run.hours);
+          labProblem = await startLab(
+            root,
+            lab,
+            research ?? {},
+            io,
+            run.hours,
+            run.share,
+          );
         io.listen?.(
           (line) =>
             terminalInput(
@@ -1303,6 +1315,7 @@ async function startLab(
   research: ResearchOptions,
   io: CliIO,
   hours?: number,
+  share?: string,
 ): Promise<string | null> {
   if (lab.exists) {
     io.progress?.(
@@ -1325,6 +1338,7 @@ async function startLab(
       asked,
       research.autonomy,
       hours,
+      share,
     );
     io.progress?.(
       planned
@@ -1346,6 +1360,7 @@ function ownerStart(value: unknown): {
   readonly lab: boolean;
   readonly agency: string | undefined;
   readonly hours: number | undefined;
+  readonly share: string | undefined;
 } {
   const data = (value ?? {}) as Record<string, unknown>;
   const research = (data.research ?? null) as Record<string, unknown> | null;
@@ -1394,6 +1409,8 @@ function ownerStart(value: unknown): {
       Number.isSafeInteger(data.hours) && (data.hours as number) > 0
         ? (data.hours as number)
         : undefined,
+    // How far from known work, from the Ask page. The lab checks it again.
+    share: typeof data.share === 'string' ? data.share : undefined,
   };
 }
 
@@ -1420,7 +1437,7 @@ async function runOwner(
     throw new Error(
       'verifold owner runs only when Verifold starts it. Run verifold in the project folder.',
     );
-  const { research, desk, lab, agency, hours } = ownerStart(input);
+  const { research, desk, lab, agency, hours, share } = ownerStart(input);
   const global = agency ?? agencyDirectory(root);
   // The profile that the lab reads: an isolated project's own, else the global one. A terminal that attaches with another one hears so.
   const profile = await projectProfile(root, global);
@@ -1541,6 +1558,7 @@ async function runOwner(
         noOpen: true,
         research,
         hours,
+        share,
         harness,
         lab,
         agency: global,
@@ -1599,6 +1617,8 @@ async function attachTeam(
     readonly agency?: string | undefined;
     /** The time budget, in hours, of the lab that starts on `research`. */
     readonly hours?: number | undefined;
+    /** How far from known work that lab goes. */
+    readonly share?: string | undefined;
   },
 ): Promise<void> {
   const running = await liveOwner(root);
@@ -1631,6 +1651,7 @@ async function attachTeam(
           ...(start.lab ? { lab: true } : {}),
           ...(start.agency ? { agency: start.agency } : {}),
           ...(start.hours ? { hours: start.hours } : {}),
+          ...(start.share ? { share: start.share } : {}),
         }),
       );
     } catch (error) {
@@ -2248,12 +2269,14 @@ export async function runCli(
           desk: begun.desk,
           agency,
           hours: begun.hours,
+          share: begun.share,
         });
       else
         await serveDesk(begun.root, io, signal, {
           noOpen: true,
           research,
           hours: begun.hours,
+          share: begun.share,
           harness,
           agency,
           reuse: begun.desk,

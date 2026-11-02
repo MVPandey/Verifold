@@ -263,6 +263,10 @@ await test("a start makes the project from the profile, and the Ask page's own c
     first.start.act({ question: 'Q?', gpuUsd: 0 }),
     /spend limit/,
   );
+  await assert.rejects(
+    first.start.act({ question: 'Q?', share: 'wild' }),
+    /close, mixed, or far/,
+  );
   assert.equal(existsSync(join(here, '.verifold')), false);
 
   // A start without changes takes what the page showed: the profile's team, models, and limits.
@@ -274,6 +278,7 @@ await test("a start makes the project from the profile, and the Ask page's own c
     root: here,
     question: 'Do probes see faithfulness?',
     hours: 8,
+    share: 'mixed',
   });
   const workspace = await loadWorkspace(here);
   assert.equal(workspace.host, 'claude');

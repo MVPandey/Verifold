@@ -168,7 +168,7 @@ export class ThreadStore {
   }
 
   /** Open a thread. Refuses when the lab holds the most threads. */
-  private async open(
+  async open(
     fields: Pick<Thread, 'title' | 'why' | 'openedBy' | 'at' | 'direction'>,
   ): Promise<Thread> {
     if (this.threads.length >= threadLimits.threads)

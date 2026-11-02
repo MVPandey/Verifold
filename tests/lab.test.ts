@@ -184,6 +184,8 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   if (message.uuid && running) {
     fs.appendFileSync(path.join(log, 'steers.jsonl'), JSON.stringify(text) + '\\n');
     out({ type: 'user', isReplay: true, uuid: message.uuid, message: message.message });
+    // Only a turn that WAITs goes on with the steer. A steer during a tool call waits for that call's result.
+    if (calls[next]?.name !== 'WAIT') return;
     next++;
     return call();
   }
@@ -458,6 +460,8 @@ async function fixture(
         codex: join(base, 'fake-codex'),
       },
       onTurnEnd: (record, outcome) => owned.lab?.turnEnded(record, outcome),
+      onTranscript: (record, update) =>
+        owned.lab?.harnessUpdate(record, update),
       onLimit: (host, signal) => {
         quota.record(host, signal);
         owned.lab?.limited(host, signal);
@@ -6297,9 +6301,17 @@ await test("an objection to a claim with a run starts a fresh checker of the oth
   const html = renderLab(view, (value) => value);
   assert.doesNotMatch(html, /Open disputes/);
   assert.match(html, /reran r-2 \(Codex\): acc=0\.7/);
-  // The checker's session ended after its post.
+  // The checker's session ended after its post. Its saved record says so: a later start can take its slot, and then the pool no longer holds it.
+  const ended = async (): Promise<string | undefined> =>
+    (await readRecord(lab.root, check?.session ?? ''))?.status;
   await until(
-    () => lab.sessions.view(check?.session ?? '')?.record.status === 'ended',
+    async () => (await ended()) === 'ended',
+    10_000,
+    () => {
+      const now = lab.lab.view()?.checks[0];
+      const worker = lab.sessions.view(now?.session ?? '');
+      return `Check: ${now?.state}, session ${now?.session}. In the pool: ${worker?.record.status}, live ${worker?.live}.`;
+    },
   );
 });
 

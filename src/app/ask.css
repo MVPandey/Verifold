@@ -83,6 +83,23 @@
   border-radius: 14px;
 }
 
+.ask__share {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ask__share legend {
+  margin-bottom: 6px;
+}
+
+.ask__share input {
+  flex: none;
+}
+
 .ask__agents,
 .ask__gpu,
 .ask__folder-edit {

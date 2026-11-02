@@ -579,6 +579,7 @@ async function busyLab(
       title: 'x'.repeat(planLimits.title),
       job: `Job ${index + 1}`,
       team: 'One',
+      longShot: false,
       bar: 'b'.repeat(planLimits.bar),
       runs: 3,
       noise: '±0.02',

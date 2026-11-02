@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type ReactNode } from 'react';
 import type {
   AgentTool,
   Harness,
+  LabShare,
   ProjectAgents,
   StartView,
 } from '../../protocol/api.ts';
@@ -10,6 +11,8 @@ import {
   agentsLabel,
   dueLabel,
   gpuLabel,
+  shareChoices,
+  shareLabel,
   startedAfterLost,
   teamOrder,
   validFolder,
@@ -25,7 +28,7 @@ import { useSetup } from '../useSetup.ts';
 import { Logo } from '../components/Icons.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
 
-type Editing = 'agents' | 'gpu' | 'hours' | 'folder' | null;
+type Editing = 'agents' | 'gpu' | 'hours' | 'share' | 'folder' | null;
 
 /**
  * The project's agents: a Use box and a model menu for each harness on this
@@ -107,6 +110,41 @@ function AgentsEditor({
         </span>
       )}
     </div>
+  );
+}
+
+/** How far from known work the lab goes. Mixed unless the person changes it. */
+export function ShareChoice({
+  share,
+  onChange,
+}: {
+  readonly share: LabShare;
+  readonly onChange: (share: LabShare) => void;
+}): ReactNode {
+  return (
+    <fieldset className="ask__share">
+      <legend className="limit__label">
+        How far from known work should the lab go?
+      </legend>
+      {shareChoices.map((choice) => (
+        <label key={choice.value} className="agent__use">
+          <input
+            type="radio"
+            name="share"
+            checked={share === choice.value}
+            onChange={() => onChange(choice.value)}
+          />
+          <span>
+            {choice.label}
+            <span className="muted"> · {choice.detail}</span>
+          </span>
+        </label>
+      ))}
+      <p className="setup__note">
+        A long shot joins ideas that the lab has not tried. Verifold draws them
+        at random, and agents choose what to take up.
+      </p>
+    </fieldset>
   );
 }
 
@@ -245,6 +283,7 @@ export function AskForm({
   const [gpu, setGpu] = useState<number | null>(where.gpuUsd);
   const [hours, setHours] = useState(where.hours);
   const [hoursText, setHoursText] = useState(String(where.hours));
+  const [share, setShare] = useState<LabShare>('mixed');
   const [folder, setFolder] = useState<string | null>(null);
   const [typed, setTyped] = useState('');
   const [editing, setEditing] = useState<Editing>(null);
@@ -294,6 +333,7 @@ export function AskForm({
         agents,
         gpuUsd: gpu,
         hours: budget,
+        share,
       },
       newKey(),
     );
@@ -358,6 +398,7 @@ export function AskForm({
           {chip('agents', agents ? agentsLabel(agents) : 'Choose an agent')}
           {chip('gpu', gpuLabel(gpu))}
           {chip('hours', dueLabel(hours, now))}
+          {chip('share', shareLabel(share))}
         </div>
         <span className="ask__hint">
           {scope
@@ -462,6 +503,9 @@ export function AskForm({
                   }}
                 />
               </label>
+            )}
+            {editing === 'share' && (
+              <ShareChoice share={share} onChange={setShare} />
             )}
             {editing === 'folder' && (
               <div className="ask__folder-edit">

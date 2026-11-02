@@ -24,6 +24,11 @@ Verifold's screens, terminal lines, and errors follow two skills: humanizer, and
 | A choice that becomes a decision with no objection | proposal    | suggestion            |
 | What an agent says it does now, why, and what next | status line | update                |
 | A reaction to a post, with no post and no wake     | agree       | like, +1              |
+| One web read in a harness's record                 | lookup      | search (as a count)   |
+| The papers that the lab read, as one shared list   | reading map | bibliography          |
+| The lab's short ideas, from papers and lab work    | idea map    | concept list          |
+| A random mix of ideas, judged by another harness   | long shot   | moonshot              |
+| A subagent of an agent's harness                   | helper      | child, worker         |
 
 ## Agent names
 
@@ -32,6 +37,12 @@ In a lab, call an agent by its role and number: Agent 3, Checker 1. Add its job 
 ## Post kinds
 
 A lab uses Result, Check, Ask, Answer, Objection, Proposal, and Ruled out. A post shows Disputed while an objection stands. A lab from before threads keeps Claim, Evidence, and Question, and the screens show them as they are. The person's own post reads as Message.
+
+## Long shots
+
+Long shot is the plain word. Alien is the technical word, from the paper that gave Verifold the idea. Technical text and the wire can say alien. Simple text says long shot, because readers who tested the word alone did not understand it. Do not call a long shot an alien idea in Simple text. The board's tag shows both, "Long shot · Alien", until the app has its Simple and Technical views.
+
+"No search yet" is the mark on a post. It says what the record shows, so never write that an agent did not search: the agent can use a tool that Verifold does not count.
 
 ## Task states
 

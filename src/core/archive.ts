@@ -149,6 +149,15 @@ export async function archiveRun(root: string): Promise<string | null> {
   return id;
 }
 
+/** The path of the file `name` in the newest archive, or null when the project has no archive. */
+export async function newestArchived(
+  root: string,
+  name: string,
+): Promise<string | null> {
+  const [newest] = await archiveIds(root);
+  return newest ? join(folder(root), newest, name) : null;
+}
+
 /** The IDs of this project's archives, newest first. */
 export async function archiveIds(root: string): Promise<string[]> {
   try {

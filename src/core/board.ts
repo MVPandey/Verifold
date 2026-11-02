@@ -66,6 +66,10 @@ export interface Post {
   readonly outcome?: 'holds' | 'fails';
   /** An `answer` to an objection: the author accepts the objection, so it ends. */
   readonly accepts?: true;
+  /** A proposal or a ruled-out post: its author made no lookup since its last such post. It blocks nothing. */
+  readonly noSearch?: true;
+  /** A proposal from Verifold's draw of ideas, a long shot. It stays open: no window makes it a decision. */
+  readonly alien?: true;
   /** Agent IDs, `person`, or `all`. */
   readonly mentions: readonly string[];
   readonly artifacts: readonly Artifact[];
@@ -271,11 +275,16 @@ function check(entry: Record<string, unknown>): Post | string {
     !(typeof thread === 'string' && threadId.test(thread))
   )
     return 'The thread is not valid.';
-  const { outcome, accepts } = entry;
+  const { outcome, accepts, noSearch, alien } = entry;
   if (outcome !== undefined && outcome !== 'holds' && outcome !== 'fails')
     return 'The outcome is not valid.';
   if (accepts !== undefined && accepts !== true)
     return 'The accepts field is not valid.';
+  if (
+    (noSearch !== undefined && noSearch !== true) ||
+    (alien !== undefined && alien !== true)
+  )
+    return 'A mark of the post is not valid.';
   const replyTo = entry.replyTo;
   if (
     replyTo !== undefined &&
@@ -329,6 +338,8 @@ function check(entry: Record<string, unknown>): Post | string {
     ...(replyTo ? { replyTo } : {}),
     ...(outcome ? { outcome } : {}),
     ...(accepts ? { accepts } : {}),
+    ...(noSearch ? { noSearch } : {}),
+    ...(alien ? { alien } : {}),
     mentions: mentions as string[],
     artifacts: artifacts as Artifact[],
     ...(key ? { key } : {}),
@@ -391,7 +402,7 @@ export function postLine(
   forYou = false,
   fold?: number,
 ): string {
-  return `- ${post.id} [${post.kind}${post.outcome ? ` ${post.outcome}` : ''}${post.accepts ? ', accepted' : ''}${forYou ? ', for you' : ''}] from ${name(post.author)}${post.direction ? ` in ${post.direction}` : ''}${post.thread ? ` on ${post.thread}` : ''}${post.replyTo ? `, reply to ${post.replyTo}` : ''}: ${quoted(post, fold)}${post.artifacts.length ? ` Proof: ${post.artifacts.map(artifactText).join('; ')}.` : ''}`;
+  return `- ${post.id} [${post.kind}${post.outcome ? ` ${post.outcome}` : ''}${post.accepts ? ', accepted' : ''}${post.noSearch ? ', no search yet' : ''}${post.alien ? ', long shot' : ''}${forYou ? ', for you' : ''}] from ${name(post.author)}${post.direction ? ` in ${post.direction}` : ''}${post.thread ? ` on ${post.thread}` : ''}${post.replyTo ? `, reply to ${post.replyTo}` : ''}: ${quoted(post, fold)}${post.artifacts.length ? ` Proof: ${post.artifacts.map(artifactText).join('; ')}.` : ''}`;
 }
 
 /** What an agent has read: every post through `readThrough`, and the posts in `seen` after it. */
