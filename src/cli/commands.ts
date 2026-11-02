@@ -904,7 +904,7 @@ async function serveDesk(
         }),
       });
       owned.coordinator = coordinator;
-      // The lab's Coordinator and its line check have one place of their own, outside "Agents at once".
+      // The lab's Coordinator, its line check, and its long-shot sessions share one place of their own, outside "Agents at once".
       const reserved = new SessionPool(root, {
         clientVersion: version,
         ownerId: owner.ownerId,

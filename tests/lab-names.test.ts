@@ -1157,8 +1157,13 @@ await test('the pick of an option with no effect reaches the post and the agent,
     line,
     'The person chose "Raise to 3" on c-1. This choice changes no setting by itself.',
   );
-  const agent = statesOf(lab).directions[0]?.agent;
-  assert.ok(agent?.events.some((event) => event.text === line));
+  await until(() =>
+    Boolean(
+      statesOf(lab).directions[0]?.agent.events.some(
+        (event) => event.text === line,
+      ),
+    ),
+  );
   const { lab: wire } = await wireLab(root, statesOf(lab));
   const options = wire.answered[0]?.options;
   assert.equal(options?.[0]?.noSetting, true);

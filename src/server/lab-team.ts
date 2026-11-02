@@ -122,6 +122,7 @@ export function collabPage(
   const collab = collabOf({
     posts: view.posts,
     threads: view.threads ?? [],
+    directions: view.state.directions,
     checks: view.checks,
     calls: view.state.calls,
     runs: view.ledger,

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type {
   Agent,
+  BriefLine,
   CheckItem,
   CollabPage,
   Direction,
@@ -399,15 +400,62 @@ await test('a thread offers Stop for an open agent and Reopen for an ended one',
 });
 
 await test('an answer shows its sources, and each form says that no agent woke', () => {
+  const check = (
+    state: BriefLine['check']['state'],
+    failure?: BriefLine['check']['failure'],
+  ): BriefLine =>
+    ({
+      check: {
+        state,
+        by: null,
+        sameHarness: false,
+        ...(failure ? { failure } : {}),
+      },
+    }) as BriefLine;
+  const head = (answer: BriefLine | null): string =>
+    answerHead({ at: ago(1), state: 'answered', answer }, now);
   for (const state of ['waiting', 'answered', 'unanswered'] as const)
     assert.match(
-      answerHead({ at: ago(1), state }, now),
+      answerHead({ at: ago(1), state, answer: null }, now),
       /No agent was disturbed\.$/,
     );
-  assert.match(
-    answerHead({ at: ago(1), state: 'answered' }, now),
-    /Answered from the record/,
+  // Only an answer that passed reads as answered from the record.
+  assert.match(head(check('passed')), /\. Answered from the record\. No agent/);
+  assert.match(head(check('pending')), /\. Not checked yet\. No agent/);
+  assert.doesNotMatch(head(check('pending')), /Answered|checking/);
+  assert.match(head(null), /Not checked yet/);
+  assert.match(head(check('withheld')), /keeps no plain words\. No agent/);
+  const failed = head(
+    check('failed', {
+      first: { kind: 'added-fact', claim: 'The rerun held.' },
+      count: 2,
+    }),
   );
+  assert.match(
+    failed,
+    /Failed its check, with 2 problems\. Its posts do not say: The rerun held\. No agent was disturbed\.$/,
+  );
+  assert.doesNotMatch(failed, /Answered/);
+  assert.match(
+    head(
+      check('failed', {
+        first: { kind: 'raised-certainty', claim: 'It failed.' },
+        count: 1,
+      }),
+    ),
+    /Failed its check\. It is more certain than its posts: It failed\./,
+  );
+  assert.match(
+    head(
+      check('numbers', {
+        first: { kind: 'stray-number', claim: '91.5%' },
+        count: 1,
+      }),
+    ),
+    /Failed its check\. No cited post holds 91\.5%\./,
+  );
+  // A record from an earlier version keeps its state, with no reason to show.
+  assert.match(head(check('failed')), /\. Failed its check\. No agent/);
   assert.equal(sourceWords(['p-1', 'p-2']), '2 posts');
   assert.equal(sourceWords(['p-1']), '1 post');
   const questions = ['q-1', 'q-2', 'q-3'].map(
@@ -742,7 +790,7 @@ await test('the page says who works on long shots, and what draws do now', () =>
   ] as Direction[];
   assert.match(
     shareLine({ directions, share: 'far' }),
-    /^1 of 2 agents work on long shots.*You chose Far when you asked\.$/,
+    /^Of the 2 agents with open work, 1 works on long shots\. This count leaves out 1 agent whose work ended\. Agents on long shots choose.*You chose Far when you asked\.$/,
   );
   assert.match(shareLine({ directions, share: null }), /no share/);
   assert.equal(
@@ -755,7 +803,7 @@ await test('the page says who works on long shots, and what draws do now', () =>
   );
   assert.match(
     drawState({ stopped: false, drawing: 'waiting', judge: null }) ?? '',
-    /may never run/,
+    /waits for the Coordinator to finish/,
   );
   assert.match(
     drawState({ stopped: true, drawing: null, judge: null }) ?? '',

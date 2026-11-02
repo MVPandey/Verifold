@@ -7,6 +7,7 @@ import {
 } from './agent-rows.ts';
 import { roleName, since } from './format.ts';
 import type { ViewMode } from './view-mode.ts';
+import { rowWaits } from './waits.ts';
 
 /** Past this many agents, the home folds them into teams. */
 const rowsUpTo = 6;
@@ -44,7 +45,7 @@ function waitTrouble(
   mode: ViewMode,
   now: number,
 ): Trouble | null {
-  const wait = lab.waits?.find(
+  const wait = rowWaits(lab).find(
     (entry) => entry.waiter === agent.id && old(entry.since, now),
   );
   if (wait) {

@@ -576,21 +576,21 @@ await test('the desk stores a key and limits through actions, and no reply holds
       (await post({ action: 'compute-agents', agents })).status,
       409,
     );
-  assert.equal(pool.limit, 3);
+  assert.equal(pool.limit, 4);
   assert.equal(
-    (await post({ action: 'compute-agents', agents: 4 })).status,
+    (await post({ action: 'compute-agents', agents: 5 })).status,
     200,
   );
-  assert.equal(pool.limit, 4);
+  assert.equal(pool.limit, 5);
   const workspace = JSON.parse(
     await readFile(join(root, '.verifold', 'workspace.json'), 'utf8'),
   ) as { agents: number };
-  assert.equal(workspace.agents, 4);
+  assert.equal(workspace.agents, 5);
   assert.match(
     await (
       await fetch(`${url.origin}/api/view?view=compute`, { headers })
     ).text(),
-    /Up to 4 agents run tasks and sessions at the same time\./,
+    /Up to 5 agents run tasks and sessions at the same time\./,
   );
 });
 

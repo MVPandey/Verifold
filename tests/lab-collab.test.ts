@@ -52,6 +52,7 @@ const records = (
 ): Parameters<typeof collabOf>[0] => ({
   posts: [],
   threads: [],
+  directions: [],
   checks: [],
   calls: [],
   runs: [],

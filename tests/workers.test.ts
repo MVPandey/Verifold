@@ -505,9 +505,9 @@ await test('the project record keeps "Agents at once" from 1 to 20', () => {
     );
 });
 
-await test('"Agents at once" admits three agents by default, and a change takes effect for the next start', async (t) => {
-  const { sessions } = await owner(t, {}, defaultAgents);
-  assert.equal(defaultAgents, 3);
+await test('"Agents at once" admits four agents by default, and a change takes effect for the next start', async (t) => {
+  assert.equal(defaultAgents, 4);
+  const { sessions } = await owner(t, {}, 3);
   const start = (prompt: string): Promise<string> =>
     sessions.start({ host: 'claude', mode: 'ask', prompt: `ASK ${prompt}` });
   const ids = [await start('one'), await start('two'), await start('three')];

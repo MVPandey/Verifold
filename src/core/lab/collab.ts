@@ -8,7 +8,7 @@ import type { Post } from '../board.ts';
 import { isOpen, type Lease } from '../leases.ts';
 import type { RunRecord } from '../runs.ts';
 import { openObjections } from './post-rules.ts';
-import type { Call, Check, Thread } from './schema.ts';
+import type { Call, Check, Direction, Thread } from './schema.ts';
 import { openWaits, type Wait } from './waits.ts';
 import { askers } from './words.ts';
 
@@ -159,6 +159,7 @@ function gpuQueue(
 export function collabOf(records: {
   readonly posts: readonly Post[];
   readonly threads: readonly Thread[];
+  readonly directions: readonly Pick<Direction, 'agent' | 'state'>[];
   readonly checks: readonly Check[];
   readonly calls: readonly Call[];
   readonly runs: readonly RunRecord[];
@@ -167,7 +168,15 @@ export function collabOf(records: {
 }): Collab {
   const { posts, threads, calls, runs, leases } = records;
   const checks = records.checks.filter((check) => check.state !== 'dropped');
-  const waits = openWaits(posts, threads);
+  // An agent that ended waits on no one here. A reopen brings its waits back.
+  const ended = new Set(
+    records.directions
+      .filter((direction) => direction.state !== 'open')
+      .map((direction) => direction.agent),
+  );
+  const waits = openWaits(posts, threads).filter(
+    (wait) => !ended.has(wait.waiter),
+  );
   const onPerson = new Set([
     ...waits.filter((wait) => wait.on === 'person').map((wait) => wait.waiter),
     ...calls.filter((call) => call.state === 'open').flatMap(askers),

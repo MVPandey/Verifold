@@ -1,20 +1,24 @@
 /**
  * The brief, the notices, and the questions on the wire. Verifold builds the
- * quote, the evidence label, and the top line here from the records as they
- * are now, so a label follows a later check. Plain words go out only once they
- * passed their check: a line that failed, or that waits, carries its quote.
+ * quote, the evidence label, the tag of a line, and the top line here from the
+ * records as they are now, so they follow a later check. Plain words go out
+ * only once they passed their check: a line that failed, or that waits, carries
+ * its quote. An answer goes to the person who asked as written, with how its
+ * check went.
  */
-import type { Post as BoardPost } from '../core/board.ts';
+import { clip, type Post as BoardPost } from '../core/board.ts';
 import {
   briefTop,
   briefTopIds,
   evidenceLabel,
   evidencePosts,
-  plainNumbersMatch,
   quotesOf,
+  shownKind,
+  wholePost,
 } from '../core/lab/brief.ts';
 import { noticeStands } from '../core/lab/coordinator-rules.ts';
 import { endedWhy } from '../core/lab/reach.ts';
+import { strayInRecord, type FactRecords } from '../core/lab/record-facts.ts';
 import { openWaits } from '../core/lab/waits.ts';
 import type {
   BriefLine as StoredLine,
@@ -54,28 +58,71 @@ function standingNotices(view: LabView): (notice: StoredNotice) => boolean {
   return (notice) => noticeStands(notice, waits, working);
 }
 
+/** What a line's record facts read, as a snapshot sees them. */
+function factRecords(view: LabView): FactRecords {
+  const threads = view.threads ?? [];
+  return {
+    posts: view.posts,
+    directions: view.state.directions,
+    threads,
+    waits: openWaits(view.posts, threads),
+    checks: view.checks,
+    name: (author) => view.handles[author] ?? author,
+  };
+}
+
+/** Characters of a problem in an answer's one line. */
+const problemText = 160;
+
 /** A line as the wire has it. */
 function lineItem(
   line: StoredLine,
   view: LabView,
   posts: ReadonlyMap<string, BoardPost>,
 ): BriefLine {
-  const cited = line.posts.flatMap((id) => posts.get(id) ?? []);
+  const cited = line.posts.flatMap((id) => {
+    const post = posts.get(id);
+    return post ? wholePost(post, view.state.plan) : [];
+  });
   const { by, sameHarness } = line.check;
   // The file can change after a check, so the numbers are tested again on the way out.
-  const state =
-    line.check.state === 'passed' && !plainNumbersMatch(line.plain, cited)
-      ? 'numbers'
-      : line.check.state;
+  const stray =
+    line.check.state === 'passed'
+      ? strayInRecord(line.plain, cited, () => factRecords(view))
+      : [];
+  const state = stray.length ? 'numbers' : line.check.state;
+  const problems = stray.length
+    ? stray.map((claim) => ({ kind: 'stray-number' as const, claim }))
+    : line.check.problems;
+  const [first] = problems;
+  const answer = line.kind === 'answer';
+  const record = evidencePosts(cited, view.posts);
   return {
-    kind: line.kind,
+    kind: shownKind(line.kind, record, view.checks),
     at: line.at,
-    plain: state === 'passed' ? line.plain : null,
+    plain:
+      state === 'passed' || (answer && state !== 'withheld')
+        ? line.plain
+        : null,
     quotes: quotesOf(cited),
     posts: [...line.posts],
     thread: cited.find((post) => post.thread)?.thread ?? null,
-    evidence: evidenceLabel(evidencePosts(cited, view.posts), view.checks),
-    check: { state, by, sameHarness },
+    evidence: evidenceLabel(record, view.checks),
+    check: {
+      state,
+      by,
+      sameHarness,
+      ...(answer && (state === 'failed' || state === 'numbers')
+        ? {
+            failure: {
+              first: first
+                ? { ...first, claim: clip(first.claim, problemText) }
+                : null,
+              count: problems.length,
+            },
+          }
+        : {}),
+    },
   };
 }
 

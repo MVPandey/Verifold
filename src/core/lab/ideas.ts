@@ -4,7 +4,7 @@
  * work. Verifold draws combinations of ideas itself, and agents judge them.
  * An idea counts as the same idea only with the exact same text.
  */
-import { object } from '../board.ts';
+import { object, postId } from '../board.ts';
 import { longShotLimits, readingLimits } from '../lab-tools.ts';
 
 export interface Idea {
@@ -15,6 +15,8 @@ export interface Idea {
   readonly sources: readonly string[];
   /** The lab tried it. */
   readonly tried: boolean;
+  /** The post that the Coordinator cited when it marked the idea tried. */
+  readonly post?: string;
   readonly by: string;
   readonly at: string;
 }
@@ -40,6 +42,9 @@ export function parseIdea(value: unknown): Idea | null {
           )
           .slice(0, readingLimits.sourcesPerIdea),
         tried: entry.tried === true,
+        ...(typeof entry.post === 'string' && postId.test(entry.post)
+          ? { post: entry.post }
+          : {}),
         by: entry.by.slice(0, 20),
         at: entry.at,
       }

@@ -23,6 +23,7 @@ import {
 } from '../src/core/lab-tools.ts';
 import {
   parseState,
+  type LabOptions,
   type LabSessions,
   type LabView,
 } from '../src/core/lab/schema.ts';
@@ -65,9 +66,10 @@ interface Started {
   readonly denyRead: readonly string[];
 }
 
-/** Fake worker slots: a start records its input, and no harness runs. Each start is one process. */
+/** Fake worker slots and a fake reserved place of one session: a start records its input, and no harness runs. Each start is one process. */
 function fakeSessions(limit: number): {
   readonly sessions: LabSessions;
+  readonly place: NonNullable<LabOptions['reserved']>;
   readonly started: Started[];
   readonly sent: { readonly id: string; readonly text: string }[];
   readonly idle: Set<string>;
@@ -77,9 +79,25 @@ function fakeSessions(limit: number): {
   const sent: { id: string; text: string }[] = [];
   const live = new Set<string>();
   const idle = new Set<string>();
+  /** The sessions that the reserved place started. */
+  const reserved = new Set<string>();
+  const start = (input: Parameters<LabSessions['startAgent']>[0]): string => {
+    const id = `20261101T000000000Z-${String(started.length + 1).padStart(8, '0')}`;
+    started.push({
+      id,
+      host: input.host,
+      agent: input.agent,
+      prompt: input.prompt,
+      cwd: input.cwd,
+      tools: input.tools,
+      denyRead: input.denyRead ?? [],
+    });
+    live.add(id);
+    return id;
+  };
   const sessions: LabSessions = {
     get full(): boolean {
-      return live.size >= limit;
+      return [...live].filter((id) => !reserved.has(id)).length >= limit;
     },
     limit,
     view: (id) =>
@@ -94,20 +112,7 @@ function fakeSessions(limit: number): {
           } as unknown as SessionView)
         : null,
     idle: (id) => idle.has(id),
-    startAgent: (input) => {
-      const id = `20261101T000000000Z-${String(started.length + 1).padStart(8, '0')}`;
-      started.push({
-        id,
-        host: input.host,
-        agent: input.agent,
-        prompt: input.prompt,
-        cwd: input.cwd,
-        tools: input.tools,
-        denyRead: input.denyRead ?? [],
-      });
-      live.add(id);
-      return Promise.resolve(id);
-    },
+    startAgent: (input) => Promise.resolve(start(input)),
     resumeAgent: (id) => {
       live.add(id);
       return Promise.resolve();
@@ -128,7 +133,24 @@ function fakeSessions(limit: number): {
       idle.delete(id);
     },
   };
-  return { sessions, started, sent, idle, live };
+  const place: NonNullable<LabOptions['reserved']> = {
+    get full(): boolean {
+      return [...reserved].some((id) => live.has(id));
+    },
+    view: (id) => sessions.view(id),
+    startAgent: (input) => {
+      const id = start(input);
+      reserved.add(id);
+      return Promise.resolve(id);
+    },
+    continueTask: (id, text) => {
+      sessions.continueTask(id, text);
+    },
+    endTask: (id, why) => {
+      sessions.endTask(id, why);
+    },
+  };
+  return { sessions, place, started, sent, idle, live };
 }
 
 async function project(t: TestContext): Promise<string> {
@@ -179,6 +201,7 @@ function newLab(
     readonly limit?: number;
     readonly minuteMs?: number;
     readonly objectionMs?: number;
+    readonly briefDelayMs?: number;
     readonly share?: string;
   } = {},
 ): Built {
@@ -187,6 +210,7 @@ function newLab(
   let seed = 0;
   const lab = new Lab(root, {
     sessions: fake.sessions,
+    reserved: fake.place,
     sandbox: (spec) => ({ file: '/bin/sh', args: ['-c', spec.command] }),
     harnesses: () => Promise.resolve(['claude', 'codex']),
     random: () => {
@@ -199,9 +223,17 @@ function newLab(
       continueMs: 60_000,
       objectionMs: more.objectionMs ?? 3_600_000,
       ...(more.minuteMs ? { minuteMs: more.minuteMs } : {}),
+      ...(more.briefDelayMs === undefined
+        ? {}
+        : { briefDelayMs: more.briefDelayMs }),
     },
   });
   t.after(() => lab.close());
+  // A draw here runs at once: a real Coordinator keeps an update scheduled for 3 minutes. A test that gives `briefDelayMs` tests the real one.
+  if (more.briefDelayMs === undefined)
+    (
+      lab as unknown as { coordinator: { idle(): Promise<boolean> } }
+    ).coordinator.idle = () => Promise.resolve(true);
   const view = (): LabView => {
     const shown = lab.view();
     assert.ok(shown);
@@ -671,10 +703,11 @@ await test('later draws skip the combinations of earlier draws', async (t) => {
   assert.ok(combinations(second.prompt).every((key) => !old.has(key)));
 });
 
-await test('in a full lab a draw parks no one, says so once, and may never run', async (t) => {
+await test('a full lab runs its draw in the reserved place, and no agent gives a slot', async (t) => {
   const built = await planned(t, { limit: 3 });
   await ideas(built, 8);
-  // An agent that had its turn could give its slot, but a long shot takes none.
+  // Every slot is taken, and an agent that had its turn could give its slot.
+  assert.equal(built.sessions.full, true);
   const agent = built.started[1];
   assert.ok(agent);
   endTurn(built, agent);
@@ -684,50 +717,145 @@ await test('in a full lab a draw parks no one, says so once, and may never run',
       0,
   );
   await built.lab.drawAgain();
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.equal(judgeOf(built), undefined);
-  assert.equal(built.live.has(agent.id), true);
-  const waits = statusPosts(built).filter((text) => /may never run/.test(text));
-  assert.equal(waits.length, 1);
-  // A slot that comes free takes the draw.
-  await built.sessions.park(agent.id);
-  built.lab.turnEnded({
-    id: agent.id,
-    agent: agent.agent,
-    status: 'paused',
-    launches: [],
-  } as unknown as SessionRecord);
   await until(() => judgeOf(built) !== undefined);
+  assert.equal(built.live.has(agent.id), true);
+  assert.equal(built.place.full, true);
+  assert.ok(!statusPosts(built).some((text) => /free slot/.test(text)));
 });
 
-await test('whatever needs a slot ends the session first, and its draw waits with the same candidates', async (t) => {
-  const built = await planned(t, { limit: 4 });
+await test('a person who needs a slot parks an agent, never the session of a draw', async (t) => {
+  const built = await planned(t, { limit: 3 });
   await ideas(built, 8);
   await built.lab.drawAgain();
   await until(() => judgeOf(built) !== undefined);
   const judge = judgeOf(built);
   assert.ok(judge);
-  assert.equal(built.sessions.full, true);
-  assert.equal(built.lab.canYield(), true);
-  // The person's session asks for a slot: no agent parks.
-  assert.equal(await built.lab.yieldSlot(), true);
-  assert.equal(built.live.has(judge.id), false);
-  assert.equal(built.live.size, 3);
-  assert.ok(statusPosts(built).some((text) => /may never run/.test(text)));
-  // The draw comes back in a free slot, on record once, with the same agent.
+  // The agents had no turn, so no agent can give a slot, and the session holds none.
+  assert.equal(built.lab.canYield(), false);
+  assert.equal(await built.lab.yieldSlot(), false);
+  assert.equal(built.live.has(judge.id), true);
+});
+
+await test("a person's question ends the session of a draw at once, and the draw comes back with the same candidates", async (t) => {
+  const built = await planned(t, { limit: 3 });
+  await ideas(built, 8);
+  await built.lab.drawAgain();
+  await until(() => judgeOf(built) !== undefined);
+  const judge = judgeOf(built);
+  assert.ok(judge);
+  await built.lab.askCoordinator('What is new?');
+  // One tick: the session ends, and the Coordinator has the place.
+  await until(() => !built.live.has(judge.id));
+  const coordinator = (): Started | undefined =>
+    built.started.find((session) =>
+      /Coordinator of a research lab/.test(session.prompt),
+    );
+  await until(() => coordinator() !== undefined);
+  const session = coordinator();
+  assert.ok(session);
+  assert.equal(built.place.full, true);
+  const reader = built.lab as unknown as {
+    longShots: { draws(): readonly unknown[]; state(): { drawing: unknown } };
+  };
+  assert.equal(reader.longShots.state().drawing, 'waiting');
+  const question = /(q-\d+)/.exec(session.prompt)?.[1];
+  const answer = await session.tools.call(
+    'verifold_answer',
+    { question, plain: 'The plan stands.', posts: ['p-1'] },
+    'answer-1',
+  );
+  assert.equal(answer.ok, true, answer.text);
+  endTurn(built, session);
+  // Its line check comes first too, and then the draw starts again.
+  const lineCheck = (): Started | undefined =>
+    built.started.find((entry) => /You check plain lines/.test(entry.prompt));
+  await until(() => lineCheck() !== undefined);
+  const check = lineCheck();
+  assert.ok(check);
+  const checked = await check.tools.call(
+    'verifold_line_check',
+    {
+      lines: [
+        {
+          id: /l-\d+/.exec(check.prompt)?.[0],
+          claims: [{ claim: 'The plan stands.', verdict: 'supported' }],
+          dropped: [],
+        },
+      ],
+    },
+    'check-1',
+  );
+  assert.equal(checked.ok, true, checked.text);
+  endTurn(built, check);
   await until(() => judges(built) === 2);
-  const again = built.started.at(-1);
+  const again = built.started.findLast(isJudge);
   assert.equal(again?.agent, judge.agent);
   assert.deepEqual(
     again?.prompt.match(/c-\d: .+/g),
     judge.prompt.match(/c-\d: .+/g),
   );
-  assert.equal(
-    (
-      built.lab as unknown as { longShots: { draws(): unknown[] } }
-    ).longShots.draws().length,
-    1,
+  assert.equal(reader.longShots.draws().length, 1);
+});
+
+await test('a draw that keeps giving the place stops at the limit of sessions in an hour', async (t) => {
+  const built = await planned(t, { limit: 3 });
+  await ideas(built, 8);
+  await built.lab.drawAgain();
+  const shots = (built.lab as unknown as { longShots: { giveSlot(): void } })
+    .longShots;
+  for (let count = 1; count <= longShotLimits.sessionsPerHour; count++) {
+    await until(() => judges(built) === count);
+    shots.giveSlot();
+  }
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(judges(built), longShotLimits.sessionsPerHour);
+  assert.equal(built.place.full, false);
+});
+
+await test('the Coordinator takes the reserved place first, and the draw starts when it ends', async (t) => {
+  const built = await planned(t, { limit: 4, briefDelayMs: 0 });
+  await ideas(built, 8);
+  // The plan's post makes an update due, so the Coordinator holds the place.
+  await until(() => built.place.full);
+  const update = built.started.find((session) =>
+    /Coordinator of a research lab/.test(session.prompt),
   );
+  assert.ok(update);
+  await built.lab.drawAgain();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(judgeOf(built), undefined);
+  const brief = await update.tools.call(
+    'verifold_brief',
+    { lines: [{ kind: 'open', plain: 'The plan stands.', posts: ['p-1'] }] },
+    'brief-1',
+  );
+  assert.equal(brief.ok, true, brief.text);
+  endTurn(built, update);
+  // Its line check comes before the draw too.
+  const lineCheck = (): Started | undefined =>
+    built.started.find((session) =>
+      /You check plain lines/.test(session.prompt),
+    );
+  await until(() => lineCheck() !== undefined);
+  assert.equal(judgeOf(built), undefined);
+  const check = lineCheck();
+  assert.ok(check);
+  const checked = await check.tools.call(
+    'verifold_line_check',
+    {
+      lines: [
+        {
+          id: /l-\d+/.exec(check.prompt)?.[0],
+          claims: [{ claim: 'The plan stands.', verdict: 'supported' }],
+          dropped: [],
+        },
+      ],
+    },
+    'check-1',
+  );
+  assert.equal(checked.ok, true, checked.text);
+  endTurn(built, check);
+  await until(() => judgeOf(built) !== undefined);
 });
 
 await test('a pause ends the session, and a draw can start after the resume', async (t) => {
@@ -752,7 +880,7 @@ await test('a draw refuses while the lab is paused, and a draw that waits does n
   await assert.rejects(built.lab.drawAgain(), /paused/);
   await built.lab.resume();
   await until(() => !built.lab.view()?.state.pausedAt);
-  // A full lab keeps the draw waiting.
+  // The draw waits for the next tick.
   await built.lab.drawAgain();
   await built.lab.suspend();
   await assert.rejects(built.lab.drawAgain());

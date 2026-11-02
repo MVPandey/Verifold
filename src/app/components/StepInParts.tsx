@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import type { Lab, Post, Question } from '../../protocol/api.ts';
-import { lineHref, lineText, hasOriginal } from '../brief-view.ts';
+import { lineHref, hasOriginal } from '../brief-view.ts';
 import { useControl } from '../controls.ts';
 import { href } from '../route.ts';
 import {
@@ -15,6 +15,7 @@ import {
 } from '../step-in.ts';
 import { useView } from '../view-mode.ts';
 import { Avatar } from './Avatar.tsx';
+import { LineWords } from './LineWords.tsx';
 import { IdText } from './IdText.tsx';
 import { PlainToggle } from './PlainToggle.tsx';
 
@@ -123,10 +124,12 @@ function Answer({
       </div>
       {answer && (
         <div className="answer__text">
-          <IdText text={lineText(answer, mode, original)} />{' '}
-          <a className="proof" href={lineHref(answer)}>
-            {sourceWords(answer.posts)}
-          </a>{' '}
+          <LineWords line={answer} original={original} />{' '}
+          {answer.posts.length > 0 && (
+            <a className="proof" href={lineHref(answer)}>
+              {sourceWords(answer.posts)}
+            </a>
+          )}{' '}
           {hasOriginal(answer, mode) && (
             <PlainToggle
               original={original}

@@ -1,8 +1,10 @@
 import type {
   Agent,
+  BriefLine,
   CheckBlock,
   Direction,
   Lab,
+  LineProblem,
   Notice,
   Post,
   Question,
@@ -364,9 +366,41 @@ export function workNote(acts: {
 const counted = (count: number, word: string): string =>
   `${count} ${word}${count === 1 ? '' : 's'}`;
 
+const problemWords: Readonly<
+  Record<LineProblem['kind'], (claim: string) => string>
+> = {
+  'added-fact': (claim) => `Its posts do not say: ${claim}`,
+  'raised-certainty': (claim) => `It is more certain than its posts: ${claim}`,
+  'number-out-of-scope': (claim) => `A number counts something else: ${claim}`,
+  'dropped-caveat': (claim) => `It leaves out a caveat: ${claim}`,
+  'stray-number': (claim) => `No cited post holds ${claim}.`,
+};
+
+/** How an answer stands, from its check. Only an answer that passed reads as answered from the record. */
+function answerWords(answer: Pick<BriefLine, 'check'> | null): string {
+  const check = answer?.check;
+  switch (check?.state) {
+    case 'passed':
+      return 'Answered from the record.';
+    case 'failed':
+    case 'numbers': {
+      const { first = null, count = 0 } = check.failure ?? {};
+      const head =
+        count > 1
+          ? `Failed its check, with ${count} problems.`
+          : 'Failed its check.';
+      return first ? `${head} ${problemWords[first.kind](first.claim)}` : head;
+    }
+    case 'withheld':
+      return 'This lab keeps no plain words.';
+    default:
+      return 'Not checked yet.';
+  }
+}
+
 /** The head of an answer. Each form says that no agent woke for it. */
 export function answerHead(
-  question: Pick<Question, 'at' | 'state'>,
+  question: Pick<Question, 'at' | 'state' | 'answer'>,
   now: number,
 ): string {
   const quiet = 'No agent was disturbed.';
@@ -374,7 +408,7 @@ export function answerHead(
     case 'waiting':
       return `Reading the record. ${quiet}`;
     case 'answered':
-      return `${shortTime(question.at, now)}. Answered from the record. ${quiet}`;
+      return `${shortTime(question.at, now)}. ${answerWords(question.answer)} ${quiet}`;
     case 'unanswered':
       return `It gave no answer. ${quiet}`;
   }
