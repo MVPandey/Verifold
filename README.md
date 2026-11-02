@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-<p align="center"><strong>Run Claude Code and Codex as a research team.</strong></p>
+<p align="center"><strong>Turn the Claude Code and Codex you already have into a research team.</strong></p>
 
 <p align="center">
   <a href="https://github.com/MVPandey/Verifold/actions/workflows/validate.yml"><img src="https://github.com/MVPandey/Verifold/actions/workflows/validate.yml/badge.svg?branch=main" alt="Validation workflow status" /></a>
@@ -16,22 +16,31 @@
 
 # Verifold
 
-A research question can take days of agent work. One Claude Code or Codex session ends with your terminal, runs with its first idea, checks its own work, and forgets what it found.
+AI agents can already read papers, write code, and run experiments. Science could move a lot faster if many of them worked on one question together, the way a good lab does. One agent tries an idea, another reruns its numbers, and a third finds the paper that already tried it. The hard part is getting them to talk to each other well.
 
-Verifold runs them as a research team:
+There is early evidence that this works. In the [Virtual Lab](https://www.nature.com/articles/s41586-025-09442-9) study (Nature, 2025), a team of AI agents designed nanobodies against SARS-CoV-2 while a human researcher gave high-level feedback. In lab tests, two of the new nanobodies bound recent variants better than the ones they were designed from, and still bound the original virus strongly. Google's [Co-Scientist](https://arxiv.org/abs/2502.18864) has agents generate, critique, and refine hypotheses. Drug candidates it helped find for acute myeloid leukemia were then validated in lab experiments.
 
-- It keeps working in a background process after you close the terminal.
-- A planner checks current facts, then splits your question into directions.
-- Each direction gets its own agent, in its own copy of your project.
-- Agents talk in threads with a subject. An objection marks a result Disputed until a check or an accepted answer settles it. With both harnesses, the agents check each other across model families. One page shows how they work together, from the records: disagreements, what objections changed, and who needs whom.
-- Every agent reads a shared project memory, also in later runs.
-- Verifold counts what agents read from harness records, keeps a shared reading map, and marks a proposal with no search. It also draws long shots, random combinations of the lab's ideas that the other harness judges. This method is new and nobody has tested it, so you choose how many agents take them up. An idea map shows the ideas, the candidates, and the papers.
-- You can step in where you read. The box writes to one agent, a thread, or everyone, and it says who reads your words and when. You can object to a post, ask for a check, stop an agent, reopen a closed direction, and overturn a decision.
-- A Coordinator session keeps the record: it titles, moves, and closes threads, tells agents about overlap and missing answers, and answers your questions. It assigns no work, and nobody waits on it. Its brief for a lay reader quotes its posts, gets its evidence label from the record, and shows plain words only after a second session checks them. The app has one switch: Simple shows the brief and each thread's story, and Technical shows the agents' own posts.
+Those were custom systems, built by research groups for their own work. Most people who could direct a swarm of agents like that have something else: a coding agent such as Claude Code or Codex. A research question can take days of agent work, and one session ends with your terminal, runs with its first idea, checks its own work, and forgets what it found. Three terminal tabs give you three agents that never talk to each other.
 
-Three terminal tabs give you none of this.
+Verifold is built to close that gap. It turns the agent harnesses you already have into one research team of up to 20 agents. You give a direction and approve the big decisions. The agents split the work, talk in threads, object to weak results, and check each other's numbers. You get an answer with the checks behind it, and the files to bring into your project.
 
-You ask, then decide what the team brings to you. You get check results, a proposed answer, and the files to bring into your project. Agents use your harness plan. GPU pods stay off until you set a spend limit.
+## How it works
+
+**Use the agents you already have.** Verifold runs Claude Code and Codex with your own sign-in and plan. Each harness keeps its own credentials, tools, and permissions. Verifold picks each agent's model unless you name one.
+
+**You set the direction and make the big calls.** A planner checks current facts, then splits your question into directions. Each direction gets its own agent with a job, such as Agent 3 · Controls, working in its own copy of your project. Needs you shows only the calls that are yours: money, scope, access, or more time. You can also step in anywhere you read. The box writes to one agent, a thread, or everyone, and it tells you who reads your words and when. You can object to a post, ask for a check, stop an agent, reopen a closed direction, or overturn a decision.
+
+**Agents talk to each other in threads.** Each thread has a subject. Each post has a kind, such as result, check, ask, objection, or proposal, so you can tell a result from a question at a glance. An objection marks a result Disputed until a check or an accepted answer settles it. A working-together page counts from the records: open disagreements, what objections changed, and who needs whom.
+
+**They check each other.** With both harnesses, agents from different model families check each other's work. A line in the brief reads Held up only after Verifold's own blind rerun held and no check failed.
+
+**Reading is part of the job.** Every agent is told to search the literature when a new idea comes up. It can launch its own helpers and start long runs without asking. Verifold counts the reads from the harness records, keeps a shared reading map, and marks a proposal with no search behind it.
+
+**It tries long shots.** Following [The Alien Space of Science](https://arxiv.org/abs/2603.01092), Verifold draws random combinations of the lab's ideas, and an agent from the other harness judges them. Nobody has shown yet that these ideas pay off, so you choose how many agents take them up. An idea map shows the ideas, the candidates, and the papers.
+
+**A Coordinator keeps the record.** It titles and closes threads, tells agents about overlap and missing answers, and answers your questions. It assigns no work, and nobody waits on it. Its brief quotes the posts behind each line, and a plain-language line shows only after a second session checks it against those posts. One switch flips the app: Simple shows the brief and each thread's story, and Technical shows the agents' own posts.
+
+**It keeps going when you leave.** The team runs in a background process after you close the terminal. Every agent reads a shared project memory, also in later runs. GPU pods stay off until you set a spend limit.
 
 ## Quick start
 
@@ -57,6 +66,7 @@ You can close the terminal. While it is open, it shows the lab in a few lines. R
 
 Verifold is in early development. The [guide](docs/guide.md) describes everything that works in this checkout. Limits to know first:
 
+- Nobody has measured yet how much faster a Verifold team is than one agent. The studies above used their own systems, not Verifold.
 - Four agents work at the same time unless you change "Agents at once" in the project's Settings (1 to 20).
 - Verifold needs a terminal and Node. There is no desktop app yet.
 - Verifold's page is a local web page on this computer. Other devices cannot open it.
