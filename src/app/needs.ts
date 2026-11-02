@@ -1,7 +1,7 @@
 import type { Call, Lab, Wait } from '../protocol/api.ts';
 import { andList } from '../ui/call-words.ts';
 import { failureOf } from './call.ts';
-import { clock, roleName, since, usd } from './format.ts';
+import { roleName, shortTime, since, usd } from './format.ts';
 import { href } from './route.ts';
 import { askedOfYou } from './waits.ts';
 
@@ -57,8 +57,8 @@ export function timeLine(
     const minutes = (Date.parse(deadline) - Date.parse(latestAt)) / 60_000;
     const upTo = `Up to ${timeWords(minutes)}`;
     return Date.parse(latestAt) > now
-      ? `${upTo}. To finish by ${clock(deadline)}, answer by about ${clock(latestAt)}`
-      : `${upTo}. That no longer fits before ${clock(deadline)}`;
+      ? `${upTo}. To finish by ${shortTime(deadline, now)}, answer by about ${shortTime(latestAt, now)}`
+      : `${upTo}. That no longer fits before ${shortTime(deadline, now)}`;
   }
   const minutes = Math.max(
     0,

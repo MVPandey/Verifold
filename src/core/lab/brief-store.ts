@@ -132,14 +132,15 @@ function parseStory(value: unknown): ThreadStory | null {
     typeof entry.thread === 'string' &&
     threadId.test(entry.thread) &&
     isTime(entry.at) &&
-    Number.isSafeInteger(entry.through) &&
     (entry.outcome === null ||
       (typeof entry.outcome === 'string' && postId.test(entry.outcome))) &&
     Array.isArray(entry.lines)
     ? {
         thread: entry.thread,
         at: entry.at,
-        through: entry.through as number,
+        posts: strings(entry.posts, briefLimits.storyPosts).filter((id) =>
+          postId.test(id),
+        ),
         outcome: entry.outcome,
         lines: entry.lines
           .slice(0, briefLimits.lines)
@@ -196,7 +197,9 @@ function parseMark(value: unknown): SessionMark | null {
   const entry = object(value);
   return entry &&
     isTime(entry.at) &&
-    (entry.kind === 'update' || entry.kind === 'check')
+    (entry.kind === 'update' ||
+      entry.kind === 'check' ||
+      entry.kind === 'story')
     ? { at: entry.at, kind: entry.kind }
     : null;
 }

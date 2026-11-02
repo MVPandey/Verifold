@@ -3,7 +3,7 @@ import type { Harness, Lab, Post, Work } from '../../protocol/api.ts';
 import { useControl, type NewDirection } from '../controls.ts';
 import { authorOf, clock, cut, harnessName, roleName } from '../format.ts';
 import { href } from '../route.ts';
-import { useView } from '../view-mode.ts';
+import { showsIds, useView } from '../view-mode.ts';
 import { Warning } from './Icons.tsx';
 
 /** The most characters of a direction's title and bar, as the lab checks them. */
@@ -241,8 +241,7 @@ function checkWhere(
  * doubt about it, where its check is, and what the checker did.
  */
 export function Disputes({ lab }: { readonly lab: Lab }): ReactNode {
-  const { mode, threaded } = useView();
-  const ids = !threaded || mode === 'technical';
+  const ids = showsIds(useView());
   if (!lab.disputes.length) return null;
   const posts = new Map(lab.board.posts.map((post) => [post.id, post]));
   // A checker that ended long ago is not in the snapshot, so it has no page to link.

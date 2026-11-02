@@ -48,6 +48,13 @@ export function dayClock(at: string, now = Date.now()): string {
   return `on ${date.getDate()} ${months[date.getMonth()] ?? ''}${year} at ${clock(at)}`;
 }
 
+/** A time for a tight place: "21:17" today, "19 Oct 21:17" on another day. */
+export function shortTime(at: string, now = Date.now()): string {
+  return dayClock(at, now)
+    .replace(/^(?:today at|on) /, '')
+    .replace(' at ', ' ');
+}
+
 /** Who asked: "Agent 2 · Controls asked", "claude-2 and codex-2 asked". */
 export function asked(askers: readonly Asker[]): string {
   const names = askers.map((asker) => agentName(asker.handle, asker.job));

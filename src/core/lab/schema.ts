@@ -680,9 +680,9 @@ export interface BriefRecord {
 export interface ThreadStory {
   readonly thread: string;
   readonly at: string;
-  /** The newest post of the thread then. */
-  readonly through: number;
-  /** The post with the thread's outcome then. Null: it had none. */
+  /** The posts of the thread that its session's prompt held. A post that came later or moved in is not among them. */
+  readonly posts: readonly string[];
+  /** The post with the thread's outcome in that prompt. Null: it had none. */
   readonly outcome: string | null;
   readonly lines: readonly BriefLine[];
 }
@@ -711,7 +711,7 @@ export interface Question {
 /** A session of the place, for the hourly limits. */
 export interface SessionMark {
   readonly at: string;
-  readonly kind: 'update' | 'check';
+  readonly kind: 'update' | 'check' | 'story';
 }
 
 /** What the store holds. */

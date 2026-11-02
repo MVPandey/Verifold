@@ -7,7 +7,13 @@ import { clip, type Post as BoardPost } from '../core/board.ts';
 import { citedDispute } from '../core/lab/post-rules.ts';
 import { openWaits } from '../core/lab/waits.ts';
 import type { LabView, Thread as LabThread } from '../core/lab/schema.ts';
-import type { Post, Recount, Thread, Wait } from '../protocol/api.ts';
+import type {
+  Post,
+  Recount,
+  TakingPart,
+  Thread,
+  Wait,
+} from '../protocol/api.ts';
 
 /** The marks of a post on the wire. */
 export type PostMarks = (
@@ -50,6 +56,19 @@ export function threadItem(entry: LabThread, activity: ThreadActivity): Thread {
     agreed: entry.agreed.map(({ post, by, at }) => ({ post, by, at })),
     posts: own?.posts ?? 0,
     lastAt: own?.lastAt ?? null,
+  };
+}
+
+/** Who wrote in a thread, over all of its posts, oldest first. */
+export function takingPart(
+  posts: readonly BoardPost[],
+  handles: Readonly<Record<string, string>>,
+): TakingPart {
+  return {
+    handles: [
+      ...new Set(posts.flatMap((post) => handles[post.author] ?? [])),
+    ].sort((a, b) => a.localeCompare(b, 'en', { numeric: true })),
+    byPerson: posts[0]?.author === 'person',
   };
 }
 

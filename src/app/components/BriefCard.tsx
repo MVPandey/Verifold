@@ -3,16 +3,19 @@ import type { Away, Brief, BriefLine, Lab } from '../../protocol/api.ts';
 import {
   briefFoot,
   briefHead,
+  decisionCount,
+  hasOriginal,
   lineHref,
   lineText,
   lineWords,
-  shortTime,
+  topLine,
 } from '../brief-view.ts';
-import { withoutIds } from '../ids.ts';
+import { shortTime } from '../format.ts';
 import { href } from '../route.ts';
 import { useAction } from '../useAction.ts';
 import { useView } from '../view-mode.ts';
 import type { ActOutcome } from '../api.ts';
+import { AwayNews } from './AwayDigest.tsx';
 import { IdText } from './IdText.tsx';
 import { PlainToggle } from './PlainToggle.tsx';
 
@@ -37,7 +40,7 @@ function BriefRow({
       </div>
       <div className="brief__links">
         <span className="cue">{line.evidence}</span>
-        {mode === 'simple' && line.plain !== null && (
+        {hasOriginal(line, mode) && (
           <PlainToggle
             original={original}
             onToggle={() => setOriginal(!original)}
@@ -49,29 +52,22 @@ function BriefRow({
   );
 }
 
-/** The time away in numbers from the records, with its way to end. */
-function AwayNumbers({
+/** What came in the time away, from the records, with its way to end. */
+function AwayBlock({
   away,
   onDismiss,
 }: {
   readonly away: Away;
   readonly onDismiss: ((key: string) => Promise<ActOutcome>) | null;
 }): ReactNode {
-  const { mode } = useView();
   const dismiss = useAction<null>((_value, key) =>
     onDismiss ? onDismiss(key) : Promise.resolve({ ok: true }),
   );
-  const { news } = away;
-  const counts = news?.counts ? `${news.counts}.` : '';
-  const words = [
-    mode === 'simple' ? withoutIds(counts) : counts,
-    news?.cost ?? '',
-  ]
-    .filter(Boolean)
-    .join(' ');
   return (
     <div className="brief__foot brief__away">
-      <span>{words || 'Nothing changed.'}</span>
+      <div className="brief__news">
+        {away.news && <AwayNews news={away.news} />}
+      </div>
       {onDismiss && (
         <button
           type="button"
@@ -109,8 +105,6 @@ export function BriefCard({
   readonly onDismiss: ((key: string) => Promise<ActOutcome>) | null;
 }): ReactNode {
   const { mode } = useView();
-  const decisions =
-    lab.threads?.filter((thread) => thread.state === 'decided').length ?? 0;
   const foot = briefFoot(brief.lines, mode);
   return (
     <section aria-labelledby="brief">
@@ -119,16 +113,12 @@ export function BriefCard({
           {briefHead({ away: lab.away, brief }, now)}
         </h2>
         <a className="section-link" href={href.threads}>
-          Decisions ({decisions})
+          Decisions ({decisionCount(lab.threads)})
         </a>
       </div>
       <div className="card">
         <p className="brief__top">
-          {mode === 'technical' && brief.topIds ? (
-            <IdText text={brief.topIds} />
-          ) : (
-            brief.top
-          )}
+          <IdText text={topLine(brief, mode)} />
         </p>
         {brief.lines.map((line, index) => (
           // A new view starts with each line closed.
@@ -141,7 +131,7 @@ export function BriefCard({
           </p>
         )}
         {foot && <p className="brief__foot">{foot}</p>}
-        {lab.away && <AwayNumbers away={lab.away} onDismiss={onDismiss} />}
+        {lab.away && <AwayBlock away={lab.away} onDismiss={onDismiss} />}
       </div>
     </section>
   );

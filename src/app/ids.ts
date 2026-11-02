@@ -5,12 +5,6 @@ const id = String.raw`(?:[dprc]|lease)-[1-9]\d*`;
 
 const ids = new RegExp(String.raw`(?<![\w./-])${id}(?![\w/-])`, 'g');
 
-/** A list of IDs in brackets, or after a colon before a closing bracket, as Verifold writes them. */
-const marks = new RegExp(
-  String.raw`\s*\(${id}(?:, ${id})*\)|: ${id}(?:, ${id})*(?=\))`,
-  'g',
-);
-
 /** An ID in a text, with where it leads. */
 export interface IdLink {
   readonly id: string;
@@ -45,9 +39,4 @@ export function idParts(text: string): readonly (string | IdLink)[] {
   }
   if (at < text.length) parts.push(text.slice(at));
   return parts;
-}
-
-/** Verifold's text with the IDs that it adds taken out, for the Simple view: "(p-155)", or ": r-7" in "(1 failed: r-7)". */
-export function withoutIds(text: string): string {
-  return text.replace(marks, '');
 }

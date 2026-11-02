@@ -626,6 +626,7 @@ async function labAction(
         kind: body.kind,
         direction: body.direction,
         replyTo: body.replyTo,
+        thread: body.thread,
       });
       return 200;
     case 'lab-direction-add':

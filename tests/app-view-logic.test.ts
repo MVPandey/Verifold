@@ -7,35 +7,50 @@ import type {
   Direction,
   Lab,
   Post,
+  StoryLine,
   Thread,
   ThreadPage,
   Wait,
 } from '../src/protocol/api.ts';
-import { agentRows, reachLine } from '../src/app/agent-rows.ts';
+import {
+  agentRows,
+  reachLine,
+  readingWords,
+  rowAge,
+  rowDetail,
+  rowMore,
+} from '../src/app/agent-rows.ts';
 import {
   briefFoot,
   briefHead,
+  countsWords,
+  decisionCount,
+  hasOriginal,
   lineHref,
   lineText,
+  quietWords,
+  quoteText,
+  topLine,
 } from '../src/app/brief-view.ts';
-import { clock } from '../src/app/format.ts';
-import { idParts, withoutIds } from '../src/app/ids.ts';
+import { clock, shortTime } from '../src/app/format.ts';
+import { idParts } from '../src/app/ids.ts';
 import { needRows, timeLine, upToCost } from '../src/app/needs.ts';
 import { href, parseRoute } from '../src/app/route.ts';
 import {
-  laterFromRecord,
+  allThreads,
   openThreads,
   outcomeLabel,
-  simplePosts,
-  storyParts,
+  postCount,
   threadChip,
   threadGroups,
+  threadLayout,
   threadTitle,
   wantsStory,
 } from '../src/app/thread-view.ts';
 import {
   readViewMode,
   saveViewMode,
+  showsIds,
   threadedLab,
   threadHome,
 } from '../src/app/view-mode.ts';
@@ -162,7 +177,10 @@ function briefLine(more: Partial<BriefLine> = {}): BriefLine {
     kind: 'open',
     at: ago(19),
     plain: 'It looks open.',
-    quote: 'Seed 0 gives 55%. (p-155) Seed 1 gives 60%. (p-156)',
+    quotes: [
+      { post: 'p-155', text: 'Seed 0 gives 55%.' },
+      { post: 'p-156', text: 'Seed 1 gives 60%.' },
+    ],
     posts: ['p-155', 'p-156'],
     thread: 't-3',
     evidence: "One agent's result. No check yet.",
@@ -284,19 +302,18 @@ await test('an ID links to its record, and a word that only holds one stays text
   assert.deepEqual(idParts(''), []);
 });
 
-await test('Simple takes out the IDs that Verifold adds, and nothing else', () => {
+await test('Simple drops the run IDs of Verifold’s own counts, and only there', () => {
+  const counts =
+    '15 posts, 2 runs ended (1 failed: r-93, r-94), 1 call for you';
   assert.equal(
-    withoutIds('Seed 0 gives 55%. (p-155) Seed 1. (p-156, p-157)'),
-    'Seed 0 gives 55%. Seed 1.',
-  );
-  assert.equal(
-    withoutIds('15 posts, 2 runs ended (1 failed: r-93), 1 call for you'),
+    countsWords(counts, false),
     '15 posts, 2 runs ended (1 failed), 1 call for you',
   );
-  assert.equal(
-    withoutIds('A plain line (with words).'),
-    'A plain line (with words).',
-  );
+  assert.equal(countsWords(counts, true), counts);
+  assert.equal(countsWords('15 posts', false), '15 posts');
+  assert.equal(showsIds({ mode: 'simple', threaded: true }), false);
+  assert.equal(showsIds({ mode: 'technical', threaded: true }), true);
+  assert.equal(showsIds({ mode: 'simple', threaded: false }), true);
 });
 
 await test('a row of Needs you shows who asks, the wait, the cost, and the latest time in about words', () => {
@@ -311,6 +328,18 @@ await test('a row of Needs you shows who asks, the wait, the cost, and the lates
     `Agent 2 asks · 17 min · Up to $3.58 of GPU · Up to 3 hours. To finish by ${clock(deadline)}, answer by about ${clock(open.latestAt ?? '')}`,
   );
   assert.equal(row?.call, 'c-4');
+});
+
+await test('a time on another day shows its day, in Needs you too', () => {
+  const later = (days: number, minutes = 0): string =>
+    new Date(now + days * 86_400_000 + minutes * 60_000).toISOString();
+  assert.equal(shortTime(ago(5), now), clock(ago(5)));
+  assert.match(shortTime(later(-3), now), /^\d{1,2} [A-Z][a-z]{2} \d\d:\d\d$/);
+  const line = timeLine(call({ latestAt: later(2, -180) }), later(2), now);
+  assert.match(
+    line,
+    /^Up to 3 hours\. To finish by \d{1,2} [A-Z][a-z]{2} \d\d:\d\d, answer by about \d{1,2} [A-Z][a-z]{2} \d\d:\d\d$/,
+  );
 });
 
 await test('a late call says that it no longer fits, and an unknown cost or time says so', () => {
@@ -397,9 +426,12 @@ await test('Needs you lists each call, then each ask to the person, and leaves o
   assert.match(rows[3]?.sub ?? '', /^Agent 3 asks · 5 min$/);
 });
 
-await test('Technical quotes unchanged, and Simple shows plain words, or the quote without Verifold’s IDs', () => {
+await test('Technical quotes unchanged, and Simple shows plain words, or the quote', () => {
   const line = briefLine();
-  assert.equal(lineText(line, 'technical', false), line.quote);
+  assert.equal(
+    lineText(line, 'technical', false),
+    'Seed 0 gives 55%. (p-155) Seed 1 gives 60%. (p-156)',
+  );
   assert.equal(lineText(line, 'simple', false), 'It looks open.');
   assert.equal(
     lineText(line, 'simple', true),
@@ -409,12 +441,60 @@ await test('Technical quotes unchanged, and Simple shows plain words, or the quo
     lineText({ ...line, plain: null }, 'simple', false),
     'Seed 0 gives 55%. Seed 1 gives 60%.',
   );
+  assert.equal(hasOriginal(line, 'simple'), true);
+  assert.equal(hasOriginal(line, 'technical'), false);
+  assert.equal(hasOriginal({ plain: null }, 'simple'), false);
+});
+
+await test('an agent’s own IDs stay in its words in both views', () => {
+  const quotes = [{ post: 'p-9', text: 'This builds on p-1 (p-2) and r-7.' }];
+  assert.equal(
+    quoteText({ quotes }, 'simple'),
+    'This builds on p-1 (p-2) and r-7.',
+  );
+  assert.equal(
+    quoteText({ quotes }, 'technical'),
+    'This builds on p-1 (p-2) and r-7. (p-9)',
+  );
 });
 
 await test('a line links to its thread, or to its post in a lab with no thread for it', () => {
   assert.equal(lineHref(briefLine()), '#/thread/t-3');
   assert.equal(lineHref(briefLine({ thread: null })), '#/post/p-155');
   assert.equal(lineHref({ thread: null, posts: [] }), '#/threads');
+});
+
+await test('the top line and the decisions come from the records', () => {
+  const brief = { top: 'One test ran.', topIds: 'd-1 ran.' };
+  assert.equal(topLine(brief, 'simple'), 'One test ran.');
+  assert.equal(topLine(brief, 'technical'), 'd-1 ran.');
+  assert.equal(topLine({ top: 'One test ran.' }, 'technical'), 'One test ran.');
+  assert.equal(decisionCount(undefined), 0);
+  assert.equal(
+    decisionCount([
+      thread({ state: 'decided' }),
+      thread({ state: 'answered' }),
+      thread(),
+    ]),
+    1,
+  );
+});
+
+await test('quiet words need quiet news, and "Nothing changed." needs no cost either', () => {
+  const news = { lines: [], moreLines: 0, counts: '', cost: '' };
+  assert.equal(quietWords(news), 'Nothing changed.');
+  assert.equal(
+    quietWords({ ...news, cost: 'Spent since then: $1.' }),
+    'No post, run, or call came.',
+  );
+  assert.equal(quietWords({ ...news, counts: '2 posts' }), null);
+  assert.equal(
+    quietWords({
+      ...news,
+      lines: [{ direction: 'd-1', title: 'A', mark: 'open', said: 'B' }],
+    }),
+    null,
+  );
 });
 
 await test('the head says since when only if the brief covers the time away, and it shows the age', () => {
@@ -555,17 +635,70 @@ await test('agent rows say what and why, follow the record, and run first', () =
     ],
   );
   const [, third, second, first] = rows;
-  assert.equal(second?.line, 'Asks to rebuild. The prompts are mixed.');
-  assert.equal(second?.next, 'Rebuild them');
-  assert.equal(second?.helpers, '1 helper stopped with no result');
-  assert.match(third?.run ?? '', /^r-49 queued/);
-  // Technical keeps the evidence, and Simple reads the records.
-  assert.equal(first?.line, 'It failed at p-9.');
+  assert.ok(first && second && third);
+  assert.equal(second.line, 'Asks to rebuild. The prompts are mixed.');
+  assert.equal(second.next, 'Rebuild them');
+  assert.equal(second.helpers, '1 helper stopped with no result');
+  assert.match(third.run ?? '', /^r-49 queued/);
+  assert.match(rowAge(second, now) ?? '', /^\d\d:\d\d, 9 min ago$/);
+  assert.equal(rowAge(first, now), null);
+  // An agent that ended reads the same in both views: the record's end, time, and verdict.
   assert.match(
-    first?.ended ?? '',
-    /^Closed at \d\d:\d\d after its test failed\. Its code and outputs stay for the others\.$/,
+    first.line,
+    /^Closed at \d\d:\d\d\. Ruled out\. Its folder stays\.$/,
   );
-  assert.equal(second?.ended, null);
+  assert.equal(first.evidence, 'It failed at p-9.');
+  assert.deepEqual(rowMore(first, 'simple'), []);
+  assert.deepEqual(rowMore(first, 'technical'), ['It failed at p-9.']);
+  assert.deepEqual(rowMore(second, 'simple'), [
+    '1 helper stopped with no result',
+  ]);
+  assert.deepEqual(rowMore(second, 'technical'), [
+    'Next: Rebuild them',
+    '1 helper stopped with no result',
+  ]);
+  assert.equal(rowDetail(second, 'simple'), 'Controls · Codex');
+  assert.equal(rowDetail(second, 'technical'), 'Controls, d-2 · Codex');
+});
+
+await test('an ended line says only what the record says', () => {
+  const ended = (more: Partial<Direction>) =>
+    agentRows(
+      lab({
+        directions: [direction('d-1', more)],
+        agents: [
+          agent('a-1', {
+            status: 'stopped',
+            live: { state: 'ended', text: 'Stopped', since: null },
+            line: { doing: 'Old', why: 'Old', next: 'Old', at: ago(9) },
+          }),
+        ],
+      }),
+      now,
+    )[0];
+  assert.equal(ended({ state: 'stopped' })?.line, 'Stopped. Its folder stays.');
+  assert.equal(ended({ state: 'stopped' })?.next, null);
+  assert.match(
+    ended({ state: 'closed', verdict: 'holds-up', stoppedAt: ago(1) })?.line ??
+      '',
+    /^Closed at \d\d:\d\d\. Holds up\. Its folder stays\.$/,
+  );
+});
+
+await test('the reading line says what the record holds', () => {
+  assert.deepEqual(
+    readingWords({ papers: 1, lookups: 2, lastPaperAt: null }, now),
+    { line: 'Reading map: 1 paper. No paper read yet.', age: null },
+  );
+  const { line, age } = readingWords(
+    { papers: 14, lookups: 20, lastPaperAt: ago(143) },
+    now,
+  );
+  assert.match(
+    line,
+    /^Reading map: 14 papers\. Last paper read at \d\d:\d\d\.$/,
+  );
+  assert.equal(age, '2 h 23 min ago');
 });
 
 await test('an agent that waits on another shows it, and an agent with no line shows its live step', () => {
@@ -671,81 +804,205 @@ await test('threads group by state with open first, and the newest talk leads', 
   );
 });
 
-await test('an outcome says what it is, when, and who took part', () => {
+await test('an outcome says what it is, when, and who took part, from the whole thread', () => {
   const outcome = { text: 'Use it.', post: 'p-3', by: 'a-1', at: ago(50) };
   const decided = thread({ state: 'decided', outcome });
-  assert.equal(outcomeLabel(thread(), []), null);
+  const part = { handles: ['agent-1', 'agent-3', 'agent-10'], byPerson: true };
+  assert.equal(outcomeLabel(thread(), part, now), null);
   assert.match(
-    outcomeLabel(decided, [
-      post('p-1', { author: 'person', handle: null, harness: null }),
-      post('p-2', { author: 'a-3', handle: 'agent-3' }),
-      post('p-3'),
-      post('p-4', { author: 'a-10', handle: 'agent-10' }),
-    ]) ?? '',
+    outcomeLabel(decided, part, now) ?? '',
     /^Decision · \d\d:\d\d · Agents 1, 3 and 10, after your request$/,
   );
   assert.match(
-    outcomeLabel({ ...decided, state: 'closed' }, [post('p-3')]) ?? '',
+    outcomeLabel(
+      { ...decided, state: 'closed' },
+      { handles: ['agent-1'], byPerson: false },
+      now,
+    ) ?? '',
     /^Outcome · \d\d:\d\d · Agent 1$/,
   );
   assert.match(
-    outcomeLabel({ ...decided, state: 'answered' }, []) ?? '',
-    /^Answer · \d\d:\d\d · Verifold$/,
+    outcomeLabel(
+      { ...decided, state: 'answered' },
+      { handles: [], byPerson: true },
+      now,
+    ) ?? '',
+    /^Answer · \d\d:\d\d · You$/,
   );
+  assert.match(outcomeLabel(decided, undefined, now) ?? '', /· Verifold$/);
 });
 
-await test('a story splits into its parts, and newer posts stay outside it', () => {
-  const line = (kind: BriefLine['kind'], posts: readonly string[]) => ({
-    ...briefLine({ kind, posts }),
-    author: 'a-1',
-    handle: 'agent-1',
-    harness: 'claude' as const,
-  });
-  const page: ThreadPage = {
-    thread: thread(),
-    posts: [post('p-3'), post('p-4')],
-    more: false,
-    story: {
-      at: ago(1),
-      through: 'p-3',
-      lines: [
-        line('step', ['p-3']),
-        line('outcome', ['p-3']),
-        line('later', ['p-9']),
-      ],
-    },
-    later: [post('p-9'), post('p-10')],
-  };
-  const parts = storyParts(page);
-  assert.equal(parts.steps.length, 1);
-  assert.equal(parts.outcome.length, 1);
-  assert.equal(parts.later.length, 1);
+const storyLine = (
+  kind: BriefLine['kind'],
+  posts: readonly string[],
+  plain: string | null = 'A plain line.',
+): StoryLine => ({
+  ...briefLine({
+    kind,
+    posts,
+    plain,
+    quotes: posts.map((post) => ({ post, text: `Words of ${post}.` })),
+  }),
+  author: 'a-1',
+  handle: 'agent-1',
+  harness: 'claude',
+});
+
+const outcome = { text: 'Use it.', post: 'p-3', by: 'a-1', at: ago(50) };
+
+const storyPage = (more: Partial<ThreadPage> = {}): ThreadPage => ({
+  thread: thread({ state: 'decided', outcome, posts: 2 }),
+  posts: [post('p-3'), post('p-4')],
+  more: false,
+  story: {
+    at: ago(1),
+    posts: ['p-3'],
+    outcome: 'p-3',
+    lines: [
+      storyLine('step', ['p-3']),
+      storyLine('outcome', ['p-3']),
+      storyLine('later', ['p-8', 'p-9']),
+    ],
+  },
+  later: [post('p-9'), post('p-10')],
+  ...more,
+});
+
+await test('Simple tells a current story, and posts outside it show after it', () => {
+  const page = storyPage();
+  const simple = threadLayout(page, page.posts, 'simple', now);
+  assert.equal(simple.steps?.length, 1);
+  assert.equal(simple.outcome.length, 1);
+  assert.equal(simple.note, '1 post is not in this story. It follows.');
   assert.deepEqual(
-    parts.newer.map(({ id }) => id),
+    simple.posts.map(({ id }) => id),
     ['p-4'],
   );
-  // A later line tells p-9, so the record adds only p-10.
-  assert.deepEqual(
-    laterFromRecord(page).map(({ id }) => id),
-    ['p-10'],
+  assert.equal(
+    simple.foot,
+    'The thread has 2 posts. Technical shows each one.',
   );
   assert.equal(wantsStory(page, 'simple'), true);
   assert.equal(wantsStory(page, 'technical'), false);
-  assert.equal(wantsStory({ ...page, posts: [post('p-3')] }, 'simple'), false);
-  assert.equal(wantsStory({ ...page, story: null }, 'simple'), true);
-  assert.equal(
-    wantsStory({ ...page, posts: [], story: null }, 'simple'),
-    false,
+  const covered = storyPage({ posts: [post('p-3')] });
+  assert.equal(wantsStory(covered, 'simple'), false);
+  assert.equal(threadLayout(covered, covered.posts, 'simple', now).note, null);
+  // A post that moved in has an older number, and a story still leaves it out.
+  const moved = storyPage({ posts: [post('p-1'), post('p-3')] });
+  assert.deepEqual(
+    threadLayout(moved, moved.posts, 'simple', now).posts.map(({ id }) => id),
+    ['p-1'],
   );
 });
 
-await test('Simple leaves out Verifold’s own lines, which carry IDs', () => {
+await test('Technical shows the real posts and the outcome’s quote with its ID', () => {
+  const page = storyPage();
+  const technical = threadLayout(page, page.posts, 'technical', now);
+  assert.equal(technical.steps, null);
+  assert.deepEqual(technical.outcome, []);
+  assert.equal(technical.outcomeQuote, 'Use it. (p-3)');
   assert.deepEqual(
-    simplePosts([
-      post('p-1'),
-      post('p-2', { author: 'verifold', handle: null, kind: 'status' }),
-    ]).map(({ id }) => id),
+    technical.posts.map(({ id }) => id),
+    ['p-3', 'p-4'],
+  );
+  assert.equal(technical.note, null);
+  assert.equal(technical.foot, null);
+  assert.equal(
+    threadLayout(page, page.posts, 'simple', now).outcomeQuote,
+    'Use it.',
+  );
+});
+
+await test('a story of an earlier outcome says so, shows the current quote, and drops its later lines in both views', () => {
+  const page = storyPage({
+    thread: thread({
+      state: 'decided',
+      outcome: { ...outcome, post: 'p-7', text: 'Use the other one.' },
+    }),
+    later: [post('p-9')],
+  });
+  assert.equal(
+    wantsStory(storyPage({ ...page, posts: [post('p-3')] }), 'simple'),
+    true,
+  );
+  const simple = threadLayout(page, [post('p-3')], 'simple', now);
+  assert.deepEqual(simple.outcome, []);
+  assert.equal(simple.outcomeQuote, 'Use the other one.');
+  assert.equal(
+    simple.stale,
+    "This story is out of date: the thread's outcome changed.",
+  );
+  assert.equal(simple.note, null);
+  assert.equal(simple.steps?.length, 1);
+  // The record's later post stays in both views, because no current line tells it.
+  for (const mode of ['simple', 'technical'] as const)
+    assert.deepEqual(
+      threadLayout(page, [post('p-3')], mode, now).later.map(({ key }) => key),
+      ['p-9'],
+    );
+  const reopened = storyPage({ thread: thread({ posts: 2 }), later: [] });
+  assert.equal(
+    threadLayout(reopened, [post('p-3')], 'simple', now).stale,
+    "This story is out of date: the thread's outcome changed.",
+  );
+  assert.equal(threadLayout(page, [post('p-3')], 'technical', now).stale, null);
+});
+
+await test('each later post is its own short item, with its link only in Technical', () => {
+  const page = storyPage();
+  assert.deepEqual(
+    threadLayout(page, page.posts, 'technical', now).later.map(
+      ({ key, post: id, line, text }) => [key, id, line, text],
+    ),
+    [
+      ['line-0-p-8', 'p-8', null, 'Words of p-8.'],
+      ['line-0-p-9', 'p-9', null, 'Words of p-9.'],
+      ['p-10', 'p-10', null, 'It holds.'],
+    ],
+  );
+  const simple = threadLayout(page, page.posts, 'simple', now).later;
+  assert.equal(simple.length, 2);
+  assert.equal(simple[0]?.line?.kind, 'later');
+  assert.equal(simple[0]?.post, null);
+  assert.equal(simple[1]?.post, null);
+  assert.match(simple[1]?.who ?? '', /^Agent 1, \d\d:\d\d$/);
+});
+
+await test('with no story, Simple says so and leaves out Verifold’s own lines, which carry IDs', () => {
+  const posts = [
+    post('p-1'),
+    post('p-2', { author: 'verifold', handle: null, kind: 'status' }),
+  ];
+  const page = storyPage({ story: null, posts, later: [] });
+  const simple = threadLayout(page, posts, 'simple', now);
+  assert.equal(simple.steps, null);
+  assert.equal(
+    simple.note,
+    'The story of this thread is not ready yet. Here are its posts.',
+  );
+  assert.deepEqual(
+    simple.posts.map(({ id }) => id),
     ['p-1'],
+  );
+  assert.equal(threadLayout(page, posts, 'technical', now).posts.length, 2);
+  assert.equal(wantsStory(page, 'simple'), true);
+  assert.equal(wantsStory({ ...page, posts: [] }, 'simple'), false);
+  assert.equal(
+    threadLayout({ ...page, posts: [] }, [], 'technical', now).foot,
+    'This thread has no posts yet.',
+  );
+});
+
+await test('the counts of threads and posts', () => {
+  assert.equal(postCount({ posts: 1 }), '1 post');
+  assert.equal(postCount({ posts: 6 }), '6 posts');
+  assert.equal(
+    allThreads({ threads: [thread()], omitted: { threads: 13 } }),
+    'All 14 threads',
+  );
+  assert.equal(
+    allThreads({ threads: [thread()], omitted: {} }),
+    'All 1 thread',
   );
 });
 

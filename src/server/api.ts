@@ -161,6 +161,7 @@ import { keptAgents, keptDirections } from './lab-lists.ts';
 import {
   noMarks,
   postMarks,
+  takingPart,
   threadActivity,
   threadItem,
   waitItems,
@@ -2193,15 +2194,11 @@ export class ApiReader {
     if (!view || !thread) return null;
     const who = namesOf(view);
     const marks = postMarks(view, openDisputes(view));
+    const own = view.posts.filter((entry) => entry.thread === id);
     return {
       thread: threadItem(thread, threadActivity(view.posts)),
-      ...boardPage(
-        view.posts.filter((entry) => entry.thread === id),
-        apiLimits.posts,
-        who,
-        marks,
-        before,
-      ),
+      ...boardPage(own, apiLimits.posts, who, marks, before),
+      takingPart: takingPart(own, view.handles),
       story: storyItem(view, id),
       later: laterPosts(thread, view.posts, apiLimits.later).map((entry) =>
         post(entry, who, marks),

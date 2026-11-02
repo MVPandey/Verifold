@@ -1,8 +1,20 @@
-import type { Agent, Direction, Lab, Run } from '../protocol/api.ts';
-import { directionLine, roleOf } from '../ui/lab-lines.ts';
+import type { Agent, Direction, Lab, Reading, Run } from '../protocol/api.ts';
+import {
+  directionLine,
+  roleOf,
+  shownVerdict,
+  verdictLabels,
+} from '../ui/lab-lines.ts';
 import { andList } from '../ui/call-words.ts';
-import { clock, roleName } from './format.ts';
+import {
+  agentDetail,
+  harnessLabel,
+  roleName,
+  shortTime,
+  since,
+} from './format.ts';
 import { helperLine } from './helpers.ts';
+import type { ViewMode } from './view-mode.ts';
 import { waitLine } from './waits.ts';
 
 export type Tone = 'run' | 'wait' | 'need' | 'done' | 'ok' | 'open';
@@ -18,10 +30,10 @@ export interface AgentRow {
   readonly agent: Agent;
   readonly direction: Direction | null;
   readonly chip: Chip;
-  /** What the agent does and why, in its own words when it gave them. */
+  /** What the agent does and why, in its own words when it gave them. An agent that ended has the words of the record, in both views. */
   readonly line: string;
-  /** What Simple shows in place of `line` for an agent that ended, from the records. */
-  readonly ended: string | null;
+  /** The words of an ended direction's evidence, for the Technical view. */
+  readonly evidence: string | null;
   /** What the agent says comes next. */
   readonly next: string | null;
   /** When the agent gave its line. */
@@ -74,49 +86,60 @@ const toneRank: Readonly<Record<Tone, number>> = {
   done: 4,
 };
 
-/** How a direction's verdict reads on the line of its closed agent. */
-const verdictEnd: Partial<Record<Direction['verdict'], string>> = {
-  'ruled-out': ' after its test failed',
-  'holds-up': ' after its test held up',
-};
-
-/** An ended direction in plain words, from the records. */
-function endedLine(agent: Agent, direction: Direction | null): string | null {
-  if (!direction || direction.state === 'open' || agent.line) return null;
+/**
+ * An ended direction in the words of the record: its end, its time, and its
+ * verdict's own word. Its folder and branch stay when it ends. Null: it did
+ * not end, or it is a checker's row.
+ */
+function endedLine(
+  agent: Agent,
+  direction: Direction | null,
+  now: number,
+): string | null {
+  if (!direction || direction.state === 'open') return null;
   const at = direction.stoppedAt ?? agent.live.since;
-  const when = at ? ` at ${clock(at)}` : '';
-  return `${direction.state === 'closed' ? 'Closed' : 'Stopped'}${when}${verdictEnd[direction.verdict] ?? ''}. Its code and outputs stay for the others.`;
+  return [
+    `${direction.state === 'closed' ? 'Closed' : 'Stopped'}${at ? ` at ${shortTime(at, now)}` : ''}.`,
+    ...(direction.verdict === 'open'
+      ? []
+      : [`${verdictLabels[shownVerdict(direction)]}.`]),
+    'Its folder stays.',
+  ].join(' ');
 }
 
 /** The agent's newest run that is not over, from the records. */
-function runLine(runs: readonly Run[]): string | null {
+function runLine(runs: readonly Run[], now: number): string | null {
   const run = runs.findLast(
     (entry) => entry.status === 'running' || entry.status === 'queued',
   );
   if (!run) return null;
   return run.startedAt
-    ? `${run.id} started ${clock(run.startedAt)}.`
-    : `${run.id} queued ${clock(run.queuedAt)}.`;
+    ? `${run.id} started ${shortTime(run.startedAt, now)}.`
+    : `${run.id} queued ${shortTime(run.queuedAt, now)}.`;
 }
 
 function rowOf(agent: Agent, lab: Lab, now: number): AgentRow {
   const direction =
     lab.directions.find((entry) => entry.id === agent.direction) ?? null;
   const runs = lab.runs.filter((run) => run.agent === agent.id);
-  const line = agent.line
-    ? `${sentence(agent.line.doing)} ${sentence(agent.line.why)}`
-    : directionLine(direction?.evidence?.text ?? null, agent.live, now).text;
+  const ended = endedLine(agent, direction, now);
+  const status = ended ? null : (agent.line ?? null);
   return {
     agent,
     direction,
     chip: chipOf(agent, runs, lab),
-    line,
-    ended: endedLine(agent, direction),
-    next: agent.line?.next ?? null,
-    statusAt: agent.line?.at ?? null,
+    line:
+      ended ??
+      (status
+        ? `${sentence(status.doing)} ${sentence(status.why)}`
+        : directionLine(direction?.evidence?.text ?? null, agent.live, now)
+            .text),
+    evidence: ended ? (direction?.evidence?.text ?? null) : null,
+    next: status?.next ?? null,
+    statusAt: status?.at ?? null,
     wait: waitLine(lab, agent.id),
     helpers: helperLine(agent.helpers ?? []),
-    run: runLine(runs),
+    run: runLine(runs, now),
   };
 }
 
@@ -130,6 +153,54 @@ export function agentRows(lab: Lab, now: number): readonly AgentRow[] {
     .filter((agent) => agent.direction !== null || agent.live.state !== 'ended')
     .map((agent) => rowOf(agent, lab, now))
     .sort((a, b) => toneRank[a.chip.tone] - toneRank[b.chip.tone]);
+}
+
+/** What follows a row's name: its job and harness, and in Technical its direction's ID. */
+export function rowDetail(
+  row: Pick<AgentRow, 'agent' | 'direction'>,
+  mode: ViewMode,
+): string | null {
+  const { agent, direction } = row;
+  return mode === 'technical' && direction
+    ? `${agent.job ? `${agent.job}, ` : ''}${direction.id} · ${harnessLabel(agent.harness)}`
+    : agentDetail(agent);
+}
+
+/** The small lines under a row's line, as a view shows them. */
+export function rowMore(row: AgentRow, mode: ViewMode): readonly string[] {
+  return [
+    ...(mode === 'technical'
+      ? [
+          ...(row.evidence ? [row.evidence] : []),
+          ...(row.next ? [`Next: ${row.next}`] : []),
+          ...(row.run ? [row.run] : []),
+        ]
+      : []),
+    ...(row.wait ? [row.wait] : []),
+    ...(row.helpers ? [row.helpers] : []),
+  ];
+}
+
+/** The age of an agent's line. Null: it gave none. */
+export function rowAge(row: AgentRow, now: number): string | null {
+  return row.statusAt
+    ? `${shortTime(row.statusAt, now)}, ${since(row.statusAt, now)} ago`
+    : null;
+}
+
+/** The reading line, and how long ago the last paper came. */
+export function readingWords(
+  reading: Reading,
+  now: number,
+): { readonly line: string; readonly age: string | null } {
+  const { papers, lastPaperAt } = reading;
+  const count = `Reading map: ${papers} ${papers === 1 ? 'paper' : 'papers'}.`;
+  return lastPaperAt
+    ? {
+        line: `${count} Last paper read at ${shortTime(lastPaperAt, now)}.`,
+        age: `${since(lastPaperAt, now)} ago`,
+      }
+    : { line: `${count} No paper read yet.`, age: null };
 }
 
 /** Names of agents by number: "Agent 1", "Agents 2, 3 and 4". */

@@ -7,14 +7,7 @@ import type {
 } from '../../protocol/api.ts';
 import { signedOff } from '../answer.ts';
 import type { ActOutcome } from '../api.ts';
-import {
-  boardLink,
-  byNumber,
-  filledPosts,
-  joinPosts,
-  threads,
-  type OlderPosts,
-} from '../board.ts';
+import { boardLink, threads } from '../board.ts';
 import { askedOfYou, waitLine } from '../waits.ts';
 import { ControlsContext } from '../controls.ts';
 import { authorOf, cut } from '../format.ts';
@@ -42,6 +35,7 @@ import { PodNeeds, PodsLine, type PodActions } from '../components/Pods.tsx';
 import { waitingPods } from '../pods.ts';
 import { failureOf } from '../call.ts';
 import { ToolsContext } from '../tools.ts';
+import { useOlderPosts } from '../useOlderPosts.ts';
 import {
   noDirectionsLine,
   plannerEndLine,
@@ -53,9 +47,6 @@ import {
   type AgentActions,
 } from './DirectionPage.tsx';
 import { PlannerComposer, Scoping, planQuestions } from './Scoping.tsx';
-
-/** Pages of older posts that a gap fill reads at most, before it gives the older posts up. */
-const gapPages = 10;
 
 export interface LabActions {
   /** Write to the lab. `key` marks the person's intent (see intent.ts). */
@@ -149,7 +140,7 @@ export function LabHome({
   const waiting = compute && pods ? waitingPods(compute).length : 0;
   const tools = useContext(ToolsContext);
   const [replyTo, setReplyTo] = useState<Post | null>(null);
-  const older = useOlderPosts(lab);
+  const older = useOlderPosts(lab.board, controls?.board ?? null);
   // Older pages hold question posts too, so the filter applies after the join.
   const shownPosts = scoping
     ? older.posts.filter((post) => !announced.has(post.id))
@@ -351,95 +342,4 @@ export function LabHome({
       </main>
     </div>
   );
-}
-
-/**
- * The board: older pages read on request, then the snapshot's newest page.
- * When new posts push the older pages' anchor out of the newest page, the
- * posts between are read before anything older shows again, so no post is
- * ever missing from the list, as with an agent's turns.
- */
-function useOlderPosts(lab: Lab): {
-  /** Every post to show, oldest first. */
-  readonly posts: readonly Post[];
-  readonly more: boolean;
-  /** The posts between the older pages and the newest page are being read. */
-  readonly gap: boolean;
-  readonly busy: boolean;
-  readonly problem: string | null;
-  readonly show: () => Promise<void>;
-} {
-  const controls = useContext(ControlsContext);
-  const [older, setOlder] = useState<OlderPosts | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
-  // A ref, so two clicks in one frame read once.
-  const loading = useRef(false);
-  // A gap fill makes reads that started before it stale.
-  const epoch = useRef(0);
-  const pending = useRef<AbortController | null>(null);
-  useEffect(() => () => pending.current?.abort(), []);
-  const { posts, gap } = joinPosts(older, lab.board.posts);
-  const anchor = older?.anchor ?? null;
-  useEffect(() => {
-    if (!controls || !gap || !older) return;
-    const controller = new AbortController();
-    const mine = ++epoch.current;
-    void (async () => {
-      const pages: (readonly Post[])[] = [];
-      let before = gap;
-      for (let page = 0; page < gapPages; page++) {
-        const loaded = await controls.board(before, controller.signal);
-        if (controller.signal.aborted || mine !== epoch.current) return;
-        if ('error' in loaded) {
-          // The list stays whole: the newest page alone, and "Show older posts" again.
-          setOlder(null);
-          setProblem(loaded.error);
-          return;
-        }
-        pages.push(loaded.value.posts);
-        const first = loaded.value.posts[0];
-        if (
-          !first ||
-          !loaded.value.more ||
-          loaded.value.posts.some((post) => post.id === older.anchor)
-        )
-          break;
-        before = first.id;
-      }
-      setOlder(filledPosts(older, pages, gap));
-    })();
-    return () => controller.abort();
-    // The fill depends on the gap and the anchor, not on each new `older`.
-  }, [gap, anchor, controls]);
-  return {
-    posts,
-    more: controls !== null && !gap && (older ? older.more : lab.board.more),
-    gap: gap !== null,
-    busy,
-    problem,
-    show: async () => {
-      const first = posts[0];
-      if (!controls || !first || loading.current) return;
-      loading.current = true;
-      setBusy(true);
-      const controller = new AbortController();
-      pending.current = controller;
-      const mine = epoch.current;
-      const loaded = await controls.board(first.id, controller.signal);
-      loading.current = false;
-      setBusy(false);
-      if (controller.signal.aborted || mine !== epoch.current) return;
-      if ('error' in loaded) {
-        setProblem(loaded.error);
-        return;
-      }
-      setProblem(null);
-      setOlder((current) => ({
-        posts: byNumber([loaded.value.posts, current?.posts ?? []]),
-        more: loaded.value.more,
-        anchor: current?.anchor ?? first.id,
-      }));
-    },
-  };
 }

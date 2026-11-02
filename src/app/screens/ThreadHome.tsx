@@ -3,10 +3,11 @@ import type { Lab, Snapshot } from '../../protocol/api.ts';
 import { reachLine } from '../agent-rows.ts';
 import { signedOff } from '../answer.ts';
 import { mentionNames } from '../mentions.ts';
+import { needRows } from '../needs.ts';
 import { waitingPods } from '../pods.ts';
 import { href, replaceRoute } from '../route.ts';
 import type { Connection } from '../store.ts';
-import { openThreads } from '../thread-view.ts';
+import { allThreads, openThreads } from '../thread-view.ts';
 import { ToolsContext } from '../tools.ts';
 import { AgentList } from '../components/AgentList.tsx';
 import { AnswerLine } from '../components/AnswerLine.tsx';
@@ -60,10 +61,8 @@ export function ThreadHome({
   }, [show]);
   const { compute } = snapshot;
   const waiting = compute && pods ? waitingPods(compute).length : 0;
-  const quiet =
-    !lab.needsYou.length && !lab.waits?.some((wait) => wait.on === 'person');
+  const quiet = !needRows(lab, now).length;
   const threads = lab.threads ?? [];
-  const total = threads.length + (lab.omitted.threads ?? 0);
   const open = openThreads(threads, homeThreads);
   return (
     <div className="page">
@@ -119,14 +118,14 @@ export function ThreadHome({
             answer={signedOff(lab) ? 'The answer' : 'The answer so far'}
           />
           <Disputes lab={lab} />
-          {total > 0 && (
+          {(threads.length > 0 || lab.omitted.threads) && (
             <section aria-labelledby="open-threads">
               <div className="section-head">
                 <h2 id="open-threads" className="section-title">
                   Open threads
                 </h2>
                 <a className="section-link" href={href.threads}>
-                  All {total} {total === 1 ? 'thread' : 'threads'}
+                  {allThreads(lab)}
                 </a>
               </div>
               {open.length ? (

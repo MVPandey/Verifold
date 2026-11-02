@@ -270,6 +270,12 @@ export interface LineCheck {
   readonly sameHarness: boolean;
 }
 
+/** One cited post, unchanged, apart from its ID. */
+export interface Quote {
+  readonly post: string;
+  readonly text: string;
+}
+
 /** One line of a brief, or an answer of the Coordinator. */
 export interface BriefLine {
   readonly kind:
@@ -284,10 +290,10 @@ export interface BriefLine {
     | 'later';
   /** The time of its newest post. */
   readonly at: string;
-  /** The plain words, only once they passed their check. Null: show `quote`. */
+  /** The plain words, only once they passed their check. Null: show `quotes`. */
   readonly plain: string | null;
-  /** The cited posts unchanged, each with its ID. Verifold builds it. */
-  readonly quote: string;
+  /** The cited posts unchanged, each apart from its ID. Verifold builds them. */
+  readonly quotes: readonly Quote[];
   readonly posts: readonly string[];
   /** The thread of its first cited post that has one. Null: none. Added after version 1. */
   readonly thread?: string | null;
@@ -309,8 +315,10 @@ export interface StoryLine extends BriefLine {
 export interface ThreadStory {
   /** When the Coordinator wrote it. */
   readonly at: string;
-  /** The thread's newest post then. Newer posts are not in the story. */
-  readonly through: string;
+  /** The posts that its session read. Other posts of the thread are not in it. */
+  readonly posts: readonly string[];
+  /** The post with the outcome that it told. Null: it told none. */
+  readonly outcome: string | null;
   readonly lines: readonly StoryLine[];
 }
 
@@ -933,6 +941,16 @@ export interface ThreadPage {
   readonly story?: ThreadStory | null;
   /** Posts after the outcome that reply to it or name it, in any thread, oldest first. Absent: an earlier server. */
   readonly later?: readonly Post[];
+  /** Who took part, over all of its posts, not only those of this page. Absent: an earlier server. */
+  readonly takingPart?: TakingPart;
+}
+
+/** Who wrote in a thread. */
+export interface TakingPart {
+  /** The handles of its agents. */
+  readonly handles: readonly string[];
+  /** The person wrote its first post. */
+  readonly byPerson: boolean;
 }
 
 export interface BoardPage {
@@ -1631,6 +1649,8 @@ export interface ActionBodies {
     readonly kind?: PostKind;
     readonly direction?: string;
     readonly replyTo?: string;
+    /** The thread that the post goes in. Added after version 1. */
+    readonly thread?: string;
     readonly key?: string;
   };
   'lab-call-answer': {

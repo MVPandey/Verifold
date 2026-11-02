@@ -15,10 +15,12 @@ import type {
   ThreadPage,
 } from '../src/protocol/api.ts';
 import { Screen } from '../src/app/App.tsx';
+import { labControls } from '../src/app/controls.ts';
+import { AwayDigest } from '../src/app/components/AwayDigest.tsx';
 import { BoardThread } from '../src/app/components/BoardThread.tsx';
 import { IdText } from '../src/app/components/IdText.tsx';
 import { Disputes } from '../src/app/components/LabControls.tsx';
-import { ThreadBody } from '../src/app/screens/ThreadPage.tsx';
+import { ThreadBody, ThreadBox } from '../src/app/screens/ThreadPage.tsx';
 import type { Route } from '../src/app/route.ts';
 import type { LabActions } from '../src/app/screens/LabHome.tsx';
 import type { AgentActions } from '../src/app/screens/DirectionPage.tsx';
@@ -56,7 +58,7 @@ const line = (more: Partial<BriefLine> = {}): BriefLine => ({
   kind: 'open',
   at: ago(20),
   plain: 'The first run gave 55%, in plain words.',
-  quote: 'Seed 1 gives 55%. (p-3)',
+  quotes: [{ post: 'p-3', text: 'Seed 1 gives 55%.' }],
   posts: ['p-3'],
   thread: 't-2',
   evidence: "One agent's result. No check yet.",
@@ -205,7 +207,14 @@ function page(shown: Lab, route: Route, mode: ViewMode = 'simple'): string {
 const home = (more: Partial<Lab> = {}, mode: ViewMode = 'simple'): string =>
   page(lab(more), { page: 'lab' }, mode);
 
-const older = { posts: [], more: false, busy: false, show: () => {} };
+const olderOf = (posts: readonly Post[], more = false) => ({
+  posts,
+  more,
+  gap: false,
+  busy: false,
+  problem: null,
+  show: () => Promise.resolve(),
+});
 
 const storyLine = (
   kind: BriefLine['kind'],
@@ -232,14 +241,25 @@ const threadPage = (more: Partial<ThreadPage> = {}): ThreadPage => ({
   more: false,
   story: null,
   later: [],
+  takingPart: { handles: ['agent-2'], byPerson: false },
   ...more,
 });
 
-const body = (shown: ThreadPage, mode: ViewMode, labFields = {}): string =>
+const body = (
+  shown: ThreadPage,
+  mode: ViewMode,
+  more: { readonly onReply?: (post: Post) => void } = {},
+): string =>
   inView(
-    lab(labFields),
+    lab(),
     mode,
-    <ThreadBody page={shown} lab={lab(labFields)} older={older} />,
+    <ThreadBody
+      page={shown}
+      lab={lab()}
+      older={olderOf(shown.posts, shown.more)}
+      now={now}
+      {...more}
+    />,
   );
 
 await test('a lab with threads gets the new home, top to bottom', () => {
@@ -347,21 +367,73 @@ await test('no brief yet shows the records’ top line and a short honest line',
   assert.match(html, /One test is running\./);
 });
 
-await test('since you left shows the numbers of the record, with no ID in Simple, and Dismiss needs its tool', () => {
-  const away = {
-    since: ago(152),
-    spentThen: { plansUsd: 0, gpuUsd: 0 },
-    news: {
-      lines: [],
-      moreLines: 0,
-      counts: '15 posts, 2 runs ended (1 failed: r-93)',
-      cost: 'Spent since then: $1.',
-    },
+await test('since you left shows the direction lines and the numbers, with no ID of Verifold’s in Simple', () => {
+  const news = {
+    lines: [
+      {
+        direction: 'd-2',
+        title: 'The control beats chance',
+        mark: 'open' as const,
+        said: 'Not settled yet. 4 new posts.',
+      },
+    ],
+    moreLines: 2,
+    counts: '15 posts, 2 runs ended (1 failed: r-93)',
+    cost: 'Spent since then: $1.',
   };
+  const away = { since: ago(152), spentThen: { plansUsd: 0, gpuUsd: 0 }, news };
   const simple = home({ away });
   assert.match(simple, /Since you left at/);
-  assert.match(simple, /2 runs ended \(1 failed\)\. Spent since then/);
+  assert.match(simple, /href="#\/d\/d-2">The control beats chance</);
+  assert.match(simple, /Not settled yet\. 4 new posts\./);
+  assert.match(simple, /2 more directions changed too\./);
+  assert.match(simple, /2 runs ended \(1 failed\)\./);
+  assert.match(simple, /Spent since then: \$1\./);
+  assert.doesNotMatch(simple, /Nothing changed/);
   assert.match(home({ away }, 'technical'), /1 failed: r-93/);
+});
+
+await test('the time away says "Nothing changed." only when its news is quiet', () => {
+  const away = (news?: NonNullable<Lab['away']>['news']): Lab['away'] => ({
+    since: ago(152),
+    spentThen: { plansUsd: 0, gpuUsd: 0 },
+    ...(news ? { news } : {}),
+  });
+  const news = { lines: [], moreLines: 0, counts: '', cost: '' };
+  assert.match(home({ away: away(news) }), /Nothing changed\./);
+  assert.match(
+    home({ away: away({ ...news, cost: 'Spent since then: $1.' }) }),
+    /No post, run, or call came\./,
+  );
+  // A server from before these words sends only the time away.
+  assert.doesNotMatch(
+    home({ away: away() }),
+    /Nothing changed|No post, run, or call/,
+  );
+});
+
+await test('an old lab’s digest reads as it did, with its run IDs', () => {
+  const shown = lab({ brief: null, threads: [] });
+  const html = inView(
+    shown,
+    'technical',
+    <AwayDigest
+      away={{
+        since: ago(40),
+        spentThen: { plansUsd: 0, gpuUsd: 0 },
+        news: {
+          lines: [],
+          moreLines: 0,
+          counts: '2 runs ended (1 failed: r-93)',
+          cost: '',
+        },
+      }}
+      now={now}
+      onDismiss={null}
+    />,
+  );
+  assert.match(html, /While you were away/);
+  assert.match(html, /1 failed: r-93/);
 });
 
 await test('agent rows show the job, the harness, the chip, and the agent’s own words in both views', () => {
@@ -405,7 +477,8 @@ await test('all threads go by state, open first', () => {
 await test('Simple tells the story under the outcome, and Technical shows the real posts', () => {
   const story = {
     at: ago(30),
-    through: 'p-3',
+    posts: ['p-2', 'p-3'],
+    outcome: 'p-3',
     lines: [
       storyLine('step', 'Agent 2 tried the first set.'),
       storyLine('outcome', 'The lab uses the first set.'),
@@ -452,7 +525,8 @@ await test('with no story, Simple shows the outcome and the posts, and says that
 await test('a line of a story that failed its check shows its quote', () => {
   const story = {
     at: ago(30),
-    through: 'p-3',
+    posts: ['p-2', 'p-3'],
+    outcome: 'p-3',
     lines: [storyLine('step', null)],
   };
   const html = body(threadPage({ story }), 'simple');
@@ -463,7 +537,8 @@ await test('a line of a story that failed its check shows its quote', () => {
 await test('posts newer than a story show after it, and later posts of the record show under the outcome', () => {
   const story = {
     at: ago(30),
-    through: 'p-2',
+    posts: ['p-2'],
+    outcome: 'p-3',
     lines: [storyLine('step', 'Agent 2 tried the first set.')],
   };
   const html = body(
@@ -473,7 +548,7 @@ await test('posts newer than a story show after it, and later posts of the recor
     }),
     'simple',
   );
-  assert.match(html, /1 newer post follows\./);
+  assert.match(html, /1 post is not in this story\. It follows\./);
   assert.match(html, /Seed 1 gives 55% in p-3/);
   assert.match(html, /Later: Agent 2, \d\d:\d\d: It failed on seed 2\./);
 });
@@ -528,4 +603,124 @@ await test('a dispute in Simple shows no ID of Verifold’s', () => {
   const technical = inView(shown, 'technical', <Disputes lab={shown} />);
   assert.match(technical, />p-3</);
   assert.match(technical, /Check k-1 waits for/);
+});
+
+await test('each post of a thread has Reply, and a thread has a box that writes to it', () => {
+  const html = body(threadPage(), 'technical', { onReply: () => {} });
+  assert.equal(html.match(/>Reply</g)?.length, 2);
+  assert.doesNotMatch(body(threadPage(), 'technical'), />Reply</);
+  const box = inView(
+    lab(),
+    'simple',
+    <ThreadBox
+      lab={lab()}
+      replyTo={null}
+      onWrite={() => Promise.resolve({ ok: true })}
+      onReply={() => Promise.resolve({ ok: true })}
+      onStop={() => {}}
+      onSent={() => {}}
+    />,
+  );
+  assert.match(box, /Write to this thread/);
+  const replying = inView(
+    lab(),
+    'simple',
+    <ThreadBox
+      lab={lab()}
+      replyTo={post('p-3')}
+      onWrite={() => Promise.resolve({ ok: true })}
+      onReply={() => Promise.resolve({ ok: true })}
+      onStop={() => {}}
+      onSent={() => {}}
+    />,
+  );
+  assert.match(replying, /Agent 2 · Controls/);
+});
+
+await test('the box writes to its thread, and a read of a thread can ask for posts before one', async (t) => {
+  const seen: { url: string; body: unknown }[] = [];
+  t.mock.method(globalThis, 'fetch', (url: string, init?: RequestInit) => {
+    seen.push({
+      url,
+      body: JSON.parse(typeof init?.body === 'string' ? init.body : '{}'),
+    });
+    return Promise.resolve(new Response('{}', { status: 200 }));
+  });
+  const controls = labControls('token');
+  await controls.writeThread('t-2', 'Hello', 'key-1');
+  assert.equal(seen[0]?.url, '/api/v1/actions/lab-post');
+  assert.deepEqual(seen[0]?.body, {
+    text: 'Hello',
+    thread: 't-2',
+    key: 'key-1',
+  });
+  await controls.threadPage('t-2', 'p-9');
+  assert.equal(seen[1]?.url, '/api/v1/threads/t-2?before=p-9');
+});
+
+await test('a failed read and a gap show on the thread', () => {
+  const html = inView(
+    lab(),
+    'technical',
+    <ThreadBody
+      page={threadPage()}
+      lab={lab()}
+      older={{
+        ...olderOf(threadPage().posts),
+        gap: true,
+        problem: 'The read failed.',
+      }}
+      now={now}
+    />,
+  );
+  assert.match(html, /Reading the posts in between/);
+  assert.match(html, /role="alert"[^>]*>The read failed\./);
+});
+
+await test('Simple’s agent rows, thread rows, and top line show no ID of Verifold’s', () => {
+  const ended: Agent = {
+    ...agent,
+    id: 'a-1',
+    handle: 'agent-1',
+    direction: 'd-1',
+    status: 'closed',
+    line: null,
+    live: { state: 'ended', text: 'Closed by its agent', since: ago(30) },
+  };
+  const html = home({
+    agents: [agent, ended],
+    directions: [
+      direction,
+      {
+        ...direction,
+        id: 'd-1',
+        agent: 'a-1',
+        state: 'closed',
+        verdict: 'ruled-out',
+        evidence: { text: 'It failed at p-9.', post: 'p-9', run: 'r-1' },
+      },
+    ],
+    runs: [
+      {
+        id: 'r-52',
+        agent: 'a-2',
+        direction: 'd-2',
+        status: 'running',
+        command: 'python x.py',
+        why: '',
+        where: 'local',
+        commit: 'a',
+        exitCode: null,
+        queuedAt: ago(9),
+        startedAt: ago(2),
+        endedAt: null,
+        metrics: {},
+        note: null,
+      },
+    ],
+  });
+  const text = html.replace(/<[^>]+>/g, ' ');
+  assert.doesNotMatch(text, /\b(?:[dprck]|lease)-\d+\b/);
+  assert.match(text, /Closed at \d\d:\d\d\. Ruled out\. Its folder stays\./);
+  assert.doesNotMatch(text, /after its test failed/);
 });

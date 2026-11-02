@@ -1,14 +1,14 @@
 import type { ReactNode } from 'react';
 import type { Lab } from '../../protocol/api.ts';
-import { agentRows, type AgentRow } from '../agent-rows.ts';
-import { shortTime } from '../brief-view.ts';
 import {
-  agentDetail,
-  clock,
-  harnessLabel,
-  roleName,
-  since,
-} from '../format.ts';
+  agentRows,
+  readingWords,
+  rowAge,
+  rowDetail,
+  rowMore,
+  type AgentRow,
+} from '../agent-rows.ts';
+import { roleName } from '../format.ts';
 import { href } from '../route.ts';
 import { useView } from '../view-mode.ts';
 import { Avatar } from './Avatar.tsx';
@@ -23,11 +23,8 @@ function Row({
 }): ReactNode {
   const { mode } = useView();
   const { agent, direction, chip } = row;
-  const technical = mode === 'technical';
-  const detail =
-    technical && direction
-      ? `${agent.job ? `${agent.job}, ` : ''}${direction.id} · ${harnessLabel(agent.harness)}`
-      : agentDetail(agent);
+  const detail = rowDetail(row, mode);
+  const age = rowAge(row, now);
   return (
     <div className="agent-row">
       <Avatar
@@ -50,32 +47,14 @@ function Row({
         <span className={`state state--${chip.tone}`}>{chip.label}</span>
       </div>
       <div className="agent-row__line">
-        <IdText text={technical ? row.line : (row.ended ?? row.line)} />
-        {row.statusAt && (
-          <span className="agent-row__at">
-            {' '}
-            {clock(row.statusAt)}, {since(row.statusAt, now)} ago
-          </span>
-        )}
+        <IdText text={row.line} />
+        {age && <span className="agent-row__at"> {age}</span>}
       </div>
-      {technical && row.next && (
-        <div className="agent-row__line agent-row__more">
-          Next: <IdText text={row.next} />
+      {rowMore(row, mode).map((line) => (
+        <div key={line} className="agent-row__line agent-row__more">
+          <IdText text={line} />
         </div>
-      )}
-      {technical && row.run && (
-        <div className="agent-row__line agent-row__more">
-          <IdText text={row.run} />
-        </div>
-      )}
-      {row.wait && (
-        <div className="agent-row__line agent-row__more">
-          <IdText text={row.wait} />
-        </div>
-      )}
-      {row.helpers && (
-        <div className="agent-row__line agent-row__more">{row.helpers}</div>
-      )}
+      ))}
     </div>
   );
 }
@@ -91,7 +70,7 @@ export function AgentList({
   /** The words of the link to the answer. */
   readonly answer: string;
 }): ReactNode {
-  const { reading } = lab;
+  const reading = lab.reading ? readingWords(lab.reading, now) : null;
   return (
     <section aria-labelledby="who">
       <div className="section-head">
@@ -108,16 +87,10 @@ export function AgentList({
         ))}
         {reading && (
           <p className="lit">
-            <span>
-              Reading map: {reading.papers}{' '}
-              {reading.papers === 1 ? 'paper' : 'papers'}.{' '}
-              {reading.lastPaperAt
-                ? `Last paper read at ${shortTime(reading.lastPaperAt, now)}.`
-                : 'No paper read yet.'}
-            </span>
-            {reading.lastPaperAt && (
+            <span>{reading.line}</span>
+            {reading.age && (
               <span className="state state--wait state--flat">
-                {since(reading.lastPaperAt, now)} ago
+                {reading.age}
               </span>
             )}
           </p>

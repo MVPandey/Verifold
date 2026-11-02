@@ -245,6 +245,19 @@ a.id {
   justify-content: space-between;
 }
 
+.brief__news {
+  flex: 1 1 280px;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.brief__news .away__fine,
+.brief__news .away__quiet {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
 /* Who is doing what */
 .agent-row {
   display: grid;
@@ -445,6 +458,26 @@ a.id {
   overflow-wrap: anywhere;
 }
 
+.later p {
+  margin: 0;
+}
+
+.later__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  align-items: baseline;
+  font-size: 13px;
+}
+
+.later__text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
 .story {
   margin: 0;
   padding: 0;
@@ -542,7 +575,13 @@ a.id {
     display: block;
   }
 
+  .column--lab .post__reply {
+    min-height: 44px;
+  }
+
   .brief__links a,
+  .later__links a,
+  .brief__news .away__direction,
   .section-link,
   .back,
   .agent-row__name {

@@ -85,6 +85,12 @@ export interface LabControls {
   ) => Promise<Loaded<ThreadPage>>;
   /** Ask for a thread's story. It needs no intent: a second ask changes nothing. */
   readonly askStory: (thread: string) => Promise<ActOutcome>;
+  /** Write to a thread, as a post that replies to no post. */
+  readonly writeThread: (
+    thread: string,
+    text: string,
+    key: string,
+  ) => Promise<ActOutcome>;
   /** The figure that a post cites, such as p-12.0: its bytes, as the post pinned them, and its name. */
   readonly figure: (
     proof: string,
@@ -144,6 +150,8 @@ export function labControls(token: string): LabControls {
     threadPage: (thread, before, signal) =>
       load(token, paths.threadPage(thread, before), isThreadPage, signal),
     askStory: (thread) => act(token, 'lab-story', { thread }, newKey()),
+    writeThread: (thread, text, key) =>
+      act(token, 'lab-post', { text, thread }, key),
     figure: (proof, signal) => loadFile(token, paths.figure(proof), signal),
   };
 }
