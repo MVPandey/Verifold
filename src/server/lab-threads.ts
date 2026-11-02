@@ -129,16 +129,18 @@ export function waitItems(view: LabView): Wait[] {
   if (!threads.length) return [];
   const titles = new Map(threads.map((entry) => [entry.id, entry.title]));
   const posts = new Map(view.posts.map((post) => [post.id, post]));
-  const items = openWaits(view.posts, threads).map((wait): Wait => {
-    const text = clip(posts.get(wait.post)?.text ?? '', waitText);
-    return {
-      ...wait,
-      waiterHandle: view.handles[wait.waiter] ?? null,
-      onHandle: view.handles[wait.on] ?? null,
-      subject: titles.get(wait.thread ?? '') ?? text,
-      text,
-    };
-  });
+  const items = openWaits(view.posts, threads, view.state.directions).map(
+    (wait): Wait => {
+      const text = clip(posts.get(wait.post)?.text ?? '', waitText);
+      return {
+        ...wait,
+        waiterHandle: view.handles[wait.waiter] ?? null,
+        onHandle: view.handles[wait.on] ?? null,
+        subject: titles.get(wait.thread ?? '') ?? text,
+        text,
+      };
+    },
+  );
   return [
     ...items.filter((wait) => wait.on === 'person'),
     ...items.filter((wait) => wait.on !== 'person'),

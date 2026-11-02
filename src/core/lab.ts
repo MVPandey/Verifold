@@ -635,7 +635,7 @@ export class Lab {
     );
     this.longShots = new LongShots({
       root,
-      sessions: options.sessions,
+      sessions: options.reserved ?? null,
       threads: this.threads,
       timing: this.timing,
       random: options.random ?? Math.random,
@@ -666,6 +666,9 @@ export class Lab {
       summary: () => this.summary(false),
       board: this.board,
       checks: () => this.current().checks,
+      plan: () => this.current().plan,
+      ideas: () => this.literature.ideas(),
+      markTried: (idea, post) => this.literature.markTried(idea, post),
       name: (author) => this.name(author),
       team: () => this.team(),
       usedUp: (host) => Boolean(options.quota?.parked(host)),
@@ -8275,8 +8278,11 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     if (state.pausedAt) return;
     for (const note of await this.threads.decide())
       await this.add(note).catch(() => {});
-    // The Coordinator has its own place, so it takes no slot and nothing waits on it.
-    if (this.threaded) await this.coordinator.tick();
+    // The Coordinator has its own place, so it takes no slot and nothing waits on it. Long shots use that place when it leaves it free.
+    if (this.threaded) {
+      await this.coordinator.tick();
+      await this.longShots.start();
+    }
     // A check takes the next free slot before any agent.
     const checking = await this.tickChecks(state);
     if (checking === 'started') return;
@@ -8317,8 +8323,6 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         Date.parse(a.wakeups.at(-1) ?? a.startedAt) -
         Date.parse(b.wakeups.at(-1) ?? b.startedAt),
     )[0];
-    // Long shots take a slot only when no check and no agent needs one.
-    if (!next && checking === 'none') await this.longShots.start();
     // A check waits for a slot: the slot that a park frees goes to it in the next tick.
     if (!next || checking === 'wait') return;
     if (sessions.full && !(await this.free(next.id))) return;
@@ -8334,8 +8338,6 @@ Start now: find the claim's premise, start a run early, and post your rerun once
    * keeps its slot. Returns true when a slot is free.
    */
   private async free(except?: string): Promise<boolean> {
-    // A long-shot session is the lowest priority: it goes first, and its draw waits.
-    if (await this.longShots.giveSlot()) return !this.options.sessions.full;
     const agent = this.yieldable(except)[0];
     if (!agent?.session) return false;
     await this.options.sessions.park(agent.session);
@@ -8507,7 +8509,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         !this.suspended &&
         !this.moving &&
         !this.closing &&
-        (this.longShots.holdsSlot || this.yieldable().length),
+        this.yieldable().length,
     );
   }
 

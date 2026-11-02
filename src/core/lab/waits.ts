@@ -4,7 +4,7 @@
  * the record shows its end.
  */
 import type { Post } from '../board.ts';
-import type { Thread } from './schema.ts';
+import type { Direction, Thread } from './schema.ts';
 
 export interface Wait {
   /** The author of the ask or the objection. */
@@ -37,16 +37,24 @@ function ends(reply: Post, post: Post): boolean {
 /**
  * The waits now, oldest first. An ask waits on who it names. An objection
  * waits on the author of its target. A closed thread ends its waits. An
- * objection to a post of Verifold, or of its own author, waits on no one.
+ * objection to a post of Verifold, or of its own author, waits on no one. An
+ * agent whose direction ended waits on no one, and a reopen brings its waits
+ * back. `directions`: all of the lab's.
  */
 export function openWaits(
   posts: readonly Post[],
   threads: readonly Thread[],
+  directions: readonly Pick<Direction, 'agent' | 'state'>[],
 ): readonly Wait[] {
   const closed = new Set(
     threads
       .filter((thread) => thread.state === 'closed')
       .map((thread) => thread.id),
+  );
+  const ended = new Set(
+    directions
+      .filter((direction) => direction.state !== 'open')
+      .map((direction) => direction.agent),
   );
   const byId = new Map(posts.map((post) => [post.id, post]));
   return posts.flatMap((post, index) => {
@@ -61,6 +69,7 @@ export function openWaits(
       (post.kind !== 'ask' && post.kind !== 'objection') ||
       !on ||
       on === 'verifold' ||
+      ended.has(post.author) ||
       (post.thread && closed.has(post.thread)) ||
       posts.slice(index + 1).some((reply) => ends(reply, post))
     )

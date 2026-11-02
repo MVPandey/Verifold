@@ -925,7 +925,8 @@ export interface LabOptions {
   readonly sessions: LabSessions;
   /**
    * The place of the Coordinator and its line check, outside "Agents at once":
-   * one session at a time. Without it, a lab has no Coordinator.
+   * one session at a time. A long-shot session uses it when the Coordinator
+   * leaves it free. Without it, a lab has no Coordinator and runs no draw.
    */
   readonly reserved?: Pick<
     LabSessions,

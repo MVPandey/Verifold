@@ -340,14 +340,14 @@ export function barText(direction: Direction): string {
 }
 
 /** A direction's verdict in words, such as "leading", or "no verdict yet". */
-export function verdictWord(direction: Direction): string {
+export function verdictWord(direction: Pick<Direction, 'verdict'>): string {
   return direction.verdict === 'open'
     ? 'no verdict yet'
     : verdictWords[direction.verdict].toLowerCase();
 }
 
 /** A direction's state in words: open, closed by its agent, or stopped by the person. */
-export function stateWord(direction: Direction): string {
+export function stateWord(direction: Pick<Direction, 'state'>): string {
   return direction.state === 'open'
     ? 'open'
     : direction.state === 'closed'

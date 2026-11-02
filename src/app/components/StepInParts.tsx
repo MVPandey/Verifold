@@ -1,9 +1,10 @@
 import { useState, type ReactNode } from 'react';
 import type { Lab, Post, Question } from '../../protocol/api.ts';
-import { lineHref, lineText, hasOriginal } from '../brief-view.ts';
+import { lineHref, hasOriginal } from '../brief-view.ts';
 import { useControl } from '../controls.ts';
 import { href } from '../route.ts';
 import {
+  answerCheck,
   answerHead,
   checksForYou,
   newestQuestions,
@@ -15,6 +16,7 @@ import {
 } from '../step-in.ts';
 import { useView } from '../view-mode.ts';
 import { Avatar } from './Avatar.tsx';
+import { LineWords } from './LineWords.tsx';
 import { IdText } from './IdText.tsx';
 import { PlainToggle } from './PlainToggle.tsx';
 
@@ -111,6 +113,7 @@ function Answer({
   const { mode } = useView();
   const [original, setOriginal] = useState(false);
   const { answer } = question;
+  const check = answer && answerCheck(answer);
   return (
     <div className="answer">
       <div className="post__head">
@@ -123,7 +126,7 @@ function Answer({
       </div>
       {answer && (
         <div className="answer__text">
-          <IdText text={lineText(answer, mode, original)} />{' '}
+          <LineWords line={answer} original={original} />{' '}
           <a className="proof" href={lineHref(answer)}>
             {sourceWords(answer.posts)}
           </a>{' '}
@@ -133,6 +136,7 @@ function Answer({
               onToggle={() => setOriginal(!original)}
             />
           )}
+          {check && <p className="answer__check">{check}</p>}
         </div>
       )}
     </div>

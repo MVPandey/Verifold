@@ -478,6 +478,16 @@ a.id {
   overflow: hidden;
 }
 
+.quote {
+  margin: 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+}
+
+.quote + .quote {
+  margin-top: 6px;
+}
+
 .story {
   margin: 0;
   padding: 0;
@@ -571,7 +581,8 @@ a.id {
   /* An inline control this tall would pull its lines apart. */
   .story .see,
   .outcome .see,
-  .later .see {
+  .later .see,
+  .quote .see {
     display: block;
   }
 
@@ -885,6 +896,12 @@ a.lit:hover {
   border-radius: 12px;
   font-size: 14px;
   overflow-wrap: anywhere;
+}
+
+.answer__check {
+  margin: 4px 0 0;
+  color: var(--ink-2);
+  font-size: 13px;
 }
 
 .avatar--coordinator {

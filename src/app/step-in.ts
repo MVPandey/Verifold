@@ -1,5 +1,6 @@
 import type {
   Agent,
+  BriefLine,
   CheckBlock,
   Direction,
   Lab,
@@ -378,6 +379,14 @@ export function answerHead(
     case 'unanswered':
       return `It gave no answer. ${quiet}`;
   }
+}
+
+/** How an answer's check went, in one line. Null: it passed, or this lab keeps no plain words. */
+export function answerCheck(answer: Pick<BriefLine, 'check'>): string | null {
+  const { state, reason } = answer.check;
+  return state === 'pending'
+    ? 'A second agent is checking this answer.'
+    : (reason ?? null);
 }
 
 /** "2 posts": what an answer cites. */

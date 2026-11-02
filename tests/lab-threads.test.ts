@@ -1432,7 +1432,7 @@ await test('an ask wakes who it names and sets a wait until an answer comes', as
   assert.deepEqual(wokenBy(lab, id), [agentOf(lab, 1).handle]);
   const view = viewOf(lab);
   assert.deepEqual(
-    openWaits(view.posts, view.threads ?? []).map(
+    openWaits(view.posts, view.threads ?? [], view.state.directions).map(
       ({ waiter, on, post: asked }) => [waiter, on, asked],
     ),
     [[started[0]?.agent, started[1]?.agent, id]],
@@ -1450,7 +1450,10 @@ await test('an ask wakes who it names and sets a wait until an answer comes', as
   assert.equal(answer.ok, true, answer.text);
   assert.deepEqual(wokenBy(lab, posted(answer.text)), [agentOf(lab, 0).handle]);
   const after = viewOf(lab);
-  assert.deepEqual(openWaits(after.posts, after.threads ?? []), []);
+  assert.deepEqual(
+    openWaits(after.posts, after.threads ?? [], after.state.directions),
+    [],
+  );
   const opened = after.threads?.find((entry) => entry.id === 't-2');
   assert.equal(opened?.state, 'answered');
   assert.equal(opened?.outcome?.text, 'Seed 2.');

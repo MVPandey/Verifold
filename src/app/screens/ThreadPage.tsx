@@ -13,7 +13,7 @@ import type {
   StoryLine,
   ThreadPage as ThreadRecord,
 } from '../../protocol/api.ts';
-import { hasOriginal, lineText } from '../brief-view.ts';
+import { hasOriginal } from '../brief-view.ts';
 import { ControlsContext } from '../controls.ts';
 import { shortTime } from '../format.ts';
 import { href } from '../route.ts';
@@ -28,6 +28,7 @@ import {
   wantsStory,
   type LaterItem,
 } from '../thread-view.ts';
+import { useClip } from '../useClip.ts';
 import { useOlderPosts, type OlderList } from '../useOlderPosts.ts';
 import { useRead } from '../useRead.ts';
 import { useView, type ViewMode } from '../view-mode.ts';
@@ -38,6 +39,7 @@ import { ConfirmButton } from '../components/ConfirmButton.tsx';
 import { ConnectionBar } from '../components/ConnectionBar.tsx';
 import { Chevron } from '../components/Icons.tsx';
 import { IdText } from '../components/IdText.tsx';
+import { ClipToggle, LineWords } from '../components/LineWords.tsx';
 import { PlainToggle } from '../components/PlainToggle.tsx';
 import { StepInBox } from '../components/StepInBox.tsx';
 import {
@@ -66,7 +68,7 @@ function PlainLine({ line }: { readonly line: StoryLine }): ReactNode {
   const [original, setOriginal] = useState(false);
   return (
     <>
-      <IdText text={lineText(line, mode, original)} />
+      <LineWords line={line} original={original} />
       {hasOriginal(line, mode) && (
         <>
           {' '}
@@ -82,33 +84,20 @@ function PlainLine({ line }: { readonly line: StoryLine }): ReactNode {
 
 /** One later fact as a short item. A post clips to two lines, with Show more when it does not fit, and its link stays outside the clip. */
 function Later({ item }: { readonly item: LaterItem }): ReactNode {
-  const [open, setOpen] = useState(false);
-  const [clipped, setClipped] = useState(false);
-  const text = useRef<HTMLParagraphElement>(null);
-  useEffect(() => {
-    const element = text.current;
-    if (element && !open)
-      setClipped(element.scrollHeight > element.clientHeight);
-  }, [item.text, open]);
+  const clip = useClip(item.text);
   return (
     <div className="later">
-      <p ref={text} className={open || item.line ? undefined : 'later__text'}>
+      <div
+        ref={clip.ref}
+        className={clip.open || item.line ? undefined : 'later__text'}
+      >
         Later: {item.who && `${item.who}: `}
         {item.line ? <PlainLine line={item.line} /> : item.text}
-      </p>
-      {(item.post || clipped || open) && (
+      </div>
+      {(item.post || clip.toggles) && (
         <div className="later__links">
           {item.post && <IdText text={item.post} />}
-          {(clipped || open) && (
-            <button
-              type="button"
-              className="see"
-              aria-expanded={open}
-              onClick={() => setOpen(!open)}
-            >
-              {open ? 'Show less' : 'Show more'}
-            </button>
-          )}
+          {clip.toggles && <ClipToggle clip={clip} />}
         </div>
       )}
     </div>
@@ -129,9 +118,9 @@ function Story({
         <li key={`${line.at}-${line.posts.join()}`}>
           <span className="story__time">{shortTime(line.at, now)}</span>
           <Avatar who={lineWho(line)} size="sm" />
-          <span>
+          <div>
             <PlainLine line={line} />
-          </span>
+          </div>
         </li>
       ))}
     </ol>
