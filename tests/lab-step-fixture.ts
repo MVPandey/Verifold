@@ -5,7 +5,11 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Lab } from '../src/core/lab.ts';
-import type { LabSessions, LabView } from '../src/core/lab/schema.ts';
+import type {
+  LabCompute,
+  LabSessions,
+  LabView,
+} from '../src/core/lab/schema.ts';
 import type { AgentTools } from '../src/core/session-hosts.ts';
 import type { SessionRecord, SessionView } from '../src/core/session.ts';
 import { changeWorkspace } from '../src/core/storage.ts';
@@ -143,6 +147,7 @@ export async function planned(
     readonly limit?: number;
     readonly objectionMs?: number;
     readonly share?: string;
+    readonly compute?: LabCompute;
   } = {},
 ): Promise<Built> {
   const root = await project(t);
@@ -153,6 +158,7 @@ export async function planned(
     reserved: fake.sessions,
     sandbox: (spec) => ({ file: '/bin/sh', args: ['-c', spec.command] }),
     harnesses: () => Promise.resolve(['claude', 'codex']),
+    ...(more.compute ? { compute: more.compute } : {}),
     random: () => {
       seed = (seed + 0.618_033_988_75) % 1;
       return seed;

@@ -161,6 +161,7 @@ import {
   addSpend,
   askerDirections,
   askers,
+  asksForPod,
   barSummary,
   barText,
   bringOut,
@@ -180,6 +181,7 @@ import {
   nameList,
   networkOf,
   personal,
+  podWordsLine,
   type PodsState,
   podsWords,
   sameAsk,
@@ -3165,7 +3167,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         // Without a key or a spend limit, the person adds them first.
         if (pods === 'no-key' || pods === 'no-limit')
           return this.podCall(id, generation, why, pods);
-        // The lab's first GPU pod always asks the person, also when the project's limits would start it.
+        // Until the person allows GPU pods, a request asks them, also when the project's limits would start it.
         if (await this.serial(() => !gpuApproved(this.current()))) {
           const effect = callEffect(
             {
@@ -3295,6 +3297,14 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         'Settle this on the board: post an objection, and a check breaks the tie.',
       );
     const options = callOptions(args.options, kind);
+    // Once the person allows pods, the agent picks its pod: a call would only wait for them.
+    if (
+      asksForPod({ options }) &&
+      (await this.serial(() => gpuApproved(this.current())))
+    )
+      fail(
+        'GPU pods are allowed in this lab. Ask for the pod with verifold_request_pod: a pod inside the limits starts with no call.',
+      );
     const need =
       args.need === undefined || args.need === null
         ? null
@@ -3456,10 +3466,11 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
   }
 
   /**
-   * A pod request that the person decides: the lab's first GPU pod, with the
-   * most that it can cost, or, while pods are off, an access call to add
-   * what is missing in the project's settings: a RunPod key, a spend limit,
-   * or both.
+   * A pod request that the person decides: whether the lab may use GPU pods,
+   * asked once with the first request and the most that it can cost, or,
+   * while pods are off, an access call to add what is missing in the
+   * project's settings: a RunPod key, a spend limit, or both. A request
+   * while such a call is open joins it.
    */
   private async podCall(
     id: string,
@@ -3500,15 +3511,16 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         : {
             kind: 'cost',
             need: null,
-            question: `The lab's first GPU pod: ${request.effect.gpuType} for ${request.effect.hours} ${request.effect.hours === 1 ? 'hour' : 'hours'}?`,
+            question:
+              'Allow GPU pods in this lab? After this, agents pick GPUs inside your limits.',
             options: [
               {
-                label: `Rent it, for at most ${usd(request.cost)}`,
+                label: 'Allow GPU pods',
                 usd: Number(request.cost.toFixed(2)),
                 minutes: null,
                 effect: request.effect,
               },
-              { label: 'No pod now', usd: 0, minutes: null, effect: null },
+              { label: 'Not now', usd: 0, minutes: null, effect: null },
             ],
           }
     ) satisfies Pick<Call, 'kind' | 'need' | 'question' | 'options'>;
@@ -3520,15 +3532,21 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
           askers(entry).includes(agent.id) &&
           entry.kind === ask.kind &&
           // While pods are off, a pod request asks with need pods, else with a pod option.
-          (off
-            ? entry.need === 'pods'
-            : entry.options.some((option) => option.effect?.type === 'pod')),
+          (off ? entry.need === 'pods' : asksForPod(entry)),
       );
       if (waiting)
         fail(
           `Your call ${waiting.id} waits for the person already. Verifold wakes you with the answer.`,
         );
-      const same = this.sameOpenCall(ask);
+      // The person allows pods once for the lab, so a pod request joins any open pod call.
+      const same = off
+        ? this.sameOpenCall(ask)
+        : this.current().calls.find(
+            (entry) =>
+              entry.state === 'open' &&
+              entry.by !== 'verifold' &&
+              asksForPod(entry),
+          );
       if (same) {
         await this.joinCall(same, agent, clip(why, callLimits.why));
         return { call: same, joined: true };
@@ -3546,7 +3564,9 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     });
     this.progressed(id, generation);
     if (!off)
-      return `The lab's first GPU pod waits for the person: Verifold asked them in ${call.id}, with the most that it can cost, ${usd(request.cost)}. Nothing is billed before they answer. Verifold wakes you with the answer.`;
+      return joined
+        ? `${this.name(call.by)} asked the person already in ${call.id} to allow GPU pods, and your request joined it. Nothing is billed before they answer. When they allow pods, ask for yours again: it starts inside the limits. Verifold wakes you with the answer.`
+        : `Verifold asked the person in ${call.id} to allow GPU pods in this lab, starting with yours, at most ${usd(request.cost)}. Nothing is billed before they answer. Verifold wakes you with the answer.`;
     return joined
       ? `${podsWords[request].off} ${this.name(call.by)} asked the person already in ${call.id}, and your request joined it. Verifold wakes you with the answer.`
       : `${podsWords[request].off} Verifold asked the person in ${call.id}. Verifold wakes you with the answer.`;
@@ -3807,7 +3827,9 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
    * with the words. The board keeps them in the call's thread, where they
    * wake no one. Verifold's own deadline call asks for more time or the end
    * of the lab, and only an option does either: words on it go to the whole
-   * lab, and the call stays open until the person picks an option.
+   * lab, and the call stays open until the person picks an option. Words
+   * start no pod either: on a pod call they reach its askers, and the call
+   * stays open, so no agent asks again.
    */
   async answerCallInWords(id: unknown, words: unknown): Promise<void> {
     await this.serial(async () => {
@@ -3829,6 +3851,12 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
           artifacts: [],
         });
         await this.changeCall(call.id, (entry) => ({ ...entry, words: body }));
+        return;
+      }
+      if (asksForPod(call)) {
+        await this.changeCall(call.id, (entry) => ({ ...entry, words: body }));
+        await this.add(wordsPost(call, body)).catch(() => null);
+        this.wakeAskers(call, podWordsLine(call, body), true);
         return;
       }
       await this.changeCall(call.id, (entry) => ({
@@ -4043,6 +4071,14 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       // before the answer reaches it, so the answer comes with its next start.
       for (const agent of askers(call)) this.checkProcess(agent);
       await this.tell(call, choiceLine(call, picked, did), true);
+      // Pods are allowed now, so the agents start the pods of the other calls themselves.
+      if (applied?.type === 'pod')
+        for (const other of this.current().calls)
+          if (other.state === 'open' && asksForPod(other))
+            await this.withdraw(
+              other,
+              `The person allowed GPU pods in ${call.id}. Ask for this pod with verifold_request_pod: it starts inside the limits.`,
+            );
     });
   }
 
@@ -4221,8 +4257,18 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
   /** What an answer changed, in words for the board. */
   private appliedText(applied: CallApplied, call: Call): string {
     switch (applied.type) {
-      case 'pod':
-        return `Verifold started ${applied.lease}.`;
+      case 'pod': {
+        // The person allowed pods, also when RunPod had none to start.
+        const allowed =
+          'GPU pods are allowed in this lab now: each agent picks its GPU, and a request inside the limits starts with no call.';
+        const lease = this.options.compute?.leases
+          .list()
+          .find((entry) => entry.id === applied.lease);
+        if (lease?.state !== 'failed')
+          return `Verifold started ${applied.lease}. ${allowed}`;
+        const why = lease.end?.reason ? ` ${lease.end.reason}` : '';
+        return `RunPod did not create the pod of ${lease.id}, so nothing was billed.${why} ${allowed}`;
+      }
       case 'hours':
         return `The lab has ${applied.hours} more ${applied.hours === 1 ? 'hour' : 'hours'}, until ${applied.deadline ?? 'its new deadline'}.`;
       case 'podsAtOnce':
