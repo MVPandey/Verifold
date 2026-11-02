@@ -9,7 +9,6 @@
  * anything that needs its slot ends it, so a full lab may never run a draw.
  * The records of draws are in `.verifold/lab/long-shots.json`.
  */
-import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { newestArchived } from '../archive.ts';
 import {
@@ -25,8 +24,6 @@ import { labShares, type LabShare } from '../lab-share.ts';
 import { longShotLimits, longShotToolSpecs } from '../lab-tools.ts';
 import { loadPrompt } from '../prompts.ts';
 import { hostName, type SessionRecord } from '../session.ts';
-import type { AgentTools } from '../session-hosts.ts';
-import { PoolFullError } from '../workers.ts';
 import {
   combinationKey,
   drawCombinations,
@@ -35,8 +32,9 @@ import {
 } from './ideas.ts';
 import { readObject, RecordFile } from './record-file.ts';
 import { fail, text, type LabSessions, type labTiming } from './schema.ts';
+import { SlotSession, type SlotEnd } from './slot-session.ts';
 import type { ThreadStore } from './thread-store.ts';
-import { stoppedText, todayLine } from './words.ts';
+import { todayLine } from './words.ts';
 
 /** The ideas that one candidate combines. */
 export interface Candidate {
@@ -246,11 +244,16 @@ interface WaitingDraw {
 interface RunningDraw extends WaitingDraw {
   readonly agent: string;
   readonly harness: HarnessName;
-  session: string | null;
-  turns: number;
+  readonly slot: SlotSession;
   judged: boolean;
-  timer: NodeJS.Timeout | undefined;
 }
+
+/** What the board reads when a session ends with no judgment. */
+const noJudgment: Readonly<Record<Exclude<SlotEnd, 'done'>, string>> = {
+  time: 'The long-shot check ran out of time.',
+  exit: 'The long-shot check stopped with no judgment.',
+  turns: 'The long-shot check gave no judgment.',
+};
 
 export class LongShots {
   private waiting: WaitingDraw | null = null;
@@ -409,31 +412,34 @@ export class LongShots {
       this.waiting = null;
       return;
     }
-    const run: RunningDraw = {
-      ...draw,
-      agent,
-      harness,
-      session: null,
-      turns: 0,
-      judged: false,
-      timer: undefined,
-    };
     const name = `l-${number(agent)}`;
-    const folder = join(this.host.root, '.verifold', 'checks', name);
+    const slot = new SlotSession(this.host, {
+      agent,
+      host: harness,
+      folder: name,
+      specs: longShotToolSpecs,
+      turns: longShotLimits.turns,
+      minutes: longShotLimits.minutes,
+      model: () => this.host.model(harness),
+      prompt: () => firstPrompt(this.host.question(), draw.candidates),
+      denied: () => this.host.denied(name),
+      call: (tool, input) => this.judge(run, tool, input),
+      owed: () =>
+        run.judged
+          ? null
+          : 'Call verifold_judge now with what you have. This is your last turn.',
+      ended: (how) => this.ended(run, how),
+    });
+    const run: RunningDraw = { ...draw, agent, harness, slot, judged: false };
     this.waiting = null;
     this.running = run;
     try {
-      await mkdir(folder, { recursive: true, mode: 0o700 });
-      const model = await this.host.model(harness);
-      run.session = await sessions.startAgent({
-        host: harness,
-        ...(model ? { model } : {}),
-        prompt: await firstPrompt(this.host.question(), draw.candidates),
-        cwd: folder,
-        agent,
-        tools: this.tools(run),
-        denyRead: [...(await this.host.denied(name))],
-      });
+      if (!(await slot.start())) {
+        // Another start took the last slot first: the draw waits for the next one.
+        this.running = null;
+        this.waiting = draw;
+        return;
+      }
       if (!draw.agent) {
         this.list = [
           ...this.list,
@@ -448,27 +454,11 @@ export class LongShots {
         ].slice(-longShotLimits.draws);
         void this.file.save().catch(() => {});
       }
-      run.timer = setTimeout(
-        () =>
-          void this.host
-            .serial(() =>
-              this.finish(
-                run,
-                run.judged ? null : 'The long-shot check ran out of time.',
-              ),
-            )
-            .catch(() => {}),
-        longShotLimits.minutes * this.host.timing.minuteMs,
-      );
-      run.timer.unref();
     } catch (error) {
       this.running = null;
-      // Another start took the last slot first: the draw waits for the next one.
-      if (error instanceof PoolFullError) this.waiting = draw;
-      else
-        await this.note(
-          `Verifold could not start the long-shot check: ${error instanceof Error ? error.message : 'unknown error'}`,
-        );
+      await this.note(
+        `Verifold could not start the long-shot check: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
     }
   }
 
@@ -480,7 +470,8 @@ export class LongShots {
   async giveSlot(): Promise<boolean> {
     const run = this.running;
     if (!run) return false;
-    this.endSession(run);
+    run.slot.end();
+    this.running = null;
     if (!run.judged) {
       this.waiting = {
         by: run.by,
@@ -493,36 +484,12 @@ export class LongShots {
     return true;
   }
 
-  /** The one tool of the session. A call of an earlier session changes nothing. */
-  private tools(run: RunningDraw): AgentTools {
-    return {
-      specs: longShotToolSpecs,
-      call: async (name, input) => {
-        try {
-          return {
-            ok: true,
-            text: await this.host.serial(() => this.judge(run, name, input)),
-          };
-        } catch (error) {
-          return {
-            ok: false,
-            text:
-              error instanceof Error
-                ? error.message
-                : 'Verifold could not do this.',
-          };
-        }
-      },
-    };
-  }
-
   /** `verifold_judge`, in the lab's queue: the best candidates go on the board. */
   private async judge(
     run: RunningDraw,
     name: string,
     input: unknown,
   ): Promise<string> {
-    if (this.running !== run) fail(stoppedText);
     if (name !== 'verifold_judge') fail(`Unknown tool: ${name}`);
     if (run.judged) return 'You gave your judgment. End your turn now.';
     const judged = parseJudged(object(input)?.candidates, run.candidates);
@@ -551,58 +518,20 @@ export class LongShots {
   turnEnded(record: SessionRecord): boolean {
     const run = this.running;
     if (!run || record.agent !== run.agent) return false;
-    void this.host.serial(() => this.afterTurn(run, record)).catch(() => {});
+    run.slot.turnEnded(record);
     return true;
   }
 
-  private async afterTurn(
-    run: RunningDraw,
-    record: SessionRecord,
-  ): Promise<void> {
-    if (this.running !== run) return;
-    run.session ??= record.id;
-    if (run.judged) {
-      await this.finish(run, null);
-      return;
-    }
-    if (record.status !== 'idle') {
-      if (record.status === 'ended' || record.status === 'failed')
-        await this.finish(run, 'The long-shot check stopped with no judgment.');
-      return;
-    }
-    run.turns += 1;
-    if (run.turns >= longShotLimits.turns) {
-      await this.finish(run, 'The long-shot check gave no judgment.');
-      return;
-    }
-    this.host.sessions.continueTask(
-      record.id,
-      'Call verifold_judge now with what you have. This is your last turn.',
-    );
-  }
-
-  /** The draw ends, with a note on the board when it has one. Its session ends too. */
-  private async finish(run: RunningDraw, note: string | null): Promise<void> {
-    if (this.running !== run) return;
-    this.endSession(run);
-    if (note) await this.note(note);
-  }
-
-  private endSession(run: RunningDraw): void {
-    clearTimeout(run.timer);
+  /** The draw's session ended by itself, with a note on the board when it gave no judgment. */
+  private async ended(run: RunningDraw, how: SlotEnd): Promise<void> {
     this.running = null;
-    const { sessions } = this.host;
-    if (run.session && sessions.view(run.session)?.live)
-      try {
-        sessions.endTask(run.session, 'Its draw ended.');
-      } catch {
-        /* The session ends with the next stop of its process. */
-      }
+    if (!run.judged && how !== 'done') await this.note(noJudgment[how]);
   }
 
   /** A pause, Start over, or a close of the lab: the draw ends without a note, and a new one can start later. */
   stop(): void {
     this.waiting = null;
-    if (this.running) this.endSession(this.running);
+    this.running?.slot.end();
+    this.running = null;
   }
 }

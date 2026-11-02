@@ -5,8 +5,8 @@
  * `openObjections` says which objections still stand. Together they replace a
  * switch on kinds in the lab.
  */
-import type { BoardAgent, Post, PostKind } from '../board.ts';
-import { postOutcomes, threadLimits } from '../lab-tools.ts';
+import { object, type BoardAgent, type Post, type PostKind } from '../board.ts';
+import { postMethods, postOutcomes, threadLimits } from '../lab-tools.ts';
 import { fail, text, type Check, type Thread } from './schema.ts';
 import { checkTitle, planThread, reopeningKinds } from './threads.ts';
 
@@ -26,7 +26,8 @@ export interface PostContext {
 }
 
 /** A post's place and its fields beyond the text. */
-export interface PostShape extends Pick<Post, 'outcome' | 'accepts'> {
+export interface PostShape
+  extends Pick<Post, 'outcome' | 'accepts' | 'method' | 'raters'> {
   /** An existing thread, or the title and the why of a new one. */
   readonly thread: string | { readonly title: string; readonly why: string };
 }
@@ -163,6 +164,39 @@ function place(
   };
 }
 
+/** How a check post says that it checked. Refuses a shape that the record cannot use. */
+function methodOf(
+  args: Record<string, unknown>,
+  kind: PostKind,
+): Pick<Post, 'method' | 'raters'> {
+  if (args.method === undefined && args.raters === undefined) return {};
+  if (kind !== 'check') fail('Only a check gives a method or raters.');
+  const method =
+    postMethods.find((entry) => entry === args.method) ??
+    fail(`A method is one of: ${postMethods.join(', ')}.`);
+  if (
+    method === 'rerun' &&
+    !(Array.isArray(args.artifacts) ? args.artifacts : []).some(
+      (item) => object(item)?.type === 'run',
+    )
+  )
+    fail('A rerun cites its run as proof: {type: run, run: r-N}.');
+  if (method !== 'ratings') {
+    if (args.raters !== undefined) fail('Only ratings give raters.');
+    return { method };
+  }
+  const { raters } = args;
+  if (
+    !Number.isSafeInteger(raters) ||
+    (raters as number) < 1 ||
+    (raters as number) > threadLimits.raters
+  )
+    fail(
+      `Give raters: the AI ratings of each answer, from 1 to ${threadLimits.raters}.`,
+    );
+  return { method, raters: raters as number };
+}
+
 /** Check a post of an agent. Throws a refusal that says what to change. */
 export function shapePost(
   args: Record<string, unknown>,
@@ -186,6 +220,7 @@ export function shapePost(
   rules[context.kind]?.({ ...context, target: replied, outcome, accepts });
   return {
     thread: place(args, replied, context),
+    ...methodOf(args, context.kind),
     ...(outcome ? { outcome } : {}),
     ...(accepts ? { accepts: true } : {}),
   };
@@ -259,7 +294,7 @@ export function wakeList(post: Post, context: WakeContext): readonly string[] {
  */
 export function openObjections(
   posts: readonly Post[],
-  checks: readonly Check[],
+  checks: readonly Pick<Check, 'state' | 'objections'>[],
 ): ReadonlyMap<string, readonly Post[]> {
   const ended = new Set([
     ...checks

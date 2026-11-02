@@ -202,6 +202,8 @@ import { readObject, RecordFile } from './lab/record-file.ts';
 import { threadLine } from './lab/thread-digest.ts';
 import { ThreadStore } from './lab/thread-store.ts';
 import { HelperStore } from './lab/helper-store.ts';
+import { BriefStore, plainPaths } from './lab/brief-store.ts';
+import { LabCoordinator } from './lab/coordinator.ts';
 import { LiteratureStore } from './lab/literature-store.ts';
 import { lastShare, LongShots, longShotRole } from './lab/long-shots.ts';
 import { shareLine, shareOf, shareProblem } from './lab-share.ts';
@@ -482,6 +484,10 @@ export async function startLabOn(
   return planned;
 }
 
+/** An event that joins the next digest and starts no turn by itself. */
+const quietEvent = (event: LabEvent): boolean =>
+  event.kind === 'helper' || event.kind === 'notice';
+
 /** How many lists of changed files a lab keeps, by their commits. */
 const changeListLimit = 20;
 
@@ -518,6 +524,8 @@ export class Lab {
   private readonly literature: LiteratureStore;
   private readonly helpers: HelperStore;
   private readonly longShots: LongShots;
+  private readonly briefs: BriefStore;
+  private readonly coordinator: LabCoordinator;
   private readonly agents = new Map<string, AgentRecord>();
   private readonly files = new Map<string, RecordFile>();
   private readonly loops = new Map<string, WakeLoop<LabEvent, AgentRecord>>();
@@ -597,7 +605,7 @@ export class Lab {
     this.board = new Board(root);
     this.ledger = new RunLedger(root, {
       sandbox: options.sandbox === undefined ? localSandbox() : options.sandbox,
-      ...(options.denyRead ? { denyRead: options.denyRead } : {}),
+      denyRead: [...(options.denyRead ?? []), ...plainPaths([root])],
       ...(options.compute ? { pods: options.compute.podRuns() } : {}),
       serial: (work) => this.serial(work),
       slots: () => this.options.sessions.limit,
@@ -638,11 +646,35 @@ export class Lab {
       model: async (host) => (await options.model?.(host)) ?? null,
       nextAgent: () => this.nextAgent(),
       question: () => this.current().question,
-      denied: async (id) => [
-        ...(options.denyRead ?? []),
-        ...(await this.checkDenials({ id })).harness,
-      ],
+      denied: (id) => this.sideDenials(id),
       add: (fields) => this.add(fields),
+    });
+    this.briefs = new BriefStore(
+      join(this.folder, 'brief.json'),
+      () => this.suspended,
+    );
+    this.coordinator = new LabCoordinator({
+      root,
+      sessions: options.reserved ?? null,
+      store: this.briefs,
+      threads: this.threads,
+      timing: this.timing,
+      question: () => this.current().question,
+      directions: () => this.current().directions,
+      summary: () => this.summary(false),
+      board: this.board,
+      checks: () => this.current().checks,
+      name: (author) => this.name(author),
+      team: () => this.team(),
+      usedUp: (host) => Boolean(options.quota?.parked(host)),
+      model: async (host) => (await options.model?.(host)) ?? null,
+      denied: (id) => this.sideDenials(id),
+      keepsPlain: () => this.blindable(),
+      add: (fields) => this.add(fields),
+      read: (args) => this.read(null, args, ''),
+      notify: (id, line) => this.holdLine(id, 'notice', line),
+      serial: (work) => this.serial(work),
+      progress: (line) => options.progress?.(line),
     });
   }
 
@@ -686,6 +718,8 @@ export class Lab {
     await this.literature.load(this.threaded);
     await this.helpers.load(this.threaded);
     await this.longShots.load(this.threaded);
+    await this.briefs.load(this.threaded);
+    this.coordinator.loaded();
     // Only the owner, where agents work, ends the runs of an earlier owner.
     await this.ledger.load(this.runs && this.state !== null);
     if (!this.state) return;
@@ -782,6 +816,7 @@ export class Lab {
         for (const loop of this.loops.values()) await loop.close();
         // A draw that waits belongs to this run: its ideas must not reach the next one.
         this.longShots.stop();
+        this.coordinator.stop();
         await this.flushRecords();
         this.suspended = true;
       });
@@ -807,6 +842,7 @@ export class Lab {
       this.forget();
       this.forgetChecks();
       this.longShots.stop();
+      this.coordinator.stop();
       this.applied.clear();
       this.bringAt.clear();
       await this.load();
@@ -881,7 +917,9 @@ export class Lab {
       state,
       posts: this.board.list(),
       threads: this.threads.list(),
-      ...(this.threaded ? { reading: this.literature.reading() } : {}),
+      ...(this.threaded
+        ? { reading: this.literature.reading(), brief: this.briefs.view() }
+        : {}),
       handles: Object.fromEntries([
         ...state.checks.map((check) => [check.agent, check.handle] as const),
         ...[...this.agents.values()].map(
@@ -891,10 +929,11 @@ export class Lab {
       runs: this.runs,
       ledger: this.ledger.list(),
       checks: state.checks,
-      claudeUsd: [...this.agents.values(), ...state.checks].reduce(
-        (sum, entry) => sum + (entry.spend?.usd ?? 0),
-        0,
-      ),
+      claudeUsd: [
+        ...this.agents.values(),
+        ...state.checks,
+        this.briefs.view(),
+      ].reduce((sum, entry) => sum + (entry.spend?.usd ?? 0), 0),
       openingPlanner: this.openingPlanner,
       directions: state.directions.flatMap((direction) => {
         const agent = this.agents.get(direction.agent);
@@ -1607,6 +1646,7 @@ export class Lab {
       // A check that runs ends its session and waits for the resume, when a fresh one starts.
       await this.requeueChecks();
       this.longShots.stop();
+      this.coordinator.stop();
       const ids: string[] = [];
       for (const agent of this.agents.values()) {
         this.loops.get(agent.id)?.cancel();
@@ -1842,6 +1882,7 @@ export class Lab {
   ): void {
     this.recordSpend(record);
     if (this.longShots.turnEnded(record)) return;
+    if (this.coordinator.turnEnded(record)) return;
     // A checker's session: its agent ID is the check's, known before its start returns.
     const check = record.agent
       ? this.state?.checks.find((entry) => entry.agent === record.agent)
@@ -2281,6 +2322,7 @@ export class Lab {
     // A check that this process runs ends its session and waits for the next owner, as for a pause. Verifold stopped it, not its checker, so the stop does not count.
     await this.serial(() => this.requeueChecks());
     this.longShots.stop();
+    this.coordinator.stop();
     // Runs stop as interrupted. Their agents hear it after the next start.
     await this.ledger.close();
     await this.queue;
@@ -2295,6 +2337,7 @@ export class Lab {
         this.literature,
         this.helpers,
         this.longShots,
+        this.briefs,
         ...this.files.values(),
       ].map((file) => file.flush()),
     );
@@ -2502,7 +2545,7 @@ export class Lab {
             )),
         parked: (agent) => this.options.quota?.parked(agent.host) ?? null,
         person: personal,
-        quiet: (event) => event.kind === 'helper',
+        quiet: quietEvent,
         // The profile as it is now, so a changed "Talk to me" comes with this digest.
         prepare: async () => {
           await this.readPerson();
@@ -6609,6 +6652,22 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     return [this.root, real].every(expressible);
   }
 
+  /** What a session beside the agents cannot read: what a checker cannot, in its own folder under `.verifold/checks`. */
+  private async sideDenials(id: string): Promise<readonly string[]> {
+    return [
+      ...(this.options.denyRead ?? []),
+      ...(await this.checkDenials({ id })).harness,
+    ];
+  }
+
+  /** What an agent's harness cannot read. A lab with threads keeps plain words out of its context. One that its deny rules cannot express keeps none. */
+  private async agentDenials(): Promise<readonly string[]> {
+    const denied = this.options.denyRead ?? [];
+    if (!this.threaded || !(await this.blindable())) return denied;
+    const real = await realpath(this.root).catch(() => this.root);
+    return [...denied, ...plainPaths([this.root, real])];
+  }
+
   /**
    * The paths that a checker cannot read, made once for each start:
    * everything under `.verifold` but its own folder (the lab's records, the
@@ -7499,9 +7558,9 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     ];
   }
 
-  /** `verifold_board`: read the posts that the agent asks for. Reading the unread ones marks them read. */
+  /** `verifold_board`: read the posts that the agent asks for. Reading the unread ones marks them read. `agent` null: the Coordinator, which has no read mark. */
   private async read(
-    agent: AgentRecord,
+    agent: AgentRecord | null,
     args: Record<string, unknown>,
     key: string,
   ): Promise<string> {
@@ -7521,6 +7580,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         : 'No posts.';
     switch (args.view) {
       case 'unread': {
+        if (!agent) fail('Give a view of the record.');
         const digest = this.digestOf(agent, { limit, name });
         const answer = digest.lines.length
           ? digest.lines.join('\n')
@@ -8083,7 +8143,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
   /** Events that wait for the agent's next digest. */
   private waiting(agent: AgentRecord): number {
     return agent.events.filter(
-      (event) => event.seq > agent.cursor && event.kind !== 'helper',
+      (event) => event.seq > agent.cursor && !quietEvent(event),
     ).length;
   }
 
@@ -8128,12 +8188,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     // A lost helper's notice joins its agent's next digest, and wakes no one: a wake would need a slot, and a park for it could stop another helper.
     this.helpers.sweep(
       (id) => this.liveLaunch(id),
-      (id, line) => {
-        const agent = this.agents.get(id);
-        if (!agent || !this.active(agent)) return false;
-        this.loop(id).hold([{ kind: 'helper', text: line }]);
-        return true;
-      },
+      (id, line) => this.holdLine(id, 'helper', line),
     );
     // Pods that the person turned on or off, from the project's settings or a call, reach each live process.
     for (const agent of this.agents.values())
@@ -8152,6 +8207,8 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     if (state.pausedAt) return;
     for (const note of await this.threads.decide())
       await this.add(note).catch(() => {});
+    // The Coordinator has its own place, so it takes no slot and nothing waits on it.
+    if (this.threaded) await this.coordinator.tick();
     // A check takes the next free slot before any agent.
     const checking = await this.tickChecks(state);
     if (checking === 'started') return;
@@ -8274,6 +8331,34 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     return view?.live ? (view.record.launches.at(-1)?.id ?? null) : null;
   }
 
+  /** A line joins an agent's next digest and wakes no one. False: the agent does not work now. */
+  private holdLine(
+    id: string,
+    kind: 'helper' | 'notice',
+    line: string,
+  ): boolean {
+    const agent = this.agents.get(id);
+    if (!agent || !this.active(agent)) return false;
+    this.loop(id).hold([{ kind, text: line }]);
+    return true;
+  }
+
+  /** The person's question to the Coordinator. It wakes no agent, and the answer comes with the snapshot. */
+  askCoordinator(text: unknown): Promise<void> {
+    return this.serial(() => {
+      if (this.current().pausedAt)
+        fail('The lab is paused, so no session starts.');
+      if (!this.threaded) fail('A lab from before threads has no Coordinator.');
+      this.coordinator.ask(text);
+      this.kick();
+    });
+  }
+
+  /** The person came back after `since`, so the Coordinator updates the brief. */
+  personBack(since: string): void {
+    if (this.threaded) this.coordinator.personBack(since);
+  }
+
   /** The person's Draw again: a new draw of long shots. */
   drawAgain(): Promise<void> {
     return this.serial(async () => {
@@ -8335,7 +8420,9 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     let listed: string | undefined;
     // The set of linked files that the first prompt names.
     let named: string | undefined;
+    let denyRead: readonly string[];
     try {
+      denyRead = await this.agentDenials();
       // A Codex thread keeps its tools, so a thread with older tools, or
       // without the pod tools while pods are on, gives way to a new one.
       saved =
@@ -8408,7 +8495,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     };
     try {
       if (resume && saved) {
-        await sessions.resumeAgent(saved.id, tools, network);
+        await sessions.resumeAgent(saved.id, tools, network, denyRead);
         if (agent.host === 'claude')
           await this.update(id, (current) => ({ ...current, pods }));
       } else {
@@ -8420,9 +8507,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
           agent: id,
           tools,
           ...(network.length ? { network } : {}),
-          ...(this.options.denyRead?.length
-            ? { denyRead: this.options.denyRead }
-            : {}),
+          ...(denyRead.length ? { denyRead } : {}),
         });
         // The new thread has the current tools. Only a start that worked says
         // so. A new conversation drops the notes about the earlier one, such

@@ -497,6 +497,20 @@ async function codexServers(
  * cannot hold, the call runs with them on, unless the prompt holds text from
  * outside: that call does not run.
  */
+/** Codex with no web search, no command tool, no image tool, and no approvals. */
+export const codexNoTools: readonly string[] = [
+  '-c',
+  'web_search="disabled"',
+  '-c',
+  'approval_policy="never"',
+  '-c',
+  'features.shell_tool=false',
+  '-c',
+  'features.unified_exec=false',
+  '-c',
+  'features.view_image=false',
+];
+
 async function codexTextOnly(
   request: HarnessRequest,
   executable: string,
@@ -519,16 +533,7 @@ async function codexTextOnly(
   return {
     global: [
       ...(off ?? ['-c', 'features.plugins=false', '-c', 'features.apps=false']),
-      '-c',
-      'web_search="disabled"',
-      '-c',
-      'approval_policy="never"',
-      '-c',
-      'features.shell_tool=false',
-      '-c',
-      'features.unified_exec=false',
-      '-c',
-      'features.view_image=false',
+      ...codexNoTools,
     ],
     exec: ['--sandbox', 'read-only'],
   };

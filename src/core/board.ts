@@ -64,6 +64,10 @@ export interface Post {
   readonly replyTo?: string;
   /** A `check` post: what the check found in the post that it replies to. */
   readonly outcome?: 'holds' | 'fails';
+  /** A `check` post: how its author checked. Absent: it did not say. */
+  readonly method?: 'rerun' | 'code-read' | 'ratings';
+  /** A `check` post with `ratings`: the AI ratings of each answer. */
+  readonly raters?: number;
   /** An `answer` to an objection: the author accepts the objection, so it ends. */
   readonly accepts?: true;
   /** A proposal or a ruled-out post: its author made no lookup since its last such post. It blocks nothing. */
@@ -275,9 +279,21 @@ function check(entry: Record<string, unknown>): Post | string {
     !(typeof thread === 'string' && threadId.test(thread))
   )
     return 'The thread is not valid.';
-  const { outcome, accepts, noSearch, alien } = entry;
+  const { outcome, method, raters, accepts, noSearch, alien } = entry;
   if (outcome !== undefined && outcome !== 'holds' && outcome !== 'fails')
     return 'The outcome is not valid.';
+  if (
+    method !== undefined &&
+    method !== 'rerun' &&
+    method !== 'code-read' &&
+    method !== 'ratings'
+  )
+    return 'The method is not valid.';
+  if (
+    raters !== undefined &&
+    (!Number.isSafeInteger(raters) || (raters as number) < 1)
+  )
+    return 'The number of raters is not valid.';
   if (accepts !== undefined && accepts !== true)
     return 'The accepts field is not valid.';
   if (
@@ -337,6 +353,8 @@ function check(entry: Record<string, unknown>): Post | string {
     text,
     ...(replyTo ? { replyTo } : {}),
     ...(outcome ? { outcome } : {}),
+    ...(method ? { method } : {}),
+    ...(raters ? { raters: raters as number } : {}),
     ...(accepts ? { accepts } : {}),
     ...(noSearch ? { noSearch } : {}),
     ...(alien ? { alien } : {}),
@@ -498,6 +516,20 @@ export class Board {
 
   get(id: string): Post | undefined {
     return this.byId.get(id);
+  }
+
+  /**
+   * Read a post in another thread from now on. Its file stays as it was: the
+   * lab's thread records hold the move, and they apply it after each load. The
+   * post keeps its ID, so every link keeps working.
+   */
+  move(id: string, thread: string): void {
+    const post = this.byId.get(id);
+    if (!post) return;
+    const moved = { ...post, thread };
+    this.byId.set(id, moved);
+    // A new list, so a reader that compares lists sees the move.
+    this.posts = this.posts.map((entry) => (entry === post ? moved : entry));
   }
 
   /** The number of the newest post, or 0. A new agent's read cursor starts here. */

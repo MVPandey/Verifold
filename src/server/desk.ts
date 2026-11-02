@@ -551,11 +551,13 @@ async function noteLook(
   const look = await lookOf(root, desk, view.state.startedAt);
   const now = Date.now();
   const back = look.at > 0 && now - look.at >= awayMs;
-  if (back)
+  if (back) {
     look.away = {
       since: new Date(look.at).toISOString(),
       spent: { claude: look.claude, gpu: look.gpu },
     };
+    desk.lab?.personBack(look.away.since);
+  }
   look.at = now;
   look.claude = view.claudeUsd;
   look.gpu = gpu;
@@ -608,6 +610,9 @@ async function labAction(
       return 200;
     case 'lab-draw':
       await lab.drawAgain();
+      return 200;
+    case 'lab-ask':
+      await lab.askCoordinator(body.text);
       return 200;
     case 'lab-budget':
       await lab.extend(body.hours);

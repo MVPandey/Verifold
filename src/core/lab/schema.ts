@@ -18,6 +18,7 @@ import {
 } from '../board.ts';
 import { type HarnessName, validateModel } from '../harness.ts';
 import {
+  briefKinds,
   callKinds,
   callLimits,
   callNeeds,
@@ -25,6 +26,7 @@ import {
   checkOutcomes,
   directionLimits,
   handlePattern,
+  noticeKinds,
   planLimits,
   threadLimits,
   verdicts,
@@ -122,6 +124,8 @@ export const labTiming = {
   podPollMs: 20_000,
   /** The time that a proposal stays open to objections. Then it becomes the decision of its thread. */
   objectionMs: threadLimits.objectionMinutes * 60_000,
+  /** State changes within this time join one update of the Coordinator. */
+  briefDelayMs: 3 * 60_000,
 };
 
 /** Work that a direction builds on: known work, or new in this lab. */
@@ -529,7 +533,8 @@ export interface LabEvent {
     | 'run'
     | 'pod'
     | 'call'
-    | 'helper';
+    | 'helper'
+    | 'notice';
   readonly text: string;
   /** The post that the event is about. */
   readonly post?: string;
@@ -570,7 +575,10 @@ export interface Agreement {
 export interface Thread {
   /** `t-N`. */
   readonly id: string;
+  /** What agents read. It comes from an agent, from Verifold, or from the person's own words. */
   readonly title: string;
+  /** The Coordinator's wording for the person. Like all plain words, it reaches no agent. */
+  readonly plainTitle?: string;
   readonly state: ThreadState;
   /** One line on why the thread exists. */
   readonly why: string;
@@ -613,6 +621,94 @@ export interface Reading {
   readonly lookups: number;
   /** The last paper in harness records. */
   readonly lastPaperAt: string | null;
+}
+
+export type BriefKind = (typeof briefKinds)[number];
+
+export type NoticeKind = (typeof noticeKinds)[number];
+
+/**
+ * `pending`: no check came yet. `passed`: a second session found each claim in
+ * the posts. `failed`: it did not. `numbers`: a number is not in the posts, so
+ * no check runs. `withheld`: this lab keeps no plain words, because the deny
+ * rules cannot express its paths. Only `passed` shows the plain words.
+ */
+export type LineState =
+  | 'pending'
+  | 'passed'
+  | 'failed'
+  | 'numbers'
+  | 'withheld';
+
+export interface LineCheck {
+  readonly state: LineState;
+  /** The harness of the session that checked it. */
+  readonly by: HarnessName | null;
+  /** A fresh session of the writer's own harness checked it: the team has one. */
+  readonly sameHarness: boolean;
+  /** What a failed check found, or the numbers that no post holds. */
+  readonly problems: readonly string[];
+}
+
+/** A plain line with what it rests on. */
+export interface BriefLine {
+  /** `l-N`. */
+  readonly id: string;
+  readonly kind: BriefKind | 'answer';
+  /** The time of its newest post. */
+  readonly at: string;
+  readonly plain: string;
+  readonly posts: readonly string[];
+  /** The harness that wrote it. Its check uses another one. */
+  readonly writer: HarnessName;
+  readonly check: LineCheck;
+}
+
+export interface BriefRecord {
+  readonly at: string;
+  /** The state of directions and threads that it covers. */
+  readonly key: string;
+  /** The newest post then. */
+  readonly through: number;
+  readonly lines: readonly BriefLine[];
+}
+
+/** What the Coordinator told agents. Verifold wrote the words from the kind and the posts. */
+export interface Notice {
+  /** `n-N`. */
+  readonly id: string;
+  readonly at: string;
+  readonly kind: NoticeKind;
+  readonly posts: readonly string[];
+  /** The agents that get it. */
+  readonly to: readonly string[];
+}
+
+/** A question of the person. `unanswered`: its session ended with no answer. */
+export interface Question {
+  /** `q-N`. */
+  readonly id: string;
+  readonly at: string;
+  readonly text: string;
+  readonly state: 'waiting' | 'answered' | 'unanswered';
+  readonly answer: BriefLine | null;
+}
+
+/** A session of the place, for the hourly limits. */
+export interface SessionMark {
+  readonly at: string;
+  readonly kind: 'update' | 'check';
+}
+
+/** What the store holds. */
+export interface BriefView {
+  readonly brief: BriefRecord | null;
+  readonly notices: readonly Notice[];
+  readonly questions: readonly Question[];
+  /** Newest last. */
+  readonly sessions: readonly SessionMark[];
+  /** Claude Code's cost estimate of the sessions. */
+  readonly spend?: Spend;
 }
 
 /** The agent's own line from `verifold_status`: what it does, why, and what comes next. */
@@ -762,6 +858,8 @@ export interface LabView {
   readonly threads?: readonly Thread[];
   /** What the lab read. Absent: a lab from before threads. */
   readonly reading?: Reading;
+  /** The brief, the notices, and the person's questions. Absent: a lab from before threads. */
+  readonly brief?: BriefView;
 }
 
 /** The harness sessions of the lab: the project's worker slots. */
@@ -782,12 +880,17 @@ export interface LabSessions {
     readonly denyRead?: readonly string[];
     /** The domains that its shell commands may reach. */
     readonly network?: readonly string[];
+    /** It acts only through `tools`, with no shell and no file tools of its own. */
+    readonly toolsOnly?: boolean;
+    /** A short session beside the agents, with a window of its own in recovery. */
+    readonly side?: boolean;
   }): Promise<string>;
-  /** A resume takes the agent's domains, also when they changed. */
+  /** A resume takes the agent's domains and denials, also when they changed. */
   resumeAgent(
     id: string,
     tools: AgentTools,
     network?: readonly string[],
+    denyRead?: readonly string[],
   ): Promise<void>;
   /** Hand an agent's live session to its harness's own terminal, between turns. */
   takeAgentTerminal(id: string, lease: string): Promise<void>;
@@ -799,6 +902,14 @@ export interface LabSessions {
 
 export interface LabOptions {
   readonly sessions: LabSessions;
+  /**
+   * The place of the Coordinator and its line check, outside "Agents at once":
+   * one session at a time. Without it, a lab has no Coordinator.
+   */
+  readonly reserved?: Pick<
+    LabSessions,
+    'full' | 'view' | 'startAgent' | 'continueTask' | 'endTask'
+  >;
   /** One run has one team. A lab starts only when the guard gives it the run. */
   readonly team?: RunTeam;
   readonly memory?: {
@@ -2041,6 +2152,7 @@ export function parseAgent(
           'pod',
           'call',
           'helper',
+          'notice',
         ].includes(event.kind as string)
         ? [event as unknown as QueuedEvent<LabEvent>]
         : [];

@@ -75,7 +75,9 @@ export function askers(call: Call): string[] {
 }
 
 /** The directions of the agents that asked a call, in the order of `askers`. Verifold's own call has none. */
-export function askerDirections(call: Call): (string | null)[] {
+export function askerDirections(
+  call: Pick<Call, 'by' | 'direction' | 'joined'>,
+): (string | null)[] {
   return [
     ...(call.by === 'verifold' ? [] : [call.direction]),
     ...call.joined.map((asker) => asker.direction),

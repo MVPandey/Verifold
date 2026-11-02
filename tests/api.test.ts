@@ -1976,6 +1976,10 @@ await test('the API needs the token, pushes one snapshot for a burst of changes,
       words.push(['questions', answers]);
       return Promise.resolve();
     },
+    askCoordinator: (text: unknown) => {
+      words.push(['ask', text]);
+      return Promise.resolve();
+    },
     drawAgain: () => {
       words.push(['draw']);
       return Promise.resolve();
@@ -2152,10 +2156,12 @@ await test('the API needs the token, pushes one snapshot for a burst of changes,
   assert.equal((await action('lab-questions-answer', { answers })).status, 200);
   assert.equal((await action('lab-skip-questions', {})).status, 200);
   assert.equal((await action('lab-draw', {})).status, 200);
+  assert.equal((await action('lab-ask', { text: 'Why?' })).status, 200);
   assert.deepEqual(words.slice(1), [
     ['questions', answers],
     ['skip'],
     ['draw'],
+    ['ask', 'Why?'],
   ]);
   // A desk with a project takes no project start.
   assert.equal(
@@ -2474,7 +2480,12 @@ await test("a post's thread: the post and the replies below it at any depth, old
 await test("a look after a time away starts the digest, a dismiss ends it, and search and a post's thread answer over HTTP with the token", async (t) => {
   const root = await project();
   const view = seededView();
-  const lab = { runs: true, view: () => view } as unknown as Lab;
+  const returns: string[] = [];
+  const lab = {
+    runs: true,
+    view: () => view,
+    personBack: (since: string) => returns.push(since),
+  } as unknown as Lab;
   const sessions = {
     view: () => null,
     views: () => [],
@@ -2531,6 +2542,7 @@ await test("a look after a time away starts the digest, a dismiss ends it, and s
   const back = await away();
   assert.ok(back);
   assert.equal(back.since, left);
+  assert.deepEqual(returns, [left]);
   assert.deepEqual(back.spentThen, { plansUsd: 1, gpuUsd: 0 });
   assert.equal(
     back.news?.cost,

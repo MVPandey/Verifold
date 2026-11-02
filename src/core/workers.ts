@@ -165,13 +165,14 @@ export class SessionPool {
     return this.use((slot) => slot.startAgent(input));
   }
 
-  /** Continue a lab agent's paused session in a free slot, with its tools and the domains of its shell. */
+  /** Continue a lab agent's paused session in a free slot, with its tools, the domains of its shell, and what it cannot read. */
   resumeAgent(
     id: string,
     tools: AgentTools,
     network?: readonly string[],
+    denyRead?: readonly string[],
   ): Promise<void> {
-    return this.use((slot) => slot.resume(id, tools, network), id);
+    return this.use((slot) => slot.resume(id, tools, network, denyRead), id);
   }
 
   /**
