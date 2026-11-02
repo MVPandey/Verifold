@@ -323,7 +323,7 @@ If Verifold stops without saving the end of its work, for example after a forced
 
 ### Agents at once
 
-Verifold runs up to three harness agents at the same time. "Agents at once" in Compute changes this, from 1 to 20, and the project record keeps it. Each agent uses your Claude Code or Codex plan, so more agents reach its usage limit sooner. A lower setting stops no agent: new starts wait until fewer run. Each has its own session, launch, native session ID, record, and transcript. A task agent also has its own task, claim, and task folder. The Team list in the rail shows them with their state and anything that waits for you. A session opens in a panel with its activity, transcript, requests, controls, and Commands table, and a task opens as its own page. A start beyond the setting waits until one of them ends. A cancel, a permission request, a burst of output, or a failure in one agent does not change the others.
+Verifold runs up to three harness agents at the same time. "Agents at once" in Compute changes this, from 1 to 20, and the project record keeps it. Each agent uses your Claude Code or Codex plan, so more agents reach its usage limit sooner. A lower setting stops no agent: new starts wait until fewer run. Each has its own session, launch, native session ID, record, and transcript. A task agent also has its own task, claim, and task folder. The Team list in the rail shows them with their state and anything that waits for you. A session opens in a panel with its activity, transcript, requests, controls, and Commands table, and a task opens as its own page. A start beyond the setting waits until one of them ends. The lab's Coordinator takes no slot (see The Coordinator). A cancel, a permission request, a burst of output, or a failure in one agent does not change the others.
 
 In the terminal, `a` and `d` with a request ID answer the request of the agent that it belongs to. When more than one agent could get a follow-up, a cancel, or an end, the terminal asks you to use the desk. Each terminal line of a session names its harness.
 
@@ -424,7 +424,7 @@ Stop the coordinator ends its session. Running agents finish their turns, and th
 
 ### The lab
 
-The lab is how a new project works on its question. Several agents work on it at the same time, and each one owns one direction. They talk on one board instead of through a coordinator.
+The lab is how a new project works on its question. Several agents work on it at the same time, and each one owns one direction. They talk on one board instead of through a coordinator. A session of the lab, the Coordinator, keeps the record and gives no one work (see The Coordinator).
 
 The lab starts in one of two ways:
 
@@ -484,7 +484,7 @@ Each direction has a verdict that its own agent gives, with one line of evidence
 
 A long run showed why threads exist. Agents replied to the nearest old post, so threads drifted across subjects. Proof-only kinds left no kind for a plain reply, so most "questions" asked nothing. An objection changed nothing unless a check took it. A lab now keeps one thread for each subject, and each post says what it does. A lab from before role names keeps its flat board: the kinds claim, evidence, objection, question, and ruled out, and the wakes below "Who a post wakes" as they were.
 
-- A thread is one conversation, with a title, a one-line why, a state (open, decided, answered, or closed), and its followers. `t-1` is the plan thread. The plan goes there, and so does your post with no thread, until a later post files it. Every agent reads it.
+- A thread is one conversation, with a title, a one-line why, a state (open, decided, answered, or closed), and its followers. `t-1` is the plan thread. The plan goes there, and so does your post with no thread, until the Coordinator moves it to the thread where it belongs. Every agent reads it.
 - Agents post with Verifold tools, in at most 280 characters. Each post names a thread, or opens one with a title and a why. A title is a specific plain question or subject. Verifold refuses a title such as "Update", and a title that an open thread has. A reply stays in the thread of its target. A closed thread takes no new post, but an objection, an answer, or a check to a post in it opens the thread again. When a thread's record is gone, a reply there gives a title and a why, and opens a new thread.
 - A post has a kind, and Verifold refuses the wrong shape with a line that says what to change:
 
@@ -501,6 +501,7 @@ A long run showed why threads exist. Agents replied to the nearest old post, so 
 - A plan and a rerun stay as they were. An answer to the ask that opened a thread answers the thread, and the thread keeps that answer as its outcome.
 - An objection marks its target Disputed, on the post and on the row of its direction. A post that builds on a disputed post says so. Three things settle it: an answer that accepts the objection, from the author of the target or of the objection, a check post that holds, from an agent who wrote neither, and a check that Verifold runs, with any result. So a wrong objection to a post with no run can end too. A check post that fails settles nothing: the post stays Disputed, and it shows the failure. An answer that does not accept the objection leaves it open. An objection to a post that cites a run also starts a check (see Checks).
 - A check post that failed backs no verdict, and neither does a post with a failed check post.
+- A check post can say how it checked, with `method`: `rerun`, which cites its run, `code-read`, or `ratings`, where `raters` says how many AI ratings each answer got. A post with no method counts as the weakest form of check (see The Coordinator).
 - Every agent's turn names each new proposal in one line, with the end of its window, also outside its thread. A proposal with an objection never becomes a decision by itself. Its author can post a new proposal. A newer proposal replaces a decision when its own window ends. A later objection to the proposal that decided a thread opens the thread again. A window that ends while the lab is paused takes effect when the lab resumes.
 - An ask that waits shows on its agent's row, such as "Waits on Agent 2: Does seed 2 agree?". An ask that names you shows in Needs you, with a link to the post. Your reply to it ends the wait.
 - `verifold_status` is not a post. It takes what the agent does now, why, and what comes next. It replaces the live step on the agent's row while the agent works, in the app and the terminal, and it wakes no one. The line comes from the model, unlike the live step, which comes from harness events. When the agent does not work, the row shows the evidence again. A new verdict clears the line. It ends no quiet stretch.
@@ -545,6 +546,38 @@ A failed line of work starts a draw: a ruled-out post of an agent. So does the `
 The Ask page has one choice for this: Close to known work (no long shots), Mixed (1 agent in 4, the default), or Far (1 agent in 2). The planner turns it into a number of long-shot directions in its plan, with `longShot`. An agent can open one with `verifold_direction` too. Agents on long shots choose what to take up, and can bring their own ideas. Verifold never assigns a candidate. With Close to known work, a failed line of work starts no draw. The `lab-draw` action still does. A start with no share, such as the app's **Start the lab** after Start over, keeps the last lab's share, or else Mixed.
 
 A lab from before threads has no reading map, no idea map, and no long shots, and its tools stay as they were.
+
+**The Coordinator**
+
+A long board does not show what the lab knows, what it decided, or what each agent does. A short view would help, but a summary is the weakest layer of a research system. In one study, synthesis statements were 57.9% accurate, against 85.5% for data. One preprint saw rewrites shift certainty in up to 75% of outputs. So Verifold limits what a summary can do, and does not rely on good intentions.
+
+The Coordinator keeps the record and assigns no work. Nobody waits on it. If it stops, the lab goes on, and the brief shows its time. This section describes what runs now. The app has no screen for the brief, the notices, or your questions yet, and a later release adds them. Today the API's snapshot holds them as `brief`, `notices`, and `questions`, and the `lab-ask` action asks a question. Only a lab with threads has a Coordinator.
+
+- **When it runs.** An update starts 3 minutes after the first change of a direction's or a thread's state, so changes join one update, also in a busy lab. It also starts when you come back after 30 minutes or more and a post came since the last update, and when you ask a question.
+- **A new session each time.** Each update builds from posts and records. Its prompt holds no earlier brief and no earlier answer. Plain words never reach an agent: not in a digest, not in `verifold_board`, and not in a prompt. An agent's harness also denies the file of the brief and the session transcripts.
+- **Its own place.** A Coordinator that competes for slots would go silent in the busiest labs. So it runs outside "Agents at once", with its line check, in one place. One session runs there at a time. It uses the project's main harness and the model of a lab agent. It starts no session while the lab is paused, and a pause, Start over, or a stop of Verifold ends the session that runs.
+- **Its limits.** At most 4 updates, 6 line checks, and 6 of your questions in an hour. Each session has 3 turns, 10 minutes, and 40 changes of threads and notices. A prompt holds the newest 120 posts. These limits do not grow with the number of agents. Claude Code's cost estimate of these sessions counts in the lab's total. Codex reports none. A Coordinator that keeps stopping costs at most these sessions, and the lab goes on.
+- **What it can do.** It has no shell and no file tools. Claude Code gets no built-in tools. Codex gets a read-only sandbox that denies the lab's records, as a checker's does. It has `verifold_board` to read the record, and these tools:
+  - `verifold_thread` gives a thread a clearer title, moves a post to another thread, or closes a thread. A post file never changes, so a record applies a move on read, and the post keeps its ID and its links. The post that opens a thread or holds its outcome stays. A closed thread opens with its outcome: a quote of the post that holds it, with its author and time, under the thread's why. An open objection, a wait, an open proposal, or a long shot keeps a thread open, so a close settles nothing.
+  - `verifold_brief` gives the plain lines.
+  - `verifold_notice` tells agents about overlap, a missing answer, or a new idea with no search. It gives a kind and posts, and Verifold writes the words and picks who reads them from the record. The notice joins their next digest and wakes no one. A lab sends at most 6 in an hour.
+  - `verifold_answer` answers your question from the record and wakes no one.
+- **What it cannot do.** No tool of it opens or stops a direction, starts a run, asks you for anything, changes a plan, or settles a dispute.
+
+**The brief**
+
+The brief has a top line and up to 12 lines. Each line has a kind (decided, failed, held up, open, or new), the time of its newest post, its plain words, its quote, its posts, its evidence label, and its check.
+
+- The top line comes from the records of directions, calls, and runs, with no model, such as "One test failed, one is running, one needs your decision, and one has not run yet." Each snapshot builds it again, so it is true also when the lines are old.
+- The quote is the cited posts, unchanged. Verifold builds it, and no model touches it.
+- The evidence label comes from the record, never from the writer. It says the true weakest form, such as "One agent's result. No check yet." or "Code check, then two AI ratings per answer. No rerun." A code read is no rerun, a check that did not end counts for nothing, and a part with no check says so. The label follows the record, so a later check changes it.
+- Each number of a plain line must appear in its cited posts: percent, decimals, ranges, and comma thousands compare as numbers, a percent needs a percent, and IDs and agent names count for nothing. A line that fails this test gets no check.
+- A line check is a fresh session of the other harness. It gets the lines and their posts, and nothing else of the lab. It splits each line into claims and looks for added facts, raised certainty, numbers out of scope, and dropped caveats. Verifold reads its verdicts, so a line passes only when each claim is supported and no caveat dropped out. With one harness, a fresh session of that harness checks, and the record says so. When the other harness has used up its usage window, the line waits.
+- **What shows meanwhile.** You can read a brief while its check runs. A line shows its plain words only after it passed. While its check waits, and after any failure, it shows its quote and its evidence label. So a brief first shows quotes, and the plain words follow. The same holds for an answer to your question.
+
+Ask the Coordinator with the `lab-ask` action, in up to 500 characters. A session starts at the next tick, or after the session that runs. The answer comes with its source posts, in the snapshot's `questions`, and no agent wakes or reads it. A lab keeps the newest 50 questions. A paused lab refuses a question. A session that ends with no answer marks the question unanswered.
+
+Nobody has measured how well this works in a live lab. The check of plain lines worked once, on one page of a design review, and a line check can miss what its own model misses.
 
 **Runs**
 

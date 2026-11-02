@@ -237,7 +237,10 @@ export type LabList =
   | 'checks'
   | 'works'
   | 'plan'
-  | 'signoff';
+  | 'signoff'
+  | 'briefLines'
+  | 'notices'
+  | 'questions';
 
 /** How far from known work a lab goes: no long shots, 1 agent in 4, or 1 agent in 2. */
 export type LabShare = 'close' | 'mixed' | 'far';
@@ -252,12 +255,76 @@ export interface Reading {
   readonly lastPaperAt: string | null;
 }
 
+/** The check of a plain line. */
+export interface LineCheck {
+  /**
+   * `pending`: no check came yet. `passed`: a second session found each claim
+   * in its posts. `failed`: it did not. `numbers`: a number is not in its
+   * posts, so no check ran.
+   */
+  readonly state: 'pending' | 'passed' | 'failed' | 'numbers';
+  /** The harness of the session that checked it. */
+  readonly by: Harness | null;
+  /** A fresh session of the writer's own harness checked it, because the team has one. */
+  readonly sameHarness: boolean;
+}
+
+/** One line of a brief, or an answer of the Coordinator. */
+export interface BriefLine {
+  readonly kind: 'decided' | 'failed' | 'held' | 'open' | 'new' | 'answer';
+  /** The time of its newest post. */
+  readonly at: string;
+  /** The plain words, only once they passed their check. Null: show `quote`. */
+  readonly plain: string | null;
+  /** The cited posts unchanged, each with its ID. Verifold builds it. */
+  readonly quote: string;
+  readonly posts: readonly string[];
+  /** How strong the record is, from the record, never from the writer. */
+  readonly evidence: string;
+  readonly check: LineCheck;
+}
+
+/** What the lab knows, in short. */
+export interface Brief {
+  /** When the Coordinator wrote its lines, so a screen can show their age. Null: it wrote none yet. */
+  readonly at: string | null;
+  /** The top line, from the records now. No model writes it. */
+  readonly top: string;
+  readonly lines: readonly BriefLine[];
+}
+
+/** What the Coordinator told agents: a kind and posts. Verifold writes the words, and no agent wakes for it. */
+export interface Notice {
+  readonly id: string;
+  readonly at: string;
+  readonly kind: 'overlap' | 'missing-answer' | 'no-search';
+  readonly posts: readonly string[];
+  /** Agent IDs. */
+  readonly to: readonly string[];
+}
+
+/** A question of the person to the Coordinator. It wakes no agent. */
+export interface Question {
+  readonly id: string;
+  readonly at: string;
+  readonly text: string;
+  /** `unanswered`: its session ended with no answer. */
+  readonly state: 'waiting' | 'answered' | 'unanswered';
+  readonly answer: BriefLine | null;
+}
+
 export interface Lab {
   readonly question: string;
   /** The person's choice at Ask. Null or absent: a lab from before this choice. Added after version 1. */
   readonly share?: LabShare | null;
   /** Null or absent: a lab from before threads. Added after version 1. */
   readonly reading?: Reading | null;
+  /** What the lab knows, in short. Null or absent: a lab from before threads. Added after version 1. */
+  readonly brief?: Brief | null;
+  /** What the Coordinator told agents, newest last. Added after version 1. */
+  readonly notices?: readonly Notice[];
+  /** The person's questions to the Coordinator, newest last. Added after version 1. */
+  readonly questions?: readonly Question[];
   /** The most characters that a post by the person may have. Added after version 1. */
   readonly postLimit?: number;
   /** The most characters that the line of a sign-off may have. Added after version 1. */
@@ -1597,6 +1664,11 @@ export interface ActionBodies {
     readonly key?: string;
   };
   'lab-away-dismiss': Record<string, never>;
+  /**
+   * Ask the Coordinator. It answers from the record, with its source posts,
+   * in the snapshot's `questions`. It wakes no agent. Added after version 1.
+   */
+  'lab-ask': { readonly text: string; readonly key?: string };
   /**
    * The person looks at the lab now. A look after 30 minutes or more away
    * starts a time away, which the snapshot's `away` shows until the person

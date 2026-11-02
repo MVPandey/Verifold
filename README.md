@@ -26,6 +26,7 @@ Verifold runs them as a research team:
 - Agents talk in threads with a subject. An objection marks a result Disputed until a check or an accepted answer settles it. With both harnesses, the agents check each other across model families.
 - Every agent reads a shared project memory, also in later runs.
 - Verifold counts what agents read from harness records, keeps a shared reading map, and marks a proposal with no search. It also draws long shots, random combinations of the lab's ideas that the other harness judges. This method is new and nobody has tested it, so you choose how many agents take them up.
+- A Coordinator session keeps the record: it titles, moves, and closes threads, tells agents about overlap and missing answers, and answers your questions. It assigns no work, and nobody waits on it. Its brief for a lay reader quotes its posts, gets its evidence label from the record, and shows plain words only after a second session checks them. The app's screens for this come in a later release.
 
 Three terminal tabs give you none of this.
 

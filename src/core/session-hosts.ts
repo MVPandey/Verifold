@@ -24,8 +24,9 @@ import type { LimitSignal } from './quota.ts';
  * `strict`: a task session. The harness itself limits writes to the task folder and asks nothing.
  * `coordinator`: the coordinator. Claude Code gets no built-in tools; Codex gets a read-only sandbox.
  * Its actions go only through Verifold's tools.
+ * `tools`: a lab session with the same limits, as the lab's own Coordinator and its line check have.
  */
-export type SessionMode = 'ask' | 'auto' | 'strict' | 'coordinator';
+export type SessionMode = 'ask' | 'auto' | 'strict' | 'coordinator' | 'tools';
 
 /** A domain that a task's shell commands may reach: a host name, or `*.` and a domain. */
 export function validDomain(value: string): boolean {
@@ -164,7 +165,7 @@ export function codexSkillsOff(off: readonly string[]): string[] {
  * were probed with `codex sandbox` on Codex 0.160.0.
  */
 function codexProfile(
-  mode: 'strict' | 'coordinator',
+  mode: 'strict' | 'coordinator' | 'tools',
   network: boolean,
   denyRead: readonly string[] = [],
 ): Record<string, unknown> {
@@ -762,7 +763,9 @@ function claude(options: HostOptions): HostSession {
         ? 'dontAsk'
         : 'default',
     ...(settings ? ['--settings', settings] : []),
-    ...(options.mode === 'coordinator' ? ['--tools', ''] : []),
+    ...(options.mode === 'coordinator' || options.mode === 'tools'
+      ? ['--tools', '']
+      : []),
     ...(options.model ? ['--model', options.model] : []),
     ...(plugin ? ['--plugin-dir', plugin] : []),
     ...(options.tools
@@ -1746,7 +1749,9 @@ function codex(options: HostOptions): HostSession {
     picked = false,
   ): void {
     const unsupervised =
-      options.mode === 'strict' || options.mode === 'coordinator'
+      options.mode === 'strict' ||
+      options.mode === 'coordinator' ||
+      options.mode === 'tools'
         ? options.mode
         : null;
     call(

@@ -904,9 +904,23 @@ async function serveDesk(
         }),
       });
       owned.coordinator = coordinator;
+      // The lab's Coordinator and its line check have one place of their own, outside "Agents at once".
+      const reserved = new SessionPool(root, {
+        clientVersion: version,
+        ownerId: owner.ownerId,
+        denyRead: closed,
+        skills,
+        agents: 1,
+        onLimit: (host, signal) => {
+          quota.record(host, signal);
+          owned.lab?.limited(host, signal);
+        },
+        onTurnEnd: (record, outcome) => owned.lab?.turnEnded(record, outcome),
+      });
       // The lab's agents share the worker slots with tasks and plain sessions.
       const lab = new Lab(root, {
         sessions,
+        reserved,
         memory,
         quota,
         team,
@@ -1138,7 +1152,8 @@ async function serveDesk(
         await lab.close();
         // Lease recovery after the lab's pod runs ends before the pods stop.
         await leasesRecovered;
-        if (!(await sessions.close()) || !coordinatorSaved)
+        const placeSaved = await reserved.close();
+        if (!(await sessions.close()) || !coordinatorSaved || !placeSaved)
           io.progress?.(
             'Verifold could not save the last change to the session record in .verifold/sessions/.',
           );
