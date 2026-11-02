@@ -547,11 +547,11 @@ await test('while Verifold applies an answer, the call says what starts, not a f
   const state = snapshot({ needsYou: [], answered: [starting] });
   const box = text(dialog(render(state)));
   assert.match(box, /Applying your answer/);
-  assert.match(box, /Starting the pod for “Rent 1 H100 for 3 hours”…/);
+  assert.match(box, /Starting the H100 SXM pod…/);
   assert.doesNotMatch(box, /You chose|Answered|Undo/);
   assert.match(
     text(render(state, '#/')),
-    /Starting the pod for “Rent 1 H100 for 3 hours”… on “Rent an H100 for the probe reruns\?”/,
+    /Starting the H100 SXM pod… on “Rent an H100 for the probe reruns\?”/,
   );
   // Then the undo line, once the undo window is set.
   const started = { ...starting, applying: false, undoUntil: later(10) };

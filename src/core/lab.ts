@@ -4264,10 +4264,10 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         const lease = this.options.compute?.leases
           .list()
           .find((entry) => entry.id === applied.lease);
-        if (lease?.state !== 'failed')
-          return `Verifold started ${applied.lease}. ${allowed}`;
-        const why = lease.end?.reason ? ` ${lease.end.reason}` : '';
-        return `RunPod did not create the pod of ${lease.id}, so nothing was billed.${why} ${allowed}`;
+        // The agent hears RunPod's reason with the lease's change.
+        return lease?.state === 'failed'
+          ? `RunPod did not create the pod of ${lease.id}, so nothing was billed. ${allowed}`
+          : `Verifold started ${applied.lease}. ${allowed}`;
       }
       case 'hours':
         return `The lab has ${applied.hours} more ${applied.hours === 1 ? 'hour' : 'hours'}, until ${applied.deadline ?? 'its new deadline'}.`;

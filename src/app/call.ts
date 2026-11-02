@@ -206,7 +206,7 @@ export function failureOf(lab: Lab, call: Call): CallFailure | null {
 /** While Verifold applies an answer: what it does, never a final "You chose". */
 export function applyingText(option: CallOption): string {
   return option.effect?.type === 'pod'
-    ? `Starting the pod for “${option.label}”…`
+    ? `Starting the ${option.effect.gpu} pod…`
     : `Applying “${option.label}”…`;
 }
 

@@ -154,7 +154,7 @@ await test('one answer allows GPU pods for the lab, also when RunPod has none of
   assert.deepEqual(answered.applied, { type: 'pod', lease: 'lease-1' });
   assert.match(
     answered.note ?? '',
-    /^RunPod did not create the pod of lease-1, so nothing was billed\. RunPod answered with 400\..* GPU pods are allowed in this lab now: each agent picks its GPU, and a request inside the limits starts with no call\.$/,
+    /^RunPod did not create the pod of lease-1, so nothing was billed\. GPU pods are allowed in this lab now: each agent picks its GPU, and a request inside the limits starts with no call\.$/,
   );
   assert.equal(pods.leases.length, 1);
   const withdrawn = callOf(built, otherId);
