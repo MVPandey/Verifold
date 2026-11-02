@@ -11,9 +11,10 @@ import type {
   Thread,
 } from '../protocol/api.ts';
 import { agentsWord } from './agent-rows.ts';
+import { checkWords as ranWords } from './answer.ts';
 import type { ReachQuery } from './controls.ts';
 import { roleName, shortTime } from './format.ts';
-import type { ViewMode } from './view-mode.ts';
+import { threadedLab, type ViewMode } from './view-mode.ts';
 
 /** How far a message goes. */
 export type BoxLevel = 'coordinator' | 'thread' | 'agent' | 'lab';
@@ -70,22 +71,117 @@ export function boxLevels(
 }
 
 /**
- * Where a message goes, for the reach read. It says what the send says. The
- * home's post names no one, so a name in its text narrows it. A level that
- * names `all` stays with everyone. `agent`: the chosen agent. `names`: the
- * `@` names of the text.
+ * What a send does. One value drives the send, the reach read, and the key of
+ * the person's intent, so the line under the box cannot differ from the send.
+ * `held`: the box keeps its text and sends nothing, and `why` says so.
  */
-export function boxQuery(
-  thread: string | undefined,
-  act: BoxAct | null,
-  level: BoxLevel,
-  agent: string | undefined,
+export type BoxTarget =
+  | { readonly action: 'ask' }
+  | { readonly action: 'held'; readonly why: string }
+  | { readonly action: 'home' }
+  | { readonly action: 'thread'; readonly thread: string }
+  | {
+      readonly action: 'to';
+      readonly thread: string | null;
+      /** An agent ID, or `all`. */
+      readonly to: string;
+    }
+  | {
+      readonly action: 'reply' | 'object';
+      readonly thread: string | null;
+      readonly post: string;
+    };
+
+const missWords: Readonly<
+  Record<Reach['missed'][number]['why'], (one: boolean) => string>
+> = {
+  closed: (one) =>
+    one ? "is closed, so it won't" : "are closed, so they won't",
+  stopped: (one) =>
+    one ? "is stopped, so it won't" : "are stopped, so they won't",
+  crashed: (one) =>
+    one
+      ? "stopped by itself, so it won't until you start it again"
+      : "stopped by themselves, so they won't until you start them again",
+};
+
+/** Why a pinned agent cannot get a message. Null: it can. */
+function pinWords(
+  agent: Pick<Agent, 'handle' | 'status'> | undefined,
+): string | null {
+  const keep = 'Your text stays. Choose another agent or level.';
+  if (!agent) return `This page no longer shows that agent. ${keep}`;
+  const why =
+    agent.status === 'closed' ||
+    agent.status === 'stopped' ||
+    agent.status === 'crashed'
+      ? agent.status
+      : null;
+  return why
+    ? `${roleName(agent.handle)} ${missWords[why](true)}. ${keep}`
+    : null;
+}
+
+/**
+ * What the box's choice sends. `pinned`: the agent that the person chose,
+ * which a new post never changes. An agent that ended holds the message: the
+ * box never moves it to another agent by itself.
+ */
+export function boxTarget(choice: {
+  readonly thread: string | null;
+  readonly act: BoxAct | null;
+  readonly level: BoxLevel;
+  readonly pinned: Pick<Agent, 'id' | 'handle' | 'status'> | undefined;
+}): BoxTarget {
+  const { thread, act, level, pinned } = choice;
+  if (act) return { action: act.kind, thread, post: act.post.id };
+  if (level === 'coordinator') return { action: 'ask' };
+  if (level === 'agent') {
+    const why = pinWords(pinned);
+    return why || !pinned
+      ? { action: 'held', why: why ?? '' }
+      : { action: 'to', thread, to: pinned.id };
+  }
+  if (level === 'lab' && thread) return { action: 'to', thread, to: 'all' };
+  return thread ? { action: 'thread', thread } : { action: 'home' };
+}
+
+/**
+ * The reach read of a target. Null: no agent reads it, so there is nothing to
+ * read. The home's post names no one, so a name in its text narrows it.
+ * `names`: the `@` names of the text.
+ */
+export function targetQuery(
+  target: BoxTarget,
   names: string,
-): ReachQuery {
-  const place = { thread, named: names };
-  if (act) return { ...place, replyTo: act.post.id };
-  if (level === 'agent') return { ...place, to: agent };
-  return level === 'lab' && thread ? { ...place, to: 'all' } : place;
+): ReachQuery | null {
+  switch (target.action) {
+    case 'ask':
+    case 'held':
+      return null;
+    case 'home':
+      return { named: names };
+    case 'thread':
+      return { thread: target.thread, named: names };
+    case 'to':
+      return {
+        thread: target.thread ?? undefined,
+        to: target.to,
+        named: names,
+      };
+    case 'reply':
+    case 'object':
+      return {
+        thread: target.thread ?? undefined,
+        replyTo: target.post,
+        named: names,
+      };
+  }
+}
+
+/** What makes two sends one intent, beyond their text: the action and its target, so a retry can never replay another send. */
+export function targetKey(target: BoxTarget): string {
+  return JSON.stringify(target);
 }
 
 /** The `@` names in a text, as the server reads them. */
@@ -127,19 +223,6 @@ function whenWords(
       return 'after the plan is kept';
   }
 }
-
-const missWords: Readonly<
-  Record<Reach['missed'][number]['why'], (one: boolean) => string>
-> = {
-  closed: (one) =>
-    one ? "is closed, so it won't" : "are closed, so they won't",
-  stopped: (one) =>
-    one ? "is stopped, so it won't" : "are stopped, so they won't",
-  crashed: (one) =>
-    one
-      ? "stopped by itself, so it won't until you start it again"
-      : "stopped by themselves, so they won't until you start them again",
-};
 
 /** Items by their key, in the order that the keys came. */
 function grouped<T>(
@@ -253,6 +336,14 @@ export function threadActs(
   };
 }
 
+/** The person can bring back this direction's agent from its page. */
+export function canReopen(
+  lab: Pick<Lab, 'agentsHere'> & Parameters<typeof threadedLab>[0],
+  direction: Pick<Direction, 'state'>,
+): boolean {
+  return lab.agentsHere && threadedLab(lab) && direction.state !== 'open';
+}
+
 /** What Stop and Reopen do, for the controls that the page shows. */
 export function workNote(acts: {
   readonly stop: readonly unknown[];
@@ -343,6 +434,38 @@ export function noticesForYou(
       id: notice.id,
       text: noticeWords(notice, lab, mode),
       thread: notice.thread ?? null,
+    }));
+}
+
+/** How many ended checks of the person a page shows. */
+const shownChecks = 3;
+
+/**
+ * The person's checks that failed or that did not hold, each the newest of its
+ * post, so a later check takes its line away. Ended checks can leave a smaller
+ * snapshot, and then their posts still show them.
+ */
+export function checksForYou(
+  lab: Pick<Lab, 'checks'>,
+  mode: ViewMode,
+): readonly {
+  readonly id: string;
+  readonly text: string;
+  readonly post: string;
+}[] {
+  return lab.checks
+    .filter(
+      (check, index) =>
+        check.byPerson === true &&
+        (check.state === 'failed' ||
+          (check.state === 'done' && check.outcome !== 'holds')) &&
+        !lab.checks.slice(index + 1).some(({ post }) => post === check.post),
+    )
+    .slice(-shownChecks)
+    .map((check) => ({
+      id: check.id,
+      post: check.post,
+      text: `Your check: ${ranWords(check)}.${check.state === 'failed' && check.note ? ` ${check.note}` : ''}${mode === 'technical' ? ` (${check.id} of ${check.post})` : ''}`,
     }));
 }
 

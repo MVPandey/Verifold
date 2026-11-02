@@ -77,10 +77,12 @@ export function shareLine(lab: Pick<Lab, 'directions' | 'share'>): string {
 
 /** What the draws do now. Null: nothing to say. */
 export function drawState(
-  page: Pick<IdeaPage, 'stopped' | 'drawing'>,
+  page: Pick<IdeaPage, 'stopped' | 'drawing' | 'judge'>,
 ): string | null {
   if (page.drawing === 'running')
-    return 'A session of the other harness judges a draw now.';
+    return page.judge
+      ? `A ${harnessName(page.judge)} session judges a draw now.`
+      : 'A session judges a draw now.';
   if (page.drawing === 'waiting')
     return 'A draw waits for a free slot. In a full lab it may never run.';
   return page.stopped

@@ -67,6 +67,8 @@ await test('the page holds each candidate with its judge and its search, from th
   const judge = judgeOf(built);
   assert.ok(judge);
   assert.equal(built.reader().ideas()?.drawing, 'running');
+  // A draw of the person has no author, so the session uses the main harness.
+  assert.equal(built.reader().ideas()?.judge, 'claude');
   // A draw on record with no judgment yet is no failed draw.
   assert.deepEqual(built.reader().ideas()?.draws, []);
   const reply = await judge.tools.call(
@@ -145,6 +147,33 @@ await test('Stop long shots ends the session and the next draw, and no agent sto
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(built.started.filter(isJudge).length, judges);
   assert.equal(built.reader().ideas()?.drawing, null);
+});
+
+await test('a stop gives back the combinations of a draw with no judgment', async (t) => {
+  const built = await planned(t);
+  // Four ideas hold four combinations, and one draw takes them all.
+  await ideas(built, 4);
+  await built.lab.drawAgain();
+  await until(() => judgeOf(built) !== undefined);
+  await built.lab.stopLongShots();
+  await built.lab.drawAgain();
+  assert.equal(built.reader().ideas()?.stopped, false);
+});
+
+await test('a judged draw keeps its combinations through a stop', async (t) => {
+  const built = await planned(t);
+  await ideas(built, 4);
+  await built.lab.drawAgain();
+  await until(() => judgeOf(built) !== undefined);
+  const judge = judgeOf(built);
+  assert.ok(judge);
+  await judge.tools.call(
+    'verifold_judge',
+    { candidates: [judgment('c-1', 5, 0)] },
+    'judge-1',
+  );
+  await built.lab.stopLongShots();
+  await assert.rejects(built.lab.drawAgain(), /new combination/);
 });
 
 await test('Draw again turns long shots on again', async (t) => {

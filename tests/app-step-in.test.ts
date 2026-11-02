@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type {
   Agent,
+  CheckItem,
   CollabPage,
   Direction,
   IdeaPage,
@@ -36,7 +37,9 @@ import {
   atNames,
   boxAgents,
   boxLevels,
-  boxQuery,
+  boxTarget,
+  canReopen,
+  checksForYou,
   newestQuestions,
   noticesForYou,
   objectWords,
@@ -44,11 +47,13 @@ import {
   priorLabel,
   reachWords,
   sourceWords,
+  targetKey,
+  targetQuery,
   threadActs,
   workNote,
-  type BoxAct,
+  type BoxTarget,
 } from '../src/app/step-in.ts';
-import { threadLayout } from '../src/app/thread-view.ts';
+import { canOverturn, threadLayout } from '../src/app/thread-view.ts';
 
 const now = Date.UTC(2026, 10, 1, 17, 8);
 const ago = (minutes: number): string =>
@@ -194,31 +199,136 @@ await test('the box has four levels on a thread, and two on the home', () => {
   ]);
 });
 
-await test('the reach asks what the send does, so a name on the home narrows it', () => {
-  const act: BoxAct = { kind: 'object', post: { id: 'p-3' } as Post };
-  assert.deepEqual(boxQuery(undefined, null, 'lab', undefined, '@agent-3'), {
-    thread: undefined,
-    named: '@agent-3',
-  });
-  assert.deepEqual(boxQuery('t-2', null, 'lab', undefined, ''), {
+const pick = (more: Partial<Parameters<typeof boxTarget>[0]>): BoxTarget =>
+  boxTarget({
     thread: 't-2',
-    named: '',
+    act: null,
+    level: 'thread',
+    pinned: undefined,
+    ...more,
+  });
+
+await test('one target drives the reach read and the send', () => {
+  const post = { id: 'p-3' } as Post;
+  assert.deepEqual(pick({ level: 'thread' }), {
+    action: 'thread',
+    thread: 't-2',
+  });
+  assert.deepEqual(pick({ level: 'lab' }), {
+    action: 'to',
+    thread: 't-2',
     to: 'all',
   });
-  assert.deepEqual(boxQuery('t-2', null, 'thread', 'a-3', ''), {
+  assert.deepEqual(pick({ level: 'agent', pinned: agent(3) }), {
+    action: 'to',
     thread: 't-2',
-    named: '',
-  });
-  assert.deepEqual(boxQuery('t-2', null, 'agent', 'a-3', '@agent-4'), {
-    thread: 't-2',
-    named: '@agent-4',
     to: 'a-3',
   });
-  assert.deepEqual(boxQuery('t-2', act, 'lab', 'a-3', ''), {
+  assert.deepEqual(pick({ level: 'coordinator' }), { action: 'ask' });
+  assert.deepEqual(pick({ act: { kind: 'object', post } }), {
+    action: 'object',
     thread: 't-2',
-    named: '',
-    replyTo: 'p-3',
+    post: 'p-3',
   });
+  assert.deepEqual(pick({ thread: null, level: 'lab' }), { action: 'home' });
+  assert.equal(targetQuery({ action: 'ask' }, ''), null);
+  // The home's post names no one, so a name narrows it.
+  assert.deepEqual(targetQuery({ action: 'home' }, '@agent-3'), {
+    named: '@agent-3',
+  });
+  assert.deepEqual(targetQuery(pick({ level: 'lab' }), ''), {
+    thread: 't-2',
+    to: 'all',
+    named: '',
+  });
+  assert.deepEqual(
+    targetQuery(pick({ act: { kind: 'reply', post } }), '@agent-4'),
+    { thread: 't-2', replyTo: 'p-3', named: '@agent-4' },
+  );
+});
+
+await test('a pinned agent that ended holds the message, and nothing moves it to another agent', () => {
+  for (const status of ['closed', 'stopped', 'crashed'] as const) {
+    const target = pick({ level: 'agent', pinned: agent(3, { status }) });
+    assert.equal(target.action, 'held');
+    assert.equal(targetQuery(target, ''), null);
+    assert.match(
+      target.action === 'held' ? target.why : '',
+      /^Agent 3 .* Your text stays\. Choose another agent or level\.$/,
+    );
+  }
+  const gone = pick({ level: 'agent', pinned: undefined });
+  assert.equal(gone.action, 'held');
+  assert.match(gone.action === 'held' ? gone.why : '', /no longer shows/);
+});
+
+await test('the same text to another target is another intent', () => {
+  const post = { id: 'p-3' } as Post;
+  const keys = [
+    pick({ level: 'thread' }),
+    pick({ level: 'thread', thread: 't-3' }),
+    pick({ level: 'lab' }),
+    pick({ level: 'agent', pinned: agent(3) }),
+    pick({ level: 'agent', pinned: agent(4) }),
+    pick({ level: 'coordinator' }),
+    pick({ act: { kind: 'reply', post } }),
+    pick({ act: { kind: 'object', post } }),
+    pick({ thread: null, level: 'lab' }),
+  ].map(targetKey);
+  assert.equal(new Set(keys).size, keys.length);
+});
+
+await test('a person can overturn a decision, and reopen what ended in a lab with threads', () => {
+  assert.equal(canOverturn({ state: 'decided' }), true);
+  assert.equal(canOverturn({ state: 'open' }), false);
+  const brief = {} as Lab['brief'];
+  const lab = { agentsHere: true, brief } as Lab;
+  assert.equal(canReopen(lab, { state: 'closed' }), true);
+  assert.equal(canReopen(lab, { state: 'stopped' }), true);
+  assert.equal(canReopen(lab, { state: 'open' }), false);
+  assert.equal(
+    canReopen({ ...lab, agentsHere: false }, { state: 'closed' }),
+    false,
+  );
+  assert.equal(canReopen({ ...lab, brief: null }, { state: 'closed' }), false);
+});
+
+await test("the person's failed checks reach them, until a later check of the post", () => {
+  const check = (more: Partial<CheckItem>): CheckItem =>
+    ({
+      id: 'k-1',
+      post: 'p-3',
+      harness: 'codex',
+      byPerson: true,
+      state: 'failed',
+      outcome: null,
+      note: 'Its process stopped.',
+      ...more,
+    }) as CheckItem;
+  assert.deepEqual(checksForYou({ checks: [check({})] }, 'simple'), [
+    {
+      id: 'k-1',
+      post: 'p-3',
+      text: 'Your check: A rerun by Codex did not finish. Its process stopped.',
+    },
+  ]);
+  assert.match(
+    checksForYou({ checks: [check({})] }, 'technical')[0]?.text ?? '',
+    /\(k-1 of p-3\)/,
+  );
+  assert.match(
+    checksForYou(
+      { checks: [check({ state: 'done', outcome: 'fails' })] },
+      'simple',
+    )[0]?.text ?? '',
+    /did not hold/,
+  );
+  for (const checks of [
+    [check({ state: 'done', outcome: 'holds' })],
+    [{ ...check({}), byPerson: undefined } as unknown as CheckItem],
+    [check({}), check({ id: 'k-2', state: 'running', note: null })],
+  ] as const)
+    assert.deepEqual(checksForYou({ checks: [...checks] }, 'simple'), []);
 });
 
 await test('the box sends the @ names of its text for the reach', () => {
@@ -409,9 +519,26 @@ await test('a disagreement reads from the record in both views', () => {
   );
   assert.equal(
     checked.simple?.sub,
-    "Agent 3 objects to Agent 1's post. Agent 1 answered and did not accept. A code check did not hold. No verdict yet.",
+    "Agent 3 objects to Agent 1's post. Agent 1 answered and did not accept. A code check did not hold.",
   );
   assert.match(checked.technical?.sub ?? '', /k-1 \(code-read\) fails/);
+  const line = (check: CollabPage['disagreements'][number]['check']): string =>
+    rows(disagreement({ check })).simple?.sub ?? '';
+  const done = { id: 'k-1', state: 'done', method: 'rerun' } as const;
+  assert.match(line({ ...done, outcome: 'holds' }), /A rerun held\.$/);
+  assert.match(
+    line({ ...done, outcome: 'differs' }),
+    /A rerun got a different result\.$/,
+  );
+  assert.match(
+    line({ ...done, method: null, outcome: 'fails' }),
+    /A check did not hold\.$/,
+  );
+  assert.match(line({ ...done, outcome: null }), /A rerun ended\.$/);
+  assert.doesNotMatch(
+    line({ ...done, outcome: 'holds' }),
+    /before this objection|No verdict/,
+  );
   assert.equal(
     rows(
       disagreement({
@@ -618,15 +745,23 @@ await test('the page says who works on long shots, and what draws do now', () =>
     /^1 of 2 agents work on long shots.*You chose Far when you asked\.$/,
   );
   assert.match(shareLine({ directions, share: null }), /no share/);
+  assert.equal(
+    drawState({ stopped: false, drawing: 'running', judge: 'claude' }),
+    'A Claude session judges a draw now.',
+  );
+  assert.doesNotMatch(
+    drawState({ stopped: false, drawing: 'running', judge: null }) ?? '',
+    /other harness/,
+  );
   assert.match(
-    drawState({ stopped: false, drawing: 'waiting' }) ?? '',
+    drawState({ stopped: false, drawing: 'waiting', judge: null }) ?? '',
     /may never run/,
   );
   assert.match(
-    drawState({ stopped: true, drawing: null }) ?? '',
+    drawState({ stopped: true, drawing: null, judge: null }) ?? '',
     /You stopped long shots/,
   );
-  assert.equal(drawState({ stopped: false, drawing: null }), null);
+  assert.equal(drawState({ stopped: false, drawing: null, judge: null }), null);
 });
 
 await test('two new pages have their own addresses', () => {

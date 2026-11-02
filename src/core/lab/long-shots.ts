@@ -366,10 +366,13 @@ export class LongShots {
   state(): {
     readonly stopped: boolean;
     readonly drawing: 'running' | 'waiting' | null;
+    /** The harness of the session that judges now. */
+    readonly judge: HarnessName | null;
   } {
     return {
       stopped: this.off,
       drawing: this.running ? 'running' : this.waiting ? 'waiting' : null,
+      judge: this.running?.harness ?? null,
     };
   }
 
@@ -637,11 +640,19 @@ export class LongShots {
   /**
    * The person's Stop long shots, in the lab's queue: the draw that waits and
    * the session that runs end, and no failed line of work starts a new draw.
-   * An agent that took up a long shot keeps working.
+   * An agent that took up a long shot keeps working. A draw that got no
+   * judgment gives its combinations back, so a later draw can take them.
    */
   async halt(): Promise<void> {
+    const unjudged =
+      this.running && !this.running.judged
+        ? this.running.agent
+        : this.waiting?.agent;
     this.stop();
     this.off = true;
+    this.list = this.list.map((draw) =>
+      draw.agent === unjudged ? { ...draw, drawn: [] } : draw,
+    );
     await this.file.save();
   }
 }

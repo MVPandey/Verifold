@@ -1,13 +1,18 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { writeFile } from 'node:fs/promises';
+import { chmod, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { Board } from '../src/core/board.ts';
 import { checkBlock } from '../src/core/lab/post-rules.ts';
-import { reopenRefusal } from '../src/core/lab/reopen.ts';
-import type { AgentRecord, Direction } from '../src/core/lab/schema.ts';
+import { reopenDirection, reopenRefusal } from '../src/core/lab/reopen.ts';
+import type {
+  AgentRecord,
+  Direction,
+  LabState,
+  Thread,
+} from '../src/core/lab/schema.ts';
 import type { SessionRecord } from '../src/core/session.ts';
 import type { RunRecord } from '../src/core/runs.ts';
 import type { TranscriptUpdate } from '../src/core/transcript.ts';
@@ -27,6 +32,17 @@ const directionOf = (built: Built, index: number): Direction => {
   assert.ok(direction);
   return direction;
 };
+
+/** The agents that heard of an overturn, in the person's name. */
+const heardOverturn = (built: Built): readonly string[] =>
+  built
+    .view()
+    .directions.filter(({ agent }) =>
+      agent.events.some(
+        (event) => event.byPerson && /overturned/.test(event.text),
+      ),
+    )
+    .map(({ agent }) => agent.id);
 
 const threadOf = (built: Built, id: string) =>
   built.view().threads?.find((thread) => thread.id === id);
@@ -178,9 +194,65 @@ await test('Reopen brings a stopped agent back with its thread, its folder, and 
         (post) => post.thread === thread && /reopened "Alpha"/.test(post.text),
       ),
   );
-  assert.equal(built.view().state.agentStarts.length, 1);
+  // The person's act uses none of the agents' own starts.
+  assert.equal(built.view().state.agentStarts.length, 0);
   await until(() => built.started.length > starts);
   assert.equal(built.started.at(-1)?.agent, agent.id);
+});
+
+await test('a reopened agent hears why and which thread, also in a new conversation', async (t) => {
+  const built = await planned(t);
+  const { thread } = await opened(built, 1, 'proposal');
+  const { id } = directionOf(built, 0);
+  await built.lab.stopDirection(id);
+  await until(() => built.view().directions[0]?.status === 'stopped');
+  const starts = built.started.length;
+  await built.lab.reopenDirection(id, thread);
+  // The fake keeps no conversation to resume, so this start is a new one.
+  await until(() => built.started.length > starts);
+  const fresh = built.started.at(-1);
+  assert.ok(fresh);
+  built.endTurn(fresh);
+  await until(() => built.sent.some((entry) => entry.id === fresh.id));
+  const heard = built.sent.find((entry) => entry.id === fresh.id)?.text ?? '';
+  assert.match(heard, /The person reopened your direction/);
+  assert.match(heard, new RegExp(`Read ${thread} first`));
+});
+
+await test('a failed save of the thread does not strand a reopened agent', async () => {
+  const agent = {
+    id: 'a-1',
+    handle: 'agent-1',
+    stopReason: 'person',
+    finished: false,
+  } as AgentRecord;
+  const direction = {
+    id: 'd-1',
+    title: 'Alpha',
+    state: 'stopped',
+  } as Direction;
+  const state = { directions: [direction] } as unknown as LabState;
+  const heard: string[] = [];
+  await reopenDirection(
+    {
+      threaded: true,
+      state: () => state,
+      agent: () => agent,
+      ending: () => false,
+      room: () => {},
+      save: () => Promise.resolve(),
+      change: () => Promise.resolve(),
+      threads: {
+        get: () => ({ id: 't-3' }) as Thread,
+        follow: () => Promise.reject(new Error('The disk is full.')),
+      },
+      add: () => Promise.reject(new Error('The board is full.')),
+      wake: (_, text) => heard.push(text),
+    },
+    'd-1',
+    't-3',
+  );
+  assert.match(heard[0] ?? '', /Read t-3 first/);
 });
 
 await test('Reopen brings back an agent that closed its direction, once its last turn is saved', async (t) => {
@@ -221,7 +293,7 @@ await test('Reopen brings back an agent that closed its direction, once its last
   assert.equal(agentOf(built, 0).finished, false);
 });
 
-await test('Reopen keeps to the limits and says why it refuses', async (t) => {
+await test("Reopen keeps to the lab and says why it refuses, and the agents' allowance does not count", async (t) => {
   const built = await planned(t, { limit: 3 });
   const { id } = directionOf(built, 0);
   await assert.rejects(built.lab.reopenDirection(id), /open already/);
@@ -234,14 +306,12 @@ await test('Reopen keeps to the limits and says why it refuses', async (t) => {
   await built.lab.pause();
   await assert.rejects(built.lab.reopenDirection(id), /paused/);
   await built.lab.resume();
-  for (let count = 0; count < 3; count++) {
+  // "Agents at once" is 3, and agents would have used up their starts by now.
+  for (let count = 0; count < 5; count++) {
     await built.lab.reopenDirection(id);
     await built.lab.stopDirection(id);
   }
-  await assert.rejects(
-    built.lab.reopenDirection(id),
-    /in the last 24 hours.*Try again later/,
-  );
+  assert.equal(built.view().state.agentStarts.length, 0);
 });
 
 await test('a pure refusal names a session that still ends', () => {
@@ -271,18 +341,81 @@ await test('Overturn opens a decided thread, wakes its followers, and the propos
   assert.equal(record?.state, 'open');
   assert.equal(record?.overturned, post);
   assert.equal(record?.outcome, undefined);
-  const note = built
-    .view()
-    .posts.find((entry) => /overturned/.test(entry.text));
-  assert.ok(note);
+  assert.ok(built.view().posts.some((entry) => /overturned/.test(entry.text)));
   assert.deepEqual(
-    [...woken(built, note.id)].sort(),
+    [...heardOverturn(built)].sort(),
     [agentOf(built, 0).id, agentOf(built, 1).id].sort(),
   );
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(threadOf(built, thread)?.state, 'open');
   await assert.rejects(built.lab.overturnDecision(thread), /no decision/);
   await assert.rejects(built.lab.overturnDecision('t-99'), /gone/);
+});
+
+await test('followers hear an overturn when the board is full', async (t) => {
+  const built = await planned(t, { objectionMs: 1 });
+  const { thread } = await opened(built, 0, 'proposal');
+  await until(() => threadOf(built, thread)?.state === 'decided');
+  const { board } = built.lab as unknown as { board: Board };
+  t.mock.method(board, 'add', () =>
+    Promise.reject(new Error('The board is full.')),
+  );
+  await built.lab.overturnDecision(thread);
+  assert.equal(threadOf(built, thread)?.state, 'open');
+  assert.deepEqual(heardOverturn(built), [agentOf(built, 0).id]);
+});
+
+await test('an overturn that cannot save changes nothing, and a retry works', async (t) => {
+  const built = await planned(t, { objectionMs: 1 });
+  const { post, thread } = await opened(built, 0, 'proposal');
+  await until(() => threadOf(built, thread)?.state === 'decided');
+  const folder = join(built.root, '.verifold', 'lab');
+  await chmod(folder, 0o500);
+  try {
+    await assert.rejects(built.lab.overturnDecision(thread));
+  } finally {
+    await chmod(folder, 0o700);
+  }
+  assert.equal(threadOf(built, thread)?.state, 'decided');
+  assert.equal(threadOf(built, thread)?.outcome?.post, post);
+  await built.lab.overturnDecision(thread);
+  assert.equal(threadOf(built, thread)?.overturned, post);
+});
+
+await test("the person's objection to a thread's opening ask answers nothing", async (t) => {
+  const built = await planned(t);
+  const { post, thread } = await opened(built, 0, 'ask', {
+    mentions: ['person'],
+  });
+  await built.lab.post({
+    text: 'This asks the wrong thing.',
+    kind: 'objection',
+    replyTo: post,
+  });
+  assert.equal(threadOf(built, thread)?.state, 'open');
+  assert.equal(threadOf(built, thread)?.outcome, undefined);
+  const waits = built.reader().collab()?.needs ?? [];
+  assert.ok(waits.some((wait) => wait.post === post && wait.on === 'person'));
+  // A plain reply of the person still answers it.
+  await built.lab.post({ text: 'Seed 2.', replyTo: post });
+  assert.equal(threadOf(built, thread)?.state, 'answered');
+  assert.equal(
+    built
+      .reader()
+      .collab()
+      ?.needs.some((wait) => wait.post === post),
+    false,
+  );
+});
+
+await test('a name of another scheme stays plain text, in the reach as in the post', async (t) => {
+  const built = await planned(t);
+  const { thread } = await opened(built, 0, 'proposal');
+  const reader = built.reader();
+  const plain = reader.reach({ thread });
+  assert.deepEqual(reader.reach({ thread, named: '@claude-1' }), plain);
+  const sent = await built.lab.post({ text: '@claude-1 look', thread });
+  assert.deepEqual(sent.mentions, []);
 });
 
 const ended = {
@@ -321,8 +454,8 @@ await test('a check needs a post that cites a run that ended, and says why it ca
   );
 });
 
-await test('the person can ask for a check of a post with an ended run, and hears why not on any other', async (t) => {
-  const built = await planned(t);
+/** A result of the first agent that cites a run that ended. */
+async function resultWithRun(built: Built): Promise<string> {
   const started = await built.call(0, 'verifold_run', {
     command: 'echo hello',
     why: 'A test.',
@@ -330,8 +463,6 @@ await test('the person can ask for a check of a post with an ended run, and hear
   });
   assert.equal(started.ok, true, started.text);
   const run = /r-\d+/.exec(started.text)?.[0] ?? assert.fail(started.text);
-  const own = built.view().directions[0]?.direction;
-  assert.ok(own);
   await until(() => built.view().ledger.at(0)?.status !== 'running');
   await until(() => built.view().ledger.at(0)?.status !== 'queued');
   const reply = await built.call(0, 'verifold_post', {
@@ -342,7 +473,36 @@ await test('the person can ask for a check of a post with an ended run, and hear
     artifacts: [{ type: 'run', run }],
   });
   assert.equal(reply.ok, true, reply.text);
-  const post = posted(reply.text);
+  return posted(reply.text);
+}
+
+await test("a person's check that fails says so in its own words, reaches the person, and wakes the owner", async (t) => {
+  const built = await planned(t);
+  const post = await resultWithRun(built);
+  await built.lab.askCheck(post);
+  const check = built.view().checks.at(-1);
+  assert.equal(check?.byPerson, true);
+  await (
+    built.lab as unknown as {
+      endCheck(id: string, note: string): Promise<void>;
+    }
+  ).endCheck(check?.id ?? '', 'Its process stopped.');
+  const note = built
+    .view()
+    .posts.findLast((entry) => /which the person asked for/.test(entry.text));
+  assert.ok(note);
+  assert.match(note.text, /failed: Its process stopped\./);
+  assert.doesNotMatch(note.text, /does not hold up yet/);
+  assert.ok(note.mentions.includes('person'));
+  assert.ok(note.mentions.includes(agentOf(built, 0).id));
+  assert.deepEqual(woken(built, note.id), [agentOf(built, 0).id]);
+  const wire = (await built.reader().build()).data.lab?.checks.at(-1);
+  assert.equal(wire?.byPerson, true);
+});
+
+await test('the person can ask for a check of a post with an ended run, and hears why not on any other', async (t) => {
+  const built = await planned(t);
+  const post = await resultWithRun(built);
   await built.lab.askCheck(post);
   assert.equal(built.view().checks.at(-1)?.claim, post);
   assert.equal(built.view().checks.at(-1)?.holdsUp, false);

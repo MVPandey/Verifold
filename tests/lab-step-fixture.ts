@@ -34,10 +34,12 @@ export interface Started {
 function fakeSessions(limit: number): {
   readonly sessions: LabSessions;
   readonly started: Started[];
+  readonly sent: { readonly id: string; readonly text: string }[];
   readonly idle: Set<string>;
   readonly live: Set<string>;
 } {
   const started: Started[] = [];
+  const sent: { readonly id: string; readonly text: string }[] = [];
   const live = new Set<string>();
   const idle = new Set<string>();
   const sessions: LabSessions = {
@@ -79,7 +81,8 @@ function fakeSessions(limit: number): {
       idle.delete(id);
       return Promise.resolve(true);
     },
-    continueTask: (id) => {
+    continueTask: (id, text) => {
+      sent.push({ id, text });
       idle.delete(id);
     },
     steer: () => false,
@@ -88,7 +91,7 @@ function fakeSessions(limit: number): {
       idle.delete(id);
     },
   };
-  return { sessions, started, idle, live };
+  return { sessions, started, sent, idle, live };
 }
 
 async function project(t: TestContext): Promise<string> {

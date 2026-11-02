@@ -13,6 +13,9 @@ import {
   plainNumbersMatch,
   quotesOf,
 } from '../core/lab/brief.ts';
+import { noticeStands } from '../core/lab/coordinator-rules.ts';
+import { endedWhy } from '../core/lab/reach.ts';
+import { openWaits } from '../core/lab/waits.ts';
 import type {
   BriefLine as StoredLine,
   LabView,
@@ -37,6 +40,18 @@ function concernsPerson(
     (notice.kind === 'missing-answer' &&
       notice.posts.some((id) => posts.get(id)?.author === 'person'))
   );
+}
+
+/** Which notices the records still hold. It reads the records only when a lab has notices. */
+function standingNotices(view: LabView): (notice: StoredNotice) => boolean {
+  if (!view.brief?.notices.length) return () => false;
+  const waits = openWaits(view.posts, view.threads ?? []);
+  const working = new Set(
+    view.directions
+      .filter(({ status }) => !endedWhy(status))
+      .map(({ agent }) => agent.id),
+  );
+  return (notice) => noticeStands(notice, waits, working);
 }
 
 /** A line as the wire has it. */
@@ -80,6 +95,7 @@ export function briefItems(
   const stored = view.brief;
   if (!stored) return { brief: null, notices: [], questions: [] };
   const posts = new Map(view.posts.map((post) => [post.id, post]));
+  const stands = standingNotices(view);
   const records = {
     directions: view.state.directions,
     calls: view.state.calls,
@@ -100,7 +116,7 @@ export function briefItems(
       kind: notice.kind,
       posts: [...notice.posts],
       to: [...notice.to],
-      forYou: concernsPerson(notice, posts),
+      forYou: concernsPerson(notice, posts) && stands(notice),
       thread:
         notice.posts.flatMap((id) => posts.get(id)?.thread ?? [])[0] ?? null,
     })),

@@ -15,9 +15,11 @@ import {
   atNames,
   boxAgents,
   boxLevels,
-  boxQuery,
+  boxTarget,
   objectWords,
   reachWords,
+  targetKey,
+  targetQuery,
   type BoxAct,
   type BoxLevel,
 } from '../step-in.ts';
@@ -55,50 +57,63 @@ export function StepInBox({
   const controls = useContext(ControlsContext);
   const agents = boxAgents(lab, thread, posts);
   const [level, setLevel] = useState<BoxLevel>(thread ? 'thread' : 'lab');
+  // Set when the person clicks the chip: a new post never changes who this is.
   const [picked, setPicked] = useState<string | null>(null);
   const [names, setNames] = useState('');
-  const agent = agents.find(({ id }) => id === picked) ?? agents[0] ?? null;
-  const chosen = level === 'agent' && !agent ? 'thread' : level;
-  const asking = chosen === 'coordinator' && !act;
-  const threadId = thread?.id;
-  const query = useMemo(
-    () => boxQuery(threadId, act, chosen, agent?.id, names),
-    [threadId, act, chosen, agent?.id, names],
-  );
+  const pinned = lab.agents.find(({ id }) => id === picked);
+  const offered = picked ? pinned : agents[0];
+  // An agent that ended stays in the list while it is the person's choice.
+  const listed = [...new Set([...(pinned ? [pinned] : []), ...agents])];
+  const target = boxTarget({
+    thread: thread?.id ?? null,
+    act,
+    level,
+    pinned,
+  });
+  const intent = targetKey(target);
+  const query = useMemo(() => targetQuery(target, names), [intent, names]);
   const read = useCallback(
     (signal: AbortSignal) =>
-      controls
+      controls && query
         ? controls.reach(query, signal)
         : Promise.resolve({
             error: 'This page cannot read who a message reaches.',
           }),
     [controls, query],
   );
-  const reach = useRead(asking ? null : read, tick);
-  const line = asking
-    ? askWords(lab)
-    : reach.failed
-      ? 'Verifold could not read who this reaches.'
-      : reach.value
-        ? reachWords(reach.value, now)
-        : undefined;
+  const reach = useRead(query ? read : null, tick);
+  const line =
+    target.action === 'ask'
+      ? askWords(lab)
+      : target.action === 'held'
+        ? target.why
+        : reach.failed
+          ? 'Verifold could not read who this reaches.'
+          : reach.value
+            ? reachWords(reach.value, now)
+            : undefined;
   const send = (text: string, key: string): Promise<ActOutcome> => {
-    if (!controls)
-      return Promise.resolve({ refused: 'This page cannot send a message.' });
-    if (act)
-      return act.kind === 'object'
-        ? controls.object(act.post.id, text, key)
-        : controls.reply(act.post.id, text, key);
-    if (chosen === 'coordinator') return controls.askCoordinator(text, key);
-    if (!threadId && onPost) return onPost(text, key);
-    if (chosen === 'thread' && threadId)
-      return controls.writeThread(threadId, text, key);
-    return controls.writeTo(
-      threadId ?? null,
-      chosen === 'agent' ? (agent?.id ?? 'all') : 'all',
-      text,
-      key,
-    );
+    const refused = (why: string): Promise<ActOutcome> =>
+      Promise.resolve({ refused: why });
+    if (!controls) return refused('This page cannot send a message.');
+    switch (target.action) {
+      case 'ask':
+        return controls.askCoordinator(text, key);
+      case 'held':
+        return refused(target.why);
+      case 'home':
+        return onPost
+          ? onPost(text, key)
+          : refused('This page cannot send a message.');
+      case 'thread':
+        return controls.writeThread(target.thread, text, key);
+      case 'to':
+        return controls.writeTo(target.thread, target.to, text, key);
+      case 'reply':
+        return controls.reply(target.post, text, key);
+      case 'object':
+        return controls.object(target.post, text, key);
+    }
   };
   const placeholder = thread
     ? 'Write your message'
@@ -107,27 +122,30 @@ export function StepInBox({
     <div className="box">
       {!act && (
         <div className="to" role="group" aria-label="Who this message goes to">
-          {boxLevels(lab, thread, agent).map((entry) => (
+          {boxLevels(lab, thread, offered ?? null).map((entry) => (
             <button
               key={entry.level}
               type="button"
-              aria-pressed={chosen === entry.level}
-              onClick={() => setLevel(entry.level)}
+              aria-pressed={level === entry.level}
+              onClick={() => {
+                if (entry.level === 'agent' && offered) setPicked(offered.id);
+                setLevel(entry.level);
+              }}
             >
               {entry.label}
             </button>
           ))}
         </div>
       )}
-      {!act && chosen === 'agent' && agents.length > 1 && agent && (
+      {!act && level === 'agent' && pinned && listed.length > 1 && (
         <label className="to__pick">
           Which agent
           <select
             className="field__input"
-            value={agent.id}
+            value={pinned.id}
             onChange={(event) => setPicked(event.target.value)}
           >
-            {agents.map((entry) => (
+            {listed.map((entry) => (
               <option key={entry.id} value={entry.id}>
                 {agentName(entry.handle, entry.job)}
               </option>
@@ -142,6 +160,7 @@ export function StepInBox({
         maxLength={lab.postLimit}
         names={mentionNames(lab)}
         onSend={send}
+        intent={intent}
         onType={(text) => setNames(atNames(text))}
         replying={
           act

@@ -19,7 +19,7 @@ import {
 import { useAction } from '../useAction.ts';
 import { Cross } from './Icons.tsx';
 
-/** What a send is: the text, and the post that it answers, or null. */
+/** What a send is: the text, and what it goes to: `intent`, or the post that it answers, or null. */
 export interface Send {
   readonly text: string;
   readonly to: string | null;
@@ -45,7 +45,8 @@ export function sameSend(a: Send, b: Send): boolean {
  * one-line box completes after an `@`, with the arrow keys and Tab, or Enter
  * while the person typed only the start of a name. `replying`: the post that
  * a send answers, shown above the box with a way to stop replying. A send
- * to another post is another intent, with its own key. `onSent` runs after
+ * to another post is another intent, with its own key, and so is a send with
+ * another `intent`, which says where the box sends. `onSent` runs after
  * a send went through. `onType` hears each change of the text, also a name that the list completes.
  */
 export function Composer({
@@ -59,6 +60,7 @@ export function Composer({
   replying,
   onSent,
   onType,
+  intent,
 }: {
   readonly label: string;
   readonly placeholder: string;
@@ -81,6 +83,7 @@ export function Composer({
     | undefined;
   readonly onSent?: (() => void) | undefined;
   readonly onType?: ((text: string) => void) | undefined;
+  readonly intent?: string | undefined;
 }): ReactNode {
   const id = useId();
   const listId = useId();
@@ -110,7 +113,8 @@ export function Composer({
     const sent = text;
     const value = sent.trim();
     if (!value || action.busy) return;
-    if (await action.submit({ text: value, to: replying?.post ?? null })) {
+    const to = intent ?? replying?.post ?? null;
+    if (await action.submit({ text: value, to })) {
       setText((current) => afterSend(current, sent));
       onSent?.();
     }

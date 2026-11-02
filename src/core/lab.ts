@@ -1226,10 +1226,9 @@ export class Lab {
   /**
    * An agent can start one more agent: the lab works, its time budget has
    * time left, and agents started fewer than `directionLimits.starts` agents
-   * in 24 hours, and fewer than "Agents at once". `person`: the person starts
-   * it, so the refusal tells them to wait.
+   * in 24 hours, and fewer than "Agents at once".
    */
-  private roomForStart(person = false): void {
+  private roomForStart(): void {
     const state = this.current();
     if (state.pausedAt || this.ended(state))
       fail('The lab is paused, so no agent starts now.');
@@ -1239,7 +1238,7 @@ export class Lab {
     );
     if (this.recentStarts(state).length >= most)
       fail(
-        `Agents started ${most} ${most === 1 ? 'agent' : 'agents'} in the last 24 hours, the most that this lab allows. ${person ? 'Try again later.' : 'Ask the person on the board to open the direction.'}`,
+        `Agents started ${most} ${most === 1 ? 'agent' : 'agents'} in the last 24 hours, the most that this lab allows. Ask the person on the board to open the direction.`,
       );
   }
 
@@ -1416,6 +1415,15 @@ export class Lab {
       );
   }
 
+  /**
+   * An agent hears an act of the person at once. A `call` event prints in its
+   * digest with no post behind it, a run does not hold it back, and a new
+   * conversation keeps it.
+   */
+  private tellFromPerson(agent: string, text: string): void {
+    this.loop(agent).add([{ kind: 'call', text, byPerson: true }], 0);
+  }
+
   /** The person brings back an ended direction's agent. See `reopenDirection`. */
   reopenDirection(id: unknown, thread?: unknown): Promise<void> {
     return this.serial(() =>
@@ -1427,15 +1435,14 @@ export class Lab {
           ending: (agent) => this.alive(agent.session),
           room: () => {
             this.roomForDirection();
-            this.roomForStart(true);
+            if (this.current().pausedAt || this.ended(this.current()))
+              fail('The lab is paused, so no agent starts now.');
           },
-          starts: (state) => this.recentStarts(state),
           save: (next) => this.saveState(next),
           change: (agent, next) => this.update(agent, next),
           threads: this.threads,
           add: (fields) => this.add(fields),
-          wake: (agent, text) =>
-            this.loop(agent).add([{ kind: 'restart', text }], 0),
+          wake: (agent, text) => this.tellFromPerson(agent, text),
         },
         id,
         thread,
@@ -5972,7 +5979,11 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
    */
   private async queueCheck(
     claim: Post,
-    ask: { readonly objection?: string; readonly holdsUp?: boolean },
+    ask: {
+      readonly objection?: string;
+      readonly holdsUp?: boolean;
+      readonly byPerson?: true;
+    },
   ): Promise<{ readonly check: Check } | { readonly refused: string }> {
     const run = citedRun(claim, (id) => this.ledger.get(id));
     if (!run || runActive(run))
@@ -5990,6 +6001,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
             ? [...entry.objections, ask.objection]
             : entry.objections,
         holdsUp: entry.holdsUp || ask.holdsUp === true,
+        ...(ask.byPerson ? { byPerson: true as const } : {}),
       }));
     if (waiting) return { check: (await join(waiting)) ?? waiting };
     if (running && !ask.objection)
@@ -6024,6 +6036,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         ...(ask.objection ? [ask.objection] : []),
       ],
       holdsUp: ask.holdsUp === true,
+      ...(ask.byPerson ? { byPerson: true as const } : {}),
       direction: claim.direction ?? run.direction,
       run: run.id,
       commit: run.commit,
@@ -6601,16 +6614,18 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     const owner = this.current().directions.find(
       (entry) => entry.id === check.direction,
     )?.agent;
+    const failed = how === 'failed';
     const mentions = [
       ...new Set(
         [
-          ...(check.holdsUp && how === 'failed' ? [owner] : []),
+          ...((check.holdsUp || check.byPerson) && failed ? [owner] : []),
           ...check.objections.map((post) => this.board.get(post)?.author),
         ].filter(
           (author): author is string =>
             author !== undefined && this.agents.has(author),
         ),
       ),
+      ...(check.byPerson && failed ? ['person'] : []),
     ].slice(0, boardLimits.mentions);
     await this.add({
       author: 'verifold',
@@ -6619,7 +6634,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       text: clip(
         how === 'dropped'
           ? `Check ${id} of ${check.claim} stopped: ${note}`
-          : `Check ${id} of ${check.claim} failed: ${note} ${check.objections.length ? 'The dispute stays open.' : `${check.direction} does not hold up yet.`}`,
+          : `Check ${id} of ${check.claim}${check.byPerson ? ', which the person asked for,' : ''} failed: ${note} ${check.objections.length ? 'The dispute stays open.' : check.holdsUp ? `${check.direction} does not hold up yet.` : 'The post stays as it was.'}`,
         boardLimits.text,
       ),
       mentions,
@@ -8452,7 +8467,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         fail('Name a post on the board.');
       if (!checkableKinds.some((kind) => kind === claim.kind))
         fail(`${claim.id} is no result, so no check tests it.`);
-      const queued = await this.queueCheck(claim, {});
+      const queued = await this.queueCheck(claim, { byPerson: true });
       if ('refused' in queued) fail(queued.refused);
     });
   }
@@ -8468,18 +8483,19 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       if (!this.threaded) fail('A lab from before threads has no decisions.');
       const thread = this.threads.get(id) ?? fail('This thread is gone.');
       const decision = await this.threads.overturn(thread.id);
-      const note = await this.add({
+      const line = `The person overturned ${decision ?? 'the decision'}, so ${thread.id} is open again.`;
+      // A full board refuses the note. Its followers hear it all the same.
+      await this.add({
         author: 'verifold',
         kind: 'status',
         thread: thread.id,
         ...(decision ? { replyTo: decision } : {}),
-        text: `The person overturned ${decision ?? 'the decision'}, so ${thread.id} is open again.`,
+        text: line,
         mentions: [],
         artifacts: [],
-      }).catch(() => null);
-      if (note)
-        for (const agent of this.activeAgents())
-          if (follows(thread, agent.id)) await this.wake(agent, note);
+      }).catch(() => {});
+      for (const agent of this.activeAgents())
+        if (follows(thread, agent.id)) this.tellFromPerson(agent.id, line);
       this.options.onChange?.();
     });
   }

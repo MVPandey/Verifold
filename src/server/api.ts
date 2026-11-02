@@ -170,6 +170,7 @@ import {
   type ReachQuery,
 } from './lab-team.ts';
 import {
+  agentRunStates,
   lastPostTimes,
   noMarks,
   postMarks,
@@ -1443,6 +1444,7 @@ function check(entry: LabCheck): CheckItem {
     method: entry.method,
     result: entry.result,
     note: entry.note,
+    ...(entry.byPerson ? { byPerson: true as const } : {}),
     queuedAt: entry.queuedAt,
     startedAt: entry.startedAt,
     endedAt: entry.endedAt,
@@ -1646,6 +1648,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     omitted.threads = threads.length - keptThreads.length;
   const activity = threadActivity(view.posts);
   const lastPosts = lastPostTimes(view.posts);
+  const runStates = agentRunStates(view.ledger);
   const shown = keptAgents(loaded.agents, kept, level.agents);
   if (shown.length < loaded.agents.length)
     omitted.agents = loaded.agents.length - shown.length;
@@ -1676,6 +1679,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
       line: ref.line,
       helpers: ref.helpers,
       lastPostAt: lastPosts.get(ref.id) ?? null,
+      runState: runStates.get(ref.id) ?? { active: false, ended: null },
       turns: pageOfTurns(ref, turns, level.turns, level.message, proof),
       spendUsd: ref.spend,
     };

@@ -20,6 +20,7 @@ import { href } from '../route.ts';
 import { threadActs, workNote, type BoxAct } from '../step-in.ts';
 import type { Connection } from '../store.ts';
 import {
+  canOverturn,
   outcomeLabel,
   threadChip,
   threadLayout,
@@ -252,7 +253,7 @@ export function ThreadBody({
           )}
         </div>
       )}
-      {onAct && thread.state === 'decided' && (
+      {onAct && canOverturn(thread) && (
         <Overturn thread={thread.id} onDone={() => onChanged?.()} />
       )}
       {thread.overturned && (

@@ -10,8 +10,10 @@ import {
 } from '../core/board.ts';
 import { checkBlock, citedDispute } from '../core/lab/post-rules.ts';
 import { openWaits } from '../core/lab/waits.ts';
+import { runActive, type RunRecord } from '../core/runs.ts';
 import type { LabView, Thread as LabThread } from '../core/lab/schema.ts';
 import type {
+  Agent,
   Post,
   PostSearch as WireSearch,
   Recount,
@@ -49,6 +51,27 @@ export function lastPostTimes(
   posts: readonly BoardPost[],
 ): ReadonlyMap<string, string> {
   return new Map(posts.map((post) => [post.author, post.at]));
+}
+
+/** Each agent's runs in one fact, from the whole ledger. A snapshot's `runs` keeps the newest only, so a long run can fall out of it. */
+export function agentRunStates(
+  ledger: readonly RunRecord[],
+): ReadonlyMap<string, NonNullable<Agent['runState']>> {
+  const states = new Map<string, NonNullable<Agent['runState']>>();
+  for (const run of ledger) {
+    const known = states.get(run.agent);
+    const newer =
+      run.endedAt !== null &&
+      (!known?.ended || Date.parse(run.endedAt) >= Date.parse(known.ended.at));
+    states.set(run.agent, {
+      active: known?.active === true || runActive(run),
+      ended:
+        newer && run.endedAt
+          ? { run: run.id, at: run.endedAt }
+          : (known?.ended ?? null),
+    });
+  }
+  return states;
 }
 
 /** A post's lookups on the wire. */

@@ -7575,6 +7575,8 @@ await test("an access answer gives the agent's shell its domains while it stands
     { title: 'Beta', harness: 'codex' },
   ]);
   await until(() => lab.lab.view()?.state.calls.length === 3);
+  // The third call can be C, of the other agent, so a-1's third result can still be on its way.
+  await until(async () => (await claudeResults(lab, 'd-1-alpha')).length >= 3);
   // A lab without a time budget refuses more hours.
   assert.equal(
     (await claudeResults(lab, 'd-1-alpha'))[2],
@@ -7678,7 +7680,8 @@ await test("an access answer gives the agent's shell its domains while it stands
   // The start had pypi.org, so its process ends, and the next start has no domain.
   await until(() => networks.length === 2);
   assert.deepEqual(networks, [['pypi.org'], []]);
-  await until(async () => (await domains()).length === 0);
+  // A new process can be in the middle of writing args.json.
+  await until(async () => (await domains().catch(() => null))?.length === 0);
   pool.resumeAgent = resume;
 });
 

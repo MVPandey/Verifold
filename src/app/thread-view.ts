@@ -268,6 +268,11 @@ export function threadLayout(
   };
 }
 
+/** The person can overturn a thread that has a decision. */
+export function canOverturn(thread: Pick<Thread, 'state'>): boolean {
+  return thread.state === 'decided';
+}
+
 /** The person asks for a story of an open page that Simple shows with none, with an earlier outcome, or with posts outside it. The server decides whether one is due. */
 export function wantsStory(page: ThreadPage, mode: ViewMode): boolean {
   if (mode !== 'simple' || !page.posts.length) return false;
