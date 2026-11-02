@@ -20,6 +20,7 @@ import {
   claudeSessionSettings,
   strictCodexOptions,
   validDomain,
+  toolsOnly,
   type AgentTools,
   type HostEvent,
   type HostSession,
@@ -402,6 +403,7 @@ export function lastReply(record: SessionRecord): string | undefined {
 export function modeLabel(record: SessionRecord): string {
   if (record.mode === 'strict') return 'Strict (task)';
   if (record.mode === 'coordinator') return 'Coordinator (Verifold tools only)';
+  if (record.mode === 'tools') return 'Verifold tools only';
   const reported = record.reportedMode;
   if (!reported)
     return record.mode === 'auto' ? 'Auto (requested)' : 'Ask me (requested)';
@@ -419,7 +421,7 @@ export function modeLabel(record: SessionRecord): string {
 }
 
 export function validSessionId(id: string): boolean {
-  return /^\d{8}T\d{9}Z-[a-f0-9]{8}$/.test(id);
+  return /^\d{8}T\d{9}Z-s?[a-f0-9]{8}$/.test(id);
 }
 
 function transcriptFile(root: string, id: string): string {
@@ -599,7 +601,8 @@ function parseRecord(value: unknown): SessionRecord | null {
     record.mode === 'ask' ||
     record.mode === 'auto' ||
     record.mode === 'strict' ||
-    record.mode === 'coordinator'
+    record.mode === 'coordinator' ||
+    record.mode === 'tools'
       ? record.mode
       : null;
   const task = object(record.task);
@@ -665,8 +668,8 @@ function parseRecord(value: unknown): SessionRecord | null {
       ? { network: record.network as string[] }
       : {}),
     ...(typeof record.cwd === 'string' &&
-    // A task's or a direction's folder, or a lab check's or long-shot session's.
-    /^\.verifold\/(?:workspaces\/[a-z0-9][a-z0-9-]{0,80}|checks\/[kl]-[1-9]\d{0,5})$/.test(
+    // A task's or a direction's folder, or the folder of a lab check, a long-shot session, or the lab's Coordinator.
+    /^\.verifold\/(?:workspaces\/[a-z0-9][a-z0-9-]{0,80}|checks\/(?:[kl]-[1-9]\d{0,5}|lab-record))$/.test(
       record.cwd,
     )
       ? { cwd: record.cwd }
@@ -778,32 +781,46 @@ export function agentResumable(record: SessionRecord): boolean {
   );
 }
 
-async function recordIds(root: string): Promise<string[]> {
+/** A short session beside a lab's agents. Its ID says so, so recovery needs to read no file to tell it apart. */
+const sideId = /-s[a-f0-9]{8}$/;
+
+/**
+ * The newest records, newest first, in two windows of 50 by name. Short side
+ * sessions can come many times an hour, so they get their own window, and they
+ * never push a lab agent's long session out of the other one.
+ */
+async function recordIds(
+  root: string,
+): Promise<{ readonly main: string[]; readonly side: string[] }> {
   let names: string[];
   try {
     names = await readdir(join(root, '.verifold', 'sessions'));
   } catch {
-    return [];
+    return { main: [], side: [] };
   }
-  return names
-    .filter((name) => /^\d{8}T\d{9}Z-[a-f0-9]{8}\.json$/.test(name))
+  const ids = names
+    .filter((name) => name.endsWith('.json'))
     .map((name) => name.slice(0, -5))
+    .filter(validSessionId)
     .sort()
-    .reverse()
-    .slice(0, 50);
+    .reverse();
+  return {
+    main: ids.filter((id) => !sideId.test(id)).slice(0, 50),
+    side: ids.filter((id) => sideId.test(id)).slice(0, 50),
+  };
 }
 
 /** Paused and interrupted sessions among the latest 50 records, newest first. */
 export async function loadPaused(root: string): Promise<PausedSession[]> {
   const paused: PausedSession[] = [];
-  for (const id of await recordIds(root)) {
+  for (const id of (await recordIds(root)).main) {
     const record = await readRecord(root, id);
     // A task session belongs to its task, and a lab agent's session to the lab. Each offers its own next step.
     if (
       (record?.status === 'paused' || record?.status === 'interrupted') &&
       !record.task &&
       !record.agent &&
-      record.mode !== 'coordinator' &&
+      !toolsOnly(record.mode) &&
       record.events.some((event) => event.kind === 'you')
     )
       paused.push({
@@ -831,7 +848,8 @@ export async function reconcileSessions(
 ): Promise<{ readonly interrupted: number; readonly stopped: number }> {
   let interrupted = 0;
   let stopped = 0;
-  for (const id of await recordIds(root)) {
+  const { main, side } = await recordIds(root);
+  for (const id of [...main, ...side]) {
     const record = await readRecord(root, id);
     const launch = record?.launches.at(-1);
     if (
@@ -971,11 +989,12 @@ function fresh(
   host: HarnessName,
   model: string | null,
   mode: SessionMode,
+  side = false,
 ): SessionRecord {
   const now = new Date();
   return {
     schemaVersion: 2,
-    id: `${now.toISOString().replace(/[-:.]/g, '')}-${randomBytes(4).toString('hex')}`,
+    id: `${now.toISOString().replace(/[-:.]/g, '')}-${side ? 's' : ''}${randomBytes(4).toString('hex')}`,
     host,
     model,
     mode,
@@ -1109,7 +1128,7 @@ export class SessionManager {
       fail(
         'Open the terminal between turns. Wait for the turn to end, or cancel it.',
       );
-    if (record.mode === 'coordinator') fail('The coordinator has no terminal.');
+    if (toolsOnly(record.mode)) fail('This session has no terminal.');
     if (record.agent && !agent) fail(agentSession);
     const native =
       record.nativeSessionId ??
@@ -1308,6 +1327,10 @@ export class SessionManager {
     readonly denyRead?: readonly string[];
     /** The domains that its shell commands may reach, after the person's call. */
     readonly network?: readonly string[];
+    /** It acts only through `tools`: neither harness gives it a shell or file tools. */
+    readonly toolsOnly?: boolean;
+    /** A short session beside the agents, with a window of its own in recovery. */
+    readonly side?: boolean;
   }): Promise<string> {
     this.ready();
     if (input.denyRead && !input.denyRead.every(denyPath))
@@ -1315,7 +1338,12 @@ export class SessionManager {
     if (input.network && !input.network.every(validDomain))
       fail('A domain that a session may reach is not valid.');
     const record: SessionRecord = {
-      ...fresh(input.host, input.model ?? null, 'strict'),
+      ...fresh(
+        input.host,
+        input.model ?? null,
+        input.toolsOnly ? 'tools' : 'strict',
+        input.side,
+      ),
       agent: input.agent,
       cwd: relative(this.root, input.cwd).split('\\').join('/'),
       ...(input.denyRead?.length ? { denyRead: input.denyRead } : {}),
@@ -1328,7 +1356,9 @@ export class SessionManager {
     this.tools = input.tools;
     this.event(
       'status',
-      `Verifold started ${input.agent} in the folder of its direction, in Strict mode.`,
+      input.toolsOnly
+        ? `Verifold started ${input.agent}. It has no shell or file tools, only Verifold tools.`
+        : `Verifold started ${input.agent} in the folder of its direction, in Strict mode.`,
     );
     await this.launch(input.prompt);
     return record.id;
@@ -1366,16 +1396,19 @@ export class SessionManager {
 
   /**
    * Continue a paused session in a new harness process. A coordinator gets
-   * its tools again. A lab agent gets its tools and the domains of its shell:
-   * the new process takes them also when the person changed them.
+   * its tools again. A lab agent gets its tools, the domains of its shell, and
+   * what it cannot read: the new process takes them also when they changed.
    */
   async resume(
     id: unknown,
     tools?: AgentTools,
     network?: readonly string[],
+    denyRead?: readonly string[],
   ): Promise<void> {
     const generation = this.generation;
     this.ready();
+    if (denyRead && !denyRead.every(denyPath))
+      fail('A path that a session cannot read is not valid.');
     const saved =
       typeof id === 'string' && validSessionId(id)
         ? await readRecord(this.root, id)
@@ -1386,11 +1419,13 @@ export class SessionManager {
       fail('That session cannot resume. Choose a paused session.');
     // Another start can begin while the record loads.
     this.ready();
-    const { network: before, ...kept } = saved;
+    const { network: before, denyRead: closed, ...kept } = saved;
     const domains = saved.agent && network ? network : before;
+    const denied = saved.agent && denyRead ? denyRead : closed;
     this.current = {
       ...kept,
       ...(domains?.length ? { network: domains } : {}),
+      ...(denied?.length ? { denyRead: denied } : {}),
       status: 'starting',
       endedAt: null,
     };
@@ -1727,7 +1762,9 @@ export class SessionManager {
         // A Codex lab agent or checker without a model gets Verifold's preferred model when Codex lists one. The lab names Claude Code's model.
         ...(record.agent && !record.model ? { bestModel: true } : {}),
         // Lab agents and checkers look up current facts on the live web.
-        ...(record.agent ? { liveSearch: true } : {}),
+        ...(record.agent && record.mode === 'strict'
+          ? { liveSearch: true }
+          : {}),
         ...(prompt === undefined ? {} : { prompt }),
         ...(native && (prompt === undefined || resume)
           ? { resume: native }

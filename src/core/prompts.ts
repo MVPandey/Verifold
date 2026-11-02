@@ -35,6 +35,8 @@ export const promptIds = [
   'lab-check',
   'lab-check-flat',
   'lab-long-shot',
+  'lab-coordinator',
+  'lab-line-check',
   'profile-card',
   'profile-import',
   'profile-merge',

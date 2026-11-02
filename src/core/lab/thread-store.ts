@@ -7,6 +7,7 @@
  * file is parsed with care and a bad record is skipped.
  */
 import {
+  agentId,
   boardLimits,
   clip,
   number,
@@ -31,22 +32,27 @@ import { threadDigest, threadLines } from './thread-digest.ts';
 import {
   afterPost,
   agreedWith,
+  closed,
   decided,
   dueProposals,
   followed,
+  parseMove,
   parseThread,
   placed,
   planThread,
   planThreadRecord,
+  type PostMove,
 } from './threads.ts';
 
 export class ThreadStore {
   private threads: readonly Thread[] = [];
+  /** The posts that moved, so each load applies them to the board again. */
+  private moves: readonly PostMove[] = [];
   /** The highest thread number that a record or a post uses, so no new thread takes the number of a lost record. */
   private last = 0;
   private readonly path: string;
   private readonly file: RecordFile;
-  private readonly board: Pick<Board, 'digest' | 'get' | 'list'>;
+  private readonly board: Pick<Board, 'digest' | 'get' | 'list' | 'move'>;
   /** Milliseconds that a proposal stays open to objections. */
   private readonly objectionMs: number;
 
@@ -54,14 +60,16 @@ export class ThreadStore {
   constructor(
     path: string,
     paused: () => boolean,
-    board: Pick<Board, 'digest' | 'get' | 'list'>,
+    board: Pick<Board, 'digest' | 'get' | 'list' | 'move'>,
     objectionMs: number,
   ) {
     this.path = path;
     this.board = board;
     this.objectionMs = objectionMs;
     this.file = new RecordFile(path, () =>
-      paused() ? null : { schemaVersion: 1, threads: this.threads },
+      paused()
+        ? null
+        : { schemaVersion: 1, threads: this.threads, moves: this.moves },
     );
   }
 
@@ -79,6 +87,11 @@ export class ThreadStore {
     this.threads = threads;
     if (started !== null && !this.get(planThread))
       this.threads = [planThreadRecord(started), ...threads];
+    this.moves = (Array.isArray(saved?.moves) ? saved.moves : [])
+      .slice(-threadLimits.moves)
+      .flatMap((entry) => parseMove(entry) ?? []);
+    for (const { post, to } of this.moves)
+      if (this.get(to)) this.board.move(post, to);
     this.last = Math.max(
       ...this.threads.map((thread) => number(thread.id)),
       ...this.board.list().map((post) => number(post.thread ?? 't-0')),
@@ -169,7 +182,10 @@ export class ThreadStore {
 
   /** Open a thread. Refuses when the lab holds the most threads. */
   async open(
-    fields: Pick<Thread, 'title' | 'why' | 'openedBy' | 'at' | 'direction'>,
+    fields: Pick<
+      Thread,
+      'title' | 'plainTitle' | 'why' | 'openedBy' | 'at' | 'direction'
+    >,
   ): Promise<Thread> {
     if (this.threads.length >= threadLimits.threads)
       fail(
@@ -193,7 +209,9 @@ export class ThreadStore {
     shape: PostShape,
     by: string,
     direction: string,
-  ): Promise<Pick<Post, 'thread' | 'outcome' | 'accepts'>> {
+  ): Promise<
+    Pick<Post, 'thread' | 'outcome' | 'accepts' | 'method' | 'raters'>
+  > {
     const { thread, ...rest } = shape;
     return {
       ...rest,
@@ -209,6 +227,39 @@ export class ThreadStore {
               })
             ).id,
     };
+  }
+
+  /** `verifold_thread`: a thread gets a title for the person. Agents keep reading its `title`. */
+  async retitle(id: string, plainTitle: string): Promise<void> {
+    await this.change(id, (thread) => ({ ...thread, plainTitle }));
+  }
+
+  /** `verifold_thread`: a thread ends, with the outcome in `post` or the one that it has. */
+  async close(id: string, post: Post | undefined): Promise<void> {
+    const at = new Date().toISOString();
+    await this.change(id, (thread) => closed(thread, post, at));
+  }
+
+  /**
+   * `verifold_thread`: a post reads in the thread `to` from now on. Its author
+   * follows that thread. The post's file stays as it was, so a record holds the
+   * move, and each load applies it again. It wakes no one.
+   */
+  async move(post: Post, to: string): Promise<void> {
+    if (
+      this.moves.length >= threadLimits.moves &&
+      !this.moves.some((entry) => entry.post === post.id)
+    )
+      fail(`The lab moved ${threadLimits.moves} posts, the limit.`);
+    this.moves = [
+      ...this.moves.filter((entry) => entry.post !== post.id),
+      { post: post.id, to, at: new Date().toISOString() },
+    ];
+    this.board.move(post.id, to);
+    await this.change(to, (thread) =>
+      agentId.test(post.author) ? followed(thread, post.author) : thread,
+    );
+    await this.file.save();
   }
 
   /** Change one thread and save it. The change is in memory when the save fails: the next save writes it. */

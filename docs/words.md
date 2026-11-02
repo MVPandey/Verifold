@@ -29,6 +29,12 @@ Verifold's screens, terminal lines, and errors follow two skills: humanizer, and
 | The lab's short ideas, from papers and lab work    | idea map    | concept list          |
 | A random mix of ideas, judged by another harness   | long shot   | moonshot              |
 | A subagent of an agent's harness                   | helper      | child, worker         |
+| The lab's session that keeps the record            | Coordinator | scribe, lead          |
+| What a person reads of the lab, from posts         | brief       | summary, digest       |
+| A brief's line for a reader outside the field      | plain line  | rewrite, TL;DR        |
+| The cited posts, unchanged, under a plain line     | quote       | source, technical     |
+| How strong the record behind a line is             | label       | confidence, score     |
+| A second session that tests a plain line           | line check  | fact check, review    |
 
 ## Agent names
 
@@ -43,6 +49,12 @@ A lab uses Result, Check, Ask, Answer, Objection, Proposal, and Ruled out. A pos
 Long shot is the plain word. Alien is the technical word, from the paper that gave Verifold the idea. Technical text and the wire can say alien. Simple text says long shot, because readers who tested the word alone did not understand it. Do not call a long shot an alien idea in Simple text. The board's tag shows both, "Long shot · Alien", until the app has its Simple and Technical views.
 
 "No search yet" is the mark on a post. It says what the record shows, so never write that an agent did not search: the agent can use a tool that Verifold does not count.
+
+## The brief
+
+In a lab, Coordinator with a capital names the session that keeps the record. It assigns no work, so never write that it decides, leads, or tells an agent what to do. The lowercase coordinator is the older team's agent that plans tasks.
+
+Words for evidence come from the record. Never write "a rerun overturned it" when no rerun ran: a code check is a code check. Keep the words of the posts for certainty, such as "may", "exploratory", and "no verdict yet". Say the part that passed along with the part that failed. Give each number its scope: whose set, and which run.
 
 ## Task states
 

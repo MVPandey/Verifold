@@ -25,7 +25,8 @@ import type { AgentTool } from './session-hosts.ts';
  * with `oldLabToolsVersion` and its Codex threads go on. `verifold_source`,
  * `verifold_idea`, the `sources` and `ideas` views of `verifold_board`, and
  * `longShot` add to the tools of a lab with threads, so they raise no version
- * either. A lab from before threads keeps its exact schemas.
+ * either. `method` and `raters` of a check post are optional too. A lab from
+ * before threads keeps its exact schemas.
  */
 export const labToolsVersion = 3;
 
@@ -88,6 +89,9 @@ export const threadPostKinds = [
 /** What a `check` post found in its target. */
 export const postOutcomes = ['holds', 'fails'] as const;
 
+/** How the author of a `check` post checked. `ratings`: AI raters scored each answer. */
+export const postMethods = ['rerun', 'code-read', 'ratings'] as const;
+
 /** The limits of threads. The tool schemas and the lab's checks use the same ones. */
 export const threadLimits = {
   /** Threads of one lab. With the other limits, the threads file stays under the 4 MB that a read takes. */
@@ -107,6 +111,10 @@ export const threadLimits = {
   proposalLine: 140,
   /** Minutes that a proposal stays open to objections. Then it becomes the decision of its thread. */
   objectionMinutes: 15,
+  /** Posts that moved to another thread. A record applies each move on read. */
+  moves: 2000,
+  /** AI ratings per answer that a check post can name. */
+  raters: 9,
 };
 
 /** The limits of the lab's reading. The tool schemas and the store use the same ones. */
@@ -158,6 +166,57 @@ export const longShotLimits = {
   /** The most papers that an answer counts as combining the ideas. */
   prior: 99,
 };
+
+/**
+ * The limits of the Coordinator and its line check. They run outside "Agents
+ * at once", in one place of their own, so these bounds hold at any lab size.
+ */
+export const briefLimits = {
+  /** Sessions in one hour of the lab's clock. */
+  updatesPerHour: 4,
+  checksPerHour: 6,
+  /** Questions of the person, which can each start a session. */
+  questionsPerHour: 6,
+  /** Turns and minutes of one session. */
+  turns: 3,
+  minutes: 10,
+  /** Sessions that the record keeps for those counts. */
+  sessions: 40,
+  /** Changes of threads and notices that one session can make. */
+  actions: 40,
+  /** Newest posts in a session's first prompt, and characters of each. */
+  promptPosts: 120,
+  promptPost: 1000,
+  /** Lines of one brief, and posts that one line cites. */
+  lines: 12,
+  linePosts: 6,
+  /** Characters of a plain line, of the person's question, and of an answer. */
+  plain: 400,
+  question: 500,
+  answer: 1000,
+  /** Notices in one hour, and the notices and questions that a lab keeps. */
+  noticesPerHour: 6,
+  notices: 100,
+  questions: 50,
+  /** Characters of a claim or a caveat in a line check. */
+  claim: 300,
+  /** Claims and caveats of one line in a line check. */
+  claims: 20,
+};
+
+/** What a line of a brief is about. */
+export const briefKinds = ['decided', 'failed', 'held', 'open', 'new'] as const;
+
+/** What the Coordinator can tell agents, and nothing more. */
+export const noticeKinds = ['overlap', 'missing-answer', 'no-search'] as const;
+
+/** What a line check says of one claim of a plain line. */
+export const claimVerdicts = [
+  'supported',
+  'added-fact',
+  'raised-certainty',
+  'number-out-of-scope',
+] as const;
 
 const postId = { type: 'string', pattern: '^p-[1-9][0-9]{0,5}$' };
 const directionId = { type: 'string', pattern: '^d-[1-9][0-9]{0,3}$' };
@@ -308,7 +367,7 @@ export const threadToolSpecs: readonly AgentTool[] = [
     name: 'verifold_post',
     description: `Post to the lab board, in at most 280 characters. A post is for what another agent or the person must read. Each post needs a thread: give thread, or open a thread with title and why. A reply with replyTo stays in the thread of its target. An objection, an answer, or a check to a post in a closed thread opens that thread again. Choose a kind:
 - result: what you found. It needs proof. A check can test it.
-- check: a recount or an audit of another post. It needs replyTo, outcome (holds or fails), and proof.
+- check: a recount or an audit of another post. It needs replyTo, outcome (holds or fails), and proof. method says how you checked: rerun (you ran it again, with the run as proof), code-read (you read the code), or ratings (AI raters scored each answer, and raters says how many per answer).
 - ask: a question for one agent or the person. Name them in mentions. The wait ends when an answer comes.
 - answer: a reply to an ask, to an objection, or to the person. It needs replyTo and no proof. In an answer to an objection, accepts: true says that the objection is right.
 - objection: a problem in a post. It needs replyTo. The post shows Disputed until an answer accepts the objection, a check of a third agent holds the post, or a check of Verifold ends. A check that fails leaves it Disputed.
@@ -342,6 +401,8 @@ Proof is a file or a figure in your folder, a diff of paths that you changed, or
         artifacts: proofSchema,
         replyTo: postId,
         outcome: { type: 'string', enum: postOutcomes },
+        method: { type: 'string', enum: postMethods },
+        raters: { type: 'integer', minimum: 1, maximum: threadLimits.raters },
         accepts: { type: 'boolean' },
         mentions: mentionsSchema,
       },
@@ -862,6 +923,188 @@ export const callKinds = ['cost', 'scope', 'access', 'go'] as const;
 
 /** What a call asks for when no option effect says it. `pods`: turn on GPU pods. Calls with the same need join. */
 export const callNeeds = ['pods'] as const;
+
+const citedPosts = {
+  type: 'array',
+  minItems: 1,
+  maxItems: briefLimits.linePosts,
+  items: postId,
+};
+
+/**
+ * The tools of the Coordinator: it reads the board, keeps the threads, writes
+ * the brief, tells agents about overlap and missing answers, and answers the
+ * person. No tool of it opens or stops a direction, starts a run, asks the
+ * person, changes a plan, or settles a dispute. Its session is always new, so
+ * these need no version.
+ */
+export const labCoordinatorToolSpecs: readonly AgentTool[] = [
+  {
+    name: 'verifold_board',
+    description:
+      'Read the lab board. threads: each thread with its state. thread: the posts of a thread, or a post and its replies. summary: each direction with its agent and its latest posts. direction: the latest posts of one direction. search: the posts that contain the query. sources: the reading map. ideas: the idea map.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        view: {
+          type: 'string',
+          enum: [
+            'threads',
+            'thread',
+            'summary',
+            'direction',
+            'search',
+            'sources',
+            'ideas',
+          ],
+        },
+        thread: threadIdSchema,
+        post: postId,
+        direction: directionId,
+        query: { type: 'string', maxLength: 100 },
+        limit: { type: 'integer', minimum: 1, maximum: 50 },
+      },
+      required: ['view'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_thread',
+    description:
+      "Keep a thread. title: give the person a clearer title. Agents keep reading the thread's own title. A title names a subject or a question, states no result, and ends once the thread has an outcome. move: move a post to another thread. The post keeps its ID, so its links keep working. A plan, a proposal, a post that holds an outcome, and a post with an open objection or ask stay. file: open a thread for one of the person's posts in the plan thread, when no thread fits. Agents read the person's own words as its title. Give title for the person. close: end a thread. Name the post that holds its outcome. A thread with a decision or an answer keeps its outcome, so name no post then. Verifold quotes that post. An open objection, a wait, an open proposal, or a long shot keeps a thread open.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['title', 'move', 'file', 'close'] },
+        thread: {
+          ...threadIdSchema,
+          description:
+            'title and close: the thread. move: the thread that gets the post.',
+        },
+        title: { type: 'string', maxLength: threadLimits.title },
+        post: {
+          ...postId,
+          description:
+            'move and file: the post. close: the post with the outcome.',
+        },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_brief',
+    description: `Give the brief for the person, in up to ${briefLimits.lines} plain lines. Each line cites the posts that it rests on. Verifold quotes those posts, writes the evidence label, and has a second session check each line. A new call replaces your last one.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        lines: {
+          type: 'array',
+          minItems: 1,
+          maxItems: briefLimits.lines,
+          items: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', enum: briefKinds },
+              plain: {
+                type: 'string',
+                maxLength: briefLimits.plain,
+                description:
+                  'Leave it out only when the prompt says that this lab keeps no plain words.',
+              },
+              posts: citedPosts,
+            },
+            required: ['kind', 'posts'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['lines'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_notice',
+    description: `Tell agents what the record shows, in their next turn. It wakes no one. You give a kind and posts, and Verifold writes the words. overlap: two or more posts of different agents may cover the same work. missing-answer: an ask or an objection has no answer yet. no-search: a post shows "No search yet". A notice states the record and suggests no work. A lab sends at most ${briefLimits.noticesPerHour} notices in an hour.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: noticeKinds },
+        posts: citedPosts,
+      },
+      required: ['kind', 'posts'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_answer',
+    description:
+      'Answer a question of the person from the record, in plain words. Cite the posts that the answer rests on. This wakes no agent, and no agent reads it. A second session checks the answer, as it checks a line of the brief.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', pattern: '^q-[1-9][0-9]{0,5}$' },
+        plain: {
+          type: 'string',
+          maxLength: briefLimits.answer,
+          description:
+            'Leave it out only when the prompt says that this lab keeps no plain words.',
+        },
+        posts: citedPosts,
+      },
+      required: ['question', 'posts'],
+      additionalProperties: false,
+    },
+  },
+];
+
+/** The one tool of a line check. Its session is always new, so it needs no version. */
+export const lineCheckToolSpecs: readonly AgentTool[] = [
+  {
+    name: 'verifold_line_check',
+    description:
+      'Give your check of each line, once. Split each line into its claims, and judge each claim against the cited posts. supported: the posts say it. added-fact: the posts do not say it. raised-certainty: the line is more certain than the posts. number-out-of-scope: the number is in the posts, but it describes something else. In dropped, list each caveat of the posts that the line leaves out and that changes its meaning.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        lines: {
+          type: 'array',
+          minItems: 1,
+          maxItems: briefLimits.lines + briefLimits.questions,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', pattern: '^l-[1-9][0-9]{0,6}$' },
+              claims: {
+                type: 'array',
+                minItems: 1,
+                maxItems: briefLimits.claims,
+                items: {
+                  type: 'object',
+                  properties: {
+                    claim: { type: 'string', maxLength: briefLimits.claim },
+                    verdict: { type: 'string', enum: claimVerdicts },
+                  },
+                  required: ['claim', 'verdict'],
+                  additionalProperties: false,
+                },
+              },
+              dropped: {
+                type: 'array',
+                maxItems: briefLimits.claims,
+                items: { type: 'string', maxLength: briefLimits.claim },
+              },
+            },
+            required: ['id', 'claims', 'dropped'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['lines'],
+      additionalProperties: false,
+    },
+  },
+];
 
 /** The limits of a call. The tool schema and the lab's checks use the same ones. */
 export const callLimits = {
