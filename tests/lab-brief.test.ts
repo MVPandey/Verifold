@@ -43,6 +43,7 @@ function check(more: Partial<Check> = {}): Fact {
     method: 'rerun',
     outcome: 'holds',
     sameHarness: false,
+    blind: true,
     ...more,
   };
 }
@@ -170,6 +171,75 @@ await test('percent, decimals, ranges, lists, and comma thousands compare as num
   assert.equal(plainNumbersMatch('41 of them.', source), true);
 });
 
+await test('a sign counts, and a hyphen in a range or a word is no sign', () => {
+  const source = [
+    post('p-1', 'The score fell by -0.5 on seed-2, in 3-5 runs.'),
+  ];
+  assert.equal(plainNumbersMatch('It fell by −0.5.', source), true);
+  assert.deepEqual(strayNumbers('It rose by 0.5.', source), ['0.5']);
+  assert.equal(
+    plainNumbersMatch('It took 3 to 5 runs on seed 2.', source),
+    true,
+  );
+  assert.deepEqual(
+    strayNumbers('It moved by 5%.', [post('p-1', 'It moved by -5%.')]),
+    ['5%'],
+  );
+  assert.deepEqual(
+    strayNumbers('It moved by -5%.', [post('p-1', 'It moved by 5%.')]),
+    ['-5%'],
+  );
+});
+
+await test('k and M scale a number, and other letters do not', () => {
+  const source = [
+    post(
+      'p-1',
+      'It holds 1,500 cases, 2 million rows, and 120k tokens in a 5km grid.',
+    ),
+  ];
+  assert.equal(plainNumbersMatch('It holds 1.5k cases.', source), true);
+  assert.equal(plainNumbersMatch('It holds 1.5K cases.', source), true);
+  assert.equal(plainNumbersMatch('It holds 2M rows.', source), true);
+  assert.equal(plainNumbersMatch('It holds 2,000,000 rows.', source), true);
+  assert.equal(plainNumbersMatch('It holds 120,000 tokens.', source), true);
+  assert.deepEqual(strayNumbers('It holds 3M rows.', source), ['3000000']);
+  // A lowercase m is minutes or metres, as in 50m.
+  assert.deepEqual(strayNumbers('A 5m grid.', source), []);
+  assert.deepEqual(strayNumbers('A 7m grid.', source), ['7']);
+});
+
+await test('spelled numbers and spelled percent count as numbers', () => {
+  const source = [
+    post(
+      'p-1',
+      '35 of 200 failed, 21 passed, 100 waited, 0 ended, and 40% and 5% and 1% and 70 percent held.',
+    ),
+  ];
+  for (const plain of [
+    'Thirty-five failed.',
+    'Thirty five failed.',
+    'Two hundred ran.',
+    'A hundred waited.',
+    'One hundred waited.',
+    'Twenty-one passed.',
+    'Zero ended.',
+    'Forty percent held.',
+    'Five per cent held.',
+    'One percent held.',
+    'Seventy percent held.',
+  ])
+    assert.equal(plainNumbersMatch(plain, source), true, plain);
+  assert.deepEqual(strayNumbers('Twenty failed.', source), ['20']);
+  assert.deepEqual(strayNumbers('Sixty percent held.', source), ['60%']);
+  // 35 of 200 is no percent.
+  assert.deepEqual(strayNumbers('Thirty-five percent failed.', source), [
+    '35%',
+  ]);
+  const spelledPost = [post('p-1', 'Forty percent of two hundred held.')];
+  assert.equal(plainNumbersMatch('40% of 200 held.', spelledPost), true);
+});
+
 await test('digits in IDs and agent names are no numbers, in a line or in a post', () => {
   const source = [
     post('p-1', 'Agent 13 reports r-38 in p-90 (lease-4), and r1 + 2 runs.'),
@@ -263,10 +333,20 @@ await test('a label states one result with no check', () => {
     evidenceLabel([post('p-1', 'Noted.', { author: 'verifold' })], []),
     "Verifold's own record.",
   );
+  assert.equal(
+    evidenceLabel(
+      [
+        post('p-1', 'Please look.', { author: 'person', kind: 'question' }),
+        post('p-2', 'Noted.', { author: 'verifold', kind: 'status' }),
+      ],
+      [],
+    ),
+    "Your own words and Verifold's record.",
+  );
   assert.equal(evidenceLabel([], []), 'No cited post is on the board.');
 });
 
-await test('a code read is no rerun, whatever it found', () => {
+await test('a code read is no rerun, whatever it found, and each form carries its outcome', () => {
   const claim = post('p-1', 'It breaks the model.');
   const verdict = post('p-2', 'The code does not support this.', {
     author: 'a-9',
@@ -274,14 +354,10 @@ await test('a code read is no rerun, whatever it found', () => {
     replyTo: 'p-1',
   });
   const read = check({ method: 'code-read', outcome: 'fails', result: 'p-2' });
+  // The shape of the error: a code check reads as "a rerun overturned the claim".
   assert.equal(
     evidenceLabel([claim, verdict], [read]),
-    'Code check. No rerun.',
-  );
-  // The shape of the error: a code check reads as "a rerun overturned the claim".
-  assert.doesNotMatch(
-    evidenceLabel([claim, verdict], [read]),
-    /Rerun (held|failed)/,
+    'Code check failed. No rerun.',
   );
   const ratings = post('p-3', 'Raters scored the answers.', {
     author: 'a-3',
@@ -294,11 +370,27 @@ await test('a code read is no rerun, whatever it found', () => {
   });
   assert.equal(
     evidenceLabel([claim, verdict, ratings], [read]),
+    'Code check failed, then two AI ratings per answer failed. No rerun.',
+  );
+  // A check that reports no outcome keeps the bare form.
+  const bare = post('p-3', 'Raters scored the answers.', {
+    author: 'a-3',
+    kind: 'check',
+    replyTo: 'p-1',
+    method: 'ratings',
+    raters: 2,
+    at: '2026-11-01T11:00:00.000Z',
+  });
+  assert.equal(
+    evidenceLabel(
+      [claim, verdict, bare],
+      [check({ method: 'code-read', outcome: null, result: 'p-2' })],
+    ),
     'Code check, then two AI ratings per answer. No rerun.',
   );
 });
 
-await test('a rerun says how it ended, and a same-harness rerun says so', () => {
+await test('a rerun says how it ended, and says so when it was not blind or on the same harness', () => {
   const claim = post('p-1', 'It works.');
   assert.equal(evidenceLabel([claim], [check()]), 'Rerun held.');
   assert.equal(
@@ -314,6 +406,11 @@ await test('a rerun says how it ended, and a same-harness rerun says so', () => 
     'Rerun on the same harness held.',
   );
   assert.equal(
+    evidenceLabel([claim], [check({ blind: false })]),
+    'Not-blind rerun held.',
+  );
+  // An agent's own rerun read the lab, so it is never blind.
+  assert.equal(
     evidenceLabel(
       [
         claim,
@@ -327,7 +424,7 @@ await test('a rerun says how it ended, and a same-harness rerun says so', () => 
       ],
       [],
     ),
-    'Rerun held.',
+    'Not-blind rerun held.',
   );
 });
 
@@ -351,23 +448,35 @@ await test('a check that did not end counts for nothing, and a check with no met
       ],
       [],
     ),
-    'An agent check. No rerun.',
+    'An agent check held. No rerun.',
   );
 });
 
-await test('the weakest result sets the label, so a part with no check shows', () => {
+await test('the label reports the weakest form across the cited results', () => {
   const posts = [post('p-1', 'One.'), post('p-2', 'Two.', { author: 'a-2' })];
   assert.equal(
     evidenceLabel(posts, [check()]),
-    'Rerun held on 1 of 2 results. 1 has no check yet.',
+    'Rerun held on 1 of 2 results. No rerun on the other.',
   );
+  // A code check of the other result does not lift the label to a rerun.
   assert.equal(
-    evidenceLabel(posts, [check({ method: 'code-read' })]),
-    'Code check on 1 of 2 results. 1 has no check yet. No rerun.',
+    evidenceLabel(posts, [
+      check(),
+      check({ method: 'code-read', claim: 'p-2' }),
+    ]),
+    'Rerun held on 1 of 2 results. No rerun on the other.',
   );
   assert.equal(
     evidenceLabel([...posts, post('p-3', 'Three.')], [check()]),
-    'Rerun held on 1 of 3 results. 2 have no check yet.',
+    'Rerun held on 1 of 3 results. No rerun on the other 2.',
+  );
+  assert.equal(
+    evidenceLabel(posts, [check({ method: 'code-read' })]),
+    'Code check held on 1 of 2 results. 1 has no check yet. No rerun.',
+  );
+  assert.equal(
+    evidenceLabel(posts, [check(), check({ claim: 'p-2' })]),
+    'Rerun held.',
   );
 });
 
@@ -393,7 +502,11 @@ await test('a label reads the checks and objections around the cited posts', () 
     post('p-1', 'It works.'),
     post('p-2', 'Unrelated.', { author: 'a-2' }),
     post('p-3', 'No.', { author: 'a-2', kind: 'objection', replyTo: 'p-1' }),
-    post('p-4', 'Fair, I withdraw.', { kind: 'answer', replyTo: 'p-3' }),
+    post('p-4', 'Fair, I withdraw.', {
+      kind: 'answer',
+      replyTo: 'p-3',
+      accepts: true,
+    }),
     post('p-5', 'Audit.', {
       author: 'a-3',
       kind: 'check',
@@ -402,11 +515,16 @@ await test('a label reads the checks and objections around the cited posts', () 
       method: 'code-read',
     }),
   ];
-  const [, , , answer] = all;
-  assert.ok(answer);
+  const [claim, , , answer] = all;
+  assert.ok(claim && answer);
   assert.deepEqual(
     evidencePosts([answer], all).map((entry) => entry.id),
     ['p-1', 'p-3', 'p-4', 'p-5'],
+  );
+  // The accepting answer comes along, so an ended objection shows no dispute.
+  assert.equal(
+    evidenceLabel(evidencePosts([claim], all), []),
+    'Code check failed. No rerun.',
   );
 });
 

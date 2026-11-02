@@ -1,12 +1,14 @@
 /**
  * What the Coordinator's tools take and what they refuse: pure rules, with no
- * lab. These rules hold its reach. It cannot close a thread that holds an open
- * objection, a wait, an open proposal, or a long shot, because that would
- * settle what is not its to settle. A notice carries a kind and posts, and
- * Verifold writes its words, so no words of a model reach an agent. A thread's
- * outcome quotes a post for the same reason. A refusal says what to change.
+ * lab. These rules hold its reach. No tool of it can change a decision: it
+ * cannot close a thread that holds an open objection, a wait, an open proposal,
+ * or a long shot, replace an outcome, or move a post that a decision rests on.
+ * A notice carries a kind and posts, and Verifold writes its words, so no words
+ * of a model reach an agent. A thread's outcome quotes a post, and a filed
+ * thread's title quotes the person, for the same reason. A refusal says what
+ * to change.
  */
-import { agentId, object, postId, type Post } from '../board.ts';
+import { agentId, clip, object, postId, type Post } from '../board.ts';
 import {
   briefKinds,
   briefLimits,
@@ -61,6 +63,7 @@ export interface DraftLine {
 export function parseLines(
   value: unknown,
   post: (id: string) => Post | undefined,
+  keepPlain: boolean,
 ): readonly DraftLine[] {
   if (
     !Array.isArray(value) ||
@@ -74,7 +77,9 @@ export function parseLines(
       kind:
         briefKinds.find((kind) => kind === entry.kind) ??
         fail(`A line's kind is one of: ${briefKinds.join(', ')}.`),
-      plain: oneLine(text(entry.plain, briefLimits.plain, 'the plain line')),
+      plain: keepPlain
+        ? oneLine(text(entry.plain, briefLimits.plain, 'the plain line'))
+        : '',
       posts: citedPosts(entry.posts, post),
     };
   });
@@ -82,8 +87,9 @@ export function parseLines(
 
 /**
  * The checks of a session's lines. Verifold reads the verdicts, so a line
- * passes only when each claim is supported and no caveat dropped out. Refuses
- * an answer that leaves out a line.
+ * passes only when each claim is supported and no caveat dropped out. It fails
+ * closed: an answer that leaves out or repeats a line, or that does not list
+ * its dropped caveats, is refused.
  */
 export function parseChecks(
   value: unknown,
@@ -96,6 +102,11 @@ export function parseChecks(
     const id =
       ids.find((known) => known === entry.id) ??
       fail(`Name one of these lines: ${ids.join(', ')}.`);
+    if (checks.has(id)) fail(`Check ${id} once.`);
+    if (!Array.isArray(entry.dropped))
+      fail(`List the dropped caveats of ${id}, or give an empty list.`);
+    if (entry.dropped.length > briefLimits.claims)
+      fail(`Give ${id} at most ${briefLimits.claims} caveats.`);
     if (!Array.isArray(entry.claims) || !entry.claims.length)
       fail(`Split ${id} into its claims.`);
     if (entry.claims.length > briefLimits.claims)
@@ -111,12 +122,10 @@ export function parseChecks(
             `${verdict}: ${oneLine(text(part.claim, briefLimits.claim, 'the claim'))}`,
           ];
     });
-    const dropped = (Array.isArray(entry.dropped) ? entry.dropped : [])
-      .slice(0, briefLimits.claims)
-      .map(
-        (caveat) =>
-          `dropped-caveat: ${oneLine(text(caveat, briefLimits.claim, 'the caveat'))}`,
-      );
+    const dropped = entry.dropped.map(
+      (caveat) =>
+        `dropped-caveat: ${oneLine(text(caveat, briefLimits.claim, 'the caveat'))}`,
+    );
     const found = [...problems, ...dropped].slice(0, briefLimits.claims);
     checks.set(id, {
       state: found.length ? 'failed' : 'passed',
@@ -128,43 +137,82 @@ export function parseChecks(
   return checks;
 }
 
-/** A title of `verifold_thread`. A title reaches agents, so its numbers must come from the thread's posts. */
+/** A title for the person. It reaches no agent, and it holds no number that the posts do not hold. */
 export function checkedTitle(
   value: unknown,
-  thread: Thread,
   threads: readonly Thread[],
   posts: readonly Post[],
 ): string {
-  if (thread.id === planThread) fail('The plan thread keeps its title.');
   const title = oneLine(text(value, threadLimits.title, 'the title'));
   checkTitle(title, threads);
-  const stray = strayNumbers(
-    title,
-    posts.filter((post) => post.thread === thread.id),
-  );
+  const stray = strayNumbers(title, posts);
   if (stray.length)
-    fail(`No post of ${thread.id} holds these numbers: ${stray.join(', ')}.`);
+    fail(`No post of the thread holds these numbers: ${stray.join(', ')}.`);
   return title;
 }
 
+/** Why a thread keeps its title, or null. A thread with an outcome is a record of it. */
+export function retitleRefusal(thread: Thread): string | null {
+  if (thread.id === planThread) return 'The plan thread keeps its title.';
+  return thread.outcome
+    ? `${thread.id} has its outcome, so it keeps its title.`
+    : null;
+}
+
+/** The title that agents read of a thread filed for a person's post: the person's own words. */
+export function filedTitle(post: Post): string {
+  return clip(oneLine(post.text), threadLimits.title);
+}
+
 /**
- * Why a post stays where it is, or null. The post that opens a thread or holds
- * its outcome stays, because the thread's record names it.
+ * The posts with something open: each open ask or objection, and what each
+ * one replies to.
  */
+export function openPosts(
+  posts: readonly Post[],
+  checks: readonly Pick<Check, 'state' | 'objections'>[],
+  waits: readonly Wait[],
+): ReadonlySet<string> {
+  const byId = new Map(posts.map((post) => [post.id, post]));
+  const open = [
+    ...waits.flatMap((wait) => byId.get(wait.post) ?? []),
+    ...[...openObjections(posts, checks).values()].flat(),
+  ];
+  return new Set(
+    open.flatMap((post) => [post.id, ...(post.replyTo ? [post.replyTo] : [])]),
+  );
+}
+
+/**
+ * Why a post stays in its thread, or null. A plan and a proposal say what the
+ * lab decides. A post that holds an outcome is the decision. A post with an
+ * open objection or ask is in dispute. Anything else can move.
+ */
+export function stayRefusal(
+  post: Post,
+  threads: readonly Thread[],
+  open: ReadonlySet<string>,
+): string | null {
+  if (post.kind === 'plan' || post.kind === 'proposal')
+    return `${post.id} is a ${post.kind} post, so it stays in its thread.`;
+  const held = threads.find((thread) => thread.outcome?.post === post.id);
+  if (held) return `${post.id} holds the outcome of ${held.id}, so it stays.`;
+  return open.has(post.id)
+    ? `${post.id} has an open objection or ask, so it stays in its thread.`
+    : null;
+}
+
+/** Why a post does not move to the thread `to`, or null. */
 export function moveRefusal(
   post: Post,
   to: Thread,
   threads: readonly Thread[],
+  open: ReadonlySet<string>,
 ): string | null {
   if (post.thread === to.id) return `${post.id} is in ${to.id} already.`;
   if (to.state === 'closed')
     return `${to.id} is closed. Move the post to an open thread.`;
-  const held = threads.find(
-    (thread) => thread.opening === post.id || thread.outcome?.post === post.id,
-  );
-  return held && held.id !== planThread
-    ? `${post.id} opens ${held.id} or holds its outcome, so it stays there.`
-    : null;
+  return stayRefusal(post, threads, open);
 }
 
 /**
@@ -225,15 +273,18 @@ export function noticeFrom(
     return {
       kind,
       to: authors,
-      text: `The Coordinator sees that ${cited} may cover the same work. Read them, and decide what to do.`,
+      text: `The Coordinator sees that ${cited} may cover the same work.`,
     };
   }
-  if (kind === 'no-search')
+  if (kind === 'no-search') {
+    const unmarked = posts.find((post) => !post.noSearch);
+    if (unmarked) fail(`${unmarked.id} has no "No search yet" mark.`);
     return {
       kind,
       to: authors,
-      text: `The Coordinator sees no search before the new idea in ${cited}. Search if you see fit.`,
+      text: `The Coordinator sees no search yet for ${cited}.`,
     };
+  }
   const open = posts.map(
     (post) =>
       waits.find((wait) => wait.post === post.id) ??

@@ -605,7 +605,7 @@ export class Lab {
     this.board = new Board(root);
     this.ledger = new RunLedger(root, {
       sandbox: options.sandbox === undefined ? localSandbox() : options.sandbox,
-      ...(options.denyRead ? { denyRead: options.denyRead } : {}),
+      denyRead: [...(options.denyRead ?? []), ...plainPaths([root])],
       ...(options.compute ? { pods: options.compute.podRuns() } : {}),
       serial: (work) => this.serial(work),
       slots: () => this.options.sessions.limit,
@@ -662,14 +662,15 @@ export class Lab {
       question: () => this.current().question,
       directions: () => this.current().directions,
       summary: () => this.summary(false),
-      posts: () => this.board.list(),
-      post: (id) => this.board.get(id),
+      board: this.board,
       checks: () => this.current().checks,
       name: (author) => this.name(author),
       team: () => this.team(),
       usedUp: (host) => Boolean(options.quota?.parked(host)),
       model: async (host) => (await options.model?.(host)) ?? null,
       denied: (id) => this.sideDenials(id),
+      keepsPlain: () => this.blindable(),
+      add: (fields) => this.add(fields),
       read: (args) => this.read(null, args, ''),
       notify: (id, line) => this.holdLine(id, 'notice', line),
       serial: (work) => this.serial(work),
@@ -6659,12 +6660,12 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     ];
   }
 
-  /** What an agent's harness cannot read. In a lab with threads, plain words stay out of its context. */
+  /** What an agent's harness cannot read. A lab with threads keeps plain words out of its context. One that its deny rules cannot express keeps none. */
   private async agentDenials(): Promise<readonly string[]> {
     const denied = this.options.denyRead ?? [];
-    if (!this.threaded) return denied;
+    if (!this.threaded || !(await this.blindable())) return denied;
     const real = await realpath(this.root).catch(() => this.root);
-    return [...denied, ...plainPaths([this.root, real]).filter(expressible)];
+    return [...denied, ...plainPaths([this.root, real])];
   }
 
   /**
@@ -8494,7 +8495,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     };
     try {
       if (resume && saved) {
-        await sessions.resumeAgent(saved.id, tools, network);
+        await sessions.resumeAgent(saved.id, tools, network, denyRead);
         if (agent.host === 'claude')
           await this.update(id, (current) => ({ ...current, pods }));
       } else {

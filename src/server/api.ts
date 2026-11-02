@@ -1660,7 +1660,9 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     startedAt: state.startedAt,
     share: state.share,
     reading: view.reading ?? null,
-    ...briefItems(view, (list, name) => keep(list, level.brief, name, true)),
+    ...briefItems(view, (list, name, last) =>
+      keep(list, level.brief, name, last),
+    ),
     agentsHere: view.runs,
     paused: state.pausedAt
       ? { at: state.pausedAt, reason: state.pausedFor ?? 'person' }
@@ -1949,7 +1951,13 @@ export class ApiReader {
         sources.computeWorks?.(),
       );
     if (!view || !root) return parts;
-    parts.push(view.posts.length, view.posts.at(-1), ...view.ledger);
+    // A move makes a new list of posts, and a new post makes a new last one.
+    parts.push(
+      view.posts,
+      view.posts.length,
+      view.posts.at(-1),
+      ...view.ledger,
+    );
     for (const entry of view.directions)
       parts.push(entry.agent, entry.status, entry.until);
     if (compute) parts.push(cents(labGpu(compute, view.state.startedAt).spent));

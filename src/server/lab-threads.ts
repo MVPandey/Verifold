@@ -21,6 +21,7 @@ export function threadItem(entry: LabThread): Thread {
   return {
     id: entry.id,
     title: entry.title,
+    ...(entry.plainTitle ? { plainTitle: entry.plainTitle } : {}),
     state: entry.state,
     why: entry.why,
     direction: entry.direction ?? null,

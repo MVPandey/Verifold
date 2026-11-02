@@ -182,7 +182,10 @@ export class ThreadStore {
 
   /** Open a thread. Refuses when the lab holds the most threads. */
   async open(
-    fields: Pick<Thread, 'title' | 'why' | 'openedBy' | 'at' | 'direction'>,
+    fields: Pick<
+      Thread,
+      'title' | 'plainTitle' | 'why' | 'openedBy' | 'at' | 'direction'
+    >,
   ): Promise<Thread> {
     if (this.threads.length >= threadLimits.threads)
       fail(
@@ -226,9 +229,9 @@ export class ThreadStore {
     };
   }
 
-  /** `verifold_thread`: a thread gets a clearer title. */
-  async retitle(id: string, title: string): Promise<void> {
-    await this.change(id, (thread) => ({ ...thread, title }));
+  /** `verifold_thread`: a thread gets a title for the person. Agents keep reading its `title`. */
+  async retitle(id: string, plainTitle: string): Promise<void> {
+    await this.change(id, (thread) => ({ ...thread, plainTitle }));
   }
 
   /** `verifold_thread`: a thread ends, with the outcome in `post` or the one that it has. */

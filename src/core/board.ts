@@ -528,7 +528,8 @@ export class Board {
     if (!post) return;
     const moved = { ...post, thread };
     this.byId.set(id, moved);
-    this.posts[this.posts.indexOf(post)] = moved;
+    // A new list, so a reader that compares lists sees the move.
+    this.posts = this.posts.map((entry) => (entry === post ? moved : entry));
   }
 
   /** The number of the newest post, or 0. A new agent's read cursor starts here. */

@@ -260,9 +260,10 @@ export interface LineCheck {
   /**
    * `pending`: no check came yet. `passed`: a second session found each claim
    * in its posts. `failed`: it did not. `numbers`: a number is not in its
-   * posts, so no check ran.
+   * posts, so no check ran. `withheld`: this lab keeps no plain words, because
+   * the harnesses' deny rules cannot express its paths.
    */
-  readonly state: 'pending' | 'passed' | 'failed' | 'numbers';
+  readonly state: 'pending' | 'passed' | 'failed' | 'numbers' | 'withheld';
   /** The harness of the session that checked it. */
   readonly by: Harness | null;
   /** A fresh session of the writer's own harness checked it, because the team has one. */
@@ -855,7 +856,10 @@ export interface ThreadOutcome {
 /** A conversation with a subject. Its posts name it in `Post.thread`. */
 export interface Thread {
   readonly id: string;
+  /** What agents read. */
   readonly title: string;
+  /** The Coordinator's wording, for the person only. Absent: show `title`. Added after version 1. */
+  readonly plainTitle?: string;
   readonly state: 'open' | 'decided' | 'answered' | 'closed';
   /** One line on why it exists. */
   readonly why: string;

@@ -575,7 +575,10 @@ export interface Agreement {
 export interface Thread {
   /** `t-N`. */
   readonly id: string;
+  /** What agents read. It comes from an agent, from Verifold, or from the person's own words. */
   readonly title: string;
+  /** The Coordinator's wording for the person. Like all plain words, it reaches no agent. */
+  readonly plainTitle?: string;
   readonly state: ThreadState;
   /** One line on why the thread exists. */
   readonly why: string;
@@ -627,9 +630,15 @@ export type NoticeKind = (typeof noticeKinds)[number];
 /**
  * `pending`: no check came yet. `passed`: a second session found each claim in
  * the posts. `failed`: it did not. `numbers`: a number is not in the posts, so
- * no check runs. Only `passed` shows the plain words.
+ * no check runs. `withheld`: this lab keeps no plain words, because the deny
+ * rules cannot express its paths. Only `passed` shows the plain words.
  */
-export type LineState = 'pending' | 'passed' | 'failed' | 'numbers';
+export type LineState =
+  | 'pending'
+  | 'passed'
+  | 'failed'
+  | 'numbers'
+  | 'withheld';
 
 export interface LineCheck {
   readonly state: LineState;
@@ -873,12 +882,15 @@ export interface LabSessions {
     readonly network?: readonly string[];
     /** It acts only through `tools`, with no shell and no file tools of its own. */
     readonly toolsOnly?: boolean;
+    /** A short session beside the agents, with a window of its own in recovery. */
+    readonly side?: boolean;
   }): Promise<string>;
-  /** A resume takes the agent's domains, also when they changed. */
+  /** A resume takes the agent's domains and denials, also when they changed. */
   resumeAgent(
     id: string,
     tools: AgentTools,
     network?: readonly string[],
+    denyRead?: readonly string[],
   ): Promise<void>;
   /** Hand an agent's live session to its harness's own terminal, between turns. */
   takeAgentTerminal(id: string, lease: string): Promise<void>;

@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import {
   childEnvironment,
+  codexNoTools,
   codexOffOptions,
   type HarnessName,
 } from './harness.ts';
@@ -24,9 +25,14 @@ import type { LimitSignal } from './quota.ts';
  * `strict`: a task session. The harness itself limits writes to the task folder and asks nothing.
  * `coordinator`: the coordinator. Claude Code gets no built-in tools; Codex gets a read-only sandbox.
  * Its actions go only through Verifold's tools.
- * `tools`: a lab session with the same limits, as the lab's own Coordinator and its line check have.
+ * `tools`: a lab session with no built-in tools on either harness, as the lab's own Coordinator and its line check have.
  */
 export type SessionMode = 'ask' | 'auto' | 'strict' | 'coordinator' | 'tools';
+
+/** A session that acts only through Verifold's tools. It has no terminal. */
+export function toolsOnly(mode: SessionMode): boolean {
+  return mode === 'coordinator' || mode === 'tools';
+}
 
 /** A domain that a task's shell commands may reach: a host name, or `*.` and a domain. */
 export function validDomain(value: string): boolean {
@@ -165,7 +171,7 @@ export function codexSkillsOff(off: readonly string[]): string[] {
  * were probed with `codex sandbox` on Codex 0.160.0.
  */
 function codexProfile(
-  mode: 'strict' | 'coordinator' | 'tools',
+  mode: SessionMode,
   network: boolean,
   denyRead: readonly string[] = [],
 ): Record<string, unknown> {
@@ -763,9 +769,7 @@ function claude(options: HostOptions): HostSession {
         ? 'dontAsk'
         : 'default',
     ...(settings ? ['--settings', settings] : []),
-    ...(options.mode === 'coordinator' || options.mode === 'tools'
-      ? ['--tools', '']
-      : []),
+    ...(toolsOnly(options.mode) ? ['--tools', ''] : []),
     ...(options.model ? ['--model', options.model] : []),
     ...(plugin ? ['--plugin-dir', plugin] : []),
     ...(options.tools
@@ -1207,6 +1211,8 @@ function codex(options: HostOptions): HostSession {
     config: [
       // Search does not use the sandbox's network.
       ...(options.liveSearch ? ['-c', 'web_search="live"'] : []),
+      // The same options as a text-only `codex exec`. Probed there, and not on the app-server.
+      ...(options.mode === 'tools' ? codexNoTools : []),
       // A skill's MCP dependencies would go into the person's own Codex settings.
       // The same as `--disable`, which an older app-server may refuse.
       ...(options.skills
@@ -1749,9 +1755,7 @@ function codex(options: HostOptions): HostSession {
     picked = false,
   ): void {
     const unsupervised =
-      options.mode === 'strict' ||
-      options.mode === 'coordinator' ||
-      options.mode === 'tools'
+      options.mode === 'strict' || toolsOnly(options.mode)
         ? options.mode
         : null;
     call(

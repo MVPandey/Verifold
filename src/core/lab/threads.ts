@@ -131,6 +131,11 @@ export function parseThread(value: unknown): Thread | null {
   return {
     id: entry.id,
     title: entry.title,
+    ...(typeof entry.plainTitle === 'string' &&
+    entry.plainTitle &&
+    entry.plainTitle.length <= threadLimits.title
+      ? { plainTitle: entry.plainTitle }
+      : {}),
     state,
     why: entry.why,
     ...(typeof entry.direction === 'string' && directionId.test(entry.direction)

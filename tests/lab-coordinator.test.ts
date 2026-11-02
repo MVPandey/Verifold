@@ -1,6 +1,7 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   mkdir,
   mkdtemp,
@@ -28,26 +29,39 @@ import {
 import {
   checkedTitle,
   closeRefusal,
+  filedTitle,
   moveRefusal,
   noticeFrom,
+  openPosts,
   parseChecks,
+  retitleRefusal,
 } from '../src/core/lab/coordinator-rules.ts';
 import type {
+  BriefLine,
   Direction,
   LabSessions,
   LabView,
+  LineState,
   Thread,
 } from '../src/core/lab/schema.ts';
+import { SlotSession } from '../src/core/lab/slot-session.ts';
 import { ThreadStore } from '../src/core/lab/thread-store.ts';
 import { planThread } from '../src/core/lab/threads.ts';
 import type { Wait } from '../src/core/lab/waits.ts';
 import type { AgentTools } from '../src/core/session-hosts.ts';
-import type { SessionRecord, SessionView } from '../src/core/session.ts';
+import { processStart } from '../src/core/owner.ts';
+import {
+  loadPaused,
+  reconcileSessions,
+  type SessionRecord,
+  type SessionView,
+} from '../src/core/session.ts';
 import { changeWorkspace } from '../src/core/storage.ts';
 import { PoolFullError, SessionPool } from '../src/core/workers.ts';
 import { gitEnvironment } from '../src/core/workspaces.ts';
 import type { Lab as WireLab } from '../src/protocol/api.ts';
 import { ApiReader } from '../src/server/api.ts';
+import { briefItems } from '../src/server/lab-brief.ts';
 import { until } from './wait.ts';
 
 function git(cwd: string, ...args: string[]): void {
@@ -148,53 +162,102 @@ await test('a close settles nothing: an objection, a wait, a proposal, or a long
   );
 });
 
-await test('a post that opens a thread or holds its outcome stays, and a closed thread takes no post', () => {
-  const home = threadOf('t-2', { opening: 'p-1' });
+await test('a move cannot change a decision: a plan, a proposal, an outcome, and a post with an open objection or ask stay', () => {
+  const outcome = {
+    text: 'Yes.',
+    post: 'p-2',
+    by: 'a-1',
+    at,
+  };
+  const home = threadOf('t-2', { opening: 'p-1', outcome, state: 'answered' });
   const to = threadOf('t-3');
   const threads = [threadOf(planThread, { opening: 'p-9' }), home, to];
+  const none: ReadonlySet<string> = new Set();
+  const move = (post: Post, open = none): string | null =>
+    moveRefusal(post, to, threads, open);
+  assert.match(move(postOf('p-3', { kind: 'plan' })) ?? '', /plan post/);
   assert.match(
-    moveRefusal(postOf('p-1'), to, threads) ?? '',
-    /opens t-2 or holds its outcome/,
+    move(postOf('p-3', { kind: 'proposal' })) ?? '',
+    /proposal post/,
   );
-  assert.equal(moveRefusal(postOf('p-2'), to, threads), null);
-  // The plan thread is no subject of its own: what opens it can still move.
-  assert.equal(moveRefusal(postOf('p-9'), to, threads), null);
+  assert.match(move(postOf('p-2')) ?? '', /holds the outcome of t-2/);
   assert.match(
-    moveRefusal(postOf('p-2', { thread: 't-3' }), to, threads) ?? '',
+    move(postOf('p-3'), new Set(['p-3'])) ?? '',
+    /open objection or ask/,
+  );
+  // The plan thread has no exemption, and a post that opens a thread is a post like any other.
+  assert.equal(move(postOf('p-1')), null);
+  assert.equal(move(postOf('p-9', { thread: planThread })), null);
+  assert.match(
+    moveRefusal(postOf('p-3', { thread: 't-3' }), to, threads, none) ?? '',
     /already/,
   );
   assert.match(
-    moveRefusal(postOf('p-2'), threadOf('t-4', { state: 'closed' }), threads) ??
-      '',
+    moveRefusal(
+      postOf('p-3'),
+      threadOf('t-4', { state: 'closed' }),
+      threads,
+      none,
+    ) ?? '',
     /t-4 is closed/,
   );
 });
 
-await test('a title reaches agents, so its numbers come from the posts of its thread', () => {
+await test('an open ask or objection holds itself and what it replies to', () => {
+  const posts = [
+    postOf('p-1'),
+    postOf('p-2', { kind: 'objection', replyTo: 'p-1', author: 'a-2' }),
+    postOf('p-3', { kind: 'ask', replyTo: 'p-4', author: 'a-2' }),
+    postOf('p-4'),
+    postOf('p-5'),
+  ];
+  assert.deepEqual([...openPosts(posts, [], [waitOf('p-3', 'a-3')])].sort(), [
+    'p-1',
+    'p-2',
+    'p-3',
+    'p-4',
+  ]);
+  // A check that took the objection ended it.
+  assert.deepEqual(
+    [...openPosts(posts, [{ state: 'done', objections: ['p-2'] }], [])],
+    [],
+  );
+});
+
+await test('a title for the person holds no number that its thread does not, and ends with the outcome', () => {
   const thread = threadOf('t-2');
-  const threads = [thread];
+  const threads = [threadOf(planThread), thread];
   const posts = [postOf('p-1', { text: 'Seed 2 reached 64.5%.' })];
   assert.equal(
-    checkedTitle('Does seed 2 reach 64.5%?', thread, threads, posts),
+    checkedTitle('Does seed 2 reach 64.5%?', threads, posts),
     'Does seed 2 reach 64.5%?',
   );
   assert.throws(
-    () => checkedTitle('Does seed 2 reach 91.5%?', thread, threads, posts),
-    /No post of t-2 holds these numbers: 91.5%/,
+    () => checkedTitle('Does seed 2 reach 91.5%?', threads, posts),
+    /No post of the thread holds these numbers: 91.5%/,
   );
   assert.throws(
-    () => checkedTitle('Update', thread, threads, posts),
+    () => checkedTitle('Update', threads, posts),
     /title that a reader understands alone/,
   );
-  assert.throws(
-    () =>
-      checkedTitle(
-        'A new title of the plan',
-        threadOf(planThread),
-        threads,
-        posts,
-      ),
-    /plan thread keeps its title/,
+  assert.equal(retitleRefusal(thread), null);
+  assert.match(retitleRefusal(threadOf(planThread)) ?? '', /plan thread keeps/);
+  assert.match(
+    retitleRefusal(
+      threadOf('t-2', {
+        outcome: { text: 'Yes.', post: 'p-1', by: 'a-1', at },
+      }),
+    ) ?? '',
+    /has its outcome/,
+  );
+  // A filed thread's title is the person's own words, clipped.
+  assert.equal(
+    filedTitle(postOf('p-1', { text: 'Look  at\nthe seeds.' })),
+    'Look at the seeds.',
+  );
+  assert.equal(
+    filedTitle(postOf('p-1', { text: 'x'.repeat(500) })).length,
+    120,
   );
 });
 
@@ -206,13 +269,28 @@ await test('Verifold writes a notice from its kind and its posts, and the record
   assert.deepEqual(overlap.to, ['a-1', 'a-2']);
   assert.equal(
     overlap.text,
-    'The Coordinator sees that p-1 of Agent 1, p-2 of Agent 2 may cover the same work. Read them, and decide what to do.',
+    'The Coordinator sees that p-1 of Agent 1, p-2 of Agent 2 may cover the same work.',
   );
   assert.throws(
     () => noticeFrom('overlap', [first], [], name),
     /posts of two or more agents/,
   );
-  assert.deepEqual(noticeFrom('no-search', [first], [], name).to, ['a-1']);
+  // A no-search notice states a mark of the record, and suggests no work.
+  assert.throws(
+    () => noticeFrom('no-search', [first], [], name),
+    /p-1 has no "No search yet" mark/,
+  );
+  const unsearched = noticeFrom(
+    'no-search',
+    [postOf('p-4', { kind: 'proposal', noSearch: true })],
+    [],
+    name,
+  );
+  assert.deepEqual(unsearched.to, ['a-1']);
+  assert.equal(
+    unsearched.text,
+    'The Coordinator sees no search yet for p-4 of Agent 1.',
+  );
   const ask = postOf('p-3', { kind: 'ask', author: 'a-2' });
   assert.deepEqual(
     noticeFrom('missing-answer', [ask], [waitOf('p-3', 'a-5')], name).to,
@@ -270,13 +348,33 @@ await test('a line passes only when each claim is supported and no caveat droppe
     /Split l-1 into its claims/,
   );
   assert.throws(
-    () => parseChecks([{ id: 'l-9', claims: [claim('supported')] }], ['l-1']),
+    () =>
+      parseChecks(
+        [{ id: 'l-9', claims: [claim('supported')], dropped: [] }],
+        ['l-1'],
+      ),
     /Name one of these lines: l-1/,
   );
   assert.throws(
-    () => parseChecks([{ id: 'l-1', claims: [claim('fine')] }], ['l-1']),
+    () =>
+      parseChecks(
+        [{ id: 'l-1', claims: [claim('fine')], dropped: [] }],
+        ['l-1'],
+      ),
     /A verdict is one of/,
   );
+  // It fails closed: no list of caveats, or a line twice, passes nothing.
+  for (const dropped of [undefined, 'none', null])
+    assert.throws(
+      () =>
+        parseChecks(
+          [{ id: 'l-1', claims: [claim('supported')], dropped }],
+          ['l-1'],
+        ),
+      /List the dropped caveats of l-1/,
+    );
+  const passed = { id: 'l-1', claims: [claim('supported')], dropped: [] };
+  assert.throws(() => parseChecks([passed, passed], ['l-1']), /Check l-1 once/);
 });
 
 await test('the tools reach nothing that assigns, stops, starts, asks, plans, or settles', () => {
@@ -347,8 +445,9 @@ interface Rig extends ReturnType<typeof fakePlace> {
   readonly store: BriefStore;
   readonly board: Board;
   readonly threads: ThreadStore;
-  readonly directions: Direction[];
+  readonly directions: Pick<Direction, 'id' | 'state' | 'verdict'>[];
   readonly held: { readonly agent: string; readonly line: string }[];
+  readonly notes: Map<string, string>;
   readonly post: (fields: Partial<NewPost>) => Promise<Post>;
   /** Call a tool of the newest session. */
   readonly call: (
@@ -360,8 +459,14 @@ interface Rig extends ReturnType<typeof fakePlace> {
   readonly tick: () => Promise<void>;
 }
 
-const direction = (id: string, verdict = 'open'): Direction =>
-  ({ id, state: 'open', verdict }) as Direction;
+const direction = (
+  id: string,
+  verdict: Direction['verdict'] = 'open',
+): Pick<Direction, 'id' | 'state' | 'verdict'> => ({
+  id,
+  state: 'open',
+  verdict,
+});
 
 async function rig(
   t: TestContext,
@@ -371,6 +476,7 @@ async function rig(
     readonly minuteMs?: number;
     readonly usedUp?: (host: string) => boolean;
     readonly noPlace?: boolean;
+    readonly keepsPlain?: boolean;
   } = {},
 ): Promise<Rig> {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'verifold-brief-')));
@@ -388,8 +494,9 @@ async function rig(
   await store.load(true);
   t.after(() => store.flush());
   const place = fakePlace();
-  const directions: Direction[] = [];
+  const directions: Rig['directions'] = [];
   const held: Rig['held'] = [];
+  const notes = new Map<string, string>();
   const host: LabCoordinatorHost = {
     root,
     sessions: more.noPlace ? null : place.sessions,
@@ -403,14 +510,18 @@ async function rig(
     question: () => 'Do months sit on a circle?',
     directions: () => directions,
     summary: () => '- d-1 "A line of work": open.',
-    posts: () => board.list(),
-    post: (id) => board.get(id),
+    board,
     checks: () => [],
     name: (author) => author,
     team: () => Promise.resolve(more.team ?? ['claude', 'codex']),
     usedUp: (name) => more.usedUp?.(name) ?? false,
     model: () => Promise.resolve('best-model'),
     denied: () => Promise.resolve(['/denied']),
+    keepsPlain: () => Promise.resolve(more.keepsPlain ?? true),
+    add: (fields) => {
+      if (fields.key) notes.set(fields.key, fields.text);
+      return board.add(fields);
+    },
     read: () => Promise.resolve('the record'),
     notify: (agent, line) => {
       held.push({ agent, line });
@@ -433,6 +544,7 @@ async function rig(
     threads,
     directions,
     held,
+    notes,
     tick: () => coordinator.tick(),
     post: async (fields) => {
       const post = await board.add({
@@ -480,7 +592,7 @@ await test('a state change starts one update after the delay, and a busy lab doe
   await lab.tick();
   assert.equal(lab.started.length, 0);
   // Changes keep coming, and the delay runs from the first one.
-  for (const verdict of ['leading', 'open', 'leading']) {
+  for (const verdict of ['leading', 'open', 'leading'] as const) {
     t.mock.timers.tick(59_000);
     lab.directions[0] = direction('d-1', verdict);
     await lab.tick();
@@ -864,7 +976,7 @@ await test('a notice joins the next digest of who the record names, once, and wi
   assert.equal(lab.held.length, 2);
   assert.equal(lab.store.view().notices.length, 1);
   assert.deepEqual(lab.store.view().notices[0]?.to, ['a-1', 'a-2']);
-  const gone = await lab.post({ author: 'a-404' });
+  const gone = await lab.post({ author: 'a-404', noSearch: true });
   const nobody = await lab.call('verifold_notice', {
     kind: 'no-search',
     posts: [gone.id],
@@ -872,7 +984,7 @@ await test('a notice joins the next digest of who the record names, once, and wi
   assert.equal(nobody.ok, false);
   assert.match(nobody.text, /No agent that works now/);
   for (let index = 1; index < briefLimits.noticesPerHour; index++) {
-    const post = await lab.post({ author: 'a-1' });
+    const post = await lab.post({ author: 'a-1', noSearch: true });
     assert.equal(
       (
         await lab.call('verifold_notice', {
@@ -883,7 +995,7 @@ await test('a notice joins the next digest of who the record names, once, and wi
       true,
     );
   }
-  const post = await lab.post({ author: 'a-1' });
+  const post = await lab.post({ author: 'a-1', noSearch: true });
   const limited = await lab.call('verifold_notice', {
     kind: 'no-search',
     posts: [post.id],
@@ -917,7 +1029,7 @@ await test('a session changes at most so many threads and notices', async (t) =>
   assert.match(last.text, /One session makes at most 40 changes/);
 });
 
-await test('verifold_thread titles, moves, and closes, and a close keeps a quote of a post', async (t) => {
+await test('verifold_thread moves, titles for the person, and closes with a quote, and it changes no decision', async (t) => {
   const lab = await rig(t);
   const asked = await lab.post({
     text: 'Please check the seeds.',
@@ -942,6 +1054,18 @@ await test('verifold_thread titles, moves, and closes, and a close keeps a quote
     kind: 'answer',
     text: 'Agreed: all 3 seeds hold.',
   });
+  const open = await lab.post({
+    thread: id,
+    author: 'a-2',
+    kind: 'ask',
+    text: 'Which seed comes next?',
+    mentions: ['a-3'],
+  });
+  const proposal = await lab.post({
+    thread: id,
+    kind: 'proposal',
+    text: 'Use all seeds.',
+  });
   lab.directions.push(direction('d-1'));
   await lab.tick();
   const prompt = lab.started[0]?.input.prompt ?? '';
@@ -958,49 +1082,158 @@ await test('verifold_thread titles, moves, and closes, and a close keeps a quote
   // The post reads in its new thread, under the same ID, and its file stays as it was.
   assert.equal(lab.board.get(asked.id)?.thread, id);
   assert.deepEqual(
-    lab.threads.posts(lab.threads.get(id) as Thread).map((post) => post.id),
-    [asked.id, opening.id, outcome.id],
+    lab.threads
+      .posts(lab.threads.get(id) ?? threadOf(id))
+      .map((post) => post.id),
+    [asked.id, opening.id, outcome.id, open.id, proposal.id],
   );
-  const staying = await lab.call('verifold_thread', {
-    action: 'move',
-    thread: planThread,
-    post: opening.id,
-  });
-  assert.match(staying.text, /opens t-2 or holds its outcome/);
+  for (const [post, reason] of [
+    [open.id, /open objection or ask/],
+    [proposal.id, /proposal post/],
+  ] as const)
+    assert.match(
+      (
+        await lab.call('verifold_thread', {
+          action: 'move',
+          thread: planThread,
+          post,
+        })
+      ).text,
+      reason,
+    );
+  const title = 'Do all 3 seeds beat chance?';
   assert.equal(
+    (await lab.call('verifold_thread', { action: 'title', thread: id, title }))
+      .ok,
+    true,
+  );
+  // The person reads the new wording. Agents keep the title that they read.
+  const record = lab.threads.get(id);
+  assert.equal(record?.plainTitle, title);
+  assert.equal(record?.title, 'Does the control beat chance?');
+  assert.doesNotMatch(lab.threads.lines().join('\n'), /Do all 3 seeds/);
+  assert.match(
+    (await lab.call('verifold_thread', { action: 'stop', thread: id })).text,
+    /Give an action/,
+  );
+  assert.match(
+    (await lab.call('verifold_thread', { action: 'close', thread: id })).text,
+    /p-\d+ waits for an answer|open proposal/,
+  );
+});
+
+await test('a close names a post only for a thread with no outcome, and an outcome ends retitles', async (t) => {
+  const lab = await rig(t);
+  const { id } = await lab.threads.open({
+    title: 'Does the control beat chance?',
+    why: 'It decides the next step.',
+    openedBy: 'a-1',
+    at,
+  });
+  await lab.post({ thread: id, text: 'It does, on 3 seeds.' });
+  const second = await lab.post({
+    thread: id,
+    author: 'a-2',
+    text: 'All 3 seeds hold.',
+  });
+  lab.directions.push(direction('d-1'));
+  await lab.tick();
+  assert.match(
+    (await lab.call('verifold_thread', { action: 'close', thread: id })).text,
+    /Name the post of t-2 that holds its outcome/,
+  );
+  const closed = await lab.call('verifold_thread', {
+    action: 'close',
+    thread: id,
+    post: second.id,
+  });
+  assert.equal(closed.ok, true, closed.text);
+  const record = lab.threads.get(id);
+  assert.equal(record?.state, 'closed');
+  assert.equal(record?.outcome?.text, 'All 3 seeds hold.');
+  assert.equal(record?.outcome?.post, second.id);
+  assert.equal(record?.outcome?.by, 'a-2');
+  assert.match(
     (
       await lab.call('verifold_thread', {
         action: 'title',
         thread: id,
-        title: 'Do all 3 seeds beat chance?',
+        title: 'A better title for this thread',
       })
-    ).ok,
-    true,
+    ).text,
+    /has its outcome, so it keeps its title/,
   );
-  assert.equal(lab.threads.get(id)?.title, 'Do all 3 seeds beat chance?');
-  const none = await lab.call('verifold_thread', {
-    action: 'close',
-    thread: id,
+  // A decision cannot be replaced by closing again with another post.
+  const decided = await lab.threads.open({
+    title: 'Which seed comes first?',
+    why: 'It sets the order.',
+    openedBy: 'a-1',
+    at,
   });
-  assert.match(none.text, /Name the post of t-2 that holds its outcome/);
+  const choice = await lab.post({
+    thread: decided.id,
+    kind: 'proposal',
+    text: 'Seed 2 first.',
+  });
+  const other = await lab.post({ thread: decided.id, text: 'Seed 3 first.' });
+  const settled = lab.threads as unknown as {
+    change(
+      id: string,
+      next: (thread: Thread) => Thread,
+    ): Promise<Thread | undefined>;
+  };
+  await settled.change(decided.id, (thread) => ({
+    ...thread,
+    state: 'decided',
+    outcome: { text: choice.text, post: choice.id, by: 'a-1', at },
+  }));
+  assert.match(
+    (
+      await lab.call('verifold_thread', {
+        action: 'close',
+        thread: decided.id,
+        post: other.id,
+      })
+    ).text,
+    /has its outcome, so close it with no post/,
+  );
   assert.equal(
     (
       await lab.call('verifold_thread', {
         action: 'close',
-        thread: id,
-        post: outcome.id,
+        thread: decided.id,
       })
     ).ok,
     true,
   );
-  const closed = lab.threads.get(id);
-  assert.equal(closed?.state, 'closed');
-  assert.equal(closed?.outcome?.text, 'Agreed: all 3 seeds hold.');
-  assert.equal(closed?.outcome?.post, outcome.id);
-  assert.equal(closed?.outcome?.by, 'a-2');
+  assert.equal(lab.threads.get(decided.id)?.outcome?.post, choice.id);
+});
+
+await test("a person's post with no thread gets one, titled in the person's own words", async (t) => {
+  const lab = await rig(t);
+  const asked = await lab.post({
+    text: 'Please compare the two controls.',
+    author: 'person',
+    kind: 'question',
+  });
+  const agents = await lab.post({ text: 'A note of an agent.' });
+  lab.directions.push(direction('d-1'));
+  await lab.tick();
+  const filed = await lab.call('verifold_thread', {
+    action: 'file',
+    post: asked.id,
+    title: 'Which control works better?',
+  });
+  assert.equal(filed.ok, true, filed.text);
+  const thread = lab.threads.list().at(-1);
+  assert.equal(thread?.title, 'Please compare the two controls.');
+  assert.equal(thread?.plainTitle, 'Which control works better?');
+  assert.equal(thread?.openedBy, 'verifold');
+  assert.equal(lab.board.get(asked.id)?.thread, thread?.id);
   assert.match(
-    (await lab.call('verifold_thread', { action: 'stop', thread: id })).text,
-    /Give an action/,
+    (await lab.call('verifold_thread', { action: 'file', post: agents.id }))
+      .text,
+    /Name one of the person's posts in the plan thread/,
   );
 });
 
@@ -1115,6 +1348,358 @@ await test('the store survives a bad file, keeps no pass that it cannot read, an
   assert.equal(broken.view().brief, null);
 });
 
+await test('what a session changes itself counts as seen: a quiet lab gets one update, then none', async (t) => {
+  const lab = await rig(t, { team: ['claude'] });
+  const { id } = await lab.threads.open({
+    title: 'Does the control beat chance?',
+    why: 'It decides the next step.',
+    openedBy: 'a-1',
+    at,
+  });
+  const post = await lab.post({ thread: id, text: 'It does.' });
+  lab.directions.push(direction('d-1'));
+  await lab.tick();
+  assert.equal(lab.started.length, 1);
+  await lab.call('verifold_brief', anyLine([post.id]));
+  // A close after the brief changes the state, and the brief covers it.
+  await lab.call('verifold_thread', {
+    action: 'close',
+    thread: id,
+    post: post.id,
+  });
+  await lab.endTurn();
+  await lab.tick();
+  assert.equal(lab.started.length, 2);
+  const [line] = lab.store.pending();
+  assert.ok(line);
+  await lab.call('verifold_line_check', {
+    lines: [
+      {
+        id: line.id,
+        claims: [{ claim: 'It works.', verdict: 'supported' }],
+        dropped: [],
+      },
+    ],
+  });
+  await lab.endTurn();
+  for (let turn = 0; turn < 3; turn++) await lab.tick();
+  assert.equal(lab.started.length, 2);
+  // A restart reads the same state.
+  lab.coordinator.loaded();
+  await lab.tick();
+  assert.equal(lab.started.length, 2);
+  // Someone else's change still counts.
+  lab.directions[0] = direction('d-1', 'leading');
+  await lab.tick();
+  assert.equal(lab.started.length, 3);
+});
+
+await test('a lab whose paths the deny rules cannot express keeps no plain words: quotes only, with one note', async (t) => {
+  const lab = await rig(t, { keepsPlain: false });
+  const post = await lab.post({ text: 'It reached 64.5%.' });
+  const { id } = await lab.threads.open({
+    title: 'Does the control beat chance?',
+    why: 'It decides the next step.',
+    openedBy: 'a-1',
+    at,
+  });
+  lab.directions.push(direction('d-1'));
+  await lab.tick();
+  assert.match(
+    lab.started[0]?.input.prompt ?? '',
+    /This lab keeps no plain words/,
+  );
+  assert.equal(lab.notes.size, 1);
+  assert.match(lab.notes.get('plain-off') ?? '', /quotes only/);
+  const brief = await lab.call('verifold_brief', {
+    lines: [{ kind: 'open', posts: [post.id] }],
+  });
+  assert.equal(brief.ok, true, brief.text);
+  // Plain words that come anyway stay out of the record.
+  await lab.call('verifold_brief', anyLine([post.id], 'Words that must go.'));
+  const [line] = lab.store.view().brief?.lines ?? [];
+  assert.equal(line?.plain, '');
+  assert.equal(line?.check.state, 'withheld');
+  assert.deepEqual(lab.store.pending(), []);
+  assert.match(
+    (
+      await lab.call('verifold_thread', {
+        action: 'title',
+        thread: id,
+        title: 'A plain title of this thread',
+      })
+    ).text,
+    /keeps no plain words/,
+  );
+  await lab.endTurn();
+  // A withheld line needs no check, so no session starts for it.
+  await lab.tick();
+  assert.equal(lab.started.length, 1);
+});
+
+await test('the snapshot keeps the first lines of a brief, tests numbers again, and shows plain words only after a pass', () => {
+  const posts = [postOf('p-1', { text: 'It reached 64.5%.' })];
+  const line = (id: string, plain: string, state: LineState): BriefLine => ({
+    id,
+    kind: 'open',
+    at,
+    plain,
+    posts: ['p-1'],
+    writer: 'claude',
+    check: { state, by: null, sameHarness: false, problems: [] },
+  });
+  const view = {
+    state: { directions: [], calls: [] },
+    posts,
+    ledger: [],
+    checks: [],
+    brief: {
+      brief: {
+        at,
+        key: 'k',
+        through: 1,
+        lines: [
+          line('l-1', 'It reached 64.5%.', 'passed'),
+          // A file that says passed cannot carry a number that no post holds.
+          line('l-2', 'It reached 91.5%.', 'passed'),
+          line('l-3', 'It may pass.', 'pending'),
+          line('l-4', '', 'withheld'),
+        ],
+      },
+      notices: [],
+      questions: [],
+      sessions: [],
+    },
+  } as unknown as LabView;
+  const cuts: [string, boolean][] = [];
+  const { brief } = briefItems(view, (list, name, newest) => {
+    cuts.push([name, newest]);
+    return [...list];
+  });
+  assert.deepEqual(cuts, [
+    ['briefLines', false],
+    ['notices', true],
+    ['questions', true],
+  ]);
+  assert.deepEqual(
+    brief?.lines.map((entry) => [entry.plain, entry.check.state]),
+    [
+      ['It reached 64.5%.', 'passed'],
+      [null, 'numbers'],
+      [null, 'pending'],
+      [null, 'withheld'],
+    ],
+  );
+  assert.equal(brief?.lines[3]?.quote, 'It reached 64.5%. (p-1)');
+});
+
+await test('a slot session ends on an exit that leaves it paused, on its limits, and with no call back from end', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'verifold-slot-')));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
+  const place = fakePlace();
+  const host = {
+    root,
+    sessions: place.sessions,
+    timing: { minuteMs: 60_000 },
+    serial: <T>(work: () => T | Promise<T>): Promise<T> =>
+      Promise.resolve().then(work),
+  };
+  const ends: string[] = [];
+  const job = {
+    agent: 'a-3',
+    host: 'claude' as const,
+    folder: 'l-3',
+    specs: [],
+    turns: 2,
+    minutes: 10,
+    prompt: () => Promise.resolve('Work.'),
+    model: () => Promise.resolve(null),
+    denied: () => Promise.resolve([]),
+    call: () => 'Done.',
+    owed: () => 'Give it now.',
+    ended: (how: string) => {
+      ends.push(how);
+    },
+  };
+  const settle = (): Promise<void> =>
+    new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+  const record = (id: string, status: SessionRecord['status']): SessionRecord =>
+    ({ id, status }) as SessionRecord;
+  const paused = new SlotSession(host, job);
+  t.after(() => paused.end());
+  assert.equal(await paused.start(), true);
+  paused.turnEnded(record('session-1', 'paused'));
+  await settle();
+  assert.deepEqual(ends, ['exit']);
+  assert.deepEqual(place.ended, ['session-1']);
+  const limited = new SlotSession(host, job);
+  t.after(() => limited.end());
+  assert.equal(await limited.start(), true);
+  limited.turnEnded(record('session-2', 'idle'));
+  await settle();
+  assert.deepEqual(place.sent, ['Give it now.']);
+  // A session of another start says nothing of this one.
+  limited.turnEnded(record('session-1', 'ended'));
+  await settle();
+  assert.deepEqual(ends, ['exit']);
+  limited.turnEnded(record('session-2', 'idle'));
+  await settle();
+  assert.deepEqual(ends, ['exit', 'turns']);
+  const stopped = new SlotSession(host, job);
+  assert.equal(await stopped.start(), true);
+  stopped.end();
+  assert.deepEqual(ends, ['exit', 'turns']);
+  const full = new SlotSession(
+    {
+      ...host,
+      sessions: {
+        ...place.sessions,
+        startAgent: () => Promise.reject(new PoolFullError('Full.')),
+      },
+    },
+    job,
+  );
+  assert.equal(await full.start(), false);
+  const broken = new SlotSession(
+    {
+      ...host,
+      sessions: {
+        ...place.sessions,
+        startAgent: () => Promise.reject(new Error('No harness.')),
+      },
+    },
+    job,
+  );
+  await assert.rejects(broken.start(), /No harness/);
+});
+
+function sessionRecord(
+  id: string,
+  status: SessionRecord['status'],
+  launch: { readonly pid: number | null; readonly processStart: string | null },
+  more: Partial<SessionRecord> = {},
+): SessionRecord {
+  return {
+    schemaVersion: 2,
+    id,
+    host: 'claude',
+    model: null,
+    mode: 'strict',
+    reportedMode: null,
+    nativeSessionId: randomUUID(),
+    status,
+    startedAt: at,
+    endedAt: null,
+    costUsd: null,
+    events: [],
+    commands: [],
+    requests: [],
+    launches: [
+      {
+        id: 'abcd1234',
+        startedAt: at,
+        endedAt: null,
+        ownerId: 'dead-owner',
+        ...launch,
+      },
+    ],
+    ...more,
+  };
+}
+
+const idAt = (seconds: number, suffix: string): string =>
+  `20261101T1000${String(seconds).padStart(2, '0')}000Z-${suffix}`;
+
+await test('short side sessions keep out of the recovery window of agents, and recovery still stops their processes', async (t) => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), 'verifold-window-')),
+  );
+  const folder = join(root, '.verifold', 'sessions');
+  await mkdir(folder, { recursive: true });
+  const save = (record: SessionRecord): Promise<void> =>
+    writeFile(join(folder, `${record.id}.json`), JSON.stringify(record));
+  const side = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  side.unref();
+  t.after(async () => {
+    try {
+      process.kill(-(side.pid ?? 0), 'SIGKILL');
+    } catch {
+      /* It stopped. */
+    }
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
+  });
+  await until(async () => (await processStart(side.pid ?? 0)) !== null);
+  // An agent's long session, older than every short one.
+  const agent = idAt(0, 'aaaaaaaa');
+  await save(
+    sessionRecord(
+      agent,
+      'running',
+      { pid: null, processStart: null },
+      {
+        agent: 'a-1',
+      },
+    ),
+  );
+  // The person's own paused session, as old.
+  const own = idAt(1, 'bbbbbbbb');
+  await save(
+    sessionRecord(
+      own,
+      'paused',
+      { pid: null, processStart: null },
+      {
+        mode: 'ask',
+        events: [{ at, kind: 'you', text: 'Check the page.' }],
+      },
+    ),
+  );
+  // More short sessions than a window holds, each newer than the agent's.
+  for (let index = 0; index < 55; index++)
+    await save(
+      sessionRecord(
+        `20261101T1100${String(index).padStart(2, '0')}000Z-s${String(index).padStart(8, '0')}`,
+        'ended',
+        { pid: null, processStart: null },
+        { mode: 'tools', agent: coordinatorAgent },
+      ),
+    );
+  const running = '20261101T120000000Z-s99999999';
+  await save(
+    sessionRecord(
+      running,
+      'running',
+      {
+        pid: side.pid ?? null,
+        processStart: await processStart(side.pid ?? 0),
+      },
+      { mode: 'tools', agent: coordinatorAgent },
+    ),
+  );
+  assert.deepEqual(
+    (await loadPaused(root)).map((entry) => entry.id),
+    [own],
+  );
+  const result = await reconcileSessions(root, 'new-owner');
+  // Both windows are read: the agent's record and the side session's.
+  assert.equal(result.interrupted, 2);
+  assert.equal(result.stopped, 1);
+  const status = async (id: string): Promise<unknown> =>
+    (
+      JSON.parse(await readFile(join(folder, `${id}.json`), 'utf8')) as {
+        readonly status: unknown;
+      }
+    ).status;
+  assert.equal(await status(agent), 'interrupted');
+  assert.equal(await status(running), 'interrupted');
+  await until(async () => (await processStart(side.pid ?? 0)) === null);
+});
+
 await test('Claude Code spend of the sessions adds up, across sessions', async (t) => {
   const lab = await rig(t);
   const store = lab.store;
@@ -1140,10 +1725,12 @@ interface Started {
 function fakeSlots(limit: number): {
   readonly sessions: LabSessions;
   readonly started: Started[];
+  readonly resumed: { readonly id: string; readonly denyRead: unknown }[];
   readonly idle: Set<string>;
   readonly live: Set<string>;
 } {
   const started: Started[] = [];
+  const resumed: { readonly id: string; readonly denyRead: unknown }[] = [];
   const live = new Set<string>();
   const idle = new Set<string>();
   const sessions: LabSessions = {
@@ -1164,7 +1751,7 @@ function fakeSlots(limit: number): {
         : null,
     idle: (id) => idle.has(id),
     startAgent: (input) => {
-      const id = `20261101T000000000Z-${String(started.length + 1).padStart(8, '0')}${limit}`;
+      const id = `20261101T000000000Z-${String(started.length + 1).padStart(7, '0')}${limit % 10}`;
       started.push({
         id,
         host: input.host,
@@ -1176,7 +1763,8 @@ function fakeSlots(limit: number): {
       live.add(id);
       return Promise.resolve(id);
     },
-    resumeAgent: (id) => {
+    resumeAgent: (id, _tools, _network, denyRead) => {
+      resumed.push({ id, denyRead });
       live.add(id);
       return Promise.resolve();
     },
@@ -1193,15 +1781,15 @@ function fakeSlots(limit: number): {
       idle.delete(id);
     },
   };
-  return { sessions, started, idle, live };
+  return { sessions, started, resumed, idle, live };
 }
 
-async function project(t: TestContext): Promise<string> {
+async function project(t: TestContext, name = 'project'): Promise<string> {
   const base = await realpath(
     await mkdtemp(join(tmpdir(), 'verifold-keeper-')),
   );
   t.after(() => rm(base, { recursive: true, force: true, maxRetries: 5 }));
-  const root = join(base, 'project');
+  const root = join(base, name);
   await mkdir(root);
   git(root, 'init', '--quiet');
   await writeFile(join(root, 'README.md'), '# Project\n');
@@ -1231,6 +1819,8 @@ interface Whole {
   readonly root: string;
   readonly agents: ReturnType<typeof fakeSlots>;
   readonly place: ReturnType<typeof fakeSlots>;
+  /** What each run's sandbox denied. */
+  readonly denied: string[][];
   readonly view: () => LabView;
   readonly call: (
     started: Started | undefined,
@@ -1252,14 +1842,22 @@ const entry = (title: string): Record<string, unknown> => ({
   harness: 'claude',
 });
 
-async function wholeLab(t: TestContext, limit = 1): Promise<Whole> {
-  const root = await project(t);
+async function wholeLab(
+  t: TestContext,
+  limit = 1,
+  name?: string,
+): Promise<Whole> {
+  const root = await project(t, name);
   const agents = fakeSlots(limit);
   const place = fakeSlots(1);
+  const denied: string[][] = [];
   const lab = new Lab(root, {
     sessions: agents.sessions,
     reserved: place.sessions,
-    sandbox: (spec) => ({ file: '/bin/sh', args: ['-c', spec.command] }),
+    sandbox: (spec) => {
+      denied.push([...spec.denied]);
+      return { file: '/bin/sh', args: ['-c', spec.command] };
+    },
     harnesses: () => Promise.resolve(['claude', 'codex']),
     timing: {
       tickMs: 5,
@@ -1280,6 +1878,7 @@ async function wholeLab(t: TestContext, limit = 1): Promise<Whole> {
     root,
     agents,
     place,
+    denied,
     view,
     call: (started, name, input) => {
       assert.ok(started);
@@ -1474,7 +2073,7 @@ await test('the label comes from what agents posted, and a check post says how i
   // The writer said "rerun". The label says what the record holds.
   assert.equal(
     (await whole.wire()).brief?.lines[0]?.evidence,
-    'Code check. No rerun.',
+    'Code check failed. No rerun.',
   );
 });
 
@@ -1513,6 +2112,121 @@ await test('Start over ends the session, and the next run has no brief of the la
   assert.equal(whole.lab.view(), null);
   await startLabOn(whole.root, whole.lab, 'A new question?');
   assert.equal(whole.lab.view()?.brief?.brief, null);
+});
+
+await test('plain words stay out on a resume and in a run, not only on a fresh start', async (t) => {
+  const whole = await wholeLab(t);
+  await until(() => whole.place.started.length > 0);
+  const agent = whole.agents.started[0];
+  assert.ok(agent);
+  const brief = join(whole.root, '.verifold', 'lab', 'brief.json');
+  // A run that starts before the first brief still denies the file.
+  await until(() => readFile(brief, 'utf8').then(Boolean, () => false));
+  const run = await whole.call(agent, 'verifold_run', {
+    command: 'true',
+    why: 'A test of the sandbox.',
+  });
+  assert.equal(run.ok, true, run.text);
+  await until(() => whole.denied.length > 0);
+  assert.ok(whole.denied[0]?.includes(brief), whole.denied[0]?.join('\n'));
+  await whole.lab.pause();
+  await mkdir(join(whole.root, '.verifold', 'sessions'), { recursive: true });
+  await writeFile(
+    join(whole.root, '.verifold', 'sessions', `${agent.id}.json`),
+    JSON.stringify(
+      sessionRecord(
+        agent.id,
+        'paused',
+        { pid: null, processStart: null },
+        {
+          agent: agent.agent,
+          reportedMode: 'default',
+          cwd: whole.view().directions[0]?.direction.workspace.path ?? '',
+        },
+      ),
+    ),
+  );
+  await whole.lab.resume();
+  await until(() => whole.agents.resumed.length > 0);
+  const denied = whole.agents.resumed[0]?.denyRead as readonly string[];
+  assert.ok(denied.includes(brief));
+  assert.ok(denied.includes(join(whole.root, '.verifold', 'sessions')));
+  // A title for the person is plain words too.
+  assert.ok(
+    denied.includes(join(whole.root, '.verifold', 'lab', 'threads.json')),
+  );
+});
+
+await test('a move changes the snapshot, and a title for the person stays out of what agents read', async (t) => {
+  const whole = await wholeLab(t);
+  await until(() => whole.place.started.length > 0);
+  const agent = whole.agents.started[0];
+  const writer = whole.place.started[0];
+  const posted = await whole.call(agent, 'verifold_post', {
+    kind: 'ask',
+    title: 'Which seed comes first in the test?',
+    why: 'It sets the order of the work.',
+    text: 'Which seed comes first?',
+    mentions: ['person'],
+  });
+  const thread = /t-\d+/.exec(posted.text)?.[0] ?? '';
+  const mine = await whole.lab.post({ text: 'A note on the seeds.' });
+  const view = (): LabView => whole.view();
+  const reader = new ApiReader(() => ({
+    root: whole.root,
+    lab: { view },
+    compute: undefined,
+    session: () => null,
+    away: () => Promise.resolve(null),
+    works: [],
+  }));
+  const before = await reader.signal();
+  const moved = await whole.call(writer, 'verifold_thread', {
+    action: 'move',
+    thread,
+    post: mine.id,
+  });
+  assert.equal(moved.ok, true, moved.text);
+  const after = await reader.signal();
+  assert.ok(after.some((part, index) => part !== before[index]));
+  const title = 'Which seed should run first?';
+  const retitled = await whole.call(writer, 'verifold_thread', {
+    action: 'title',
+    thread,
+    title,
+  });
+  assert.equal(retitled.ok, true, retitled.text);
+  const wire = await whole.wire();
+  assert.equal(
+    wire.threads?.find((entry) => entry.id === thread)?.plainTitle,
+    title,
+  );
+  const reads = await Promise.all(
+    ['threads', 'summary'].map((name) =>
+      whole.call(agent, 'verifold_board', { view: name }),
+    ),
+  );
+  for (const read of reads) assert.ok(!read.text.includes(title), read.text);
+  whole.endTurn(writer);
+});
+
+await test('a project path that deny rules cannot express keeps no plain words, and says so once', async (t) => {
+  const whole = await wholeLab(t, 1, 'pro[ject');
+  await until(() => whole.place.started.length > 0);
+  const writer = whole.place.started[0];
+  assert.match(writer?.prompt ?? '', /This lab keeps no plain words/);
+  const notes = whole.view().posts.filter((post) => post.key === 'plain-off');
+  assert.equal(notes.length, 1);
+  // Nothing plain exists, so no deny rule pretends to close it.
+  assert.deepEqual(whole.agents.started[0]?.denyRead, []);
+  const brief = await whole.call(writer, 'verifold_brief', {
+    lines: [{ kind: 'open', posts: ['p-1'] }],
+  });
+  assert.equal(brief.ok, true, brief.text);
+  const line = (await whole.wire()).brief?.lines[0];
+  assert.equal(line?.plain, null);
+  assert.equal(line?.check.state, 'withheld');
+  assert.ok(line?.quote);
 });
 
 await test('the reserved place holds one session, with no built-in tools, in the folder that a session record accepts', async (t) => {
@@ -1571,13 +2285,19 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
         call: () => Promise.resolve({ ok: true, text: '' }),
       },
       toolsOnly: true,
+      side: true,
     });
   const id = await start();
+  assert.match(id, /-s[a-f0-9]{8}$/);
   assert.equal(pool.full, true);
   await assert.rejects(start(), PoolFullError);
   await until(() => ended.some((record) => record.status === 'idle'));
   assert.equal(pool.view(id)?.record.mode, 'tools');
   assert.equal(pool.view(id)?.record.cwd, '.verifold/checks/lab-record');
+  await assert.rejects(
+    pool.takeAgentTerminal(id, 'lease'),
+    /This session has no terminal/,
+  );
   const args = JSON.parse(
     await readFile(join(folder, 'args.json'), 'utf8'),
   ) as string[];

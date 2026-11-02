@@ -51,6 +51,7 @@ function parseCheck(value: unknown): LineCheck {
     'passed',
     'failed',
     'numbers',
+    'withheld',
   ];
   const state = states.find((item) => item === entry?.state);
   // A check that the file does not show never counts as passed.
@@ -78,7 +79,6 @@ function parseLine(value: unknown): BriefLine | null {
     /^l-[1-9]\d{0,6}$/.test(entry.id) &&
     isTime(entry.at) &&
     typeof entry.plain === 'string' &&
-    entry.plain &&
     entry.plain.length <= briefLimits.answer &&
     posts.length &&
     isHarness(entry.writer)
@@ -175,10 +175,11 @@ function parseSpend(value: unknown): Spend | null {
     : null;
 }
 
-/** Where plain words are on disk: this record, and the transcripts of the sessions that wrote them. */
+/** Where plain words are on disk: this record, the threads with their titles for the person, and the transcripts of the sessions that wrote them. */
 export function plainPaths(roots: readonly string[]): readonly string[] {
   return [...new Set(roots)].flatMap((root) => [
     join(root, '.verifold', 'lab', 'brief.json'),
+    join(root, '.verifold', 'lab', 'threads.json'),
     join(root, '.verifold', 'sessions'),
   ]);
 }
@@ -187,6 +188,7 @@ export class BriefStore {
   private record: BriefView = empty;
   /** The highest number of a line, a notice, and a question. */
   private last = 0;
+  private touched = false;
   private readonly path: string;
   private readonly file: RecordFile;
 
@@ -201,6 +203,7 @@ export class BriefStore {
   /** Read the records. `on`: a lab with threads. Any other lab holds none. */
   async load(on: boolean): Promise<void> {
     const saved = on ? await readObject(this.path) : null;
+    this.touched = false;
     const list = (value: unknown, limit: number): readonly unknown[] =>
       (Array.isArray(value) ? value : []).slice(-limit);
     const spend = parseSpend(saved?.spend);
@@ -232,6 +235,13 @@ export class BriefStore {
     return this.file.flush();
   }
 
+  /** Write the file once, so a run that starts before the first brief can deny it. */
+  async touch(): Promise<void> {
+    if (this.touched) return;
+    this.touched = true;
+    await this.file.save().catch(() => {});
+  }
+
   /** What the store holds. The same object until something changes. */
   view(): BriefView {
     return this.record;
@@ -242,7 +252,7 @@ export class BriefStore {
     void this.file.save().catch(() => {});
   }
 
-  /** A line with a new ID. `stray`: the numbers that its posts do not hold. */
+  /** A line with a new ID. `stray`: the numbers that its posts do not hold. A line with no plain words is withheld, and gets no check. */
   line(
     fields: Pick<BriefLine, 'kind' | 'plain' | 'writer'>,
     posts: readonly Pick<Post, 'id' | 'at'>[],
@@ -259,7 +269,11 @@ export class BriefStore {
           .at(-1) ?? new Date().toISOString(),
       posts: posts.map((post) => post.id),
       check: {
-        state: stray.length ? 'numbers' : 'pending',
+        state: !fields.plain
+          ? 'withheld'
+          : stray.length
+            ? 'numbers'
+            : 'pending',
         by: null,
         sameHarness: false,
         problems: stray,
@@ -270,6 +284,12 @@ export class BriefStore {
   /** A new brief replaces the last one. */
   setBrief(brief: BriefRecord): void {
     this.change({ brief });
+  }
+
+  /** The session's own change of the state: the brief covers it. */
+  rekey(before: string, after: string): void {
+    const { brief } = this.record;
+    if (brief?.key === before) this.change({ brief: { ...brief, key: after } });
   }
 
   /** The lines that wait for a check: those of the brief, then the answers. */
