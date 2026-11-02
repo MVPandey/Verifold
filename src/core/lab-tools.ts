@@ -971,11 +971,11 @@ export const labCoordinatorToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_thread',
     description:
-      "Keep a thread. title: give the thread a clearer title. A title names a subject or a question, and it states no result. move: move a post to another thread. The person's posts in the plan thread go where they belong. The post keeps its ID, so its links keep working. close: end a thread. Name the post that holds its outcome, unless the thread has a decision or an answer. Verifold quotes that post. An open objection, a wait, an open proposal, or a long shot keeps a thread open.",
+      "Keep a thread. title: give the person a clearer title. Agents keep reading the thread's own title. A title names a subject or a question, states no result, and ends once the thread has an outcome. move: move a post to another thread. The post keeps its ID, so its links keep working. A plan, a proposal, a post that holds an outcome, and a post with an open objection or ask stay. file: open a thread for one of the person's posts in the plan thread, when no thread fits. Agents read the person's own words as its title. Give title for the person. close: end a thread. Name the post that holds its outcome. A thread with a decision or an answer keeps its outcome, so name no post then. Verifold quotes that post. An open objection, a wait, an open proposal, or a long shot keeps a thread open.",
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['title', 'move', 'close'] },
+        action: { type: 'string', enum: ['title', 'move', 'file', 'close'] },
         thread: {
           ...threadIdSchema,
           description:
@@ -984,10 +984,11 @@ export const labCoordinatorToolSpecs: readonly AgentTool[] = [
         title: { type: 'string', maxLength: threadLimits.title },
         post: {
           ...postId,
-          description: 'move: the post. close: the post with the outcome.',
+          description:
+            'move and file: the post. close: the post with the outcome.',
         },
       },
-      required: ['action', 'thread'],
+      required: ['action'],
       additionalProperties: false,
     },
   },
@@ -1005,10 +1006,15 @@ export const labCoordinatorToolSpecs: readonly AgentTool[] = [
             type: 'object',
             properties: {
               kind: { type: 'string', enum: briefKinds },
-              plain: { type: 'string', maxLength: briefLimits.plain },
+              plain: {
+                type: 'string',
+                maxLength: briefLimits.plain,
+                description:
+                  'Leave it out only when the prompt says that this lab keeps no plain words.',
+              },
               posts: citedPosts,
             },
-            required: ['kind', 'plain', 'posts'],
+            required: ['kind', 'posts'],
             additionalProperties: false,
           },
         },
@@ -1019,7 +1025,7 @@ export const labCoordinatorToolSpecs: readonly AgentTool[] = [
   },
   {
     name: 'verifold_notice',
-    description: `Tell agents what the record shows, in their next turn. It wakes no one. You give a kind and posts, and Verifold writes the words. overlap: two or more posts of different agents may cover the same work. missing-answer: an ask or an objection has no answer yet. no-search: a post has a new idea with no search before it. A lab sends at most ${briefLimits.noticesPerHour} notices in an hour.`,
+    description: `Tell agents what the record shows, in their next turn. It wakes no one. You give a kind and posts, and Verifold writes the words. overlap: two or more posts of different agents may cover the same work. missing-answer: an ask or an objection has no answer yet. no-search: a post shows "No search yet". A notice states the record and suggests no work. A lab sends at most ${briefLimits.noticesPerHour} notices in an hour.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1038,10 +1044,15 @@ export const labCoordinatorToolSpecs: readonly AgentTool[] = [
       type: 'object',
       properties: {
         question: { type: 'string', pattern: '^q-[1-9][0-9]{0,5}$' },
-        plain: { type: 'string', maxLength: briefLimits.answer },
+        plain: {
+          type: 'string',
+          maxLength: briefLimits.answer,
+          description:
+            'Leave it out only when the prompt says that this lab keeps no plain words.',
+        },
         posts: citedPosts,
       },
-      required: ['question', 'plain', 'posts'],
+      required: ['question', 'posts'],
       additionalProperties: false,
     },
   },

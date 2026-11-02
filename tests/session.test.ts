@@ -1859,6 +1859,57 @@ await test('a task with domains opens only those to its shell commands', async (
   });
 });
 
+await test('a tools-only lab session on Codex has no shell, no image tool, no web search, and a read-only profile', async () => {
+  await project(async (root, _executables, create) => {
+    const folder = join(root, '.verifold', 'checks', 'lab-record');
+    await mkdir(folder, { recursive: true });
+    const session = create();
+    await session.startAgent({
+      host: 'codex',
+      model: 'fake-model',
+      prompt: 'Keep the record.',
+      cwd: folder,
+      agent: 'a-9999',
+      tools: { specs: [], call: () => Promise.resolve({ ok: true, text: '' }) },
+      denyRead: ['/closed'],
+      toolsOnly: true,
+    });
+    let start = '';
+    for (let tries = 0; tries < 250 && !start; tries++) {
+      start =
+        (await readFile(join(folder, 'rpc.jsonl'), 'utf8').catch(() => ''))
+          .split('\n')
+          .find((line) => line.includes('"thread/start"')) ?? '';
+      if (!start) await delay(20);
+    }
+    const options = JSON.parse(
+      await readFile(join(folder, 'codex-args.json'), 'utf8'),
+    ) as string[];
+    for (const option of [
+      'features.shell_tool=false',
+      'features.unified_exec=false',
+      'features.view_image=false',
+      'web_search="disabled"',
+    ])
+      assert.ok(options.includes(option), option);
+    const profile = (
+      JSON.parse(start) as {
+        params: {
+          config: {
+            permissions: Record<
+              string,
+              { extends: string; filesystem: Record<string, string> }
+            >;
+          };
+        };
+      }
+    ).params.config.permissions['verifold-tools'];
+    assert.equal(profile?.extends, ':read-only');
+    assert.equal(profile?.filesystem['/closed'], 'deny');
+    await session.close();
+  });
+});
+
 await test("every session of a manager cannot read the paths that it closes, such as an isolated project's own settings", async () => {
   await project(async (root, _executables, create) => {
     const own = join(root, '.verifold', 'agency');

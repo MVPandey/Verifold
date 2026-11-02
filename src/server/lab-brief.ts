@@ -9,6 +9,7 @@ import {
   briefTop,
   evidenceLabel,
   evidencePosts,
+  plainNumbersMatch,
   quoteOf,
 } from '../core/lab/brief.ts';
 import type { BriefLine as StoredLine, LabView } from '../core/lab/schema.ts';
@@ -27,7 +28,12 @@ function lineItem(
   posts: ReadonlyMap<string, BoardPost>,
 ): BriefLine {
   const cited = line.posts.flatMap((id) => posts.get(id) ?? []);
-  const { state, by, sameHarness } = line.check;
+  const { by, sameHarness } = line.check;
+  // The file can change after a check, so the numbers are tested again on the way out.
+  const state =
+    line.check.state === 'passed' && !plainNumbersMatch(line.plain, cited)
+      ? 'numbers'
+      : line.check.state;
   return {
     kind: line.kind,
     at: line.at,
@@ -40,12 +46,13 @@ function lineItem(
 }
 
 /**
- * The fields of a lab's snapshot. `keep` cuts a list to its level. A lab from
- * before threads has none.
+ * The fields of a lab's snapshot. `keep` cuts a list to its level, from its
+ * start or, with `newest`, from its end. A brief's first lines come first, so
+ * a smaller snapshot keeps them. A lab from before threads has none.
  */
 export function briefItems(
   view: LabView,
-  keep: <T>(list: readonly T[], name: LabList) => T[],
+  keep: <T>(list: readonly T[], name: LabList, newest: boolean) => T[],
 ): {
   readonly brief: Brief | null;
   readonly notices: readonly Notice[];
@@ -62,18 +69,18 @@ export function briefItems(
         calls: view.state.calls,
         runs: view.ledger,
       }),
-      lines: keep(stored.brief?.lines ?? [], 'briefLines').map((line) =>
+      lines: keep(stored.brief?.lines ?? [], 'briefLines', false).map((line) =>
         lineItem(line, view, posts),
       ),
     },
-    notices: keep(stored.notices, 'notices').map((notice) => ({
+    notices: keep(stored.notices, 'notices', true).map((notice) => ({
       id: notice.id,
       at: notice.at,
       kind: notice.kind,
       posts: [...notice.posts],
       to: [...notice.to],
     })),
-    questions: keep(stored.questions, 'questions').map((question) => ({
+    questions: keep(stored.questions, 'questions', true).map((question) => ({
       id: question.id,
       at: question.at,
       text: question.text,

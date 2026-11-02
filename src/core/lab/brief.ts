@@ -130,39 +130,77 @@ const names =
 
 const clock = /(?<![\d:])(\d{1,2}):(\d{2})(?![\d:])/g;
 
-const amount = String.raw`(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d*\.?\d+)(?:e[-+]?\d+)?`;
+const amount = String.raw`(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d*\.?\d+)(?:[eE][-+]?\d+)?(?:[kKM](?![\p{L}\d])|\s+(?:thousand|million)\b)?`;
 
-const amountOnly = new RegExp(amount, 'gi');
+const separator = String.raw`(?:\s*[-–—/]\s*|\s+to\s+)`;
 
-/** Amounts that a range or a list joins, as in 40/55/60% or 20 to 30%, so a percent sign reaches each. */
+const percent = String.raw`\s*(?:%|[Pp]ercent\b|[Pp]er cent\b)`;
+
+/** Amounts that a range or a list joins, as in 40/55/60% or 20 to 30%, so a percent sign reaches each. A hyphen after a word or a digit is no sign. */
 const amounts = new RegExp(
-  String.raw`(?<![\p{L}\d.])${amount}(?:(?:\s*[-–—/]\s*|\s+to\s+)${amount})*(\s*(?:%|percent\b|per cent\b))?`,
-  'giu',
+  String.raw`(?:(?<![\p{L}\d.)\]])[-−])?(?<![\p{L}\d.])${amount}(?:${separator}[-−]?${amount})*(${percent})?`,
+  'gu',
 );
 
-/** Numbers that a line can spell out. "One" stays out: "no one" and "one of them" count nothing. */
+/** One amount of a list, with its sign. */
+const amountPart = new RegExp(
+  String.raw`(?:^|${separator})([-−]?)(${amount})`,
+  'gu',
+);
+
+/** Numbers that a line can spell out. */
 const spelled: ReadonlyMap<string, number> = new Map([
-  ...smallNumbers.slice(2).map((word, index) => [word, index + 2] as const),
-  ...[30, 40, 50, 60, 70, 80, 90].map(
-    (value) =>
-      [
-        ['thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'][
-          value / 10 - 3
-        ] ?? '',
-        value,
-      ] as const,
-  ),
+  ...smallNumbers.map((word, index) => [word, index] as const),
+  ['thirty', 30],
+  ['forty', 40],
+  ['fifty', 50],
+  ['sixty', 60],
+  ['seventy', 70],
+  ['eighty', 80],
+  ['ninety', 90],
   ['hundred', 100],
   ['thousand', 1000],
   ['million', 1_000_000],
 ]);
 
-const spelledWords = new RegExp(
-  `\\b(?:${[...spelled.keys()].join('|')})\\b`,
+const spelledWord = [...spelled.keys()].join('|');
+
+const spelledNumbers = new RegExp(
+  String.raw`\b(?:${spelledWord})(?:[\s-]+(?:${spelledWord}))*\b(${percent})?`,
   'gi',
 );
 
-/** The numbers of a text: times, then amounts, then spelled numbers. Comma thousands, a decimal's zeros, and a leading zero do not count. */
+/** The value of an amount with its comma thousands and its k or M. */
+function amountValue(sign: string, raw: string): string {
+  const scale = /[kK]$|thousand$/.test(raw)
+    ? 1000
+    : /M$|million$/.test(raw)
+      ? 1_000_000
+      : 1;
+  const value = Number.parseFloat(raw.replaceAll(',', '')) * scale;
+  return String(Number((sign ? -value : value).toPrecision(12)));
+}
+
+/** The value of spelled words, such as "two hundred" or "thirty-five". */
+function spelledValue(words: string): number {
+  let total = 0;
+  let current = 0;
+  for (const word of words.toLowerCase().split(/[\s-]+/)) {
+    const value = spelled.get(word) ?? 0;
+    if (value === 100) current = (current || 1) * 100;
+    else if (value >= 1000) {
+      total += (current || 1) * value;
+      current = 0;
+    } else current += value;
+  }
+  return total + current;
+}
+
+/**
+ * The numbers of a text: times, then amounts, then spelled numbers. Comma
+ * thousands, a decimal's zeros, and a leading zero do not count. A sign counts.
+ * "One" alone stays out: "no one" and "one of them" count nothing.
+ */
 function figures(text: string): readonly Figure[] {
   const bare = text.replace(names, ' ');
   const times = [...bare.matchAll(clock)].map(
@@ -175,18 +213,22 @@ function figures(text: string): readonly Figure[] {
   return [
     ...times,
     ...[...rest.matchAll(amounts)].flatMap((match) =>
-      (match[0].match(amountOnly) ?? []).map(
-        (raw): Figure => ({
-          value: String(Number(raw.replaceAll(',', ''))),
+      [...match[0].matchAll(amountPart)].map(
+        (part): Figure => ({
+          value: amountValue(part[1] ?? '', part[2] ?? ''),
           percent: match[1] !== undefined,
         }),
       ),
     ),
-    ...[...rest.matchAll(spelledWords)].map(
-      (match): Figure => ({
-        value: String(spelled.get(match[0].toLowerCase())),
-        percent: false,
-      }),
+    ...[...rest.matchAll(spelledNumbers)].flatMap((match): readonly Figure[] =>
+      /^one$/i.test(match[0])
+        ? []
+        : [
+            {
+              value: String(spelledValue(match[0])),
+              percent: match[1] !== undefined,
+            },
+          ],
     ),
   ];
 }
@@ -229,7 +271,7 @@ export function plainNumbersMatch(
   return !strayNumbers(plain, posts).length;
 }
 
-/** The posts that a label reads: the cited posts, what they reply to, and the checks, reruns, and objections of any of those. */
+/** The posts that a label reads: the cited posts, what they reply to, and the checks, reruns, objections, and accepting answers of any of those. */
 export function evidencePosts(
   cited: readonly Post[],
   all: readonly Post[],
@@ -242,9 +284,13 @@ export function evidencePosts(
     if (target) kept.set(target.id, target);
   }
   const tests: ReadonlySet<PostKind> = new Set(['check', 'rerun', 'objection']);
-  // Oldest first, so a check of a check follows its target.
+  // Oldest first, so a check of a check follows its target. An answer that accepts an objection ends it.
   for (const post of all)
-    if (tests.has(post.kind) && post.replyTo && kept.has(post.replyTo))
+    if (
+      (tests.has(post.kind) || post.accepts) &&
+      post.replyTo &&
+      kept.has(post.replyTo)
+    )
       kept.set(post.id, post);
   return [...kept.values()].sort((a, b) => number(a.id) - number(b.id));
 }
@@ -257,6 +303,21 @@ const resultKinds: ReadonlySet<PostKind> = new Set([
   'evidence',
 ]);
 
+/** What a label reads of a check. */
+type EvidenceCheck = Pick<
+  Check,
+  | 'state'
+  | 'objections'
+  | 'claim'
+  | 'result'
+  | 'endedAt'
+  | 'method'
+  | 'outcome'
+  | 'sameHarness'
+  | 'queuedAt'
+  | 'blind'
+>;
+
 /** One thing that tested a post. */
 interface Form {
   readonly at: string;
@@ -265,49 +326,44 @@ interface Form {
   readonly rerun: boolean;
 }
 
-const rerunWords = { holds: 'held', fails: 'failed', differs: 'differed' };
+const outcomeWords = { holds: 'held', fails: 'failed', differs: 'differed' };
+
+/** A form with how it ended. */
+const ending = (
+  words: string,
+  outcome: keyof typeof outcomeWords | null | undefined,
+): string => (outcome ? `${words} ${outcomeWords[outcome]}` : words);
 
 /** What a check of Verifold did. A `code-read` is no rerun, whatever it found. */
-function checkForm(
-  check: Pick<
-    Check,
-    'claim' | 'endedAt' | 'method' | 'outcome' | 'sameHarness' | 'queuedAt'
-  >,
-): Form {
+function checkForm(check: EvidenceCheck): Form {
   const rerun = check.method === 'rerun';
   return {
     at: check.endedAt ?? check.queuedAt,
     target: check.claim,
     rerun,
-    words: rerun
-      ? `rerun ${check.sameHarness ? 'on the same harness ' : ''}${check.outcome ? rerunWords[check.outcome] : 'ended'}`
-      : 'code check',
+    words: ending(
+      rerun
+        ? `${check.blind ? '' : 'not-blind '}rerun${check.sameHarness ? ' on the same harness' : ''}`
+        : 'code check',
+      check.outcome,
+    ),
   };
 }
 
-/** What a `check` post did, as its author says. A check with no method is the weakest form. */
+/** What a `check` post did, as its author says. Its author read the lab, so its rerun is not blind. A check with no method is the weakest form. */
 function postForm(post: Post): Form {
   const base = { at: post.at, target: post.replyTo ?? null };
-  switch (post.method) {
-    case 'rerun':
-      return {
-        ...base,
-        rerun: true,
-        words: `rerun ${post.outcome ? rerunWords[post.outcome] : 'ended'}`,
-      };
-    case 'code-read':
-      return { ...base, rerun: false, words: 'code check' };
-    case 'ratings': {
-      const raters = post.raters ?? 1;
-      return {
-        ...base,
-        rerun: false,
-        words: `${numberWord(raters)} AI rating${raters > 1 ? 's' : ''} per answer`,
-      };
-    }
-    default:
-      return { ...base, rerun: false, words: 'an agent check' };
-  }
+  const raters = post.raters ?? 1;
+  const words = {
+    rerun: 'not-blind rerun',
+    'code-read': 'code check',
+    ratings: `${numberWord(raters)} AI rating${raters > 1 ? 's' : ''} per answer`,
+  }[post.method ?? 'rerun'];
+  return {
+    ...base,
+    rerun: post.method === 'rerun',
+    words: ending(post.method ? words : 'an agent check', post.outcome),
+  };
 }
 
 /** Who wrote the posts of a line that nothing tested. */
@@ -319,34 +375,26 @@ function noCheckYet(subjects: readonly Post[]): string {
     return "Verifold's own record.";
   authors.delete('person');
   authors.delete('verifold');
+  if (!authors.size) return "Your own words and Verifold's record.";
   const results = subjects.every((post) => resultKinds.has(post.kind));
   const noun = `${results ? 'result' : 'post'}${subjects.length > 1 ? 's' : ''}`;
   return `${capitalized(numberWord(authors.size))} agent${authors.size > 1 ? "s'" : "'s"} ${noun}. No check yet.`;
 }
 
 /**
- * How strong the record behind a line is, in the true weakest form: "One
- * agent's result. No check yet." or "Code check, then two AI ratings per
- * answer. No rerun." It reads records only, never the words of the line, so
+ * How strong the record behind a line is, in the true weakest form across its
+ * results: "One agent's result. No check yet.", "Code check failed, then two AI
+ * ratings per answer failed. No rerun.", or "Rerun held on 1 of 2 results. No
+ * rerun on the other." It reads records only, never the words of the line, so
  * no writer can raise it. `posts`: what `evidencePosts` gives. `checks`: the
  * lab's checks. A `code-read` is no rerun, a check that did not end counts for
- * nothing, and a result with no test says so also when another result passed.
+ * nothing, and a rerun that was not blind says so.
  */
 export function evidenceLabel(
   posts: readonly Post[],
-  checks: readonly Pick<
-    Check,
-    | 'state'
-    | 'objections'
-    | 'claim'
-    | 'result'
-    | 'endedAt'
-    | 'method'
-    | 'outcome'
-    | 'sameHarness'
-    | 'queuedAt'
-  >[],
+  checks: readonly EvidenceCheck[],
 ): string {
+  if (!posts.length) return 'No cited post is on the board.';
   const ids = new Set(posts.map((post) => post.id));
   const forms = [
     ...checks
@@ -359,7 +407,6 @@ export function evidenceLabel(
       .map(checkForm),
     ...posts.filter((post) => post.kind === 'check').map(postForm),
   ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-  if (!posts.length) return 'No cited post is on the board.';
   const results = posts.filter((post) => resultKinds.has(post.kind));
   const disputed = [...openObjections(posts, checks).keys()].some((id) =>
     ids.has(id),
@@ -367,15 +414,23 @@ export function evidenceLabel(
   const open = disputed ? ' Disputed.' : '';
   if (!forms.length)
     return `${noCheckYet(results.length ? results : posts)}${open}`;
-  const tested = new Set(forms.map((form) => form.target));
-  const left = results.filter((post) => !tested.has(post.id)).length;
-  const words = [...new Set(forms.map((form) => form.words))].join(', then ');
+  const joined = (list: readonly Form[]): string =>
+    capitalized([...new Set(list.map((form) => form.words))].join(', then '));
+  const reruns = forms.filter((form) => form.rerun);
+  const rerun = results.filter((post) =>
+    reruns.some((form) => form.target === post.id),
+  );
+  const others = results.length - rerun.length;
+  if (rerun.length && others)
+    return `${joined(reruns)} on ${rerun.length} of ${results.length} results. No rerun on the other${others > 1 ? ` ${others}` : ''}.${open}`;
+  const left = results.filter(
+    (post) => !forms.some((form) => form.target === post.id),
+  ).length;
   const part = left
     ? ` on ${results.length - left} of ${results.length} results`
     : '';
   const rest = left
     ? ` ${left} ${left > 1 ? 'have' : 'has'} no check yet.`
     : '';
-  const rerun = forms.some((form) => form.rerun) ? '' : ' No rerun.';
-  return `${capitalized(words)}${part}.${rest}${rerun}${open}`;
+  return `${joined(forms)}${part}.${rest}${reruns.length ? '' : ' No rerun.'}${open}`;
 }
