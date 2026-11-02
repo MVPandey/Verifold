@@ -54,6 +54,11 @@ export interface View {
   readonly setMode: (mode: ViewMode) => void;
 }
 
+/** The page shows IDs in Verifold's own text: an old lab as it did, and a lab with threads in Technical. */
+export function showsIds(view: Pick<View, 'mode' | 'threaded'>): boolean {
+  return !view.threaded || view.mode === 'technical';
+}
+
 /** A page outside the app, as in a test, reads as an old lab. */
 export const ViewContext = createContext<View>({
   mode: 'simple',

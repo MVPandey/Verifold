@@ -2,11 +2,13 @@ import type {
   Lab,
   Post,
   StoryLine,
+  TakingPart,
   Thread,
   ThreadPage,
 } from '../protocol/api.ts';
 import { agentsWord, type Chip } from './agent-rows.ts';
-import { clock, roleName } from './format.ts';
+import { lineText } from './brief-view.ts';
+import { roleName, shortTime } from './format.ts';
 import type { ViewMode } from './view-mode.ts';
 
 /** The title that a view shows. The Coordinator's plain title is for the person, and Technical shows the agents' own. */
@@ -71,6 +73,20 @@ export function openThreads(
   );
 }
 
+const counted = (count: number, word: string): string =>
+  `${count} ${word}${count === 1 ? '' : 's'}`;
+
+/** "6 posts": a thread's posts. */
+export function postCount(thread: Pick<Thread, 'posts'>): string {
+  return counted(thread.posts ?? 0, 'post');
+}
+
+/** "All 14 threads": the threads of a lab, also those that the snapshot leaves out. */
+export function allThreads(lab: Pick<Lab, 'threads' | 'omitted'>): string {
+  const total = (lab.threads?.length ?? 0) + (lab.omitted.threads ?? 0);
+  return `All ${counted(total, 'thread')}`;
+}
+
 const outcomeWords: Readonly<Record<Thread['state'], string>> = {
   open: 'Outcome',
   decided: 'Decision',
@@ -78,71 +94,177 @@ const outcomeWords: Readonly<Record<Thread['state'], string>> = {
   closed: 'Outcome',
 };
 
-/** Who took part in a thread: "Agents 1, 2 and 3, after your request". The posts name them, and a thread that the person opened says so. */
-function takingPart(posts: readonly Post[]): string {
-  const agents = [...new Set(posts.flatMap((post) => post.handle ?? []))].sort(
-    (a, b) => a.localeCompare(b, 'en', { numeric: true }),
-  );
-  const asked = posts[0]?.author === 'person';
-  if (!agents.length) return asked ? 'You' : 'Verifold';
-  return `${agentsWord(agents)}${asked ? ', after your request' : ''}`;
+/** Who took part: "Agents 1, 2 and 3, after your request". */
+function takingPartWords(part: TakingPart | undefined): string {
+  if (!part?.handles.length) return part?.byPerson ? 'You' : 'Verifold';
+  return `${agentsWord(part.handles)}${part.byPerson ? ', after your request' : ''}`;
 }
 
-/** The label of an outcome: what it is, when, and who took part. Null with no outcome. `posts`: the thread's, oldest first. */
+/** The label of an outcome: what it is, when, and who took part, from the server's record of the whole thread. Null with no outcome. */
 export function outcomeLabel(
   thread: Thread,
-  posts: readonly Post[],
+  part: TakingPart | undefined,
+  now: number,
 ): string | null {
   const { outcome } = thread;
   return outcome
-    ? `${outcomeWords[thread.state]} · ${clock(outcome.at)} · ${takingPart(posts)}`
+    ? `${outcomeWords[thread.state]} · ${shortTime(outcome.at, now)} · ${takingPartWords(part)}`
     : null;
 }
 
-/** What a page tells of a story: its steps, its outcome lines, its later lines, and the posts that came after it. */
-export interface StoryParts {
-  readonly steps: readonly StoryLine[];
+/** A later fact under an outcome, as one short item. */
+export interface LaterItem {
+  readonly key: string;
+  /** A plain line of the story, with its way to its quote. */
+  readonly line: StoryLine | null;
+  /** Who wrote it and when. Null: a plain line, or a quote of a line. */
+  readonly who: string | null;
+  readonly text: string;
+  /** Its post, for its link in the Technical view. */
+  readonly post: string | null;
+}
+
+/** What a thread's page shows in a view. */
+export interface ThreadLayout {
+  /** Simple's story. Null: the page shows posts. */
+  readonly steps: readonly StoryLine[] | null;
+  /** The plain lines of the outcome. Empty: the outcome shows its quote. */
   readonly outcome: readonly StoryLine[];
-  readonly later: readonly StoryLine[];
-  readonly newer: readonly Post[];
+  /** The outcome's quote. An ID follows it only in Technical. */
+  readonly outcomeQuote: string | null;
+  readonly later: readonly LaterItem[];
+  /** One line above the story: it tells an earlier outcome. Null: it does not. */
+  readonly stale: string | null;
+  /** One line above the posts, or null. */
+  readonly note: string | null;
+  readonly posts: readonly Post[];
+  /** One line at the end, or null. */
+  readonly foot: string | null;
 }
 
-const number = (id: string): number => Number(id.slice(2));
-
-export function storyParts(page: ThreadPage): StoryParts {
-  const { story, posts } = page;
-  const lines = story?.lines ?? [];
-  const through = story ? number(story.through) : Infinity;
-  return {
-    steps: lines.filter((line) => line.kind === 'step'),
-    outcome: lines.filter((line) => line.kind === 'outcome'),
-    later: lines.filter((line) => line.kind === 'later'),
-    newer: posts.filter((post) => number(post.id) > through),
-  };
-}
-
-/** The later facts that the record shows and no story line cites. */
-export function laterFromRecord(page: ThreadPage): readonly Post[] {
-  const told = new Set(
-    (page.story?.lines ?? [])
-      .filter((line) => line.kind === 'later')
-      .flatMap((line) => line.posts),
+/** A story tells the outcome that the thread has now. */
+function storyIsCurrent(page: ThreadPage): boolean {
+  return (
+    !page.story || page.story.outcome === (page.thread.outcome?.post ?? null)
   );
-  return (page.later ?? []).filter((post) => !told.has(post.id));
 }
 
-/** A later post in words: who, when, and what it says. */
-export function laterLine(post: Post): string {
-  return `${post.handle ? roleName(post.handle) : post.author === 'person' ? 'You' : 'Verifold'}, ${clock(post.at)}: ${post.text}`;
+/** The posts of `posts` that the story's session did not read: newer posts, and posts that moved in. */
+function outsideStory(
+  page: ThreadPage,
+  posts: readonly Post[],
+): readonly Post[] {
+  const covered = new Set(page.story?.posts);
+  return posts.filter((post) => !covered.has(post.id));
 }
 
-/** The person asks for a story of an open page that Simple shows with none, or with newer posts past it. */
-export function wantsStory(page: ThreadPage, mode: ViewMode): boolean {
-  if (mode !== 'simple' || !page.posts.length) return false;
-  return !page.story || storyParts(page).newer.length > 0;
+function laterItems(
+  page: ThreadPage,
+  mode: ViewMode,
+  now: number,
+): readonly LaterItem[] {
+  const lines = storyIsCurrent(page)
+    ? (page.story?.lines ?? []).filter((line) => line.kind === 'later')
+    : [];
+  const told = new Set(lines.flatMap((line) => line.posts));
+  return [
+    ...lines.flatMap((line, index): readonly LaterItem[] =>
+      mode === 'simple'
+        ? [
+            {
+              key: `line-${index}`,
+              line,
+              who: null,
+              text: lineText(line, mode, false),
+              post: null,
+            },
+          ]
+        : line.quotes.map(({ post, text }) => ({
+            key: `line-${index}-${post}`,
+            line: null,
+            who: null,
+            text,
+            post,
+          })),
+    ),
+    ...(page.later ?? [])
+      .filter((post) => !told.has(post.id))
+      .map((post) => ({
+        key: post.id,
+        line: null,
+        who: `${post.handle ? roleName(post.handle) : post.author === 'person' ? 'You' : 'Verifold'}, ${shortTime(post.at, now)}`,
+        text: post.text,
+        post: mode === 'technical' ? post.id : null,
+      })),
+  ];
 }
 
 /** Simple shows the agents' posts. Verifold's own lines carry IDs and say what the outcome and the record say. */
-export function simplePosts(posts: readonly Post[]): readonly Post[] {
+function simplePosts(posts: readonly Post[]): readonly Post[] {
   return posts.filter((post) => post.author !== 'verifold');
+}
+
+function outsideNote(left: number): string | null {
+  if (!left) return null;
+  return left === 1
+    ? '1 post is not in this story. It follows.'
+    : `${left} posts are not in this story. They follow.`;
+}
+
+/**
+ * What a thread's page shows. Simple tells the story, unless the thread has
+ * none yet, and Technical shows the real posts. A story that tells an earlier
+ * outcome stays, but the current outcome's quote stands above it, and both
+ * views leave out its later lines. `posts`: each post that the page read.
+ */
+export function threadLayout(
+  page: ThreadPage,
+  posts: readonly Post[],
+  mode: ViewMode,
+  now: number,
+): ThreadLayout {
+  const { thread, story } = page;
+  const told = mode === 'simple' && story ? story : null;
+  const current = storyIsCurrent(page);
+  const lines = current
+    ? (told?.lines.filter((line) => line.kind === 'outcome') ?? [])
+    : [];
+  const left = told ? simplePosts(outsideStory(page, posts)) : [];
+  const count = thread.posts ?? posts.length;
+  return {
+    steps: told?.lines.filter((line) => line.kind === 'step') ?? null,
+    outcome: lines,
+    outcomeQuote: thread.outcome
+      ? mode === 'technical'
+        ? `${thread.outcome.text} (${thread.outcome.post})`
+        : thread.outcome.text
+      : null,
+    later: laterItems(page, mode, now),
+    stale:
+      told && !current
+        ? "This story is out of date: the thread's outcome changed."
+        : null,
+    note: told
+      ? outsideNote(left.length)
+      : mode === 'simple'
+        ? 'The story of this thread is not ready yet. Here are its posts.'
+        : null,
+    posts: told ? left : mode === 'simple' ? simplePosts(posts) : posts,
+    foot:
+      told && count
+        ? `The thread has ${counted(count, 'post')}. Technical shows ${count === 1 ? 'it' : 'each one'}.`
+        : !posts.length
+          ? 'This thread has no posts yet.'
+          : null,
+  };
+}
+
+/** The person asks for a story of an open page that Simple shows with none, with an earlier outcome, or with posts outside it. The server decides whether one is due. */
+export function wantsStory(page: ThreadPage, mode: ViewMode): boolean {
+  if (mode !== 'simple' || !page.posts.length) return false;
+  return (
+    !page.story ||
+    !storyIsCurrent(page) ||
+    outsideStory(page, page.posts).length > 0
+  );
 }

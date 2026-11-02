@@ -1818,10 +1818,15 @@ export class Lab {
     readonly kind?: unknown;
     readonly direction?: unknown;
     readonly replyTo?: unknown;
+    readonly thread?: unknown;
   }): Promise<Post> {
     return this.serial(async () => {
       this.current();
       const body = text(input.text, boardLimits.personText, 'your post');
+      const thread =
+        input.thread === undefined || !this.threaded
+          ? undefined
+          : (this.threads.get(input.thread) ?? fail('This thread is gone.'));
       const kind: PostKind =
         input.kind === undefined || input.kind === null || input.kind === ''
           ? 'question'
@@ -1860,6 +1865,7 @@ export class Lab {
         kind,
         ...(direction ? { direction } : {}),
         ...(replyTo ? { replyTo } : {}),
+        ...(thread ? { thread: thread.id } : {}),
         text: body,
         mentions,
         artifacts: [],

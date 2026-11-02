@@ -172,9 +172,13 @@ export const longShotLimits = {
  * at once", in one place of their own, so these bounds hold at any lab size.
  */
 export const briefLimits = {
-  /** Sessions in one hour of the lab's clock. */
+  /**
+   * Sessions in one hour of the lab's clock: at most 20, with the questions.
+   * Stories have their own budget, so they never use an update of the brief.
+   */
   updatesPerHour: 4,
   checksPerHour: 6,
+  storiesPerHour: 4,
   /** Questions of the person, which can each start a session. */
   questionsPerHour: 6,
   /** Turns and minutes of one session. */
@@ -190,7 +194,7 @@ export const briefLimits = {
   /** Lines of one brief or story, and posts that one line cites. */
   lines: 12,
   linePosts: 6,
-  /** Stories that a lab keeps, one session writes, and posts of each that its prompt holds. */
+  /** Stories that a lab keeps, threads that one session tells, and posts of each that its prompt holds. */
   stories: 500,
   storiesPerSession: 2,
   storyPosts: 40,
@@ -1201,7 +1205,7 @@ const factsSchema = {
 /** A call for the person: cost, scope, access, or go, with options, a pick, and an undo window. */
 export const askPersonToolSpec: AgentTool = {
   name: 'verifold_ask_person',
-  description: `Ask the person for a call that only they make: cost (money, such as a GPU pod or more lab hours), scope (open or stop a direction, or, before the plan of record, a choice that changes the plan), access (network for your shell, or GPU pods), or go (more time for the lab). Never ask the person to settle a technical question: post an objection on the board, and a check settles it. Give 2 to 4 options, each with its dollars and minutes when you know them, and an effect that Verifold applies when the person picks it. pod goes with cost, podsAtOnce with cost, hours with cost or go, direction with scope, and domains with access. An option without an effect changes no setting: the person's pick only tells you their choice, and Verifold says so to the person. When an option promises a change, give it the effect that makes the change. A scope call before the plan has no effects: the plan opens the directions. pick is the option that you advise, and why says why. facts lists the facts behind the call that change over time, each with its source and the source's date. The person's answer applies at once, and they can undo it within undoMinutes (default 10). The person can also answer in their own words instead of an option: then no option applies, and their words are the decision. When another agent's open call asks for the same thing (the same kind and need, or the same effects), your call joins it, and its answer reaches you too. Verifold wakes you with the answer. At most ${callLimits.open} calls wait for the person at once.`,
+  description: `Write the call for the person, in plain words, with no internal IDs: the person decides on your exact words. Ask the person for a call that only they make: cost (money, such as a GPU pod or more lab hours), scope (open or stop a direction, or, before the plan of record, a choice that changes the plan), access (network for your shell, or GPU pods), or go (more time for the lab). Never ask the person to settle a technical question: post an objection on the board, and a check settles it. Give 2 to 4 options, each with its dollars and minutes when you know them, and an effect that Verifold applies when the person picks it. pod goes with cost, podsAtOnce with cost, hours with cost or go, direction with scope, and domains with access. An option without an effect changes no setting: the person's pick only tells you their choice, and Verifold says so to the person. When an option promises a change, give it the effect that makes the change. A scope call before the plan has no effects: the plan opens the directions. pick is the option that you advise, and why says why. facts lists the facts behind the call that change over time, each with its source and the source's date. The person's answer applies at once, and they can undo it within undoMinutes (default 10). The person can also answer in their own words instead of an option: then no option applies, and their words are the decision. When another agent's open call asks for the same thing (the same kind and need, or the same effects), your call joins it, and its answer reaches you too. Verifold wakes you with the answer. At most ${callLimits.open} calls wait for the person at once.`,
   inputSchema: {
     type: 'object',
     properties: {

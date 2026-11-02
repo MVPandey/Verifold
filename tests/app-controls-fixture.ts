@@ -18,5 +18,6 @@ export const controls: LabControls = {
   board: unread,
   threadPage: unread,
   askStory: ok,
+  writeThread: ok,
   figure: unread,
 };

@@ -2,9 +2,9 @@ import type { ReactNode } from 'react';
 import type { Lab, Post, PostKind, Proof } from '../../protocol/api.ts';
 import { checkWords } from '../answer.ts';
 import { outcomeWord, recountWords, type Thread } from '../board.ts';
-import { authorOf, clock, roleName } from '../format.ts';
+import { authorOf, roleName, shortTime } from '../format.ts';
 import { href } from '../route.ts';
-import { useView } from '../view-mode.ts';
+import { showsIds, useView } from '../view-mode.ts';
 import { Avatar, PostAuthor, type Who } from './Avatar.tsx';
 import { IdText } from './IdText.tsx';
 import { PlanCard } from './PlanCard.tsx';
@@ -69,8 +69,7 @@ export function proofHref(
 
 /** A post's proof, as chips that lead to it. */
 function ProofLinks({ post }: { readonly post: Post }): ReactNode {
-  const { mode, threaded } = useView();
-  const ids = !threaded || mode === 'technical';
+  const ids = showsIds(useView());
   return (
     <>
       {post.proof.map((proof, index) => {
@@ -169,7 +168,7 @@ export function PostLines({
             {post.outcome && `: ${outcomeWord(post.outcome)}`}
           </span>
         )}
-        {threaded && <span className="post__time">{clock(post.at)}</span>}
+        {threaded && <span className="post__time">{shortTime(post.at)}</span>}
         {post.alien && (
           <span className="chip chip--proposal">
             {!threaded
@@ -251,7 +250,7 @@ export function BoardThread({
               <Avatar who={who(reply)} size="xs" />
               <span>
                 <span className="ack__name">{authorOf(reply)}</span>
-                {threaded && ` · ${clock(reply.at)}`}
+                {threaded && ` · ${shortTime(reply.at)}`}
                 {' · '}
                 <IdText text={reply.text} />
                 <ProofLinks post={reply} />

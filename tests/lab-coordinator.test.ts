@@ -1509,7 +1509,9 @@ await test('the snapshot keeps the first lines of a brief, tests numbers again, 
       [null, 'withheld'],
     ],
   );
-  assert.equal(brief?.lines[3]?.quote, 'It reached 64.5%. (p-1)');
+  assert.deepEqual(brief?.lines[3]?.quotes, [
+    { post: 'p-1', text: 'It reached 64.5%.' },
+  ]);
 });
 
 await test('a slot session ends on an exit that leaves it paused, on its limits, and with no call back from end', async (t) => {
@@ -1993,10 +1995,9 @@ await test('plain words reach the wire only once they passed, and never an agent
   assert.equal(brief.ok, true, brief.text);
   let wire = await whole.wire();
   assert.equal(wire.brief?.lines[0]?.plain, null);
-  assert.equal(
-    wire.brief?.lines[0]?.quote,
-    `Seed 2 reached 64.5%. Which seed comes next? (${id})`,
-  );
+  assert.deepEqual(wire.brief?.lines[0]?.quotes, [
+    { post: id, text: 'Seed 2 reached 64.5%. Which seed comes next?' },
+  ]);
   assert.equal(
     wire.brief?.lines[0]?.evidence,
     "One agent's post. No check yet.",
@@ -2245,7 +2246,7 @@ await test('a project path that deny rules cannot express keeps no plain words, 
   const line = (await whole.wire()).brief?.lines[0];
   assert.equal(line?.plain, null);
   assert.equal(line?.check.state, 'withheld');
-  assert.ok(line?.quote);
+  assert.ok(line?.quotes.length);
 });
 
 await test('the reserved place holds one session, with no built-in tools, in the folder that a session record accepts', async (t) => {

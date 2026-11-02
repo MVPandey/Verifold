@@ -1980,6 +1980,14 @@ await test('the API needs the token, pushes one snapshot for a burst of changes,
       words.push(['ask', text]);
       return Promise.resolve();
     },
+    wantStory: (thread: unknown) => {
+      words.push(['story', thread]);
+      return Promise.resolve();
+    },
+    post: (input: { thread?: unknown }) => {
+      words.push(['post', input.thread]);
+      return Promise.resolve();
+    },
     drawAgain: () => {
       words.push(['draw']);
       return Promise.resolve();
@@ -2157,11 +2165,18 @@ await test('the API needs the token, pushes one snapshot for a burst of changes,
   assert.equal((await action('lab-skip-questions', {})).status, 200);
   assert.equal((await action('lab-draw', {})).status, 200);
   assert.equal((await action('lab-ask', { text: 'Why?' })).status, 200);
+  assert.equal((await action('lab-story', { thread: 't-2' })).status, 200);
+  assert.equal(
+    (await action('lab-post', { text: 'Hi', thread: 't-2' })).status,
+    200,
+  );
   assert.deepEqual(words.slice(1), [
     ['questions', answers],
     ['skip'],
     ['draw'],
     ['ask', 'Why?'],
+    ['story', 't-2'],
+    ['post', 't-2'],
   ]);
   // A desk with a project takes no project start.
   assert.equal(

@@ -6,7 +6,7 @@ import {
   evidenceLabel,
   evidencePosts,
   plainNumbersMatch,
-  quoteOf,
+  quotesOf,
   stateKey,
   strayNumbers,
   type TopRecords,
@@ -123,13 +123,16 @@ await test('the state key changes with a direction or a thread, and not with any
   assert.notEqual(stateKey(directions, [{ id: 't-1', state: 'decided' }]), key);
 });
 
-await test('a quote holds the cited posts unchanged', () => {
-  assert.equal(
-    quoteOf([
+await test('a quote holds each cited post unchanged, apart from its ID', () => {
+  assert.deepEqual(
+    quotesOf([
       post('p-1', 'seed 0: 55% vs 15%.'),
-      post('p-2', 'It may be noise.'),
+      post('p-2', 'It may be noise (p-1).'),
     ]),
-    'seed 0: 55% vs 15%. (p-1) It may be noise. (p-2)',
+    [
+      { post: 'p-1', text: 'seed 0: 55% vs 15%.' },
+      { post: 'p-2', text: 'It may be noise (p-1).' },
+    ],
   );
 });
 

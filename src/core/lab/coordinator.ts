@@ -59,7 +59,7 @@ import {
   type Question,
 } from './schema.ts';
 import { SlotSession } from './slot-session.ts';
-import { storiesDue } from './thread-story.ts';
+import { storiesDue, storyJob, type StoryJob } from './thread-story.ts';
 import type { ThreadStore } from './thread-store.ts';
 import { planThread } from './threads.ts';
 import { openWaits } from './waits.ts';
@@ -142,8 +142,8 @@ type Job =
       /** Write the brief. False: only the person's questions or stories wait. */
       readonly brief: boolean;
       readonly questions: readonly Question[];
-      /** The threads to tell. */
-      readonly stories: readonly string[];
+      /** The threads to tell, with what the prompt holds of each. */
+      readonly stories: readonly StoryJob[];
       /** When the person left, on their return. */
       readonly since: string | null;
       /** This lab keeps plain words. */
@@ -184,26 +184,25 @@ function postLines(
   );
 }
 
-/** The posts of each thread that a session tells, from the record and never from an earlier story. */
+/** The posts of each thread that a session tells, from the record and never from an earlier story. A story records these posts as what it covers. */
 function storyBlocks(
   host: LabCoordinatorHost,
-  ids: readonly string[],
+  jobs: readonly StoryJob[],
 ): readonly string[] {
-  const posts = host.board.list();
-  return ids.flatMap((id) => {
-    const thread = host.threads.get(id);
+  return jobs.flatMap((job) => {
+    const thread = host.threads.get(job.thread);
     if (!thread) return [];
-    const own = posts.filter((post) => post.thread === id);
+    const posts = job.posts.flatMap((id) => host.board.get(id) ?? []);
     return [
-      `${id} ${JSON.stringify(thread.title)}. Why it exists: ${JSON.stringify(thread.why)}. Outcome: ${thread.outcome?.post ?? 'none yet'}. Its newest posts of ${own.length}, oldest first:\n${postLines(host, own.slice(-briefLimits.storyPosts)).join('\n')}`,
+      `${job.thread} ${JSON.stringify(thread.title)}. Why it exists: ${JSON.stringify(thread.why)}. Outcome: ${job.outcome ?? 'none yet'}. Its newest posts, oldest first:\n${postLines(host, posts).join('\n')}`,
     ];
   });
 }
 
-/** How an update ends. */
+/** How an update ends. A brief comes alone: stories wait until no brief is due. */
 function startLine(job: UpdateJob): string {
   if (job.brief)
-    return `Start now: keep the threads, then call verifold_brief once.${job.stories.length ? ' Then call verifold_story for each thread above.' : ''}`;
+    return 'Start now: keep the threads, then call verifold_brief once.';
   const parts = [
     ...(job.questions.length ? ['answer the questions'] : []),
     ...(job.stories.length
@@ -382,25 +381,31 @@ export class LabCoordinator {
       (this.back !== null ||
         (this.changedAt !== null &&
           now - this.changedAt >= timing.briefDelayMs));
-    // An update that comes soon takes the stories with it, unless the person waits for one.
-    const soon = this.changedAt !== null && !due;
-    const stories = room
-      ? storiesDue(
-          host.threads.list(),
-          host.board.list(),
-          store.view().stories,
-          this.asked,
-        )
-          .filter((thread) => !soon || this.asked.has(thread.id))
-          .slice(0, briefLimits.storiesPerSession)
-          .map((thread) => thread.id)
-      : [];
+    // A story never delays a brief: it waits while an update can still come, and it has a budget of its own.
+    const brief = room && (this.back !== null || this.changedAt !== null);
+    const posts = host.board.list();
+    const stories =
+      brief || store.count('story', hour) >= briefLimits.storiesPerHour
+        ? []
+        : storiesDue(
+            host.threads.list(),
+            posts,
+            store.view().stories,
+            this.asked,
+          )
+            .slice(0, briefLimits.storiesPerSession)
+            .map((thread) => storyJob(thread, posts));
     const questions = store
       .view()
       .questions.filter((question) => question.state === 'waiting');
+    // A check of a story's lines does not take the place of a brief that is due.
     const pending =
       store.count('check', hour) < briefLimits.checksPerHour
-        ? store.pending()
+        ? store
+            .pending()
+            .filter(
+              (line) => !due || !storyKinds.some((kind) => kind === line.kind),
+            )
         : [];
     if (!due && !questions.length && !pending.length && !stories.length) return;
     const team = await host.team();
@@ -514,11 +519,11 @@ export class LabCoordinator {
       return;
     }
     if (job.kind === 'lines') store.mark('check');
-    else if (job.brief || job.stories.length) store.mark('update');
-    if (job.kind === 'update' && job.brief) {
+    else if (job.brief) {
+      store.mark('update');
       this.changedAt = null;
       this.back = null;
-    }
+    } else if (job.stories.length) store.mark('story');
   }
 
   /** One tool call, in the lab's queue. What the session changes itself counts as seen, so it schedules no update. */
@@ -609,7 +614,7 @@ export class LabCoordinator {
       const { id } = await host.threads.open({
         title: filedTitle(named),
         ...(plainTitle ? { plainTitle } : {}),
-        why: `Filed from the person's post ${named.id}.`,
+        why: "Filed from one of the person's posts.",
         openedBy: 'verifold',
         at: new Date().toISOString(),
       });
@@ -717,30 +722,23 @@ export class LabCoordinator {
     job: UpdateJob,
     args: Record<string, unknown>,
   ): string {
-    const { host } = this;
-    const thread = job.stories.includes(String(args.thread))
-      ? host.threads.get(args.thread)
-      : undefined;
-    if (!thread) fail(`Name one of these threads: ${job.stories.join(', ')}.`);
+    const told =
+      job.stories.find((entry) => entry.thread === args.thread) ??
+      fail(
+        `Name one of these threads: ${job.stories.map(({ thread }) => thread).join(', ')}.`,
+      );
     const lines = this.lines(run, job, args.lines, storyKinds);
-    host.store.setStory({
-      thread: thread.id,
+    this.host.store.setStory({
+      ...told,
       at: new Date().toISOString(),
-      through: number(
-        host.board
-          .list()
-          .filter((post) => post.thread === thread.id)
-          .at(-1)?.id ?? 'p-0',
-      ),
-      outcome: thread.outcome?.post ?? null,
       lines,
     });
-    run.told.add(thread.id);
-    this.asked.delete(thread.id);
+    run.told.add(told.thread);
+    this.asked.delete(told.thread);
     const stray = lines.filter((line) => line.check.state === 'numbers');
     return stray.length
-      ? `Verifold kept the story of ${thread.id}. No cited post holds these numbers: ${stray.flatMap((line) => line.check.problems).join(', ')}. Those lines show their quotes.`
-      : `Verifold kept the story of ${thread.id}.`;
+      ? `Verifold kept the story of ${told.thread}. No cited post holds these numbers: ${stray.flatMap((line) => line.check.problems).join(', ')}. Those lines show their quotes.`
+      : `Verifold kept the story of ${told.thread}.`;
   }
 
   /** `verifold_notice`: Verifold writes the words, and each agent reads them in its next turn. */
@@ -855,7 +853,9 @@ export class LabCoordinator {
       return `Answer these with verifold_answer now: ${waiting.map(({ id }) => id).join(', ')}.`;
     if (job.brief && !run.done)
       return 'Call verifold_brief now with what you have.';
-    const untold = job.stories.filter((id) => !run.told.has(id));
+    const untold = job.stories
+      .map(({ thread }) => thread)
+      .filter((id) => !run.told.has(id));
     return untold.length
       ? `Call verifold_story now for: ${untold.join(', ')}.`
       : null;

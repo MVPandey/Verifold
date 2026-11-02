@@ -1,6 +1,5 @@
-import type { Brief, BriefLine, Lab } from '../protocol/api.ts';
-import { clock, dayClock, since } from './format.ts';
-import { withoutIds } from './ids.ts';
+import type { Away, Brief, BriefLine, Lab, Thread } from '../protocol/api.ts';
+import { shortTime, since } from './format.ts';
 import { href } from './route.ts';
 import type { ViewMode } from './view-mode.ts';
 
@@ -17,23 +16,39 @@ export const lineWords: Readonly<Record<BriefLine['kind'], string>> = {
   later: 'Later',
 };
 
-/** A clock time, with its day when it is not today. */
-export function shortTime(at: string, now: number): string {
-  return dayClock(at, now).replace(/^today at /, '');
+/** The cited posts, each unchanged. Technical adds each post's ID after it, and an agent's own IDs stay in both views. */
+export function quoteText(
+  line: Pick<BriefLine, 'quotes'>,
+  mode: ViewMode,
+): string {
+  return line.quotes
+    .map(({ post, text }) =>
+      mode === 'technical' ? `${text} (${post})` : text,
+    )
+    .join(' ');
 }
 
 /**
- * The words that a line shows. Technical quotes its posts unchanged. Simple
- * shows the plain words, or the quote with no IDs of Verifold's when the line
- * has no plain words yet, or when the person asked for the original.
+ * The words that a line shows. Technical quotes its posts. Simple shows the
+ * plain words, or the quote when the line has no plain words yet, or when the
+ * person asked for the original.
  */
 export function lineText(
-  line: Pick<BriefLine, 'plain' | 'quote'>,
+  line: Pick<BriefLine, 'plain' | 'quotes'>,
   mode: ViewMode,
   original: boolean,
 ): string {
-  if (mode === 'technical') return line.quote;
-  return original || line.plain === null ? withoutIds(line.quote) : line.plain;
+  return mode === 'technical' || original || line.plain === null
+    ? quoteText(line, mode)
+    : line.plain;
+}
+
+/** A line has a way to its quote only where it shows plain words. */
+export function hasOriginal(
+  line: Pick<BriefLine, 'plain'>,
+  mode: ViewMode,
+): boolean {
+  return mode === 'simple' && line.plain !== null;
 }
 
 /** Where a line's Thread link leads: its thread, or its first post in a lab's older posts. */
@@ -41,6 +56,19 @@ export function lineHref(line: Pick<BriefLine, 'thread' | 'posts'>): string {
   const [post] = line.posts;
   if (line.thread) return href.thread(line.thread);
   return post ? href.post(post) : href.threads;
+}
+
+/** The top line of a view. Both come from one reading of the records. */
+export function topLine(
+  brief: Pick<Brief, 'top' | 'topIds'>,
+  mode: ViewMode,
+): string {
+  return mode === 'technical' && brief.topIds ? brief.topIds : brief.top;
+}
+
+/** The threads with a decision. */
+export function decisionCount(threads: readonly Thread[] = []): number {
+  return threads.filter((thread) => thread.state === 'decided').length;
 }
 
 /** The head of the brief: since when, and who wrote it and how long ago. A brief older than the person's return does not cover their time away. */
@@ -54,7 +82,7 @@ export function briefHead(
     ? `Since you left at ${shortTime(away.since, now)}`
     : null;
   const written = brief.at
-    ? `Coordinator, ${clock(brief.at)}, ${since(brief.at, now)} ago`
+    ? `Coordinator, ${shortTime(brief.at, now)}, ${since(brief.at, now)} ago`
     : null;
   return [left, written].filter(Boolean).join(' · ') || 'Where the lab stands';
 }
@@ -103,4 +131,17 @@ export function briefFoot(
         : []),
     ...(withheld ? ['This lab keeps no plain words.'] : []),
   ].join(' ');
+}
+
+type News = NonNullable<Away['news']>;
+
+/** What the time away says when nothing came. Null: something came. */
+export function quietWords(news: News): string | null {
+  if (news.lines.length || news.counts) return null;
+  return news.cost ? 'No post, run, or call came.' : 'Nothing changed.';
+}
+
+/** The counts of a time away. They are Verifold's own words, so Simple can drop the run IDs: "(1 failed: r-7)" reads "(1 failed)". */
+export function countsWords(counts: string, ids: boolean): string {
+  return ids ? counts : counts.replace(/( failed): [^)]*\)/, '$1)');
 }

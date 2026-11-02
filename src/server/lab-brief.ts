@@ -11,7 +11,7 @@ import {
   evidenceLabel,
   evidencePosts,
   plainNumbersMatch,
-  quoteOf,
+  quotesOf,
 } from '../core/lab/brief.ts';
 import type { BriefLine as StoredLine, LabView } from '../core/lab/schema.ts';
 import type {
@@ -40,7 +40,7 @@ function lineItem(
     kind: line.kind,
     at: line.at,
     plain: state === 'passed' ? line.plain : null,
-    quote: quoteOf(cited),
+    quotes: quotesOf(cited),
     posts: [...line.posts],
     thread: cited.find((post) => post.thread)?.thread ?? null,
     evidence: evidenceLabel(evidencePosts(cited, view.posts), view.checks),
@@ -102,7 +102,8 @@ export function storyItem(view: LabView, thread: string): ThreadStory | null {
   const posts = new Map(view.posts.map((post) => [post.id, post]));
   return {
     at: stored.at,
-    through: `p-${stored.through}`,
+    posts: [...stored.posts],
+    outcome: stored.outcome,
     lines: stored.lines.map((line) => {
       const first = posts.get(line.posts[0] ?? '');
       const author = first?.author ?? 'verifold';

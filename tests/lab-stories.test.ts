@@ -22,11 +22,19 @@ import type {
   Thread,
   ThreadStory,
 } from '../src/core/lab/schema.ts';
-import { laterPosts, storiesDue } from '../src/core/lab/thread-story.ts';
+import {
+  laterPosts,
+  storiesDue,
+  storyJob,
+} from '../src/core/lab/thread-story.ts';
 import { ThreadStore } from '../src/core/lab/thread-store.ts';
 import type { SessionRecord, SessionView } from '../src/core/session.ts';
 import { briefItems, storyItem } from '../src/server/lab-brief.ts';
-import { threadActivity, threadItem } from '../src/server/lab-threads.ts';
+import {
+  takingPart,
+  threadActivity,
+  threadItem,
+} from '../src/server/lab-threads.ts';
 
 const at = '2026-11-01T10:00:00.000Z';
 
@@ -68,11 +76,11 @@ const outcome = (post: string): NonNullable<Thread['outcome']> => ({
 
 function storyOf(
   thread: string,
-  through: number,
+  posts: readonly string[],
   post: string | null,
   lines: readonly BriefLine[] = [],
 ): ThreadStory {
-  return { thread, at, through, outcome: post, lines };
+  return { thread, at, posts, outcome: post, lines };
 }
 
 await test('a thread gets a story at its outcome, and an open one when the person opens it', () => {
@@ -95,15 +103,69 @@ await test('a thread gets a story at its outcome, and an open one when the perso
       ({ id }) => id,
     );
   assert.deepEqual(due([]), ['t-2']);
-  assert.deepEqual(due([], ['t-3']), ['t-2', 't-3']);
-  assert.deepEqual(due([storyOf('t-2', 2, 'p-2')]), []);
+  // What the person opened comes first.
+  assert.deepEqual(due([], ['t-3']), ['t-3', 't-2']);
+  assert.deepEqual(due([storyOf('t-2', ['p-1', 'p-2'], 'p-2')]), []);
   // A new decision needs a new story, and a close that keeps the outcome does not.
-  assert.deepEqual(due([storyOf('t-2', 2, 'p-1')]), ['t-2']);
-  // The person opened a thread that newer posts passed.
-  assert.deepEqual(due([storyOf('t-3', 1, null)], ['t-3']), ['t-2', 't-3']);
-  assert.deepEqual(due([storyOf('t-3', 3, null)], ['t-3']), ['t-2']);
+  assert.deepEqual(due([storyOf('t-2', ['p-1', 'p-2'], 'p-1')]), ['t-2']);
+  // The person opened a thread with a post that its story did not read.
+  assert.deepEqual(due([storyOf('t-3', ['p-1'], null)], ['t-3']), [
+    't-3',
+    't-2',
+  ]);
+  assert.deepEqual(due([storyOf('t-3', ['p-3'], null)], ['t-3']), ['t-2']);
   // A thread with no post has nothing to tell, even when the person asks.
   assert.deepEqual(due([], ['t-4']), ['t-2']);
+});
+
+await test('a story covers what its prompt held, so a post that moved in or came later is outside it, and the list has a bound', () => {
+  const thread = threadOf('t-2');
+  const many = Array.from({ length: briefLimits.storyPosts + 5 }, (_, index) =>
+    postOf(`p-${index + 1}`),
+  );
+  const job = storyJob(thread, many);
+  assert.equal(job.posts.length, briefLimits.storyPosts);
+  assert.equal(job.posts.at(-1), `p-${many.length}`);
+  assert.equal(job.outcome, null);
+  // Posts older than the prompt's bound do not make a story due again and again.
+  assert.deepEqual(
+    storiesDue(
+      [thread],
+      many,
+      [storyOf('t-2', job.posts, null)],
+      new Set(['t-2']),
+    ),
+    [],
+  );
+  // A post with an older number that moved into the thread is not covered.
+  assert.deepEqual(
+    storiesDue(
+      [thread],
+      [postOf('p-1'), postOf('p-5')],
+      [storyOf('t-2', ['p-5'], null)],
+      new Set(['t-2']),
+    ).map(({ id }) => id),
+    ['t-2'],
+  );
+  // A thread that opened again needs a story that says so, when the person opens it.
+  assert.deepEqual(
+    storiesDue(
+      [thread],
+      [postOf('p-5')],
+      [storyOf('t-2', ['p-5'], 'p-3')],
+      new Set(['t-2']),
+    ).map(({ id }) => id),
+    ['t-2'],
+  );
+  assert.deepEqual(
+    storiesDue(
+      [thread],
+      [postOf('p-5')],
+      [storyOf('t-2', ['p-5'], 'p-3')],
+      new Set(),
+    ),
+    [],
+  );
 });
 
 await test('later facts are the posts after an outcome that reply to it or name it', () => {
@@ -187,7 +249,7 @@ await test('the latest answer is the deadline minus the longest option, and a mo
   );
 });
 
-await test('the top line with IDs says what the plain top line says, in its order', () => {
+await test('both top lines read the records once, also a call of no direction', () => {
   const direction = (
     id: string,
     verdict: 'open' | 'ruled-out' = 'open',
@@ -196,6 +258,13 @@ await test('the top line with IDs says what the plain top line says, in its orde
     state: 'open',
     verdict,
   });
+  const call = (id: string, on: string | null) => ({
+    id,
+    state: 'open' as const,
+    by: on ? 'a-2' : 'verifold',
+    direction: on,
+    joined: [],
+  });
   const records = {
     directions: [
       direction('d-3'),
@@ -203,15 +272,7 @@ await test('the top line with IDs says what the plain top line says, in its orde
       direction('d-1', 'ruled-out'),
       direction('d-4'),
     ],
-    calls: [
-      {
-        id: 'c-4',
-        state: 'open' as const,
-        by: 'a-2',
-        direction: 'd-2',
-        joined: [],
-      },
-    ],
+    calls: [call('c-4', 'd-2')],
     runs: [{ direction: 'd-4', status: 'running' as const }],
   };
   assert.equal(
@@ -222,9 +283,16 @@ await test('the top line with IDs says what the plain top line says, in its orde
     briefTopIds(records),
     'd-1 failed. d-4 is running. d-2 waits on c-4. d-3 has not run yet.',
   );
+  const loose = { ...records, calls: [...records.calls, call('c-7', null)] };
+  assert.match(briefTop(loose), /The lab also has one decision for you\.$/);
+  assert.match(briefTopIds(loose), /c-7 waits on you\.$/);
   assert.equal(
     briefTopIds({ directions: [], calls: [], runs: [] }),
     'No test has started yet.',
+  );
+  assert.equal(
+    briefTopIds({ directions: [], calls: [call('c-7', null)], runs: [] }),
+    'c-7 waits on you.',
   );
 });
 
@@ -255,21 +323,21 @@ await test('the store keeps stories, one for each thread, and a file with a bad 
   const store = new BriefStore(path, () => false);
   await store.load(true);
   store.setStory(
-    storyOf('t-2', 3, 'p-3', [
+    storyOf('t-2', ['p-3'], 'p-3', [
       storedLine({ check: { ...passed, state: 'pending' } }),
     ]),
   );
-  store.setStory(storyOf('t-3', 4, null));
+  store.setStory(storyOf('t-3', ['p-4'], null));
   store.setStory(
-    storyOf('t-2', 5, 'p-3', [
+    storyOf('t-2', ['p-3', 'p-5'], 'p-3', [
       storedLine({ check: { ...passed, state: 'pending' } }),
     ]),
   );
   assert.deepEqual(
-    store.view().stories.map(({ thread, through }) => [thread, through]),
+    store.view().stories.map(({ thread, posts }) => [thread, posts]),
     [
-      ['t-3', 4],
-      ['t-2', 5],
+      ['t-3', ['p-4']],
+      ['t-2', ['p-3', 'p-5']],
     ],
   );
   assert.deepEqual(
@@ -288,9 +356,9 @@ await test('the store keeps stories, one for each thread, and a file with a bad 
       ...saved,
       stories: [
         ...saved.stories,
-        { thread: 'nothing', at, through: 1, outcome: null, lines: [] },
-        { thread: 't-9', at: 'soon', through: 1, outcome: null, lines: [] },
-        { thread: 't-9', at, through: 1, outcome: 'nothing', lines: [] },
+        { thread: 'nothing', at, posts: [], outcome: null, lines: [] },
+        { thread: 't-9', at: 'soon', posts: [], outcome: null, lines: [] },
+        { thread: 't-9', at, posts: [], outcome: 'nothing', lines: [] },
       ],
     }),
   );
@@ -446,9 +514,32 @@ const step = (plain: string, posts: readonly string[], kind = 'step') => ({
   posts,
 });
 
+/** A rig whose first update ran, so no brief is due. */
+async function quiet(t: TestContext): Promise<Awaited<ReturnType<typeof rig>>> {
+  const lab = await rig(t);
+  const first = await lab.post({ thread: 't-1', text: 'The plan is up.' });
+  await lab.tick();
+  assert.equal(lab.started.length, 1);
+  await lab.call('verifold_brief', {
+    lines: [step('The plan is up.', [first.id], 'new')],
+  });
+  await lab.endTurn();
+  await lab.tick();
+  await lab.call('verifold_line_check', {
+    lines: lab.store.pending().map(({ id }) => ({
+      id,
+      claims: [{ claim: 'It is up.', verdict: 'supported' }],
+      dropped: [],
+    })),
+  });
+  await lab.endTurn();
+  lab.started.length = 0;
+  lab.sent.length = 0;
+  return lab;
+}
+
 await test('the person opens a thread: one session tells it, with no brief, and no agent wakes', async (t) => {
-  // The update waits for its delay, and the person does not wait with it.
-  const lab = await rig(t, { delayMs: 3_600_000 });
+  const lab = await quiet(t);
   const post = await lab.post({ text: 'Seed 0 gives 55% vs 15%.' });
   await lab.tick();
   assert.equal(lab.started.length, 0);
@@ -478,6 +569,8 @@ await test('the person opens a thread: one session tells it, with no brief, and 
     lines: [step('A line.', [post.id])],
   });
   assert.match(refused.text, /Name one of these threads/);
+  // A post that comes while the session runs was not in its prompt.
+  const mid = await lab.post({ text: 'A post in the middle of it.' });
   const kept = await lab.call('verifold_story', {
     thread: lab.thread,
     lines: [
@@ -489,7 +582,9 @@ await test('the person opens a thread: one session tells it, with no brief, and 
   assert.match(kept.text, /No cited post holds these numbers: 90%/);
   const story = lab.store.view().stories[0];
   assert.equal(story?.thread, lab.thread);
-  assert.equal(story?.through, 1);
+  assert.deepEqual(story?.posts, [post.id]);
+  assert.equal(story?.posts.includes(mid.id), false);
+  assert.equal(story?.outcome, null);
   assert.deepEqual(
     story?.lines.map((line) => [line.kind, line.check.state]),
     [
@@ -512,25 +607,78 @@ await test('the person opens a thread: one session tells it, with no brief, and 
   assert.equal(lab.store.view().stories[0]?.lines[0]?.check.state, 'failed');
 });
 
-await test('a decision brings its story with the next update, and no prompt holds an earlier story', async (t) => {
+await test('a story waits while a brief can come, also when the person asks, and a brief session tells nothing', async (t) => {
+  const lab = await rig(t, { delayMs: 3_600_000 });
+  await lab.post({ text: 'It works at 55%.' });
+  lab.coordinator.wantStory(lab.thread);
+  await lab.tick();
+  // A change of state waits for its update, so no story takes the place.
+  assert.equal(lab.started.length, 0);
+  const now = await rig(t);
+  const post = await now.post({ text: 'Seed 0 gives 55%.' });
+  await now.threads.close(now.thread, post);
+  now.coordinator.wantStory(now.thread);
+  await now.tick();
+  assert.equal(now.started.length, 1);
+  const { prompt } = now.started[0]?.input ?? {};
+  assert.match(prompt ?? '', /verifold_brief once/);
+  assert.doesNotMatch(prompt ?? '', /Tell how each/);
+  assert.equal(
+    (
+      await now.call('verifold_story', {
+        thread: now.thread,
+        lines: [step('It gave 55%.', [post.id])],
+      })
+    ).ok,
+    false,
+  );
+  // The check of a brief goes first, then the story.
+  await now.call('verifold_brief', {
+    lines: [step('The first run is in.', [post.id], 'held')],
+  });
+  await now.endTurn();
+  await now.tick();
+  await now.call('verifold_line_check', {
+    lines: now.store.pending().map(({ id }) => ({
+      id,
+      claims: [{ claim: 'It is in.', verdict: 'supported' }],
+      dropped: [],
+    })),
+  });
+  await now.endTurn();
+  await now.tick();
+  assert.equal(now.started.length, 3);
+  assert.match(now.started[2]?.input.prompt ?? '', /Tell how each/);
+  assert.match(now.started[2]?.input.prompt ?? '', /Give no brief\./);
+  assert.equal(now.store.count('story', 0), 1);
+  assert.equal(now.store.count('update', 0), 1);
+});
+
+await test('a decision gets its story, the story records its outcome, and no prompt holds an earlier story', async (t) => {
   const lab = await rig(t);
   const post = await lab.post({ text: 'Seed 0 gives 55%.' });
   await lab.threads.close(lab.thread, post);
   await lab.tick();
-  assert.equal(lab.started.length, 1);
-  const { prompt } = lab.started[0]?.input ?? {};
-  assert.match(prompt ?? '', /verifold_brief once/);
-  assert.match(prompt ?? '', /Then call verifold_story/);
   await lab.call('verifold_brief', {
     lines: [step('The first run is in.', [post.id], 'held')],
   });
   await lab.endTurn();
-  assert.match(lab.sent[0] ?? '', /verifold_story now/);
+  await lab.tick();
+  await lab.call('verifold_line_check', {
+    lines: lab.store.pending().map(({ id }) => ({
+      id,
+      claims: [{ claim: 'It is in.', verdict: 'supported' }],
+      dropped: [],
+    })),
+  });
+  await lab.endTurn();
+  await lab.tick();
   const plain = 'The first run gave 55%, in the story words.';
   await lab.call('verifold_story', {
     thread: lab.thread,
     lines: [step(plain, [post.id], 'outcome')],
   });
+  assert.equal(lab.store.view().stories[0]?.outcome, post.id);
   await lab.endTurn();
   await lab.tick();
   await lab.call('verifold_line_check', {
@@ -542,9 +690,9 @@ await test('a decision brings its story with the next update, and no prompt hold
   });
   await lab.endTurn();
   // The story covers its outcome, so a tick starts nothing.
+  const count = lab.started.length;
   await lab.tick();
-  assert.equal(lab.started.length, 2);
-  await lab.post({ thread: 't-1', text: 'A newer post elsewhere.' });
+  assert.equal(lab.started.length, count);
   const { id: next } = await lab.threads.open({
     title: 'Does the second control beat chance?',
     why: 'It decides the step after.',
@@ -555,13 +703,13 @@ await test('a decision brings its story with the next update, and no prompt hold
   await lab.threads.close(next, second);
   await lab.tick();
   const later = lab.started.at(-1)?.input.prompt ?? '';
-  assert.match(later, /Seed 1 gives 60%/);
+  assert.match(later, /Seed 1 gives 60%|verifold_brief once/);
   assert.doesNotMatch(later, /in the story words/);
 });
 
-await test('stories stay within the hourly limit of updates, and a session tells a bounded number', async (t) => {
+await test('stories have an hourly budget of their own, a session tells a bounded number, and asked threads lead', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse(at) });
-  const lab = await rig(t);
+  const lab = await quiet(t);
   const ids = [lab.thread];
   for (const title of ['one', 'two', 'three'])
     ids.push(
@@ -574,19 +722,32 @@ await test('stories stay within the hourly limit of updates, and a session tells
         })
       ).id,
     );
-  for (const id of ids) {
-    await lab.post({ thread: id });
-    lab.coordinator.wantStory(id);
-  }
+  // New threads are a change of state, so their update comes first.
+  await lab.tick();
+  await lab.call('verifold_brief', {
+    lines: [step('A line.', [(await lab.post({})).id], 'new')],
+  });
+  await lab.endTurn();
+  await lab.tick();
+  await lab.call('verifold_line_check', {
+    lines: lab.store.pending().map(({ id }) => ({
+      id,
+      claims: [{ claim: 'A line.', verdict: 'supported' }],
+      dropped: [],
+    })),
+  });
+  await lab.endTurn();
+  lab.started.length = 0;
+  for (const id of ids) await lab.post({ thread: id });
+  for (const id of [...ids].reverse()) lab.coordinator.wantStory(id);
   await lab.tick();
   assert.equal(lab.started.length, 1);
   const prompt = lab.started[0]?.input.prompt ?? '';
   const told = ids.filter((id) => prompt.includes(`${id} "`));
   assert.equal(told.length, briefLimits.storiesPerSession);
-  assert.deepEqual(told, ids.slice(0, briefLimits.storiesPerSession));
-  // Sessions that give nothing use up the hour, and the next one waits for it.
+  // Sessions that give nothing use up the hour's stories, and the next one waits for it.
   let count = lab.started.length;
-  for (let index = 1; index < briefLimits.updatesPerHour; index++) {
+  for (let index = 1; index < briefLimits.storiesPerHour; index++) {
     await lab.endTurn('ended');
     t.mock.timers.tick(1);
     await lab.tick();
@@ -597,9 +758,55 @@ await test('stories stay within the hourly limit of updates, and a session tells
   t.mock.timers.tick(1);
   await lab.tick();
   assert.equal(lab.started.length, count);
+  // The stories used none of the updates.
+  assert.equal(lab.store.count('story', 0), briefLimits.storiesPerHour);
+  assert.equal(lab.store.count('update', 0), 2);
   t.mock.timers.tick(3_600_001);
   await lab.tick();
   assert.equal(lab.started.length, count + 1);
+});
+
+await test('with the hour’s updates gone, stories still run: no brief can come', async (t) => {
+  const lab = await rig(t, { delayMs: 3_600_000 });
+  const post = await lab.post({});
+  for (let index = 0; index < briefLimits.updatesPerHour; index++)
+    lab.store.mark('update');
+  lab.coordinator.wantStory(lab.thread);
+  await lab.tick();
+  assert.equal(lab.started.length, 1);
+  assert.match(lab.started[0]?.input.prompt ?? '', /Give no brief\./);
+  assert.ok(post.id);
+});
+
+await test('the check of a story’s lines waits for a brief that is due', async (t) => {
+  const lab = await quiet(t);
+  const post = await lab.post({});
+  lab.store.setStory(
+    storyOf(lab.thread, [post.id], null, [
+      storedLine({ check: { ...passed, state: 'pending' } }),
+    ]),
+  );
+  lab.coordinator.personBack(at);
+  await lab.tick();
+  assert.equal(lab.started.length, 1);
+  assert.match(lab.started[0]?.input.prompt ?? '', /verifold_brief once/);
+});
+
+await test('a filed thread’s why holds no ID', async (t) => {
+  const lab = await rig(t);
+  const person = await lab.post({
+    thread: 't-1',
+    author: 'person',
+    text: 'Can we look at this from another side?',
+  });
+  await lab.tick();
+  const filed = await lab.call('verifold_thread', {
+    action: 'file',
+    post: person.id,
+  });
+  assert.equal(filed.ok, true, filed.text);
+  const thread = lab.threads.list().at(-1);
+  assert.equal(thread?.why, "Filed from one of the person's posts.");
 });
 
 await test('a lab that keeps no plain words writes no story', async (t) => {
@@ -615,9 +822,9 @@ await test('wantStory needs a thread and a working lab', async (t) => {
   assert.throws(() => lab.coordinator.wantStory('t-99'), /Name a thread/);
 });
 
-await test('on the wire a story shows plain words only once they passed, with who wrote the post', () => {
+await test('on the wire a story shows plain words only once they passed, what it covers, and who wrote the post', () => {
   const posts = [
-    postOf('p-1', { harness: 'codex', text: 'Seed 0 gives 55%.' }),
+    postOf('p-1', { harness: 'codex', text: 'Seed 0 gives 55% (see p-9).' }),
   ];
   const view = {
     posts,
@@ -631,7 +838,7 @@ await test('on the wire a story shows plain words only once they passed, with wh
       questions: [],
       sessions: [],
       stories: [
-        storyOf('t-2', 1, null, [
+        storyOf('t-2', ['p-1'], 'p-1', [
           storedLine(),
           storedLine({ check: { ...passed, state: 'failed' } }),
           storedLine({ check: { ...passed, state: 'pending' } }),
@@ -641,7 +848,8 @@ await test('on the wire a story shows plain words only once they passed, with wh
     },
   } as unknown as LabView;
   const story = storyItem(view, 't-2');
-  assert.equal(story?.through, 'p-1');
+  assert.deepEqual(story?.posts, ['p-1']);
+  assert.equal(story?.outcome, 'p-1');
   assert.deepEqual(
     story?.lines.map((line) => [line.plain, line.check.state]),
     [
@@ -660,11 +868,41 @@ await test('on the wire a story shows plain words only once they passed, with wh
     ],
     ['a-1', 'agent-1', 'codex'],
   );
-  assert.equal(story?.lines[0]?.quote, 'Seed 0 gives 55%. (p-1)');
+  // The quote and its source stay apart, and an agent's own ID stays in its words.
+  assert.deepEqual(story?.lines[0]?.quotes, [
+    { post: 'p-1', text: 'Seed 0 gives 55% (see p-9).' },
+  ]);
   assert.equal(story?.lines[0]?.thread, 't-2');
   assert.equal(storyItem(view, 't-3'), null);
   const items = briefItems(view, (list) => [...list]);
   assert.equal(items.brief?.topIds, 'No test has started yet.');
+});
+
+await test('who took part comes from every post of the thread', () => {
+  assert.deepEqual(
+    takingPart(
+      [
+        postOf('p-1', { author: 'person' }),
+        postOf('p-2', { author: 'a-10' }),
+        postOf('p-3', { author: 'a-2' }),
+        postOf('p-4', { author: 'a-2' }),
+        postOf('p-5', { author: 'verifold' }),
+      ],
+      { 'a-2': 'agent-2', 'a-10': 'agent-10' },
+    ),
+    { handles: ['agent-2', 'agent-10'], byPerson: true },
+  );
+  assert.deepEqual(takingPart([], {}), { handles: [], byPerson: false });
+});
+
+await test('a call is written for the person, and Simple shows it as written', async () => {
+  const { askPersonToolSpec } = await import('../src/core/lab-tools.ts');
+  assert.match(
+    askPersonToolSpec.description,
+    /for the person, in plain words, with no internal IDs/,
+  );
+  const prompt = await readFile('src/core/prompts/lab-peer.md', 'utf8');
+  assert.match(prompt, /Write each call for the person, in plain words/);
 });
 
 await test('a thread on the wire counts its posts', () => {
