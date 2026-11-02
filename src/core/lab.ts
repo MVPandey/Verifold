@@ -8354,6 +8354,15 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     });
   }
 
+  /** The person opened a thread with no story that covers its posts. It wakes no agent. */
+  wantStory(thread: unknown): Promise<void> {
+    return this.serial(() => {
+      if (!this.threaded) fail('A lab from before threads has no stories.');
+      this.coordinator.wantStory(thread);
+      this.kick();
+    });
+  }
+
   /** The person came back after `since`, so the Coordinator updates the brief. */
   personBack(since: string): void {
     if (this.threaded) this.coordinator.personBack(since);

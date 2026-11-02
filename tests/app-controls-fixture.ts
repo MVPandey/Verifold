@@ -16,5 +16,7 @@ export const controls: LabControls = {
   run: unread,
   diff: unread,
   board: unread,
+  threadPage: unread,
+  askStory: ok,
   figure: unread,
 };

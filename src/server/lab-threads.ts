@@ -16,8 +16,26 @@ export type PostMarks = (
 
 export const noMarks: PostMarks = () => ({});
 
+/** How many posts each thread has, and the time of its newest post. Posts come oldest first. */
+export type ThreadActivity = ReadonlyMap<
+  string,
+  { readonly posts: number; readonly lastAt: string }
+>;
+
+export function threadActivity(posts: readonly BoardPost[]): ThreadActivity {
+  const activity = new Map<string, { posts: number; lastAt: string }>();
+  for (const post of posts)
+    if (post.thread)
+      activity.set(post.thread, {
+        posts: (activity.get(post.thread)?.posts ?? 0) + 1,
+        lastAt: post.at,
+      });
+  return activity;
+}
+
 /** A thread as the wire has it. */
-export function threadItem(entry: LabThread): Thread {
+export function threadItem(entry: LabThread, activity: ThreadActivity): Thread {
+  const own = activity.get(entry.id);
   return {
     id: entry.id,
     title: entry.title,
@@ -30,6 +48,8 @@ export function threadItem(entry: LabThread): Thread {
     outcome: entry.outcome ?? null,
     followers: [...entry.followers],
     agreed: entry.agreed.map(({ post, by, at }) => ({ post, by, at })),
+    posts: own?.posts ?? 0,
+    lastAt: own?.lastAt ?? null,
   };
 }
 

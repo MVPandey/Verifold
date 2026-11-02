@@ -37,6 +37,9 @@ import { CallDialog } from './screens/CallDialog.tsx';
 import { DiffPage } from './screens/DiffPage.tsx';
 import { DirectionPage, type AgentActions } from './screens/DirectionPage.tsx';
 import { LabHome, type LabActions } from './screens/LabHome.tsx';
+import { ThreadHome } from './screens/ThreadHome.tsx';
+import { ThreadPage } from './screens/ThreadPage.tsx';
+import { ThreadsPage } from './screens/ThreadsPage.tsx';
 import { NoLab, NotFound, Notice } from './screens/Notice.tsx';
 import { AppHeader } from './components/AppHeader.tsx';
 import { PodNeeds, PodsLine } from './components/Pods.tsx';
@@ -60,6 +63,15 @@ import { TurnScreen } from './screens/TurnScreen.tsx';
 import type { LabStore, LabState } from './store.ts';
 import { ToolsContext, type AppTools } from './tools.ts';
 import { useNotify } from './useNotify.ts';
+import {
+  readViewMode,
+  saveViewMode,
+  threadedLab,
+  threadHome,
+  ViewContext,
+  type View,
+  type ViewMode,
+} from './view-mode.ts';
 
 /** This page's route. A call's comes with the page that opened it, from the history state. */
 function currentRoute(): Route {
@@ -424,6 +436,46 @@ function Page({
         <NoLab snapshot={snapshot} onStart={startLab} />
       </div>
     );
+  // The one place that chooses the screens of a lab with threads. Every other lab page reads the view from `ViewContext`.
+  if (route.page === 'lab' && threadHome(lab))
+    return (
+      <ThreadHome
+        snapshot={snapshot}
+        lab={lab}
+        connection={connection}
+        now={now}
+        actions={actions}
+        pods={compute}
+        show={route.post ?? null}
+      />
+    );
+  if (
+    (route.page === 'thread' || route.page === 'threads') &&
+    !threadedLab(lab)
+  )
+    return <NotFound />;
+  if (route.page === 'threads')
+    return (
+      <ThreadsPage
+        snapshot={snapshot}
+        lab={lab}
+        connection={connection}
+        now={now}
+        actions={actions}
+      />
+    );
+  if (route.page === 'thread')
+    return (
+      <ThreadPage
+        key={route.id}
+        snapshot={snapshot}
+        lab={lab}
+        id={route.id}
+        connection={connection}
+        now={now}
+        actions={actions}
+      />
+    );
   if (route.page === 'lab')
     return (
       <LabHome
@@ -641,24 +693,40 @@ export function App({
     () => ({ openSearch, dismissAway: app.dismissAway, notify }),
     [openSearch, app, notify],
   );
+  const threaded = threadedLab(lab);
+  const [mode, setMode] = useState<ViewMode>(() => readViewMode());
+  const view = useMemo<View>(
+    () => ({
+      // An old lab reads as it did, whatever this browser chose for another lab.
+      mode: threaded ? mode : 'simple',
+      threaded,
+      setMode: (next) => {
+        saveViewMode(next);
+        setMode(next);
+      },
+    }),
+    [threaded, mode],
+  );
   return (
     <ToolsContext.Provider value={tools}>
       <ControlsContext.Provider value={controls}>
         <HistoryContext.Provider value={history}>
-          <Screen
-            state={state}
-            route={route}
-            now={now}
-            actions={actions}
-            agentActions={agent}
-            answers={answers}
-            setup={setup}
-            start={start}
-            projectSetup={projectSetup}
-            projectStart={projectStart}
-            startLab={app.startLab}
-            compute={compute}
-          />
+          <ViewContext.Provider value={view}>
+            <Screen
+              state={state}
+              route={route}
+              now={now}
+              actions={actions}
+              agentActions={agent}
+              answers={answers}
+              setup={setup}
+              start={start}
+              projectSetup={projectSetup}
+              projectStart={projectStart}
+              startLab={app.startLab}
+              compute={compute}
+            />
+          </ViewContext.Provider>
         </HistoryContext.Provider>
         {searching && lab && (
           <SearchDialog

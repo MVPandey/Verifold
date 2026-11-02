@@ -19,7 +19,8 @@ import type { SetupPage } from './setup.ts';
  * and `#/d/<id>/diff` what a direction changed, or with a proof such as
  * `#/d/<id>/diff/p-12.0` the diff that a post cites. `#/figure/p-12.0` is a
  * figure that a post cites, with its post. `#/settings` is the project's
- * settings, with its pods. Any other fragment is a page that does not
+ * settings, with its pods. `#/threads` is a lab's threads by state, and
+ * `#/thread/<id>` one thread. Any other fragment is a page that does not
  * exist.
  */
 export type Route =
@@ -46,6 +47,8 @@ export type Route =
       readonly opener?: Opener;
     }
   | { readonly page: 'post'; readonly id: string }
+  | { readonly page: 'threads' }
+  | { readonly page: 'thread'; readonly id: string }
   /** The proof that a post cites, such as p-12.0. */
   | { readonly page: 'figure'; readonly proof: string }
   | { readonly page: 'answer' }
@@ -116,6 +119,9 @@ export function parseRoute(hash: string): Route {
   if (board?.[1]) return { page: 'lab', post: board[1] };
   const post = /^\/post\/(p-[1-9][0-9]{0,5})$/.exec(path);
   if (post?.[1]) return { page: 'post', id: post[1] };
+  if (path === '/threads') return { page: 'threads' };
+  const thread = /^\/thread\/(t-[1-9][0-9]{0,5})$/.exec(path);
+  if (thread?.[1]) return { page: 'thread', id: thread[1] };
   const figure = /^\/figure\/(p-[1-9][0-9]{0,5}\.[0-9])$/.exec(path);
   if (figure?.[1]) return { page: 'figure', proof: figure[1] };
   const direction = new RegExp(`^/d/(${id})$`).exec(path);
@@ -184,6 +190,8 @@ export const href = {
   bring: (direction: string): string => `#/d/${direction}/bring`,
   board: (post: string): string => `#/board/${post}`,
   post: (id: string): string => `#/post/${id}`,
+  threads: '#/threads',
+  thread: (id: string): string => `#/thread/${id}`,
   /** A figure that a post cites, such as p-12.0. */
   figure: (proof: string): string => `#/figure/${proof}`,
   run: (direction: string, run: string): string =>

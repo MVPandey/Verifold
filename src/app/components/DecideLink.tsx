@@ -11,10 +11,12 @@ export function DecideLink({
   call,
   id,
   className,
+  children = 'Decide',
 }: {
   readonly call: string;
-  readonly id?: string;
+  readonly id?: string | undefined;
   readonly className?: string;
+  readonly children?: ReactNode;
 }): ReactNode {
   return (
     <a
@@ -27,7 +29,7 @@ export function DecideLink({
         openCall(call);
       }}
     >
-      Decide
+      {children}
     </a>
   );
 }

@@ -78,6 +78,8 @@ import {
 } from '../core/lab/schema.ts';
 import type { FigureRead } from '../core/lab.ts';
 import type { PlanFact } from '../core/lab/schema.ts';
+import { latestAnswer } from '../core/lab/latest-answer.ts';
+import { laterPosts } from '../core/lab/thread-story.ts';
 import { runSummary, type RunLogPart, type RunRecord } from '../core/runs.ts';
 import { loadWorkspace } from '../core/storage.ts';
 import {
@@ -154,11 +156,12 @@ import {
 } from '../protocol/api.ts';
 import { agentName } from '../ui/lab-lines.ts';
 import { figureHeaders, figurePixels, imageSize } from './figure.ts';
-import { briefItems } from './lab-brief.ts';
+import { briefItems, storyItem } from './lab-brief.ts';
 import { keptAgents, keptDirections } from './lab-lists.ts';
 import {
   noMarks,
   postMarks,
+  threadActivity,
   threadItem,
   waitItems,
   type PostMarks,
@@ -199,6 +202,8 @@ export const apiLimits = {
   agents: 50,
   disputes: 50,
   threads: 100,
+  /** Posts that a thread page shows after its outcome. */
+  later: 6,
   waits: 50,
   facts: 50,
   runs: 30,
@@ -783,6 +788,7 @@ function call(
   entry: LabCall,
   who: AgentNames,
   stored: ReadonlySet<string> | null,
+  deadline: string | null = null,
 ): Call {
   const options: CallOption[] = entry.options.map((option) => ({
     label: option.label,
@@ -808,6 +814,7 @@ function call(
         why: joined ? joined.why : entry.why,
       };
     }),
+    latestAt: latestAnswer(entry, deadline),
     byVerifold: entry.by === 'verifold',
     options,
     pick: entry.pick,
@@ -1615,6 +1622,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
   const keptThreads = keptDirections(threads, level.threads);
   if (keptThreads.length < threads.length)
     omitted.threads = threads.length - keptThreads.length;
+  const activity = threadActivity(view.posts);
   const shown = keptAgents(loaded.agents, kept, level.agents);
   if (shown.length < loaded.agents.length)
     omitted.agents = loaded.agents.length - shown.length;
@@ -1685,7 +1693,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     },
     // The calls that waited longest come first.
     needsYou: keep(state.calls.filter(waiting), level.needsYou, 'needsYou').map(
-      (entry) => call(entry, who, stored),
+      (entry) => call(entry, who, stored, state.budget?.deadline ?? null),
     ),
     answered: keep(
       state.calls.filter((entry) => !waiting(entry)),
@@ -1731,7 +1739,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
       objections: entry.objections.map((objection) => objection.id),
       check: entry.check?.id ?? null,
     })),
-    threads: keptThreads.map(threadItem),
+    threads: keptThreads.map((entry) => threadItem(entry, activity)),
     waits: keep(waitItems(view), level.waits, 'waits'),
     runs: keep(view.ledger, level.runs, 'runs', true).map(run),
     checks: keep(view.checks, level.checks, 'checks', true).map(check),
@@ -2178,20 +2186,26 @@ export class ApiReader {
     );
   }
 
-  /** A thread and its newest posts, at most `apiLimits.posts`. Null without a lab, or when the lab has no such thread. */
-  threadPage(id: string): ThreadPage | null {
+  /** A thread with its story and its later facts, and its newest posts, at most `apiLimits.posts`, or those before the post number `before`. Null without a lab, or when the lab has no such thread. */
+  threadPage(id: string, before?: number): ThreadPage | null {
     const view = this.sources().lab?.view();
     const thread = view?.threads?.find((entry) => entry.id === id);
     if (!view || !thread) return null;
     const who = namesOf(view);
     const marks = postMarks(view, openDisputes(view));
-    const posts = view.posts.filter((entry) => entry.thread === id);
     return {
-      thread: threadItem(thread),
-      posts: posts
-        .slice(-apiLimits.posts)
-        .map((entry) => post(entry, who, marks)),
-      more: posts.length > apiLimits.posts,
+      thread: threadItem(thread, threadActivity(view.posts)),
+      ...boardPage(
+        view.posts.filter((entry) => entry.thread === id),
+        apiLimits.posts,
+        who,
+        marks,
+        before,
+      ),
+      story: storyItem(view, id),
+      later: laterPosts(thread, view.posts, apiLimits.later).map((entry) =>
+        post(entry, who, marks),
+      ),
     };
   }
 
@@ -2706,6 +2720,7 @@ const actionNames = new Set<string>([
   'lab-skip-questions',
   'lab-draw',
   'lab-ask',
+  'lab-story',
   'lab-questions-answer',
   'compute-settings',
   'compute-gpus',
@@ -2987,12 +3002,19 @@ export async function answerApi(
     else response.writeHead(404).end();
     return;
   }
-  if (first === 'threads' && parts.length === 2 && !keys.length) {
-    if (!second || !threadId.test(second)) {
+  if (first === 'threads' && parts.length === 2 && onlyBefore) {
+    if (
+      !second ||
+      !threadId.test(second) ||
+      (before !== null && !postId.test(before))
+    ) {
       response.writeHead(400).end();
       return;
     }
-    const page = reader.threadPage(second);
+    const page = reader.threadPage(
+      second,
+      before === null ? undefined : number(before),
+    );
     if (page) json(response, 200, page);
     else response.writeHead(404).end();
     return;
