@@ -197,7 +197,7 @@ import {
   wordsPost,
 } from './lab/words.ts';
 import { agentLine, mentionPattern, nextHandle } from './lab/names.ts';
-import { citedRun, refutation } from './lab/post-rules.ts';
+import { citedRun, heldUp, refutation } from './lab/post-rules.ts';
 import { readObject, RecordFile } from './lab/record-file.ts';
 import { threadLine } from './lab/thread-digest.ts';
 import { ThreadStore } from './lab/thread-store.ts';
@@ -639,6 +639,7 @@ export class Lab {
       threads: this.threads,
       timing: this.timing,
       random: options.random ?? Math.random,
+      coordinatorIdle: () => this.coordinator.idle(),
       paused: () => this.suspended,
       ideas: () => this.literature.ideas(),
       share: () => this.state?.share ?? null,
@@ -669,6 +670,9 @@ export class Lab {
       plan: () => this.current().plan,
       ideas: () => this.literature.ideas(),
       markTried: (idea, post) => this.literature.markTried(idea, post),
+      freePlace: () => {
+        this.longShots.giveSlot();
+      },
       name: (author) => this.name(author),
       team: () => this.team(),
       usedUp: (host) => Boolean(options.quota?.parked(host)),
@@ -5799,16 +5803,14 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
               check.claim === of &&
               (check.state === 'queued' || check.state === 'running'),
           );
-        const heldBy = (check: Check): boolean =>
-          check.state === 'done' &&
-          check.outcome === 'holds' &&
-          check.method === 'rerun' &&
-          check.blind;
-        // A blind rerun that held, and no check of the post (or of the claim that it reran) open.
+        const board = this.board.list();
+        // It held up, and no check of the post (or of the claim that it reran) is open.
         const held =
           !open(post.id) &&
-          (checks.some(heldBy) ||
-            (settled !== undefined && heldBy(settled) && !open(settled.claim)));
+          (heldUp(post, board, state.checks) ||
+            (settled !== undefined &&
+              !open(settled.claim) &&
+              heldUp({ id: settled.claim }, board, state.checks)));
         if (!held) {
           // A check without runs only reads the code, and a code-read never holds up.
           if (!this.ledger.sandboxed)
@@ -6680,9 +6682,9 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       direction.evidence?.post !== check.claim
     )
       return;
-    const holds = outcome === 'holds' && method === 'rerun';
     const next: Pick<Direction, 'verdict' | 'evidence'> | null =
-      holds && check.holdsUp && check.blind
+      check.holdsUp &&
+      heldUp({ id: check.claim }, this.board.list(), state.checks)
         ? { verdict: 'holds-up', evidence: direction.evidence }
         : outcome !== 'holds' &&
             (direction.verdict === 'leading' ||
@@ -8278,7 +8280,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     if (state.pausedAt) return;
     for (const note of await this.threads.decide())
       await this.add(note).catch(() => {});
-    // The Coordinator has its own place, so it takes no slot and nothing waits on it. Long shots use that place when it leaves it free.
+    // The Coordinator has its own place, so it takes no slot and nothing waits on it. Long shots use that place when it has nothing to do.
     if (this.threaded) {
       await this.coordinator.tick();
       await this.longShots.start();

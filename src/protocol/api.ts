@@ -255,6 +255,18 @@ export interface Reading {
   readonly lastPaperAt: string | null;
 }
 
+/** One thing that a line's check found. */
+export interface LineProblem {
+  readonly kind:
+    | 'added-fact'
+    | 'raised-certainty'
+    | 'number-out-of-scope'
+    | 'dropped-caveat'
+    | 'stray-number';
+  /** The check's words, or a number that no cited post holds. */
+  readonly claim: string;
+}
+
 /** The check of a plain line. */
 export interface LineCheck {
   /**
@@ -268,8 +280,11 @@ export interface LineCheck {
   readonly by: Harness | null;
   /** A fresh session of the writer's own harness checked it, because the team has one. */
   readonly sameHarness: boolean;
-  /** An answer that failed its check: why, in one line for the person. Added after version 1. */
-  readonly reason?: string | null;
+  /** An answer that failed its check: what the check found first, and how many problems it found. Added after version 1. */
+  readonly failure?: {
+    readonly first: LineProblem | null;
+    readonly count: number;
+  };
 }
 
 /** One cited post, unchanged, apart from its ID. */

@@ -229,6 +229,11 @@ function newLab(
     },
   });
   t.after(() => lab.close());
+  // A draw here runs at once: a real Coordinator keeps an update scheduled for 3 minutes. A test that gives `briefDelayMs` tests the real one.
+  if (more.briefDelayMs === undefined)
+    (
+      lab as unknown as { coordinator: { idle(): Promise<boolean> } }
+    ).coordinator.idle = () => Promise.resolve(true);
   const view = (): LabView => {
     const shown = lab.view();
     assert.ok(shown);
@@ -729,6 +734,82 @@ await test('a person who needs a slot parks an agent, never the session of a dra
   assert.equal(built.lab.canYield(), false);
   assert.equal(await built.lab.yieldSlot(), false);
   assert.equal(built.live.has(judge.id), true);
+});
+
+await test("a person's question ends the session of a draw at once, and the draw comes back with the same candidates", async (t) => {
+  const built = await planned(t, { limit: 3 });
+  await ideas(built, 8);
+  await built.lab.drawAgain();
+  await until(() => judgeOf(built) !== undefined);
+  const judge = judgeOf(built);
+  assert.ok(judge);
+  await built.lab.askCoordinator('What is new?');
+  // One tick: the session ends, and the Coordinator has the place.
+  await until(() => !built.live.has(judge.id));
+  const coordinator = (): Started | undefined =>
+    built.started.find((session) =>
+      /Coordinator of a research lab/.test(session.prompt),
+    );
+  await until(() => coordinator() !== undefined);
+  const session = coordinator();
+  assert.ok(session);
+  assert.equal(built.place.full, true);
+  const reader = built.lab as unknown as {
+    longShots: { draws(): readonly unknown[]; state(): { drawing: unknown } };
+  };
+  assert.equal(reader.longShots.state().drawing, 'waiting');
+  const question = /(q-\d+)/.exec(session.prompt)?.[1];
+  const answer = await session.tools.call(
+    'verifold_answer',
+    { question, plain: 'The plan stands.', posts: ['p-1'] },
+    'answer-1',
+  );
+  assert.equal(answer.ok, true, answer.text);
+  endTurn(built, session);
+  // Its line check comes first too, and then the draw starts again.
+  const lineCheck = (): Started | undefined =>
+    built.started.find((entry) => /You check plain lines/.test(entry.prompt));
+  await until(() => lineCheck() !== undefined);
+  const check = lineCheck();
+  assert.ok(check);
+  const checked = await check.tools.call(
+    'verifold_line_check',
+    {
+      lines: [
+        {
+          id: /l-\d+/.exec(check.prompt)?.[0],
+          claims: [{ claim: 'The plan stands.', verdict: 'supported' }],
+          dropped: [],
+        },
+      ],
+    },
+    'check-1',
+  );
+  assert.equal(checked.ok, true, checked.text);
+  endTurn(built, check);
+  await until(() => judges(built) === 2);
+  const again = built.started.findLast(isJudge);
+  assert.equal(again?.agent, judge.agent);
+  assert.deepEqual(
+    again?.prompt.match(/c-\d: .+/g),
+    judge.prompt.match(/c-\d: .+/g),
+  );
+  assert.equal(reader.longShots.draws().length, 1);
+});
+
+await test('a draw that keeps giving the place stops at the limit of sessions in an hour', async (t) => {
+  const built = await planned(t, { limit: 3 });
+  await ideas(built, 8);
+  await built.lab.drawAgain();
+  const shots = (built.lab as unknown as { longShots: { giveSlot(): void } })
+    .longShots;
+  for (let count = 1; count <= longShotLimits.sessionsPerHour; count++) {
+    await until(() => judges(built) === count);
+    shots.giveSlot();
+  }
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(judges(built), longShotLimits.sessionsPerHour);
+  assert.equal(built.place.full, false);
 });
 
 await test('the Coordinator takes the reserved place first, and the draw starts when it ends', async (t) => {

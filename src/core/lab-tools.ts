@@ -151,8 +151,10 @@ export const longShotLimits = {
   batch: 6,
   /** The best candidates that go on the board. */
   top: 3,
-  /** Draws in one hour of the lab's clock, each one session in the reserved place. */
+  /** Draws in one hour of the lab's clock. */
   perHour: 3,
+  /** Sessions in one hour: the draws, and starts again of a draw that gave the Coordinator its place. */
+  sessionsPerHour: 6,
   /** Draws that a lab keeps on record. */
   draws: 40,
   /** The lowest score that a candidate needs to go on the board. */
@@ -176,9 +178,9 @@ export const longShotLimits = {
 export const briefLimits = {
   /**
    * Sessions in one hour of the lab's clock: at most 20, with the questions.
-   * Long-shot sessions share the place, with `longShotLimits.perHour` more, so
-   * the place holds at most 23 sessions in an hour. Stories have their own
-   * budget, so they never use an update of the brief.
+   * Long-shot sessions share the place, with `longShotLimits.sessionsPerHour`
+   * more, so the place holds at most 26 sessions in an hour. Stories have their
+   * own budget, so they never use an update of the brief.
    */
   updatesPerHour: 4,
   checksPerHour: 6,
@@ -237,6 +239,15 @@ export const claimVerdicts = [
   'added-fact',
   'raised-certainty',
   'number-out-of-scope',
+] as const;
+
+/** What a check of a plain line can find: a verdict on a claim, a dropped caveat, or a number that no post holds. */
+export const lineProblems = [
+  'added-fact',
+  'raised-certainty',
+  'number-out-of-scope',
+  'dropped-caveat',
+  'stray-number',
 ] as const;
 
 const postId = { type: 'string', pattern: '^p-[1-9][0-9]{0,5}$' };
@@ -1098,7 +1109,7 @@ export const labCoordinatorToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_answer',
     description:
-      'Answer a question of the person from the record, in plain words. Cite the posts that the answer rests on. This wakes no agent, and no agent reads it. A second session checks the answer, as it checks a line of the brief.',
+      'Answer a question of the person from the record, in plain words. Cite the posts that the answer rests on. Cite none only while the board has no post. This wakes no agent, and no agent reads it. A second session checks the answer, as it checks a line of the brief.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1109,7 +1120,7 @@ export const labCoordinatorToolSpecs: readonly AgentTool[] = [
           description:
             'Leave it out only when the prompt says that this lab keeps no plain words.',
         },
-        posts: citedPosts,
+        posts: { ...citedPosts, minItems: 0 },
       },
       required: ['question', 'posts'],
       additionalProperties: false,

@@ -7,7 +7,7 @@ import { lineWords } from '../src/app/brief-view.ts';
 import { BriefCard } from '../src/app/components/BriefCard.tsx';
 import { ClipToggle, LineWords } from '../src/app/components/LineWords.tsx';
 import { Answers } from '../src/app/components/StepInParts.tsx';
-import { answerCheck } from '../src/app/step-in.ts';
+import { askedOfYou, rowWaits, waitLine } from '../src/app/waits.ts';
 import { ViewContext, type ViewMode } from '../src/app/view-mode.ts';
 
 const now = Date.UTC(2026, 10, 1, 12, 0);
@@ -107,6 +107,35 @@ await test('Decisions shows only when the lab has one', () => {
   assert.match(card(brief([]), 'simple', threads), /Decisions \(1\)/);
 });
 
+await test('a closed agent waits on no row, and a reopen brings its wait back', () => {
+  const wait = {
+    waiter: 'a-2',
+    on: 'a-1',
+    onHandle: 'agent-1',
+    post: 'p-9',
+    subject: 'Do the counts agree?',
+  };
+  const lab = (state: string): Lab =>
+    ({
+      directions: [{ agent: 'a-2', state }],
+      waits: [wait],
+    }) as unknown as Lab;
+  for (const state of ['closed', 'stopped']) {
+    assert.deepEqual(rowWaits(lab(state)), []);
+    assert.equal(waitLine(lab(state), 'a-2'), null);
+  }
+  assert.equal(
+    waitLine(lab('open'), 'a-2'),
+    'Waits on Agent 1: Do the counts agree?',
+  );
+  // An ask to the person stays in Needs you: only the rows leave it out.
+  const ofYou = {
+    directions: [{ agent: 'a-2', state: 'closed' }],
+    waits: [{ ...wait, on: 'person', onHandle: null, reason: 'ask' }],
+  } as unknown as Lab;
+  assert.equal(askedOfYou(ofYou).length, 1);
+});
+
 const asked = (answer: Partial<BriefLine>): Lab =>
   ({
     questions: [
@@ -130,32 +159,45 @@ await test('an answer shows as written, in both views, with its sources one clic
       state: 'failed',
       by: 'codex',
       sameHarness: false,
-      reason: 'Failed its check. Its posts do not say: X.',
+      failure: { first: { kind: 'added-fact', claim: 'X.' }, count: 1 },
     },
   });
   for (const mode of ['simple', 'technical'] as const) {
     const html = inView(mode, <Answers lab={lab} now={now} />);
     assert.match(html, /No post says which test matters most\./);
-    assert.match(
-      html,
-      /answer__check">Failed its check\. Its posts do not say: X\.</,
-    );
+    assert.match(html, /Failed its check\. Its posts do not say: X\. No agent/);
+    assert.doesNotMatch(html, /Answered from the record/);
     assert.doesNotMatch(html, /<blockquote/);
     assert.match(html, /href="#\/thread\/t-2">2 posts</);
     assert.match(html, /Original posts/);
   }
 });
 
-await test('an answer that waits for its check says so, and one that passed says nothing', () => {
+await test('an answer that waits for its check says that it is not checked, and names no checker', () => {
   const pending = { state: 'pending', by: null, sameHarness: false } as const;
-  assert.match(
-    inView('simple', <Answers lab={asked({ check: pending })} now={now} />),
-    /A second agent is checking this answer\./,
+  const html = inView(
+    'simple',
+    <Answers lab={asked({ check: pending })} now={now} />,
   );
-  assert.equal(
-    answerCheck({ check: { ...pending, state: 'passed', reason: null } }),
-    null,
+  assert.match(html, /Not checked yet\. No agent was disturbed\./);
+  assert.doesNotMatch(html, /second agent|Answered from the record/);
+  assert.match(html, /No post says which test matters most\./);
+});
+
+await test('an answer with no post to cite has no link and no toggle', () => {
+  const html = inView(
+    'simple',
+    <Answers
+      lab={asked({
+        quotes: [],
+        posts: [],
+        check: { state: 'pending', by: null, sameHarness: false },
+      })}
+      now={now}
+    />,
   );
+  assert.match(html, /No post says which test matters most\./);
+  assert.doesNotMatch(html, /0 posts|Original posts/);
 });
 
 await test('an answer with no plain words shows each post as its own quote', () => {

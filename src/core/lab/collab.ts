@@ -166,9 +166,17 @@ export function collabOf(records: {
   /** The pods of the lab's directions. */
   readonly leases: readonly Lease[];
 }): Collab {
-  const { posts, threads, directions, calls, runs, leases } = records;
+  const { posts, threads, calls, runs, leases } = records;
   const checks = records.checks.filter((check) => check.state !== 'dropped');
-  const waits = openWaits(posts, threads, directions);
+  // An agent that ended waits on no one here. A reopen brings its waits back.
+  const ended = new Set(
+    records.directions
+      .filter((direction) => direction.state !== 'open')
+      .map((direction) => direction.agent),
+  );
+  const waits = openWaits(posts, threads).filter(
+    (wait) => !ended.has(wait.waiter),
+  );
   const onPerson = new Set([
     ...waits.filter((wait) => wait.on === 'person').map((wait) => wait.waiter),
     ...calls.filter((call) => call.state === 'open').flatMap(askers),

@@ -29,6 +29,7 @@ import {
   text,
   type Check,
   type LineCheck,
+  type LineProblem,
   type NoticeKind,
   type Thread,
   type Notice,
@@ -125,7 +126,7 @@ export function parseChecks(
       fail(`Split ${id} into its claims.`);
     if (entry.claims.length > briefLimits.claims)
       fail(`Give ${id} at most ${briefLimits.claims} claims.`);
-    const problems = entry.claims.flatMap((claim): readonly string[] => {
+    const problems = entry.claims.flatMap((claim): readonly LineProblem[] => {
       const part = object(claim) ?? {};
       const verdict =
         claimVerdicts.find((known) => known === part.verdict) ??
@@ -133,12 +134,17 @@ export function parseChecks(
       return verdict === 'supported'
         ? []
         : [
-            `${verdict}: ${oneLine(text(part.claim, briefLimits.claim, 'the claim'))}`,
+            {
+              kind: verdict,
+              claim: oneLine(text(part.claim, briefLimits.claim, 'the claim')),
+            },
           ];
     });
     const dropped = entry.dropped.map(
-      (caveat) =>
-        `dropped-caveat: ${oneLine(text(caveat, briefLimits.claim, 'the caveat'))}`,
+      (caveat): LineProblem => ({
+        kind: 'dropped-caveat',
+        claim: oneLine(text(caveat, briefLimits.claim, 'the caveat')),
+      }),
     );
     const found = [...problems, ...dropped].slice(0, briefLimits.claims);
     checks.set(id, {

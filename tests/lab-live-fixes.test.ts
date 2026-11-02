@@ -1,6 +1,6 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Board, clip, type NewPost, type Post } from '../src/core/board.ts';
@@ -12,7 +12,6 @@ import {
 } from '../src/core/lab-tools.ts';
 import { loadPrompt } from '../src/core/prompts.ts';
 import {
-  checkReason,
   evidencePosts,
   shownKind,
   strayNumbers,
@@ -25,10 +24,16 @@ import {
   LabCoordinator,
   type LabCoordinatorHost,
 } from '../src/core/lab/coordinator.ts';
-import { parseChecks, triedPost } from '../src/core/lab/coordinator-rules.ts';
+import {
+  closeRefusal,
+  openPosts,
+  parseChecks,
+  triedPost,
+} from '../src/core/lab/coordinator-rules.ts';
 import { parseIdea, type Idea } from '../src/core/lab/ideas.ts';
 import { LiteratureStore } from '../src/core/lab/literature-store.ts';
-import { recordFacts } from '../src/core/lab/record-facts.ts';
+import { heldUp } from '../src/core/lab/post-rules.ts';
+import { recordFacts, strayInRecord } from '../src/core/lab/record-facts.ts';
 import type {
   BriefLine,
   Check,
@@ -36,6 +41,7 @@ import type {
   LabSessions,
   LabView,
   PlanOfRecord,
+  Thread,
 } from '../src/core/lab/schema.ts';
 import { ThreadStore } from '../src/core/lab/thread-store.ts';
 import { openWaits } from '../src/core/lab/waits.ts';
@@ -95,6 +101,7 @@ const directionOf = (
 });
 
 interface Rig {
+  readonly path: string;
   readonly board: Board;
   readonly store: BriefStore;
   readonly started: { readonly prompt: string; readonly tools: Tools }[];
@@ -102,6 +109,8 @@ interface Rig {
   readonly ideas: Idea[];
   readonly marked: string[];
   readonly coordinator: LabCoordinator;
+  /** How often a session asked a long shot to give the place. */
+  readonly freed: { count: number };
   plan: Pick<PlanOfRecord, 'post' | 'reading'> | null;
   readonly post: (fields: Partial<NewPost>) => Promise<Post>;
   readonly call: (
@@ -135,6 +144,7 @@ async function rig(t: TestContext): Promise<Rig> {
   const marked: string[] = [];
   const directions: Rig['directions'] = [];
   const state: { plan: Rig['plan'] } = { plan: null };
+  const freed = { count: 0 };
   const host: LabCoordinatorHost = {
     root,
     sessions: {
@@ -168,6 +178,9 @@ async function rig(t: TestContext): Promise<Rig> {
       marked.push(`${String(idea)} ${post}`);
       return Promise.resolve('Kept.');
     },
+    freePlace: () => {
+      freed.count += 1;
+    },
     name: (author) => author,
     team: () => Promise.resolve(['claude', 'codex']),
     usedUp: () => false,
@@ -184,6 +197,7 @@ async function rig(t: TestContext): Promise<Rig> {
   t.after(() => coordinator.stop());
   directions.push(directionOf('d-1'));
   const built: Rig = {
+    path: join(root, 'brief.json'),
     board,
     store,
     started,
@@ -191,6 +205,7 @@ async function rig(t: TestContext): Promise<Rig> {
     ideas,
     marked,
     coordinator,
+    freed,
     get plan() {
       return state.plan;
     },
@@ -336,9 +351,11 @@ await test('the line check reads the whole plan and the record, and the number t
   assert.ok(!check.includes(clipped));
   assert.match(
     check,
-    new RegExp(`${asks.id} of a-2 waits on a-1\\. No answer ended this ask`),
+    new RegExp(`Ask ${asks.id} of a-2: no answer ended it yet`),
   );
   assert.match(check, /a-1 on d-1: open, no verdict yet\. Its posts: 1 plan/);
+  // A whole list can say that what it leaves out does not exist.
+  assert.match(check, /A cited post with no wait and no check below has none/);
 });
 
 await test('a line check keeps the whole of a long post', async (t) => {
@@ -360,75 +377,144 @@ await test('a line check keeps the whole of a long post', async (t) => {
   );
 });
 
-await test('the record facts hold each direction, wait, thread, and check of the cited posts', () => {
+const factsOf = (
+  more: Partial<Parameters<typeof recordFacts>[1]>,
+): Parameters<typeof recordFacts>[1] => ({
+  posts: [],
+  directions: [],
+  threads: [],
+  waits: [],
+  checks: [],
+  name: (author) => author.replace('a-', 'Agent '),
+  ...more,
+});
+
+await test('the record facts put the cited posts first, open or closed, then the lab', () => {
   const posts = [
     postOf('p-1', { kind: 'plan' }),
     postOf('p-2'),
     postOf('p-3'),
     postOf('p-4', { author: 'a-2', kind: 'status' }),
     postOf('p-5', { thread: 't-9' }),
+    postOf('p-6', { kind: 'ask', author: 'a-2', replyTo: 'p-2' }),
+    postOf('p-7', { kind: 'ask', author: 'a-2', replyTo: 'p-2' }),
+    postOf('p-8', { kind: 'objection', author: 'a-2', replyTo: 'p-2' }),
+    postOf('p-9', { kind: 'objection', author: 'a-2', replyTo: 'p-3' }),
+    postOf('p-10', {
+      kind: 'check',
+      author: 'a-2',
+      replyTo: 'p-3',
+      method: 'rerun',
+      outcome: 'holds',
+    }),
+    postOf('p-11', { kind: 'objection', replyTo: 'p-5' }),
   ];
-  const facts = recordFacts({
-    cited: [posts[1], posts[2]].flatMap((post) => post ?? []),
-    posts,
-    directions: [
-      directionOf('d-1', { verdict: 'leading' }),
-      directionOf('d-2', { state: 'closed', verdict: 'ruled-out' }),
-    ],
-    threads: [
-      { id: 't-2', state: 'open' },
-      { id: 't-9', state: 'closed' },
-    ],
-    waits: [
-      {
-        waiter: 'a-1',
-        on: 'person',
-        post: 'p-2',
-        reason: 'ask',
-        thread: 't-2',
-        since: at,
-      },
-      {
-        waiter: 'a-1',
-        on: 'a-2',
-        post: 'p-5',
-        reason: 'ask',
-        thread: 't-9',
-        since: at,
-      },
-    ],
-    checks: [
-      { claim: 'p-2', state: 'running', outcome: null },
-      { claim: 'p-3', state: 'done', outcome: 'fails' },
-      { claim: 'p-3', state: 'dropped', outcome: null },
-      { claim: 'p-5', state: 'done', outcome: 'holds' },
-    ],
-    name: (author) => author.replace('a-', 'Agent '),
-  });
-  assert.deepEqual(facts, [
-    '- Agent 1 on d-1: open, leading. Its posts: 1 plan, 3 result.',
-    '- Agent 2 on d-2: closed by its agent, ruled out. Its posts: none.',
-    '- p-2 of Agent 1 waits on the person. No answer ended this ask yet.',
+  const { lines, cut } = recordFacts(
+    [posts[1], posts[2]].flatMap((post) => post ?? []),
+    factsOf({
+      posts,
+      directions: [
+        directionOf('d-1', { verdict: 'leading' }),
+        directionOf('d-2', { state: 'closed', verdict: 'ruled-out' }),
+      ],
+      threads: [
+        { id: 't-2', state: 'open' },
+        { id: 't-9', state: 'closed' },
+      ],
+      waits: [
+        {
+          waiter: 'a-2',
+          on: 'a-1',
+          post: 'p-6',
+          reason: 'ask',
+          thread: 't-2',
+          since: at,
+        },
+      ],
+      checks: [
+        checkOf({
+          claim: 'p-2',
+          state: 'running',
+          outcome: null,
+          method: null,
+        }),
+        checkOf({ claim: 'p-3', outcome: 'fails', blind: false }),
+        checkOf({ claim: 'p-3', state: 'dropped' }),
+        checkOf({ claim: 'p-5' }),
+      ],
+    }),
+  );
+  assert.deepEqual(lines, [
+    '- Ask p-6 of Agent 2 on p-2: no answer ended it yet.',
+    '- Ask p-7 of Agent 2 on p-2: it ended.',
+    // A closed agent's objection still stands.
+    '- Objection p-8 of Agent 2 on p-2: it stands.',
+    '- Objection p-9 of Agent 2 on p-3: it stands.',
+    "- An agent's own check post p-10 of Agent 2 on p-3: rerun, not blind, holds.",
+    "- Verifold's check of p-2: no method yet, blind, waits or runs.",
+    "- Verifold's check of p-3: rerun, not blind, ended: fails.",
     '- t-2: open.',
-    '- A check of p-2 waits or runs.',
-    '- A check of p-3 ended: fails.',
+    '- The lab has 2 directions: 1 open, 1 ended.',
+    '- Agent 1 on d-1: open, leading. Its posts: 1 plan, 3 result, 1 objection.',
+    '- Agent 2 on d-2: closed by its agent, ruled out. Its posts: 2 ask, 2 objection, 1 check.',
   ]);
+  assert.equal(cut, false);
 });
 
-await test('the record facts stay within their limit', () => {
-  const facts = recordFacts({
-    cited: [],
-    posts: [],
-    directions: Array.from(
-      { length: briefLimits.recordFacts + 5 },
-      (_, index) => directionOf(`d-${index + 1}`),
-    ),
-    threads: [],
-    waits: [],
-    checks: [],
-    name: (author) => author,
+await test('a cut list says so, so that absence never reads as proof', async (t) => {
+  const many = Array.from({ length: briefLimits.recordFacts + 5 }, (_, index) =>
+    directionOf(`d-${index + 1}`),
+  );
+  const facts = recordFacts([postOf('p-1')], factsOf({ directions: many }));
+  assert.equal(facts.lines.length, briefLimits.recordFacts);
+  assert.equal(facts.cut, true);
+  // The cited posts come first, so a cut takes the lab's lines.
+  const cited = [postOf('p-1')];
+  const posts = [
+    ...cited,
+    postOf('p-2', { kind: 'objection', author: 'a-2', replyTo: 'p-1' }),
+  ];
+  assert.match(
+    recordFacts(cited, factsOf({ posts, directions: many })).lines[0] ?? '',
+    /Objection p-2/,
+  );
+  const lab = await rig(t);
+  const post = await lab.post({});
+  lab.directions.push(...many);
+  await lab.coordinator.tick();
+  await lab.call('verifold_brief', {
+    lines: [{ kind: 'new', plain: 'It works.', posts: [post.id] }],
   });
-  assert.equal(facts.length, briefLimits.recordFacts);
+  await lab.end();
+  await lab.coordinator.tick();
+  const check = lab.started.at(-1)?.prompt ?? '';
+  assert.match(check, /verifold_line_check/);
+  assert.doesNotMatch(check, /has none/);
+});
+
+await test('a true count of the record passes the number test, and a stray number still fails', () => {
+  const posts = [postOf('p-1', { text: 'It reached 64.5%.' })];
+  const records = (): Parameters<typeof recordFacts>[1] =>
+    factsOf({
+      posts,
+      directions: [directionOf('d-1'), directionOf('d-2')],
+    });
+  assert.deepEqual(strayNumbers('2 of the 2 lines have no verdict.', posts), [
+    '2',
+    '2',
+  ]);
+  assert.deepEqual(
+    strayInRecord('2 of the 2 lines have no verdict.', posts, records),
+    [],
+  );
+  assert.deepEqual(strayInRecord('It reached 91.5%.', posts, records), [
+    '91.5%',
+  ]);
+  // The records are read only for a number that the posts do not hold.
+  assert.deepEqual(
+    strayInRecord('It reached 64.5%.', posts, () => assert.fail('read')),
+    [],
+  );
 });
 
 await test('the check prompt keeps results strict, and lets a definition and the record pass', async () => {
@@ -439,14 +525,22 @@ await test('the check prompt keeps results strict, and lets a definition and the
     /`raised-certainty`/,
     /`number-out-of-scope`/,
     /It cannot add a result, a cause, or certainty/,
-    /When you are in doubt about a claim of a result, do not write `supported`/,
+    /When you are in doubt, do not write `supported`\./,
   ])
     assert.match(prompt, rule);
   // What no longer fails a true line.
+  assert.match(prompt, /Only two exceptions exist/);
   assert.match(prompt, /A plain definition/);
   assert.match(prompt, /judge it against the record's facts/);
   assert.match(prompt, /would conclude something else/);
   assert.match(prompt, /A plain line can leave out detail/);
+  // A caveat on the evidence is never detail.
+  assert.match(prompt, /"one AI rater", "not a rerun", or "same harness"/);
+  assert.doesNotMatch(prompt, /how a method works/);
+  assert.match(
+    prompt,
+    /In a claim about a result, it is `number-out-of-scope`/,
+  );
   const [spec] = lineCheckToolSpecs;
   assert.match(spec?.description ?? '', /record facts/);
 });
@@ -514,31 +608,35 @@ await test('a brief has at most 5 lines, and a later brief replaces the last one
   );
 });
 
-await test('"Held up" needs a rerun that held on each result, and any other held line is a Result', () => {
+await test('"Held up" needs a blind rerun of Verifold that held, and nothing since against it', () => {
   const one = [postOf('p-1')];
   const two = [postOf('p-1'), postOf('p-2')];
+  const later = '2026-11-01T12:05:00.000Z';
   assert.equal(shownKind('held', one, []), 'result');
   assert.equal(shownKind('held', one, [checkOf()]), 'held');
-  // A check that did not end, a code read, or a failed rerun holds nothing up.
-  assert.equal(
-    shownKind('held', one, [checkOf({ state: 'running' })]),
-    'result',
-  );
-  assert.equal(
-    shownKind('held', one, [checkOf({ method: 'code-read' })]),
-    'result',
-  );
-  assert.equal(
-    shownKind('held', one, [checkOf({ outcome: 'fails' })]),
-    'result',
-  );
-  // The newest rerun decides.
+  // A check that did not end, a code read, a failed rerun, or a rerun that was not blind holds nothing up.
+  for (const more of [
+    { state: 'running' },
+    { method: 'code-read' },
+    { outcome: 'fails' },
+    { blind: false },
+  ] as const)
+    assert.equal(shownKind('held', one, [checkOf(more)]), 'result');
+  // A later failed check of any form takes it back, and an earlier one does not.
+  for (const form of ['rerun', 'code-read'] as const)
+    assert.equal(
+      shownKind('held', one, [
+        checkOf(),
+        checkOf({ endedAt: later, outcome: 'fails', method: form }),
+      ]),
+      'result',
+    );
   assert.equal(
     shownKind('held', one, [
-      checkOf({ endedAt: '2026-11-01T12:01:00.000Z' }),
-      checkOf({ endedAt: '2026-11-01T12:02:00.000Z', outcome: 'fails' }),
+      checkOf({ outcome: 'differs', endedAt: '2026-11-01T11:00:00.000Z' }),
+      checkOf(),
     ]),
-    'result',
+    'held',
   );
   // Each result needs its own.
   assert.equal(shownKind('held', two, [checkOf()]), 'result');
@@ -546,7 +644,13 @@ await test('"Held up" needs a rerun that held on each result, and any other held
     shownKind('held', two, [checkOf(), checkOf({ claim: 'p-2' })]),
     'held',
   );
-  // A check post of another agent counts when it reran the result.
+  // No line of another kind changes.
+  for (const kind of ['decided', 'failed', 'open', 'new', 'answer'] as const)
+    assert.equal(shownKind(kind, one, []), kind);
+});
+
+await test("an agent's own check post never holds a post up, whatever its method", () => {
+  const one = postOf('p-1');
   const reran = postOf('p-2', {
     kind: 'check',
     author: 'a-2',
@@ -555,33 +659,83 @@ await test('"Held up" needs a rerun that held on each result, and any other held
     outcome: 'holds',
   });
   assert.equal(
-    shownKind('held', evidencePosts([one[0] as Post], [...one, reran]), []),
-    'held',
-  );
-  // An open objection takes it back.
-  const doubt = postOf('p-3', {
-    kind: 'objection',
-    author: 'a-2',
-    replyTo: 'p-1',
-  });
-  assert.equal(
-    shownKind('held', evidencePosts(one, [...one, doubt]), [checkOf()]),
+    shownKind('held', evidencePosts([one], [one, reran]), []),
     'result',
   );
-  // No line of another kind changes.
-  for (const kind of ['decided', 'failed', 'open', 'new', 'answer'] as const)
-    assert.equal(shownKind(kind, one, []), kind);
+  assert.equal(heldUp(one, [one, reran], []), false);
 });
 
-await test('an answer goes out as written at each state of its check, with the reason when it failed', () => {
+await test('a held rerun stops holding after a refutation, an accepted objection, or a dispute', () => {
+  const claim = postOf('p-1');
+  const rerun = postOf('p-2', { kind: 'rerun', replyTo: 'p-1', author: 'a-5' });
+  const check = checkOf({ result: 'p-2' });
+  const later = '2026-11-01T12:05:00.000Z';
+  const held = (...more: readonly Post[]): boolean =>
+    heldUp(claim, [claim, rerun, ...more], [check]);
+  assert.equal(held(), true);
+  // A check post that fails the rerun refutes it.
+  assert.equal(
+    held(
+      postOf('p-3', {
+        kind: 'check',
+        author: 'a-3',
+        replyTo: 'p-2',
+        outcome: 'fails',
+      }),
+    ),
+    false,
+  );
+  // An objection stands, against the claim or against its rerun.
+  const doubt = (target: string): Post =>
+    postOf('p-3', {
+      kind: 'objection',
+      author: 'a-3',
+      replyTo: target,
+      at: later,
+    });
+  assert.equal(held(doubt('p-1')), false);
+  assert.equal(held(doubt('p-2')), false);
+  // An objection that the author accepts after the rerun ends the dispute and the rerun's standing.
+  const accepted = postOf('p-4', {
+    kind: 'answer',
+    accepts: true,
+    replyTo: 'p-3',
+    at: later,
+  });
+  assert.equal(held(doubt('p-1'), accepted), false);
+  // An objection accepted before the rerun changes nothing.
+  assert.equal(
+    held(
+      { ...doubt('p-1'), at: '2026-11-01T11:00:00.000Z' },
+      { ...accepted, at: '2026-11-01T11:01:00.000Z' },
+    ),
+    true,
+  );
+  // A later check of the claim by an agent that fails it takes it back.
+  assert.equal(
+    held(
+      postOf('p-5', {
+        kind: 'check',
+        author: 'a-3',
+        replyTo: 'p-1',
+        outcome: 'fails',
+        at: later,
+      }),
+    ),
+    false,
+  );
+});
+
+await test('an answer goes out as written at each state of its check, with what the check found', () => {
   const posts = [postOf('p-1', { text: 'It reached 64.5%.' })];
-  const asked = (answer: BriefLine, state = 'answered'): LabView =>
+  const asked = (answer: BriefLine): LabView =>
     viewWith({
       posts,
+      handles: {},
       brief: {
         brief: null,
         notices: [],
-        questions: [{ id: 'q-1', at, text: 'Why?', state, answer }],
+        questions: [{ id: 'q-1', at, text: 'Why?', state: 'answered', answer }],
         stories: [],
         sessions: [],
       },
@@ -591,35 +745,48 @@ await test('an answer goes out as written at each state of its check, with the r
   const plain = 'It reached 64.5% on one seed.';
   const check = (
     state: BriefLine['check']['state'],
-    problems: readonly string[] = [],
+    problems: BriefLine['check']['problems'] = [],
   ): BriefLine['check'] => ({ state, by: null, sameHarness: false, problems });
   const answerOf = (more: Partial<BriefLine>): BriefLine =>
     lineOf('l-1', plain, { kind: 'answer', ...more });
-  assert.equal(shown(answerOf({ check: check('pending') }))?.plain, plain);
+  const pending = shown(answerOf({ check: check('pending') }));
+  assert.equal(pending?.plain, plain);
+  assert.equal(pending?.check.failure, undefined);
   const failed = shown(
     answerOf({
       check: check('failed', [
-        'added-fact: The rerun held.',
-        'dropped-caveat: One seed only.',
+        { kind: 'added-fact', claim: 'The rerun held.' },
+        { kind: 'dropped-caveat', claim: 'One seed only.' },
       ]),
     }),
   );
   assert.equal(failed?.plain, plain);
-  assert.equal(
-    failed?.check.reason,
-    'Failed its check, with 2 problems. Its posts do not say: The rerun held.',
-  );
+  assert.deepEqual(failed?.check.failure, {
+    first: { kind: 'added-fact', claim: 'The rerun held.' },
+    count: 2,
+  });
   const numbers = shown(
     answerOf({
       plain: 'It reached 91.5%.',
-      check: check('numbers', ['91.5%']),
+      check: check('numbers', [{ kind: 'stray-number', claim: '91.5%' }]),
     }),
   );
   assert.equal(numbers?.plain, 'It reached 91.5%.');
-  assert.equal(
-    numbers?.check.reason,
-    'Failed its check. No cited post holds 91.5%.',
+  assert.equal(numbers?.check.failure?.first?.claim, '91.5%');
+  // A file that says passed still shows what no post holds.
+  const edited = shown(
+    answerOf({ plain: 'It reached 91.5%.', check: check('passed') }),
   );
+  assert.equal(edited?.check.state, 'numbers');
+  assert.equal(edited?.check.failure?.first?.claim, '91.5%');
+  const long = shown(
+    answerOf({
+      check: check('failed', [
+        { kind: 'added-fact', claim: 'long '.repeat(100) },
+      ]),
+    }),
+  );
+  assert.ok((long?.check.failure?.first?.claim.length ?? 0) <= 160);
   // A lab that keeps no plain words has only its quotes.
   assert.equal(
     shown(answerOf({ plain: '', check: check('withheld') }))?.plain,
@@ -635,7 +802,9 @@ await test('an answer goes out as written at each state of its check, with the r
           key: 'k',
           through: 1,
           lines: [
-            lineOf('l-2', plain, { check: check('failed', ['added-fact: X']) }),
+            lineOf('l-2', plain, {
+              check: check('failed', [{ kind: 'added-fact', claim: 'X' }]),
+            }),
           ],
         },
         notices: [],
@@ -647,48 +816,131 @@ await test('an answer goes out as written at each state of its check, with the r
     (list) => [...list],
   ).brief;
   assert.equal(brief?.lines[0]?.plain, null);
-  assert.equal(brief?.lines[0]?.check.reason, undefined);
+  assert.equal(brief?.lines[0]?.check.failure, undefined);
 });
 
-await test('the reason of a failed check reads as one plain line', () => {
-  assert.equal(checkReason('passed', []), null);
-  assert.equal(checkReason('pending', []), null);
-  assert.equal(
-    checkReason('failed', ['raised-certainty: It failed.']),
-    'Failed its check. It is more certain than its posts: It failed.',
+await test('a check stores what it found by kind, and a record of an earlier version keeps its state', async (t) => {
+  assert.deepEqual(
+    parseChecks(
+      [
+        {
+          id: 'l-1',
+          claims: [{ claim: 'It held.', verdict: 'raised-certainty' }],
+          dropped: ['One seed only.'],
+        },
+      ],
+      ['l-1'],
+    ).get('l-1')?.problems,
+    [
+      { kind: 'raised-certainty', claim: 'It held.' },
+      { kind: 'dropped-caveat', claim: 'One seed only.' },
+    ],
   );
-  assert.equal(
-    checkReason('failed', ['number-out-of-scope: 4 of 5 seeds.']),
-    'Failed its check. A number counts something else: 4 of 5 seeds.',
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'verifold-line-')));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
+  const path = join(root, 'brief.json');
+  await writeFile(
+    path,
+    JSON.stringify({
+      brief: {
+        at,
+        key: 'k',
+        through: 1,
+        lines: [
+          lineOf('l-1', 'A line.', {
+            check: {
+              state: 'failed',
+              by: 'codex',
+              sameHarness: false,
+              problems: [
+                'added-fact: an earlier form' as unknown as BriefLine['check']['problems'][number],
+                { kind: 'dropped-caveat', claim: 'A caveat.' },
+                {
+                  kind: 'unknown',
+                  claim: 'No.',
+                } as unknown as BriefLine['check']['problems'][number],
+              ],
+            },
+          }),
+        ],
+      },
+    }),
   );
-  assert.equal(
-    checkReason('failed', ['dropped-caveat: One seed only.']),
-    'Failed its check. It leaves out a caveat: One seed only.',
-  );
-  // A hand-edited file holds no reason to show.
-  assert.equal(checkReason('failed', ['odd']), 'Failed its check.');
-  assert.equal(checkReason('failed', []), 'Failed its check.');
-  assert.equal(
-    checkReason('numbers', []),
-    'Failed its check. A number is not in its cited posts.',
-  );
-  assert.ok(
-    (checkReason('failed', [`added-fact: ${'long '.repeat(100)}`]) ?? '')
-      .length < 220,
-  );
+  const store = new BriefStore(path, () => false);
+  await store.load(true);
+  const [line] = store.view().brief?.lines ?? [];
+  assert.equal(line?.check.state, 'failed');
+  assert.deepEqual(line?.check.problems, [
+    { kind: 'dropped-caveat', claim: 'A caveat.' },
+  ]);
 });
 
-await test('no session starts until the board has a post, and the first post lets the update run', async (t) => {
+await test('no update starts until the board has a post, and the first post lets it run', async (t) => {
   const lab = await rig(t);
-  await lab.coordinator.tick();
-  assert.equal(lab.started.length, 0);
-  // A question waits for it too: an answer must cite a post.
-  lab.coordinator.ask('What is new?');
   await lab.coordinator.tick();
   assert.equal(lab.started.length, 0);
   await lab.post({});
   await lab.coordinator.tick();
   assert.equal(lab.started.length, 1);
+});
+
+await test('a question before the first post gets its answer at once, from what exists', async (t) => {
+  const lab = await rig(t);
+  const question = lab.coordinator.ask('What is new?');
+  await lab.coordinator.tick();
+  assert.equal(lab.started.length, 1);
+  assert.match(lab.started[0]?.prompt ?? '', /The board has no post yet/);
+  const answer = await lab.call('verifold_answer', {
+    question: question.id,
+    plain: 'The lab has no post yet.',
+    posts: [],
+  });
+  assert.equal(answer.ok, true, answer.text);
+  const stored = lab.store.view().questions[0]?.answer;
+  assert.deepEqual(stored?.posts, []);
+  assert.equal(stored?.check.state, 'pending');
+  await lab.end();
+  // Its line check runs with the record's facts alone.
+  await lab.coordinator.tick();
+  const prompt = lab.started.at(-1)?.prompt ?? '';
+  assert.match(prompt, /verifold_line_check/);
+  await lab.call('verifold_line_check', {
+    lines: [
+      {
+        id: /l-\d+/.exec(prompt)?.[0],
+        claims: [{ claim: 'The lab has no post.', verdict: 'supported' }],
+        dropped: [],
+      },
+    ],
+  });
+  await lab.end();
+  // The record keeps an answer with no post.
+  await lab.store.flush();
+  const again = new BriefStore(lab.path, () => false);
+  await again.load(true);
+  assert.deepEqual(again.view().questions[0]?.answer?.posts, []);
+  // With a post on the board, an answer cites it.
+  await lab.post({});
+  const next = lab.coordinator.ask('And now?');
+  await lab.coordinator.tick();
+  const refused = await lab.call('verifold_answer', {
+    question: next.id,
+    plain: 'It works.',
+    posts: [],
+  });
+  assert.equal(refused.ok, false);
+  assert.match(refused.text, /Cite 1 to 6 posts/);
+});
+
+await test('the Coordinator asks for the place for a question, an update, or a line check, and not for a story', async (t) => {
+  const lab = await rig(t);
+  await lab.post({});
+  assert.equal(await lab.coordinator.idle(), true);
+  lab.coordinator.ask('What is new?');
+  assert.equal(await lab.coordinator.idle(), false);
+  await lab.coordinator.tick();
+  assert.equal(lab.freed.count, 1);
+  assert.equal(await lab.coordinator.idle(), false);
 });
 
 await test('the Coordinator marks an idea tried with the post that tried it, and that is all the tool does', async (t) => {
@@ -784,7 +1036,7 @@ await test('a post that tried an idea says what a run or a check did', () => {
   assert.throws(() => triedPost(undefined), /Cite a result/);
 });
 
-await test('a closed agent waits on no one, on every screen, and a reopen brings its wait back', () => {
+await test('a closed agent leaves Working together, the record keeps its wait, and a reopen brings it back', () => {
   const ask = postOf('p-2', {
     kind: 'ask',
     author: 'a-2',
@@ -799,59 +1051,60 @@ await test('a closed agent waits on no one, on every screen, and a reopen brings
   });
   const posts = [ask, onClosed];
   const open = [directionOf('d-1'), directionOf('d-2')];
-  const closed = [
-    directionOf('d-1'),
-    directionOf('d-2', { state: 'closed', verdict: 'ruled-out' }),
-  ];
+  const needs = (directions: typeof open): readonly string[] =>
+    collabOf({
+      posts,
+      threads: [],
+      directions,
+      checks: [],
+      calls: [],
+      runs: [],
+      leases: [],
+    }).needs.map((need) => need.post);
+  assert.deepEqual(needs(open), ['p-2', 'p-3']);
+  // Agent 1 still waits on the agent that ended, and that agent waits on no one.
+  for (const state of ['closed', 'stopped'] as const)
+    assert.deepEqual(
+      needs([directionOf('d-1'), directionOf('d-2', { state })]),
+      ['p-3'],
+    );
+  // The record keeps the wait, so a move or a close still sees the open ask.
   assert.deepEqual(
-    openWaits(posts, [], open).map((wait) => wait.post),
+    openWaits(posts, []).map((wait) => wait.post),
     ['p-2', 'p-3'],
   );
-  // Agent 1 still waits on the closed agent, and the closed agent waits on no one.
-  assert.deepEqual(
-    openWaits(posts, [], closed).map((wait) => wait.post),
-    ['p-3'],
+  assert.equal(openPosts(posts, [], openWaits(posts, [])).has('p-2'), true);
+  assert.match(
+    closeRefusal(
+      { id: 't-2', state: 'open' } as Thread,
+      posts,
+      [],
+      [],
+      openWaits(posts, []),
+    ) ?? '',
+    /p-2 waits for an answer/,
   );
-  const stopped = [
-    directionOf('d-1'),
-    directionOf('d-2', { state: 'stopped' }),
-  ];
-  assert.deepEqual(
-    openWaits(posts, [], stopped).map((wait) => wait.post),
-    ['p-3'],
-  );
-  const needs = collabOf({
-    posts,
-    threads: [],
-    directions: closed,
-    checks: [],
-    calls: [],
-    runs: [],
-    leases: [],
-  }).needs;
-  assert.deepEqual(
-    needs.map((need) => need.post),
-    ['p-3'],
-  );
+  // A reopen: the direction is open again, and the wait is back.
+  assert.deepEqual(needs(open), ['p-2', 'p-3']);
   const view = viewWith({
-    state: { directions: closed, calls: [], plan: null },
+    state: { directions: open, calls: [], plan: null },
     posts,
     handles: { 'a-1': 'agent-1', 'a-2': 'agent-2' },
     threads: [{ id: 't-2', title: 'A subject', state: 'open' }],
   });
   assert.deepEqual(
     waitItems(view).map((wait) => wait.waiter),
-    ['a-1'],
+    ['a-2', 'a-1'],
   );
 });
 
-await test('the reserved place holds at most 23 sessions in an hour, as the guide says', () => {
+await test('the reserved place holds at most 26 sessions in an hour, as the guide says', () => {
   assert.equal(
     briefLimits.updatesPerHour +
       briefLimits.storiesPerHour +
       briefLimits.checksPerHour +
       briefLimits.questionsPerHour +
-      longShotLimits.perHour,
-    23,
+      longShotLimits.sessionsPerHour,
+    26,
   );
 });

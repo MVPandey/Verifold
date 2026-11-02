@@ -5,9 +5,10 @@
  * combines the ideas. The top candidates go on the board as open proposals,
  * each in its own thread, and agents choose what to take up. Verifold assigns
  * nothing. The session runs in the Coordinator's reserved place, outside
- * "Agents at once", when the Coordinator left that place free. So a full lab
- * still runs its draws, and a draw never takes an agent's slot. Each draw is
- * one session, within `longShotLimits.perHour`.
+ * "Agents at once", and only when the Coordinator has nothing to do. So a full
+ * lab still runs its draws, and a draw never takes an agent's slot. A person's
+ * question, a due update, or a line check ends the session, and its draw starts
+ * again later with the same candidates, within `longShotLimits.sessionsPerHour`.
  * The records of draws are in `.verifold/lab/long-shots.json`.
  */
 import { join } from 'node:path';
@@ -274,6 +275,8 @@ export interface LongShotHost {
   readonly root: string;
   /** The reserved place, which the Coordinator uses first. Null: this lab has none, so no session starts. */
   readonly sessions: LabOptions['reserved'] | null;
+  /** The Coordinator has nothing to do now and nothing scheduled. */
+  coordinatorIdle(): Promise<boolean>;
   readonly threads: Pick<ThreadStore, 'open'>;
   readonly timing: Pick<typeof labTiming, 'hourMs' | 'minuteMs'>;
   /** A number from 0 up to 1. */
@@ -304,6 +307,8 @@ interface WaitingDraw {
   /** The harness of the agent whose line failed. The session uses another one. */
   readonly author: HarnessName | null;
   readonly candidates: readonly Candidate[];
+  /** A draw whose session gave the place keeps its agent ID, and it is on record. */
+  readonly agent?: string;
 }
 
 interface RunningDraw extends WaitingDraw {
@@ -324,6 +329,8 @@ export class LongShots {
   private waiting: WaitingDraw | null = null;
   private running: RunningDraw | null = null;
   private list: readonly DrawRecord[] = [];
+  /** When sessions started, in milliseconds, for `longShotLimits.sessionsPerHour`. */
+  private starts: readonly number[] = [];
   /** The person's Stop long shots: no failed line of work starts a draw until their next Draw again. */
   private off = false;
   private readonly path: string;
@@ -472,18 +479,22 @@ export class LongShots {
   }
 
   /**
-   * Start the session of a draw that waits, in the lab's queue. The lab calls
-   * this after the Coordinator's turn in each tick, so the Coordinator comes
-   * first. A running session keeps the place until it ends.
+   * Start the session of a draw that waits, in the lab's queue, once the
+   * Coordinator has nothing to do and nothing scheduled. A restart of a draw
+   * that gave the place counts against the sessions of the hour.
    */
   async start(): Promise<void> {
     const draw = this.waiting;
-    const { sessions } = this.host;
+    const { sessions, timing } = this.host;
     if (!draw || this.running || !sessions || sessions.full) return;
+    if (!(await this.host.coordinatorIdle())) return;
+    const hour = Date.now() - timing.hourMs;
+    this.starts = this.starts.filter((at) => at > hour);
+    if (this.starts.length >= longShotLimits.sessionsPerHour) return;
     const team = await this.host.team();
     const harness = team.find((host) => host !== draw.author) ?? team[0];
     if (!harness || this.host.usedUp(harness)) return;
-    const agent = this.host.nextAgent();
+    const agent = draw.agent ?? this.host.nextAgent();
     if (number(agent) > 9999) {
       this.waiting = null;
       return;
@@ -519,24 +530,46 @@ export class LongShots {
         this.waiting = draw;
         return;
       }
-      this.list = [
-        ...this.list,
-        {
-          at: new Date().toISOString(),
-          by: draw.by,
-          agent,
-          drawn: draw.candidates.map((candidate) =>
-            combinationKey(candidate.ideas),
-          ),
-        },
-      ].slice(-longShotLimits.draws);
-      void this.file.save().catch(() => {});
+      this.starts = [...this.starts, Date.now()];
+      if (!draw.agent) {
+        this.list = [
+          ...this.list,
+          {
+            at: new Date().toISOString(),
+            by: draw.by,
+            agent,
+            drawn: draw.candidates.map((candidate) =>
+              combinationKey(candidate.ideas),
+            ),
+          },
+        ].slice(-longShotLimits.draws);
+        void this.file.save().catch(() => {});
+      }
     } catch (error) {
       this.running = null;
       await this.note(
         `Verifold could not start the long-shot check: ${error instanceof Error ? error.message : 'unknown error'}`,
       );
     }
+  }
+
+  /**
+   * The Coordinator needs the place, in the lab's queue. The session ends, so
+   * the place is free when this returns, and its draw waits with the same
+   * candidates and agent ID.
+   */
+  giveSlot(): void {
+    const run = this.running;
+    if (!run) return;
+    run.slot.end();
+    this.running = null;
+    if (!run.judged)
+      this.waiting = {
+        by: run.by,
+        author: run.author,
+        candidates: run.candidates,
+        agent: run.agent,
+      };
   }
 
   /** `verifold_judge`, in the lab's queue: the best candidates go on the board. */
@@ -602,11 +635,14 @@ export class LongShots {
   /**
    * The person's Stop long shots, in the lab's queue: the draw that waits and
    * the session that runs end, and no failed line of work starts a new draw.
-   * An agent that took up a long shot keeps working. A session that gave no
+   * An agent that took up a long shot keeps working. A draw that got no
    * judgment gives its combinations back, so a later draw can take them.
    */
   async halt(): Promise<void> {
-    const unjudged = this.running?.judged ? undefined : this.running?.agent;
+    const unjudged =
+      this.running && !this.running.judged
+        ? this.running.agent
+        : this.waiting?.agent;
     this.stop();
     this.off = true;
     this.list = this.list.map((draw) =>

@@ -281,6 +281,16 @@ const wokenBy = (lab: Lab, post: string): string[] =>
     )
     .map(({ agent }) => agent.handle);
 
+/** A wake joins each agent's own queue after its call returns, so this waits for `handles` first. */
+async function wokenAre(
+  lab: Lab,
+  post: string,
+  handles: readonly string[],
+): Promise<void> {
+  await until(() => wokenBy(lab, post).length >= handles.length);
+  assert.deepEqual(wokenBy(lab, post), handles);
+}
+
 await test('a thread from a file keeps what is valid and drops what is not', () => {
   const good = {
     id: 't-3',
@@ -1303,7 +1313,7 @@ await test('an objection wakes its target’s author and marks the target Disput
   });
   assert.equal(objection.ok, true, objection.text);
   const objectionId = posted(objection.text);
-  assert.deepEqual(wokenBy(lab, objectionId), [agentOf(lab, 0).handle]);
+  await wokenAre(lab, objectionId, [agentOf(lab, 0).handle]);
   assert.deepEqual(
     openDisputes(viewOf(lab)).map((dispute) => dispute.target.id),
     [target],
@@ -1314,9 +1324,7 @@ await test('an objection wakes its target’s author and marks the target Disput
     text: 'Seed 2 is clean: I read the split.',
   });
   assert.equal(rebuttal.ok, true, rebuttal.text);
-  assert.deepEqual(wokenBy(lab, posted(rebuttal.text)), [
-    agentOf(lab, 1).handle,
-  ]);
+  await wokenAre(lab, posted(rebuttal.text), [agentOf(lab, 1).handle]);
   assert.equal(openDisputes(viewOf(lab)).length, 1);
   const accepted = await by(0)('verifold_post', {
     kind: 'answer',
@@ -1429,10 +1437,10 @@ await test('an ask wakes who it names and sets a wait until an answer comes', as
   });
   assert.equal(ask.ok, true, ask.text);
   const id = posted(ask.text);
-  assert.deepEqual(wokenBy(lab, id), [agentOf(lab, 1).handle]);
+  await wokenAre(lab, id, [agentOf(lab, 1).handle]);
   const view = viewOf(lab);
   assert.deepEqual(
-    openWaits(view.posts, view.threads ?? [], view.state.directions).map(
+    openWaits(view.posts, view.threads ?? []).map(
       ({ waiter, on, post: asked }) => [waiter, on, asked],
     ),
     [[started[0]?.agent, started[1]?.agent, id]],
@@ -1448,12 +1456,9 @@ await test('an ask wakes who it names and sets a wait until an answer comes', as
     text: 'Seed 2.',
   });
   assert.equal(answer.ok, true, answer.text);
-  assert.deepEqual(wokenBy(lab, posted(answer.text)), [agentOf(lab, 0).handle]);
+  await wokenAre(lab, posted(answer.text), [agentOf(lab, 0).handle]);
   const after = viewOf(lab);
-  assert.deepEqual(
-    openWaits(after.posts, after.threads ?? [], after.state.directions),
-    [],
-  );
+  assert.deepEqual(openWaits(after.posts, after.threads ?? []), []);
   const opened = after.threads?.find((entry) => entry.id === 't-2');
   assert.equal(opened?.state, 'answered');
   assert.equal(opened?.outcome?.text, 'Seed 2.');
@@ -1480,13 +1485,13 @@ await test("the person's words wake followers past the hourly turns, and a post 
   await result(lab, by(0), started[0]?.agent ?? '', open);
   const toLab = await lab.post({ text: 'Stop using seed 2.' });
   assert.equal(toLab.thread, planThread);
-  assert.equal(wokenBy(lab, toLab.id).length, 3);
+  await until(() => wokenBy(lab, toLab.id).length === 3);
   const inThread = viewOf(lab).posts.find(
     (entry) => entry.thread === 't-2',
   )?.id;
   const reply = await lab.post({ text: 'Why seed 2?', replyTo: inThread });
   assert.equal(reply.thread, 't-2');
-  assert.deepEqual(wokenBy(lab, reply.id), [agentOf(lab, 0).handle]);
+  await wokenAre(lab, reply.id, [agentOf(lab, 0).handle]);
   const events = agentOf(lab, 0).events.filter(
     (event) => event.post === reply.id,
   );
@@ -1502,7 +1507,7 @@ await test("the person's words in a thread with no live follower reach every age
     text: 'Why this result?',
     replyTo: inThread?.id,
   });
-  assert.equal(wokenBy(lab, words.id).length, 2);
+  await until(() => wokenBy(lab, words.id).length === 2);
   assert.ok(
     viewOf(lab)
       .threads?.find((entry) => entry.id === 't-2')
@@ -1534,7 +1539,7 @@ await test('a plan change wakes each agent that it changes, not the others', asy
   );
   assert.equal(change.ok, true, change.text);
   const id = /Posted the plan (p-\d+)/.exec(change.text)?.[1] ?? '';
-  assert.deepEqual(wokenBy(lab, id), [agentOf(lab, 1).handle]);
+  await wokenAre(lab, id, [agentOf(lab, 1).handle]);
 });
 
 await test('a proposal becomes a decision on the tick, its followers read it, and a later objection opens the thread again', async (t) => {
@@ -1704,7 +1709,7 @@ await test('an older lab keeps its kinds, tools, wakes, and prompt, and holds no
     viewOf(lab).posts.find((entry) => entry.id === asked)?.thread,
     undefined,
   );
-  assert.deepEqual(wokenBy(lab, asked), ['codex-1']);
+  await wokenAre(lab, asked, ['codex-1']);
   const newKind = await first.tools.call(
     'verifold_post',
     { kind: 'proposal', text: 'Use the old mix.' },
@@ -1715,7 +1720,9 @@ await test('an older lab keeps its kinds, tools, wakes, and prompt, and holds no
   // A person's post keeps its old reach.
   const words = await lab.post({ text: 'Stop.' });
   assert.equal(words.thread, undefined);
-  assert.equal(wokenBy(lab, words.id).length, viewOf(lab).directions.length);
+  await until(
+    () => wokenBy(lab, words.id).length === viewOf(lab).directions.length,
+  );
   // An objection that no check took stays a reply here.
   await first.tools.call(
     'verifold_post',
