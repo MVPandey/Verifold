@@ -4,9 +4,9 @@ This guide describes what works in the current source checkout. The [README](../
 
 Run `verifold` to connect the Claude Code or Codex that you have installed. You can review optional personal background and choose a project folder. Before your harness asks follow-up questions, you can give it existing work, a written brief, or notes. Verifold saves the brief that you reviewed and the research records. Then it opens a local desk in your browser, where you follow the research and the team.
 
-We're building toward a research **meta-harness**: one workspace where several harness instances work together, from the first idea to a paper, a repository, a figure, a proof, or another result. Each harness keeps its own credentials, tools, and permissions. Verifold picks the model of the lab's agents unless you name one. Verifold connects their tasks, messages, memory, and evidence across sessions. The [development plan](#development-plan) says what is done and what comes next.
+We're building toward a research **meta-harness**: one workspace where several harness instances work together, from the first idea to a paper, a repository, a figure, a proof, or another result. Each harness keeps its own credentials, tools, and permissions. Verifold picks the model of the lab's agents unless you name one. Verifold connects their tasks, messages, memory, and evidence across sessions.
 
-Contents: [Install](#install-the-cli) · [Start a research project](#start-a-research-project) · [The desk](#local-research-desk) · [Sessions](#controlled-harness-session) · [Tasks](#scoped-tasks) · [Coordinator](#coordinator) · [The lab](#the-lab-preview) · [GPU pods](#gpu-pods-on-runpod) · [Privacy](#privacy) · [Project status](#project-status) · [Development plan](#development-plan) · [Contribute](#help-build-verifold) · [Build from source](#build-from-source) · [Engineering](#engineering)
+Contents: [Install](#install-the-cli) · [Start a research project](#start-a-research-project) · [The desk](#local-research-desk) · [Sessions](#controlled-harness-session) · [Tasks](#scoped-tasks) · [Coordinator](#coordinator) · [The lab](#the-lab-preview) · [GPU pods](#gpu-pods-on-runpod) · [Privacy](#privacy) · [Project status](#project-status) · [Contribute](#help-build-verifold) · [Build from source](#build-from-source) · [Engineering](#engineering)
 
 ## Install the CLI
 
@@ -878,47 +878,7 @@ This guide describes the current source checkout. The published npm package can 
 
 This is an early implementation. The host requests and reports native delegation. Verifold does not verify it.
 
-The optional literature retention and pilot handoff commands produce requests for the host. They do not download PDFs, create a literature memory file, or run experiments. Agent supervision and experiment execution follow the development plan below. Scheduled memory, public collaboration, and cloud sync come later.
-
-## Development plan
-
-Build a local workspace for research agents that you control one by one. Keep one npm distribution and a browser UI for now. The CLI and the browser use the same operations, and the selected harness keeps its credentials, tools, and permissions.
-
-Stages 1 to 6 are in this checkout:
-
-1. The [controlled harness session](#controlled-harness-session).
-2. Persistent ownership with recovery, research in the desk, browser setup, and [harness transcripts](#harness-transcripts).
-3. [Scoped tasks](#scoped-tasks).
-4. [Agents at once](#agents-at-once).
-5. [Agent terminals](#agent-terminals).
-6. The [coordinator](#coordinator), with task handoffs and messages.
-
-The later stages are planned. Each stage builds on the completion criteria of the stage before it.
-
-| Order | Deliverable                       | Complete when                                                                                                                                                                                        |
-| ----- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | One controllable harness session  | Start a session, see identified live events, send a follow-up, and cancel from the browser through shared CLI operations. Native permission requests have a supported response or continuation path. |
-| 2     | Persistent ownership and recovery | A local owner keeps sessions independent of browser connections. Reconnect restores identity; owner restart reconciles surviving, interrupted, and unknown work before retry.                        |
-| 3     | Scoped tasks and isolated writes  | Tasks have objectives, dependencies, input records, writable scopes, outputs, owners, and limits. Writers use separate workspaces; duplicate or stale claims are rejected.                           |
-| 4     | Two independent harness workers   | Claude Code and Codex run adjacent assignments concurrently. Cancelling or blocking one does not stop or mislabel the other. Both are visible in the desk.                                           |
-| 5     | Interactive terminal workspace    | Supported workers have native terminal views with input, resize, bounded replay, and explicit input ownership. Reload and protocol handoff preserve identity without duplicate live owners.          |
-| 6     | Coordinator and durable handoffs  | A coordinator assigns and labels tasks, exchanges evidence-linked messages, and revises dependent work through the same manager operations. Runtime code enforces ownership and limits.              |
-| 7     | Reviewed research deliverables    | Parallel investigation, an objection, and revision produce a reviewed memo/report bundle. Accepted artifact versions, producing attempts, failed work, and unresolved objections remain inspectable. |
-| 8     | Owned experiment execution        | An approved local experiment has fixed inputs and evaluator, resource allocation, cancellation, retained results, and recovery. Managed jobs cannot double-book a shared compute slot.               |
-
-The first usable multi-agent workspace ends at stage 6. Stage 7 completes the research delivery. Stage 8 adds experiment execution. A planning record or a report does not show that an experiment ran.
-
-Start by extending the existing attempt record and harness adapter. Extract shared operations where the first browser control needs them. Record the native session identity and bounded structured events as they arrive. Keep the existing CLI JSON and the foreground Ctrl+C behavior. Persistent sessions have an explicit attach and detach contract.
-
-Worktrees reduce checkout collisions, but they do not isolate like a sandbox. Keep authoritative writes serialized, and review agent output before you integrate it. Record the scoped inputs with each attempt. A generated label or a model report cannot override the observed execution state or expand permissions.
-
-The first complete demonstration connects a prior-art agent and a reviewer of methods and baselines. The researcher watches both, intervenes in one, and reconnects without a relaunch. An objection with evidence leads to revised work and a reviewed memo on the literature gap, with a reproducible report. Experiment measurements enter this flow only after stage 8.
-
-After the core workflow is in use, reassess desktop distribution from real installation and interaction needs. A native launcher or an optional desktop app can reuse the same manager and UI. Split the installation only when native dependencies or a separately shipped app justify it.
-
-Full browser onboarding, automatic memory maintenance, procedure optimization, a public board, cloud sync, and broad remote provisioning are outside this sequence. Existing approved background and project context stay available. Harness readiness checks and scoped context belong in the execution features that need them.
-
-See the [implementation roadmap](https://github.com/MVPandey/Verifold/issues/14) for completion criteria and validation requirements.
+The optional literature retention and pilot handoff commands produce requests for the host. They do not download PDFs, create a literature memory file, or run experiments. Scheduled memory, public collaboration, and cloud sync come later.
 
 ## Help build Verifold
 

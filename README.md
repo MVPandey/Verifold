@@ -72,8 +72,6 @@ Verifold is in early development. The [guide](docs/guide.md) describes everythin
 - Verifold's page is a local web page on this computer. Other devices cannot open it.
 - Your harness sends what it reads to its model provider. Verifold keeps its records in your project folder and publishes nothing.
 
-The [roadmap](https://github.com/MVPandey/Verifold/issues/14) says what comes next.
-
 ## Contribute
 
 See [open issues](https://github.com/MVPandey/Verifold/issues). Read [AGENTS.md](AGENTS.md) before you change code. The guide explains how to [build from source](docs/guide.md#build-from-source) and the [engineering rules](docs/guide.md#engineering).
