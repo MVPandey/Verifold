@@ -26,6 +26,11 @@ class Member:
         self._seen = lab.board.seq
 
     @property
+    def seen(self) -> int:
+        """The last event that the agent read with `wait`."""
+        return self._seen
+
+    @property
     def lab(self) -> Lab:
         """The lab that the agent works in."""
         return self._lab
