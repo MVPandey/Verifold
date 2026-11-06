@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from verifold.protocol.agents import Agent, ModelSpec
-from verifold.protocol.events import AgentJoined, Event, LabOpened, Posted, ThreadOpened
+from verifold.protocol.events import AgentJoined, Event, LabOpened, Posted, ThreadOpened, WatchSet
 from verifold.protocol.posts import Post
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
@@ -46,6 +46,11 @@ class RecordBuilder:
     def post(self, post: Post) -> 'RecordBuilder':
         seq, at = self._stamp()
         self.events.append(Posted(seq=seq, at=at, post=post))
+        return self
+
+    def watch(self, agent_id: str, thread_id: str, watching: bool = True) -> 'RecordBuilder':
+        seq, at = self._stamp()
+        self.events.append(WatchSet(seq=seq, at=at, agent=agent_id, thread=thread_id, watching=watching))
         return self
 
     def board(self) -> Board:
