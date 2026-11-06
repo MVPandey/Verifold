@@ -16,6 +16,10 @@ from verifold.protocol.record import Record
 
 type Headline = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
 type Body = Annotated[str, StringConstraints(max_length=20_000)]
+type PostKind = Literal['message', 'result', 'ask', 'answer', 'objection', 'proposal', 'check', 'ruled_out']
+"""The values of `kind` across the `Post` union."""
+type Outcome = Literal['holds', 'fails']
+type CheckMethod = Literal['rerun', 'code_read', 'ratings']
 
 
 class FileEvidence(Record):
@@ -91,8 +95,8 @@ class Check(PostBase):
 
     kind: Literal['check'] = 'check'
     reply_to: PostId
-    outcome: Literal['holds', 'fails']
-    method: Literal['rerun', 'code_read', 'ratings']
+    outcome: Outcome
+    method: CheckMethod
 
 
 class RuledOut(PostBase):
