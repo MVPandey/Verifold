@@ -7,6 +7,7 @@ here.
 """
 
 from verifold.protocol.agents import Agent
+from verifold.protocol.events import WatchSet
 from verifold.protocol.ids import PERSON, AgentId
 from verifold.protocol.posts import Answer, Check, Objection, Post
 from verifold.protocol.threads import Thread
@@ -68,6 +69,20 @@ def check_post(board: Board, post: Post) -> None:
             raise RejectedEvent(f'Post {post.reply_to} is your own. Another agent must object to it or check it.')
         case Answer(accepts=True):
             _check_concession(board, post, target.post)
+
+
+def check_watch(board: Board, watch: WatchSet) -> None:
+    """
+    Check that an agent can watch a thread.
+
+    Raises:
+        RejectedEvent: The agent is not in the lab, or the thread does not exist.
+
+    """
+    if not board.agent(watch.agent):
+        raise RejectedEvent(f'{watch.agent} is not an agent in this lab.')
+    if not board.thread(watch.thread):
+        raise RejectedEvent(f'Thread {watch.thread} does not exist.')
 
 
 def _check_member(board: Board, author: AgentId) -> None:
