@@ -73,6 +73,7 @@ async def run_lab(project: Path, config: LabConfig, catalog: Mapping[str, Harnes
                 host='127.0.0.1',
                 port=config.port,
                 log_level='warning',
+                timeout_graceful_shutdown=5,
             )
         )
         serving = asyncio.create_task(server.serve())
