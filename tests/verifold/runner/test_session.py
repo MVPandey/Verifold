@@ -67,10 +67,10 @@ async def test_a_session_keeps_the_persons_settings_unless_asked(served: ServedB
 
     async with AgentSession.open(
         FAKE_HARNESS, folder, Board(url=served.url, token=token), SessionOptions(), no_permission
-    ) as session:
-        await session.cancel()
+    ):
+        pass
 
-    assert [call['event'] for call in calls(log)] == ['new_session', 'cancel']
+    assert [call['event'] for call in calls(log)] == ['new_session']
 
 
 async def test_a_session_can_be_loaded_again(served: ServedBoard, folder: Place, log: Path) -> None:
