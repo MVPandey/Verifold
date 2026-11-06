@@ -60,7 +60,7 @@ def test_unknown_fields_and_kinds_are_rejected(field: dict[str, str]) -> None:
         posts.validate_python({'kind': 'message', 'id': 'p-1', 'thread': 't-1', 'author': 'ada', 'text': 'Hi'} | field)
 
 
-@pytest.mark.parametrize('path', ['/etc/passwd', '../other/file.txt', 'a/../../b', ''])
+@pytest.mark.parametrize('path', ['/etc/passwd', '../other/file.txt', 'a/../../b', '', 'a\x00b'])
 def test_evidence_stays_inside_the_folder(path: str) -> None:
     with pytest.raises(ValidationError, match='relative to your folder'):
         FileEvidence(path=path, commit='a' * 40)
