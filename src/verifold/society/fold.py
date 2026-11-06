@@ -4,10 +4,10 @@ from collections.abc import Iterable
 from dataclasses import replace
 from functools import reduce
 
-from verifold.protocol.events import AgentJoined, Event, LabOpened, Posted, ThreadOpened, WatchSet
+from verifold.protocol.events import AgentJoined, Event, LabOpened, Posted, ThreadOpened, TurnEnded, WatchSet
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
-from verifold.society.rules import check_agent, check_post, check_thread, check_watch
+from verifold.society.rules import check_agent, check_post, check_thread, check_turn, check_watch
 
 
 def apply(board: Board, event: Event) -> Board:
@@ -35,6 +35,9 @@ def apply(board: Board, event: Event) -> Board:
         case WatchSet():
             check_watch(board, event)
             return replace(board, seq=event.seq, watches=(*board.watches, event))
+        case TurnEnded():
+            check_turn(board, event)
+            return replace(board, seq=event.seq, turns=(*board.turns, event))
 
 
 def fold(events: Iterable[Event]) -> Board:

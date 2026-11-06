@@ -14,6 +14,7 @@ from verifold.protocol.ids import AgentId, ThreadId
 from verifold.protocol.posts import Post
 from verifold.protocol.record import Record
 from verifold.protocol.threads import Thread
+from verifold.protocol.usage import Usage
 
 
 class EventBase(Record):
@@ -61,4 +62,18 @@ class WatchSet(EventBase):
     watching: bool
 
 
-type Event = Annotated[LabOpened | AgentJoined | ThreadOpened | Posted | WatchSet, Field(discriminator='type')]
+class TurnEnded(EventBase):
+    """An agent's harness ended a turn. The record keeps what the turn cost and why it failed, if it did."""
+
+    type: Literal['turn_ended'] = 'turn_ended'
+    agent: AgentId
+    seconds: float = Field(ge=0)
+    usage: Usage
+    cost_usd: float | None = None
+    error: str | None = None
+
+
+type Event = Annotated[
+    LabOpened | AgentJoined | ThreadOpened | Posted | WatchSet | TurnEnded,
+    Field(discriminator='type'),
+]
