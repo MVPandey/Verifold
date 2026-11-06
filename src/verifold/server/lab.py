@@ -7,15 +7,16 @@ from datetime import UTC, datetime
 from typing import Self
 
 from verifold.protocol.agents import Agent
-from verifold.protocol.events import AgentJoined, Event, LabOpened, Posted, ThreadOpened
-from verifold.protocol.ids import AgentId, PostId
-from verifold.protocol.posts import Post
+from verifold.protocol.events import AgentJoined, Event, LabOpened, Posted, ThreadOpened, WatchSet
+from verifold.protocol.ids import AgentId, ThreadId
+from verifold.protocol.join import PostRequest
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
 from verifold.society.fold import apply, fold
 from verifold.store.record_file import RecordFile
 
 type Clock = Callable[[], datetime]
+type Build = Callable[[Board, int, datetime], Event]
 
 
 def utc_now() -> datetime:
@@ -64,19 +65,28 @@ class Lab:
 
     async def join(self, agent: Agent) -> AgentJoined:
         """Add an agent to the lab."""
-        return await self._commit(lambda seq, at: AgentJoined(seq=seq, at=at, agent=agent))
+        board = await self._commit(lambda _, seq, at: AgentJoined(seq=seq, at=at, agent=agent))
+        return board.agents[-1]
 
-    async def open_thread(self, title: str, opened_by: AgentId) -> ThreadOpened:
-        """Open a thread with the next free thread ID."""
-        thread_id = f't-{len(self._board.threads) + 1}'
-        return await self._commit(
-            lambda seq, at: ThreadOpened(seq=seq, at=at, thread=Thread(id=thread_id, title=title, opened_by=opened_by))
+    async def post(self, request: PostRequest, author: AgentId) -> Posted:
+        """
+        Add a post with the next free post ID. With `new_thread`, open its thread in the same step.
+
+        Raises:
+            RejectedEvent: The post breaks a rule of the record.
+            pydantic.ValidationError: The request does not describe a valid post of its kind.
+
+        """
+        opens = (_open_thread(request.new_thread, author),) if request.new_thread else ()
+        board = await self._commit(*opens, _add_post(request, author))
+        return board.posts[-1]
+
+    async def watch(self, agent_id: AgentId, thread_id: ThreadId, watching: bool) -> WatchSet:
+        """Record that an agent starts or stops watching a thread."""
+        board = await self._commit(
+            lambda _, seq, at: WatchSet(seq=seq, at=at, agent=agent_id, thread=thread_id, watching=watching)
         )
-
-    async def post(self, draft: Callable[[PostId], Post]) -> Posted:
-        """Add the post that `draft` builds from the next free post ID."""
-        post_id = f'p-{len(self._board.posts) + 1}'
-        return await self._commit(lambda seq, at: Posted(seq=seq, at=at, post=draft(post_id)))
+        return board.watches[-1]
 
     async def events_after(self, seq: int, timeout: float) -> tuple[Event, ...]:
         """Return the events after `seq`. Wait up to `timeout` seconds for one when there are none yet."""
@@ -86,14 +96,34 @@ class Lab:
                     await self._changed.wait_for(lambda: self._board.seq > seq)
             return tuple(self._events[seq:])
 
-    async def _commit[E: Event](self, build: Callable[[int, datetime], E]) -> E:
-        # The condition's lock serializes changes, so IDs and sequence numbers come from the board that the event
-        # joins. `apply` rejects a bad event before anything reaches the record.
+    async def _commit(self, *builds: Build) -> Board:
+        # The condition's lock serializes changes. Each event comes from the board that it joins, so IDs and sequence
+        # numbers never collide, and `apply` rejects a bad event before anything reaches the record.
         async with self._changed:
-            event = build(self._board.seq + 1, self._clock())
-            board = apply(self._board, event)
-            self._record.append(event)
+            board, events, at = self._board, [], self._clock()
+            for build in builds:
+                event = build(board, board.seq + 1, at)
+                board = apply(board, event)
+                events.append(event)
+            for event in events:
+                self._record.append(event)
             self._board = board
-            self._events.append(event)
+            self._events.extend(events)
             self._changed.notify_all()
-            return event
+            return board
+
+
+def _open_thread(title: str, opened_by: AgentId) -> Build:
+    def build(board: Board, seq: int, at: datetime) -> ThreadOpened:
+        thread = Thread(id=f't-{len(board.threads) + 1}', title=title, opened_by=opened_by)
+        return ThreadOpened(seq=seq, at=at, thread=thread)
+
+    return build
+
+
+def _add_post(request: PostRequest, author: AgentId) -> Build:
+    def build(board: Board, seq: int, at: datetime) -> Posted:
+        thread_id = request.thread or board.threads[-1].thread.id
+        return Posted(seq=seq, at=at, post=request.to_post(f'p-{len(board.posts) + 1}', thread_id, author))
+
+    return build
