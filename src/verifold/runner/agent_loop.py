@@ -7,6 +7,7 @@ agent arrive after it ended its turn, and starts the harness again when its proc
 
 import asyncio
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from pydantic import Field, SecretStr
@@ -19,10 +20,11 @@ from verifold.protocol.usage import Usage
 from verifold.runner.git import GitError
 from verifold.runner.messages import DOORBELL
 from verifold.runner.permissions import ask_the_person
-from verifold.runner.session import AgentSession, Board, PermissionRequest, Place, SessionOptions
+from verifold.runner.session import AgentSession, BoardAccess, PermissionRequest, Place, SessionOptions
 from verifold.runner.snapshots import snapshot
 from verifold.server.member import Member
 from verifold.society.attention import update
+from verifold.society.board import Board
 
 
 class LoopSettings(Record):
@@ -55,13 +57,16 @@ class AgentSetup(Record):
 class AgentLoop:
     """Keeps one agent's ACP session open until the agent fails `max_failures` times in a row or the lab stops."""
 
-    def __init__(self, member: Member, setup: AgentSetup, settings: LoopSettings) -> None:
+    def __init__(
+        self, member: Member, setup: AgentSetup, settings: LoopSettings, done: Callable[[Board], bool] | None = None
+    ) -> None:
         """
         Prepare to supervise an agent that joined the lab.
 
         `member` is the same seat that serves the agent's tool calls, so a doorbell never repeats what the agent read
-        with `wait`.
+        with `wait`. `done` ends the loop after a turn, as for a checker that posted its check.
         """
+        self._done = done
         self._member = member
         self._lab = member.lab
         self._setup = setup
@@ -71,7 +76,7 @@ class AgentLoop:
     async def run(self) -> None:
         """Run the agent until it fails too often, or until the caller cancels the loop."""
         setup = self._setup
-        board = Board(url=self._settings.mcp_url, token=setup.token)
+        board = BoardAccess(url=self._settings.mcp_url, token=setup.token)
         resume: str | None = None
         message, failures = setup.start, 0
         while True:
@@ -83,6 +88,8 @@ class AgentLoop:
                     while True:
                         await self._send(session, message)
                         failures = 0
+                        if self._done and self._done(self._lab.board):
+                            return
                         await self._news()
                         message = DOORBELL
             # Any failure of one harness restarts that harness. It must not stop the lab's other agents.

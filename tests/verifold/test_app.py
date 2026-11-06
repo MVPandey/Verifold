@@ -10,6 +10,8 @@ from pydantic import TypeAdapter
 from verifold.app import AgentSpec, LabConfig, run_lab
 from verifold.protocol.events import AgentJoined, Event, Posted
 from verifold.runner.errors import RunnerError
+from verifold.society.fold import fold
+from verifold.society.standing import standing
 
 events: TypeAdapter[Event] = TypeAdapter(Event)
 CATALOG = {'fake': FAKE_HARNESS}
@@ -103,3 +105,36 @@ async def test_an_unknown_harness_is_refused_before_anything_starts(tmp_path: Pa
         await run_lab(tmp_path, LabConfig(question='Q?', agents=(AgentSpec(harness='nope'),)), CATALOG)
 
     assert record(tmp_path) == []
+
+
+async def test_a_rerun_request_starts_a_blind_checker_from_another_family(
+    tmp_path: Path, calls: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
+    project = tmp_path / 'project'
+    project.mkdir()
+    catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
+    config = LabConfig(question='Is it faster?', agents=(AgentSpec(harness='fake'), AgentSpec(harness='other')))
+    running = asyncio.create_task(run_lab(project, config, catalog))
+    try:
+        async with asyncio.timeout(60):
+            while not any(isinstance(event, Posted) and event.post.kind == 'check' for event in record(project)):
+                await asyncio.sleep(0.05)
+    finally:
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+
+    board = fold(record(project))
+    result = next(entry.post for entry in board.posts if entry.post.kind == 'result')
+    checker = next(entry.agent for entry in board.agents if entry.agent.checks)
+    assert (checker.checks, checker.harness, checker.model.family, checker.recruited_by) == (
+        result.id,
+        'other',
+        'other',
+        'agent-1',
+    )
+    assert standing(board, result.id) == 'held_up'
+    check = next(entry.post for entry in board.posts if entry.post.kind == 'check')
+    assert check.text == 'Reran it blind: 11.8.'
+    assert check.evidence[0].path == 'rerun.txt'

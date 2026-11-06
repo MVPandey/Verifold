@@ -2,7 +2,8 @@ from pathlib import Path
 
 from builders import lab
 
-from verifold.runner.messages import DOORBELL, LAB_TEMPLATE, start_message
+from verifold.protocol.posts import FileEvidence, Result
+from verifold.runner.messages import DOORBELL, LAB_TEMPLATE, rerun_message, start_message
 
 
 def test_the_start_message_gives_the_question_the_agent_its_peers_and_the_norms() -> None:
@@ -29,3 +30,21 @@ def test_an_agent_without_a_role_gets_no_role_line() -> None:
 def test_the_lab_norms_and_the_doorbell_are_short_and_plain() -> None:
     assert LAB_TEMPLATE.startswith('# How this lab works')
     assert DOORBELL == 'New posts for you on the lab board.'
+
+
+def test_a_rerun_message_gives_the_claim_its_files_and_where_to_check_but_not_the_thread() -> None:
+    post = Result(
+        id='p-4',
+        thread='t-2',
+        author='ada',
+        text='sorted() is 11.8x faster.',
+        body='My reasoning: the C implementation avoids interpreter overhead.',
+        evidence=(FileEvidence(path='bench.py', commit='c' * 40), FileEvidence(path='out.json', commit='c' * 40)),
+    )
+
+    message = rerun_message(post)
+
+    assert '"sorted() is 11.8x faster."' in message
+    assert 'bench.py, out.json' in message
+    assert 'thread t-2 that replies to p-4' in message
+    assert 'reasoning' not in message

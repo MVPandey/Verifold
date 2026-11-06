@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Mapping
+from contextlib import suppress
 from functools import partial
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.errors import RunnerError
 from verifold.runner.folders import LAB_FOLDER, agent_folder
 from verifold.runner.messages import LAB_TEMPLATE, start_message
+from verifold.runner.reruns import Crew, Reruns
 from verifold.runner.session import SessionOptions
 from verifold.runner.snapshots import pin
 from verifold.server.join import Members, join_server
@@ -83,12 +85,28 @@ async def run_lab(project: Path, config: LabConfig, catalog: Mapping[str, Harnes
             settings = LoopSettings(
                 mcp_url=f'http://127.0.0.1:{await _bound_port(server)}/mcp', turn_timeout=config.turn_timeout
             )
-            async with asyncio.TaskGroup() as group:
-                for member, setup in seats:
-                    group.create_task(AgentLoop(member, setup, settings).run())
+            crew = _crew(config, catalog)
+            reruns = asyncio.create_task(Reruns(lab, members, project, crew, settings).run())
+            try:
+                async with asyncio.TaskGroup() as group:
+                    for member, setup in seats:
+                        group.create_task(AgentLoop(member, setup, settings).run())
+            finally:
+                reruns.cancel()
+                with suppress(asyncio.CancelledError):
+                    await reruns
         finally:
             server.should_exit = True
             await serving
+
+
+def _crew(config: LabConfig, catalog: Mapping[str, HarnessEntry]) -> Crew:
+    # One entry for each harness of the lab, with the options of its first agent. Checkers come from this crew.
+    first = {spec.harness: spec for spec in reversed(config.agents)}
+    return tuple(
+        (catalog[name], SessionOptions(model=spec.model, effort=spec.effort, auto_mode=config.auto_mode))
+        for name, spec in reversed(first.items())
+    )
 
 
 async def _open(record: RecordFile, config: LabConfig) -> Lab:
