@@ -7,10 +7,11 @@ from datetime import UTC, datetime
 from typing import Self
 
 from verifold.protocol.agents import Agent
-from verifold.protocol.events import AgentJoined, Event, LabOpened, Posted, ThreadOpened, WatchSet
+from verifold.protocol.events import AgentJoined, Event, LabOpened, Posted, ThreadOpened, TurnEnded, WatchSet
 from verifold.protocol.ids import AgentId, ThreadId
 from verifold.protocol.join import PostRequest
 from verifold.protocol.threads import Thread
+from verifold.protocol.usage import Usage
 from verifold.society.board import Board
 from verifold.society.fold import apply, fold
 from verifold.store.record_file import RecordFile
@@ -87,6 +88,17 @@ class Lab:
             lambda _, seq, at: WatchSet(seq=seq, at=at, agent=agent_id, thread=thread_id, watching=watching)
         )
         return board.watches[-1]
+
+    async def end_turn(
+        self, agent_id: AgentId, seconds: float, usage: Usage, cost_usd: float | None, error: str | None
+    ) -> TurnEnded:
+        """Record that an agent's harness ended a turn, with what the turn cost."""
+        board = await self._commit(
+            lambda _, seq, at: TurnEnded(
+                seq=seq, at=at, agent=agent_id, seconds=seconds, usage=usage, cost_usd=cost_usd, error=error
+            )
+        )
+        return board.turns[-1]
 
     async def events_after(self, seq: int, timeout: float) -> tuple[Event, ...]:
         """Return the events after `seq`. Wait up to `timeout` seconds for one when there are none yet."""
