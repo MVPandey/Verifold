@@ -9,7 +9,9 @@ description = "An orchestrator that lets coding agents work as a research societ
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "pydantic>=2.12,<3",
+]
 
 [project.scripts]
 verifold = "verifold.cli:main"
@@ -39,6 +41,10 @@ quote-style = "single"
 indent-style = "space"
 docstring-code-format = true
 
+[tool.ty.environment]
+# Tests import shared builders from tests/, the same path that pytest adds.
+extra-paths = ["tests"]
+
 [tool.ty.terminal]
 output-format = "concise"
 
@@ -47,6 +53,7 @@ unused-ignore-comment = "error"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]
 addopts = [
     "--import-mode=importlib",
     "--cov=src/verifold",
