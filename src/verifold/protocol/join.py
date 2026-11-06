@@ -11,7 +11,7 @@ from verifold.protocol.posts import Body, CheckMethod, FileEvidence, Headline, O
 from verifold.protocol.record import Record
 from verifold.protocol.threads import Thread, Title
 
-type Standing = Literal['open', 'checked', 'disputed', 'conceded']
+type Standing = Literal['open', 'checked', 'held_up', 'disputed', 'conceded']
 """Where a post stands after the objections, checks, and answers to it."""
 
 _posts: TypeAdapter[Post] = TypeAdapter(Post)

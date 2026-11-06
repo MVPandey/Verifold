@@ -38,7 +38,7 @@ async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
         threads = await client.call_tool('threads', {})
         news = await client.call_tool('wait', {'timeout_seconds': 0})
 
-    assert tools == {'post', 'threads', 'thread', 'watch', 'wait'}
+    assert tools == {'post', 'threads', 'thread', 'watch', 'rerun', 'wait'}
     assert posted.structured_content is not None
     assert posted.structured_content['post']['id'] == 'p-2'
     assert watched.structured_content is not None

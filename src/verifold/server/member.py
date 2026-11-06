@@ -3,11 +3,11 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from verifold.protocol.events import WatchSet
-from verifold.protocol.ids import AgentId, ThreadId
+from verifold.protocol.events import RerunRequested, WatchSet
+from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import PostRequest, PostView, ThreadSummary, ThreadView, Update
 from verifold.protocol.posts import FileEvidence
-from verifold.server.errors import EvidenceRejected
+from verifold.server.errors import BlindCheck, EvidenceRejected
 from verifold.server.lab import Lab
 from verifold.society.attention import update
 from verifold.society.views import post_view, thread_summaries, thread_view
@@ -64,11 +64,22 @@ class Member:
 
     def threads(self) -> tuple[ThreadSummary, ...]:
         """Return a summary of each thread, the most recently active first."""
+        self._check_not_blind()
         return thread_summaries(self._lab.board, self.agent_id)
 
     def thread(self, thread_id: ThreadId) -> ThreadView:
         """Return a thread and its posts."""
+        self._check_not_blind()
         return thread_view(self._lab.board, self.agent_id, thread_id)
+
+    async def rerun(self, post_id: PostId) -> RerunRequested:
+        """Ask for a blind rerun of a post that has files as evidence."""
+        return await self._lab.request_rerun(self.agent_id, post_id)
+
+    def _check_not_blind(self) -> None:
+        joined = self._lab.board.agent(self.agent_id)
+        if joined and joined.agent.checks:
+            raise BlindCheck(f'You rerun {joined.agent.checks} blind, so you cannot read the board.')
 
     async def watch(self, thread_id: ThreadId, watching: bool) -> WatchSet:
         """Start or stop watching a thread."""
@@ -80,6 +91,7 @@ class Member:
 
         Posts that do not wake the agent are counted in the update, but they do not end the wait.
         """
+        self._check_not_blind()
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while True:

@@ -12,12 +12,13 @@ from verifold.protocol.events import (
     Event,
     LabOpened,
     Posted,
+    RerunRequested,
     ThreadOpened,
     TurnEnded,
     TurnSummary,
     WatchSet,
 )
-from verifold.protocol.ids import AgentId, ThreadId
+from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import FileEvidence
 from verifold.protocol.threads import Thread
@@ -105,6 +106,11 @@ class Lab:
             lambda _, seq, at: WatchSet(seq=seq, at=at, agent=agent_id, thread=thread_id, watching=watching)
         )
         return board.watches[-1]
+
+    async def request_rerun(self, by: AgentId, post_id: PostId) -> RerunRequested:
+        """Record a request for a blind rerun of a post. The runner answers it by starting a checker."""
+        board = await self._commit(lambda _, seq, at: RerunRequested(seq=seq, at=at, by=by, post=post_id))
+        return board.reruns[-1]
 
     async def end_turn(self, turn: TurnSummary) -> TurnEnded:
         """Record that an agent's harness ended a turn, with what the turn cost and the snapshot after it."""
