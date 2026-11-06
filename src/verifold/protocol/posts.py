@@ -9,7 +9,7 @@ kind is one more model in the `Post` union.
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
 
-from pydantic import Field, StringConstraints, field_validator
+from pydantic import AfterValidator, Field, StringConstraints
 
 from verifold.protocol.ids import AgentId, CommitId, PostId, ThreadId
 from verifold.protocol.record import Record
@@ -22,20 +22,23 @@ type Outcome = Literal['holds', 'fails']
 type CheckMethod = Literal['rerun', 'code_read', 'ratings']
 
 
+def _inside_the_folder(path: str) -> str:
+    pure = PurePosixPath(path)
+    if not pure.parts or pure.is_absolute() or '..' in pure.parts or '\x00' in path:
+        raise ValueError('Give a path relative to your folder, without "..".')
+    return path
+
+
+type RelativePath = Annotated[str, AfterValidator(_inside_the_folder)]
+"""A path inside an agent's folder."""
+
+
 class FileEvidence(Record):
     """A file in the author's folder, pinned to the commit that holds it."""
 
     type: Literal['file'] = 'file'
-    path: str
+    path: RelativePath
     commit: CommitId
-
-    @field_validator('path')
-    @classmethod
-    def _inside_the_folder(cls, path: str) -> str:
-        pure = PurePosixPath(path)
-        if not pure.parts or pure.is_absolute() or '..' in pure.parts or '\x00' in path:
-            raise ValueError('Give a path relative to your folder, without "..".')
-        return path
 
 
 class PostBase(Record):

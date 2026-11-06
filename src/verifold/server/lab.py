@@ -7,11 +7,20 @@ from datetime import UTC, datetime
 from typing import Self
 
 from verifold.protocol.agents import Agent
-from verifold.protocol.events import AgentJoined, Event, LabOpened, Posted, ThreadOpened, TurnEnded, WatchSet
+from verifold.protocol.events import (
+    AgentJoined,
+    Event,
+    LabOpened,
+    Posted,
+    ThreadOpened,
+    TurnEnded,
+    TurnSummary,
+    WatchSet,
+)
 from verifold.protocol.ids import AgentId, ThreadId
 from verifold.protocol.join import PostRequest
+from verifold.protocol.posts import FileEvidence
 from verifold.protocol.threads import Thread
-from verifold.protocol.usage import Usage
 from verifold.server.errors import LabExists
 from verifold.society.board import Board
 from verifold.society.fold import apply, fold
@@ -77,7 +86,7 @@ class Lab:
         board = await self._commit(lambda _, seq, at: AgentJoined(seq=seq, at=at, agent=agent))
         return board.agents[-1]
 
-    async def post(self, request: PostRequest, author: AgentId) -> Posted:
+    async def post(self, request: PostRequest, author: AgentId, evidence: tuple[FileEvidence, ...] = ()) -> Posted:
         """
         Add a post with the next free post ID. With `new_thread`, open its thread in the same step.
 
@@ -87,7 +96,7 @@ class Lab:
 
         """
         opens = (_open_thread(request.new_thread, author),) if request.new_thread else ()
-        board = await self._commit(*opens, _add_post(request, author))
+        board = await self._commit(*opens, _add_post(request, author, evidence))
         return board.posts[-1]
 
     async def watch(self, agent_id: AgentId, thread_id: ThreadId, watching: bool) -> WatchSet:
@@ -97,14 +106,10 @@ class Lab:
         )
         return board.watches[-1]
 
-    async def end_turn(
-        self, agent_id: AgentId, seconds: float, usage: Usage, cost_usd: float | None, error: str | None
-    ) -> TurnEnded:
-        """Record that an agent's harness ended a turn, with what the turn cost."""
+    async def end_turn(self, turn: TurnSummary) -> TurnEnded:
+        """Record that an agent's harness ended a turn, with what the turn cost and the snapshot after it."""
         board = await self._commit(
-            lambda _, seq, at: TurnEnded(
-                seq=seq, at=at, agent=agent_id, seconds=seconds, usage=usage, cost_usd=cost_usd, error=error
-            )
+            lambda _, seq, at: TurnEnded.model_validate(turn.model_dump() | {'seq': seq, 'at': at})
         )
         return board.turns[-1]
 
@@ -138,9 +143,9 @@ def _open_thread(title: str, opened_by: AgentId) -> Build:
     return build
 
 
-def _add_post(request: PostRequest, author: AgentId) -> Build:
+def _add_post(request: PostRequest, author: AgentId, evidence: tuple[FileEvidence, ...]) -> Build:
     def build(board: Board, seq: int, at: datetime) -> Posted:
         thread_id = request.thread or board.threads[-1].thread.id
-        return Posted(seq=seq, at=at, post=request.to_post(f'p-{len(board.posts) + 1}', thread_id, author))
+        return Posted(seq=seq, at=at, post=request.to_post(f'p-{len(board.posts) + 1}', thread_id, author, evidence))
 
     return build

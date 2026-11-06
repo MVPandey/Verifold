@@ -1,6 +1,7 @@
 import pytest
 from mcp import Client
 
+from verifold.protocol.posts import FileEvidence
 from verifold.server.errors import UnknownAgent
 from verifold.server.join import Members, join_server
 from verifold.server.lab import Lab
@@ -74,3 +75,16 @@ async def test_the_post_tool_takes_flat_fields(lab: Lab) -> None:
 
     assert {'kind', 'text', 'thread', 'new_thread', 'reply_to', 'outcome'} <= set(schema['properties'])
     assert set(schema['required']) == {'kind', 'text'}
+
+
+async def test_the_post_tool_pins_the_files_that_it_names(lab: Lab) -> None:
+    async def pin(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+        return tuple(FileEvidence(path=path, commit='b' * 40) for path in paths)
+
+    async with Client(join_server(lambda _: Member(lab, 'bo', pin=pin))) as client:
+        posted = await client.call_tool(
+            'post', {'kind': 'result', 'text': 'Done.', 'thread': 't-1', 'files': ['a.json']}
+        )
+
+    assert posted.structured_content is not None
+    assert posted.structured_content['post']['evidence'] == [{'type': 'file', 'path': 'a.json', 'commit': 'b' * 40}]
