@@ -18,9 +18,11 @@ def standing(board: Board, post_id: PostId) -> Standing:
 
     A post is `conceded` when its author accepted an objection to it. It is `disputed` when a check of it failed, or
     when an objection stands. A check that holds overrules an earlier objection when its author is not the objector.
-    It is `checked` when another agent's check holds and nothing stands against it. Otherwise it is `open`.
+    It is `checked` when another agent's check holds and nothing stands against it. Otherwise it is `open`. Checks and
+    objections that their own authors conceded do not count.
     """
-    replies = board.replies(post_id)
+    # A conceded check or objection no longer counts against or for its target.
+    replies = tuple(entry for entry in board.replies(post_id) if standing(board, entry.post.id) != 'conceded')
     objections = tuple((entry.seq, entry.post) for entry in replies if isinstance(entry.post, Objection))
     checks = tuple((entry.seq, entry.post) for entry in replies if isinstance(entry.post, Check))
     if any(_conceded(board, objection) for _, objection in objections):

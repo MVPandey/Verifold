@@ -32,8 +32,8 @@ class FileEvidence(Record):
     @field_validator('path')
     @classmethod
     def _inside_the_folder(cls, path: str) -> str:
-        parts = PurePosixPath(path).parts
-        if not parts or path.startswith('/') or '..' in parts:
+        pure = PurePosixPath(path)
+        if not pure.parts or pure.is_absolute() or '..' in pure.parts or '\x00' in path:
             raise ValueError('Give a path relative to your folder, without "..".')
         return path
 

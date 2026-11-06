@@ -61,4 +61,4 @@ class Member:
             if news.posts or remaining <= 0:
                 self._seen = news.seq
                 return news
-            await self._lab.events_after(news.seq, remaining)
+            await self._lab.wait_for_change(news.seq, remaining)

@@ -1,5 +1,6 @@
 import asyncio
 import os
+import signal
 import stat
 from pathlib import Path
 
@@ -105,3 +106,55 @@ async def test_a_harness_that_ignores_the_stop_signal_is_killed(
 
     assert report.error == 'scripted ran past 1 seconds and was stopped.'
     assert not alive(int(pid_file.read_text()))
+
+
+async def test_a_finished_turn_does_not_wait_for_a_background_child(turn: Turn, tmp_path: Path) -> None:
+    pid_file = tmp_path / 'child'
+    script = (
+        'import subprocess, sys; '
+        'child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"]); '
+        f'open({str(pid_file)!r}, "w").write(str(child.pid)); print("done", flush=True)'
+    )
+
+    async with asyncio.timeout(10):
+        report = await run_turn(Scripted(script), turn, timeout=60)
+
+    assert (report.final_text, report.error) == ('done\n', None)
+    await asyncio.sleep(0.1)
+    assert not alive(int(pid_file.read_text()))
+
+
+async def test_an_over_long_output_line_is_skipped(turn: Turn, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('verifold.runner.driver.LINE_LIMIT', 1_024)
+    script = 'print("before"); print("x" * 5000); print("after")'
+
+    report = await run_turn(Scripted(script), turn, timeout=30)
+
+    lines = report.final_text.splitlines()
+    assert (lines[0], lines[-1], report.error) == ('before', 'after', None)
+    assert all(len(line) < 5_000 for line in lines)
+
+
+async def test_output_without_a_final_newline_is_read(turn: Turn) -> None:
+    report = await run_turn(Scripted('import sys; sys.stdout.write("no newline")'), turn, timeout=30)
+
+    assert report.final_text == 'no newline'
+
+
+async def test_a_detached_process_that_holds_the_output_does_not_hold_the_turn(
+    turn: Turn, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr('verifold.runner.driver.STOP_GRACE', 0.2)
+    pid_file = tmp_path / 'detached'
+    script = (
+        'import subprocess, sys; '
+        'child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True); '
+        f'open({str(pid_file)!r}, "w").write(str(child.pid)); print("done", flush=True)'
+    )
+    try:
+        async with asyncio.timeout(10):
+            report = await run_turn(Scripted(script), turn, timeout=60)
+    finally:
+        os.kill(int(pid_file.read_text()), signal.SIGKILL)
+
+    assert report.error is None

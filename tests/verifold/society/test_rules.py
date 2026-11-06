@@ -37,8 +37,9 @@ def test_agents_join_once_with_known_recruiters(agent_id: str, recruiter: str | 
         lab().join(agent_id, recruited_by=recruiter).board()
 
 
-def test_agents_can_recruit_peers() -> None:
-    assert lab().join('dee', recruited_by='ada').board().agent('dee') is not None
+@pytest.mark.parametrize('recruiter', ['ada', 'person'])
+def test_agents_and_the_person_can_recruit_peers(recruiter: str) -> None:
+    assert lab().join('dee', recruited_by=recruiter).board().agent('dee') is not None
 
 
 def test_threads_open_once_by_members() -> None:
