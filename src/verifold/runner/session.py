@@ -41,7 +41,7 @@ type Permissions = Callable[[PermissionRequest], Awaitable[str | None]]
 """Decides a permission request: the ID of the chosen answer, or `None` to cancel the action."""
 
 
-class Board(Record):
+class BoardAccess(Record):
     """Where the agent's harness reaches the lab's board, and the agent's token."""
 
     url: str
@@ -177,7 +177,7 @@ def _unsupported(method: str) -> NoReturn:
 
 
 async def _begin(
-    connection: ClientSideConnection, harness: HarnessEntry, folder: Path, board: Board, options: SessionOptions
+    connection: ClientSideConnection, harness: HarnessEntry, folder: Path, board: BoardAccess, options: SessionOptions
 ) -> str:
     """Initialize the connection, open or load the session, and set the options that the lab asks for."""
     await connection.initialize(
@@ -220,7 +220,7 @@ class AgentSession:
     @classmethod
     @asynccontextmanager
     async def open(
-        cls, harness: HarnessEntry, place: Place, board: Board, options: SessionOptions, permissions: Permissions
+        cls, harness: HarnessEntry, place: Place, board: BoardAccess, options: SessionOptions, permissions: Permissions
     ) -> AsyncGenerator[Self]:
         """
         Start the harness's ACP agent in the agent's folder, with the board as its MCP server, and open a session.

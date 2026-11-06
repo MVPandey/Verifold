@@ -10,6 +10,7 @@ child that holds the agent's pipes open and writes its process ID to that path.
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -127,6 +128,10 @@ class FakeAgent(acp.Agent):
             await asyncio.sleep(60)
         if text == DOORBELL:
             await self._answer_news()
+        elif text.startswith('Rerun this claim blind'):
+            await self._rerun(text)
+        elif os.environ.get('FAKE_ACP_RESULT') == self._name:
+            await self._post_result()
         else:
             await self._say_hello(session_id)
         self._cost += 0.01
@@ -159,6 +164,32 @@ class FakeAgent(acp.Agent):
             outcome = response.outcome
             text = f'Permission: {outcome.option_id if isinstance(outcome, schema.AllowedOutcome) else "cancelled"}.'
         await self._call('post', {'kind': 'message', 'text': text, 'new_thread': f'Hello {self._name}'})
+
+    async def _post_result(self) -> None:
+        (Path.cwd() / 'result.txt').write_text('11.8\n')
+        posted = await self._call(
+            'post',
+            {'kind': 'result', 'text': 'sorted() is 11.8x faster.', 'new_thread': 'Speed', 'files': ['result.txt']},
+        )
+        post = posted.get('post')
+        if isinstance(post, dict):
+            await self._call('rerun', {'post': post.get('id')})
+
+    async def _rerun(self, text: str) -> None:
+        thread = re.search(r'thread (t-\d+)', text)
+        target = re.search(r'replies to (p-\d+)', text)
+        claimed = (Path.cwd() / 'result.txt').read_text().strip()
+        (Path.cwd() / 'rerun.txt').write_text(claimed)
+        request: dict[str, object] = {
+            'kind': 'check',
+            'text': f'Reran it blind: {claimed}.',
+            'thread': thread.group(1) if thread else '',
+            'reply_to': target.group(1) if target else '',
+            'outcome': 'holds',
+            'method': 'rerun',
+            'files': ['rerun.txt'],
+        }
+        await self._call('post', request)
 
     async def _answer_news(self) -> None:
         news = Update.model_validate(await self._call('wait', {'timeout_seconds': 0}))

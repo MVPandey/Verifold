@@ -2,8 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from verifold.runner.folders import agent_folder
+from verifold.runner.folders import agent_folder, checker_folder
 from verifold.runner.git import GitError, git, has_commits
+from verifold.runner.snapshots import snapshot, snapshot_ref
 
 
 async def committed_project(path: Path) -> Path:
@@ -60,3 +61,18 @@ async def test_an_existing_agent_branch_is_reused(tmp_path: Path) -> None:
     assert await git('branch', '--show-current', cwd=folder) == 'verifold/bo'
     exclude = Path(await git('rev-parse', '--path-format=absolute', '--git-path', 'info/exclude', cwd=project))
     assert exclude.read_text().count('/.verifold/') == 1
+
+
+async def test_a_checker_folder_holds_the_authors_files_at_the_cited_commit(tmp_path: Path) -> None:
+    project = await committed_project(tmp_path / 'project')
+    author = await agent_folder(project, 'ada')
+    (author / 'result.txt').write_text('11.8')
+    cited = await snapshot(author, 'ada')
+    (author / 'result.txt').write_text('changed later')
+    await snapshot(author, 'ada')
+
+    folder = await checker_folder(project, 'checker-9', author, snapshot_ref('ada'), cited)
+
+    assert (folder / 'result.txt').read_text() == '11.8'
+    assert (folder / 'data.csv').exists()
+    assert await checker_folder(project, 'checker-9', author, snapshot_ref('ada'), cited) == folder

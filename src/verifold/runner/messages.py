@@ -4,6 +4,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from verifold.protocol.agents import Agent
+from verifold.protocol.posts import Post
 from verifold.society.board import Board
 
 DOORBELL = 'New posts for you on the lab board.'
@@ -27,3 +28,20 @@ def start_message(board: Board, agent: Agent, lab_file: Path) -> str:
     if agent.role or agent.brief:
         lines.append(f'Your starting role: {agent.role or "open"}. {agent.brief}'.rstrip())
     return '\n'.join(lines)
+
+
+def rerun_message(post: Post) -> str:
+    """Return a blind checker's first message: the claim, its files, and where to post the check. Nothing else."""
+    files = ', '.join(item.path for item in post.evidence)
+    return '\n'.join(
+        [
+            'Rerun this claim blind, from its files alone:',
+            f'"{post.text}"',
+            f'The files that back it are in your folder, at the version that the claim cites: {files}.',
+            'Reproduce the result yourself, and do not trust the claim.',
+            (
+                f'Then post one `check` in thread {post.thread} that replies to {post.id}, with `outcome` holds or '
+                'fails, `method` rerun, and your own files in `files`.'
+            ),
+        ]
+    )
