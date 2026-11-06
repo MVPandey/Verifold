@@ -46,8 +46,8 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument(
         '--agent',
         action='append',
-        metavar='HARNESS[:MODEL]',
-        help=f'Add an agent: {", ".join(CATALOG)}, with an optional model. Default: one of each.',
+        metavar='HARNESS[:MODEL[:EFFORT]]',
+        help=f'Add an agent: {", ".join(CATALOG)}, with an optional model and effort. Default: one of each, with your usual settings.',
     )
     run.add_argument(
         '--ask-me',
@@ -58,5 +58,6 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _agent(value: str) -> AgentSpec:
-    harness, _, model = value.partition(':')
-    return AgentSpec(harness=harness, model=model or None)
+    harness, _, rest = value.partition(':')
+    model, _, effort = rest.partition(':')
+    return AgentSpec(harness=harness, model=model or None, effort=effort or None)
