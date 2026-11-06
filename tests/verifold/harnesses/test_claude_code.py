@@ -40,10 +40,12 @@ def test_the_first_turn_runs_print_mode_with_private_settings(tmp_path: Path) ->
     sandbox = files['claude-settings.json']['sandbox']
     assert sandbox['failIfUnavailable'] is True
     assert sandbox['network']['allowedDomains'] == ['pypi.org']
-    assert sandbox['filesystem']['denyRead'] == list(CREDENTIAL_PATHS)
+    assert sandbox['filesystem']['denyRead'] == [*CREDENTIAL_PATHS, str(tmp_path)]
     permissions = files['claude-settings.json']['permissions']
     assert 'mcp__verifold' in permissions['allow']
-    assert {'Read(~/.ssh)', 'Read(~/.ssh/**)'} <= set(permissions['deny'])
+    assert {'Read(~/.ssh)', 'Read(~/.ssh/**)', f'Read(/{tmp_path})', f'Read(/{tmp_path}/**)'} <= set(
+        permissions['deny']
+    )
 
 
 def test_a_later_turn_resumes_the_session(tmp_path: Path) -> None:

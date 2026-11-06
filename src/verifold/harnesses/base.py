@@ -61,7 +61,9 @@ class Harness(ABC):
 
     name: str
     family: str
-    """The model family that the harness uses by default. Blind checks compare families."""
+    """The model family that the harness uses by default. An agent's `ModelSpec` records the family it actually uses."""
+    environment: tuple[str, ...] = ()
+    """Prefixes of the person's environment variables that the harness needs, such as its own API key."""
 
     @abstractmethod
     def invocation(self, turn: Turn) -> Invocation:
