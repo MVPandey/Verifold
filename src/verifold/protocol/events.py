@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, Field, StringConstraints
 
 from verifold.protocol.agents import Agent
-from verifold.protocol.ids import AgentId, CommitId, ThreadId
+from verifold.protocol.ids import AgentId, CommitId, PostId, ThreadId
 from verifold.protocol.posts import Post
 from verifold.protocol.record import Record
 from verifold.protocol.threads import Thread
@@ -62,6 +62,14 @@ class WatchSet(EventBase):
     watching: bool
 
 
+class RerunRequested(EventBase):
+    """An agent or the person asked for a blind rerun of a post. Verifold answers it by starting a checker."""
+
+    type: Literal['rerun_requested'] = 'rerun_requested'
+    by: AgentId
+    post: PostId
+
+
 class TurnSummary(Record):
     """What one agent turn cost, how it ended, and the snapshot of the agent's folder after it."""
 
@@ -81,6 +89,6 @@ class TurnEnded(EventBase, TurnSummary):
 
 
 type Event = Annotated[
-    LabOpened | AgentJoined | ThreadOpened | Posted | WatchSet | TurnEnded,
+    LabOpened | AgentJoined | ThreadOpened | Posted | WatchSet | TurnEnded | RerunRequested,
     Field(discriminator='type'),
 ]
