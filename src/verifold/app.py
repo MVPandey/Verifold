@@ -1,4 +1,4 @@
-"""Runs a lab: the record, the join endpoint, and one loop for each agent."""
+"""Runs a lab: the record, the board's MCP endpoint, and one supervised ACP session for each agent."""
 
 import asyncio
 from collections.abc import Mapping
@@ -7,36 +7,32 @@ from pathlib import Path
 import uvicorn
 from pydantic import Field, SecretStr
 
-from verifold.harnesses.base import Harness
+from verifold.harnesses.catalog import CATALOG, HarnessEntry
 from verifold.protocol.agents import Agent, Label, ModelSpec
 from verifold.protocol.record import Record
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.errors import RunnerError
 from verifold.runner.folders import LAB_FOLDER, agent_folder
-from verifold.runner.prompts import PEER_BRIEF, PLANNER_BRIEF, PLANNER_ROLE
+from verifold.runner.messages import LAB_TEMPLATE, start_message
+from verifold.runner.session import SessionOptions
 from verifold.server.join import Members, join_server
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.store.record_file import RecordFile
 
-DEFAULT_NETWORK = (
-    'pypi.org',
-    'files.pythonhosted.org',
-    'github.com',
-    'raw.githubusercontent.com',
-    'huggingface.co',
-    'cdn-lfs.huggingface.co',
+PLANNER_ROLE = 'Planner'
+PLANNER_BRIEF = (
+    'Open a thread titled "Plan" with 2 to 6 different ways to attack the question, each with what would count as a '
+    'result. Then work on one of them yourself.'
 )
-"""Domains that agents' shell commands reach by default: package and model downloads."""
 
 
 class AgentSpec(Record):
-    """One agent to start: its harness, and its model when not the harness's default."""
+    """One agent to start: its harness, and the model and effort when not the person's defaults."""
 
     harness: Label
     model: Label | None = None
-    family: Label | None = None
-    """The model family, when the harness runs a family other than its default."""
+    effort: Label | None = None
 
 
 class LabConfig(Record):
@@ -45,13 +41,14 @@ class LabConfig(Record):
     question: str | None = None
     """The question of a new lab. Leave it out to resume the lab in the folder."""
     agents: tuple[AgentSpec, ...] = Field(default=(AgentSpec(harness='claude-code'), AgentSpec(harness='codex')))
-    network: tuple[str, ...] = DEFAULT_NETWORK
+    auto_mode: bool = True
+    """The person allows each harness's own auto mode. Without it, permission requests come to the person."""
     port: int = Field(default=0, ge=0, le=65_535)
-    """The port of the join endpoint on 127.0.0.1. 0 picks a free port."""
+    """The port of the board's MCP endpoint on 127.0.0.1. 0 picks a free port."""
     turn_timeout: float = Field(default=2 * 3_600, gt=0)
 
 
-async def run_lab(project: Path, config: LabConfig, harnesses: Mapping[str, Harness]) -> None:
+async def run_lab(project: Path, config: LabConfig, catalog: Mapping[str, HarnessEntry] = CATALOG) -> None:
     """
     Run the lab in `project` until every agent stops, or until the caller cancels it.
 
@@ -60,18 +57,16 @@ async def run_lab(project: Path, config: LabConfig, harnesses: Mapping[str, Harn
         RecordLocked: Another process runs this lab already.
 
     """
+    unknown = sorted({spec.harness for spec in config.agents} - set(catalog))
+    if unknown:
+        raise RunnerError(f'Unknown harness {", ".join(unknown)}. Choose from: {", ".join(catalog)}.')
     lab_folder = project / LAB_FOLDER
     with RecordFile(lab_folder / 'record.jsonl') as record:
-        unknown = sorted({spec.harness for spec in config.agents} - set(harnesses))
-        if unknown:
-            raise RunnerError(f'Unknown harness {", ".join(unknown)}. Choose from: {", ".join(harnesses)}.')
         lab = await _open(record, config)
-        members = Members()
-        seats = []
-        for number, spec in enumerate(config.agents, start=1):
-            harness = harnesses[spec.harness]
-            agent = await _join(lab, number, spec, harness)
-            seats.append((await _seat(lab, project, members, agent), harness))
+        lab_file = lab_folder / 'LAB.md'
+        if not lab_file.exists():
+            lab_file.write_text(LAB_TEMPLATE)
+        members, seats = await _seat_agents(lab, project, config, catalog, lab_file)
         server = uvicorn.Server(
             uvicorn.Config(
                 join_server(members.resolve).streamable_http_app(host='127.0.0.1'),
@@ -83,13 +78,11 @@ async def run_lab(project: Path, config: LabConfig, harnesses: Mapping[str, Harn
         serving = asyncio.create_task(server.serve())
         try:
             settings = LoopSettings(
-                mcp_url=f'http://127.0.0.1:{await _bound_port(server)}/mcp',
-                network=config.network,
-                turn_timeout=config.turn_timeout,
+                mcp_url=f'http://127.0.0.1:{await _bound_port(server)}/mcp', turn_timeout=config.turn_timeout
             )
             async with asyncio.TaskGroup() as group:
-                for (member, setup), harness in seats:
-                    group.create_task(AgentLoop(member, setup, harness, settings).run())
+                for member, setup in seats:
+                    group.create_task(AgentLoop(member, setup, settings).run())
         finally:
             server.should_exit = True
             await serving
@@ -104,7 +97,7 @@ async def _open(record: RecordFile, config: LabConfig) -> Lab:
     return Lab.create(record, config.question)
 
 
-async def _join(lab: Lab, number: int, spec: AgentSpec, harness: Harness) -> Agent:
+async def _join(lab: Lab, number: int, spec: AgentSpec, harness: HarnessEntry) -> Agent:
     agent_id = f'agent-{number}'
     joined = lab.board.agent(agent_id)
     if joined:
@@ -114,23 +107,32 @@ async def _join(lab: Lab, number: int, spec: AgentSpec, harness: Harness) -> Age
         id=agent_id,
         name=f'Agent {number}',
         harness=spec.harness,
-        model=ModelSpec(family=spec.family or harness.family, name=spec.model),
+        model=ModelSpec(family=harness.family, name=spec.model),
         role=PLANNER_ROLE if planner else '',
-        brief=PLANNER_BRIEF if planner else PEER_BRIEF,
+        brief=PLANNER_BRIEF if planner else '',
     )
     return (await lab.join(agent)).agent
 
 
-async def _seat(lab: Lab, project: Path, members: Members, agent: Agent) -> tuple[Member, AgentSetup]:
-    member = Member(lab, agent.id)
-    setup = AgentSetup(
-        agent=agent,
-        project=project,
-        folder=await agent_folder(project, agent.id),
-        private=project / LAB_FOLDER / 'private' / agent.id,
-        token=SecretStr(members.add(member)),
-    )
-    return member, setup
+async def _seat_agents(
+    lab: Lab, project: Path, config: LabConfig, catalog: Mapping[str, HarnessEntry], lab_file: Path
+) -> tuple[Members, list[tuple[Member, AgentSetup]]]:
+    # Every agent joins first, so each start message names all the other agents.
+    agents = [await _join(lab, number, spec, catalog[spec.harness]) for number, spec in enumerate(config.agents, 1)]
+    members = Members()
+    seats: list[tuple[Member, AgentSetup]] = []
+    for agent, spec in zip(agents, config.agents, strict=True):
+        member = Member(lab, agent.id)
+        setup = AgentSetup(
+            agent=agent,
+            harness=catalog[spec.harness],
+            folder=await agent_folder(project, agent.id),
+            token=SecretStr(members.add(member)),
+            options=SessionOptions(model=spec.model, effort=spec.effort, auto_mode=config.auto_mode),
+            start=start_message(lab.board, agent, lab_file),
+        )
+        seats.append((member, setup))
+    return members, seats
 
 
 async def _bound_port(server: uvicorn.Server) -> int:
