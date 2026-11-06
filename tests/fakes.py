@@ -61,3 +61,23 @@ class Recording(Harness):
     def turns(self) -> list[list[str]]:
         """Return each turn's prompt and session, in order."""
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
+
+
+class McpAgent(Harness):
+    """A harness whose turn is `agents/post_hello.py`: it posts on the board over MCP with the agent's token."""
+
+    name = 'mcp-agent'
+    family = 'test'
+
+    @override
+    def invocation(self, turn: Turn) -> Invocation:
+        script = Path(__file__).parent / 'agents' / 'post_hello.py'
+        return Invocation(
+            argv=(sys.executable, str(script), turn.folder.name),
+            env=(('VERIFOLD_URL', SecretStr(turn.mcp_url)), ('VERIFOLD_TOKEN', turn.token)),
+        )
+
+    @override
+    def read(self, report: TurnReport, line: bytes) -> TurnReport:
+        text = line.decode().strip()
+        return report.model_copy(update={'final_text': text, 'error': 'post failed' if text == 'error' else None})

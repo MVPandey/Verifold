@@ -10,6 +10,17 @@ from verifold.society.board import Board
 
 _AGENT = files(__package__).joinpath('agent.md').read_text()
 
+PLANNER_ROLE = 'Planner'
+PLANNER_BRIEF = (
+    'Before the others start their own lines of work, open a thread titled "Plan" with a proposal: 2 to 6 different '
+    'ways to attack the question, each with what would count as a result and what it must beat. Then work on one of '
+    'them yourself. Change the plan when a better idea or a good objection comes.'
+)
+PEER_BRIEF = (
+    'Read the "Plan" thread when it appears: call `wait` until it does. Then choose a line of work that nobody covers, '
+    'or a better one of your own, and say which in the plan thread.'
+)
+
 
 def opening_prompt(board: Board, agent: Agent, folder: Path, project: Path, today: date) -> str:
     """Return the prompt of an agent's first turn: the question, its role, how the lab works, and its limits."""
