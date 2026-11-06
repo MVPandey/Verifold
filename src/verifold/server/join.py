@@ -16,9 +16,9 @@ from pydantic import Field, ValidationError
 from verifold.protocol.events import WatchSet
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import PostRequest, PostView, ThreadSummary, ThreadView, Update
-from verifold.protocol.posts import Body, CheckMethod, FileEvidence, Headline, Outcome, PostKind
+from verifold.protocol.posts import Body, CheckMethod, Headline, Outcome, PostKind, RelativePath
 from verifold.protocol.threads import Title
-from verifold.server.errors import UnknownAgent
+from verifold.server.errors import ServerError, UnknownAgent
 from verifold.server.member import Member
 from verifold.society.errors import SocietyError
 
@@ -76,7 +76,7 @@ def join_server(resolve: Resolve) -> MCPServer:
         new_thread: Title | None = None,
         reply_to: PostId | None = None,
         mentions: tuple[AgentId, ...] = (),
-        evidence: tuple[FileEvidence, ...] = (),
+        files: tuple[RelativePath, ...] = (),
         accepts: bool | None = None,
         outcome: Outcome | None = None,
         method: CheckMethod | None = None,
@@ -89,7 +89,8 @@ def join_server(resolve: Resolve) -> MCPServer:
         objection to your own post. `objection` disputes another agent's post. `check` tests another agent's post: give
         `outcome` and `method`. `proposal` becomes the thread's decision when nobody objects in time. `ruled_out` ends
         a line of work. A post wakes the agents that it names, the author of the post that it replies to, and the
-        thread's watchers. Keep `text` to one headline and put detail in `body`.
+        thread's watchers. Keep `text` to one headline and put detail in `body`. Back a result with `files`: paths
+        in your folder. Verifold commits your folder and pins each file to that commit, so others can check it.
         """
         with _told_to_agent():
             request = PostRequest(
@@ -100,7 +101,7 @@ def join_server(resolve: Resolve) -> MCPServer:
                 new_thread=new_thread,
                 reply_to=reply_to,
                 mentions=mentions,
-                evidence=evidence,
+                files=files,
                 accepts=accepts,
                 outcome=outcome,
                 method=method,
@@ -145,5 +146,5 @@ def _told_to_agent() -> Generator[None]:
     # Only a ToolError's message reaches the agent, so a broken rule goes back as one.
     try:
         yield
-    except (SocietyError, UnknownAgent, ValidationError) as error:
+    except (SocietyError, ServerError, ValidationError) as error:
         raise ToolError(str(error)) from error

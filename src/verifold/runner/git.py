@@ -2,6 +2,7 @@
 
 import asyncio
 from asyncio.subprocess import PIPE
+from collections.abc import Mapping
 from pathlib import Path
 
 from verifold.runner.environment import clean_environment
@@ -12,16 +13,24 @@ class GitError(RunnerError):
     """A Git command failed. The message holds Git's own error output."""
 
 
-async def git(*args: str, cwd: Path) -> str:
+async def git(*args: str, cwd: Path, env: Mapping[str, str] | None = None) -> str:
     """
     Run `git` with `args` in `cwd`, and return its standard output without surrounding whitespace.
+
+    `env` adds variables to the clean environment, such as a temporary `GIT_INDEX_FILE`.
 
     Raises:
         GitError: Git exited with an error.
 
     """
     process = await asyncio.create_subprocess_exec(
-        'git', *args, cwd=cwd, env=clean_environment(), stdin=asyncio.subprocess.DEVNULL, stdout=PIPE, stderr=PIPE
+        'git',
+        *args,
+        cwd=cwd,
+        env=clean_environment() | dict(env or {}),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=PIPE,
+        stderr=PIPE,
     )
     output, errors = await process.communicate()
     if process.returncode:
