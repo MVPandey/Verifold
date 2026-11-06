@@ -91,6 +91,7 @@ class ClaudeCode(Harness):
 
     name = 'claude-code'
     family = 'anthropic'
+    environment = ('ANTHROPIC_', 'CLAUDE_')
 
     def __init__(self, executable: str = 'claude') -> None:
         """Use the `claude` executable on the PATH, or another one."""
@@ -152,12 +153,12 @@ class ClaudeCode(Harness):
 
 
 def _settings(turn: Turn) -> _SessionSettings:
+    # The agents' private folders hold their tokens, so no agent reads them. Claude Code itself still loads its own.
+    denied = (*CREDENTIAL_PATHS, str(turn.private.parent))
     # A rule path that starts with `//` is absolute. The sandbox covers shell commands, and these rules cover Read.
-    reads = tuple(f'Read(/{path})' if path.startswith('/') else f'Read({path})' for path in CREDENTIAL_PATHS)
+    reads = tuple(f'Read(/{path})' if path.startswith('/') else f'Read({path})' for path in denied)
     return _SessionSettings(
-        sandbox=_Sandbox(
-            filesystem=_Filesystem(deny_read=CREDENTIAL_PATHS), network=_Network(allowed_domains=turn.network)
-        ),
+        sandbox=_Sandbox(filesystem=_Filesystem(deny_read=denied), network=_Network(allowed_domains=turn.network)),
         permissions=_Permissions(
             allow=('Edit(./**)', 'Write(./**)', 'WebSearch', 'WebFetch', 'mcp__verifold'),
             deny=reads + tuple(f'{rule[:-1]}/**)' for rule in reads),
