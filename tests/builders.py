@@ -1,3 +1,5 @@
+import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -60,3 +62,10 @@ class RecordBuilder:
 def lab() -> RecordBuilder:
     """A lab with agents `ada` and `bo` from one family, `cy` from another, and thread `t-1`."""
     return RecordBuilder().join('ada').join('bo').join('cy', family='openai').thread('t-1', opened_by='ada')
+
+
+async def until(condition: Callable[[], bool], timeout: float = 20) -> None:
+    """Wait until `condition` holds, or fail after `timeout` seconds."""
+    async with asyncio.timeout(timeout):
+        while not condition():
+            await asyncio.sleep(0.02)
