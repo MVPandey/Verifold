@@ -8,7 +8,7 @@ from conftest import ServedBoard
 from fakes import FAKE_HARNESS
 
 from verifold.protocol.usage import Usage
-from verifold.runner.session import AgentSession, Board, PermissionRequest, Place, SessionOptions
+from verifold.runner.session import AgentSession, BoardAccess, PermissionRequest, Place, SessionOptions
 
 
 def calls(log: Path) -> list[dict[str, object]]:
@@ -40,7 +40,7 @@ async def test_a_session_posts_on_the_board_and_reports_usage_and_cost(
     options = SessionOptions(model='small-model', effort='low', auto_mode=True)
 
     async with AgentSession.open(
-        FAKE_HARNESS, folder, Board(url=served.url, token=token), options, no_permission
+        FAKE_HARNESS, folder, BoardAccess(url=served.url, token=token), options, no_permission
     ) as session:
         first = await session.send('Start.')
         second = await session.send('Again.')
@@ -66,7 +66,7 @@ async def test_a_session_keeps_the_persons_settings_unless_asked(served: ServedB
     _, token = served.seat('bo')
 
     async with AgentSession.open(
-        FAKE_HARNESS, folder, Board(url=served.url, token=token), SessionOptions(), no_permission
+        FAKE_HARNESS, folder, BoardAccess(url=served.url, token=token), SessionOptions(), no_permission
     ):
         pass
 
@@ -78,7 +78,7 @@ async def test_a_session_can_be_loaded_again(served: ServedBoard, folder: Place,
     options = SessionOptions(resume='session-bo')
 
     async with AgentSession.open(
-        FAKE_HARNESS, folder, Board(url=served.url, token=token), options, no_permission
+        FAKE_HARNESS, folder, BoardAccess(url=served.url, token=token), options, no_permission
     ) as session:
         assert session.id == 'session-bo'
 
@@ -98,7 +98,7 @@ async def test_permission_requests_go_to_the_handler(
         return decision
 
     async with AgentSession.open(
-        FAKE_HARNESS, folder, Board(url=served.url, token=token), SessionOptions(), decide
+        FAKE_HARNESS, folder, BoardAccess(url=served.url, token=token), SessionOptions(), decide
     ) as session:
         await session.send('Start.')
 
@@ -125,7 +125,7 @@ async def test_closing_a_session_stops_the_harness_with_its_children_and_keeps_i
 
     async with asyncio.timeout(15):
         async with AgentSession.open(
-            FAKE_HARNESS, folder, Board(url=served.url, token=token), SessionOptions(), no_permission
+            FAKE_HARNESS, folder, BoardAccess(url=served.url, token=token), SessionOptions(), no_permission
         ):
             child = int(pid_file.read_text())
             assert alive(child)
