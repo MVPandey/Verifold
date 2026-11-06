@@ -30,7 +30,7 @@ async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
     async with Client(join_server(lambda _: bo)) as client:
         tools = {tool.name for tool in (await client.list_tools()).tools}
         posted = await client.call_tool(
-            'post', {'post': {'kind': 'objection', 'text': 'Leak.', 'thread': 't-1', 'reply_to': 'p-1'}}
+            'post', {'kind': 'objection', 'text': 'Leak.', 'thread': 't-1', 'reply_to': 'p-1'}
         )
         watched = await client.call_tool('watch', {'thread': 't-1'})
         thread = await client.call_tool('thread', {'thread': 't-1'})
@@ -53,7 +53,7 @@ async def test_a_broken_rule_comes_back_to_the_agent_as_a_readable_error(lab: La
     ada = Member(lab, 'ada')
     async with Client(join_server(lambda _: ada)) as client:
         result = await client.call_tool(
-            'post', {'post': {'kind': 'objection', 'text': 'Mine.', 'thread': 't-1', 'reply_to': 'p-1'}}
+            'post', {'kind': 'objection', 'text': 'Mine.', 'thread': 't-1', 'reply_to': 'p-1'}
         )
 
     assert result.is_error
@@ -66,3 +66,11 @@ async def test_an_unknown_agent_gets_a_readable_error(lab: Lab) -> None:
 
     assert result.is_error
     assert 'no valid agent token' in str(result.content)
+
+
+async def test_the_post_tool_takes_flat_fields(lab: Lab) -> None:
+    async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
+        schema = next(tool for tool in (await client.list_tools()).tools if tool.name == 'post').input_schema
+
+    assert {'kind', 'text', 'thread', 'new_thread', 'reply_to', 'outcome'} <= set(schema['properties'])
+    assert set(schema['required']) == {'kind', 'text'}

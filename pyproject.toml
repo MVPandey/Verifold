@@ -40,6 +40,8 @@ ignore = ["D203", "D212"]
 
 [tool.ruff.lint.extend-per-file-ignores]
 "tests/**/*.py" = ["D", "PLR"]
+# The post tool's parameters mirror PostRequest's fields, because harnesses fill a flat tool schema more reliably.
+"src/verifold/server/join.py" = ["PLR0913"]
 
 [tool.ruff.format]
 quote-style = "single"
