@@ -54,6 +54,7 @@ unused-ignore-comment = "error"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["tests"]
+asyncio_mode = "auto"
 addopts = [
     "--import-mode=importlib",
     "--cov=src/verifold",
@@ -70,6 +71,7 @@ source = ["src/verifold"]
 dev = [
     "lefthook>=2.2.2,<3",
     "pytest>=9.1.1,<10",
+    "pytest-asyncio>=1.2,<2",
     "pytest-cov>=7.1.0,<8",
     "pytest-mock>=3.17.0,<4",
     "ruff>=0.17.2,<1",
