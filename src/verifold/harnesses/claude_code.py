@@ -5,7 +5,8 @@ from typing import Literal, override
 from pydantic import ConfigDict, SecretStr, ValidationError
 from pydantic.alias_generators import to_camel
 
-from verifold.harnesses.base import ConfigFile, Harness, Invocation, Turn, TurnReport, Usage, Wire
+from verifold.harnesses.base import ConfigFile, Harness, Invocation, Turn, TurnReport, Wire
+from verifold.protocol.usage import Usage
 
 CREDENTIAL_PATHS = (
     '~/.ssh',

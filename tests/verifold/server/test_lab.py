@@ -25,7 +25,7 @@ async def test_a_post_can_open_its_thread_in_one_step(lab: Lab) -> None:
     assert posted.seq == board.seq == 7
 
 
-async def test_a_rejected_post_leaves_no_trace(lab: Lab, record: RecordFile) -> None:
+async def test_a_rejected_post_leaves_no_trace(lab: Lab, record_file: RecordFile) -> None:
     before = lab.board.seq
 
     with pytest.raises(RejectedEvent, match='p-9 does not exist'):
@@ -33,7 +33,7 @@ async def test_a_rejected_post_leaves_no_trace(lab: Lab, record: RecordFile) -> 
     with pytest.raises(RejectedEvent, match='zed is not an agent'):
         await lab.post(PostRequest(kind='message', text='Hi.', new_thread='New subject', mentions=('zed',)), 'bo')
 
-    assert len(record.read()) == lab.board.seq == before
+    assert len(record_file.read()) == lab.board.seq == before
     assert len(lab.board.threads) == 1
 
 
@@ -49,10 +49,10 @@ async def test_watches_are_recorded(lab: Lab) -> None:
     assert lab.board.watches == (watch,)
 
 
-async def test_a_reloaded_lab_has_the_same_board(lab: Lab, record: RecordFile) -> None:
+async def test_a_reloaded_lab_has_the_same_board(lab: Lab, record_file: RecordFile) -> None:
     await lab.post(message('Starting.'), 'ada')
 
-    assert Lab.load(record).board == lab.board
+    assert Lab.load(record_file).board == lab.board
 
 
 async def test_a_waiter_wakes_on_the_next_event(lab: Lab) -> None:
@@ -77,5 +77,5 @@ async def test_a_waiter_times_out_with_no_events(lab: Lab) -> None:
     assert await lab.events_after(lab.board.seq, timeout=0.01) == ()
 
 
-def test_the_default_clock_is_utc(record: RecordFile) -> None:
-    assert Lab.create(record, 'Does it hold?').board.opened.at.tzinfo is UTC
+def test_the_default_clock_is_utc(record_file: RecordFile) -> None:
+    assert Lab.create(record_file, 'Does it hold?').board.opened.at.tzinfo is UTC
