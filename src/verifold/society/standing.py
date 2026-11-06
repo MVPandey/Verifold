@@ -4,11 +4,11 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 from verifold.protocol.ids import PostId
+from verifold.protocol.join import Standing
 from verifold.protocol.posts import Answer, Check, Objection, Proposal
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
 
-type Standing = Literal['open', 'checked', 'disputed', 'conceded']
 type Decision = Literal['open', 'decided', 'disputed', 'withdrawn']
 
 
