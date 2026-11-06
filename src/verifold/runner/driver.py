@@ -8,14 +8,17 @@ from asyncio.subprocess import PIPE, Process
 from contextlib import suppress
 
 from verifold.harnesses.base import Harness, Invocation, Turn, TurnReport
-from verifold.runner.environment import clean_environment
+from verifold.runner.environment import harness_environment
 from verifold.runner.errors import RunnerError
+
+LINE_LIMIT = 16 * 1024 * 1024
+"""Bytes in one line of a harness's output. A longer line is skipped."""
 
 STDERR_KEPT = 4_096
 """Bytes at the end of stderr that a failed turn's report quotes."""
 
 STOP_GRACE = 5.0
-"""Seconds that a harness gets to exit after Verifold asks it to stop, before Verifold kills it."""
+"""Seconds that a harness gets to exit after Verifold asks it to stop, and that its output gets to drain."""
 
 
 async def run_turn(harness: Harness, turn: Turn, timeout: float) -> TurnReport:
@@ -23,40 +26,69 @@ async def run_turn(harness: Harness, turn: Turn, timeout: float) -> TurnReport:
     Run one turn, and return what the harness reported.
 
     A harness that exits with an error, or runs past `timeout` seconds, gives a report with `error` set. The harness
-    runs in its own process group, so stopping it also stops the subagents and shell commands that it started.
-    Verifold stops the group when the turn times out or when the caller cancels it.
+    runs in its own process group. When the harness exits, when the turn times out, or when the caller cancels it,
+    Verifold stops the whole group, so no shell command or subagent of the turn keeps running or holds its output open.
     """
     invocation = harness.invocation(turn)
     _write_files(invocation)
     process = await asyncio.create_subprocess_exec(
         *invocation.argv,
         cwd=turn.folder,
-        env=clean_environment() | {name: value.get_secret_value() for name, value in invocation.env},
+        env=harness_environment(harness.environment)
+        | {name: value.get_secret_value() for name, value in invocation.env},
         stdin=asyncio.subprocess.DEVNULL,
         stdout=PIPE,
         stderr=PIPE,
         start_new_session=True,
-        limit=16 * 1024 * 1024,
+        limit=LINE_LIMIT,
     )
-    stdout, stderr = process.stdout, process.stderr
-    if stdout is None or stderr is None:
+    if process.stdout is None or process.stderr is None:
+        await _stop(process)
         raise RunnerError(f'{harness.name} started without output pipes.')
-    tail = asyncio.create_task(_tail(stderr))
-    report = TurnReport()
+    reader = _Reader(harness)
+    reading = asyncio.create_task(reader.read(process.stdout))
+    tail = asyncio.create_task(_tail(process.stderr))
+    timed_out = False
     try:
         async with asyncio.timeout(timeout):
-            async for line in stdout:
-                report = harness.read(report, line)
-            await process.wait()
+            await _exited(process)
     except TimeoutError:
-        report = report.model_copy(update={'error': f'{harness.name} ran past {timeout:g} seconds and was stopped.'})
+        timed_out = True
     finally:
         await _stop(process)
-        errors = await tail
-    if process.returncode and report.error is None:
+        errors = await _drain(reading, tail)
+    if timed_out:
+        return reader.report.model_copy(
+            update={'error': f'{harness.name} ran past {timeout:g} seconds and was stopped.'}
+        )
+    if process.returncode and reader.report.error is None:
         message = errors.decode(errors='replace').strip() or 'no error output'
-        return report.model_copy(update={'error': f'{harness.name} exited with code {process.returncode}: {message}'})
-    return report
+        return reader.report.model_copy(
+            update={'error': f'{harness.name} exited with code {process.returncode}: {message}'}
+        )
+    return reader.report
+
+
+class _Reader:
+    """Folds a harness's output lines into its report. The report survives a cancelled read."""
+
+    def __init__(self, harness: Harness) -> None:
+        self._harness = harness
+        self.report = TurnReport()
+
+    async def read(self, stream: StreamReader) -> None:
+        while True:
+            try:
+                line = await stream.readuntil(b'\n')
+            except asyncio.IncompleteReadError as end:
+                if end.partial:
+                    self.report = self._harness.read(self.report, end.partial)
+                return
+            except asyncio.LimitOverrunError as overrun:
+                # Skip the part of an over-long line that the buffer holds. The rest of it fails to parse later.
+                await stream.readexactly(overrun.consumed)
+                continue
+            self.report = self._harness.read(self.report, line)
 
 
 def _write_files(invocation: Invocation) -> None:
@@ -75,14 +107,31 @@ async def _tail(stream: StreamReader) -> bytes:
 
 
 async def _stop(process: Process) -> None:
-    if process.returncode is not None:
-        return
+    # Signal the group even when its leader exited already: its children can still run and hold the output open.
     with suppress(ProcessLookupError):
         os.killpg(process.pid, signal.SIGTERM)
+    if process.returncode is None:
+        with suppress(TimeoutError):
+            async with asyncio.timeout(STOP_GRACE):
+                await _exited(process)
+    with suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)
+    await _exited(process)
+
+
+async def _exited(process: Process) -> None:
+    # Process.wait() also waits until the output pipes close, and a child that the harness left running can hold
+    # them open for good. The return code is set as soon as the harness itself exits.
+    while process.returncode is None:
+        await asyncio.sleep(0.05)
+
+
+async def _drain(reading: asyncio.Task[None], tail: asyncio.Task[bytes]) -> bytes:
+    # A process outside the group can still hold the pipes open. Stop reading after STOP_GRACE seconds.
     try:
         async with asyncio.timeout(STOP_GRACE):
-            await process.wait()
+            await reading
+            return await tail
     except TimeoutError:
-        with suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
-        await process.wait()
+        tail.cancel()
+        return b''

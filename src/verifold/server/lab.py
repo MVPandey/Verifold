@@ -12,6 +12,7 @@ from verifold.protocol.ids import AgentId, ThreadId
 from verifold.protocol.join import PostRequest
 from verifold.protocol.threads import Thread
 from verifold.protocol.usage import Usage
+from verifold.server.errors import LabExists
 from verifold.society.board import Board
 from verifold.society.fold import apply, fold
 from verifold.store.record_file import RecordFile
@@ -43,7 +44,6 @@ class Lab:
         """
         self._record = record
         self._clock = clock
-        self._events = list(events)
         self._board = fold(events)
         self._changed = asyncio.Condition()
 
@@ -54,7 +54,15 @@ class Lab:
 
     @classmethod
     def create(cls, record: RecordFile, question: str, clock: Clock = utc_now) -> Self:
-        """Open a new lab on `question` in an empty record."""
+        """
+        Open a new lab on `question` in an empty record.
+
+        Raises:
+            LabExists: The record holds a lab already.
+
+        """
+        if record.read():
+            raise LabExists('This record holds a lab already. Load it instead.')
         opened = LabOpened(seq=1, at=clock(), question=question)
         record.append(opened)
         return cls(record, (opened,), clock)
@@ -100,13 +108,12 @@ class Lab:
         )
         return board.turns[-1]
 
-    async def events_after(self, seq: int, timeout: float) -> tuple[Event, ...]:
-        """Return the events after `seq`. Wait up to `timeout` seconds for one when there are none yet."""
+    async def wait_for_change(self, after: int, timeout: float) -> None:
+        """Return once the board has an event after `after`, or after `timeout` seconds."""
         async with self._changed:
             with suppress(TimeoutError):
                 async with asyncio.timeout(timeout):
-                    await self._changed.wait_for(lambda: self._board.seq > seq)
-            return tuple(self._events[seq:])
+                    await self._changed.wait_for(lambda: self._board.seq > after)
 
     async def _commit(self, *builds: Build) -> Board:
         # The condition's lock serializes changes. Each event comes from the board that it joins, so IDs and sequence
@@ -117,10 +124,8 @@ class Lab:
                 event = build(board, board.seq + 1, at)
                 board = apply(board, event)
                 events.append(event)
-            for event in events:
-                self._record.append(event)
+            self._record.append(*events)
             self._board = board
-            self._events.extend(events)
             self._changed.notify_all()
             return board
 

@@ -66,3 +66,10 @@ def test_failures_are_reported() -> None:
 
     assert Codex().read(TurnReport(), failed).error == 'Usage limit reached.'
     assert Codex().read(TurnReport(), stream_error).error == 'Reconnecting.'
+
+
+def test_a_completed_turn_clears_an_earlier_reconnect_notice() -> None:
+    report = Codex().read(TurnReport(), b'{"type": "error", "message": "Reconnecting... 1/5"}')
+    done = b'{"type": "turn.completed", "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}}'
+
+    assert Codex().read(report, done).error is None

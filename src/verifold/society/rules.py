@@ -25,8 +25,8 @@ def check_agent(board: Board, agent: Agent) -> None:
     """
     if agent.id == PERSON or board.agent(agent.id):
         raise RejectedEvent(f'The agent ID {agent.id} is taken. Choose another ID.')
-    if agent.recruited_by and not board.agent(agent.recruited_by):
-        raise RejectedEvent(f'{agent.recruited_by} is not an agent in this lab.')
+    if agent.recruited_by:
+        _check_member(board, agent.recruited_by)
 
 
 def check_thread(board: Board, thread: Thread) -> None:

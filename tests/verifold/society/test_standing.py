@@ -106,3 +106,21 @@ class TestDecision:
     def test_it_needs_a_proposal(self, record: RecordBuilder, post_id: str) -> None:
         with pytest.raises(NotFound, match=post_id):
             decision(record.post(RESULT).board(), post_id, record.at(1), self.WINDOW)
+
+
+def test_a_check_that_its_author_conceded_no_longer_counts(record: RecordBuilder) -> None:
+    record.post(RESULT).post(check('p-2', 'cy', 'holds'))
+    record.post(Objection(id='p-3', thread='t-1', author='bo', text='Your rerun used the old split.', reply_to='p-2'))
+    record.post(Answer(id='p-4', thread='t-1', author='cy', text='Right, withdrawn.', reply_to='p-3', accepts=True))
+
+    assert standing(record.board(), 'p-2') == 'conceded'
+    assert standing(record.board(), 'p-1') == 'open'
+
+
+def test_an_objection_that_its_author_conceded_no_longer_disputes(record: RecordBuilder) -> None:
+    record.post(RESULT).post(OBJECTION)
+    record.post(Objection(id='p-3', thread='t-1', author='ada', text='The split was fixed first.', reply_to='p-2'))
+    record.post(Answer(id='p-4', thread='t-1', author='bo', text='True, I withdraw it.', reply_to='p-3', accepts=True))
+
+    assert standing(record.board(), 'p-2') == 'conceded'
+    assert standing(record.board(), 'p-1') == 'open'
