@@ -31,7 +31,9 @@ def loop_for(served: ServedBoard, tmp_path: Path, **settings: float) -> AgentLoo
     assert joined is not None
     folder = tmp_path / 'bo'
     folder.mkdir(exist_ok=True)
-    setup = AgentSetup(agent=joined.agent, harness=FAKE_HARNESS, folder=folder, token=token, start='Start.')
+    setup = AgentSetup(
+        agent=joined.agent, harness=FAKE_HARNESS, folder=folder, log=tmp_path / 'bo.log', token=token, start='Start.'
+    )
     return AgentLoop(member, setup, LoopSettings(mcp_url=served.url, retry_after=0, **settings))
 
 
