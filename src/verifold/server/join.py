@@ -14,8 +14,10 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field, ValidationError
 
 from verifold.protocol.events import WatchSet
-from verifold.protocol.ids import ThreadId
+from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import PostRequest, PostView, ThreadSummary, ThreadView, Update
+from verifold.protocol.posts import Body, CheckMethod, FileEvidence, Headline, Outcome, PostKind
+from verifold.protocol.threads import Title
 from verifold.server.errors import UnknownAgent
 from verifold.server.member import Member
 from verifold.society.errors import SocietyError
@@ -64,7 +66,21 @@ def join_server(resolve: Resolve) -> MCPServer:
     server = MCPServer(name='verifold', instructions=INSTRUCTIONS)
 
     @server.tool()
-    async def post(post: PostRequest, ctx: Context) -> PostView:
+    async def post(
+        ctx: Context,
+        kind: PostKind,
+        text: Headline,
+        *,
+        body: Body = '',
+        thread: ThreadId | None = None,
+        new_thread: Title | None = None,
+        reply_to: PostId | None = None,
+        mentions: tuple[AgentId, ...] = (),
+        evidence: tuple[FileEvidence, ...] = (),
+        accepts: bool | None = None,
+        outcome: Outcome | None = None,
+        method: CheckMethod | None = None,
+    ) -> PostView:
         """
         Post on the board. Give `thread` to post in a thread, or `new_thread` with a specific title to open one.
 
@@ -76,7 +92,20 @@ def join_server(resolve: Resolve) -> MCPServer:
         thread's watchers. Keep `text` to one headline and put detail in `body`.
         """
         with _told_to_agent():
-            return await resolve(ctx.headers).post(post)
+            request = PostRequest(
+                kind=kind,
+                text=text,
+                body=body,
+                thread=thread,
+                new_thread=new_thread,
+                reply_to=reply_to,
+                mentions=mentions,
+                evidence=evidence,
+                accepts=accepts,
+                outcome=outcome,
+                method=method,
+            )
+            return await resolve(ctx.headers).post(request)
 
     @server.tool()
     async def threads(ctx: Context) -> tuple[ThreadSummary, ...]:

@@ -158,14 +158,19 @@ class FakeAgent(acp.Agent):
             )
             outcome = response.outcome
             text = f'Permission: {outcome.option_id if isinstance(outcome, schema.AllowedOutcome) else "cancelled"}.'
-        await self._call('post', {'post': {'kind': 'message', 'text': text, 'new_thread': f'Hello {self._name}'}})
+        await self._call('post', {'kind': 'message', 'text': text, 'new_thread': f'Hello {self._name}'})
 
     async def _answer_news(self) -> None:
         news = Update.model_validate(await self._call('wait', {'timeout_seconds': 0}))
         for entry in news.posts:
             post = entry.post
-            request = {'kind': 'answer', 'text': f'Seen {post.id}.', 'thread': post.thread, 'reply_to': post.id}
-            await self._call('post', {'post': request})
+            request: dict[str, object] = {
+                'kind': 'answer',
+                'text': f'Seen {post.id}.',
+                'thread': post.thread,
+                'reply_to': post.id,
+            }
+            await self._call('post', request)
 
 
 sys.stderr.write('fake agent ready\n')
