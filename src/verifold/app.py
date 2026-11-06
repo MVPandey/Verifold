@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Mapping
+from functools import partial
 from pathlib import Path
 
 import uvicorn
@@ -15,6 +16,7 @@ from verifold.runner.errors import RunnerError
 from verifold.runner.folders import LAB_FOLDER, agent_folder
 from verifold.runner.messages import LAB_TEMPLATE, start_message
 from verifold.runner.session import SessionOptions
+from verifold.runner.snapshots import pin
 from verifold.server.join import Members, join_server
 from verifold.server.lab import Lab
 from verifold.server.member import Member
@@ -123,11 +125,12 @@ async def _seat_agents(
     members = Members()
     seats: list[tuple[Member, AgentSetup]] = []
     for agent, spec in zip(agents, config.agents, strict=True):
-        member = Member(lab, agent.id)
+        folder = await agent_folder(project, agent.id)
+        member = Member(lab, agent.id, pin=partial(pin, folder, agent.id))
         setup = AgentSetup(
             agent=agent,
             harness=catalog[spec.harness],
-            folder=await agent_folder(project, agent.id),
+            folder=folder,
             log=project / LAB_FOLDER / 'logs' / f'{agent.id}.log',
             token=SecretStr(members.add(member)),
             options=SessionOptions(model=spec.model, effort=spec.effort, auto_mode=config.auto_mode),
