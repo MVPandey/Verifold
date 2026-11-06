@@ -1,85 +1,113 @@
 import asyncio
-from collections.abc import Callable
-from datetime import date
+import json
 from pathlib import Path
 
-from fakes import Recording
-from pydantic import SecretStr
+import pytest
+from builders import until
+from conftest import ServedBoard
+from fakes import FAKE_HARNESS
 
 from verifold.protocol.join import PostRequest
+from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
-from verifold.server.lab import Lab
-from verifold.server.member import Member
+from verifold.runner.messages import DOORBELL
 
 
-def setup_for(lab: Lab, agent_id: str, tmp_path: Path) -> AgentSetup:
-    joined = lab.board.agent(agent_id)
+@pytest.fixture
+def log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    path = tmp_path / 'calls.jsonl'
+    monkeypatch.setenv('FAKE_ACP_LOG', str(path))
+    return path
+
+
+def calls(log: Path, event: str) -> list[dict[str, object]]:
+    lines = log.read_text().splitlines() if log.exists() else []
+    return [call for call in map(json.loads, lines) if call['event'] == event]
+
+
+def loop_for(served: ServedBoard, tmp_path: Path, **settings: float) -> AgentLoop:
+    member, token = served.seat('bo')
+    joined = served.lab.board.agent('bo')
     assert joined is not None
-    folder = tmp_path / agent_id
-    folder.mkdir()
-    return AgentSetup(
-        agent=joined.agent, project=tmp_path, folder=folder, private=tmp_path / 'private', token=SecretStr('t')
-    )
+    folder = tmp_path / 'bo'
+    folder.mkdir(exist_ok=True)
+    setup = AgentSetup(agent=joined.agent, harness=FAKE_HARNESS, folder=folder, token=token, start='Start.')
+    return AgentLoop(member, setup, LoopSettings(mcp_url=served.url, retry_after=0, **settings))
 
 
-async def until(condition: Callable[[], bool]) -> None:
-    async with asyncio.timeout(10):
-        while not condition():
-            await asyncio.sleep(0.02)
+def posts_by(served: ServedBoard, author: str) -> list[str]:
+    return [entry.post.text for entry in served.lab.board.posts if entry.post.author == author]
 
 
-SETTINGS = LoopSettings(mcp_url='http://127.0.0.1:1/mcp', idle_wait=0.05, retry_after=0)
-
-
-async def test_the_agent_starts_with_the_opening_prompt_and_resumes_when_a_post_wakes_it(
-    lab: Lab, tmp_path: Path
+async def test_the_agent_starts_and_the_doorbell_rings_only_for_posts_for_it(
+    served: ServedBoard, tmp_path: Path, log: Path
 ) -> None:
-    harness = Recording(tmp_path / 'turns.log')
-    loop = AgentLoop(
-        Member(lab, 'bo'), setup_for(lab, 'bo', tmp_path), harness, SETTINGS, today=lambda: date(2026, 11, 6)
-    )
-    running = asyncio.create_task(loop.run())
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
     try:
         await until(lambda: len(lab.board.turns) == 1)
-        await asyncio.sleep(0.1)
-        assert len(harness.turns()) == 1
+        await lab.post(PostRequest(kind='message', text='Not for bo.', thread='t-1'), 'ada')
+        await asyncio.sleep(0.3)
+        assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
 
-        await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+        await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'person')
         await until(lambda: len(lab.board.turns) == 2)
     finally:
         running.cancel()
 
-    (opening, first_session), (update, second_session) = harness.turns()
-    assert 'You are Bo' in opening
-    assert first_session == ''
-    assert 'ada (ask): Which layer?' in update
-    assert second_session == 's-1'
-    assert [turn.error for turn in lab.board.turns] == [None, None]
-
-
-async def test_an_agent_stops_after_failing_turns_in_a_row(lab: Lab, tmp_path: Path) -> None:
-    harness = Recording(tmp_path / 'turns.log', exit_code=1)
-    loop = AgentLoop(Member(lab, 'bo'), setup_for(lab, 'bo', tmp_path), harness, SETTINGS)
-
-    async with asyncio.timeout(10):
-        await loop.run()
-
-    prompts = [prompt for prompt, _ in harness.turns()]
-    assert len(prompts) == SETTINGS.max_failures
-    assert prompts[1].startswith('Your last turn stopped: recording exited with code 1')
-    assert all(turn.error for turn in lab.board.turns)
-
-
-async def test_each_turn_records_its_time_and_usage(lab: Lab, tmp_path: Path) -> None:
-    harness = Recording(tmp_path / 'turns.log')
-    running = asyncio.create_task(
-        AgentLoop(Member(lab, 'ada'), setup_for(lab, 'ada', tmp_path), harness, SETTINGS).run()
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL]
+    assert posts_by(served, 'bo')[0] == 'Hello from bo.'
+    assert posts_by(served, 'bo')[-1].startswith('Seen p-')
+    turn = lab.board.turns[-1]
+    assert (turn.agent, turn.usage, turn.error) == (
+        'bo',
+        Usage(input_tokens=13, cached_input_tokens=3, output_tokens=5),
+        None,
     )
+    assert turn.cost_usd == pytest.approx(0.01)
+
+
+async def test_a_failing_harness_is_restarted_with_its_session_and_stops_after_three_failures(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_CRASH', '1')
+
+    async with asyncio.timeout(30):
+        await loop_for(served, tmp_path).run()
+
+    assert len(calls(log, 'new_session')) == 1
+    assert [call['session'] for call in calls(log, 'load_session')] == ['session-bo', 'session-bo']
+    turns = served.lab.board.turns
+    assert len(turns) == 3
+    assert all(turn.error for turn in turns)
+
+
+async def test_a_turn_past_its_timeout_is_cancelled(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_SLOW', '1')
+    running = asyncio.create_task(loop_for(served, tmp_path, turn_timeout=0.5).run())
     try:
-        await until(lambda: len(lab.board.turns) == 1)
+        await until(lambda: len(served.lab.board.turns) == 1)
+        await until(lambda: bool(calls(log, 'cancel')))
     finally:
         running.cancel()
 
-    turn = lab.board.turns[0]
-    assert (turn.agent, turn.usage.input_tokens, turn.cost_usd) == ('ada', 0, None)
-    assert turn.seconds > 0
+    assert served.lab.board.turns[0].error == 'The turn ran past 0.5 seconds and was cancelled.'
+
+
+async def test_a_permission_request_waits_for_the_persons_answer_on_the_board(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_PERMISSION', '1')
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: any(entry.post.kind == 'ask' for entry in lab.board.posts))
+        asked = lab.board.posts[-1].post
+        await lab.post(PostRequest(kind='answer', text='Allow once', thread=asked.thread, reply_to=asked.id), 'person')
+        await until(lambda: 'Permission: yes.' in posts_by(served, 'bo'))
+    finally:
+        running.cancel()
+
+    assert asked.text == 'Permission needed: run make'
