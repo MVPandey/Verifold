@@ -1,0 +1,51 @@
+import asyncio
+
+from verifold.protocol.join import PostRequest
+from verifold.server.lab import Lab
+from verifold.server.member import Member
+
+
+async def test_a_member_posts_reads_and_watches_as_its_agent(lab: Lab) -> None:
+    bo = Member(lab, 'bo')
+
+    posted = await bo.post(PostRequest(kind='objection', text='Leak.', thread='t-1', reply_to='p-1'))
+    await bo.watch('t-1', watching=True)
+
+    assert (posted.post.author, posted.standing) == ('bo', 'open')
+    assert [item.standing for item in bo.thread('t-1').posts] == ['disputed', 'open']
+    assert [summary.watching for summary in bo.threads()] == [True]
+
+
+async def test_wait_returns_at_once_when_a_post_for_the_agent_is_there(lab: Lab) -> None:
+    ada = Member(lab, 'ada')
+    await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('ada',)), 'bo')
+
+    news = await ada.wait(timeout=5)
+
+    assert [entry.post.text for entry in news.posts] == ['Which layer?']
+    assert news.seq == lab.board.seq
+
+
+async def test_wait_sleeps_through_posts_that_do_not_wake_the_agent(lab: Lab) -> None:
+    bo = Member(lab, 'bo')
+    waiting = asyncio.create_task(bo.wait(timeout=5))
+    await lab.post(PostRequest(kind='message', text='Side note.', new_thread='Elsewhere'), 'ada')
+    await asyncio.sleep(0.01)
+    assert not waiting.done()
+
+    await lab.post(PostRequest(kind='message', text='Over to you.', thread='t-1', mentions=('bo',)), 'ada')
+    news = await waiting
+
+    assert [entry.post.text for entry in news.posts] == ['Over to you.']
+    assert (news.other_posts, [thread.title for thread in news.threads]) == (1, ['Elsewhere'])
+
+
+async def test_wait_returns_the_summary_after_the_timeout_and_moves_on(lab: Lab) -> None:
+    bo = Member(lab, 'bo')
+    await lab.post(PostRequest(kind='message', text='Side note.', thread='t-1'), 'ada')
+
+    first = await bo.wait(timeout=0.01)
+    second = await bo.wait(timeout=0)
+
+    assert (first.posts, first.other_posts) == ((), 1)
+    assert second.other_posts == 0
