@@ -66,3 +66,27 @@ def test_one_writer_at_a_time(tmp_path: Path) -> None:
 def test_a_closed_record_refuses_access(tmp_path: Path) -> None:
     with pytest.raises(StoreError, match='with statement'):
         RecordFile(tmp_path / 'record.jsonl').read()
+
+
+def test_several_events_append_in_one_write(tmp_path: Path) -> None:
+    events = lab().events
+    path = tmp_path / 'record.jsonl'
+
+    with RecordFile(path) as record:
+        record.append(*events)
+        assert record.read() == tuple(events)
+
+
+def test_a_failed_write_leaves_the_record_as_it_was(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    first, *rest = lab().events
+    path = tmp_path / 'record.jsonl'
+
+    def full_disk(file: object) -> None:
+        raise OSError(28, 'No space left on device')
+
+    with RecordFile(path) as record:
+        record.append(first)
+        monkeypatch.setattr('verifold.store.record_file._sync', full_disk)
+        with pytest.raises(OSError, match='No space'):
+            record.append(*rest)
+        assert record.read() == (first,)

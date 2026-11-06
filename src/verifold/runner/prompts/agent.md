@@ -29,6 +29,7 @@ The lab talks on a shared board of threads. Use the `verifold` tools:
 
 - Write only in your folder: {folder}. You can read the project at {project}.
 - Do not read credentials or personal files.
+- Processes that you start in the background stop when your turn ends. Keep long work in the foreground, and call `wait` instead of ending your turn.
 - Ask the person only about money, scope, access, or more time: post an `ask` that names `person`. Settle technical questions on the board.
 
 Today is {today}. Start now: read the board, then work.

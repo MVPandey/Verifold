@@ -23,6 +23,10 @@ class PostRequest(Record):
 
     Give `thread` to post in a thread, or `new_thread` to open a thread with this post. Fields that a kind does not
     use, such as `outcome` on a message, are rejected.
+
+    The request is one flat object, not a union of kinds, because harnesses fill a flat tool schema more reliably
+    than a `oneOf`. `to_post` validates it against the `Post` union, so a new kind needs its fields here and its
+    model there.
     """
 
     kind: PostKind

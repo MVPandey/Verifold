@@ -3,7 +3,7 @@
 import json
 from typing import override
 
-from pydantic import SecretStr, ValidationError
+from pydantic import ValidationError
 
 from verifold.harnesses.base import Harness, Invocation, Turn, TurnReport, Wire
 from verifold.protocol.usage import Usage
@@ -47,6 +47,7 @@ class Codex(Harness):
 
     name = 'codex'
     family = 'openai'
+    environment = ('OPENAI_', 'CODEX_')
 
     def __init__(self, executable: str = 'codex') -> None:
         """Use the `codex` executable on the PATH, or another one."""
@@ -73,7 +74,7 @@ class Codex(Harness):
                 *(('resume', turn.session) if turn.session else ()),
                 turn.prompt,
             ),
-            env=((TOKEN_VARIABLE, SecretStr(turn.token.get_secret_value())),),
+            env=((TOKEN_VARIABLE, turn.token),),
         )
 
     @override
@@ -86,13 +87,15 @@ class Codex(Harness):
             case _Event(type='thread.started', thread_id=str(thread_id)):
                 return report.model_copy(update={'session': thread_id})
             case _Event(type='turn.completed', usage=_Usage() as usage):
+                # A completed turn ends any earlier stream error, such as a notice that Codex reconnected.
                 return report.model_copy(
                     update={
+                        'error': None,
                         'usage': Usage(
                             input_tokens=report.usage.input_tokens + usage.input_tokens,
                             cached_input_tokens=report.usage.cached_input_tokens + usage.cached_input_tokens,
                             output_tokens=report.usage.output_tokens + usage.output_tokens,
-                        )
+                        ),
                     }
                 )
             case _Event(type='item.completed', item=_Item(type='agent_message', text=str(text))):
