@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from verifold.protocol.events import AgentJoined, LabOpened, Posted, ThreadOpened, WatchSet
+from verifold.protocol.events import AgentJoined, LabOpened, Posted, ThreadOpened, TurnEnded, WatchSet
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 
 
@@ -20,6 +20,7 @@ class Board:
     threads: tuple[ThreadOpened, ...] = ()
     posts: tuple[Posted, ...] = ()
     watches: tuple[WatchSet, ...] = ()
+    turns: tuple[TurnEnded, ...] = ()
 
     # ponytail: lookups scan the tuples. Index them if a board grows past about 10,000 posts.
     def agent(self, agent_id: AgentId) -> AgentJoined | None:
