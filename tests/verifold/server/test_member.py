@@ -1,6 +1,10 @@
 import asyncio
 
+import pytest
+
 from verifold.protocol.join import PostRequest
+from verifold.protocol.posts import FileEvidence
+from verifold.server.errors import EvidenceRejected
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 
@@ -49,3 +53,23 @@ async def test_wait_returns_the_summary_after_the_timeout_and_moves_on(lab: Lab)
 
     assert (first.posts, first.other_posts) == ((), 1)
     assert second.other_posts == 0
+
+
+async def test_a_post_with_files_carries_the_pinned_evidence(lab: Lab) -> None:
+    pinned: list[tuple[str, ...]] = []
+
+    async def pin(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+        pinned.append(paths)
+        return tuple(FileEvidence(path=path, commit='a' * 40) for path in paths)
+
+    bo = Member(lab, 'bo', pin=pin)
+
+    posted = await bo.post(PostRequest(kind='result', text='11.9x faster.', thread='t-1', files=('bench.json',)))
+
+    assert pinned == [('bench.json',)]
+    assert [(item.path, item.commit) for item in posted.post.evidence] == [('bench.json', 'a' * 40)]
+
+
+async def test_a_member_without_a_pin_refuses_files(lab: Lab) -> None:
+    with pytest.raises(EvidenceRejected, match='cannot pin files'):
+        await Member(lab, 'bo').post(PostRequest(kind='result', text='x', thread='t-1', files=('bench.json',)))

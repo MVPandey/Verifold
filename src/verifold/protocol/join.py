@@ -7,7 +7,7 @@ from pydantic import AwareDatetime, TypeAdapter, model_validator
 from verifold.protocol.agents import Agent
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import AgentId, PostId, ThreadId
-from verifold.protocol.posts import Body, CheckMethod, FileEvidence, Headline, Outcome, Post, PostKind
+from verifold.protocol.posts import Body, CheckMethod, FileEvidence, Headline, Outcome, Post, PostKind, RelativePath
 from verifold.protocol.record import Record
 from verifold.protocol.threads import Thread, Title
 
@@ -37,7 +37,8 @@ class PostRequest(Record):
     new_thread: Title | None = None
     reply_to: PostId | None = None
     mentions: tuple[AgentId, ...] = ()
-    evidence: tuple[FileEvidence, ...] = ()
+    files: tuple[RelativePath, ...] = ()
+    """Files in the author's folder that back the post. Verifold commits the folder and pins each file."""
     accepts: bool | None = None
     outcome: Outcome | None = None
     method: CheckMethod | None = None
@@ -50,18 +51,22 @@ class PostRequest(Record):
             raise ValueError('A reply stays in the thread of the post that it answers. Give thread, not new_thread.')
         return self
 
-    def to_post(self, post_id: PostId, thread_id: ThreadId, author: AgentId) -> Post:
+    def to_post(
+        self, post_id: PostId, thread_id: ThreadId, author: AgentId, evidence: tuple[FileEvidence, ...] = ()
+    ) -> Post:
         """
-        Return the post that this request describes.
+        Return the post that this request describes, with the evidence that Verifold pinned for its files.
 
         Raises:
             pydantic.ValidationError: The kind does not accept a field of the request, or misses one that it needs.
 
         """
         # A false `accepts` means the same as no `accepts`, and only an answer accepts the field.
-        unused = {'thread', 'new_thread'} if self.accepts else {'thread', 'new_thread', 'accepts'}
+        unused = {'thread', 'new_thread', 'files'} | (set() if self.accepts else {'accepts'})
         fields = self.model_dump(exclude=unused, exclude_none=True)
-        return _posts.validate_python(fields | {'id': post_id, 'thread': thread_id, 'author': author})
+        return _posts.validate_python(
+            fields | {'id': post_id, 'thread': thread_id, 'author': author, 'evidence': evidence}
+        )
 
 
 class PostView(Record):
