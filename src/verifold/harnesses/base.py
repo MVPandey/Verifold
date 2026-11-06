@@ -6,6 +6,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, SecretStr
 
 from verifold.protocol.record import Record
+from verifold.protocol.usage import Usage
 
 
 class Wire(BaseModel):
@@ -43,14 +44,6 @@ class Invocation(Record):
     argv: tuple[str, ...]
     env: tuple[tuple[str, SecretStr], ...] = ()
     files: tuple[ConfigFile, ...] = ()
-
-
-class Usage(Record):
-    """Tokens that a turn used. Cached input tokens are part of the input tokens."""
-
-    input_tokens: int = 0
-    cached_input_tokens: int = 0
-    output_tokens: int = 0
 
 
 class TurnReport(Record):
