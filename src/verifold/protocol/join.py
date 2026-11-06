@@ -25,8 +25,9 @@ class PostRequest(Record):
     use, such as `outcome` on a message, are rejected.
 
     The request is one flat object, not a union of kinds, because harnesses fill a flat tool schema more reliably
-    than a `oneOf`. `to_post` validates it against the `Post` union, so a new kind needs its fields here and its
-    model there.
+    than a `oneOf`. The `post` tool takes the same fields as its own parameters, for the same reason. `to_post`
+    validates the request against the `Post` union, so a new kind needs its fields here, in the tool, and in its
+    model.
     """
 
     kind: PostKind
