@@ -39,12 +39,15 @@ class RecordFile:
         file = self._path.open('a+b')
         try:
             fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            file.seek(0)
+            complete = file.read().rpartition(b'\n')[0]
+            file.truncate(len(complete) + 1 if complete else 0)
         except BlockingIOError as error:
             file.close()
             raise RecordLocked(f'Another process has the record {self._path} open.') from error
-        file.seek(0)
-        complete = file.read().rpartition(b'\n')[0]
-        file.truncate(len(complete) + 1 if complete else 0)
+        except BaseException:
+            file.close()
+            raise
         self._file = file
         return self
 
@@ -71,14 +74,35 @@ class RecordFile:
         except ValidationError as error:
             raise CorruptRecord(f'The record {self._path} has a line that is not a valid event.') from error
 
-    def append(self, event: Event) -> None:
-        """Write one event at the end of the record and wait until it is on disk."""
+    def append(self, *events: Event) -> None:
+        """
+        Write events at the end of the record in one write, and wait until they are on disk.
+
+        When the write fails, the record goes back to its size before the write, so it never keeps part of a commit.
+
+        Raises:
+            OSError: The disk refused the write. The record is unchanged.
+
+        """
         file = self._opened()
-        file.write(_events.dump_json(event) + b'\n')
-        file.flush()
-        os.fsync(file.fileno())
+        size = file.seek(0, os.SEEK_END)
+        try:
+            file.write(b''.join(_events.dump_json(event) + b'\n' for event in events))
+            file.flush()
+            _sync(file)
+        except OSError:
+            file.truncate(size)
+            raise
 
     def _opened(self) -> IO[bytes]:
         if self._file is None:
             raise StoreError('Open the record with a with statement first.')
         return self._file
+
+
+def _sync(file: IO[bytes]) -> None:
+    # On macOS, fsync leaves data in the drive's cache. F_FULLFSYNC asks the drive to write it.
+    if hasattr(fcntl, 'F_FULLFSYNC'):
+        fcntl.fcntl(file.fileno(), fcntl.F_FULLFSYNC)
+    else:
+        os.fsync(file.fileno())
