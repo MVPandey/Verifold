@@ -15,3 +15,7 @@ class LabExists(ServerError):
 
 class EvidenceRejected(ServerError):
     """A post named files that cannot be evidence. The message says which, so it can go back to the agent."""
+
+
+class BlindCheck(ServerError):
+    """A blind checker tried to read the board, which would show it the author's reasoning."""
