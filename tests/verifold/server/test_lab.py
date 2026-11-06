@@ -4,8 +4,8 @@ from datetime import UTC, timedelta
 import pytest
 from builders import START
 
-from verifold.protocol.events import Posted
 from verifold.protocol.join import PostRequest
+from verifold.server.errors import LabExists
 from verifold.server.lab import Lab
 from verifold.society.errors import RejectedEvent
 from verifold.store.record_file import RecordFile
@@ -57,24 +57,35 @@ async def test_a_reloaded_lab_has_the_same_board(lab: Lab, record_file: RecordFi
 
 async def test_a_waiter_wakes_on_the_next_event(lab: Lab) -> None:
     seen = lab.board.seq
-    waiter = asyncio.create_task(lab.events_after(seen, timeout=5))
+    waiter = asyncio.create_task(lab.wait_for_change(seen, timeout=5))
     await asyncio.sleep(0)
+    assert not waiter.done()
 
     await lab.post(message('Ready.'), 'bo')
 
-    events = await waiter
-    assert [event.seq for event in events] == [seen + 1]
-    assert isinstance(events[0], Posted)
+    async with asyncio.timeout(1):
+        await waiter
+    assert lab.board.seq == seen + 1
 
 
-async def test_events_that_exist_return_at_once(lab: Lab) -> None:
-    events = await lab.events_after(1, timeout=0)
+async def test_a_wait_returns_at_once_when_the_board_moved_on(lab: Lab) -> None:
+    async with asyncio.timeout(1):
+        await lab.wait_for_change(1, timeout=60)
 
-    assert [event.seq for event in events] == [2, 3, 4, 5]
+
+async def test_a_wait_times_out_with_no_change(lab: Lab) -> None:
+    seen = lab.board.seq
+
+    await lab.wait_for_change(seen, timeout=0.01)
+
+    assert lab.board.seq == seen
 
 
-async def test_a_waiter_times_out_with_no_events(lab: Lab) -> None:
-    assert await lab.events_after(lab.board.seq, timeout=0.01) == ()
+async def test_a_new_lab_needs_an_empty_record(lab: Lab, record_file: RecordFile) -> None:
+    with pytest.raises(LabExists, match='holds a lab already'):
+        Lab.create(record_file, 'Another question?')
+
+    assert Lab.load(record_file).board == lab.board
 
 
 def test_the_default_clock_is_utc(record_file: RecordFile) -> None:
