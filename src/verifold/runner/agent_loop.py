@@ -14,14 +14,23 @@ from pydantic import Field, SecretStr
 
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent
+from verifold.protocol.app import AgentState
 from verifold.protocol.events import TurnSummary
 from verifold.protocol.record import Record
 from verifold.protocol.usage import Usage
 from verifold.runner.git import GitError
 from verifold.runner.messages import DOORBELL
 from verifold.runner.permissions import ask_the_person
-from verifold.runner.session import AgentSession, BoardAccess, PermissionRequest, Place, SessionOptions
+from verifold.runner.session import (
+    AgentSession,
+    BoardAccess,
+    PermissionRequest,
+    Place,
+    SessionHooks,
+    SessionOptions,
+)
 from verifold.runner.snapshots import snapshot
+from verifold.server.activity import Activity
 from verifold.server.member import Member
 from verifold.society.attention import update
 from verifold.society.board import Board
@@ -58,15 +67,22 @@ class AgentLoop:
     """Keeps one agent's ACP session open until the agent fails `max_failures` times in a row or the lab stops."""
 
     def __init__(
-        self, member: Member, setup: AgentSetup, settings: LoopSettings, done: Callable[[Board], bool] | None = None
+        self,
+        member: Member,
+        setup: AgentSetup,
+        settings: LoopSettings,
+        done: Callable[[Board], bool] | None = None,
+        activity: Activity | None = None,
     ) -> None:
         """
         Prepare to supervise an agent that joined the lab.
 
         `member` is the same seat that serves the agent's tool calls, so a doorbell never repeats what the agent read
-        with `wait`. `done` ends the loop after a turn, as for a checker that posted its check.
+        with `wait`. `done` ends the loop after a turn, as for a checker that posted its check. `activity` receives
+        what the agent is doing now, for the person's view.
         """
         self._done = done
+        self._activity = activity
         self._member = member
         self._lab = member.lab
         self._setup = setup
@@ -75,7 +91,14 @@ class AgentLoop:
 
     async def run(self) -> None:
         """Run the agent until it fails too often, or until the caller cancels the loop."""
+        try:
+            await self._run()
+        finally:
+            await self._report('stopped')
+
+    async def _run(self) -> None:
         setup = self._setup
+        hooks = SessionHooks(permissions=self._permission, step=self._step)
         board = BoardAccess(url=self._settings.mcp_url, token=setup.token)
         resume: str | None = None
         message, failures = setup.start, 0
@@ -83,7 +106,7 @@ class AgentLoop:
             try:
                 options = setup.options.model_copy(update={'resume': resume})
                 place = Place(folder=setup.folder, log=setup.log)
-                async with AgentSession.open(setup.harness, place, board, options, self._permission) as session:
+                async with AgentSession.open(setup.harness, place, board, options, hooks) as session:
                     resume = session.id
                     while True:
                         await self._send(session, message)
@@ -105,6 +128,7 @@ class AgentLoop:
                 message = DOORBELL if resume else setup.start
 
     async def _send(self, session: AgentSession, message: str) -> None:
+        await self._report('working')
         started = time.monotonic()
         try:
             async with asyncio.timeout(self._settings.turn_timeout):
@@ -116,6 +140,7 @@ class AgentLoop:
             return
         stopped = None if result.stop_reason == 'end_turn' else f'The harness stopped: {result.stop_reason}.'
         await self._record(started, result.usage, result.cost_usd, stopped)
+        await self._report('idle')
 
     async def _record(self, started: float, usage: Usage, cost_usd: float | None, error: str | None) -> None:
         agent_id = self._setup.agent.id
@@ -135,4 +160,14 @@ class AgentLoop:
         self._notified = self._lab.board.seq
 
     async def _permission(self, request: PermissionRequest) -> str | None:
-        return await ask_the_person(self._member, request)
+        await self._report('waiting', f'Asks you: {request.title}')
+        chosen = await ask_the_person(self._member, request)
+        await self._report('working')
+        return chosen
+
+    async def _step(self, title: str) -> None:
+        await self._report('working', title)
+
+    async def _report(self, state: AgentState, detail: str = '') -> None:
+        if self._activity:
+            await self._activity.set(self._setup.agent.id, state, detail)
