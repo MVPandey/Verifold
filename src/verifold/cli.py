@@ -7,8 +7,8 @@ from collections.abc import Sequence
 from importlib.metadata import version
 from pathlib import Path
 
-from verifold.app import DEFAULT_NETWORK, AgentSpec, LabConfig, run_lab
-from verifold.harnesses.registry import HARNESSES
+from verifold.app import AgentSpec, LabConfig, run_lab
+from verifold.harnesses.catalog import CATALOG
 from verifold.runner.errors import RunnerError
 from verifold.store.errors import StoreError
 
@@ -27,10 +27,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.print_help()
         return
     agents = tuple(_agent(value) for value in args.agent) if args.agent else LabConfig().agents
-    config = LabConfig(question=args.question, agents=agents, network=tuple(args.network or DEFAULT_NETWORK))
+    config = LabConfig(question=args.question, agents=agents, auto_mode=not args.ask_me)
     print(f'Running the lab in {Path.cwd()}. Its record is .verifold/record.jsonl. Press Ctrl+C to stop.')
     try:
-        asyncio.run(run_lab(Path.cwd(), config, {name: make() for name, make in HARNESSES.items()}))
+        asyncio.run(run_lab(Path.cwd(), config))
     except (RunnerError, StoreError) as error:
         sys.exit(f'verifold: {error}')
     except KeyboardInterrupt:
@@ -47,13 +47,12 @@ def _parser() -> argparse.ArgumentParser:
         '--agent',
         action='append',
         metavar='HARNESS[:MODEL]',
-        help=f'Add an agent: {", ".join(HARNESSES)}, with an optional model. Default: one of each.',
+        help=f'Add an agent: {", ".join(CATALOG)}, with an optional model. Default: one of each.',
     )
     run.add_argument(
-        '--network',
-        action='append',
-        metavar='DOMAIN',
-        help='A domain that shell commands may reach. Default: package and model downloads.',
+        '--ask-me',
+        action='store_true',
+        help="Keep each harness's own default mode. Permission requests then come to you on the board.",
     )
     return parser
 
