@@ -14,7 +14,8 @@ from pydantic import SecretStr
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.record import Record
 from verifold.protocol.usage import Usage
-from verifold.runner.environment import clean_environment
+from verifold.runner.errors import RunnerError
+from verifold.runner.processes import start, stop
 
 
 class PermissionChoice(Record):
@@ -44,6 +45,13 @@ class Board(Record):
 
     url: str
     token: SecretStr
+
+
+class Place(Record):
+    """Where an agent's harness runs, and where its error output goes."""
+
+    folder: Path
+    log: Path
 
 
 class SessionOptions(Record):
@@ -167,6 +175,38 @@ def _unsupported(method: str) -> NoReturn:
     raise acp.RequestError.method_not_found(method)
 
 
+async def _begin(
+    connection: ClientSideConnection, harness: HarnessEntry, folder: Path, board: Board, options: SessionOptions
+) -> str:
+    """Initialize the connection, open or load the session, and set the options that the lab asks for."""
+    await connection.initialize(
+        protocol_version=acp.PROTOCOL_VERSION,
+        client_capabilities=schema.ClientCapabilities(
+            fs=schema.FileSystemCapabilities(read_text_file=False, write_text_file=False), terminal=False
+        ),
+        client_info=schema.Implementation(name='verifold', version=version('verifold')),
+    )
+    servers: McpServers = [
+        schema.HttpMcpServer(
+            type='http',
+            name='verifold',
+            url=board.url,
+            headers=[schema.HttpHeader(name='Authorization', value=f'Bearer {board.token.get_secret_value()}')],
+        )
+    ]
+    if options.resume:
+        await connection.load_session(cwd=str(folder), session_id=options.resume, mcp_servers=servers)
+        session_id = options.resume
+    else:
+        session_id = (await connection.new_session(cwd=str(folder), mcp_servers=servers)).session_id
+    if options.auto_mode and harness.auto_mode:
+        await connection.set_session_mode(session_id=session_id, mode_id=harness.auto_mode)
+    for option_id, value in ((harness.model_option, options.model), (harness.effort_option, options.effort)):
+        if option_id and value:
+            await connection.set_config_option(session_id=session_id, config_id=option_id, value=value)
+    return session_id
+
+
 class AgentSession:
     """A running ACP session. Open it with `AgentSession.open`, which stops the harness when the block ends."""
 
@@ -179,45 +219,29 @@ class AgentSession:
     @classmethod
     @asynccontextmanager
     async def open(
-        cls, harness: HarnessEntry, folder: Path, board: Board, options: SessionOptions, permissions: Permissions
+        cls, harness: HarnessEntry, place: Place, board: Board, options: SessionOptions, permissions: Permissions
     ) -> AsyncGenerator[Self]:
         """
-        Start the harness's ACP agent in `folder`, with the board as its MCP server, and open or load a session.
+        Start the harness's ACP agent in the agent's folder, with the board as its MCP server, and open a session.
 
         The harness starts with the person's own settings and environment. Verifold sets only the options in
-        `options`, through the generic ACP calls.
+        `options`, through the generic ACP calls. When the block ends, Verifold stops the harness's whole process
+        group.
         """
         client = _Client(permissions)
-        async with acp.spawn_agent_process(client, *harness.command, env=clean_environment(), cwd=folder) as (
-            connection,
-            _,
-        ):
-            await connection.initialize(
-                protocol_version=acp.PROTOCOL_VERSION,
-                client_capabilities=schema.ClientCapabilities(
-                    fs=schema.FileSystemCapabilities(read_text_file=False, write_text_file=False), terminal=False
-                ),
-                client_info=schema.Implementation(name='verifold', version=version('verifold')),
-            )
-            servers: McpServers = [
-                schema.HttpMcpServer(
-                    type='http',
-                    name='verifold',
-                    url=board.url,
-                    headers=[schema.HttpHeader(name='Authorization', value=f'Bearer {board.token.get_secret_value()}')],
-                )
-            ]
-            if options.resume:
-                await connection.load_session(cwd=str(folder), session_id=options.resume, mcp_servers=servers)
-                session_id = options.resume
-            else:
-                session_id = (await connection.new_session(cwd=str(folder), mcp_servers=servers)).session_id
-            if options.auto_mode and harness.auto_mode:
-                await connection.set_session_mode(session_id=session_id, mode_id=harness.auto_mode)
-            for option_id, value in ((harness.model_option, options.model), (harness.effort_option, options.effort)):
-                if option_id and value:
-                    await connection.set_config_option(session_id=session_id, config_id=option_id, value=value)
-            yield cls(connection, session_id, client)
+        place.log.parent.mkdir(parents=True, exist_ok=True)
+        with place.log.open('ab') as errors:
+            process = await start(harness.command, place.folder, errors)
+            if process.stdin is None or process.stdout is None:
+                await stop(process)
+                raise RunnerError(f'{harness.name} started without its protocol pipes.')
+            connection = acp.connect_to_agent(client, process.stdin, process.stdout)
+            try:
+                session_id = await _begin(connection, harness, place.folder, board, options)
+                yield cls(connection, session_id, client)
+            finally:
+                await connection.close()
+                await stop(process)
 
     async def send(self, text: str) -> TurnResult:
         """Send one message, and return once the harness ends its turn."""
