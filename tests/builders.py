@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from verifold.protocol.agents import Agent, ModelSpec
-from verifold.protocol.events import AgentJoined, Event, LabOpened, Posted, ThreadOpened, WatchSet
+from verifold.protocol.events import AgentJoined, Event, LabOpened, Posted, RerunRequested, ThreadOpened, WatchSet
 from verifold.protocol.posts import Post
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
@@ -26,7 +26,9 @@ class RecordBuilder:
         seq = len(self.events) + 1
         return seq, self.at(seq)
 
-    def join(self, agent_id: str, family: str = 'anthropic', recruited_by: str | None = None) -> 'RecordBuilder':
+    def join(
+        self, agent_id: str, family: str = 'anthropic', recruited_by: str | None = None, checks: str | None = None
+    ) -> 'RecordBuilder':
         seq, at = self._stamp()
         agent = Agent(
             id=agent_id,
@@ -34,6 +36,7 @@ class RecordBuilder:
             harness='fake',
             model=ModelSpec(family=family),
             recruited_by=recruited_by,
+            checks=checks,
         )
         self.events.append(AgentJoined(seq=seq, at=at, agent=agent))
         return self
@@ -53,6 +56,11 @@ class RecordBuilder:
     def watch(self, agent_id: str, thread_id: str, watching: bool = True) -> 'RecordBuilder':
         seq, at = self._stamp()
         self.events.append(WatchSet(seq=seq, at=at, agent=agent_id, thread=thread_id, watching=watching))
+        return self
+
+    def rerun(self, by: str, post_id: str) -> 'RecordBuilder':
+        seq, at = self._stamp()
+        self.events.append(RerunRequested(seq=seq, at=at, by=by, post=post_id))
         return self
 
     def board(self) -> Board:

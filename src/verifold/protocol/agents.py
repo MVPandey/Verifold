@@ -4,7 +4,7 @@ from typing import Annotated
 
 from pydantic import StringConstraints
 
-from verifold.protocol.ids import AgentId
+from verifold.protocol.ids import AgentId, PostId
 from verifold.protocol.record import Record
 
 type Label = Annotated[str, StringConstraints(min_length=1, max_length=40)]
@@ -32,3 +32,5 @@ class Agent(Record):
     role: Annotated[str, StringConstraints(max_length=40)] = ''
     brief: Annotated[str, StringConstraints(max_length=8_000)] = ''
     recruited_by: AgentId | None = None
+    checks: PostId | None = None
+    """For a blind checker that Verifold starts: the post that it reruns. It posts one check and reads nothing else."""
