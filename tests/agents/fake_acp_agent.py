@@ -41,6 +41,7 @@ class FakeAgent(acp.Agent):
         self._url = ''
         self._headers: dict[str, str] = {}
         self._name = ''
+        self._session = ''
         self._cost = 0.0
 
     def _note(self, **entry: object) -> None:
@@ -55,6 +56,11 @@ class FakeAgent(acp.Agent):
         self._name = Path(cwd).name
 
     async def _call(self, tool: str, arguments: dict[str, object]) -> dict[str, object]:
+        if self._client:
+            start = schema.ToolCallStart(
+                session_update='tool_call', tool_call_id=f'call-{tool}', title=f'verifold.{tool}'
+            )
+            await self._client.session_update(session_id=self._session, update=start)
         async with (
             httpx2.AsyncClient(headers=self._headers) as http,
             Client(streamable_http_client(self._url, http_client=http)) as client,
@@ -87,8 +93,9 @@ class FakeAgent(acp.Agent):
         self, cwd: str, additional_directories: list[str] | None = None, mcp_servers: Servers | None = None, **_: object
     ) -> schema.NewSessionResponse:
         self._connect(cwd, mcp_servers)
+        self._session = f'session-{self._name}'
         self._note(event='new_session')
-        return schema.NewSessionResponse(session_id=f'session-{self._name}')
+        return schema.NewSessionResponse(session_id=self._session)
 
     @override
     async def load_session(
@@ -100,6 +107,7 @@ class FakeAgent(acp.Agent):
         **_: object,
     ) -> schema.LoadSessionResponse:
         self._connect(cwd, mcp_servers)
+        self._session = session_id
         self._note(event='load_session', session=session_id)
         return schema.LoadSessionResponse()
 

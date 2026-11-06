@@ -1,6 +1,7 @@
 """Answers rerun requests by starting blind checkers."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from functools import partial
 from pathlib import Path
 
@@ -8,7 +9,7 @@ from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.events import RerunRequested
 from verifold.protocol.posts import Check
-from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
+from verifold.runner.agent_loop import AgentSetup
 from verifold.runner.folders import LAB_FOLDER, agent_folder, checker_folder
 from verifold.runner.messages import rerun_message
 from verifold.runner.session import SessionOptions
@@ -21,6 +22,9 @@ from verifold.society.board import Board
 type Crew = tuple[tuple[HarnessEntry, SessionOptions], ...]
 """The lab's harnesses, each with the options that its agents use."""
 
+type Supervise = Callable[[Member, AgentSetup, Callable[[Board], bool]], Awaitable[None]]
+"""Runs one agent's loop until it is done, as the lab runs its other agents."""
+
 IDLE_WAIT = 3_600.0
 
 
@@ -32,13 +36,13 @@ class Reruns:
     It gets the author's files at the cited commit and the claim, but not the thread, and it stops after its check.
     """
 
-    def __init__(self, lab: Lab, members: Members, project: Path, crew: Crew, settings: LoopSettings) -> None:
-        """Prepare to answer the lab's rerun requests with checkers from `crew`."""
+    def __init__(self, lab: Lab, members: Members, project: Path, crew: Crew, supervise: Supervise) -> None:
+        """Prepare to answer the lab's rerun requests with checkers from `crew`, run by `supervise`."""
         self._lab = lab
         self._members = members
         self._project = project
         self._crew = crew
-        self._settings = settings
+        self._supervise = supervise
 
     async def run(self) -> None:
         """Start a checker for each request that has no check yet, now and as requests arrive."""
@@ -78,9 +82,7 @@ class Reruns:
             options=options,
             start=rerun_message(target.post),
         )
-        with_check = partial(_checked, agent_id=checker_id, post_id=request.post)
-        async with asyncio.timeout(self._settings.turn_timeout):
-            await AgentLoop(member, setup, self._settings, done=with_check).run()
+        await self._supervise(member, setup, partial(_checked, agent_id=checker_id, post_id=request.post))
 
 
 def _checker_id(request: RerunRequested) -> str:
