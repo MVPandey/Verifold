@@ -3,12 +3,15 @@ A fake ACP agent for tests. It reaches the lab's board over MCP with its token, 
 
 The first message makes it post in a new thread. The doorbell makes it read its posts with `wait` and answer each one.
 Environment variables change its behavior: `FAKE_ACP_LOG` logs each call, `FAKE_ACP_PERMISSION` asks permission
-first, `FAKE_ACP_CRASH` exits during a turn, and `FAKE_ACP_SLOW` makes a turn take a minute.
+first, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, and `FAKE_ACP_CHILD` starts a
+child that holds the agent's pipes open and writes its process ID to that path.
 """
 
 import asyncio
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import override
 
@@ -165,4 +168,9 @@ class FakeAgent(acp.Agent):
             await self._call('post', {'post': request})
 
 
+sys.stderr.write('fake agent ready\n')
+sys.stderr.flush()
+if pid_file := os.environ.get('FAKE_ACP_CHILD'):
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    Path(pid_file).write_text(str(child.pid))
 asyncio.run(acp.run_agent(FakeAgent()))  # ty: ignore[call-non-callable]
