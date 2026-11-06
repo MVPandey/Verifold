@@ -1,37 +1,14 @@
 import asyncio
 import os
 import stat
-import sys
 from pathlib import Path
-from typing import override
 
 import pytest
+from fakes import Scripted
 from pydantic import SecretStr
 
-from verifold.harnesses.base import ConfigFile, Harness, Invocation, Turn, TurnReport
+from verifold.harnesses.base import Turn
 from verifold.runner.driver import run_turn
-
-
-class Scripted(Harness):
-    """A harness that runs a Python script and keeps each output line as the final text."""
-
-    name = 'scripted'
-    family = 'test'
-
-    def __init__(self, script: str) -> None:
-        self._script = script
-
-    @override
-    def invocation(self, turn: Turn) -> Invocation:
-        return Invocation(
-            argv=(sys.executable, '-c', self._script),
-            env=(('AGENT_SECRET', SecretStr('s3cret')),),
-            files=(ConfigFile(path=turn.private / 'config.json', content=SecretStr('{"token": "s3cret"}')),),
-        )
-
-    @override
-    def read(self, report: TurnReport, line: bytes) -> TurnReport:
-        return report.model_copy(update={'final_text': report.final_text + line.decode()})
 
 
 @pytest.fixture

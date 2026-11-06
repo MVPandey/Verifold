@@ -5,7 +5,8 @@ from typing import override
 
 from pydantic import SecretStr, ValidationError
 
-from verifold.harnesses.base import Harness, Invocation, Turn, TurnReport, Usage, Wire
+from verifold.harnesses.base import Harness, Invocation, Turn, TurnReport, Wire
+from verifold.protocol.usage import Usage
 
 TOKEN_VARIABLE = 'VERIFOLD_TOKEN'
 """The environment variable that holds the agent's token. Codex reads it, so the token stays off the command line."""
