@@ -20,6 +20,9 @@ verifold = "verifold.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"verifold.runner.prompts" = ["*.md"]
+
 [tool.ruff]
 fix = true
 line-length = 120
