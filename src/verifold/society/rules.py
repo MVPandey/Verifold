@@ -7,7 +7,7 @@ here.
 """
 
 from verifold.protocol.agents import Agent
-from verifold.protocol.events import TurnEnded, WatchSet
+from verifold.protocol.events import RerunRequested, TurnEnded, WatchSet
 from verifold.protocol.ids import PERSON, AgentId
 from verifold.protocol.posts import Answer, Check, Objection, Post
 from verifold.protocol.threads import Thread
@@ -27,6 +27,8 @@ def check_agent(board: Board, agent: Agent) -> None:
         raise RejectedEvent(f'The agent ID {agent.id} is taken. Choose another ID.')
     if agent.recruited_by:
         _check_member(board, agent.recruited_by)
+    if agent.checks and not board.post(agent.checks):
+        raise RejectedEvent(f'Post {agent.checks} does not exist.')
 
 
 def check_thread(board: Board, thread: Thread) -> None:
@@ -53,6 +55,7 @@ def check_post(board: Board, post: Post) -> None:
     if board.post(post.id):
         raise RejectedEvent(f'Post {post.id} exists already.')
     _check_member(board, post.author)
+    _check_blind(board, post)
     for mention in post.mentions:
         _check_member(board, mention)
     if not board.thread(post.thread):
@@ -95,6 +98,35 @@ def check_turn(board: Board, turn: TurnEnded) -> None:
     """
     if not board.agent(turn.agent):
         raise RejectedEvent(f'{turn.agent} is not an agent in this lab.')
+
+
+MAX_RERUNS = 2
+"""Blind reruns that one post can have."""
+
+
+def check_rerun(board: Board, rerun: RerunRequested) -> None:
+    """
+    Check that a post can get a blind rerun.
+
+    Raises:
+        RejectedEvent: The post does not exist, has no files as evidence, or has all its reruns already.
+
+    """
+    _check_member(board, rerun.by)
+    target = board.post(rerun.post)
+    if target is None:
+        raise RejectedEvent(f'Post {rerun.post} does not exist.')
+    if not target.post.evidence:
+        raise RejectedEvent(f'Post {rerun.post} has no files as evidence, so a checker has nothing to rerun.')
+    if sum(entry.post == rerun.post for entry in board.reruns) >= MAX_RERUNS:
+        raise RejectedEvent(f'Post {rerun.post} has {MAX_RERUNS} reruns already.')
+
+
+def _check_blind(board: Board, post: Post) -> None:
+    joined = board.agent(post.author)
+    target = joined.agent.checks if joined else None
+    if target and not (isinstance(post, Check) and post.reply_to == target):
+        raise RejectedEvent(f'You rerun {target} blind. Post one check that replies to {target}.')
 
 
 def _check_member(board: Board, author: AgentId) -> None:

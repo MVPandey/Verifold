@@ -18,8 +18,9 @@ def standing(board: Board, post_id: PostId) -> Standing:
 
     A post is `conceded` when its author accepted an objection to it. It is `disputed` when a check of it failed, or
     when an objection stands. A check that holds overrules an earlier objection when its author is not the objector.
-    It is `checked` when another agent's check holds and nothing stands against it. Otherwise it is `open`. Checks and
-    objections that their own authors conceded do not count.
+    It is `held_up` when a blind checker from another model family reran it and its check holds, and nothing stands
+    against it. It is `checked` when another agent's check holds and nothing stands against it. Otherwise it is
+    `open`. Checks and objections that their own authors conceded do not count.
     """
     # A conceded check or objection no longer counts against or for its target.
     replies = tuple(entry for entry in board.replies(post_id) if standing(board, entry.post.id) != 'conceded')
@@ -31,6 +32,8 @@ def standing(board: Board, post_id: PostId) -> Standing:
         return 'disputed'
     if any(not _overruled(seq, objection, checks) for seq, objection in objections):
         return 'disputed'
+    if any(_independent_rerun(board, post_id, check) for _, check in checks):
+        return 'held_up'
     return 'checked' if checks else 'open'
 
 
@@ -59,6 +62,20 @@ def decision(board: Board, proposal_id: PostId, now: datetime, window: timedelta
         case 'disputed':
             return 'disputed'
     return 'decided' if now - entry.at >= window else 'open'
+
+
+def _independent_rerun(board: Board, post_id: PostId, check: Check) -> bool:
+    checker = board.agent(check.author)
+    target = board.post(post_id)
+    author = board.agent(target.post.author) if target else None
+    return bool(
+        check.outcome == 'holds'
+        and check.method == 'rerun'
+        and checker
+        and author
+        and checker.agent.checks == post_id
+        and checker.agent.model.family != author.agent.model.family
+    )
 
 
 def _conceded(board: Board, objection: Objection) -> bool:
