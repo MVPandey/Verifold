@@ -7,3 +7,7 @@ class ServerError(Exception):
 
 class UnknownAgent(ServerError):
     """A request did not carry the token of an agent in the lab."""
+
+
+class LabExists(ServerError):
+    """A new lab was asked for in a record that holds a lab already."""
