@@ -1,7 +1,7 @@
 """Runs a lab: the record, the board's MCP endpoint, and one supervised ACP session for each agent."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from functools import partial
 from pathlib import Path
@@ -19,9 +19,12 @@ from verifold.runner.messages import LAB_TEMPLATE, start_message
 from verifold.runner.reruns import Crew, Reruns
 from verifold.runner.session import SessionOptions
 from verifold.runner.snapshots import pin
+from verifold.server.activity import Activity
+from verifold.server.app_api import app_api, new_person_token
 from verifold.server.join import Members, join_server
 from verifold.server.lab import Lab
 from verifold.server.member import Member
+from verifold.society.board import Board
 from verifold.store.record_file import RecordFile
 
 PLANNER_ROLE = 'Planner'
@@ -52,9 +55,16 @@ class LabConfig(Record):
     turn_timeout: float = Field(default=2 * 3_600, gt=0)
 
 
-async def run_lab(project: Path, config: LabConfig, catalog: Mapping[str, HarnessEntry] = CATALOG) -> None:
+async def run_lab(
+    project: Path,
+    config: LabConfig,
+    catalog: Mapping[str, HarnessEntry] = CATALOG,
+    on_ready: Callable[[str], None] | None = None,
+) -> None:
     """
     Run the lab in `project` until every agent stops, or until the caller cancels it.
+
+    `on_ready` gets the link to the lab's app, with the person's token, once the server listens.
 
     Raises:
         RunnerError: The folder has no lab and the config has no question, or an agent names an unknown harness.
@@ -71,9 +81,13 @@ async def run_lab(project: Path, config: LabConfig, catalog: Mapping[str, Harnes
         if not lab_file.exists():
             lab_file.write_text(LAB_TEMPLATE)
         members, seats = await _seat_agents(lab, project, config, catalog, lab_file)
+        activity = Activity()
+        person_token = new_person_token()
+        http = join_server(members.resolve).streamable_http_app(host='127.0.0.1')
+        http.mount('/api', app_api(lab, activity, person_token))
         server = uvicorn.Server(
             uvicorn.Config(
-                join_server(members.resolve).streamable_http_app(host='127.0.0.1'),
+                http,
                 host='127.0.0.1',
                 port=config.port,
                 log_level='warning',
@@ -82,15 +96,20 @@ async def run_lab(project: Path, config: LabConfig, catalog: Mapping[str, Harnes
         )
         serving = asyncio.create_task(server.serve())
         try:
-            settings = LoopSettings(
-                mcp_url=f'http://127.0.0.1:{await _bound_port(server)}/mcp', turn_timeout=config.turn_timeout
-            )
-            crew = _crew(config, catalog)
-            reruns = asyncio.create_task(Reruns(lab, members, project, crew, settings).run())
+            port = await _bound_port(server)
+            settings = LoopSettings(mcp_url=f'http://127.0.0.1:{port}/mcp', turn_timeout=config.turn_timeout)
+            if on_ready:
+                on_ready(f'http://127.0.0.1:{port}/#token={person_token.get_secret_value()}')
+
+            async def supervise(member: Member, setup: AgentSetup, done: Callable[[Board], bool]) -> None:
+                async with asyncio.timeout(config.turn_timeout):
+                    await AgentLoop(member, setup, settings, done, activity).run()
+
+            reruns = asyncio.create_task(Reruns(lab, members, project, _crew(config, catalog), supervise).run())
             try:
                 async with asyncio.TaskGroup() as group:
                     for member, setup in seats:
-                        group.create_task(AgentLoop(member, setup, settings).run())
+                        group.create_task(AgentLoop(member, setup, settings, activity=activity).run())
             finally:
                 reruns.cancel()
                 with suppress(asyncio.CancelledError):

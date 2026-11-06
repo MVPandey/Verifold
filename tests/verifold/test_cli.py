@@ -1,6 +1,7 @@
 import asyncio
 import os
 import signal
+from collections.abc import Callable
 from importlib.metadata import version
 from pathlib import Path
 
@@ -30,8 +31,10 @@ def runs(monkeypatch: pytest.MonkeyPatch) -> list[LabConfig]:
     """Replace the lab with a stand-in that records each config it gets."""
     configs: list[LabConfig] = []
 
-    async def run_lab(project: Path, config: LabConfig) -> None:
+    async def run_lab(project: Path, config: LabConfig, on_ready: Callable[[str], None] | None = None) -> None:
         assert project == Path.cwd()
+        if on_ready:
+            on_ready('http://127.0.0.1:1234/#token=abc')
         configs.append(config)
 
     monkeypatch.setattr('verifold.cli.run_lab', run_lab)
@@ -55,14 +58,17 @@ def test_ask_me_keeps_the_harnesses_own_modes(runs: list[LabConfig]) -> None:
     assert runs == [LabConfig(question='Does it hold?', auto_mode=False)]
 
 
-def test_run_without_options_uses_the_defaults_and_resumes_without_a_question(runs: list[LabConfig]) -> None:
+def test_run_without_options_uses_the_defaults_and_resumes_without_a_question(
+    runs: list[LabConfig], capsys: pytest.CaptureFixture[str]
+) -> None:
     main(['run'])
 
     assert runs == [LabConfig()]
+    assert 'Open the lab: http://127.0.0.1:1234/#token=abc' in capsys.readouterr().out
 
 
 def test_a_lab_error_exits_with_its_message(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def run_lab(project: Path, config: LabConfig) -> None:
+    async def run_lab(project: Path, config: LabConfig, on_ready: Callable[[str], None] | None = None) -> None:
         raise RunnerError('This folder has no lab yet.')
 
     monkeypatch.setattr('verifold.cli.run_lab', run_lab)
@@ -72,7 +78,7 @@ def test_a_lab_error_exits_with_its_message(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_ctrl_c_stops_the_lab_with_a_note(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    async def run_lab(project: Path, config: LabConfig) -> None:
+    async def run_lab(project: Path, config: LabConfig, on_ready: Callable[[str], None] | None = None) -> None:
         raise KeyboardInterrupt
 
     monkeypatch.setattr('verifold.cli.run_lab', run_lab)
@@ -85,7 +91,7 @@ def test_ctrl_c_stops_the_lab_with_a_note(monkeypatch: pytest.MonkeyPatch, capsy
 def test_sigterm_stops_the_lab_like_ctrl_c(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     cancelled: list[bool] = []
 
-    async def run_lab(project: Path, config: LabConfig) -> None:
+    async def run_lab(project: Path, config: LabConfig, on_ready: Callable[[str], None] | None = None) -> None:
         os.kill(os.getpid(), signal.SIGTERM)
         try:
             await asyncio.sleep(60)
