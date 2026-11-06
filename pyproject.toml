@@ -20,6 +20,8 @@ where = ["src"]
 [tool.ruff]
 fix = true
 line-length = 120
+# The skill snapshots are kept exactly as imported, so Ruff leaves their code examples alone.
+extend-exclude = [".agents"]
 
 [tool.ruff.lint]
 # UP keeps modern syntax, ANN requires annotations, PERF flags hand-built loops that a comprehension replaces.
