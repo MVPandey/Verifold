@@ -1,1 +1,1 @@
-"""One adapter for each harness that the runner drives, such as Claude Code and Codex."""
+"""The harnesses that Verifold can start, described as data. Verifold starts each one over ACP."""
