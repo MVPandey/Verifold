@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, Field, StringConstraints
 
 from verifold.protocol.agents import Agent
+from verifold.protocol.ids import AgentId, ThreadId
 from verifold.protocol.posts import Post
 from verifold.protocol.record import Record
 from verifold.protocol.threads import Thread
@@ -51,4 +52,13 @@ class Posted(EventBase):
     post: Post
 
 
-type Event = Annotated[LabOpened | AgentJoined | ThreadOpened | Posted, Field(discriminator='type')]
+class WatchSet(EventBase):
+    """An agent started or stopped watching a thread. Every post in a watched thread wakes the agent."""
+
+    type: Literal['watch_set'] = 'watch_set'
+    agent: AgentId
+    thread: ThreadId
+    watching: bool
+
+
+type Event = Annotated[LabOpened | AgentJoined | ThreadOpened | Posted | WatchSet, Field(discriminator='type')]
