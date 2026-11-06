@@ -9,6 +9,7 @@ from pydantic import SecretStr
 from verifold.protocol.join import PostRequest
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.server.lab import Lab
+from verifold.server.member import Member
 
 
 def setup_for(lab: Lab, agent_id: str, tmp_path: Path) -> AgentSetup:
@@ -34,7 +35,9 @@ async def test_the_agent_starts_with_the_opening_prompt_and_resumes_when_a_post_
     lab: Lab, tmp_path: Path
 ) -> None:
     harness = Recording(tmp_path / 'turns.log')
-    loop = AgentLoop(lab, setup_for(lab, 'bo', tmp_path), harness, SETTINGS, today=lambda: date(2026, 11, 6))
+    loop = AgentLoop(
+        Member(lab, 'bo'), setup_for(lab, 'bo', tmp_path), harness, SETTINGS, today=lambda: date(2026, 11, 6)
+    )
     running = asyncio.create_task(loop.run())
     try:
         await until(lambda: len(lab.board.turns) == 1)
@@ -56,7 +59,7 @@ async def test_the_agent_starts_with_the_opening_prompt_and_resumes_when_a_post_
 
 async def test_an_agent_stops_after_failing_turns_in_a_row(lab: Lab, tmp_path: Path) -> None:
     harness = Recording(tmp_path / 'turns.log', exit_code=1)
-    loop = AgentLoop(lab, setup_for(lab, 'bo', tmp_path), harness, SETTINGS)
+    loop = AgentLoop(Member(lab, 'bo'), setup_for(lab, 'bo', tmp_path), harness, SETTINGS)
 
     async with asyncio.timeout(10):
         await loop.run()
@@ -69,7 +72,9 @@ async def test_an_agent_stops_after_failing_turns_in_a_row(lab: Lab, tmp_path: P
 
 async def test_each_turn_records_its_time_and_usage(lab: Lab, tmp_path: Path) -> None:
     harness = Recording(tmp_path / 'turns.log')
-    running = asyncio.create_task(AgentLoop(lab, setup_for(lab, 'ada', tmp_path), harness, SETTINGS).run())
+    running = asyncio.create_task(
+        AgentLoop(Member(lab, 'ada'), setup_for(lab, 'ada', tmp_path), harness, SETTINGS).run()
+    )
     try:
         await until(lambda: len(lab.board.turns) == 1)
     finally:

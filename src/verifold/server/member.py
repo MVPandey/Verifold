@@ -25,6 +25,11 @@ class Member:
         self.agent_id = agent_id
         self._seen = lab.board.seq
 
+    @property
+    def lab(self) -> Lab:
+        """The lab that the agent works in."""
+        return self._lab
+
     async def post(self, request: PostRequest) -> PostView:
         """Post as the agent, and return the post as it stands."""
         posted = await self._lab.post(request, self.agent_id)
