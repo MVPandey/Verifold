@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "verifold"
+version = "0.1.0"
+description = "An orchestrator that lets coding agents work as a research society."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+verifold = "verifold.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+fix = true
+line-length = 120
+
+[tool.ruff.lint]
+# UP keeps modern syntax, ANN requires annotations, PERF flags hand-built loops that a comprehension replaces.
+extend-select = ["D", "RUF", "PT", "TID", "I", "PL", "UP", "ANN", "PERF"]
+ignore = ["D203", "D212"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"typing.Any".msg = "Define a schema or a precise type instead of Any."
+
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/**/*.py" = ["D", "PLR"]
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+docstring-code-format = true
+
+[tool.ty.terminal]
+output-format = "concise"
+
+[tool.ty.rules]
+unused-ignore-comment = "error"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "--import-mode=importlib",
+    "--cov=src/verifold",
+    "--cov-report=term-missing",
+    "--cov-fail-under=95",
+    "--maxfail=3",
+    "--durations=5",
+]
+
+[tool.coverage.run]
+source = ["src/verifold"]
+
+[dependency-groups]
+dev = [
+    "lefthook>=2.2.2,<3",
+    "pytest>=9.1.1,<10",
+    "pytest-cov>=7.1.0,<8",
+    "pytest-mock>=3.17.0,<4",
+    "ruff>=0.17.2,<1",
+    "ty>=0.0.91,<1",
+]

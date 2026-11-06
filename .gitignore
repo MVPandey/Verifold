@@ -1,0 +1,27 @@
+# Python packaging and install artifacts
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+
+# Tool caches and coverage output
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Private agent work (research, plans, coordination). Never commit it.
+/.local/
+
+# Lab records of a project that runs Verifold in this folder
+/.verifold/
+
+.DS_Store
