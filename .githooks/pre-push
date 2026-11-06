@@ -1,0 +1,3 @@
+#!/bin/sh
+# Git runs this script because core.hooksPath is .githooks. The commands are in lefthook.yml.
+exec uv run --frozen lefthook run pre-push --no-auto-install "$@"
