@@ -36,12 +36,12 @@ def runs(monkeypatch: pytest.MonkeyPatch) -> list[LabConfig]:
 
 
 def test_run_starts_a_lab_with_the_given_agents(runs: list[LabConfig]) -> None:
-    main(['run', 'Does it hold?', '--agent', 'claude-code:opus', '--agent', 'codex'])
+    main(['run', 'Does it hold?', '--agent', 'claude-code:opus', '--agent', 'codex::low'])
 
     assert runs == [
         LabConfig(
             question='Does it hold?',
-            agents=(AgentSpec(harness='claude-code', model='opus'), AgentSpec(harness='codex')),
+            agents=(AgentSpec(harness='claude-code', model='opus'), AgentSpec(harness='codex', effort='low')),
         )
     ]
 
