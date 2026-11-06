@@ -2,8 +2,9 @@
 
 import argparse
 import asyncio
+import signal
 import sys
-from collections.abc import Sequence
+from collections.abc import Coroutine, Sequence
 from importlib.metadata import version
 from pathlib import Path
 
@@ -30,11 +31,29 @@ def main(argv: Sequence[str] | None = None) -> None:
     config = LabConfig(question=args.question, agents=agents, auto_mode=not args.ask_me)
     print(f'Running the lab in {Path.cwd()}. Its record is .verifold/record.jsonl. Press Ctrl+C to stop.')
     try:
-        asyncio.run(run_lab(Path.cwd(), config))
+        asyncio.run(_until_stopped(run_lab(Path.cwd(), config)))
     except (RunnerError, StoreError) as error:
         sys.exit(f'verifold: {error}')
     except KeyboardInterrupt:
         print('Stopped the lab. Run `verifold run` here to resume it.')
+
+
+async def _until_stopped(lab: Coroutine[None, None, None]) -> None:
+    """
+    Run the lab until it ends, Ctrl+C, or SIGTERM.
+
+    SIGTERM cancels the lab the way Ctrl+C does, so each agent's harness stops with its process group. The harnesses
+    run in their own groups, so a plain SIGTERM would otherwise leave them running.
+    """
+    task = asyncio.ensure_future(lab)
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGTERM, task.cancel)
+    try:
+        await task
+    except asyncio.CancelledError:
+        raise KeyboardInterrupt from None
+    finally:
+        loop.remove_signal_handler(signal.SIGTERM)
 
 
 def _parser() -> argparse.ArgumentParser:

@@ -1,3 +1,6 @@
+import asyncio
+import os
+import signal
 from importlib.metadata import version
 from pathlib import Path
 
@@ -76,4 +79,23 @@ def test_ctrl_c_stops_the_lab_with_a_note(monkeypatch: pytest.MonkeyPatch, capsy
 
     main(['run'])
 
+    assert 'Stopped the lab.' in capsys.readouterr().out
+
+
+def test_sigterm_stops_the_lab_like_ctrl_c(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    cancelled: list[bool] = []
+
+    async def run_lab(project: Path, config: LabConfig) -> None:
+        os.kill(os.getpid(), signal.SIGTERM)
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+
+    monkeypatch.setattr('verifold.cli.run_lab', run_lab)
+
+    main(['run'])
+
+    assert cancelled == [True]
     assert 'Stopped the lab.' in capsys.readouterr().out

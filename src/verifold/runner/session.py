@@ -1,7 +1,8 @@
 """One agent's ACP session: its harness process, the board attached as its MCP server, and the messages sent to it."""
 
+import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from importlib.metadata import version
 from pathlib import Path
 from typing import NoReturn, Self, override
@@ -15,7 +16,7 @@ from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.record import Record
 from verifold.protocol.usage import Usage
 from verifold.runner.errors import RunnerError
-from verifold.runner.processes import start, stop
+from verifold.runner.processes import STOP_GRACE, start, stop
 
 
 class PermissionChoice(Record):
@@ -240,8 +241,11 @@ class AgentSession:
                 session_id = await _begin(connection, harness, place.folder, board, options)
                 yield cls(connection, session_id, client)
             finally:
-                await connection.close()
+                # Stop the harness first: the connection's reader waits for output that only ends with the process.
                 await stop(process)
+                with suppress(TimeoutError):
+                    async with asyncio.timeout(STOP_GRACE):
+                        await connection.close()
 
     async def send(self, text: str) -> TurnResult:
         """Send one message, and return once the harness ends its turn."""
