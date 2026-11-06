@@ -1,8 +1,9 @@
 import pytest
 from builders import START, RecordBuilder
 
-from verifold.protocol.events import LabOpened
+from verifold.protocol.events import LabOpened, TurnEnded
 from verifold.protocol.posts import Message, Result
+from verifold.protocol.usage import Usage
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
 
@@ -48,3 +49,12 @@ def test_a_lab_opens_once(record: RecordBuilder) -> None:
 
     with pytest.raises(RejectedEvent, match='one lab_opened'):
         apply(board, LabOpened(seq=board.seq + 1, at=START, question='Again?'))
+
+
+def test_a_turn_belongs_to_an_agent_in_the_lab(record: RecordBuilder) -> None:
+    board = record.board()
+    turn = TurnEnded(seq=board.seq + 1, at=START, agent='zed', seconds=1, usage=Usage())
+
+    with pytest.raises(RejectedEvent, match='zed is not an agent'):
+        apply(board, turn)
+    assert apply(board, turn.model_copy(update={'agent': 'ada'})).turns[-1].agent == 'ada'
