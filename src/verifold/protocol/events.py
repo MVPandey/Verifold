@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, Field, StringConstraints
 
 from verifold.protocol.agents import Agent
-from verifold.protocol.ids import AgentId, ThreadId
+from verifold.protocol.ids import AgentId, CommitId, ThreadId
 from verifold.protocol.posts import Post
 from verifold.protocol.record import Record
 from verifold.protocol.threads import Thread
@@ -62,15 +62,22 @@ class WatchSet(EventBase):
     watching: bool
 
 
-class TurnEnded(EventBase):
-    """An agent's harness ended a turn. The record keeps what the turn cost and why it failed, if it did."""
+class TurnSummary(Record):
+    """What one agent turn cost, how it ended, and the snapshot of the agent's folder after it."""
 
-    type: Literal['turn_ended'] = 'turn_ended'
     agent: AgentId
     seconds: float = Field(ge=0)
     usage: Usage
     cost_usd: float | None = None
     error: str | None = None
+    snapshot: CommitId | None = None
+    """The commit of the agent's folder after the turn, which other agents and checks can read."""
+
+
+class TurnEnded(EventBase, TurnSummary):
+    """An agent's harness ended a turn. The record keeps what the turn cost and why it failed, if it did."""
+
+    type: Literal['turn_ended'] = 'turn_ended'
 
 
 type Event = Annotated[

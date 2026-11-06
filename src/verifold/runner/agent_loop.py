@@ -13,11 +13,14 @@ from pydantic import Field, SecretStr
 
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent
+from verifold.protocol.events import TurnSummary
 from verifold.protocol.record import Record
 from verifold.protocol.usage import Usage
+from verifold.runner.git import GitError
 from verifold.runner.messages import DOORBELL
 from verifold.runner.permissions import ask_the_person
 from verifold.runner.session import AgentSession, Board, PermissionRequest, Place, SessionOptions
+from verifold.runner.snapshots import snapshot
 from verifold.server.member import Member
 from verifold.society.attention import update
 
@@ -85,7 +88,10 @@ class AgentLoop:
             # Any failure of one harness restarts that harness. It must not stop the lab's other agents.
             except Exception as error:  # noqa: BLE001
                 failures += 1
-                await self._lab.end_turn(setup.agent.id, 0, Usage(), None, f'{type(error).__name__}: {error}')
+                failed = TurnSummary(
+                    agent=setup.agent.id, seconds=0, usage=Usage(), error=f'{type(error).__name__}: {error}'
+                )
+                await self._lab.end_turn(failed)
                 if failures >= self._settings.max_failures:
                     return
                 await asyncio.sleep(self._settings.retry_after * 2 ** (failures - 1))
@@ -99,11 +105,20 @@ class AgentLoop:
         except TimeoutError:
             await session.cancel()
             error = f'The turn ran past {self._settings.turn_timeout:g} seconds and was cancelled.'
-            await self._lab.end_turn(self._setup.agent.id, time.monotonic() - started, Usage(), None, error)
+            await self._record(started, Usage(), None, error)
             return
         stopped = None if result.stop_reason == 'end_turn' else f'The harness stopped: {result.stop_reason}.'
+        await self._record(started, result.usage, result.cost_usd, stopped)
+
+    async def _record(self, started: float, usage: Usage, cost_usd: float | None, error: str | None) -> None:
+        agent_id = self._setup.agent.id
+        try:
+            commit = await snapshot(self._setup.folder, agent_id)
+        except GitError:
+            commit = None
+        seconds = time.monotonic() - started
         await self._lab.end_turn(
-            self._setup.agent.id, time.monotonic() - started, result.usage, result.cost_usd, stopped
+            TurnSummary(agent=agent_id, seconds=seconds, usage=usage, cost_usd=cost_usd, error=error, snapshot=commit)
         )
 
     async def _news(self) -> None:

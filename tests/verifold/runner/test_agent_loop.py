@@ -10,6 +10,7 @@ from fakes import FAKE_HARNESS
 from verifold.protocol.join import PostRequest
 from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
+from verifold.runner.git import git
 from verifold.runner.messages import DOORBELL
 
 
@@ -113,3 +114,20 @@ async def test_a_permission_request_waits_for_the_persons_answer_on_the_board(
         running.cancel()
 
     assert asked.text == 'Permission needed: run make'
+
+
+async def test_each_turn_records_a_snapshot_of_the_agents_folder(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    loop = loop_for(served, tmp_path)
+    await git('init', '--quiet', cwd=tmp_path / 'bo')
+    (tmp_path / 'bo' / 'notes.md').write_text('benchmark plan')
+    running = asyncio.create_task(loop.run())
+    try:
+        await until(lambda: len(served.lab.board.turns) == 1)
+    finally:
+        running.cancel()
+
+    commit = served.lab.board.turns[0].snapshot
+    assert commit is not None
+    assert await git('show', f'{commit}:notes.md', cwd=tmp_path / 'bo') == 'benchmark plan'
