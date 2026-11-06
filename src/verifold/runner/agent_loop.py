@@ -14,7 +14,6 @@ from verifold.protocol.join import Update
 from verifold.protocol.record import Record
 from verifold.runner.driver import run_turn
 from verifold.runner.prompts import opening_prompt, update_prompt
-from verifold.server.lab import Lab
 from verifold.server.member import Member
 
 
@@ -54,19 +53,24 @@ class AgentLoop:
 
     def __init__(
         self,
-        lab: Lab,
+        member: Member,
         setup: AgentSetup,
         harness: Harness,
         settings: LoopSettings,
         today: Callable[[], date] = date.today,
     ) -> None:
-        """Prepare the loop of an agent that joined the lab. `today` gives the date in the opening prompt."""
-        self._lab = lab
+        """
+        Prepare the loop of an agent that joined the lab.
+
+        `member` is the same seat that serves the agent's tool calls, so the loop and the agent's own `wait` calls
+        share one read position. `today` gives the date in the opening prompt.
+        """
+        self._lab = member.lab
+        self._member = member
         self._setup = setup
         self._harness = harness
         self._settings = settings
         self._today = today
-        self._member = Member(lab, setup.agent.id)
 
     async def run(self) -> None:
         """Run the agent until it fails `max_failures` turns in a row, or until the caller cancels the loop."""
