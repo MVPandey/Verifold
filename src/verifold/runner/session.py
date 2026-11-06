@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
 from typing import NoReturn, Self, override
@@ -39,6 +40,19 @@ type McpServers = list[schema.HttpMcpServer | schema.SseMcpServer | schema.AcpMc
 
 type Permissions = Callable[[PermissionRequest], Awaitable[str | None]]
 """Decides a permission request: the ID of the chosen answer, or `None` to cancel the action."""
+
+
+async def _ignore(_: str) -> None:
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class SessionHooks:
+    """What the runner hears from a session: permission requests to decide, and each step that the harness starts."""
+
+    permissions: Permissions
+    step: Callable[[str], Awaitable[None]] = _ignore
+    """Gets the title of each tool call that the harness starts."""
 
 
 class BoardAccess(Record):
@@ -80,8 +94,8 @@ class _Client(acp.Client):
     Verifold offers no file or terminal methods, so it keeps the protocol's defaults for them.
     """
 
-    def __init__(self, permissions: Permissions) -> None:
-        self._permissions = permissions
+    def __init__(self, hooks: SessionHooks) -> None:
+        self._hooks = hooks
         self.cost: float | None = None
 
     @override
@@ -94,7 +108,7 @@ class _Client(acp.Client):
                 PermissionChoice(id=option.option_id, name=option.name, kind=option.kind) for option in options
             ),
         )
-        chosen = await self._permissions(request)
+        chosen = await self._hooks.permissions(request)
         outcome = (
             schema.AllowedOutcome(option_id=chosen, outcome='selected')
             if chosen
@@ -106,6 +120,8 @@ class _Client(acp.Client):
     async def session_update(self, session_id: str, update: object, **_: object) -> None:
         if isinstance(update, schema.UsageUpdate) and update.cost:
             self.cost = update.cost.amount
+        if isinstance(update, schema.ToolCallStart) and update.title:
+            await self._hooks.step(update.title)
 
     # Verifold offers no files, terminals, or forms. The agent learns that from the capabilities in `initialize`.
     @override
@@ -220,7 +236,7 @@ class AgentSession:
     @classmethod
     @asynccontextmanager
     async def open(
-        cls, harness: HarnessEntry, place: Place, board: BoardAccess, options: SessionOptions, permissions: Permissions
+        cls, harness: HarnessEntry, place: Place, board: BoardAccess, options: SessionOptions, hooks: SessionHooks
     ) -> AsyncGenerator[Self]:
         """
         Start the harness's ACP agent in the agent's folder, with the board as its MCP server, and open a session.
@@ -229,7 +245,7 @@ class AgentSession:
         `options`, through the generic ACP calls. When the block ends, Verifold stops the harness's whole process
         group.
         """
-        client = _Client(permissions)
+        client = _Client(hooks)
         place.log.parent.mkdir(parents=True, exist_ok=True)
         with place.log.open('ab') as errors:
             process = await start(harness.command, place.folder, errors)

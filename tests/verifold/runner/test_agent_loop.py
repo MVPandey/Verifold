@@ -1,5 +1,6 @@
 import asyncio
 import json
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -7,11 +8,13 @@ from builders import until
 from conftest import ServedBoard
 from fakes import FAKE_HARNESS
 
+from verifold.protocol.app import AgentState
 from verifold.protocol.join import PostRequest
 from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.git import git
 from verifold.runner.messages import DOORBELL
+from verifold.server.activity import Activity
 
 
 @pytest.fixture
@@ -26,7 +29,7 @@ def calls(log: Path, event: str) -> list[dict[str, object]]:
     return [call for call in map(json.loads, lines) if call['event'] == event]
 
 
-def loop_for(served: ServedBoard, tmp_path: Path, **settings: float) -> AgentLoop:
+def loop_for(served: ServedBoard, tmp_path: Path, activity: Activity | None = None, **settings: float) -> AgentLoop:
     member, token = served.seat('bo')
     joined = served.lab.board.agent('bo')
     assert joined is not None
@@ -35,7 +38,7 @@ def loop_for(served: ServedBoard, tmp_path: Path, **settings: float) -> AgentLoo
     setup = AgentSetup(
         agent=joined.agent, harness=FAKE_HARNESS, folder=folder, log=tmp_path / 'bo.log', token=token, start='Start.'
     )
-    return AgentLoop(member, setup, LoopSettings(mcp_url=served.url, retry_after=0, **settings))
+    return AgentLoop(member, setup, LoopSettings(mcp_url=served.url, retry_after=0, **settings), activity=activity)
 
 
 def posts_by(served: ServedBoard, author: str) -> list[str]:
@@ -131,3 +134,32 @@ async def test_each_turn_records_a_snapshot_of_the_agents_folder(
     commit = served.lab.board.turns[0].snapshot
     assert commit is not None
     assert await git('show', f'{commit}:notes.md', cwd=tmp_path / 'bo') == 'benchmark plan'
+
+
+class Recorded(Activity):
+    """An activity store that keeps every change, in order."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.changes: list[tuple[str, str, str]] = []
+
+    async def set(self, agent_id: str, state: AgentState, detail: str = '') -> None:
+        self.changes.append((agent_id, state, detail))
+        await super().set(agent_id, state, detail)
+
+
+async def test_the_loop_reports_what_the_agent_is_doing(served: ServedBoard, tmp_path: Path, log: Path) -> None:
+    activity = Recorded()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
+    try:
+        await until(lambda: len(served.lab.board.turns) == 1)
+        await until(lambda: activity.of('bo').state == 'idle')
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+    states = [(state, detail) for _, state, detail in activity.changes]
+    assert states[0] == ('working', '')
+    assert ('working', 'verifold.post') in states
+    assert states[-2:] == [('idle', ''), ('stopped', '')]

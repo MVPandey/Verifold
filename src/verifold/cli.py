@@ -31,7 +31,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     config = LabConfig(question=args.question, agents=agents, auto_mode=not args.ask_me)
     print(f'Running the lab in {Path.cwd()}. Its record is .verifold/record.jsonl. Press Ctrl+C to stop.')
     try:
-        asyncio.run(_until_stopped(run_lab(Path.cwd(), config)))
+        asyncio.run(_until_stopped(run_lab(Path.cwd(), config, on_ready=_announce)))
     except (RunnerError, StoreError) as error:
         sys.exit(f'verifold: {error}')
     except KeyboardInterrupt:
@@ -54,6 +54,10 @@ async def _until_stopped(lab: Coroutine[None, None, None]) -> None:
         raise KeyboardInterrupt from None
     finally:
         loop.remove_signal_handler(signal.SIGTERM)
+
+
+def _announce(link: str) -> None:
+    print(f'Open the lab: {link}', flush=True)
 
 
 def _parser() -> argparse.ArgumentParser:
