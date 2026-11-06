@@ -1,13 +1,19 @@
 """One agent's seat in its lab."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 
 from verifold.protocol.events import WatchSet
 from verifold.protocol.ids import AgentId, ThreadId
 from verifold.protocol.join import PostRequest, PostView, ThreadSummary, ThreadView, Update
+from verifold.protocol.posts import FileEvidence
+from verifold.server.errors import EvidenceRejected
 from verifold.server.lab import Lab
 from verifold.society.attention import update
 from verifold.society.views import post_view, thread_summaries, thread_view
+
+type Pin = Callable[[tuple[str, ...]], Awaitable[tuple[FileEvidence, ...]]]
+"""Commits an agent's folder and returns each named file pinned to that commit."""
 
 
 class Member:
@@ -19,11 +25,16 @@ class Member:
 
     # ponytail: the read position lives in memory. After a restart the agent starts from the newest event, and it
     # can read the threads to catch up. Record read positions if agents miss too much across restarts.
-    def __init__(self, lab: Lab, agent_id: AgentId) -> None:
-        """Seat an agent that has joined the lab. It has read everything up to now."""
+    def __init__(self, lab: Lab, agent_id: AgentId, pin: Pin | None = None) -> None:
+        """
+        Seat an agent that has joined the lab. It has read everything up to now.
+
+        `pin` commits the agent's folder and pins the files that a post names. Without it, posts cannot name files.
+        """
         self._lab = lab
         self.agent_id = agent_id
         self._seen = lab.board.seq
+        self._pin = pin
 
     @property
     def seen(self) -> int:
@@ -36,8 +47,19 @@ class Member:
         return self._lab
 
     async def post(self, request: PostRequest) -> PostView:
-        """Post as the agent, and return the post as it stands."""
-        posted = await self._lab.post(request, self.agent_id)
+        """
+        Post as the agent, with its files pinned as evidence, and return the post as it stands.
+
+        Raises:
+            EvidenceRejected: The post names files, and this member cannot pin them or they are not in the folder.
+
+        """
+        evidence: tuple[FileEvidence, ...] = ()
+        if request.files:
+            if self._pin is None:
+                raise EvidenceRejected('This lab cannot pin files for you.')
+            evidence = await self._pin(request.files)
+        posted = await self._lab.post(request, self.agent_id, evidence)
         return post_view(self._lab.board, posted)
 
     def threads(self) -> tuple[ThreadSummary, ...]:

@@ -11,3 +11,7 @@ class UnknownAgent(ServerError):
 
 class LabExists(ServerError):
     """A new lab was asked for in a record that holds a lab already."""
+
+
+class EvidenceRejected(ServerError):
+    """A post named files that cannot be evidence. The message says which, so it can go back to the agent."""
