@@ -127,6 +127,7 @@ async def _seat_agents(
             agent=agent,
             harness=catalog[spec.harness],
             folder=await agent_folder(project, agent.id),
+            log=project / LAB_FOLDER / 'logs' / f'{agent.id}.log',
             token=SecretStr(members.add(member)),
             options=SessionOptions(model=spec.model, effort=spec.effort, auto_mode=config.auto_mode),
             start=start_message(lab.board, agent, lab_file),
