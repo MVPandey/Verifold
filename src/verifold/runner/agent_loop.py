@@ -17,7 +17,7 @@ from verifold.protocol.record import Record
 from verifold.protocol.usage import Usage
 from verifold.runner.messages import DOORBELL
 from verifold.runner.permissions import ask_the_person
-from verifold.runner.session import AgentSession, Board, PermissionRequest, SessionOptions
+from verifold.runner.session import AgentSession, Board, PermissionRequest, Place, SessionOptions
 from verifold.server.member import Member
 from verifold.society.attention import update
 
@@ -42,6 +42,8 @@ class AgentSetup(Record):
     agent: Agent
     harness: HarnessEntry
     folder: Path
+    log: Path
+    """The file that receives the harness's error output."""
     token: SecretStr
     options: SessionOptions = SessionOptions()
     start: str
@@ -72,7 +74,8 @@ class AgentLoop:
         while True:
             try:
                 options = setup.options.model_copy(update={'resume': resume})
-                async with AgentSession.open(setup.harness, setup.folder, board, options, self._permission) as session:
+                place = Place(folder=setup.folder, log=setup.log)
+                async with AgentSession.open(setup.harness, place, board, options, self._permission) as session:
                     resume = session.id
                     while True:
                         await self._send(session, message)
