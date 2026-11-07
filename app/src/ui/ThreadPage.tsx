@@ -64,6 +64,7 @@ export function ThreadPage({ api, data, id }: PageProps & { readonly id: string 
             thread={view}
             agents={lab.agents}
             harnesses={data.setup?.harnesses ?? []}
+            waitsForYou={data.needs.some((need) => need.post.id === item.post.id)}
             onRerun={(postId) => api.rerun(postId)}
           />
         ))}
@@ -84,6 +85,7 @@ export function PostItem(props: {
   readonly thread: ThreadView;
   readonly agents: readonly AgentView[];
   readonly harnesses: readonly HarnessOption[];
+  readonly waitsForYou: boolean;
   readonly onRerun: (postId: string) => Promise<void>;
 }): ReactElement {
   const { post, standing, at } = props.item;
@@ -122,6 +124,12 @@ export function PostItem(props: {
         <p className="ph">{post.text}</p>
         {post.kind === 'ask' && post.choices.length > 0 ? (
           <p className="choices">Choices: {post.choices.join(' · ')}</p>
+        ) : null}
+        {props.waitsForYou ? (
+          <p className="note">
+            <a href={href({ page: 'needs' })}>Answer it on the Needs you page</a>. An agent waits
+            for your answer there, not for a reply in the thread.
+          </p>
         ) : null}
         <Files files={post.evidence} />
         {post.body ? (

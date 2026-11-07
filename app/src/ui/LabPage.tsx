@@ -43,7 +43,7 @@ export function LabPage({ api, data, now }: PageProps): ReactElement {
           {lab.posts} {lab.posts === 1 ? 'post' : 'posts'} · {lab.threads}{' '}
           {lab.threads === 1 ? 'thread' : 'threads'} · Spent {labTotal(lab.agents)}
         </p>
-        <NeedsBanner needs={needs} agents={lab.agents} />
+        <NeedsBanner needs={needs} lab={lab} />
         <section className="section">
           <div className="sechead">
             <h2>
@@ -99,11 +99,11 @@ export function LabPage({ api, data, now }: PageProps): ReactElement {
 
 function NeedsBanner(props: {
   readonly needs: readonly PostView[];
-  readonly agents: readonly AgentView[];
+  readonly lab: LabView;
 }): ReactElement | null {
-  const first = orderNeeds(props.needs, props.agents)[0];
+  const first = orderNeeds(props.needs, props.lab)[0];
   if (first === undefined) return null;
-  const name = authorName(props.agents, first.post.author);
+  const name = authorName(props.lab.agents, first.post.author);
   const ask = isPermission(first.post)
     ? `${name} asks for permission: ${first.post.text.replace(/^Permission needed:\s*/, '')}`
     : `${name} asks you: ${first.post.text}`;
@@ -229,14 +229,14 @@ function TimePanel(props: {
             <button
               className="btn small"
               type="button"
-              onClick={() => setTime(moreTime(lab, 30, props.now))}
+              onClick={() => setTime(moreTime(lab, 30, new Date()))}
             >
               30 more min
             </button>
             <button
               className="btn small"
               type="button"
-              onClick={() => setTime(moreTime(lab, 60, props.now))}
+              onClick={() => setTime(moreTime(lab, 60, new Date()))}
             >
               1 more hour
             </button>

@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import type { PostView } from '../src/api/types.ts';
+
 import { costLine, labTotal, mark, stateLine, tone } from '../src/model/agents.ts';
 import { duration, minutesBetween, money, tokens } from '../src/model/format.ts';
-import { orderNeeds } from '../src/model/needs.ts';
+import { orderNeeds, pauses } from '../src/model/needs.ts';
 import {
   isPermission,
   kindLabel,
@@ -169,17 +171,34 @@ describe('agents', () => {
 });
 
 describe('needs', () => {
-  it('puts the asks of paused agents first, and keeps the rest in order', () => {
-    const needs = [
-      postView(ask('p-1', 'agent-1')),
-      postView(ask('p-2', 'agent-2')),
-      postView(ask('p-3', 'agent-3')),
-    ];
-    const agents = [agentView('agent-2', { activity: { state: 'waiting', detail: '', at: null } })];
+  const waiting = { state: 'waiting', detail: '', at: null } as const;
+  const needs = [
+    postView({ ...ask('p-1', 'agent-1'), text: 'Which seed counts?' }),
+    postView(ask('p-2', 'agent-2')),
+    postView(ask('p-3', 'agent-3')),
+  ];
+  const ids = (items: readonly PostView[]): readonly string[] => items.map((item) => item.post.id);
+
+  it('puts the permission requests of paused agents first, and keeps the rest in order', () => {
+    const lab = labView({
+      agents: [
+        agentView('agent-1', { activity: waiting }),
+        agentView('agent-2', { activity: waiting }),
+      ],
+    });
+    assert.deepEqual(ids(orderNeeds(needs, lab)), ['p-2', 'p-1', 'p-3']);
     assert.deepEqual(
-      orderNeeds(needs, agents).map((item) => item.post.id),
-      ['p-2', 'p-1', 'p-3'],
+      needs.map((item) => pauses(item, lab)),
+      [false, true, false],
     );
+  });
+
+  it('pauses nothing once the lab is out of time', () => {
+    const lab = labView({
+      out_of_time: true,
+      agents: [agentView('agent-2', { activity: waiting })],
+    });
+    assert.deepEqual(ids(orderNeeds(needs, lab)), ['p-1', 'p-2', 'p-3']);
   });
 });
 

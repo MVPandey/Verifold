@@ -4,7 +4,7 @@ import type { ReactElement } from 'react';
 import type { AgentView, HarnessOption, PostView } from '../api/types.ts';
 import { authorName, harnessTitle, mark, tone } from '../model/agents.ts';
 import { duration, minutesBetween } from '../model/format.ts';
-import { orderNeeds } from '../model/needs.ts';
+import { orderNeeds, pauses } from '../model/needs.ts';
 import { isPermission, personAnswer } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { messageOf } from './hooks.ts';
@@ -13,7 +13,7 @@ import { Avatar, Body } from './parts.tsx';
 
 /** Everything that waits for the person's answer. Requests that pause an agent come first. */
 export function NeedsPage({ api, data, now }: PageProps): ReactElement {
-  const ordered = orderNeeds(data.needs, data.lab.agents);
+  const ordered = orderNeeds(data.needs, data.lab);
   return (
     <div className="narrow">
       <h1>Needs you</h1>
@@ -28,6 +28,7 @@ export function NeedsPage({ api, data, now }: PageProps): ReactElement {
           item={item}
           agents={data.lab.agents}
           harnesses={data.setup?.harnesses ?? []}
+          paused={pauses(item, data.lab)}
           now={now}
           onAnswer={async (choice, words) => {
             const request = personAnswer(item.post, choice, words);
@@ -44,6 +45,7 @@ function NeedCard(props: {
   readonly item: PostView;
   readonly agents: readonly AgentView[];
   readonly harnesses: readonly HarnessOption[];
+  readonly paused: boolean;
   readonly now: Date;
   readonly onAnswer: (choice: string | null, words: string) => Promise<void>;
 }): ReactElement {
@@ -57,7 +59,7 @@ function NeedCard(props: {
   const agent = props.agents.find((view) => view.agent.id === post.author);
   const permission = isPermission(post);
   const choices = post.kind === 'ask' ? post.choices : [];
-  const paused = agent?.activity.state === 'waiting';
+  const paused = props.paused;
 
   const send = (): void => {
     setSending(true);
@@ -119,8 +121,9 @@ function NeedCard(props: {
           />
           {permission ? (
             <p className="note">
-              Your words go to {name} with the option. Words alone count as a rejection unless they
-              say allow or name an option.
+              Your words go to {name} with the option you pick. Without an option, Verifold reads
+              your words: naming an option picks it, a yes allows once, and a no or anything unclear
+              rejects.
             </p>
           ) : null}
         </div>

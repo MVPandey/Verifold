@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { ApiError, createApi } from '../src/api/client.ts';
+import { parseChange } from '../src/api/events.ts';
 import { takeToken } from '../src/api/token.ts';
 
 interface Call {
@@ -77,5 +78,18 @@ describe('the token', () => {
     assert.equal(takeToken('#/', store), null);
     assert.equal(takeToken('#token=abc', store), 'abc');
     assert.equal(takeToken('#/needs', store), 'abc');
+  });
+});
+
+describe('the event stream', () => {
+  it('reads the change in each event, and ignores anything else', () => {
+    assert.deepEqual(parseChange('{"seq": 4, "activity": 2}'), { seq: 4, activity: 2 });
+    assert.deepEqual(['', 'nope', '{"seq": "4", "activity": 2}', '[]', 7].map(parseChange), [
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
   });
 });
