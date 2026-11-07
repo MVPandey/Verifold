@@ -93,3 +93,17 @@ describe('the event stream', () => {
     ]);
   });
 });
+
+describe('an unreachable server', () => {
+  it('gives an error that says verifold cannot be reached', async () => {
+    const api = createApi('secret', () => Promise.reject(new TypeError('Failed to fetch')));
+    await assert.rejects(api.lab(), (error: unknown) => {
+      assert.ok(error instanceof ApiError);
+      assert.deepEqual(
+        [error.status, error.message],
+        [0, "Can't reach verifold. Check that it is still running."],
+      );
+      return true;
+    });
+  });
+});

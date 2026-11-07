@@ -13,7 +13,7 @@ import {
   step,
 } from '../model/setup.ts';
 import type { HarnessPick } from '../model/setup.ts';
-import { messageOf } from './hooks.ts';
+import { messageOf } from '../api/client.ts';
 import { Avatar } from './parts.tsx';
 
 const TIMES: readonly { readonly minutes: number | null; readonly label: string }[] = [

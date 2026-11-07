@@ -7,7 +7,7 @@ import { duration, minutesBetween } from '../model/format.ts';
 import { orderNeeds, pauses } from '../model/needs.ts';
 import { isPermission, personAnswer } from '../model/posts.ts';
 import { href } from '../model/route.ts';
-import { messageOf } from './hooks.ts';
+import { messageOf } from '../api/client.ts';
 import type { PageProps } from './hooks.ts';
 import { Avatar, Body } from './parts.tsx';
 

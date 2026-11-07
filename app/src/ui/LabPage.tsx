@@ -19,7 +19,7 @@ import { href } from '../model/route.ts';
 import { hasNew, readSeen } from '../model/seen.ts';
 import type { Seen } from '../model/seen.ts';
 import { endLine, moreTime } from '../model/time.ts';
-import { messageOf } from './hooks.ts';
+import { messageOf } from '../api/client.ts';
 import type { PageProps } from './hooks.ts';
 import { Avatar, ChipView, Composer } from './parts.tsx';
 

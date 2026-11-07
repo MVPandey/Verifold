@@ -4,7 +4,7 @@ import type { FormEvent, ReactElement } from 'react';
 import type { FileEvidence } from '../api/types.ts';
 import type { Tone } from '../model/agents.ts';
 import type { Chip } from '../model/posts.ts';
-import { messageOf } from './hooks.ts';
+import { messageOf } from '../api/client.ts';
 
 /** An author's round avatar with their number. */
 export function Avatar(props: {
