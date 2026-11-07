@@ -13,6 +13,7 @@ from acp import schema
 from acp.client.connection import ClientSideConnection
 from pydantic import SecretStr
 
+from verifold import DISTRIBUTION
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.record import Record
 from verifold.protocol.usage import Usage
@@ -201,7 +202,7 @@ async def _begin(
         client_capabilities=schema.ClientCapabilities(
             fs=schema.FileSystemCapabilities(read_text_file=False, write_text_file=False), terminal=False
         ),
-        client_info=schema.Implementation(name='verifold', version=version('verifold')),
+        client_info=schema.Implementation(name='verifold', version=version(DISTRIBUTION)),
     )
     servers: McpServers = [
         schema.HttpMcpServer(

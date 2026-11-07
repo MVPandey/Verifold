@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from verifold import DISTRIBUTION
 from verifold.cli import DEFAULT_AGENTS, main
 from verifold.protocol.app import AgentChoice, StartRequest
 from verifold.server.errors import LabExists, SetupRejected
@@ -17,7 +18,7 @@ def test_version_prints_the_installed_version(capsys: pytest.CaptureFixture[str]
         main(['--version'])
 
     assert exit_info.value.code == 0
-    assert capsys.readouterr().out == f'verifold {version("verifold")}\n'
+    assert capsys.readouterr().out == f'verifold {version(DISTRIBUTION)}\n'
 
 
 @pytest.fixture(autouse=True)

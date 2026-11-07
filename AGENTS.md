@@ -83,6 +83,16 @@ Never bypass a hook or weaken a check to get a pass. Fix the code, or report wha
 - Don't add AI attribution: no `Co-Authored-By` lines for tools and no "Generated with" lines in pull requests.
 - Stage only the files that belong to the change.
 
+## Releases
+
+On PyPI the package is `verifold-ai`, because `verifold` there is another project. The import and the command stay `verifold`. `DISTRIBUTION` in `src/verifold/__init__.py` holds the PyPI name.
+
+1. Set the new version in `pyproject.toml` in a pull request.
+2. After it merges, tag the merge commit as `v` and the version, such as `v0.12.0`, and push the tag.
+3. `publish.yml` checks that the tag matches the version, builds the package, and publishes it to PyPI through trusted publishing.
+
+PyPI never takes the same version twice, so a broken release gets a new version.
+
 ## Private work
 
 Keep research, plans, reviews, and agent coordination under `.local/agents/`, which Git ignores. Don't commit those records or link to them from public docs.

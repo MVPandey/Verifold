@@ -1,0 +1,30 @@
+name: Publish
+on:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  contents: read
+jobs:
+  publish:
+    # PyPI trusts this workflow in the pypi environment, so the job needs no stored token. It uses no cache, so a
+    # release builds only from the tagged commit.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - name: Check that the tag names the package's version
+        run: test "$GITHUB_REF_NAME" = "v$(uv version --short)"
+      - run: uv build
+      - run: unzip -l dist/*.whl | grep -F verifold/web/index.html
+      - run: uv publish

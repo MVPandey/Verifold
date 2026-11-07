@@ -13,6 +13,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from verifold import DISTRIBUTION
 from verifold.app import serve
 from verifold.harnesses.catalog import CATALOG
 from verifold.protocol.app import AgentChoice, StartRequest
@@ -94,7 +95,7 @@ def _announce(link: str, *, open_browser: bool) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='verifold', description='Run your coding agents as a research society.')
-    parser.add_argument('--version', action='version', version=f'%(prog)s {version("verifold")}')
+    parser.add_argument('--version', action='version', version=f'%(prog)s {version(DISTRIBUTION)}')
     parser.add_argument('--no-browser', action='store_true', help='Print the link to the app, and open no browser.')
     commands = parser.add_subparsers(dest='command')
     run = commands.add_parser('run', help='Start a lab on a question without the setup screen.')
