@@ -1,9 +1,9 @@
 import pytest
 from builders import RecordBuilder
 
-from verifold.protocol.posts import Ask, Check, Message, Objection, Result
+from verifold.protocol.posts import Answer, Ask, Check, Message, Objection, Result
 from verifold.society.errors import NotFound
-from verifold.society.views import thread_summaries, thread_view
+from verifold.society.views import needs_person, thread_summaries, thread_view
 
 
 def test_a_thread_view_shows_each_post_and_where_it_stands(record: RecordBuilder) -> None:
@@ -49,3 +49,13 @@ def test_a_summary_shows_the_latest_post_and_how_results_and_asks_stand(record: 
     assert summary.latest is not None
     assert (summary.latest.author, summary.latest.kind, summary.latest.text) == ('bo', 'ask', 'Which seed?')
     assert (summary.disputed, summary.checked, summary.not_checked, summary.open_asks) == (1, 1, 1, 1)
+
+
+def test_an_ask_to_the_person_waits_for_the_persons_answer_not_an_agents(record: RecordBuilder) -> None:
+    record.post(Ask(id='p-1', thread='t-1', author='bo', text='May I install it?', mentions=('person',)))
+    record.post(Answer(id='p-2', thread='t-1', author='ada', text='Sure.', reply_to='p-1'))
+
+    assert [view.post.id for view in needs_person(record.board())] == ['p-1']
+
+    record.post(Answer(id='p-3', thread='t-1', author='person', text='Yes.', reply_to='p-1'))
+    assert needs_person(record.board()) == ()
