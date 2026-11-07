@@ -39,3 +39,4 @@ jobs:
       - run: uv build --wheel
       - run: unzip -l dist/*.whl | grep -F verifold/web/index.html
       - run: uvx --from dist/*.whl verifold --version
+      - run: uvx --from dist/*.whl verifold-ai --version
