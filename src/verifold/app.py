@@ -26,6 +26,7 @@ from verifold.server.join import Members, join_server
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.server.timekeeper import keep_time
+from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.board import Board
 from verifold.store.record_file import RecordFile
 
@@ -37,11 +38,13 @@ PLANNER_BRIEF = (
 
 
 class ServeOptions(Record):
-    """How the server runs: its port on 127.0.0.1, and how long one agent turn may take."""
+    """How the server runs: its port on 127.0.0.1, how long one agent turn may take, and the app that it serves."""
 
     port: int = Field(default=0, ge=0, le=65_535)
     """0 picks a free port."""
     turn_timeout: float = Field(default=2 * 3_600, gt=0)
+    web: Path = WEB_FOLDER
+    """The folder of the built app."""
 
 
 class Host:
@@ -181,6 +184,7 @@ async def serve(
         host = Host(project, record, catalog, members, activity)
         http = join_server(members.resolve).streamable_http_app(host='127.0.0.1')
         http.mount('/api', app_api(host, activity, person_token))
+        http.mount('/', web_app(options.web))
         server = uvicorn.Server(
             uvicorn.Config(http, host='127.0.0.1', port=options.port, log_level='warning', timeout_graceful_shutdown=5)
         )

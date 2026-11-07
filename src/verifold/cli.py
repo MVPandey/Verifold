@@ -4,8 +4,10 @@ import argparse
 import asyncio
 import signal
 import sys
+import webbrowser
 from collections.abc import Coroutine, Sequence
 from contextlib import suppress
+from functools import partial
 from importlib.metadata import version
 from pathlib import Path
 
@@ -42,7 +44,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         sys.exit(f'verifold: {error}')
     print(f'Serving Verifold for {Path.cwd()}. Its record is .verifold/record.jsonl. Press Ctrl+C to stop.')
     try:
-        asyncio.run(_until_stopped(serve(Path.cwd(), start, on_ready=_announce)))
+        announce = partial(_announce, open_browser=not args.no_browser)
+        asyncio.run(_until_stopped(serve(Path.cwd(), start, on_ready=announce)))
     except KeyboardInterrupt:
         pass  # Ctrl+C came before the event loop took over the signal.
     except (BaseExceptionGroup, *_REPORTED) as error:
@@ -83,15 +86,20 @@ async def _until_stopped(serving: Coroutine[None, None, None]) -> None:
         loop.remove_signal_handler(signal.SIGTERM)
 
 
-def _announce(link: str) -> None:
+def _announce(link: str, *, open_browser: bool) -> None:
     print(f'Open the lab: {link}', flush=True)
+    if open_browser:
+        webbrowser.open(link)
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='verifold', description='Run your coding agents as a research society.')
     parser.add_argument('--version', action='version', version=f'%(prog)s {version("verifold")}')
+    parser.add_argument('--no-browser', action='store_true', help='Print the link to the app, and open no browser.')
     commands = parser.add_subparsers(dest='command')
     run = commands.add_parser('run', help='Start a lab on a question without the setup screen.')
+    # SUPPRESS keeps the subcommand from resetting a --no-browser that came before `run`.
+    run.add_argument('--no-browser', action='store_true', default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     run.add_argument('question', help='The question of the new lab.')
     run.add_argument(
         '--agent',
