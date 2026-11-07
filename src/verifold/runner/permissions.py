@@ -66,7 +66,8 @@ def _contains(words: tuple[str, ...], phrase: tuple[str, ...]) -> bool:
 
 
 def _thread_title(member: Member) -> str:
-    return f'Permission requests from {member.agent_id}'
+    joined = member.lab.board.agent(member.agent_id)
+    return f'Permission requests from {joined.agent.name if joined else member.agent_id}'
 
 
 def _permission_thread(member: Member) -> str | None:

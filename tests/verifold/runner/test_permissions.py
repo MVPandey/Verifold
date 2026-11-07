@@ -56,7 +56,7 @@ async def test_a_request_becomes_an_ask_to_the_person_and_their_answer_decides_i
     assert asked.choices == ('Allow once', 'Allow always', 'Reject')
     thread = lab.board.thread(asked.thread)
     assert thread is not None
-    assert thread.thread.title == 'Permission requests from bo'
+    assert thread.thread.title == 'Permission requests from Bo'
 
 
 async def test_later_requests_use_the_same_thread_and_wait_for_the_persons_answer(lab: Lab) -> None:
