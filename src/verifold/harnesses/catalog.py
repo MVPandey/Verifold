@@ -18,6 +18,8 @@ class HarnessEntry(Record):
     """
 
     name: Label
+    title: Label
+    """The name that people know the harness by."""
     executable: str
     """The harness's own command. It must be on the PATH."""
     command: tuple[str, ...] = Field(min_length=1)
@@ -35,6 +37,7 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
         for entry in (
             HarnessEntry(
                 name='claude-code',
+                title='Claude Code',
                 executable='claude',
                 command=('npx', '-y', '@agentclientprotocol/claude-agent-acp@0.101.0'),
                 family='anthropic',
@@ -43,6 +46,7 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
             ),
             HarnessEntry(
                 name='codex',
+                title='Codex',
                 executable='codex',
                 command=('npx', '-y', '@agentclientprotocol/codex-acp@2.5.0'),
                 family='openai',

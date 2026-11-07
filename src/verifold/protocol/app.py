@@ -64,6 +64,7 @@ class HarnessOption(Record):
     """A harness that the setup screen offers, and whether this computer has it."""
 
     name: Label
+    title: Label
     family: Label
     available: bool
 

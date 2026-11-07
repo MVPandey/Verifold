@@ -66,7 +66,8 @@ def _contains(words: tuple[str, ...], phrase: tuple[str, ...]) -> bool:
 
 
 def _thread_title(member: Member) -> str:
-    return f'Permission requests from {member.agent_id}'
+    joined = member.lab.board.agent(member.agent_id)
+    return f'Permission requests from {joined.agent.name if joined else member.agent_id}'
 
 
 def _permission_thread(member: Member) -> str | None:
@@ -84,9 +85,10 @@ def _permission_thread(member: Member) -> str | None:
 async def _answer(member: Member, ask_id: str) -> str:
     lab = member.lab
     while True:
+        # The whole answer counts: a picked option leads the text, and the person's own words can follow in the body.
         answer = next(
             (
-                entry.post.text
+                f'{entry.post.text}\n{entry.post.body}'
                 for entry in lab.board.replies(ask_id)
                 if isinstance(entry.post, Answer) and entry.post.author == PERSON
             ),
