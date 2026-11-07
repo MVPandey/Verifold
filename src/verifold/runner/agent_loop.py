@@ -19,7 +19,7 @@ from verifold.protocol.events import TurnSummary
 from verifold.protocol.record import Record
 from verifold.protocol.usage import Usage
 from verifold.runner.git import GitError
-from verifold.runner.messages import DOORBELL
+from verifold.runner.messages import DOORBELL, more_time_message
 from verifold.runner.permissions import ask_the_person
 from verifold.runner.session import (
     AgentSession,
@@ -109,12 +109,17 @@ class AgentLoop:
                 async with AgentSession.open(setup.harness, place, board, options, hooks) as session:
                     resume = session.id
                     while True:
-                        await self._send(session, message)
+                        await self._while_out_of_time()
+                        stopped = await self._send(session, message)
                         failures = 0
                         if self._done and self._done(self._lab.board):
                             return
-                        await self._news()
-                        message = DOORBELL
+                        if stopped:
+                            await self._while_out_of_time()
+                            message = more_time_message(self._lab.board.ends_at)
+                        else:
+                            await self._news()
+                            message = DOORBELL
             # Any failure of one harness restarts that harness. It must not stop the lab's other agents.
             except Exception as error:  # noqa: BLE001
                 failures += 1
@@ -127,20 +132,45 @@ class AgentLoop:
                 await asyncio.sleep(self._settings.retry_after * 2 ** (failures - 1))
                 message = DOORBELL if resume else setup.start
 
-    async def _send(self, session: AgentSession, message: str) -> None:
+    async def _send(self, session: AgentSession, message: str) -> bool:
+        # Return whether the turn stopped because the lab ran out of time.
         await self._report('working')
         started = time.monotonic()
         try:
-            async with asyncio.timeout(self._settings.turn_timeout):
-                result = await session.send(message)
+            async with asyncio.timeout(self._settings.turn_timeout) as limit:
+                stopper = asyncio.create_task(self._stop_when_out_of_time(limit))
+                try:
+                    result = await session.send(message)
+                finally:
+                    stopper.cancel()
         except TimeoutError:
             await session.cancel()
-            error = f'The turn ran past {self._settings.turn_timeout:g} seconds and was cancelled.'
+            out_of_time = self._lab.board.out_of_time
+            error = (
+                'The lab ran out of time, so Verifold cancelled the turn.'
+                if out_of_time
+                else f'The turn ran past {self._settings.turn_timeout:g} seconds and was cancelled.'
+            )
             await self._record(started, Usage(), None, error)
-            return
+            return out_of_time
         stopped = None if result.stop_reason == 'end_turn' else f'The harness stopped: {result.stop_reason}.'
         await self._record(started, result.usage, result.cost_usd, stopped)
         await self._report('idle')
+        return False
+
+    async def _stop_when_out_of_time(self, limit: asyncio.Timeout) -> None:
+        lab = self._lab
+        while not lab.board.out_of_time:
+            await lab.wait_for_change(lab.board.seq, self._settings.idle_wait)
+        limit.reschedule(asyncio.get_running_loop().time())
+
+    async def _while_out_of_time(self) -> None:
+        lab = self._lab
+        if not lab.board.out_of_time:
+            return
+        await self._report('waiting', 'The lab is out of time. The person can give it more.')
+        while lab.board.out_of_time:
+            await lab.wait_for_change(lab.board.seq, self._settings.idle_wait)
 
     async def _record(self, started: float, usage: Usage, cost_usd: float | None, error: str | None) -> None:
         agent_id = self._setup.agent.id
