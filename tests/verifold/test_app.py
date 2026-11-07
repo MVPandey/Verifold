@@ -140,7 +140,8 @@ async def test_an_unknown_harness_is_refused_before_anything_is_recorded(project
     assert record(project) == []
 
 
-async def test_a_question_for_a_folder_with_a_lab_is_refused(project: Path, log: Path) -> None:
+@pytest.mark.usefixtures('log')
+async def test_a_question_for_a_folder_with_a_lab_is_refused(project: Path) -> None:
     async with serving(project, TWO_AGENTS):
         await until(lambda: len(posts(project)) == 2)
 
@@ -148,8 +149,9 @@ async def test_a_question_for_a_folder_with_a_lab_is_refused(project: Path, log:
         await serve(project, TWO_AGENTS, catalog=CATALOG)
 
 
+@pytest.mark.usefixtures('log')
 async def test_a_rerun_request_starts_a_blind_checker_from_another_family(
-    project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+    project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
     catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}

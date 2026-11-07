@@ -81,7 +81,7 @@ def test_a_failed_write_leaves_the_record_as_it_was(tmp_path: Path, monkeypatch:
     first, *rest = lab().events
     path = tmp_path / 'record.jsonl'
 
-    def full_disk(file: object) -> None:
+    def full_disk(_: object) -> None:
         raise OSError(28, 'No space left on device')
 
     with RecordFile(path) as record:
