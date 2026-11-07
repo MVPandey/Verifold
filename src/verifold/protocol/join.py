@@ -107,3 +107,5 @@ class Update(Record):
     threads: tuple[Thread, ...] = ()
     agents: tuple[Agent, ...] = ()
     other_posts: int = 0
+    ends_at: AwareDatetime | None = None
+    """When the lab ends. At that time Verifold stops the agents' turns. `None` means no time limit."""

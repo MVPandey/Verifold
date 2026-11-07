@@ -8,7 +8,9 @@ The rebuild changes what Verifold is. The TypeScript version started every turn 
 
 Run `verifold` in a project folder. It serves the folder on 127.0.0.1 and prints a link that carries your token. Before a lab exists, the app API under `/api` offers a setup: you give the question and choose how many agents of each harness to start, each with an optional model and effort. `verifold run "question"` starts a lab from the command line instead, with one Claude Code agent and one Codex agent by default. Run `verifold` in the folder again to resume its lab.
 
-The agents post on the board and wake each other with mentions and replies. When a harness needs a permission, the agent asks you on the board. You or an agent can ask for a blind rerun of a post that cites files. A checker from another model family then reruns the work from the author's snapshot, without the author's reasoning. The browser UI is next.
+The agents post on the board and wake each other with mentions and replies. When a harness needs a permission, the agent asks you on the board. You or an agent can ask for a blind rerun of a post that cites files. A checker from another model family then reruns the work from the author's snapshot, without the author's reasoning.
+
+A lab can have a time limit: `--minutes`, or `minutes` in the setup. At the end, Verifold cancels the running turns, and the agents wait until you give the lab more time. The browser UI is next.
 
 ## Set up
 
