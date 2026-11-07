@@ -5,15 +5,37 @@ import httpx2
 import pytest
 from pydantic import SecretStr
 
+from verifold.protocol.app import HarnessOption, SetupView, StartRequest
 from verifold.protocol.events import TurnSummary
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import FileEvidence
 from verifold.protocol.usage import Usage
 from verifold.server.activity import Activity
 from verifold.server.app_api import _changes, app_api
+from verifold.server.errors import LabExists, SetupRejected
 from verifold.server.lab import Lab
 
 TOKEN = 'person-secret'
+START = {'question': 'Is it faster?', 'agents': [{'harness': 'fake', 'count': 2}]}
+
+
+class Host:
+    """A stand-in for the process that runs the folder's lab. It records each start request."""
+
+    def __init__(self, lab: Lab | None) -> None:
+        self.lab = lab
+        self.started: list[StartRequest] = []
+
+    def setup(self) -> SetupView:
+        harnesses = (HarnessOption(name='fake', family='test', available=True),)
+        return SetupView(harnesses=harnesses, question=self.lab.board.opened.question if self.lab else None)
+
+    async def start(self, request: StartRequest) -> None:
+        if self.lab:
+            raise LabExists('This folder has a lab already.')
+        if request.agents[0].harness != 'fake':
+            raise SetupRejected('Unknown harness nope.')
+        self.started.append(request)
 
 
 @pytest.fixture
@@ -21,16 +43,48 @@ def activity() -> Activity:
     return Activity()
 
 
+def client_of(host: Host, activity: Activity) -> httpx2.AsyncClient:
+    transport = httpx2.ASGITransport(app=app_api(host, activity, SecretStr(TOKEN)))
+    headers = {'Authorization': f'Bearer {TOKEN}'}
+    return httpx2.AsyncClient(transport=transport, base_url='http://lab', headers=headers)
+
+
 @pytest.fixture
 async def client(lab: Lab, activity: Activity) -> AsyncIterator[httpx2.AsyncClient]:
-    transport = httpx2.ASGITransport(app=app_api(lab, activity, SecretStr(TOKEN)))
-    headers = {'Authorization': f'Bearer {TOKEN}'}
-    async with httpx2.AsyncClient(transport=transport, base_url='http://lab', headers=headers) as client:
+    async with client_of(Host(lab), activity) as client:
         yield client
 
 
+async def test_the_setup_screen_starts_a_lab_once_and_refuses_unknown_harnesses(activity: Activity) -> None:
+    host = Host(None)
+    async with client_of(host, activity) as client:
+        setup = (await client.get('/setup')).json()
+        no_lab = await client.get('/lab')
+        unknown = await client.post('/labs', json={**START, 'agents': [{'harness': 'nope'}]})
+        started = await client.post('/labs', json=START)
+        empty = await client.post('/labs', json={**START, 'question': '  '})
+
+    assert setup == {'harnesses': [{'name': 'fake', 'family': 'test', 'available': True}], 'question': None}
+    assert (no_lab.status_code, no_lab.json()['detail']) == (
+        409,
+        'This folder has no lab yet. Start one from the setup screen.',
+    )
+    assert (unknown.status_code, unknown.json()['detail']) == (400, 'Unknown harness nope.')
+    assert started.status_code == 200
+    assert empty.status_code == 422
+    assert host.started == [StartRequest.model_validate(START)]
+
+
+async def test_a_folder_with_a_lab_refuses_another(client: httpx2.AsyncClient) -> None:
+    setup = (await client.get('/setup')).json()
+    refused = await client.post('/labs', json=START)
+
+    assert setup['question'] == 'Does it hold?'
+    assert (refused.status_code, refused.json()['detail']) == (409, 'This folder has a lab already.')
+
+
 async def test_every_request_needs_the_persons_token(lab: Lab, activity: Activity) -> None:
-    transport = httpx2.ASGITransport(app=app_api(lab, activity, SecretStr(TOKEN)))
+    transport = httpx2.ASGITransport(app=app_api(Host(lab), activity, SecretStr(TOKEN)))
     async with httpx2.AsyncClient(transport=transport, base_url='http://lab') as anonymous:
         refused = await anonymous.get('/lab')
         wrong = await anonymous.get('/lab', headers={'Authorization': 'Bearer nope'})
@@ -106,7 +160,7 @@ async def test_the_person_asks_for_a_rerun_of_a_post_with_evidence(client: httpx
 
 
 async def test_the_event_stream_says_when_the_lab_or_an_agent_changes(lab: Lab, activity: Activity) -> None:
-    changes = _changes(lab, activity)
+    changes = _changes(Host(lab), activity)
     first = asyncio.ensure_future(anext(changes))
     await asyncio.sleep(0.01)
     await activity.set('bo', 'working')
@@ -120,3 +174,14 @@ async def test_the_event_stream_says_when_the_lab_or_an_agent_changes(lab: Lab, 
 
     assert second_activity == {'event': 'change', 'data': f'{{"seq": {lab.board.seq - 1}, "activity": 1}}'}
     assert second_post['data'] == f'{{"seq": {lab.board.seq}, "activity": 1}}'
+
+
+async def test_before_a_lab_starts_the_event_stream_follows_the_activity(activity: Activity) -> None:
+    changes = _changes(Host(None), activity)
+    first = asyncio.ensure_future(anext(changes))
+    await asyncio.sleep(0.01)
+    await activity.set('agent-1', 'starting')
+    change = await first
+    await changes.aclose()
+
+    assert change == {'event': 'change', 'data': '{"seq": 0, "activity": 1}'}
