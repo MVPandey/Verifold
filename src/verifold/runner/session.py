@@ -80,7 +80,7 @@ class SessionOptions(Record):
 
 
 class TurnResult(Record):
-    """What a harness reported about one message: why it stopped, the tokens, and the cost, when it reports one."""
+    """What a harness reported for one message: why it stopped, the tokens, and the cost if it reports one."""
 
     stop_reason: str
     usage: Usage
@@ -89,9 +89,10 @@ class TurnResult(Record):
 
 class _Client(acp.Client):
     """
-    The client side of the ACP connection: permission requests and the running cost.
+    The client side of the ACP connection. It decides permission requests and tracks the running cost.
 
-    Verifold offers no file or terminal methods, so it keeps the protocol's defaults for them.
+    Verifold offers no files, terminals, or forms. The agent learns that from the capabilities in `initialize`, and a
+    call to one of them gets a "method not found" error.
     """
 
     def __init__(self, hooks: SessionHooks) -> None:
@@ -123,7 +124,6 @@ class _Client(acp.Client):
         if isinstance(update, schema.ToolCallStart) and update.title:
             await self._hooks.step(update.title)
 
-    # Verifold offers no files, terminals, or forms. The agent learns that from the capabilities in `initialize`.
     @override
     async def write_text_file(self, session_id: str, path: str, content: str, **_: object) -> None:
         _unsupported('fs/write_text_file')
