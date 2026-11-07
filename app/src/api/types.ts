@@ -1,0 +1,171 @@
+/**
+ * The app API's messages, as the server's Pydantic schemas define them in `protocol/app.py`, `protocol/join.py`,
+ * and `protocol/posts.py`. Field names stay in the server's snake case, so a payload needs no translation.
+ */
+
+export type AgentState = 'starting' | 'working' | 'waiting' | 'idle' | 'stopped';
+export type PostKind =
+  'message' | 'result' | 'ask' | 'answer' | 'objection' | 'proposal' | 'check' | 'ruled_out';
+export type Standing = 'open' | 'checked' | 'held_up' | 'disputed' | 'conceded';
+
+export interface ModelSpec {
+  readonly family: string;
+  readonly name: string | null;
+  readonly effort: string | null;
+}
+
+export interface Agent {
+  readonly id: string;
+  readonly name: string;
+  readonly harness: string;
+  readonly model: ModelSpec;
+  readonly role: string;
+  readonly brief: string;
+  readonly recruited_by: string | null;
+  /** For a blind checker: the post that it reruns. */
+  readonly checks: string | null;
+}
+
+export interface AgentActivity {
+  readonly state: AgentState;
+  /** The latest step that the harness reported, such as a tool call's title. */
+  readonly detail: string;
+  readonly at: string | null;
+}
+
+export interface Usage {
+  readonly input_tokens: number;
+  readonly cached_input_tokens: number;
+  readonly output_tokens: number;
+}
+
+export interface AgentView {
+  readonly agent: Agent;
+  readonly activity: AgentActivity;
+  readonly turns: number;
+  readonly posts: number;
+  readonly usage: Usage;
+  /** `null` when the harness reports tokens only. */
+  readonly cost_usd: number | null;
+}
+
+export interface LabView {
+  readonly question: string;
+  readonly opened_at: string;
+  readonly seq: number;
+  readonly agents: readonly AgentView[];
+  readonly threads: number;
+  readonly posts: number;
+  readonly needs_you: number;
+  readonly ends_at: string | null;
+  readonly out_of_time: boolean;
+}
+
+export interface HarnessOption {
+  readonly name: string;
+  readonly title: string;
+  readonly family: string;
+  readonly available: boolean;
+}
+
+export interface SetupView {
+  readonly folder: string;
+  readonly harnesses: readonly HarnessOption[];
+  /** The question of the folder's lab, or `null` before a lab starts. */
+  readonly question: string | null;
+}
+
+export interface AgentChoice {
+  readonly harness: string;
+  readonly count: number;
+  readonly model?: string;
+  readonly effort?: string;
+}
+
+export interface StartRequest {
+  readonly question: string;
+  readonly agents: readonly AgentChoice[];
+  readonly auto_mode: boolean;
+  readonly minutes?: number;
+}
+
+export interface Thread {
+  readonly id: string;
+  readonly title: string;
+  readonly opened_by: string;
+}
+
+export interface FileEvidence {
+  readonly type: 'file';
+  readonly path: string;
+  readonly commit: string;
+}
+
+interface PostBase {
+  readonly id: string;
+  readonly thread: string;
+  readonly author: string;
+  /** The headline that readers scan. */
+  readonly text: string;
+  /** The detail. */
+  readonly body: string;
+  readonly reply_to: string | null;
+  readonly mentions: readonly string[];
+  readonly evidence: readonly FileEvidence[];
+}
+
+export type Post =
+  | (PostBase & { readonly kind: 'message' | 'result' | 'objection' | 'proposal' | 'ruled_out' })
+  | (PostBase & { readonly kind: 'ask'; readonly choices: readonly string[] })
+  | (PostBase & { readonly kind: 'answer'; readonly accepts: boolean })
+  | (PostBase & {
+      readonly kind: 'check';
+      readonly outcome: 'holds' | 'fails';
+      readonly method: 'rerun' | 'code_read' | 'ratings';
+    });
+
+export interface PostView {
+  readonly seq: number;
+  readonly at: string;
+  readonly post: Post;
+  readonly standing: Standing;
+}
+
+export interface ThreadView {
+  readonly thread: Thread;
+  readonly watching: boolean;
+  readonly posts: readonly PostView[];
+}
+
+export interface PostLine {
+  readonly seq: number;
+  readonly at: string;
+  readonly author: string;
+  readonly kind: PostKind;
+  readonly text: string;
+}
+
+export interface ThreadSummary {
+  readonly thread: Thread;
+  readonly watching: boolean;
+  readonly posts: number;
+  readonly last_at: string;
+  readonly latest: PostLine | null;
+  readonly disputed: number;
+  readonly checked: number;
+  readonly not_checked: number;
+  readonly open_asks: number;
+}
+
+export interface PostRequest {
+  readonly kind: PostKind;
+  readonly text: string;
+  readonly body?: string;
+  readonly thread?: string;
+  readonly new_thread?: string;
+  readonly reply_to?: string;
+  readonly mentions?: readonly string[];
+}
+
+/** The person's own author ID on the board. */
+export const PERSON = 'person';
