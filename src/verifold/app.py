@@ -55,7 +55,7 @@ class Host:
         members: Members,
         activity: Activity,
     ) -> None:
-        """Prepare a host for the record of the folder at `project`. Call `attach` before a lab starts."""
+        """Prepare a host for the folder at `project`. Call `attach` before a lab starts."""
         self._project = project
         self._record = record
         self._catalog = catalog
@@ -127,7 +127,7 @@ class Host:
             member, setup = await self._seat(lab, agent, start_message(lab.board, agent, lab_file))
             await self._activity.set(agent.id, 'starting')
             group.create_task(AgentLoop(member, setup, settings, activity=self._activity).run())
-        crew = _crew(workers, self._catalog, lab.board.opened.auto_mode)
+        crew = _crew(workers, self._catalog, auto_mode=lab.board.opened.auto_mode)
         if crew:
             group.create_task(Reruns(lab, self._members, self._project, crew, self._supervise).run())
 
@@ -140,7 +140,7 @@ class Host:
             folder=folder,
             log=self._project / LAB_FOLDER / 'logs' / f'{agent.id}.log',
             token=self._members.add(member),
-            options=_options(agent, lab.board.opened.auto_mode),
+            options=_options(agent, auto_mode=lab.board.opened.auto_mode),
             start=start,
         )
         return member, setup
@@ -213,14 +213,16 @@ def _agent(number: int, harness: HarnessEntry, model: str | None, effort: str | 
     )
 
 
-def _options(agent: Agent, auto_mode: bool) -> SessionOptions:
+def _options(agent: Agent, *, auto_mode: bool) -> SessionOptions:
     return SessionOptions(model=agent.model.name, effort=agent.model.effort, auto_mode=auto_mode)
 
 
-def _crew(agents: tuple[Agent, ...], catalog: Mapping[str, HarnessEntry], auto_mode: bool) -> Crew:
-    # One entry for each harness of the lab, with the options of its first agent. Checkers come from this crew.
+def _crew(agents: tuple[Agent, ...], catalog: Mapping[str, HarnessEntry], *, auto_mode: bool) -> Crew:
+    # One entry per harness, in the order that the agents joined, with the options of the harness's first agent.
+    # Checkers come from this crew.
     first = {agent.harness: agent for agent in reversed(agents)}
-    return tuple((catalog[name], _options(agent, auto_mode)) for name, agent in reversed(first.items()))
+    harnesses = dict.fromkeys(agent.harness for agent in agents)
+    return tuple((catalog[name], _options(first[name], auto_mode=auto_mode)) for name in harnesses)
 
 
 async def _bound_port(server: uvicorn.Server) -> int:
