@@ -34,8 +34,13 @@ line-length = 120
 extend-exclude = [".agents"]
 
 [tool.ruff.lint]
-# UP keeps modern syntax, ANN requires annotations, PERF flags hand-built loops that a comprehension replaces.
-extend-select = ["D", "RUF", "PT", "TID", "I", "PL", "UP", "ANN", "PERF"]
+# UP keeps modern syntax, ANN requires annotations, and PERF flags hand-built loops that a comprehension replaces.
+# B, SIM, RET, PIE, C4, and FURB catch likely bugs and needless code. ARG flags unused parameters, FBT positional
+# flags, and ERA commented-out code.
+extend-select = [
+    "D", "RUF", "PT", "TID", "I", "PL", "UP", "ANN", "PERF",
+    "B", "SIM", "RET", "PIE", "C4", "FURB", "PTH", "ARG", "FBT", "ERA",
+]
 ignore = ["D203", "D212"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
