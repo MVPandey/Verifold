@@ -1,16 +1,17 @@
 # License scope
 
-The MIT license in `LICENSE` applies to the Verifold harness and its supporting files:
+The MIT license in `LICENSE` applies to Verifold's code and its supporting files:
 
-- `src/cli.ts`, and the source folders `src/app/`, `src/cli/`, `src/core/`, `src/desk/`, `src/legacy/`, `src/protocol/`, and `src/server/`.
-- The shared browser modules in `src/ui/`.
-- The compiled equivalents included in the `verifold` npm package.
-- `scripts/`, `tests/`, `.githooks/`, and `.github/`.
-- Root package, build, lint, formatting, and validation configuration files.
-- `README.md`, `SECURITY.md`, this file, and documentation about the CLI in `docs/`.
+- The Python package in `src/verifold/`, apart from the files that the paragraphs below name.
+- The app's source in `app/`, apart from its brand symbol and its font.
+- `tests/`, `hatch_build.py`, `.githooks/`, and `.github/`.
+- The package, build, lint, formatting, and validation configuration files.
+- `README.md`, `SECURITY.md`, and this file.
 
-The visual brand assets in `public/assets/` are not covered by this MIT grant. Other repository files outside the list above remain reserved unless they contain a separate license notice.
+Other files in the repository remain reserved unless they carry their own license notice.
 
-The Manrope font in `public/fonts/` retains its SIL Open Font License. Third-party components retain their own licenses. The npm package includes DOMPurify as `dist-cli/desk/vendor/purify.js` under its Apache License 2.0, with that license in `dist-cli/desk/vendor/purify.LICENSE.txt`. It includes idiomorph as `dist-cli/desk/vendor/idiomorph.js` under its Zero-Clause BSD license, with that license in `dist-cli/desk/vendor/idiomorph.LICENSE.txt`. The npm package also includes xterm.js and its fit add-on as `dist-cli/desk/vendor/xterm.js`, `xterm.css`, and `addon-fit.js` under their MIT licenses, with those licenses beside them. The app in `dist-cli/app/` bundles React, React DOM, and their scheduler under their MIT licenses, with that license in `dist-cli/app/react.LICENSE.txt`. The `marked` dependency and the optional `@lydell/node-pty` dependency keep their MIT licenses.
+The MIT grant does not grant rights to Verifold trademarks. The brand symbol, `app/public/verifold-symbol.webp`, remains reserved. The built app in `src/verifold/web/`, and so the `verifold-ai` package, includes a copy of it as the app's icon.
 
-The MIT grant does not grant rights to Verifold trademarks. The published npm package includes the brand symbol, in the old desk and as the app's icon in `dist-cli/app/assets/`. That symbol remains reserved. The bundled Manrope font includes its SIL Open Font License. The app's build in `dist-cli/app/` holds its own copy of the font, with that license in `dist-cli/app/OFL-Manrope.txt`.
+The Manrope font in `app/public/fonts/` keeps its SIL Open Font License, which is beside it in `OFL-Manrope.txt`. The built app has copies of both.
+
+Third-party components keep their own licenses. The built app bundles React and React DOM under their MIT licenses, and the build writes their license texts to `licenses.md` in the built app. The Python dependencies keep their own licenses.

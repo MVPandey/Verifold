@@ -1,0 +1,63 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+
+import { renderToStaticMarkup } from 'react-dom/server';
+
+import type { Api } from '../src/api/client.ts';
+import type { ThreadView } from '../src/api/types.ts';
+import { SetupPage } from '../src/ui/SetupPage.tsx';
+import { PostItem } from '../src/ui/ThreadPage.tsx';
+import { HARNESSES, agentView, postView, result } from './fixtures.ts';
+
+const HOSTILE =
+  '<img src="https://evil.example/x.png" onerror="alert(1)"> ![x](https://evil.example/y.png)';
+
+describe('agent text', () => {
+  it('reaches the page as text, so it cannot load an image or run a script', () => {
+    const post = result('p-1', {
+      text: HOSTILE,
+      body: `First paragraph ${HOSTILE}\n\nSecond paragraph`,
+      evidence: [{ type: 'file', path: 'bench<b>.py', commit: '9a41d07'.padEnd(40, '0') }],
+    });
+    const thread: ThreadView = {
+      thread: { id: 't-1', title: 'A', opened_by: 'agent-1' },
+      watching: false,
+      posts: [postView(post)],
+    };
+
+    const html = renderToStaticMarkup(
+      <PostItem
+        item={postView(post)}
+        thread={thread}
+        agents={[agentView('agent-1')]}
+        harnesses={HARNESSES}
+        waitsForYou={false}
+        onRerun={() => Promise.resolve()}
+      />,
+    );
+
+    assert.equal(html.includes('<img'), false);
+    assert.ok(html.includes('bench&lt;b&gt;.py'));
+    assert.ok(html.includes('&lt;img src=&quot;https://evil.example/x.png&quot;'));
+    assert.ok(html.includes('<p>Second paragraph</p>'));
+    assert.ok(html.includes('Not checked'));
+    assert.ok(html.includes('9a41d07'));
+  });
+});
+
+describe('the setup screen', () => {
+  it('offers one agent of each harness that this computer has', () => {
+    const api = {} as Api;
+    const html = renderToStaticMarkup(
+      <SetupPage
+        api={api}
+        setup={{ folder: '~/code/sort-bench', harnesses: HARNESSES, question: null }}
+        onStarted={() => undefined}
+      />,
+    );
+
+    assert.ok(html.includes('~/code/sort-bench'));
+    assert.ok(html.includes('Not found on this computer'));
+    assert.ok(html.includes('Start lab with 1 agent'));
+  });
+});

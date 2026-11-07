@@ -1,27 +1,32 @@
-.DS_Store
-.idea/
-**/node_modules/
-**/dist/
-**/.env
-**/.env.*
-**/.npmrc
-!**/.env.example
-**/coverage/
-**/test-results/
-# Existing independent website repository.
-/verifold-website/
+# Python packaging and install artifacts
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
 
+# Tool caches and coverage output
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Private agent work (research, plans, coordination). Never commit it.
+/.local/
+
+# Lab records of a project that runs Verifold in this folder
 /.verifold/
-/dist-cli/
 
-# Local founder background and full design export archive.
-/verifold-context.md
-/verifold-research.md
-/brand/
+.DS_Store
 
-# Private agent research, planning, reviews, and coordination memory.
-/.local/agents/
-/docs/research/
-/docs/agent/
-/docs/product-direction.md
-/docs/landscape-cli-plan.md
+# The built app that `make app` writes, and the app's local dependencies and test build
+/src/verifold/web/
+/app/node_modules/
+/app/.test-build/
