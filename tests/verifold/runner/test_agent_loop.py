@@ -1,6 +1,7 @@
 import asyncio
 import json
 from contextlib import suppress
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ from verifold.protocol.join import PostRequest
 from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.git import git
-from verifold.runner.messages import DOORBELL
+from verifold.runner.messages import DOORBELL, more_time_message
 from verifold.server.activity import Activity
 
 
@@ -163,3 +164,55 @@ async def test_the_loop_reports_what_the_agent_is_doing(served: ServedBoard, tmp
     assert states[0] == ('working', '')
     assert ('working', 'verifold.post') in states
     assert states[-2:] == [('idle', ''), ('stopped', '')]
+
+
+async def test_running_out_of_time_stops_the_turn_until_the_person_gives_more_time(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_SLOW', '1')
+    lab = served.lab
+    activity = Recorded()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
+    try:
+        await until(lambda: bool(calls(log, 'prompt')))
+        await lab.set_time_left(timedelta(0))
+        await lab.run_out_of_time()
+        await until(lambda: activity.of('bo').state == 'waiting')
+        assert [turn.error for turn in lab.board.turns] == ['The lab ran out of time, so Verifold cancelled the turn.']
+        assert calls(log, 'cancel')
+
+        await lab.set_time_left(timedelta(hours=1))
+        await until(lambda: len(calls(log, 'prompt')) == 2)
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+    assert calls(log, 'prompt')[1]['text'] == more_time_message(lab.board.ends_at)
+    assert activity.of('bo').detail == ''
+    assert ('waiting', 'The lab is out of time. The person can give it more.') in [
+        (state, detail) for _, state, detail in activity.changes
+    ]
+
+
+async def test_an_agent_out_of_time_wakes_for_its_posts_only_after_more_time(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        await lab.set_time_left(timedelta(0))
+        await lab.run_out_of_time()
+        await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'person')
+        await asyncio.sleep(0.3)
+        assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
+
+        await lab.set_time_left(timedelta(hours=1))
+        await until(lambda: len(lab.board.turns) == 2)
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL]

@@ -1,5 +1,6 @@
-"""The two messages that Verifold sends an agent: the start of its work, and the doorbell."""
+"""The messages that Verifold sends an agent: the start of its work, the doorbell, and more time."""
 
+from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path
 
@@ -25,9 +26,21 @@ def start_message(board: Board, agent: Agent, lab_file: Path) -> str:
         f'You are {agent.name} in a Verifold lab. The other agents: {peers or "none yet"}.',
         f"The `verifold` tools are the lab's shared board. {lab_file} describes how the lab works.",
     ]
+    if board.ends_at:
+        lines.append(f'The lab ends at {_utc(board.ends_at)}, unless the person gives it more time.')
     if agent.role or agent.brief:
         lines.append(f'Your starting role: {agent.role or "open"}. {agent.brief}'.rstrip())
     return '\n'.join(lines)
+
+
+def more_time_message(ends_at: datetime | None) -> str:
+    """Return the message that resumes an agent whose turn stopped when the lab ran out of time."""
+    until = f' The lab now ends at {_utc(ends_at)}.' if ends_at else ''
+    return f'Your last turn stopped when the lab ran out of time. The person gave the lab more time.{until}'
+
+
+def _utc(at: datetime) -> str:
+    return f'{at.astimezone(UTC):%Y-%m-%d %H:%M} UTC'
 
 
 def rerun_message(post: Post) -> str:

@@ -9,6 +9,7 @@ the person on this local server.
 import asyncio
 import secrets
 from collections.abc import AsyncGenerator, Callable
+from datetime import timedelta
 from typing import Annotated, Protocol
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -16,7 +17,7 @@ from fastapi.responses import JSONResponse
 from pydantic import SecretStr, ValidationError
 from sse_starlette import EventSourceResponse
 
-from verifold.protocol.app import AgentView, LabView, RerunRequest, SetupView, StartRequest
+from verifold.protocol.app import AgentView, LabView, RerunRequest, SetupView, StartRequest, TimeRequest
 from verifold.protocol.events import RerunRequested
 from verifold.protocol.ids import PERSON, ThreadId
 from verifold.protocol.join import PostRequest, PostView, ThreadSummary, ThreadView
@@ -78,17 +79,14 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
         return host.setup()
 
     @api.get('/lab', dependencies=[authorized])
-    async def lab_view() -> LabView:
-        board = current().board
-        return LabView(
-            question=board.opened.question,
-            opened_at=board.opened.at,
-            seq=board.seq,
-            agents=tuple(_agent_view(board, activity, entry.agent.id) for entry in board.agents),
-            threads=len(board.threads),
-            posts=len(board.posts),
-            needs_you=len(needs_person(board)),
-        )
+    async def lab() -> LabView:
+        return _lab_view(current().board, activity)
+
+    @api.post('/time', dependencies=[authorized])
+    async def time(request: TimeRequest) -> LabView:
+        running = current()
+        await running.set_time_left(timedelta(minutes=request.minutes))
+        return _lab_view(running.board, activity)
 
     @api.get('/threads', dependencies=[authorized])
     async def threads() -> tuple[ThreadSummary, ...]:
@@ -130,6 +128,20 @@ def _authorize(person_token: SecretStr) -> Callable[[Request, str | None], None]
             raise HTTPException(status_code=401, detail='Open the lab with the link that verifold printed.')
 
     return check
+
+
+def _lab_view(board: Board, activity: Activity) -> LabView:
+    return LabView(
+        question=board.opened.question,
+        opened_at=board.opened.at,
+        seq=board.seq,
+        agents=tuple(_agent_view(board, activity, entry.agent.id) for entry in board.agents),
+        threads=len(board.threads),
+        posts=len(board.posts),
+        needs_you=len(needs_person(board)),
+        ends_at=board.ends_at,
+        out_of_time=board.out_of_time,
+    )
 
 
 def _agent_view(board: Board, activity: Activity, agent_id: str) -> AgentView:

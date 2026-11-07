@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Callable
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Self
 
 from verifold.protocol.agents import Agent
@@ -14,6 +14,8 @@ from verifold.protocol.events import (
     Posted,
     RerunRequested,
     ThreadOpened,
+    TimeRanOut,
+    TimeSet,
     TurnEnded,
     TurnSummary,
     WatchSet,
@@ -63,9 +65,17 @@ class Lab:
         return cls(record, record.read(), clock)
 
     @classmethod
-    def create(cls, record: RecordFile, question: str, *, auto_mode: bool = True, clock: Clock = utc_now) -> Self:
+    def create(
+        cls,
+        record: RecordFile,
+        question: str,
+        *,
+        auto_mode: bool = True,
+        time_left: timedelta | None = None,
+        clock: Clock = utc_now,
+    ) -> Self:
         """
-        Open a new lab on `question` in an empty record.
+        Open a new lab on `question` in an empty record. With `time_left`, the lab ends that long after it opens.
 
         Raises:
             LabExists: The record holds a lab already.
@@ -73,7 +83,9 @@ class Lab:
         """
         if record.read():
             raise LabExists('This record holds a lab already. Load it instead.')
-        opened = LabOpened(seq=1, at=clock(), question=question, auto_mode=auto_mode)
+        at = clock()
+        ends_at = at + time_left if time_left is not None else None
+        opened = LabOpened(seq=1, at=at, question=question, auto_mode=auto_mode, ends_at=ends_at)
         record.append(opened)
         return cls(record, (opened,), clock)
 
@@ -118,6 +130,24 @@ class Lab:
             lambda _, seq, at: TurnEnded.model_validate(turn.model_dump() | {'seq': seq, 'at': at})
         )
         return board.turns[-1]
+
+    def now(self) -> datetime:
+        """Return the time on the lab's clock, the clock that dates its events."""
+        return self._clock()
+
+    async def set_time_left(self, left: timedelta) -> None:
+        """Record that the lab ends `left` from now. A `left` of zero stops the agents now."""
+        await self._commit(lambda _, seq, at: TimeSet(seq=seq, at=at, ends_at=at + left))
+
+    async def run_out_of_time(self) -> None:
+        """
+        Record that the lab reached its end.
+
+        Raises:
+            RejectedEvent: The lab has time left, has no time limit, or ran out of time already.
+
+        """
+        await self._commit(lambda _, seq, at: TimeRanOut(seq=seq, at=at))
 
     async def wait_for_change(self, after: int, timeout: float) -> None:
         """Return once the board has an event after `after`, or after `timeout` seconds."""
