@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Callable, Mapping
+from datetime import timedelta
 from functools import partial
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from verifold.server.errors import LabExists, SetupRejected
 from verifold.server.join import Members, join_server
 from verifold.server.lab import Lab
 from verifold.server.member import Member
+from verifold.server.timekeeper import keep_time
 from verifold.society.board import Board
 from verifold.store.record_file import RecordFile
 
@@ -97,7 +99,8 @@ class Host:
         unknown = sorted({choice.harness for choice in request.agents} - set(self._catalog))
         if unknown:
             raise SetupRejected(f'Unknown harness {", ".join(unknown)}. Choose from: {", ".join(self._catalog)}.')
-        lab = Lab.create(self._record, request.question, auto_mode=request.auto_mode)
+        time_left = timedelta(minutes=request.minutes) if request.minutes else None
+        lab = Lab.create(self._record, request.question, auto_mode=request.auto_mode, time_left=time_left)
         self._lab = lab
         chosen = [choice for choice in request.agents for _ in range(choice.count)]
         for number, choice in enumerate(chosen, start=1):
@@ -116,6 +119,7 @@ class Host:
         lab_file = self._project / LAB_FOLDER / 'LAB.md'
         if not lab_file.exists():
             lab_file.write_text(LAB_TEMPLATE)
+        group.create_task(keep_time(lab))
         workers = tuple(
             entry.agent for entry in lab.board.agents if not entry.agent.checks and entry.agent.harness in self._catalog
         )

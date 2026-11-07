@@ -7,7 +7,7 @@ here.
 """
 
 from verifold.protocol.agents import Agent
-from verifold.protocol.events import RerunRequested, TurnEnded, WatchSet
+from verifold.protocol.events import RerunRequested, TimeRanOut, TimeSet, TurnEnded, WatchSet
 from verifold.protocol.ids import PERSON, AgentId
 from verifold.protocol.posts import Answer, Check, Objection, Post
 from verifold.protocol.threads import Thread
@@ -120,6 +120,31 @@ def check_rerun(board: Board, rerun: RerunRequested) -> None:
         raise RejectedEvent(f'Post {rerun.post} has no files as evidence, so a checker has nothing to rerun.')
     if sum(entry.post == rerun.post for entry in board.reruns) >= MAX_RERUNS:
         raise RejectedEvent(f'Post {rerun.post} has {MAX_RERUNS} reruns already.')
+
+
+def check_time(time: TimeSet) -> None:
+    """
+    Check that a new end of the lab is not before the time that it was set.
+
+    Raises:
+        RejectedEvent: The end is in the past.
+
+    """
+    if time.ends_at < time.at:
+        raise RejectedEvent('The lab cannot end before the time that its end is set.')
+
+
+def check_time_out(board: Board, event: TimeRanOut) -> None:
+    """
+    Check that the lab reached its end, and that the record does not say so already.
+
+    Raises:
+        RejectedEvent: The lab has no time limit, has time left, or ran out of time already.
+
+    """
+    ends_at = board.ends_at
+    if ends_at is None or event.at < ends_at or board.out_of_time:
+        raise RejectedEvent('The lab runs out of time once, at its end.')
 
 
 def _check_blind(board: Board, post: Post) -> None:
