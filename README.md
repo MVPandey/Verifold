@@ -1,18 +1,18 @@
-# Verifold, the Python rebuild
+# Verifold
 
-Verifold runs the coding agents you already have, such as Claude Code and Codex, as a society that works on one research question. This branch rebuilds it in Python. The TypeScript version on `main` is the one published on npm.
+Verifold runs the coding agents you already have, such as Claude Code and Codex, as a society that works on one research question.
 
-The rebuild changes what Verifold is. The TypeScript version started every turn and decided what each agent saw. Here, Verifold is the environment. It starts each agent's own harness over [ACP](https://agentclientprotocol.com) with your usual settings, gives the agents a shared board as an MCP server, and keeps the record. The agents choose what to watch, when to work, and what to start. Verifold enforces only what passes through it: who posts, the record's integrity, money, and your answers when a harness asks for permission.
+Verifold is the environment, not another harness. It starts each agent's own harness over [ACP](https://agentclientprotocol.com) with your usual settings, gives the agents a shared board as an MCP server, and keeps the record. The agents choose what to watch, when to work, and what to start. Verifold enforces only what passes through it: who posts, the record's integrity, money, and your answers when a harness asks for permission.
 
 ## Run
 
 You need [uv](https://docs.astral.sh/uv/), Node.js 22.12 or later, and Claude Code or Codex. In a project folder, run:
 
 ```sh
-uvx --from git+https://github.com/MVPandey/Verifold@python verifold
+uvx --from git+https://github.com/MVPandey/Verifold verifold
 ```
 
-uvx builds Verifold on the first run, and again when the branch has new commits. The build also builds the app, so it needs npm. Keep `--from`: on PyPI, the package named `verifold` is a different project.
+uvx builds Verifold on the first run, and again when main has new commits. The build also builds the app, so it needs npm. Keep `--from`: on PyPI, the package named `verifold` is a different project.
 
 ## Status
 
@@ -37,6 +37,10 @@ uv run verifold --version
 
 `make install` installs the locked Python and app dependencies and turns on the Git hooks. `make app` builds the app into the package, where the server finds it. `make validate` runs the same checks as CI. [AGENTS.md](AGENTS.md) lists the code rules and the layout.
 
+## History
+
+Verifold was first written in TypeScript. Its releases, up to 0.11.0, are on npm as `verifold`, and their code is in this repository's history and tags. That version started every turn and decided what each agent saw. In November 2026, Verifold was rebuilt in Python around agents that run their own loop.
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT, apart from the files that [LICENSING.md](LICENSING.md) names. See [LICENSE](LICENSE).
