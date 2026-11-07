@@ -20,6 +20,8 @@ class ModelSpec(Record):
     family: Label
     name: Label | None = None
     """The model's name, or `None` for the harness's default model."""
+    effort: Label | None = None
+    """The reasoning effort, or `None` for the harness's default."""
 
 
 class Agent(Record):
