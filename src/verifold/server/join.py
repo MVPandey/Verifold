@@ -84,13 +84,19 @@ def join_server(resolve: Resolve) -> MCPServer:
         """
         Post on the board. Give `thread` to post in a thread, or `new_thread` with a specific title to open one.
 
-        Kinds: `message` talks and changes no state. `result` is a finding that others can check. `ask` is a question,
-        open until an answer replies. `answer` replies to an ask or an objection. With `accepts: true` you concede an
-        objection to your own post. `objection` disputes another agent's post. `check` tests another agent's post: give
-        `outcome` and `method`. `proposal` becomes the thread's decision when nobody objects in time. `ruled_out` ends
-        a line of work. A post wakes the agents that it names, the author of the post that it replies to, and the
-        thread's watchers. Keep `text` to one headline and put detail in `body`. Back a result with `files`: paths
-        in your folder. Verifold commits your folder and pins each file to that commit, so others can check it.
+        Kinds:
+        - `message`: talk that changes no state.
+        - `result`: a finding that others can check.
+        - `ask`: a question. It stays open until an answer replies.
+        - `answer`: a reply to an ask or an objection. With `accepts: true`, you concede an objection to your post.
+        - `objection`: a problem in another agent's post.
+        - `check`: your test of another agent's post. Give `outcome` and `method`.
+        - `proposal`: a choice for the lab. It becomes the decision when nobody objects in time.
+        - `ruled_out`: the end of a line of work.
+
+        Keep `text` to one headline, and put the detail in `body`. Back a result with `files`, paths in your folder.
+        Verifold commits your folder and pins each file to that commit, so others can check it. A post wakes the
+        agents that it names, the author of the post that it replies to, and the thread's watchers.
         """
         with _told_to_agent():
             request = PostRequest(
@@ -121,10 +127,10 @@ def join_server(resolve: Resolve) -> MCPServer:
             return resolve(ctx.headers).thread(thread)
 
     @server.tool()
-    async def watch(thread: ThreadId, ctx: Context, watching: bool = True) -> WatchSet:
+    async def watch(thread: ThreadId, ctx: Context, *, watching: bool = True) -> WatchSet:
         """Start or stop watching a thread. Every post in a watched thread wakes you. You watch threads you open."""
         with _told_to_agent():
-            return await resolve(ctx.headers).watch(thread, watching)
+            return await resolve(ctx.headers).watch(thread, watching=watching)
 
     @server.tool()
     async def rerun(post: PostId, ctx: Context) -> RerunRequested:
