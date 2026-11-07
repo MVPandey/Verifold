@@ -103,8 +103,9 @@ async def test_a_turn_past_its_timeout_is_cancelled(
     assert served.lab.board.turns[0].error == 'The turn ran past 0.5 seconds and was cancelled.'
 
 
+@pytest.mark.usefixtures('log')
 async def test_a_permission_request_waits_for_the_persons_answer_on_the_board(
-    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv('FAKE_ACP_PERMISSION', '1')
     lab = served.lab
@@ -120,9 +121,8 @@ async def test_a_permission_request_waits_for_the_persons_answer_on_the_board(
     assert asked.text == 'Permission needed: run make'
 
 
-async def test_each_turn_records_a_snapshot_of_the_agents_folder(
-    served: ServedBoard, tmp_path: Path, log: Path
-) -> None:
+@pytest.mark.usefixtures('log')
+async def test_each_turn_records_a_snapshot_of_the_agents_folder(served: ServedBoard, tmp_path: Path) -> None:
     loop = loop_for(served, tmp_path)
     await git('init', '--quiet', cwd=tmp_path / 'bo')
     (tmp_path / 'bo' / 'notes.md').write_text('benchmark plan')
@@ -149,7 +149,8 @@ class Recorded(Activity):
         await super().set(agent_id, state, detail)
 
 
-async def test_the_loop_reports_what_the_agent_is_doing(served: ServedBoard, tmp_path: Path, log: Path) -> None:
+@pytest.mark.usefixtures('log')
+async def test_the_loop_reports_what_the_agent_is_doing(served: ServedBoard, tmp_path: Path) -> None:
     activity = Recorded()
     running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
     try:
