@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from verifold.protocol.join import PostRequest
-from verifold.protocol.posts import Answer, Check, Message
+from verifold.protocol.posts import Answer, Ask, Check, Message
 
 
 def test_a_request_becomes_a_post_of_its_kind() -> None:
@@ -27,6 +27,17 @@ def test_an_answer_keeps_accepts() -> None:
 
     assert isinstance(post, Answer)
     assert post.accepts
+
+
+def test_an_ask_keeps_its_choices_and_other_kinds_refuse_them() -> None:
+    ask = PostRequest(kind='ask', text='Which data?', thread='t-1', choices=('Random', 'Sorted')).to_post(
+        'p-1', 't-1', 'a'
+    )
+
+    assert isinstance(ask, Ask)
+    assert ask.choices == ('Random', 'Sorted')
+    with pytest.raises(ValidationError, match='choices'):
+        PostRequest(kind='message', text='Hi.', thread='t-1', choices=('Yes',)).to_post('p-2', 't-1', 'ada')
 
 
 def test_fields_that_the_kind_does_not_use_are_rejected() -> None:

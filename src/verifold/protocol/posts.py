@@ -14,12 +14,17 @@ from pydantic import AfterValidator, Field, StringConstraints
 from verifold.protocol.ids import AgentId, CommitId, PostId, ThreadId
 from verifold.protocol.record import Record
 
-type Headline = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
+MAX_HEADLINE = 300
+MAX_CHOICES = 10
+
+type Headline = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_HEADLINE)]
 type Body = Annotated[str, StringConstraints(max_length=20_000)]
 type PostKind = Literal['message', 'result', 'ask', 'answer', 'objection', 'proposal', 'check', 'ruled_out']
 """The values of `kind` across the `Post` union."""
 type Outcome = Literal['holds', 'fails']
 type CheckMethod = Literal['rerun', 'code_read', 'ratings']
+type Choice = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+"""An answer that an ask offers."""
 
 
 def _inside_the_folder(path: str) -> str:
@@ -67,9 +72,10 @@ class Result(PostBase):
 
 
 class Ask(PostBase):
-    """A question. It stays open until an answer replies to it."""
+    """A question. It stays open until an answer replies to it. `choices` offers answers to pick from."""
 
     kind: Literal['ask'] = 'ask'
+    choices: tuple[Choice, ...] = Field(default=(), max_length=MAX_CHOICES)
 
 
 class Answer(PostBase):
