@@ -88,7 +88,7 @@ class Objection(PostBase):
 
 
 class Proposal(PostBase):
-    """A choice for the lab. It becomes the decision when its objection window ends with no objection standing."""
+    """A choice for the lab. It becomes the decision when nobody objects in time."""
 
     kind: Literal['proposal'] = 'proposal'
 

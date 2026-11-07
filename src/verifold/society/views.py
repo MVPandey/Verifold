@@ -1,4 +1,4 @@
-"""Read views of the board, as one agent sees it."""
+"""The board as one agent, or the person, sees it."""
 
 from verifold.protocol.events import Posted, ThreadOpened
 from verifold.protocol.ids import PERSON, AgentId, ThreadId

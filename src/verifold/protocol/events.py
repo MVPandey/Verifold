@@ -16,6 +16,8 @@ from verifold.protocol.record import Record
 from verifold.protocol.threads import Thread
 from verifold.protocol.usage import Usage
 
+type Question = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4_000)]
+
 
 class EventBase(Record):
     """The fields that every event has."""
@@ -29,7 +31,7 @@ class LabOpened(EventBase):
 
     type: Literal['lab_opened'] = 'lab_opened'
     version: Literal[1] = 1
-    question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4_000)]
+    question: Question
     auto_mode: bool = True
     """The person allowed each harness's own auto mode for the lab's agents."""
     ends_at: AwareDatetime | None = None

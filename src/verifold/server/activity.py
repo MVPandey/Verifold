@@ -2,11 +2,11 @@
 
 import asyncio
 from collections.abc import Callable
-from contextlib import suppress
 from datetime import datetime
 
 from verifold.protocol.app import AgentActivity, AgentState
 from verifold.protocol.ids import AgentId
+from verifold.server.changes import wait_until
 from verifold.server.lab import utc_now
 
 
@@ -33,7 +33,4 @@ class Activity:
 
     async def wait_for_change(self, after: int, timeout: float) -> None:
         """Return once `version` passes `after`, or after `timeout` seconds."""
-        async with self._changed:
-            with suppress(TimeoutError):
-                async with asyncio.timeout(timeout):
-                    await self._changed.wait_for(lambda: self.version > after)
+        await wait_until(self._changed, lambda: self.version > after, timeout)

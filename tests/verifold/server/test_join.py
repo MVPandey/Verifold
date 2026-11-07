@@ -61,7 +61,7 @@ async def test_a_broken_rule_comes_back_to_the_agent_as_a_readable_error(lab: La
     assert 'is your own' in str(result.content)
 
 
-async def test_an_unknown_agent_gets_a_readable_error(lab: Lab) -> None:
+async def test_an_unknown_agent_gets_a_readable_error() -> None:
     async with Client(join_server(Members().resolve)) as client:
         result = await client.call_tool('threads', {})
 
