@@ -3,6 +3,7 @@
 from collections.abc import Iterable
 from dataclasses import replace
 from functools import reduce
+from typing import assert_never
 
 from verifold.protocol.events import (
     AgentJoined,
@@ -30,7 +31,7 @@ from verifold.society.rules import (
 )
 
 
-# One return for each type of event keeps the match flat.
+# One return per event type keeps the match flat.
 def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911
     """
     Return the board after one more event.
@@ -68,6 +69,8 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911
         case TimeRanOut():
             check_time_out(board, event)
             return replace(board, seq=event.seq, times=(*board.times, event))
+        case _:
+            assert_never(event)
 
 
 def fold(events: Iterable[Event]) -> Board:
