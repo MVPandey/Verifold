@@ -19,3 +19,11 @@ class EvidenceRejected(ServerError):
 
 class BlindCheck(ServerError):
     """A blind checker tried to read the board, which would show it the author's reasoning."""
+
+
+class NoLab(ServerError):
+    """The person asked for the lab before the folder had one."""
+
+
+class SetupRejected(ServerError):
+    """The person's setup cannot start a lab. The message says what to change."""

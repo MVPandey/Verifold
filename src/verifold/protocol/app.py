@@ -1,10 +1,10 @@
 """The app protocol: what the person's UI reads from a lab, and what it sends."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, Field, StringConstraints
 
-from verifold.protocol.agents import Agent
+from verifold.protocol.agents import Agent, Label
 from verifold.protocol.ids import PostId
 from verifold.protocol.record import Record
 from verifold.protocol.usage import Usage
@@ -50,3 +50,36 @@ class RerunRequest(Record):
     """The person asks for a blind rerun of a post."""
 
     post: PostId
+
+
+class HarnessOption(Record):
+    """A harness that the setup screen offers, and whether this computer has it."""
+
+    name: Label
+    family: Label
+    available: bool
+
+
+class SetupView(Record):
+    """What the setup screen needs: the harnesses, and the lab that the folder holds, if any."""
+
+    harnesses: tuple[HarnessOption, ...]
+    question: str | None = None
+    """The question of the lab in this folder, or `None` when the folder has no lab yet."""
+
+
+class AgentChoice(Record):
+    """How many agents of one harness to start, and with which model and effort."""
+
+    harness: Label
+    count: int = Field(default=1, ge=1, le=20)
+    model: Label | None = None
+    effort: Label | None = None
+
+
+class StartRequest(Record):
+    """The person starts a lab from the setup screen."""
+
+    question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4_000)]
+    agents: tuple[AgentChoice, ...] = Field(min_length=1)
+    auto_mode: bool = True

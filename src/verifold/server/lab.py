@@ -63,7 +63,7 @@ class Lab:
         return cls(record, record.read(), clock)
 
     @classmethod
-    def create(cls, record: RecordFile, question: str, clock: Clock = utc_now) -> Self:
+    def create(cls, record: RecordFile, question: str, *, auto_mode: bool = True, clock: Clock = utc_now) -> Self:
         """
         Open a new lab on `question` in an empty record.
 
@@ -73,7 +73,7 @@ class Lab:
         """
         if record.read():
             raise LabExists('This record holds a lab already. Load it instead.')
-        opened = LabOpened(seq=1, at=clock(), question=question)
+        opened = LabOpened(seq=1, at=clock(), question=question, auto_mode=auto_mode)
         record.append(opened)
         return cls(record, (opened,), clock)
 
