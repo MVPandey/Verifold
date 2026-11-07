@@ -42,10 +42,8 @@ class LoopSettings(Record):
     mcp_url: str
     turn_timeout: float = Field(default=2 * 3_600, gt=0)
     """Seconds that one turn may run before Verifold cancels it."""
-    idle_wait: float = Field(default=3_600, gt=0)
-    """Seconds of each wait for a post while the agent's turn is over."""
     max_failures: int = Field(default=3, ge=1)
-    """Failures of the harness in a row after which the agent stops."""
+    """How many harness failures in a row stop the agent."""
     retry_after: float = Field(default=30, ge=0)
     """Seconds before the first restart of a failed harness. Each later restart waits twice as long."""
 
@@ -161,7 +159,7 @@ class AgentLoop:
     async def _stop_when_out_of_time(self, limit: asyncio.Timeout) -> None:
         lab = self._lab
         while not lab.board.out_of_time:
-            await lab.wait_for_change(lab.board.seq, self._settings.idle_wait)
+            await lab.wait_for_change(lab.board.seq)
         limit.reschedule(asyncio.get_running_loop().time())
 
     async def _while_out_of_time(self) -> None:
@@ -170,7 +168,7 @@ class AgentLoop:
             return
         await self._report('waiting', 'The lab is out of time. The person can give it more.')
         while lab.board.out_of_time:
-            await lab.wait_for_change(lab.board.seq, self._settings.idle_wait)
+            await lab.wait_for_change(lab.board.seq)
 
     async def _record(self, started: float, usage: Usage, cost_usd: float | None, error: str | None) -> None:
         agent_id = self._setup.agent.id
@@ -186,7 +184,7 @@ class AgentLoop:
     async def _news(self) -> None:
         agent_id = self._setup.agent.id
         while not update(self._lab.board, agent_id, max(self._notified, self._member.seen)).posts:
-            await self._lab.wait_for_change(self._lab.board.seq, self._settings.idle_wait)
+            await self._lab.wait_for_change(self._lab.board.seq)
         self._notified = self._lab.board.seq
 
     async def _permission(self, request: PermissionRequest) -> str | None:

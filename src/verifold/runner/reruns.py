@@ -23,9 +23,7 @@ type Crew = tuple[tuple[HarnessEntry, SessionOptions], ...]
 """The lab's harnesses, each with the options that its agents use."""
 
 type Supervise = Callable[[Member, AgentSetup, Callable[[Board], bool]], Awaitable[None]]
-"""Runs one agent's loop until it is done, as the lab runs its other agents."""
-
-IDLE_WAIT = 3_600.0
+"""Runs one agent's loop until it is done, the same way that the lab runs its other agents."""
 
 
 class Reruns:
@@ -54,7 +52,7 @@ class Reruns:
                     if not _checked(board, _checker_id(request), request.post):
                         group.create_task(self._check(request))
                 started = len(board.reruns)
-                await self._lab.wait_for_change(board.seq, IDLE_WAIT)
+                await self._lab.wait_for_change(board.seq)
 
     async def _check(self, request: RerunRequested) -> None:
         board = self._lab.board
