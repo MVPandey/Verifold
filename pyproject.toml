@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
 
 [project]
 name = "verifold"
@@ -21,12 +21,18 @@ dependencies = [
 [project.scripts]
 verifold = "verifold.cli:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.hatch.build]
+# Git ignores the built app, so the build must name it to pack it. hatch_build.py builds the app when it is missing.
+artifacts = ["src/verifold/web/"]
 
-[tool.setuptools.package-data]
-"verifold" = ["web/**/*"]
-"verifold.runner" = ["LAB.md"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/verifold"]
+
+[tool.hatch.build.targets.sdist]
+# Only these paths, so that a build in a folder with private files never packs them.
+only-include = ["app", "src", "tests", "hatch_build.py"]
+
+[tool.hatch.build.hooks.custom]
 
 [tool.ruff]
 fix = true
@@ -86,6 +92,8 @@ source = ["src/verifold"]
 
 [dependency-groups]
 dev = [
+    # The build backend, so that ty can check hatch_build.py.
+    "hatchling>=1.27,<2",
     "httpx2>=2.16,<3",
     "lefthook>=2.2.2,<3",
     "pytest>=9.1.1,<10",

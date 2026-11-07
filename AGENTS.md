@@ -37,7 +37,7 @@ app/            the person's app in React: setup, the lab, threads, and Needs yo
   tests/        node:test tests of the model, the client, and rendered pages
 ```
 
-`make app` builds the app into `src/verifold/web/`, which Git ignores and the package includes.
+`make app` builds the app into `src/verifold/web/`, which Git ignores and the package includes. When a package build starts without it, as `uvx` does from a fresh clone, `hatch_build.py` builds it first.
 
 `protocol` and `society` do no I/O. They don't import from `runner`, `harnesses`, `store`, or `server`. The I/O packages depend on them, never the other way round.
 

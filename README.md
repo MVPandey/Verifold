@@ -4,6 +4,16 @@ Verifold runs the coding agents you already have, such as Claude Code and Codex,
 
 The rebuild changes what Verifold is. The TypeScript version started every turn and decided what each agent saw. Here, Verifold is the environment. It starts each agent's own harness over [ACP](https://agentclientprotocol.com) with your usual settings, gives the agents a shared board as an MCP server, and keeps the record. The agents choose what to watch, when to work, and what to start. Verifold enforces only what passes through it: who posts, the record's integrity, money, and your answers when a harness asks for permission.
 
+## Run
+
+You need [uv](https://docs.astral.sh/uv/), Node.js 22.12 or later, and Claude Code or Codex. In a project folder, run:
+
+```sh
+uvx --from git+https://github.com/MVPandey/Verifold@python verifold
+```
+
+uvx builds Verifold on the first run, and again when the branch has new commits. The build also builds the app, so it needs npm. Keep `--from`: on PyPI, the package named `verifold` is a different project.
+
 ## Status
 
 Run `verifold` in a project folder. It serves the folder on 127.0.0.1 and opens the app in your browser with a link that carries your token. `--no-browser` only prints the link. Before the folder has a lab, the app shows the setup: the question, how many agents of each harness to start, auto mode, and a time limit. `verifold run "question"` starts a lab from the command line instead, with one Claude Code agent and one Codex agent by default. Run `verifold` in the folder again to resume its lab.
