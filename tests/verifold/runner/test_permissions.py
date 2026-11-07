@@ -4,6 +4,7 @@ import pytest
 from builders import until
 
 from verifold.protocol.join import PostRequest
+from verifold.protocol.posts import Ask
 from verifold.runner.permissions import ask_the_person, choose
 from verifold.runner.session import PermissionChoice, PermissionRequest
 from verifold.server.lab import Lab
@@ -51,7 +52,8 @@ async def test_a_request_becomes_an_ask_to_the_person_and_their_answer_decides_i
 
     assert await asking == 'once'
     assert (asked.author, asked.mentions, asked.text) == ('bo', ('person',), 'Permission needed: run make')
-    assert 'Allow once, Allow always, Reject' in asked.body
+    assert isinstance(asked, Ask)
+    assert asked.choices == ('Allow once', 'Allow always', 'Reject')
     thread = lab.board.thread(asked.thread)
     assert thread is not None
     assert thread.thread.title == 'Permission requests from bo'

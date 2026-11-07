@@ -2,8 +2,8 @@
 
 from verifold.protocol.events import Posted, ThreadOpened
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
-from verifold.protocol.join import PostView, ThreadSummary, ThreadView
-from verifold.protocol.posts import Ask
+from verifold.protocol.join import PostLine, PostView, ThreadSummary, ThreadView
+from verifold.protocol.posts import Ask, Result
 from verifold.society.attention import watches_thread
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
@@ -40,13 +40,25 @@ def thread_summaries(board: Board, agent_id: AgentId) -> tuple[ThreadSummary, ..
 
 
 def _summary(board: Board, agent_id: AgentId, opened: ThreadOpened) -> ThreadSummary:
-    posts = tuple(entry for entry in board.posts if entry.post.thread == opened.thread.id)
+    entries = tuple(entry for entry in board.posts if entry.post.thread == opened.thread.id)
+    results = tuple(standing(board, entry.post.id) for entry in entries if isinstance(entry.post, Result))
+    latest = entries[-1] if entries else None
     return ThreadSummary(
         thread=opened.thread,
         watching=watches_thread(board, agent_id, opened.thread.id),
-        posts=len(posts),
-        last_at=posts[-1].at if posts else opened.at,
+        posts=len(entries),
+        last_at=latest.at if latest else opened.at,
+        latest=_line(latest) if latest else None,
+        disputed=results.count('disputed'),
+        checked=sum(state in {'checked', 'held_up'} for state in results),
+        not_checked=results.count('open'),
+        open_asks=sum(isinstance(entry.post, Ask) and not is_answered(board, entry.post.id) for entry in entries),
     )
+
+
+def _line(entry: Posted) -> PostLine:
+    post = entry.post
+    return PostLine(seq=entry.seq, at=entry.at, author=post.author, kind=post.kind, text=post.text)
 
 
 def needs_person(board: Board) -> tuple[PostView, ...]:

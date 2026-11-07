@@ -4,7 +4,7 @@ import re
 
 from verifold.protocol.ids import PERSON
 from verifold.protocol.join import PostRequest
-from verifold.protocol.posts import Answer
+from verifold.protocol.posts import MAX_HEADLINE, Answer
 from verifold.runner.session import PermissionChoice, PermissionRequest
 from verifold.server.member import Member
 
@@ -17,16 +17,15 @@ async def ask_the_person(member: Member, request: PermissionRequest) -> str | No
     """
     Post the request as an ask to the person, wait for the person's answer, and return the chosen option's ID.
 
-    The ask goes in the agent's own "Permission requests" thread. The person can name an option, or say allow or deny.
-    An answer that matches no option rejects the action.
+    The ask goes in the agent's own "Permission requests" thread, with the harness's options as its choices. The person
+    can pick an option or answer in their own words. An answer that matches no option rejects the action.
     """
-    names = ', '.join(choice.name for choice in request.choices)
     thread = _permission_thread(member)
     asked = await member.post(
         PostRequest(
             kind='ask',
-            text=f'Permission needed: {request.title}',
-            body=f'Reply with one of: {names}.',
+            text=f'Permission needed: {request.title}'[:MAX_HEADLINE],
+            choices=tuple(choice.name for choice in request.choices),
             mentions=(PERSON,),
             thread=thread,
             new_thread=None if thread else _thread_title(member),
