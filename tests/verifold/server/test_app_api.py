@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
+from datetime import timedelta
 
 import httpx2
 import pytest
@@ -185,3 +186,16 @@ async def test_before_a_lab_starts_the_event_stream_follows_the_activity(activit
     await changes.aclose()
 
     assert change == {'event': 'change', 'data': '{"seq": 0, "activity": 1}'}
+
+
+async def test_the_person_sets_how_long_the_agents_may_still_work(client: httpx2.AsyncClient, lab: Lab) -> None:
+    stopping = (await client.post('/time', json={'minutes': 0})).json()
+    await lab.run_out_of_time()
+    out = (await client.get('/lab')).json()
+    more = (await client.post('/time', json={'minutes': 30})).json()
+    refused = await client.post('/time', json={'minutes': -1})
+
+    assert (stopping['ends_at'] is not None, stopping['out_of_time'], out['out_of_time']) == (True, False, True)
+    assert more['out_of_time'] is False
+    assert lab.board.ends_at == lab.board.times[-1].at + timedelta(minutes=30)
+    assert refused.status_code == 422

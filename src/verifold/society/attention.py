@@ -50,4 +50,5 @@ def update(board: Board, agent_id: AgentId, after: int) -> Update:
         ),
         agents=tuple(entry.agent for entry in board.agents if entry.seq > after and entry.agent.id != agent_id),
         other_posts=len(others) - len(woken),
+        ends_at=board.ends_at,
     )

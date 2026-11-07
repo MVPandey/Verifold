@@ -9,6 +9,9 @@ from verifold.protocol.ids import PostId
 from verifold.protocol.record import Record
 from verifold.protocol.usage import Usage
 
+MAX_MINUTES = 7 * 24 * 60
+"""The longest time that the person can give a lab at once: one week."""
+
 type AgentState = Literal['starting', 'working', 'waiting', 'idle', 'stopped']
 """`waiting` means the agent's harness waits for the person, as with a permission request."""
 
@@ -44,6 +47,10 @@ class LabView(Record):
     threads: int
     posts: int
     needs_you: int
+    ends_at: AwareDatetime | None = None
+    """When the agents stop. `None` means no time limit."""
+    out_of_time: bool = False
+    """The lab reached its end. Its agents wait until the person gives it more time."""
 
 
 class RerunRequest(Record):
@@ -83,3 +90,11 @@ class StartRequest(Record):
     question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4_000)]
     agents: tuple[AgentChoice, ...] = Field(min_length=1)
     auto_mode: bool = True
+    minutes: int | None = Field(default=None, ge=1, le=MAX_MINUTES)
+    """How long the agents may work. `None` means no time limit."""
+
+
+class TimeRequest(Record):
+    """The person sets how long the lab's agents may still work, from now. Zero stops them now."""
+
+    minutes: int = Field(ge=0, le=MAX_MINUTES)

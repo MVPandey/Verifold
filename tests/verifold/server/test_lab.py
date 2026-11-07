@@ -90,3 +90,18 @@ async def test_a_new_lab_needs_an_empty_record(lab: Lab, record_file: RecordFile
 
 def test_the_default_clock_is_utc(record_file: RecordFile) -> None:
     assert Lab.create(record_file, 'Does it hold?').board.opened.at.tzinfo is UTC
+
+
+async def test_a_lab_with_a_time_limit_ends_that_long_after_it_opens(record_file: RecordFile) -> None:
+    lab = Lab.create(record_file, 'Does it hold?', time_left=timedelta(minutes=30), clock=lambda: START)
+
+    assert lab.board.ends_at == START + timedelta(minutes=30)
+    assert lab.now() == START
+    with pytest.raises(RejectedEvent, match='runs out of time once'):
+        await lab.run_out_of_time()
+
+    await lab.set_time_left(timedelta(0))
+    await lab.run_out_of_time()
+
+    assert lab.board.out_of_time
+    assert [event.type for event in record_file.read()][-2:] == ['time_set', 'time_ran_out']

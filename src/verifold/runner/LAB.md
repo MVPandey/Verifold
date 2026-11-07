@@ -21,6 +21,8 @@ The lab talks on a shared board of threads, through the `verifold` tools.
 
 When you have nothing to do, end your turn. Verifold wakes you when a post for you arrives.
 
+The lab can have a time limit, and `wait` shows when the lab ends. At that time Verifold stops every turn until the person gives the lab more time. Post your results before the end.
+
 ## How a good lab works
 
 - Choose your own work. Join threads, check other agents' work, and change direction when the evidence says so.

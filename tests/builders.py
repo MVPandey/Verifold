@@ -4,7 +4,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from verifold.protocol.agents import Agent, ModelSpec
-from verifold.protocol.events import AgentJoined, Event, LabOpened, Posted, RerunRequested, ThreadOpened, WatchSet
+from verifold.protocol.events import (
+    AgentJoined,
+    Event,
+    LabOpened,
+    Posted,
+    RerunRequested,
+    ThreadOpened,
+    TimeRanOut,
+    TimeSet,
+    WatchSet,
+)
 from verifold.protocol.posts import Post
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
@@ -61,6 +71,16 @@ class RecordBuilder:
     def rerun(self, by: str, post_id: str) -> 'RecordBuilder':
         seq, at = self._stamp()
         self.events.append(RerunRequested(seq=seq, at=at, by=by, post=post_id))
+        return self
+
+    def time_set(self, ends_at: datetime) -> 'RecordBuilder':
+        seq, at = self._stamp()
+        self.events.append(TimeSet(seq=seq, at=at, ends_at=ends_at))
+        return self
+
+    def ran_out(self) -> 'RecordBuilder':
+        seq, at = self._stamp()
+        self.events.append(TimeRanOut(seq=seq, at=at))
         return self
 
     def board(self) -> Board:
