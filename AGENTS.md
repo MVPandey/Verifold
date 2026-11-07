@@ -1,121 +1,102 @@
 # Repository instructions
 
-These instructions apply to the Verifold repository.
-Follow more specific instructions for a nested project when they exist.
-User instructions take precedence over repository guidelines.
+These instructions apply to the whole repository. Instructions from the user take precedence over this file.
 
-## Purpose and boundaries
+## What Verifold is
 
-Verifold coordinates computational research through the user's existing coding harnesses.
-It preserves questions, decisions, evidence, and deliverables across research tasks.
-Verifold picks the model of lab agents and checkers unless the project or the person's profile names one.
-The selected harness owns its credentials, tools, and permissions.
+Verifold runs the coding agents that a person already has, such as Claude Code and Codex, as a society that works on one research question. Agents post in threads, object to weak results, and rerun each other's work blind. The person sets the direction and makes the calls on money, scope, access, and time.
 
-Read the relevant implementation and tests before changing behavior.
-Use README.md for current capabilities.
-Public product documentation and GitHub issues can describe features that do not exist yet.
-Do not present a plan, model report, or interface mockup as an executed capability.
+Verifold is the environment, not a harness. It starts each agent's own harness over ACP with the person's own settings, gives the agent a folder and the board as an MCP server, and keeps the record. It writes no prompts beyond a short start message and a doorbell, and it has no code for a specific harness. A harness is an entry in `harnesses/catalog.py`: its ACP command and the IDs of its options.
+
+Agents decide for themselves what to watch, when to work, which threads to join, and what to start. Code enforces only these limits, at Verifold's own boundary:
+
+- who posts: each agent has its own token
+- the integrity of the record: write-once events, references that exist, nobody checks their own work
+- Held up, which needs a blind rerun by another model family
+- money, which moves only through Verifold's tools
+- the person's choices: auto mode or not, the answers to permission requests, and the power to pause or stop anything
+
+Everything else is a norm in the lab's `LAB.md`, which agents read and enforce on each other with objections. The person's app, in TypeScript and React, sits on top of the society server.
+
+## Layout
+
+```text
+src/verifold/
+  cli.py        the verifold command
+  protocol/     the open specs as schemas: the society record and the join protocol
+  society/      the board: threads, posts, watches, and the rules that turn posts into state
+  runner/       starts agents over ACP and supervises them: sessions, folders, permissions, the doorbell
+  harnesses/    how to start each harness over ACP, as data
+  store/        durable records, kept as files in the project
+  server/       the society server: the app's API, the built app, and the MCP endpoint where agents join
+tests/          mirrors src/
+app/            the person's app in React: setup, the lab, threads, and Needs you
+  src/api/      the app API's messages and client
+  src/model/    what the pages show, as functions without React
+  src/ui/       the pages, and the loader that reads the lab for them
+  tests/        node:test tests of the model, the client, and rendered pages
+```
+
+`make app` builds the app into `src/verifold/web/`, which Git ignores and the package includes. When a package build starts without it, as `uvx` does from a fresh clone, `hatch_build.py` builds it first.
+
+`protocol` and `society` do no I/O. They don't import from `runner`, `harnesses`, `store`, or `server`. The I/O packages depend on them, never the other way round.
 
 ## Required skills
 
-Use the repository editions below so every contributor has the same baseline.
-Read each applicable SKILL.md before the first relevant change.
+Read each applicable SKILL.md before the first change of that kind. The copies in `.agents/skills/` are the versions this repository follows.
 
-| Work                                                                      | Required skill                                             |
-| ------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| JavaScript, TypeScript, CLI, storage, subprocesses, or validation tooling | [node-typescript](.agents/skills/node-typescript/SKILL.md) |
-| Documentation, comments, prompts, errors, and technical explanations      | [asd-ste100](.agents/skills/asd-ste100/SKILL.md)           |
-| Implementation and refactoring                                            | [ponytail](.agents/skills/ponytail/SKILL.md)               |
-| Complexity review after correctness review                                | [ponytail-review](.agents/skills/ponytail-review/SKILL.md) |
+| Work | Skill |
+| --- | --- |
+| Python code, reviews, and package design | `python`, the maintainer's own skill, which this repository doesn't include. Without it, follow the code rules below. |
+| TypeScript and React code in `app/` | [node-typescript](.agents/skills/node-typescript/SKILL.md) |
+| Implementation and refactoring | [ponytail](.agents/skills/ponytail/SKILL.md) |
+| Complexity review after a correctness review | [ponytail-review](.agents/skills/ponytail-review/SKILL.md) |
+| Documentation, comments, prompts, and errors | [asd-ste100](.agents/skills/asd-ste100/SKILL.md), then [humanizer](.agents/skills/humanizer/SKILL.md) |
 
-These are versioned snapshots of the full operating skills, not shortened summaries or automatic mirrors of personal installations.
-The English snapshot includes the installed `asd-ste100` v0.4.0 instructions, rule reference, examples, README, and MIT license.
-The Node.js snapshot includes the installed `node-typescript` v1.1 instructions, engineering references, and complete validation template.
-Its source reference retains official documentation links. Private research comparisons and the personal Python-skill review remain outside the repository snapshot.
-Ponytail and ponytail-review are unmodified upstream skills from [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail/tree/356918eba965ee1eac64bd3a7f0dd02108350de5/skills).
-Both are pinned to commit `356918eba965ee1eac64bd3a7f0dd02108350de5`, with the upstream MIT license included.
-Preserve imported skill content when updating it. Do not replace full instructions with local summaries.
-Keep repository-specific requirements in this file and document any necessary snapshot adjustments here.
-The Node.js validation template is a reference package. It does not replace this repository's runtime pins, dependencies, validation gate, or hooks.
-Update these files through ordinary review when the shared standard changes.
-Do not require a contributor's home directory or a globally installed skill.
+## Code rules
 
-## Private agent work
-
-Keep internal research, source comparisons, review reports, planning conversations, and agent coordination under `.local/agents/`.
-Use its `research/`, `plans/`, and `coordination/` folders as needed. Git ignores this directory.
-Do not commit these records, even with force-add. Do not place them under `docs/` or publish them in issue or PR bodies.
-Public documentation and issues should contain the resulting product behavior, acceptance criteria, and necessary technical explanation only.
-Never link public documentation to ignored private files. Repository skills and coding rules remain versioned in `.agents/skills/` and this file.
-Before creating a report, give each agent its private output path. Check the staged file list before committing.
-
-## Working rules
-
-- Inspect git status before editing. Preserve unrelated work.
-- Implement the requested behavior with the smallest complete change.
-- Reuse existing operations across CLI and UI surfaces.
-- Add abstractions only for a current responsibility, variant, or external dependency.
-- Preserve runtime pins, strict types, module conventions, and public command contracts.
-- Keep authoritative state changes serialized. Preserve evidence when an operation fails.
-- Give background work an owner, limits, cancellation, and a recovery path.
-- Keep private context scoped. Publishing a repository does not authorize publishing research records.
-- Use controlled fixtures for routine tests. Live provider calls require task authorization.
-- Keep the nested verifold-website repository separate unless the task includes it.
-
-## Writing and review
-
-Use direct technical English with concrete subjects and actions.
-Preserve uncertainty, constraints, and exact command names.
-Comments explain intent, invariants, ownership, or non-obvious behavior.
-Remove comments that only restate code.
-
-Before completion, inspect the diff for unnecessary structure and unsupported claims.
-Remove unused scaffolding, duplicate state, generic wrappers, placeholder features, and speculative options added by the change.
-Do not add marketing language, repeated summaries, or invented measurements.
-Do not delete useful explanation merely to meet a word or line count.
-The English skill governs technical prose. The ponytail skill governs code simplicity.
-Preserve code syntax, command names, and protocol literals when applying the English rules.
+- Give every module one responsibility. Keep domain logic free of I/O, HTTP, and environment variables. Adapters own I/O.
+- Define a Pydantic schema for every record, message, and structured output that crosses a boundary: files, the API, MCP, and harness output. Validate at the boundary and pass validated objects inside.
+- Keep schemas extensible. Build them from small models, use a discriminated union where a field selects the kind, and give stored records a schema version.
+- Don't use `Any`, and don't pass structured data as an untyped `dict`. Ruff bans `typing.Any`.
+- Use a comprehension instead of a loop that builds a list or a dict. Ruff's `PERF` rules flag the loop.
+- Look for an existing function before you write one. Delete the code that a change makes unused.
+- Make values immutable: frozen models and dataclasses, updated with `model_copy` or `dataclasses.replace`.
+- Libraries raise exceptions. The server and the CLI own logging and exit codes.
+- Annotate every parameter and return value.
+- Use pytest, keep `tests/` in the same shape as `src/`, and keep coverage at 95% or more. Tests use fake harnesses and never call a live model.
+- In `app/`, show text from agents as text, never as HTML. ESLint refuses `dangerouslySetInnerHTML`, and the server's Content-Security-Policy refuses images and connections to other servers.
 
 ## Validation and Git hooks
 
-Run npm run validate after the final edit.
-The gate checks formatting, lint, types, tests, builds, and the installed package.
-Use separate commands to fix formatting or lint errors.
-Never bypass hooks, skip required tests, or weaken checks to obtain a passing result.
+Run `make install` once in each clone. It installs the locked Python and app environments and points Git at the hooks in `.githooks/`.
 
-The tracked hooks are .githooks/pre-commit and .githooks/pre-push.
-Enable them in each clone with this explicit command:
+- Before a commit, the hooks check the lock file, apply Ruff's fixes and formatting to the code, restage the fixed files, and run `ty`.
+- When a commit changes `app/`, the hooks also run the app's `npm run validate`: Prettier, ESLint, `tsc`, the tests, and the build.
+- Before a push, the hooks run `make validate`: the lock file check, `ruff check --no-fix`, `ruff format --check`, `ty check`, pytest with coverage, and the app's `npm run validate`. CI runs the same command.
 
-```sh
-git config --local core.hooksPath .githooks
-```
+Never bypass a hook or weaken a check to get a pass. Fix the code, or report what blocks it.
 
-Check the setting with git config --get core.hooksPath.
-Installing the npm package must not install Git hooks.
+## Commits
 
-Before a commit:
+- Commit at each working checkpoint, with a Conventional Commits prefix: `feat:`, `fix:`, `test:`, `docs:`, `refactor:`, `chore:`, or `ci:`.
+- Don't add AI attribution: no `Co-Authored-By` lines for tools and no "Generated with" lines in pull requests.
+- Stage only the files that belong to the change.
 
-1. Review the complete intended diff.
-2. Stage only files that belong to the change.
-3. Resolve unstaged changes before invoking the hook.
-4. Preserve unrelated untracked files outside the validation snapshot when necessary.
-5. Let pre-commit run make validate on the snapshot that matches the index.
+## Releases
 
-Before a push:
+On PyPI the package is `verifold-ai`, because `verifold` there is another project. The import and the command stay `verifold`. `DISTRIBUTION` in `src/verifold/__init__.py` holds the PyPI name.
 
-1. Ensure the working tree matches the committed code.
-2. Push the checked-out HEAD.
-3. Let pre-push run make validate again.
-4. Use a branch and pull request when the remote protects main.
+1. Set the new version in `pyproject.toml` in a pull request.
+2. After it merges, tag the merge commit as `v` and the version, such as `v0.12.0`, and push the tag.
+3. `publish.yml` checks that the tag matches the version, builds the package, and publishes it to PyPI through trusted publishing.
 
-Never stage unrelated files to satisfy a hook.
-Restore any temporarily preserved user files after the Git operation.
-Do not commit or push unless the current task authorizes it.
-Local hooks can be bypassed externally. Required CI checks remain the remote enforcement boundary.
+PyPI never takes the same version twice, so a broken release gets a new version.
 
-## Completion report
+## Private work
 
-State what changed and why.
-Report the validation command and result.
-Identify material limitations and checks that did not run.
-Distinguish observed harness behavior from claims made by a model.
+Keep research, plans, reviews, and agent coordination under `.local/agents/`, which Git ignores. Don't commit those records or link to them from public docs.
+
+## Writing
+
+Write docs and comments in plain technical English for a competent reader. Keep the tone objective. Use short sentences in the active voice, one idea to a sentence, and no semicolons or marketing words. Don't define terms that a developer already knows. Then reread the text for signs of AI writing and remove them.

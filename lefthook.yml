@@ -1,0 +1,30 @@
+# The Git hooks. .githooks/ holds the scripts that Git runs, and they run these commands.
+pre-commit:
+  commands:
+    check-lockfile:
+      run: uv lock --check
+      priority: 1
+    lint:
+      run: uv run ruff check
+      glob: "*.py"
+      stage_fixed: true
+      priority: 2
+    format:
+      run: uv run ruff format
+      glob: "*.py"
+      stage_fixed: true
+      priority: 3
+    typecheck:
+      run: uv run ty check
+      glob: "*.py"
+      priority: 4
+    app:
+      # root limits this command to commits that change app/, and runs it there.
+      run: npm run validate
+      root: app/
+      priority: 5
+
+pre-push:
+  commands:
+    validate:
+      run: make validate

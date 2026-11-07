@@ -1,0 +1,115 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+# PyPI's `verifold` is another project. The import and the command stay `verifold`.
+name = "verifold-ai"
+# The TypeScript releases on npm ended at 0.11.0, so the Python versions continue from there.
+version = "0.12.0"
+description = "An orchestrator that lets coding agents work as a research society."
+readme = "README.md"
+license = "MIT"
+# LICENSING.md says what the MIT grant leaves out: the brand symbol, the font, and bundled packages.
+license-files = ["LICENSE", "LICENSING.md"]
+requires-python = ">=3.13"
+dependencies = [
+    "agent-client-protocol>=0.12.1,<0.13",
+    "fastapi>=0.120,<1",
+    "mcp>=2.3,<3",
+    "pydantic>=2.12,<3",
+    "sse-starlette>=3.6,<4",
+    "uvicorn>=0.54,<1",
+]
+
+[project.urls]
+Homepage = "https://verifold.ai"
+Repository = "https://github.com/MVPandey/Verifold"
+
+[project.scripts]
+verifold = "verifold.cli:main"
+# The same command under the package's name, so that `uvx verifold-ai` finds it.
+verifold-ai = "verifold.cli:main"
+
+[tool.hatch.build]
+# Git ignores the built app, so the build must name it to pack it. hatch_build.py builds the app when it is missing.
+artifacts = ["src/verifold/web/"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/verifold"]
+
+[tool.hatch.build.targets.sdist]
+# Only these paths, so that a build in a folder with private files never packs them.
+only-include = ["app", "src", "tests", "hatch_build.py"]
+
+[tool.hatch.build.hooks.custom]
+
+[tool.ruff]
+fix = true
+line-length = 120
+# The skill snapshots are kept exactly as imported, so Ruff leaves their code examples alone.
+extend-exclude = [".agents"]
+
+[tool.ruff.lint]
+# UP keeps modern syntax, ANN requires annotations, and PERF flags hand-built loops that a comprehension replaces.
+# B, SIM, RET, PIE, C4, and FURB catch likely bugs and needless code. ARG flags unused parameters, FBT positional
+# flags, and ERA commented-out code.
+extend-select = [
+    "D", "RUF", "PT", "TID", "I", "PL", "UP", "ANN", "PERF",
+    "B", "SIM", "RET", "PIE", "C4", "FURB", "PTH", "ARG", "FBT", "ERA",
+]
+ignore = ["D203", "D212"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"typing.Any".msg = "Define a schema or a precise type instead of Any."
+
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/**/*.py" = ["D", "PLR"]
+# The post tool's parameters mirror PostRequest's fields, because harnesses fill a flat tool schema more reliably.
+"src/verifold/server/join.py" = ["PLR0913"]
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+docstring-code-format = true
+
+[tool.ty.environment]
+# Tests import shared builders from tests/, the same path that pytest adds.
+extra-paths = ["tests"]
+
+[tool.ty.terminal]
+output-format = "concise"
+
+[tool.ty.rules]
+unused-ignore-comment = "error"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = [
+    "--import-mode=importlib",
+    "--cov=src/verifold",
+    "--cov-report=term-missing",
+    "--cov-fail-under=95",
+    "--maxfail=3",
+    "--durations=5",
+]
+
+[tool.coverage.run]
+source = ["src/verifold"]
+
+[dependency-groups]
+dev = [
+    # The build backend, so that ty can check hatch_build.py.
+    "hatchling>=1.27,<2",
+    "httpx2>=2.16,<3",
+    "lefthook>=2.2.2,<3",
+    "pytest>=9.1.1,<10",
+    "pytest-asyncio>=1.2,<2",
+    "pytest-cov>=7.1.0,<8",
+    "pytest-mock>=3.17.0,<4",
+    "ruff>=0.17.2,<1",
+    "ty>=0.0.91,<1",
+]
