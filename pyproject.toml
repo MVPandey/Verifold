@@ -3,11 +3,15 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "verifold"
-version = "0.1.0"
+# PyPI's `verifold` is another project. The import and the command stay `verifold`.
+name = "verifold-ai"
+# The TypeScript releases on npm ended at 0.11.0, so the Python versions continue from there.
+version = "0.12.0"
 description = "An orchestrator that lets coding agents work as a research society."
 readme = "README.md"
 license = "MIT"
+# LICENSING.md says what the MIT grant leaves out: the brand symbol, the font, and bundled packages.
+license-files = ["LICENSE", "LICENSING.md"]
 requires-python = ">=3.13"
 dependencies = [
     "agent-client-protocol>=0.12.1,<0.13",
@@ -18,8 +22,14 @@ dependencies = [
     "uvicorn>=0.54,<1",
 ]
 
+[project.urls]
+Homepage = "https://verifold.ai"
+Repository = "https://github.com/MVPandey/Verifold"
+
 [project.scripts]
 verifold = "verifold.cli:main"
+# The same command under the package's name, so that `uvx verifold-ai` finds it.
+verifold-ai = "verifold.cli:main"
 
 [tool.hatch.build]
 # Git ignores the built app, so the build must name it to pack it. hatch_build.py builds the app when it is missing.
