@@ -3,6 +3,9 @@ on:
   push:
   pull_request:
   merge_group:
+  # Weekly, so that a new advisory shows even in a week without pushes.
+  schedule:
+    - cron: '31 8 * * 1'
 permissions:
   contents: read
 jobs:
@@ -40,3 +43,18 @@ jobs:
       - run: unzip -l dist/*.whl | grep -F verifold/web/index.html
       - run: uvx --from dist/*.whl verifold --version
       - run: uvx --from dist/*.whl verifold-ai --version
+  audit:
+    # Known advisories in the locked dependencies: the app's npm packages, and the Python package's dependencies.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - run: npm --prefix app audit --audit-level=high
+      - run: uv export --frozen --no-dev --no-emit-project --output-file requirements.txt
+      - run: uvx pip-audit@2.10.1 --requirement requirements.txt --disable-pip --strict
