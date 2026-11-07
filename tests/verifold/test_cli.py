@@ -66,7 +66,7 @@ def test_run_defaults_to_one_agent_of_each_harness_and_ask_me_turns_auto_mode_of
 
 
 def stand_in(monkeypatch: pytest.MonkeyPatch, error: BaseException) -> None:
-    async def serve(project: Path, start: StartRequest | None = None, **_: object) -> None:
+    async def serve(*_: object, **__: object) -> None:
         raise error
 
     monkeypatch.setattr('verifold.cli.serve', serve)
@@ -114,7 +114,7 @@ def test_ctrl_c_and_sigterm_stop_the_server_after_its_cleanup(
 ) -> None:
     cancelled: list[bool] = []
 
-    async def serve(project: Path, start: StartRequest | None = None, **_: object) -> None:
+    async def serve(*_: object, **__: object) -> None:
         os.kill(os.getpid(), stop)
         try:
             await asyncio.sleep(60)

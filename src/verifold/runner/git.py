@@ -15,7 +15,7 @@ class GitError(RunnerError):
 
 async def git(*args: str, cwd: Path, env: Mapping[str, str] | None = None) -> str:
     """
-    Run `git` with `args` in `cwd`, and return its standard output without surrounding whitespace.
+    Run `git` with `args` in `cwd`, and return its stripped standard output.
 
     `env` adds variables to the clean environment, such as a temporary `GIT_INDEX_FILE`.
 
@@ -38,10 +38,9 @@ async def git(*args: str, cwd: Path, env: Mapping[str, str] | None = None) -> st
     return output.decode().strip()
 
 
-async def has_commits(folder: Path) -> bool:
-    """Return whether `folder` is inside a Git repository that has at least one commit."""
+async def commit_of(folder: Path, ref: str) -> str | None:
+    """Return the commit that `ref` names in the repository at `folder`, or `None` when it names no commit."""
     try:
-        await git('rev-parse', '--verify', '--quiet', 'HEAD', cwd=folder)
+        return await git('rev-parse', '--verify', '--quiet', ref, cwd=folder)
     except GitError:
-        return False
-    return True
+        return None

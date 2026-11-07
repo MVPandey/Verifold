@@ -1,10 +1,11 @@
 """The app protocol: what the person's UI reads from a lab, and what it sends."""
 
-from typing import Annotated, Literal
+from typing import Literal
 
-from pydantic import AwareDatetime, Field, StringConstraints
+from pydantic import AwareDatetime, Field
 
 from verifold.protocol.agents import Agent, Label
+from verifold.protocol.events import Question
 from verifold.protocol.ids import PostId
 from verifold.protocol.record import Record
 from verifold.protocol.usage import Usage
@@ -13,7 +14,7 @@ MAX_MINUTES = 7 * 24 * 60
 """The longest time that the person can give a lab at once: one week."""
 
 type AgentState = Literal['starting', 'working', 'waiting', 'idle', 'stopped']
-"""`waiting` means the agent's harness waits for the person, as with a permission request."""
+"""`waiting` means that the harness waits for the person, for example for a permission answer."""
 
 
 class AgentActivity(Record):
@@ -87,7 +88,7 @@ class AgentChoice(Record):
 class StartRequest(Record):
     """The person starts a lab from the setup screen."""
 
-    question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4_000)]
+    question: Question
     agents: tuple[AgentChoice, ...] = Field(min_length=1)
     auto_mode: bool = True
     minutes: int | None = Field(default=None, ge=1, le=MAX_MINUTES)
@@ -95,6 +96,6 @@ class StartRequest(Record):
 
 
 class TimeRequest(Record):
-    """The person sets how long the lab's agents may still work, from now. Zero stops them now."""
+    """The person sets how much longer the agents may work, counted from now. Zero stops them now."""
 
     minutes: int = Field(ge=0, le=MAX_MINUTES)

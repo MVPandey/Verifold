@@ -81,15 +81,15 @@ class Member:
         if joined and joined.agent.checks:
             raise BlindCheck(f'You rerun {joined.agent.checks} blind, so you cannot read the board.')
 
-    async def watch(self, thread_id: ThreadId, watching: bool) -> WatchSet:
+    async def watch(self, thread_id: ThreadId, *, watching: bool) -> WatchSet:
         """Start or stop watching a thread."""
-        return await self._lab.watch(self.agent_id, thread_id, watching)
+        return await self._lab.watch(self.agent_id, thread_id, watching=watching)
 
     async def wait(self, timeout: float) -> Update:
         """
         Return what happened since the agent last looked, once a post wakes it or `timeout` seconds pass.
 
-        Posts that do not wake the agent are counted in the update, but they do not end the wait.
+        Posts that don't wake the agent count toward the update's summary, but they don't end the wait.
         """
         self._check_not_blind()
         loop = asyncio.get_running_loop()

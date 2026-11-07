@@ -8,9 +8,6 @@ from verifold.protocol.posts import Answer
 from verifold.runner.session import PermissionChoice, PermissionRequest
 from verifold.server.member import Member
 
-IDLE_WAIT = 3_600.0
-"""Seconds of each wait for the person's answer. The harness waits as long as the person takes."""
-
 _POSITIVE = frozenset({'allow', 'approve', 'go', 'ok', 'okay', 'sure', 'yes'})
 _NEGATIVE = frozenset({'cancel', 'deny', "don't", 'dont', 'never', 'no', 'not', 'refuse', 'reject', 'stop'})
 _WORDS = re.compile(r"[a-z]+(?:'[a-z]+)?")
@@ -98,4 +95,4 @@ async def _answer(member: Member, ask_id: str) -> str:
         )
         if answer is not None:
             return answer
-        await lab.wait_for_change(lab.board.seq, IDLE_WAIT)
+        await lab.wait_for_change(lab.board.seq)

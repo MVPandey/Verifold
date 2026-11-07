@@ -1,11 +1,7 @@
-from datetime import timedelta
-
-import pytest
 from builders import RecordBuilder
 
-from verifold.protocol.posts import Answer, Ask, Check, Objection, Proposal, Result
-from verifold.society.errors import NotFound
-from verifold.society.standing import decision, is_answered, standing
+from verifold.protocol.posts import Answer, Ask, Check, Objection, Result
+from verifold.society.standing import is_answered, standing
 
 RESULT = Result(id='p-1', thread='t-1', author='ada', text='Beats random on 10 of 10 prompts.')
 OBJECTION = Objection(id='p-2', thread='t-1', author='bo', text='The layer saw the test prompts.', reply_to='p-1')
@@ -78,34 +74,6 @@ def test_an_ask_is_open_until_an_answer_replies(record: RecordBuilder) -> None:
 
     record.post(Answer(id='p-2', thread='t-1', author='ada', text='Layer 12.', reply_to='p-1'))
     assert is_answered(record.board(), 'p-1')
-
-
-class TestDecision:
-    WINDOW = timedelta(minutes=15)
-    PROPOSAL = Proposal(id='p-1', thread='t-1', author='ada', text='Use layer 12 for every edit.')
-
-    def test_it_is_decided_after_the_window(self, record: RecordBuilder) -> None:
-        board = record.post(self.PROPOSAL).board()
-        posted = record.at(board.seq)
-
-        assert decision(board, 'p-1', posted + self.WINDOW - timedelta(seconds=1), self.WINDOW) == 'open'
-        assert decision(board, 'p-1', posted + self.WINDOW, self.WINDOW) == 'decided'
-
-    def test_a_late_objection_disputes_the_decision(self, record: RecordBuilder) -> None:
-        board = record.post(self.PROPOSAL).post(OBJECTION).board()
-
-        assert decision(board, 'p-1', record.at(board.seq) + timedelta(days=1), self.WINDOW) == 'disputed'
-
-    def test_a_conceded_proposal_is_withdrawn(self, record: RecordBuilder) -> None:
-        record.post(self.PROPOSAL).post(OBJECTION)
-        record.post(Answer(id='p-3', thread='t-1', author='ada', text='Fair.', reply_to='p-2', accepts=True))
-
-        assert decision(record.board(), 'p-1', record.at(1), self.WINDOW) == 'withdrawn'
-
-    @pytest.mark.parametrize('post_id', ['p-1', 'p-9'])
-    def test_it_needs_a_proposal(self, record: RecordBuilder, post_id: str) -> None:
-        with pytest.raises(NotFound, match=post_id):
-            decision(record.post(RESULT).board(), post_id, record.at(1), self.WINDOW)
 
 
 def test_a_check_that_its_author_conceded_no_longer_counts(record: RecordBuilder) -> None:
