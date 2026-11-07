@@ -18,6 +18,11 @@ pre-commit:
       run: uv run ty check
       glob: "*.py"
       priority: 4
+    app:
+      # root limits this command to commits that change app/, and runs it there.
+      run: npm run validate
+      root: app/
+      priority: 5
 
 pre-push:
   commands:
