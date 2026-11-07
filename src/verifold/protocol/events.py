@@ -30,6 +30,8 @@ class LabOpened(EventBase):
     type: Literal['lab_opened'] = 'lab_opened'
     version: Literal[1] = 1
     question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4_000)]
+    auto_mode: bool = True
+    """The person allowed each harness's own auto mode for the lab's agents."""
 
 
 class AgentJoined(EventBase):

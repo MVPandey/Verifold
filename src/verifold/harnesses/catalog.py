@@ -1,5 +1,6 @@
 """How to start each harness over ACP, and the IDs of the options that Verifold can set."""
 
+import shutil
 from collections.abc import Mapping
 from types import MappingProxyType
 
@@ -17,6 +18,8 @@ class HarnessEntry(Record):
     """
 
     name: Label
+    executable: str
+    """The harness's own command, which must be on the PATH for the harness to run."""
     command: tuple[str, ...] = Field(min_length=1)
     family: Label
     """The model family of the harness's default models. Blind checks compare families."""
@@ -32,6 +35,7 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
         for entry in (
             HarnessEntry(
                 name='claude-code',
+                executable='claude',
                 command=('npx', '-y', '@agentclientprotocol/claude-agent-acp@0.101.0'),
                 family='anthropic',
                 effort_option='effort',
@@ -39,6 +43,7 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
             ),
             HarnessEntry(
                 name='codex',
+                executable='codex',
                 command=('npx', '-y', '@agentclientprotocol/codex-acp@2.5.0'),
                 family='openai',
                 effort_option='reasoning_effort',
@@ -48,3 +53,8 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
     }
 )
 """The harnesses that a lab can name, with the adapter versions that Verifold was tested against."""
+
+
+def available(entry: HarnessEntry) -> bool:
+    """Return whether this computer has the harness and the command that starts its ACP agent."""
+    return shutil.which(entry.executable) is not None and shutil.which(entry.command[0]) is not None
