@@ -83,7 +83,7 @@ async def test_the_person_starts_a_lab_from_the_setup_screen(
 
     assert before == {
         'folder': '~/project',
-        'harnesses': [{'name': 'fake', 'family': 'test', 'available': True}],
+        'harnesses': [{'name': 'fake', 'title': 'Fake', 'family': 'test', 'available': True}],
         'question': None,
     }
     assert (no_lab.status_code, started.status_code, again.status_code) == (409, 200, 409)
