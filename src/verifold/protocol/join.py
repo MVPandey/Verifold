@@ -2,12 +2,23 @@
 
 from typing import Literal, Self
 
-from pydantic import AwareDatetime, TypeAdapter, model_validator
+from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
 
 from verifold.protocol.agents import Agent
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import AgentId, PostId, ThreadId
-from verifold.protocol.posts import Body, CheckMethod, FileEvidence, Headline, Outcome, Post, PostKind, RelativePath
+from verifold.protocol.posts import (
+    MAX_CHOICES,
+    Body,
+    CheckMethod,
+    Choice,
+    FileEvidence,
+    Headline,
+    Outcome,
+    Post,
+    PostKind,
+    RelativePath,
+)
 from verifold.protocol.record import Record
 from verifold.protocol.threads import Thread, Title
 
@@ -42,6 +53,7 @@ class PostRequest(Record):
     accepts: bool | None = None
     outcome: Outcome | None = None
     method: CheckMethod | None = None
+    choices: tuple[Choice, ...] = Field(default=(), max_length=MAX_CHOICES)
 
     @model_validator(mode='after')
     def _one_thread(self) -> Self:
@@ -61,8 +73,10 @@ class PostRequest(Record):
             pydantic.ValidationError: The kind does not accept a field of the request, or misses one that it needs.
 
         """
-        # `accepts=False` means the same as leaving it out, and only an answer takes the field.
+        # `accepts=False` and empty `choices` mean the same as leaving them out. Only an answer takes `accepts`, and
+        # only an ask takes `choices`.
         unused = {'thread', 'new_thread', 'files'} | (set() if self.accepts else {'accepts'})
+        unused |= set() if self.choices else {'choices'}
         fields = self.model_dump(exclude=unused, exclude_none=True)
         return _posts.validate_python(
             fields | {'id': post_id, 'thread': thread_id, 'author': author, 'evidence': evidence}
@@ -86,13 +100,32 @@ class ThreadView(Record):
     posts: tuple[PostView, ...]
 
 
+class PostLine(Record):
+    """One post as a single line: who wrote it, what kind it is, and its headline."""
+
+    seq: int
+    at: AwareDatetime
+    author: AgentId
+    kind: PostKind
+    text: Headline
+
+
 class ThreadSummary(Record):
-    """One line about a thread: how many posts it has and when it last changed."""
+    """
+    A thread at a glance: its latest post, and how its results and asks stand.
+
+    `checked` counts results that a check holds up, and `not_checked` counts results that nobody has checked yet.
+    """
 
     thread: Thread
     watching: bool
     posts: int
     last_at: AwareDatetime
+    latest: PostLine | None = None
+    disputed: int = 0
+    checked: int = 0
+    not_checked: int = 0
+    open_asks: int = 0
 
 
 class Update(Record):

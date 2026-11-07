@@ -69,8 +69,10 @@ class HarnessOption(Record):
 
 
 class SetupView(Record):
-    """What the setup screen needs: the harnesses, and the lab that the folder holds, if any."""
+    """What the setup screen needs: the project folder, the harnesses, and the folder's lab, if any."""
 
+    folder: str
+    """The project folder, with `~` for the home folder."""
     harnesses: tuple[HarnessOption, ...]
     question: str | None = None
     """The question of the lab in this folder, or `None` when the folder has no lab yet."""

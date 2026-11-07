@@ -29,7 +29,8 @@ class Host:
 
     def setup(self) -> SetupView:
         harnesses = (HarnessOption(name='fake', family='test', available=True),)
-        return SetupView(harnesses=harnesses, question=self.lab.board.opened.question if self.lab else None)
+        question = self.lab.board.opened.question if self.lab else None
+        return SetupView(folder='~/code/sort-bench', harnesses=harnesses, question=question)
 
     async def start(self, request: StartRequest) -> None:
         if self.lab:
@@ -65,7 +66,8 @@ async def test_the_setup_screen_starts_a_lab_once_and_refuses_unknown_harnesses(
         started = await client.post('/labs', json=START)
         empty = await client.post('/labs', json={**START, 'question': '  '})
 
-    assert setup == {'harnesses': [{'name': 'fake', 'family': 'test', 'available': True}], 'question': None}
+    assert setup['folder'] == '~/code/sort-bench'
+    assert setup['harnesses'] == [{'name': 'fake', 'family': 'test', 'available': True}]
     assert (no_lab.status_code, no_lab.json()['detail']) == (
         409,
         'This folder has no lab yet. Start one from the setup screen.',
@@ -122,7 +124,7 @@ async def test_threads_and_a_thread_read_as_the_person(client: httpx2.AsyncClien
     thread = (await client.get('/threads/t-1')).json()
     missing = await client.get('/threads/t-9')
 
-    assert [summary['thread']['id'] for summary in threads] == ['t-1']
+    assert [(summary['thread']['id'], summary['latest']['text']) for summary in threads] == [('t-1', 'Beats random.')]
     assert [item['post']['text'] for item in thread['posts']] == ['Beats random.']
     assert (missing.status_code, missing.json()['detail']) == (404, 'No thread has the ID t-9.')
 
