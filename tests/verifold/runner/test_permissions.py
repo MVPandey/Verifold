@@ -20,18 +20,24 @@ CHOICES = (
     ('answer', 'chosen'),
     [
         ('Allow always', 'always'),
+        ('Allow always, no need to ask again.', 'always'),
         ('yes, go ahead', 'once'),
+        ('ok, install it now', 'once'),
+        ('I would say allow always here', 'always'),
         ('No, not now.', 'no'),
         ('allow? no.', 'no'),
+        ("Don't allow", 'no'),
+        ('Don\u2019t allow always', 'no'),
         ('Maybe later', 'no'),
+        ('Reject', 'no'),
     ],
 )
 def test_the_answer_names_or_means_an_option(answer: str, chosen: str) -> None:
     assert choose(answer, CHOICES) == chosen
 
 
-def test_without_a_reject_option_an_unclear_answer_cancels() -> None:
-    assert choose('Maybe later', CHOICES[:2]) is None
+def test_without_a_reject_option_an_unclear_or_negative_answer_cancels() -> None:
+    assert (choose('Maybe later', CHOICES[:2]), choose('no', CHOICES[:2])) == (None, None)
 
 
 async def test_a_request_becomes_an_ask_to_the_person_and_their_answer_decides_it(lab: Lab) -> None:
