@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from verifold.runner.folders import agent_folder, checker_folder
-from verifold.runner.git import GitError, git, has_commits
+from verifold.runner.git import GitError, commit_of, git
 from verifold.runner.snapshots import snapshot, snapshot_ref
 
 
@@ -20,7 +20,7 @@ async def test_git_ignores_variables_that_a_hook_sets(tmp_path: Path, monkeypatc
     monkeypatch.setenv('GIT_DIR', str(tmp_path / 'elsewhere.git'))
     project = await committed_project(tmp_path / 'project')
 
-    assert await has_commits(project)
+    assert await commit_of(project, 'HEAD')
     assert not (tmp_path / 'elsewhere.git').exists()
 
 
@@ -37,7 +37,7 @@ async def test_a_project_without_commits_gets_a_new_repository_per_agent(tmp_pat
 
     assert folder == project / '.verifold' / 'agents' / 'ada'
     assert (folder / '.git').is_dir()
-    assert not await has_commits(project)
+    assert await commit_of(project, 'HEAD') is None
 
 
 async def test_a_git_project_gives_each_agent_a_worktree_on_its_own_branch(tmp_path: Path) -> None:

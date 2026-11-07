@@ -10,7 +10,7 @@ class UnknownAgent(ServerError):
 
 
 class LabExists(ServerError):
-    """A new lab was asked for in a record that holds a lab already."""
+    """Someone asked for a new lab in a record that holds one already."""
 
 
 class EvidenceRejected(ServerError):

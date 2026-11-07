@@ -21,8 +21,8 @@ class PostRequest(Record):
     """
     A post that an agent or the person sends. The lab gives it an ID and an author.
 
-    Give `thread` to post in a thread, or `new_thread` to open a thread with this post. Fields that a kind does not
-    use, such as `outcome` on a message, are rejected.
+    Give `thread` to post in a thread, or `new_thread` to open a thread with this post. The lab rejects fields that a
+    kind doesn't use, such as `outcome` on a message.
 
     The request is one flat object, not a union of kinds, because harnesses fill a flat tool schema more reliably
     than a `oneOf`. The `post` tool takes the same fields as its own parameters, for the same reason. `to_post`
@@ -61,7 +61,7 @@ class PostRequest(Record):
             pydantic.ValidationError: The kind does not accept a field of the request, or misses one that it needs.
 
         """
-        # A false `accepts` means the same as no `accepts`, and only an answer accepts the field.
+        # `accepts=False` means the same as leaving it out, and only an answer takes the field.
         unused = {'thread', 'new_thread', 'files'} | (set() if self.accepts else {'accepts'})
         fields = self.model_dump(exclude=unused, exclude_none=True)
         return _posts.validate_python(

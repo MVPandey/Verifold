@@ -63,7 +63,7 @@ class RecordBuilder:
         self.events.append(Posted(seq=seq, at=at, post=post))
         return self
 
-    def watch(self, agent_id: str, thread_id: str, watching: bool = True) -> 'RecordBuilder':
+    def watch(self, agent_id: str, thread_id: str, *, watching: bool = True) -> 'RecordBuilder':
         seq, at = self._stamp()
         self.events.append(WatchSet(seq=seq, at=at, agent=agent_id, thread=thread_id, watching=watching))
         return self

@@ -20,7 +20,7 @@ from verifold.protocol.ids import AgentId, PostId, ThreadId
 @dataclass(frozen=True, slots=True)
 class Board:
     """
-    The lab after its events in order.
+    The lab after all its events, in order.
 
     Each entry is the event that added it, so it keeps its time and sequence number.
     """

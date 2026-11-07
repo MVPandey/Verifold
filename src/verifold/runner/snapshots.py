@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 
 from verifold.protocol.ids import AgentId, CommitId
 from verifold.protocol.posts import FileEvidence
-from verifold.runner.git import GitError, git
+from verifold.runner.git import commit_of, git
 from verifold.server.errors import EvidenceRejected
 
 _AUTHOR = {
@@ -34,7 +34,7 @@ async def snapshot(folder: Path, agent_id: AgentId) -> CommitId:
         await git('add', '--all', '.', cwd=folder, env=index)
         tree = await git('write-tree', cwd=folder, env=index)
     ref = snapshot_ref(agent_id)
-    parent = await _commit_of(folder, ref)
+    parent = await commit_of(folder, ref)
     commit = await git(
         'commit-tree',
         tree,
@@ -65,10 +65,3 @@ async def pin(folder: Path, agent_id: AgentId, paths: tuple[str, ...]) -> tuple[
     if ignored:
         raise EvidenceRejected(f'Git ignores these files, so they cannot be evidence: {", ".join(ignored)}.')
     return tuple(FileEvidence(path=path, commit=commit) for path in paths)
-
-
-async def _commit_of(folder: Path, ref: str) -> str | None:
-    try:
-        return await git('rev-parse', '--verify', '--quiet', ref, cwd=folder)
-    except GitError:
-        return None

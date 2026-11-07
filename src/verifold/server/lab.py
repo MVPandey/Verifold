@@ -2,7 +2,6 @@
 
 import asyncio
 from collections.abc import Callable
-from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Self
 
@@ -24,6 +23,7 @@ from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import FileEvidence
 from verifold.protocol.threads import Thread
+from verifold.server.changes import wait_until
 from verifold.server.errors import LabExists
 from verifold.society.board import Board
 from verifold.society.fold import apply, fold
@@ -48,7 +48,7 @@ class Lab:
 
     def __init__(self, record: RecordFile, events: tuple[Event, ...], clock: Clock = utc_now) -> None:
         """
-        Serve a record that is open, with the events that it holds.
+        Serve an open record, given the events that it holds.
 
         Raises:
             RejectedEvent: The events do not add up to a board.
@@ -112,7 +112,7 @@ class Lab:
         board = await self._commit(*opens, _add_post(request, author, evidence))
         return board.posts[-1]
 
-    async def watch(self, agent_id: AgentId, thread_id: ThreadId, watching: bool) -> WatchSet:
+    async def watch(self, agent_id: AgentId, thread_id: ThreadId, *, watching: bool) -> WatchSet:
         """Record that an agent starts or stops watching a thread."""
         board = await self._commit(
             lambda _, seq, at: WatchSet(seq=seq, at=at, agent=agent_id, thread=thread_id, watching=watching)
@@ -132,7 +132,7 @@ class Lab:
         return board.turns[-1]
 
     def now(self) -> datetime:
-        """Return the time on the lab's clock, the clock that dates its events."""
+        """Return the time on the clock that dates the lab's events."""
         return self._clock()
 
     async def set_time_left(self, left: timedelta) -> None:
@@ -149,12 +149,9 @@ class Lab:
         """
         await self._commit(lambda _, seq, at: TimeRanOut(seq=seq, at=at))
 
-    async def wait_for_change(self, after: int, timeout: float) -> None:
-        """Return once the board has an event after `after`, or after `timeout` seconds."""
-        async with self._changed:
-            with suppress(TimeoutError):
-                async with asyncio.timeout(timeout):
-                    await self._changed.wait_for(lambda: self._board.seq > after)
+    async def wait_for_change(self, after: int, timeout: float | None = None) -> None:
+        """Return once the board has an event after `after`, or after `timeout` seconds when given."""
+        await wait_until(self._changed, lambda: self._board.seq > after, timeout)
 
     async def _commit(self, *builds: Build) -> Board:
         # The condition's lock serializes changes. Each event comes from the board that it joins, so IDs and sequence
