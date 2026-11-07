@@ -10,10 +10,11 @@ import type {
 
 /** A request that the server refused, with the server's reason. */
 export class ApiError extends Error {
+  /** The HTTP status, or 0 when the server never answered. */
   readonly status: number;
 
-  constructor(status: number, message: string) {
-    super(message);
+  constructor(status: number, message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = 'ApiError';
     this.status = status;
   }
@@ -45,7 +46,12 @@ export function createApi(
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     };
     if (body !== undefined) init.body = JSON.stringify(body);
-    const response = await fetcher(`/api${path}`, init);
+    const response = await fetcher(`/api${path}`, init).catch((failure: unknown) => {
+      // fetch fails only when the request never got an answer, such as when verifold has stopped.
+      throw new ApiError(0, "Can't reach verifold. Check that it is still running.", {
+        cause: failure,
+      });
+    });
     if (!response.ok) throw new ApiError(response.status, await reason(response));
     // The server validates every response against its Pydantic schema, which `types.ts` mirrors.
     return (await response.json()) as T;
@@ -83,4 +89,9 @@ async function reason(response: Response): Promise<string> {
   } catch {
     return fallback;
   }
+}
+
+/** Return the text of an error, for the person to read. */
+export function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : 'Something went wrong. Reload the page.';
 }

@@ -33,7 +33,7 @@ tests/          mirrors src/
 app/            the person's app in React: setup, the lab, threads, and Needs you
   src/api/      the app API's messages and client
   src/model/    what the pages show, as functions without React
-  src/ui/       the pages
+  src/ui/       the pages, and the loader that reads the lab for them
   tests/        node:test tests of the model, the client, and rendered pages
 ```
 

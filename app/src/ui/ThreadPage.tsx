@@ -8,7 +8,7 @@ import { clock } from '../model/format.ts';
 import { kindLabel, personMessage, standingChip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { markSeen } from '../model/seen.ts';
-import { messageOf } from './hooks.ts';
+import { messageOf } from '../api/client.ts';
 import type { PageProps } from './hooks.ts';
 import { Avatar, Body, ChipView, Composer, Files } from './parts.tsx';
 
