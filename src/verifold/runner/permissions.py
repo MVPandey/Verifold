@@ -1,5 +1,7 @@
 """Permission requests reach the person on the board, and the person's answer decides them."""
 
+import re
+
 from verifold.protocol.ids import PERSON
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import Answer
@@ -9,8 +11,9 @@ from verifold.server.member import Member
 IDLE_WAIT = 3_600.0
 """Seconds of each wait for the person's answer. The harness waits as long as the person takes."""
 
-_ALLOW = ('allow', 'yes', 'approve', 'ok')
-_REJECT = ('deny', 'no', 'reject', 'refuse')
+_POSITIVE = frozenset({'allow', 'approve', 'go', 'ok', 'okay', 'sure', 'yes'})
+_NEGATIVE = frozenset({'cancel', 'deny', "don't", 'dont', 'never', 'no', 'not', 'refuse', 'reject', 'stop'})
+_WORDS = re.compile(r"[a-z]+(?:'[a-z]+)?")
 
 
 async def ask_the_person(member: Member, request: PermissionRequest) -> str | None:
@@ -37,15 +40,33 @@ async def ask_the_person(member: Member, request: PermissionRequest) -> str | No
 
 
 def choose(answer: str, choices: tuple[PermissionChoice, ...]) -> str | None:
-    """Return the ID of the option that an answer names or means, or the first reject option."""
-    text = answer.casefold()
-    named = next((choice for choice in choices if choice.name.casefold() in text), None)
-    allows = any(word in text for word in _ALLOW) and not any(word in text for word in _REJECT)
-    wanted = 'allow' if allows else 'reject'
-    meant = next((choice for choice in choices if choice.kind.startswith(wanted)), None)
-    fallback = next((choice for choice in choices if choice.kind.startswith('reject')), None)
-    chosen = named or meant or fallback
+    """
+    Return the ID of the option that the person's answer chooses, or `None` to cancel the request.
+
+    An answer that starts with an option's name chooses that option, as when the person picks it in the app. Otherwise
+    a word such as "no" or "don't" rejects. Then an option named anywhere wins, then a word such as "yes" allows once.
+    Any other answer rejects. Words match whole, so "now" is not "no".
+    """
+    words = _words(answer)
+    names = sorted(((_words(choice.name), choice) for choice in choices), key=lambda item: len(item[0]), reverse=True)
+    leading = next((choice for name, choice in names if name and words[: len(name)] == name), None)
+    if leading:
+        return leading.id
+    rejected = next((choice for choice in choices if choice.kind.startswith('reject')), None)
+    if _NEGATIVE.intersection(words):
+        return rejected.id if rejected else None
+    named = next((choice for name, choice in names if _contains(words, name)), None)
+    allowed = next((choice for choice in choices if choice.kind.startswith('allow')), None)
+    chosen = named or (allowed if _POSITIVE.intersection(words) else None) or rejected
     return chosen.id if chosen else None
+
+
+def _words(text: str) -> tuple[str, ...]:
+    return tuple(_WORDS.findall(text.casefold().replace('\u2019', "'")))
+
+
+def _contains(words: tuple[str, ...], phrase: tuple[str, ...]) -> bool:
+    return bool(phrase) and any(words[start : start + len(phrase)] == phrase for start in range(len(words)))
 
 
 def _thread_title(member: Member) -> str:
