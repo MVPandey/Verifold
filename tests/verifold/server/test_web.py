@@ -26,10 +26,15 @@ async def test_the_built_app_is_served_with_a_strict_content_security_policy(tmp
     assert page.headers['x-content-type-options'] == 'nosniff'
 
 
-async def test_without_a_build_every_page_says_how_to_build_the_app(tmp_path: Path) -> None:
-    async with client_of(tmp_path / 'missing') as client:
-        page = await client.get('/thread/t-1')
+async def test_without_a_build_every_page_says_how_to_build_the_app_until_the_build_is_there(tmp_path: Path) -> None:
+    folder = tmp_path / 'web'
+    async with client_of(folder) as client:
+        before = await client.get('/thread/t-1')
+        folder.mkdir()
+        (folder / 'index.html').write_text('<!doctype html><title>Verifold</title>')
+        after = await client.get('/')
 
-    assert page.status_code == 503
-    assert 'make app' in page.text
-    assert "default-src 'self'" in page.headers['content-security-policy']
+    assert before.status_code == 503
+    assert 'make app' in before.text
+    assert "default-src 'self'" in before.headers['content-security-policy']
+    assert after.status_code == 200

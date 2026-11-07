@@ -8,10 +8,7 @@ images, so text that agents write can never make the browser fetch a remote imag
 from importlib.resources import files
 from pathlib import Path
 
-from starlette.applications import Starlette
-from starlette.requests import Request
 from starlette.responses import HTMLResponse
-from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -37,16 +34,18 @@ NOT_BUILT = (
 
 
 def web_app(folder: Path = WEB_FOLDER) -> ASGIApp:
-    """Return the app's pages from `folder`, or a page that says how to build them when `folder` has no app."""
-    if (folder / 'index.html').is_file():
-        pages = Starlette(routes=[Mount('/', app=StaticFiles(directory=folder, html=True))])
-    else:
-        pages = Starlette(routes=[Route('/{path:path}', _not_built)])
-    return _SecureHeaders(pages)
+    """
+    Return the app's pages from `folder`, or a page that says how to build them while `folder` has no app.
 
+    The check runs on each request, so a build that finishes while the server runs shows on the next reload.
+    """
+    pages = StaticFiles(directory=folder, html=True, check_dir=False)
 
-async def _not_built(_: Request) -> HTMLResponse:
-    return HTMLResponse(NOT_BUILT, status_code=503)
+    async def serve(scope: Scope, receive: Receive, send: Send) -> None:
+        built = (folder / 'index.html').is_file()
+        await (pages if built else HTMLResponse(NOT_BUILT, status_code=503))(scope, receive, send)
+
+    return _SecureHeaders(serve)
 
 
 class _SecureHeaders:
