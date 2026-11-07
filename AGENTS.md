@@ -47,7 +47,7 @@ Read each applicable SKILL.md before the first change of that kind. The copies i
 
 | Work | Skill |
 | --- | --- |
-| Python code, reviews, and package design | [python](.agents/skills/python/SKILL.md) |
+| Python code, reviews, and package design | `python`, the maintainer's own skill, which this repository doesn't include. Without it, follow the code rules below. |
 | TypeScript and React code in `app/` | [node-typescript](.agents/skills/node-typescript/SKILL.md) |
 | Implementation and refactoring | [ponytail](.agents/skills/ponytail/SKILL.md) |
 | Complexity review after a correctness review | [ponytail-review](.agents/skills/ponytail-review/SKILL.md) |
