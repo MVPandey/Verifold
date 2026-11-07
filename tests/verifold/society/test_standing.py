@@ -74,6 +74,8 @@ def test_an_ask_is_open_until_an_answer_replies(record: RecordBuilder) -> None:
 
     record.post(Answer(id='p-2', thread='t-1', author='ada', text='Layer 12.', reply_to='p-1'))
     assert is_answered(record.board(), 'p-1')
+    assert is_answered(record.board(), 'p-1', by='ada')
+    assert not is_answered(record.board(), 'p-1', by='cy')
 
 
 def test_a_check_that_its_author_conceded_no_longer_counts(record: RecordBuilder) -> None:

@@ -62,9 +62,15 @@ def _line(entry: Posted) -> PostLine:
 
 
 def needs_person(board: Board) -> tuple[PostView, ...]:
-    """Return the asks that name the person and have no answer yet, oldest first. Permission requests are asks too."""
+    """
+    Return the asks that name the person and have no answer from the person yet, oldest first.
+
+    Permission requests are asks too. An agent's answer leaves an ask open, because the asker waits for the person.
+    """
     return tuple(
         post_view(board, entry)
         for entry in board.posts
-        if isinstance(entry.post, Ask) and PERSON in entry.post.mentions and not is_answered(board, entry.post.id)
+        if isinstance(entry.post, Ask)
+        and PERSON in entry.post.mentions
+        and not is_answered(board, entry.post.id, by=PERSON)
     )
