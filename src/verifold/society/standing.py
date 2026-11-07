@@ -1,6 +1,6 @@
 """Where posts stand after the objections, checks, and answers to them."""
 
-from verifold.protocol.ids import PostId
+from verifold.protocol.ids import AgentId, PostId
 from verifold.protocol.join import Standing
 from verifold.protocol.posts import Answer, Check, Objection
 from verifold.society.board import Board
@@ -33,9 +33,11 @@ def standing(board: Board, post_id: PostId) -> Standing:
     return 'checked' if checks else 'open'
 
 
-def is_answered(board: Board, post_id: PostId) -> bool:
-    """Return whether any answer replies to a post."""
-    return any(isinstance(entry.post, Answer) for entry in board.replies(post_id))
+def is_answered(board: Board, post_id: PostId, by: AgentId | None = None) -> bool:
+    """Return whether an answer replies to a post: any answer, or with `by`, an answer from that author."""
+    return any(
+        isinstance(entry.post, Answer) and (by is None or entry.post.author == by) for entry in board.replies(post_id)
+    )
 
 
 def _independent_rerun(board: Board, post_id: PostId, check: Check) -> bool:
