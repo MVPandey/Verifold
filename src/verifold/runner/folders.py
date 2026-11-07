@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from verifold.protocol.ids import AgentId, CommitId
-from verifold.runner.git import git, has_commits
+from verifold.runner.git import commit_of, git
 
 LAB_FOLDER = '.verifold'
 """The folder in the project that holds the lab: its record, the agents' folders, and their private files."""
@@ -21,7 +21,7 @@ async def agent_folder(project: Path, agent_id: AgentId) -> Path:
     if folder.exists():
         return folder
     folder.parent.mkdir(parents=True, exist_ok=True)
-    if not await has_commits(project):
+    if await commit_of(project, 'HEAD') is None:
         folder.mkdir()
         await git('init', '--quiet', cwd=folder)
         return folder
