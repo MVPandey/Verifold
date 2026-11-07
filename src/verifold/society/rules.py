@@ -14,6 +14,9 @@ from verifold.protocol.threads import Thread
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 
+MAX_RERUNS = 2
+"""The most blind reruns that one post can have."""
+
 
 def check_agent(board: Board, agent: Agent) -> None:
     """
@@ -100,10 +103,6 @@ def check_turn(board: Board, turn: TurnEnded) -> None:
         raise RejectedEvent(f'{turn.agent} is not an agent in this lab.')
 
 
-MAX_RERUNS = 2
-"""Blind reruns that one post can have."""
-
-
 def check_rerun(board: Board, rerun: RerunRequested) -> None:
     """
     Check that a post can get a blind rerun.
@@ -124,14 +123,14 @@ def check_rerun(board: Board, rerun: RerunRequested) -> None:
 
 def check_time(time: TimeSet) -> None:
     """
-    Check that a new end of the lab is not before the time that it was set.
+    Check that a new end of the lab is not earlier than the moment that it was set.
 
     Raises:
         RejectedEvent: The end is in the past.
 
     """
     if time.ends_at < time.at:
-        raise RejectedEvent('The lab cannot end before the time that its end is set.')
+        raise RejectedEvent('The lab cannot end before the moment that its end is set.')
 
 
 def check_time_out(board: Board, event: TimeRanOut) -> None:
