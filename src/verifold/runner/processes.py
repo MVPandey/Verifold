@@ -17,7 +17,7 @@ STOP_GRACE = 5.0
 """Seconds that a process group gets to exit after SIGTERM, before Verifold kills it."""
 
 STREAM_LIMIT = 64 * 1024 * 1024
-"""Bytes in one line of a harness's protocol output."""
+"""The longest line of protocol output that Verifold reads from a harness, in bytes."""
 
 
 async def start(command: tuple[str, ...], cwd: Path, errors: IO[bytes]) -> Process:
