@@ -19,7 +19,7 @@ class HarnessEntry(Record):
 
     name: Label
     executable: str
-    """The harness's own command, which must be on the PATH for the harness to run."""
+    """The harness's own command. It must be on the PATH."""
     command: tuple[str, ...] = Field(min_length=1)
     family: Label
     """The model family of the harness's default models. Blind checks compare families."""

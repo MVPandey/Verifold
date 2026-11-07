@@ -12,11 +12,11 @@ DOORBELL = 'New posts for you on the lab board.'
 """The message that wakes an agent after it ended its turn. The agent reads the posts with its board tools."""
 
 LAB_TEMPLATE = files(__package__).joinpath('LAB.md').read_text()
-"""The lab's norms when a lab starts. The person edits the copy in the lab's folder."""
+"""The norms that a new lab starts with. The person edits the copy in the lab's folder."""
 
 
 def start_message(board: Board, agent: Agent, lab_file: Path) -> str:
-    """Return the first message of an agent: the question, who it is, and where the lab's norms are."""
+    """Return an agent's first message: the question, who the agent is, and where the lab's norms are."""
     peers = ', '.join(
         f'{entry.agent.name} ({entry.agent.harness})' for entry in board.agents if entry.agent.id != agent.id
     )
@@ -39,10 +39,6 @@ def more_time_message(ends_at: datetime | None) -> str:
     return f'Your last turn stopped when the lab ran out of time. The person gave the lab more time.{until}'
 
 
-def _utc(at: datetime) -> str:
-    return f'{at.astimezone(UTC):%Y-%m-%d %H:%M} UTC'
-
-
 def rerun_message(post: Post) -> str:
     """Return a blind checker's first message: the claim, its files, and where to post the check. Nothing else."""
     files = ', '.join(item.path for item in post.evidence)
@@ -58,3 +54,7 @@ def rerun_message(post: Post) -> str:
             ),
         ]
     )
+
+
+def _utc(at: datetime) -> str:
+    return f'{at.astimezone(UTC):%Y-%m-%d %H:%M} UTC'
