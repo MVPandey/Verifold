@@ -14,6 +14,8 @@ dependencies = [
     "fastapi>=0.120,<1",
     "mcp>=2.3,<3",
     "pydantic>=2.12,<3",
+    "sse-starlette>=3.6,<4",
+    "uvicorn>=0.54,<1",
 ]
 
 [project.scripts]
@@ -78,6 +80,7 @@ source = ["src/verifold"]
 
 [dependency-groups]
 dev = [
+    "httpx2>=2.16,<3",
     "lefthook>=2.2.2,<3",
     "pytest>=9.1.1,<10",
     "pytest-asyncio>=1.2,<2",
