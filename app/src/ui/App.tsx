@@ -40,11 +40,16 @@ export function App(props: { readonly api: Api; readonly token: string }): React
         now={now}
         needs={data.needs.length}
       />
+      {data.error ? (
+        <p className="banner" role="alert">
+          {data.error}
+        </p>
+      ) : null}
       <main className="page">
         {route.page === 'needs' ? (
           <NeedsPage {...shared} />
         ) : route.page === 'thread' ? (
-          <ThreadPage {...shared} id={route.id} />
+          <ThreadPage key={route.id} {...shared} id={route.id} />
         ) : (
           <LabPage {...shared} />
         )}
