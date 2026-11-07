@@ -1,28 +1,24 @@
-"""Where posts stand in the society: what objections, checks, and answers have done to them."""
-
-from datetime import datetime, timedelta
-from typing import Literal
+"""Where posts stand after the objections, checks, and answers to them."""
 
 from verifold.protocol.ids import PostId
 from verifold.protocol.join import Standing
-from verifold.protocol.posts import Answer, Check, Objection, Proposal
+from verifold.protocol.posts import Answer, Check, Objection
 from verifold.society.board import Board
-from verifold.society.errors import NotFound
-
-type Decision = Literal['open', 'decided', 'disputed', 'withdrawn']
 
 
 def standing(board: Board, post_id: PostId) -> Standing:
     """
-    Return where a post stands.
+    Return where a post stands. The first state that applies wins.
 
-    A post is `conceded` when its author accepted an objection to it. It is `disputed` when a check of it failed, or
-    when an objection stands. A check that holds overrules an earlier objection when its author is not the objector.
-    It is `held_up` when a blind checker from another model family reran it and its check holds, and nothing stands
-    against it. It is `checked` when another agent's check holds and nothing stands against it. Otherwise it is
-    `open`. Checks and objections that their own authors conceded do not count.
+    - `conceded`: the post's author accepted an objection to it.
+    - `disputed`: a check of the post failed, or an objection stands. A later check that holds overrules an
+      objection, unless the objector wrote that check.
+    - `held_up`: a blind checker from another model family reran the post, and its check holds.
+    - `checked`: another agent's check holds.
+    - `open`: none of the above.
+
+    Checks and objections that their own authors conceded don't count.
     """
-    # A conceded check or objection no longer counts against or for its target.
     replies = tuple(entry for entry in board.replies(post_id) if standing(board, entry.post.id) != 'conceded')
     objections = tuple((entry.seq, entry.post) for entry in replies if isinstance(entry.post, Objection))
     checks = tuple((entry.seq, entry.post) for entry in replies if isinstance(entry.post, Check))
@@ -40,28 +36,6 @@ def standing(board: Board, post_id: PostId) -> Standing:
 def is_answered(board: Board, post_id: PostId) -> bool:
     """Return whether any answer replies to a post."""
     return any(isinstance(entry.post, Answer) for entry in board.replies(post_id))
-
-
-def decision(board: Board, proposal_id: PostId, now: datetime, window: timedelta) -> Decision:
-    """
-    Return the state of a proposal at `now`.
-
-    A proposal is `decided` once `window` has passed since it was posted with no objection standing. A later
-    objection makes it `disputed` again. It is `withdrawn` when its author accepted an objection to it.
-
-    Raises:
-        NotFound: No proposal has this ID.
-
-    """
-    entry = board.post(proposal_id)
-    if entry is None or not isinstance(entry.post, Proposal):
-        raise NotFound(f'No proposal has the ID {proposal_id}.')
-    match standing(board, proposal_id):
-        case 'conceded':
-            return 'withdrawn'
-        case 'disputed':
-            return 'disputed'
-    return 'decided' if now - entry.at >= window else 'open'
 
 
 def _independent_rerun(board: Board, post_id: PostId, check: Check) -> bool:
