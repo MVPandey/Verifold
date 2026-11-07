@@ -28,7 +28,7 @@ class Host:
         self.started: list[StartRequest] = []
 
     def setup(self) -> SetupView:
-        harnesses = (HarnessOption(name='fake', family='test', available=True),)
+        harnesses = (HarnessOption(name='fake', title='Fake', family='test', available=True),)
         question = self.lab.board.opened.question if self.lab else None
         return SetupView(folder='~/code/sort-bench', harnesses=harnesses, question=question)
 
@@ -67,7 +67,7 @@ async def test_the_setup_screen_starts_a_lab_once_and_refuses_unknown_harnesses(
         empty = await client.post('/labs', json={**START, 'question': '  '})
 
     assert setup['folder'] == '~/code/sort-bench'
-    assert setup['harnesses'] == [{'name': 'fake', 'family': 'test', 'available': True}]
+    assert setup['harnesses'] == [{'name': 'fake', 'title': 'Fake', 'family': 'test', 'available': True}]
     assert (no_lab.status_code, no_lab.json()['detail']) == (
         409,
         'This folder has no lab yet. Start one from the setup screen.',

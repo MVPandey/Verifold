@@ -83,7 +83,7 @@ class Host:
         return SetupView(
             folder=_shown(self._project),
             harnesses=tuple(
-                HarnessOption(name=entry.name, family=entry.family, available=available(entry))
+                HarnessOption(name=entry.name, title=entry.title, family=entry.family, available=available(entry))
                 for entry in self._catalog.values()
             ),
             question=self._lab.board.opened.question if self._lab else None,
