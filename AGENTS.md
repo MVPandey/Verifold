@@ -16,7 +16,7 @@ Agents decide for themselves what to watch, when to work, which threads to join,
 - money, which moves only through Verifold's tools
 - the person's choices: auto mode or not, the answers to permission requests, and the power to pause or stop anything
 
-Everything else is a norm in the lab's `LAB.md`, which agents read and enforce on each other with objections. A TypeScript app will sit on top of the society server.
+Everything else is a norm in the lab's `LAB.md`, which agents read and enforce on each other with objections. The person's app, in TypeScript and React, sits on top of the society server.
 
 ## Layout
 
@@ -28,9 +28,16 @@ src/verifold/
   runner/       starts agents over ACP and supervises them: sessions, folders, permissions, the doorbell
   harnesses/    how to start each harness over ACP, as data
   store/        durable records, kept as files in the project
-  server/       the society server: the app's API and the MCP endpoint where agents join
+  server/       the society server: the app's API, the built app, and the MCP endpoint where agents join
 tests/          mirrors src/
+app/            the person's app in React: setup, the lab, threads, and Needs you
+  src/api/      the app API's messages and client
+  src/model/    what the pages show, as functions without React
+  src/ui/       the pages, and the loader that reads the lab for them
+  tests/        node:test tests of the model, the client, and rendered pages
 ```
+
+`make app` builds the app into `src/verifold/web/`, which Git ignores and the package includes.
 
 `protocol` and `society` do no I/O. They don't import from `runner`, `harnesses`, `store`, or `server`. The I/O packages depend on them, never the other way round.
 
@@ -41,6 +48,7 @@ Read each applicable SKILL.md before the first change of that kind. The copies i
 | Work | Skill |
 | --- | --- |
 | Python code, reviews, and package design | [python](.agents/skills/python/SKILL.md) |
+| TypeScript and React code in `app/` | [node-typescript](.agents/skills/node-typescript/SKILL.md) |
 | Implementation and refactoring | [ponytail](.agents/skills/ponytail/SKILL.md) |
 | Complexity review after a correctness review | [ponytail-review](.agents/skills/ponytail-review/SKILL.md) |
 | Documentation, comments, prompts, and errors | [asd-ste100](.agents/skills/asd-ste100/SKILL.md), then [humanizer](.agents/skills/humanizer/SKILL.md) |
@@ -57,13 +65,15 @@ Read each applicable SKILL.md before the first change of that kind. The copies i
 - Libraries raise exceptions. The server and the CLI own logging and exit codes.
 - Annotate every parameter and return value.
 - Use pytest, keep `tests/` in the same shape as `src/`, and keep coverage at 95% or more. Tests use fake harnesses and never call a live model.
+- In `app/`, show text from agents as text, never as HTML. ESLint refuses `dangerouslySetInnerHTML`, and the server's Content-Security-Policy refuses images and connections to other servers.
 
 ## Validation and Git hooks
 
-Run `make install` once in each clone. It installs the locked environment and points Git at the hooks in `.githooks/`.
+Run `make install` once in each clone. It installs the locked Python and app environments and points Git at the hooks in `.githooks/`.
 
 - Before a commit, the hooks check the lock file, apply Ruff's fixes and formatting to the code, restage the fixed files, and run `ty`.
-- Before a push, the hooks run `make validate`: the lock file check, `ruff check --no-fix`, `ruff format --check`, `ty check`, and pytest with coverage. CI runs the same command.
+- When a commit changes `app/`, the hooks also run the app's `npm run validate`: Prettier, ESLint, `tsc`, the tests, and the build.
+- Before a push, the hooks run `make validate`: the lock file check, `ruff check --no-fix`, `ruff format --check`, `ty check`, pytest with coverage, and the app's `npm run validate`. CI runs the same command.
 
 Never bypass a hook or weaken a check to get a pass. Fix the code, or report what blocks it.
 

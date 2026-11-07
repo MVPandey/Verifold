@@ -25,3 +25,8 @@ coverage.xml
 /.verifold/
 
 .DS_Store
+
+# The built app that `make app` writes, and the app's local dependencies and test build
+/src/verifold/web/
+/app/node_modules/
+/app/.test-build/

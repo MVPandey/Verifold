@@ -20,6 +20,14 @@ def test_version_prints_the_installed_version(capsys: pytest.CaptureFixture[str]
     assert capsys.readouterr().out == f'verifold {version("verifold")}\n'
 
 
+@pytest.fixture(autouse=True)
+def opened(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record the links that the command opens in a browser, instead of opening them."""
+    links: list[str] = []
+    monkeypatch.setattr('verifold.cli.webbrowser.open', links.append)
+    return links
+
+
 @pytest.fixture
 def serves(monkeypatch: pytest.MonkeyPatch) -> list[StartRequest | None]:
     """Replace the server with a stand-in that records the start request it gets."""
@@ -37,13 +45,22 @@ def serves(monkeypatch: pytest.MonkeyPatch) -> list[StartRequest | None]:
     return starts
 
 
-def test_no_command_serves_the_folder_and_prints_the_link(
-    serves: list[StartRequest | None], capsys: pytest.CaptureFixture[str]
+def test_no_command_serves_the_folder_prints_the_link_and_opens_it(
+    serves: list[StartRequest | None], opened: list[str], capsys: pytest.CaptureFixture[str]
 ) -> None:
     main([])
 
     assert serves == [None]
     assert 'Open the lab: http://127.0.0.1:1234/#token=abc' in capsys.readouterr().out
+    assert opened == ['http://127.0.0.1:1234/#token=abc']
+
+
+@pytest.mark.usefixtures('serves')
+@pytest.mark.parametrize('argv', [['--no-browser'], ['--no-browser', 'run', 'Q?'], ['run', 'Q?', '--no-browser']])
+def test_no_browser_only_prints_the_link(argv: list[str], opened: list[str]) -> None:
+    main(argv)
+
+    assert opened == []
 
 
 def test_run_starts_a_lab_with_the_given_agents(serves: list[StartRequest | None]) -> None:

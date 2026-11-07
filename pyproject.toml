@@ -25,6 +25,7 @@ verifold = "verifold.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
+"verifold" = ["web/**/*"]
 "verifold.runner" = ["LAB.md"]
 
 [tool.ruff]
