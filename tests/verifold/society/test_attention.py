@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import pytest
 from builders import RecordBuilder, lab
 
@@ -73,3 +75,10 @@ def test_an_update_holds_the_agents_posts_and_summarizes_the_rest(record: Record
     assert [thread.id for thread in news.threads] == ['t-2']
     assert [agent.id for agent in news.agents] == ['dee']
     assert news.other_posts == 1
+
+
+def test_an_update_says_when_the_lab_ends(record: RecordBuilder) -> None:
+    ends_at = record.at(6) + timedelta(hours=1)
+
+    assert update(record.board(), 'bo', after=0).ends_at is None
+    assert update(record.time_set(ends_at).board(), 'bo', after=0).ends_at == ends_at

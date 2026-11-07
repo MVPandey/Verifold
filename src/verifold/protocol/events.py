@@ -32,6 +32,8 @@ class LabOpened(EventBase):
     question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4_000)]
     auto_mode: bool = True
     """The person allowed each harness's own auto mode for the lab's agents."""
+    ends_at: AwareDatetime | None = None
+    """When the agents stop, unless the person gives the lab more time. `None` means no time limit."""
 
 
 class AgentJoined(EventBase):
@@ -72,6 +74,19 @@ class RerunRequested(EventBase):
     post: PostId
 
 
+class TimeSet(EventBase):
+    """The person set when the lab ends. At `ends_at`, the agents stop until the person gives the lab more time."""
+
+    type: Literal['time_set'] = 'time_set'
+    ends_at: AwareDatetime
+
+
+class TimeRanOut(EventBase):
+    """The lab reached its end. Verifold cancelled the agents' turns, and they wait until the person sets a new end."""
+
+    type: Literal['time_ran_out'] = 'time_ran_out'
+
+
 class TurnSummary(Record):
     """What one agent turn cost, how it ended, and the snapshot of the agent's folder after it."""
 
@@ -91,6 +106,6 @@ class TurnEnded(EventBase, TurnSummary):
 
 
 type Event = Annotated[
-    LabOpened | AgentJoined | ThreadOpened | Posted | WatchSet | TurnEnded | RerunRequested,
+    LabOpened | AgentJoined | ThreadOpened | Posted | WatchSet | TurnEnded | RerunRequested | TimeSet | TimeRanOut,
     Field(discriminator='type'),
 ]

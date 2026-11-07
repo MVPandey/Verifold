@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from pathlib import Path
 
 import httpx2
@@ -115,13 +116,18 @@ async def test_a_resumed_lab_keeps_its_agents_and_the_persons_edits_to_its_norms
     assert sorted(call['agent'] for call in resumed) == ['agent-1', 'agent-2']
 
 
-async def test_without_auto_mode_the_persons_default_mode_stays(project: Path, log: Path) -> None:
-    start = StartRequest(question='Does it hold?', agents=(AgentChoice(harness='fake'),), auto_mode=False)
+async def test_without_auto_mode_the_persons_default_mode_stays_and_minutes_set_the_end(
+    project: Path, log: Path
+) -> None:
+    start = StartRequest(question='Does it hold?', agents=(AgentChoice(harness='fake'),), auto_mode=False, minutes=30)
 
     async with serving(project, start):
         await until(lambda: len(posts(project)) == 1)
 
     assert all(call['event'] != 'mode' for call in calls(log))
+    opened = fold(record(project)).opened
+    assert opened.ends_at == opened.at + timedelta(minutes=30)
+    assert 'The lab ends at' in next(call['text'] for call in calls(log) if call['event'] == 'prompt')
 
 
 async def test_an_unknown_harness_is_refused_before_anything_is_recorded(project: Path) -> None:
