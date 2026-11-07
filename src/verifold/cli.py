@@ -5,8 +5,11 @@ import asyncio
 import signal
 import sys
 from collections.abc import Coroutine, Sequence
+from contextlib import suppress
 from importlib.metadata import version
 from pathlib import Path
+
+from pydantic import ValidationError
 
 from verifold.app import serve
 from verifold.harnesses.catalog import CATALOG
@@ -33,14 +36,18 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     """
     args = _parser().parse_args(argv)
-    start = _start(args) if args.command == 'run' else None
+    try:
+        start = _start(args) if args.command == 'run' else None
+    except ValidationError as error:
+        sys.exit(f'verifold: {error}')
     print(f'Serving Verifold for {Path.cwd()}. Its record is .verifold/record.jsonl. Press Ctrl+C to stop.')
     try:
         asyncio.run(_until_stopped(serve(Path.cwd(), start, on_ready=_announce)))
     except KeyboardInterrupt:
-        print('Stopped. Run `verifold` here again to come back.')
+        pass  # Ctrl+C came before the event loop took over the signal.
     except (BaseExceptionGroup, *_REPORTED) as error:
         sys.exit(f'verifold: {_reported(error)}')
+    print('Stopped. Run `verifold` here again to come back.')
 
 
 def _reported(error: BaseException) -> BaseException:
@@ -55,12 +62,12 @@ def _reported(error: BaseException) -> BaseException:
 
 def _start(args: argparse.Namespace) -> StartRequest:
     agents = tuple(_agent(value) for value in args.agent) if args.agent else DEFAULT_AGENTS
-    return StartRequest(question=args.question, agents=agents, auto_mode=not args.ask_me)
+    return StartRequest(question=args.question, agents=agents, auto_mode=not args.ask_me, minutes=args.minutes)
 
 
 async def _until_stopped(serving: Coroutine[None, None, None]) -> None:
     """
-    Serve until Ctrl+C or SIGTERM.
+    Serve until Ctrl+C or SIGTERM, and return once the server and the agents' harnesses have stopped.
 
     SIGTERM cancels the server the way Ctrl+C does, so each agent's harness stops with its process group. The harnesses
     run in their own groups, so a plain SIGTERM would otherwise leave them running.
@@ -69,9 +76,9 @@ async def _until_stopped(serving: Coroutine[None, None, None]) -> None:
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGTERM, task.cancel)
     try:
-        await task
-    except asyncio.CancelledError:
-        raise KeyboardInterrupt from None
+        # A cancel is the normal way to stop. It reaches this await after the server has cleaned up.
+        with suppress(asyncio.CancelledError):
+            await task
     finally:
         loop.remove_signal_handler(signal.SIGTERM)
 
@@ -91,6 +98,11 @@ def _parser() -> argparse.ArgumentParser:
         action='append',
         metavar='HARNESS[:MODEL[:EFFORT]]',
         help=f'Add an agent: {", ".join(CATALOG)}, with an optional model and effort. Default: one of each, with your usual settings.',
+    )
+    run.add_argument(
+        '--minutes',
+        type=int,
+        help='How long the agents may work. You can give the lab more time from the app. Default: no time limit.',
     )
     run.add_argument(
         '--ask-me',

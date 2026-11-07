@@ -1,7 +1,7 @@
 import asyncio
 import os
 import signal
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from importlib.metadata import version
 from pathlib import Path
 
@@ -60,9 +60,9 @@ def test_run_starts_a_lab_with_the_given_agents(serves: list[StartRequest | None
 def test_run_defaults_to_one_agent_of_each_harness_and_ask_me_turns_auto_mode_off(
     serves: list[StartRequest | None],
 ) -> None:
-    main(['run', 'Does it hold?', '--ask-me'])
+    main(['run', 'Does it hold?', '--ask-me', '--minutes', '90'])
 
-    assert serves == [StartRequest(question='Does it hold?', agents=DEFAULT_AGENTS, auto_mode=False)]
+    assert serves == [StartRequest(question='Does it hold?', agents=DEFAULT_AGENTS, auto_mode=False, minutes=90)]
 
 
 def stand_in(monkeypatch: pytest.MonkeyPatch, error: BaseException) -> None:
@@ -86,6 +86,11 @@ def test_a_known_error_exits_with_its_message(monkeypatch: pytest.MonkeyPatch, e
         main([])
 
 
+def test_an_invalid_option_exits_with_its_message() -> None:
+    with pytest.raises(SystemExit, match='verifold: 1 validation error for StartRequest'):
+        main(['run', 'Does it hold?', '--minutes', '0'])
+
+
 def test_an_unknown_error_in_a_group_is_raised(monkeypatch: pytest.MonkeyPatch) -> None:
     stand_in(monkeypatch, ExceptionGroup('unhandled errors in a TaskGroup', [ValueError('bug')]))
 
@@ -93,19 +98,24 @@ def test_an_unknown_error_in_a_group_is_raised(monkeypatch: pytest.MonkeyPatch) 
         main([])
 
 
-def test_ctrl_c_stops_with_a_note(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    stand_in(monkeypatch, KeyboardInterrupt())
+@pytest.fixture
+def default_sigint() -> Iterator[None]:
+    """Give the test Python's own Ctrl+C handler, as a new `verifold` process has."""
+    # pytest-asyncio can leave the SIGINT handler of an earlier test's event loop in place.
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    yield
+    signal.signal(signal.SIGINT, previous)
 
-    main([])
 
-    assert 'Stopped.' in capsys.readouterr().out
-
-
-def test_sigterm_stops_like_ctrl_c(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.usefixtures('default_sigint')
+@pytest.mark.parametrize('stop', [signal.SIGINT, signal.SIGTERM])
+def test_ctrl_c_and_sigterm_stop_the_server_after_its_cleanup(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], stop: signal.Signals
+) -> None:
     cancelled: list[bool] = []
 
     async def serve(project: Path, start: StartRequest | None = None, **_: object) -> None:
-        os.kill(os.getpid(), signal.SIGTERM)
+        os.kill(os.getpid(), stop)
         try:
             await asyncio.sleep(60)
         except asyncio.CancelledError:
