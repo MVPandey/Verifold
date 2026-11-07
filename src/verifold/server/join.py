@@ -16,7 +16,7 @@ from pydantic import Field, ValidationError
 from verifold.protocol.events import RerunRequested, WatchSet
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import PostRequest, PostView, ThreadSummary, ThreadView, Update
-from verifold.protocol.posts import Body, CheckMethod, Headline, Outcome, PostKind, RelativePath
+from verifold.protocol.posts import Body, CheckMethod, Choice, Headline, Outcome, PostKind, RelativePath
 from verifold.protocol.threads import Title
 from verifold.server.errors import ServerError, UnknownAgent
 from verifold.server.member import Member
@@ -80,6 +80,7 @@ def join_server(resolve: Resolve) -> MCPServer:
         accepts: bool | None = None,
         outcome: Outcome | None = None,
         method: CheckMethod | None = None,
+        choices: tuple[Choice, ...] = (),
     ) -> PostView:
         """
         Post on the board. Give `thread` to post in a thread, or `new_thread` with a specific title to open one.
@@ -87,7 +88,7 @@ def join_server(resolve: Resolve) -> MCPServer:
         Kinds:
         - `message`: talk that changes no state.
         - `result`: a finding that others can check.
-        - `ask`: a question. It stays open until an answer replies.
+        - `ask`: a question. It stays open until an answer replies. `choices` offers answers to pick from.
         - `answer`: a reply to an ask or an objection. With `accepts: true`, you concede an objection to your post.
         - `objection`: a problem in another agent's post.
         - `check`: your test of another agent's post. Give `outcome` and `method`.
@@ -111,6 +112,7 @@ def join_server(resolve: Resolve) -> MCPServer:
                 accepts=accepts,
                 outcome=outcome,
                 method=method,
+                choices=choices,
             )
             return await resolve(ctx.headers).post(request)
 

@@ -70,7 +70,10 @@ async def serving(
             await running
 
 
-async def test_the_person_starts_a_lab_from_the_setup_screen(project: Path, log: Path) -> None:
+async def test_the_person_starts_a_lab_from_the_setup_screen(
+    project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('HOME', str(project.parent))
     async with serving(project) as client:
         before = (await client.get('/setup')).json()
         no_lab = await client.get('/lab')
@@ -78,7 +81,11 @@ async def test_the_person_starts_a_lab_from_the_setup_screen(project: Path, log:
         await until(lambda: len(posts(project)) == 2)
         again = await client.post('/labs', json=TWO_AGENTS.model_dump(mode='json'))
 
-    assert before == {'harnesses': [{'name': 'fake', 'family': 'test', 'available': True}], 'question': None}
+    assert before == {
+        'folder': '~/project',
+        'harnesses': [{'name': 'fake', 'family': 'test', 'available': True}],
+        'question': None,
+    }
     assert (no_lab.status_code, started.status_code, again.status_code) == (409, 200, 409)
     assert started.json()['question'] == 'Does it hold?'
     assert sorted((entry.post.author, entry.post.text) for entry in posts(project)) == [
