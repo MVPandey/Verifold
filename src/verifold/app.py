@@ -78,6 +78,7 @@ class Host:
     def setup(self) -> SetupView:
         """Return the harnesses that this computer has, and the folder's lab, if any."""
         return SetupView(
+            folder=_shown(self._project),
             harnesses=tuple(
                 HarnessOption(name=entry.name, family=entry.family, available=available(entry))
                 for entry in self._catalog.values()
@@ -223,6 +224,12 @@ def _crew(agents: tuple[Agent, ...], catalog: Mapping[str, HarnessEntry], *, aut
     first = {agent.harness: agent for agent in reversed(agents)}
     harnesses = dict.fromkeys(agent.harness for agent in agents)
     return tuple((catalog[name], _options(first[name], auto_mode=auto_mode)) for name in harnesses)
+
+
+def _shown(path: Path) -> str:
+    # The home folder shows as ~, the way that people write paths.
+    home = Path.home()
+    return f'~/{path.relative_to(home)}' if path.is_relative_to(home) else str(path)
 
 
 async def _bound_port(server: uvicorn.Server) -> int:
