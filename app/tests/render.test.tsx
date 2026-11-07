@@ -31,6 +31,7 @@ describe('agent text', () => {
         thread={thread}
         agents={[agentView('agent-1')]}
         harnesses={HARNESSES}
+        waitsForYou={false}
         onRerun={() => Promise.resolve()}
       />,
     );

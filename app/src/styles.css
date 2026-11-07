@@ -1996,3 +1996,15 @@ h3 {
 .setup .section h3 + .sub {
   margin-top: 4px;
 }
+.body p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.banner {
+  margin: 0;
+  padding: 10px 28px;
+  background: var(--fail-bg);
+  color: var(--fail-ink);
+  font-weight: 650;
+  font-size: 14px;
+}

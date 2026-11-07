@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { Api } from '../api/client.ts';
 import { watchChanges } from '../api/events.ts';
+import type { Change } from '../api/events.ts';
 import type { LabView, PostView, SetupView, ThreadSummary } from '../api/types.ts';
 import { parseRoute } from '../model/route.ts';
 import type { Route } from '../model/route.ts';
@@ -29,17 +30,47 @@ const EMPTY: LabData = { setup: null, lab: null, threads: [], needs: [], version
 /** Milliseconds to wait after a change, so a burst of changes causes one load. */
 const SETTLE = 150;
 
-/** Return the lab as the server has it now, and a function that reads it again at once. */
+const LOST =
+  'Lost the connection to verifold. The page reconnects when verifold is back. If you restarted verifold, open the new link that it printed.';
+
+/**
+ * Return the lab as the server has it now, and a function that reads all of it again at once.
+ *
+ * A new event on the board reads the whole lab again. A change in what agents are doing reads only the lab view,
+ * which holds each agent's activity.
+ */
 export function useLab(api: Api, token: string): LabData & { readonly reload: () => void } {
   const [data, setData] = useState<LabData>(EMPTY);
+  // A slow response must not overwrite a newer one, so only the latest load applies.
   const latest = useRef(0);
+  const fullLoad = useRef(false);
+  const hasLab = useRef(false);
 
   const reload = useCallback((): void => {
-    // A slow response must not overwrite a newer one, so only the latest load applies.
     const ticket = ++latest.current;
+    fullLoad.current = true;
     readLab(api).then(
       (read) => {
-        if (ticket === latest.current) setData((old) => ({ ...read, version: old.version + 1 }));
+        if (ticket !== latest.current) return;
+        fullLoad.current = false;
+        hasLab.current = read.lab !== null;
+        setData((old) => ({ ...read, version: old.version + 1 }));
+      },
+      (error: unknown) => {
+        if (ticket !== latest.current) return;
+        fullLoad.current = false;
+        setData((old) => ({ ...old, error: messageOf(error) }));
+      },
+    );
+  }, [api]);
+
+  const reloadActivity = useCallback((): void => {
+    // A full load that is on its way brings the activity too.
+    if (fullLoad.current) return;
+    const ticket = ++latest.current;
+    api.lab().then(
+      (lab) => {
+        if (ticket === latest.current) setData((old) => ({ ...old, lab, error: null }));
       },
       (error: unknown) => {
         if (ticket === latest.current) setData((old) => ({ ...old, error: messageOf(error) }));
@@ -50,15 +81,38 @@ export function useLab(api: Api, token: string): LabData & { readonly reload: ()
   useEffect(() => {
     reload();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const stop = watchChanges(token, () => {
+    let full = false;
+    let last: Change | null = null;
+    const schedule = (needsFull: boolean): void => {
+      full ||= needsFull;
       clearTimeout(timer);
-      timer = setTimeout(reload, SETTLE);
+      timer = setTimeout(() => {
+        if (full) reload();
+        else reloadActivity();
+        full = false;
+      }, SETTLE);
+    };
+    const stop = watchChanges(token, {
+      onChange: (change) => {
+        const board = last === null || change.seq !== last.seq;
+        const activity = last === null || change.activity !== last.activity;
+        last = change;
+        // The stream also sends a heartbeat when nothing changed. That one reads nothing.
+        if (board || activity) schedule(board || !hasLab.current);
+      },
+      onLost: () => {
+        setData((old) => ({ ...old, error: LOST }));
+      },
+      onBack: () => {
+        last = null;
+        reload();
+      },
     });
     return () => {
       stop();
       clearTimeout(timer);
     };
-  }, [reload, token]);
+  }, [reload, reloadActivity, token]);
 
   return { ...data, reload };
 }
