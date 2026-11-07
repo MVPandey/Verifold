@@ -1,6 +1,6 @@
 # Repository instructions
 
-These instructions apply to the `python` branch, where Verifold is being rebuilt in Python. The TypeScript code on `main` stays the released version until this branch replaces it. Instructions from the user take precedence over this file.
+These instructions apply to the whole repository. Instructions from the user take precedence over this file.
 
 ## What Verifold is
 
