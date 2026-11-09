@@ -158,7 +158,7 @@ def _parser() -> argparse.ArgumentParser:
         '--agent',
         action='append',
         metavar='HARNESS[:MODEL[:EFFORT]]',
-        help=f'Add an agent: {", ".join(CATALOG)}, with an optional model and effort. Default: one of each, with your usual settings.',
+        help=f'Add an agent: {", ".join(CATALOG)}, or a harness from your settings, with an optional model and effort. Default: one of each, with your usual settings.',
     )
     run.add_argument(
         '--minutes',

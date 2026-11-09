@@ -14,7 +14,7 @@ import psutil
 import uvicorn
 from pydantic import Field
 
-from verifold.harnesses.catalog import CATALOG, HarnessEntry, available
+from verifold.harnesses.catalog import CATALOG, HarnessEntry, available, catalog_with
 from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.app import HarnessOption, SetupView, StartRequest
 from verifold.protocol.record import Record
@@ -154,7 +154,7 @@ class Host:
             raise SetupRejected(f'Unknown harness {", ".join(unknown)}. Choose from: {", ".join(self._catalog)}.')
         time_left = timedelta(minutes=request.minutes) if request.minutes else None
         # A broken settings file must refuse the start before the record holds anything.
-        settings = load_settings(self._project)
+        settings = load_settings(self._project).lab_settings()
         lab = Lab.create(self._record, request.question, auto_mode=request.auto_mode, time_left=time_left)
         await lab.set_settings(settings)
         self._lab = lab
@@ -167,7 +167,7 @@ class Host:
         """Serve the lab that the folder's record holds, and start its agents again."""
         self._lab = Lab.load(self._record)
         if recorded_settings(self._record.read()) is None:
-            await self._lab.set_settings(load_settings(self._project))
+            await self._lab.set_settings(load_settings(self._project).lab_settings())
         await self._launch()
 
     async def _launch(self) -> None:
@@ -240,8 +240,11 @@ async def serve(
         resuming = bool(events)
         if resuming and start:
             raise LabExists('This folder has a lab already. Run `verifold` here to resume it.')
-        # A lab follows the settings in its record. The files matter only for a lab that starts now.
-        opening = recorded_settings(events) or load_settings(project)
+        # The files give this computer's harnesses at every start. A lab follows the settings in its record, so the
+        # files' other settings matter only for a lab that starts now.
+        files = load_settings(project)
+        catalog = catalog_with(files.harnesses, catalog)
+        opening = recorded_settings(events) or files.lab_settings()
         if opening.jobs.at_exit is AtExit.STOP:
             # This process holds the record, so no other server runs the lab, and every marked process is a leftover.
             leftovers = await asyncio.to_thread(sweep, project)

@@ -401,3 +401,22 @@ async def test_under_pause_a_new_run_resumes_a_paused_job_that_keep_kept(project
 
     async with serving(project, ONE_AGENT):
         await until(lambda: not paused(orphan))
+
+
+async def test_a_harness_from_the_projects_settings_shows_in_the_setup_and_runs_a_lab(project: Path) -> None:
+    folder = project / '.verifold'
+    folder.mkdir()
+    entry = {'command': list(FAKE_HARNESS.command), 'family': 'local', 'title': 'Local agent'}
+    (folder / 'settings.json').write_text(json.dumps({'harnesses': {'local': entry}}))
+    start = StartRequest(question='Does it hold?', agents=(AgentChoice(harness='local'),))
+
+    async with serving(project, catalog={}) as client:
+        setup = (await client.get('/setup')).json()
+        started = await client.post('/labs', json=start.model_dump(mode='json'))
+        await until(lambda: len(posts(project)) == 1)
+
+    assert [(harness['name'], harness['title'], harness['available']) for harness in setup['harnesses']] == [
+        ('local', 'Local agent', True)
+    ]
+    assert started.status_code == 200
+    assert posts(project)[0].post.author == 'agent-1'
