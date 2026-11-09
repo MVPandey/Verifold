@@ -266,7 +266,13 @@ def paused(pid: int) -> bool:
 
 
 def harness_pids() -> list[int]:
-    return [child.pid for child in psutil.Process().children() if 'fake_acp_agent.py' in ' '.join(child.cmdline())]
+    pids: list[int] = []
+    for child in psutil.Process().children():
+        # A child that exited and waits to be collected can't show its command line.
+        with suppress(psutil.Error):
+            if 'fake_acp_agent.py' in ' '.join(child.cmdline()):
+                pids.append(child.pid)
+    return pids
 
 
 @pytest.fixture
