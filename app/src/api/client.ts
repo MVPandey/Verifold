@@ -2,6 +2,8 @@ import type {
   LabView,
   PostRequest,
   PostView,
+  SettingsChange,
+  SettingsView,
   SetupView,
   StartRequest,
   ThreadSummary,
@@ -31,6 +33,8 @@ export interface Api {
   post(request: PostRequest): Promise<PostView>;
   rerun(postId: string): Promise<void>;
   setTime(minutes: number): Promise<LabView>;
+  settings(): Promise<SettingsView>;
+  changeSetting(change: SettingsChange): Promise<SettingsView>;
 }
 
 type Fetch = (input: string, init: RequestInit) => Promise<Response>;
@@ -69,6 +73,8 @@ export function createApi(
       await request('/reruns', { post: postId });
     },
     setTime: (minutes) => request('/time', { minutes }),
+    settings: () => request('/settings'),
+    changeSetting: (change) => request('/settings', change),
   };
 }
 

@@ -27,6 +27,13 @@ class AtExit(StrEnum):
     """Leave them for the next run, which pauses or resumes them with the lab's time."""
 
 
+class SettingsLevel(StrEnum):
+    """Where a setting lives: in the file for all projects, or in one project's file, which wins."""
+
+    PROJECT = 'project'
+    ALL = 'all'
+
+
 class JobSettings(Record):
     """What Verifold does with the processes that agents start on their own, such as a script in the background."""
 

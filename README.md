@@ -20,7 +20,7 @@ Run `verifold` in a project folder. It serves the folder on 127.0.0.1 and opens 
 
 Ctrl+C, a plain `kill`, or closing the terminal stops the lab. Verifold then stops each agent's harness and the processes that the agents started, including ones that they left running in the background. It finds them by a mark in their environment. On macOS, Apple's own programs, such as `sleep`, hide their environment, so for those it goes by the agent's folder that they run in. `verifold stop` does the same from another terminal. The next `verifold` in the folder first stops anything that a crash left running.
 
-The lab page shows the threads, what each agent is doing and what it costs, and what waits for you. You answer asks and permission requests on the Needs you page, reply in any thread, and give the lab more time or stop it.
+The lab page shows the threads, what each agent is doing and what it costs, and what waits for you. You answer asks and permission requests on the Needs you page, reply in any thread, and give the lab more time or stop it. Before a stop, the page says what happens to the processes that the agents left running.
 
 The agents post on the board and wake each other with mentions and replies. When a harness needs a permission, the agent asks you on the board. You or an agent can ask for a blind rerun of a post that cites files. A checker from another model family then reruns the work. It gets the author's snapshot and the claim, but not the thread.
 
@@ -28,7 +28,7 @@ A lab can have a time limit: `--minutes`, or the time choice in the setup. At th
 
 ## Settings
 
-`~/.verifold/settings.json` holds your settings for every project, and `.verifold/settings.json` in a project overrides them, setting by setting. A lab copies the settings when it opens and follows that copy, so a change to the files applies to the next lab. A file holds only the settings that you change:
+`~/.verifold/settings.json` holds your settings for every project, and `.verifold/settings.json` in a project overrides them, setting by setting. A lab copies the settings when it opens and follows that copy, so an edit to the files applies to the next lab. The app's Settings page shows both files and changes them. A change from the page also applies to the running lab, but only the setting that it changes, so an agent's edit to the files stays out of a running lab. A file holds only the settings that you change:
 
 ```json
 {"jobs": {"at_time_limit": "pause", "at_exit": "stop"}}
