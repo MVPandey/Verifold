@@ -9,6 +9,7 @@ from acp import schema
 from conftest import ServedBoard
 from fakes import FAKE_HARNESS
 
+from verifold.protocol.app import Offer
 from verifold.protocol.usage import Usage
 from verifold.runner.errors import RunnerError
 from verifold.runner.session import (
@@ -71,9 +72,9 @@ async def test_a_session_posts_on_the_board_and_reports_usage_and_cost(
     assert second.cost_usd == pytest.approx(0.01)
     settings = [call for call in calls(log) if call['event'] in ('mode', 'option')]
     assert settings == [
-        {'agent': 'bo', 'event': 'mode', 'mode': 'auto'},
         {'agent': 'bo', 'event': 'option', 'option': 'llm', 'value': 'small'},
         {'agent': 'bo', 'event': 'option', 'option': 'thinking', 'value': 'low'},
+        {'agent': 'bo', 'event': 'mode', 'mode': 'auto'},
     ]
 
 
@@ -171,21 +172,44 @@ def fake_harnesses() -> list[psutil.Process]:
     return [child for child in psutil.Process().children() if 'fake_acp_agent.py' in ' '.join(child.cmdline())]
 
 
-async def test_a_probe_reads_each_models_effort_levels_and_stops_the_harness(
+def efforts_of(offer: Offer) -> dict[str, list[str] | None]:
+    return {
+        model.value: None if model.efforts is None else [effort.value for effort in model.efforts]
+        for model in offer.models
+    }
+
+
+async def test_a_probe_reads_each_models_effort_levels_and_stops_the_harness(folder: Place, log: Path) -> None:
+    offer = await offer_of(FAKE_HARNESS, folder, timeout=30)
+
+    assert efforts_of(offer) == {'default': ['default', 'low', 'high'], 'small': ['default', 'low'], 'small-model': []}
+    assert [value.value for value in offer.efforts] == ['default', 'low', 'high']
+    assert [(value.value, value.name) for value in offer.modes] == [('ask', 'Ask'), ('auto', 'Auto')]
+    assert (offer.model, offer.effort, offer.mode) == ('default', 'default', 'ask')
+    # The probe ends on the person's own model, for a harness that remembers its last one.
+    assert [call['value'] for call in calls(log) if call['event'] == 'option'] == ['small', 'small-model', 'default']
+    assert not fake_harnesses()
+
+
+async def test_a_probe_leaves_out_a_model_that_the_harness_refuses(
     folder: Place, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv('FAKE_ACP_REFUSE_MODEL', 'small')
 
     offer = await offer_of(FAKE_HARNESS, folder, timeout=30)
 
-    efforts = {
-        model.value: None if model.efforts is None else [effort.value for effort in model.efforts]
-        for model in offer.models
-    }
-    assert efforts == {'default': ['default', 'low', 'high'], 'small': None, 'small-model': []}
-    assert [value.value for value in offer.efforts] == ['default', 'low', 'high']
-    assert [(value.value, value.name) for value in offer.modes] == [('ask', 'Ask'), ('auto', 'Auto')]
-    assert (offer.model, offer.effort, offer.mode) == ('default', 'default', 'ask')
+    assert efforts_of(offer) == {'default': ['default', 'low', 'high'], 'small-model': []}
+
+
+async def test_a_probe_that_runs_out_of_time_during_the_switches_keeps_what_it_read(
+    folder: Place, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_SLOW_SWITCH', '1')
+
+    offer = await offer_of(FAKE_HARNESS, folder, timeout=2)
+
+    assert efforts_of(offer) == {'default': ['default', 'low', 'high'], 'small': None, 'small-model': None}
+    assert offer.mode == 'ask'
     assert not fake_harnesses()
 
 
@@ -222,10 +246,13 @@ def test_grouped_values_come_one_after_another() -> None:
         type='select',
         options=[
             schema.SessionConfigSelectGroup(group='a', name='A', options=[small]),
-            schema.SessionConfigSelectGroup(group='b', name='B', options=[big]),
+            schema.SessionConfigSelectGroup(
+                group='b', name='B', options=[big, schema.SessionConfigSelectOption(value='', name='Empty')]
+            ),
         ],
     )
 
+    # A value that a lab can't record is left out.
     assert [value.value for value in _values(grouped)] == ['small', 'big']
 
 

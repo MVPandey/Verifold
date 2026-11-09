@@ -11,7 +11,7 @@ from typing import NoReturn, Self, override
 import acp
 from acp import schema
 from acp.client.connection import ClientSideConnection
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from verifold import DISTRIBUTION
 from verifold.harnesses.catalog import HarnessEntry
@@ -206,17 +206,21 @@ async def offer_of(harness: HarnessEntry, place: Place, timeout: float) -> Offer
     Open a session of the harness without a prompt, and return the models, effort levels, and modes that it offers.
 
     The session gets no board and no message. It switches to each model, because a model can have its own effort
-    levels. A switch changes only this session. `timeout` limits the talk with the harness, but not its stop: Verifold
-    stops the harness before this returns, also after a failure.
+    levels, and then back to the person's model. ACP keeps a switch in the session. A model that the harness refuses
+    to switch to is left out, because a lab couldn't use it either. `timeout` limits the talk with the harness: when it
+    ends during the switches, the models that are left have unknown effort levels. Verifold stops the harness before
+    this returns, also after a failure.
 
     Raises:
-        TimeoutError: The harness took longer than `timeout` seconds.
+        TimeoutError: The harness didn't open a session within `timeout` seconds.
 
     """
+    deadline = asyncio.get_running_loop().time() + timeout
     async with _connected(harness, place, _Client(SessionHooks(permissions=_refuse))) as connection:
-        async with asyncio.timeout(timeout):
+        async with asyncio.timeout_at(deadline):
             await _initialize(connection)
-            return await _offer(connection, await connection.new_session(cwd=str(place.folder), mcp_servers=[]))
+            opened = await connection.new_session(cwd=str(place.folder), mcp_servers=[])
+        return await _offer(connection, opened, deadline)
 
 
 @asynccontextmanager
@@ -254,22 +258,31 @@ async def _refuse(_: PermissionRequest) -> str | None:
     return None
 
 
-async def _offer(connection: ClientSideConnection, opened: schema.NewSessionResponse) -> Offer:
+async def _offer(connection: ClientSideConnection, opened: schema.NewSessionResponse, deadline: float) -> Offer:
     options = _by_category(opened.config_options)
     model, effort, modes = options.get('model'), options.get('thought_level'), opened.modes
-    efforts = _values(effort)
+    values, efforts = _values(model), _values(effort)
     models: list[ModelValue] = []
-    for value in _values(model):
-        found = (
-            efforts
-            if model is None or value.value == model.current_value
-            else await _efforts_with(connection, opened.session_id, model.id, value.value)
-        )
+    for value in values:
+        found: tuple[OptionValue, ...] | None = efforts
+        if model is not None and value.value != model.current_value:
+            try:
+                found = await _efforts_with(connection, opened.session_id, model.id, value.value, deadline)
+            except acp.RequestError:
+                continue  # The harness refuses the model, so a lab couldn't use it either.
         models.append(ModelValue(value=value.value, name=value.name, efforts=found))
+    if model is not None and len(values) > 1 and asyncio.get_running_loop().time() < deadline:
+        # A harness that remembers its last model gets the person's own model back.
+        with suppress(Exception):
+            async with asyncio.timeout_at(deadline):
+                await connection.set_config_option(
+                    config_id=model.id, session_id=opened.session_id, value=model.current_value
+                )
+    available = modes.available_modes if modes else []
     return Offer(
         models=tuple(models),
         efforts=efforts,
-        modes=tuple(OptionValue(value=mode.id, name=mode.name) for mode in modes.available_modes) if modes else (),
+        modes=tuple(found for mode in available if (found := _option(mode.id, mode.name))),
         model=model.current_value if model else None,
         effort=effort.current_value if effort else None,
         mode=modes.current_mode_id if modes else None,
@@ -277,13 +290,28 @@ async def _offer(connection: ClientSideConnection, opened: schema.NewSessionResp
 
 
 async def _efforts_with(
-    connection: ClientSideConnection, session_id: str, option: str, model: str
+    connection: ClientSideConnection, session_id: str, option: str, model: str, deadline: float
 ) -> tuple[OptionValue, ...] | None:
-    """Return the effort levels that the harness offers with `model`, or `None` when it refuses to switch to it."""
-    try:
-        switched = await connection.set_config_option(config_id=option, session_id=session_id, value=model)
-    except acp.RequestError:
+    """
+    Return the effort levels that the harness offers with `model`, or `None` when they are not known.
+
+    They are not known when the time is up, or when the switch fails in another way than a refusal, such as a
+    harness that exits.
+
+    Raises:
+        acp.RequestError: The harness refuses to switch to `model`.
+
+    """
+    if asyncio.get_running_loop().time() >= deadline:
         return None
+    try:
+        async with asyncio.timeout_at(deadline):
+            switched = await connection.set_config_option(config_id=option, session_id=session_id, value=model)
+    # The time ran out (a TimeoutError), the harness exited (a ConnectionError), or its answer was not valid ACP.
+    except (OSError, ValidationError):
+        return None
+    if not switched.config_options:
+        return None  # An empty answer says nothing about the model, as in a lab's session.
     return _values(_by_category(switched.config_options).get('thought_level'))
 
 
@@ -302,7 +330,15 @@ def _values(option: schema.SessionConfigOptionSelect | None) -> tuple[OptionValu
     flat: list[schema.SessionConfigSelectOption] = []
     for entry in option.options:
         flat.extend(entry.options if isinstance(entry, schema.SessionConfigSelectGroup) else [entry])
-    return tuple(OptionValue(value=value.value, name=value.name) for value in flat)
+    return tuple(found for value in flat if (found := _option(value.value, value.name)))
+
+
+def _option(value: str, name: str) -> OptionValue | None:
+    # A value that a lab can't record, such as an empty one, is left out of the offer.
+    try:
+        return OptionValue(value=value, name=name)
+    except ValidationError:
+        return None
 
 
 async def _begin(
@@ -324,15 +360,16 @@ async def _begin(
     else:
         opened = await connection.new_session(cwd=str(folder), mcp_servers=servers)
         session_id, offered = opened.session_id, opened.config_options
-    if mode := options.mode or (harness.auto_mode if options.auto_mode else None):
-        await connection.set_session_mode(session_id=session_id, mode_id=mode)
     for category, value in (('model', options.model), ('thought_level', options.effort)):
         if value:
             option = _option_id(offered or [], category, harness)
             changed = await connection.set_config_option(session_id=session_id, config_id=option, value=value)
-            # A model can have its own effort levels, so the next option comes from the harness's answer. An answer
-            # without options keeps the ones from before.
+            # A model can have its own effort levels. ACP answers a change with the full set of options, so a later
+            # option comes from that answer. An empty answer says nothing, so the options from before stay.
             offered = changed.config_options or offered
+    # The mode comes last, so that a switch of model can't change it.
+    if mode := options.mode or (harness.auto_mode if options.auto_mode else None):
+        await connection.set_session_mode(session_id=session_id, mode_id=mode)
     return session_id
 
 
