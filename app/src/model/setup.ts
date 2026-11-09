@@ -40,15 +40,13 @@ export function firstPicks(
   harnesses: readonly HarnessOption[],
   defaults: SetupDefaults,
 ): readonly HarnessPick[] {
+  let room = MAX_AGENTS;
   return harnesses.map((option) => {
     if (defaults.agents === null) {
-      return {
-        harness: option.name,
-        count: option.available ? 1 : 0,
-        model: '',
-        effort: '',
-        mode: '',
-      };
+      // One of each harness that this computer has, for as long as the lab has room.
+      const count = option.available && room > 0 ? 1 : 0;
+      room -= count;
+      return { harness: option.name, count, model: '', effort: '', mode: '' };
     }
     // The server keeps one saved choice for each harness, and at most `MAX_AGENTS` agents in all.
     const saved = defaults.agents.find((choice) => choice.harness === option.name);
@@ -70,9 +68,13 @@ export function step(
 ): readonly HarnessPick[] {
   const others = picks.filter((pick) => pick.harness !== harness);
   const room = MAX_AGENTS - agentCount(others);
+  // A count never grows past the room that the other harnesses leave, and a step down always works.
   return picks.map((pick) =>
     pick.harness === harness
-      ? { ...pick, count: Math.min(room, Math.max(0, pick.count + change)) }
+      ? {
+          ...pick,
+          count: Math.max(0, Math.min(Math.max(room, pick.count), pick.count + change)),
+        }
       : pick,
   );
 }
@@ -114,7 +116,7 @@ function chosenAgents(picks: readonly HarnessPick[]): readonly AgentChoice[] {
       count: pick.count,
       ...(pick.model.trim() ? { model: pick.model.trim() } : {}),
       ...(pick.effort.trim() ? { effort: pick.effort.trim() } : {}),
-      ...(pick.mode ? { mode: pick.mode } : {}),
+      ...(pick.mode.trim() ? { mode: pick.mode.trim() } : {}),
     }));
 }
 

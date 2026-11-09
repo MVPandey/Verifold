@@ -57,6 +57,7 @@ describe('the setup screen', () => {
           harnesses: HARNESSES,
           question: null,
           defaults: DEFAULTS,
+          defaults_from: '~/code/sort-bench/.verifold/settings.json',
         }}
         onStarted={() => undefined}
         onRefresh={() => undefined}
@@ -66,6 +67,11 @@ describe('the setup screen', () => {
     assert.ok(html.includes('~/code/sort-bench'));
     assert.ok(html.includes('Not found on this computer'));
     assert.ok(html.includes('Start lab with 1 agent'));
+    assert.ok(
+      html.includes(
+        'Its first choices come from <code>~/code/sort-bench/.verifold/settings.json</code>.',
+      ),
+    );
     assert.ok(html.includes('<summary>Opus, High effort (your default)</summary>'));
     assert.ok(html.includes('<option value="" selected="">Opus (your default)</option>'));
     assert.ok(html.includes('<option value="plan">Plan</option>'));
@@ -77,7 +83,13 @@ describe('the setup screen', () => {
       renderToStaticMarkup(
         <SetupPage
           api={{} as Api}
-          setup={{ folder: '~/code', harnesses: [option], question: null, defaults: DEFAULTS }}
+          setup={{
+            folder: '~/code',
+            harnesses: [option],
+            question: null,
+            defaults: DEFAULTS,
+            defaults_from: null,
+          }}
           onStarted={() => undefined}
           onRefresh={() => undefined}
         />,

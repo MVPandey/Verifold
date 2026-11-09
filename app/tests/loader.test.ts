@@ -28,7 +28,13 @@ function slowServer(): {
   };
   const api: Api = {
     setup: () =>
-      answer('setup', { folder: '~/lab', harnesses: [], question: 'Q?', defaults: DEFAULTS }),
+      answer('setup', {
+        folder: '~/lab',
+        harnesses: [],
+        question: 'Q?',
+        defaults: DEFAULTS,
+        defaults_from: null,
+      }),
     lab: () => {
       calls.push('lab');
       return new Promise((resolve) => waiting.push(resolve));

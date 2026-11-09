@@ -112,6 +112,8 @@ class SetupView(Record):
     """The question of the lab in this folder, or `None` when the folder has no lab yet."""
     defaults: SetupDefaults = SetupDefaults()
     """What the setup starts with: the person's saved choices for new labs, or Verifold's defaults."""
+    defaults_from: str | None = None
+    """The settings file that the saved choices come from, which can be the project's own, or `None`."""
 
 
 class StartRequest(Record):

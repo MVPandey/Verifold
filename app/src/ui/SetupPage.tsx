@@ -122,6 +122,12 @@ export function SetupPage(props: {
       </div>
       <p className="folder">
         The lab works in <code>{props.setup.folder}</code> and keeps its record there.
+        {props.setup.defaults_from ? (
+          <>
+            {' '}
+            Its first choices come from <code>{props.setup.defaults_from}</code>.
+          </>
+        ) : null}
       </p>
 
       <section className="section">
@@ -377,7 +383,7 @@ function Typed(props: {
         id={modeId}
         placeholder="Your auto mode answer"
         value={pick.mode}
-        onChange={(event) => props.onPick({ ...pick, mode: event.target.value.trim() })}
+        onChange={(event) => props.onPick({ ...pick, mode: event.target.value })}
       />
       <p>Leave a field blank to keep your own setting for {props.title}.</p>
     </>

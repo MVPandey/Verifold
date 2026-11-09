@@ -225,7 +225,11 @@ class Host:
 
     def setup(self) -> SetupView:
         """Return the harnesses that this computer has, and the folder's lab, if any."""
+        # The lab's pages don't use the choices for new labs, so a running lab reads no settings file here.
+        defaults, source = self._defaults() if self._lab is None else (SetupDefaults(), None)
         return SetupView(
+            defaults=defaults,
+            defaults_from=source,
             folder=_shown(self._project),
             harnesses=tuple(
                 HarnessOption(
@@ -239,16 +243,19 @@ class Host:
                 for entry in self._catalog.values()
             ),
             question=self._lab.board.opened.question if self._lab else None,
-            # The lab's pages don't use the choices for new labs, so a running lab reads no settings file here.
-            defaults=self._defaults() if self._lab is None else SetupDefaults(),
         )
 
-    def _defaults(self) -> SetupDefaults:
-        # A broken settings file doesn't hide the setup. The start then refuses, with the file's error.
+    def _defaults(self) -> tuple[SetupDefaults, str | None]:
+        # The saved choices for new labs, and the file that they come from. A broken settings file doesn't hide the
+        # setup: the start then refuses, with the file's error.
+        paths = {level: settings_path(level, self._project) for level in SettingsLevel}
         try:
-            return load_settings(self._project).setup
+            values = {level: read_settings_file(path, level)[0] for level, path in paths.items()}
+            defaults = settings_of(values).setup
         except SettingsInvalid:
-            return SetupDefaults()
+            return SetupDefaults(), None
+        holder = next((level for level in (SettingsLevel.PROJECT, SettingsLevel.ALL) if 'setup' in values[level]), None)
+        return defaults, None if holder is None else _shown(paths[holder])
 
     async def start(self, request: StartRequest) -> None:
         """
