@@ -10,7 +10,8 @@ session of its own, the way that a harness starts a background command, and writ
 Each session offers a model option `llm` and an effort option `thinking`, under their ACP categories, as real
 adapters do under their own IDs, and the modes `ask` and `auto`. As in real adapters, each model has its own effort
 levels, and `small-model` has none. `FAKE_ACP_NO_OPTIONS` makes it offer no options, `FAKE_ACP_REFUSE_MODEL`
-names a model that it refuses to switch to, and `FAKE_ACP_SLOW_SESSION` makes a new session take a minute.
+names a model that it refuses to switch to, and `FAKE_ACP_SLOW_SESSION` and `FAKE_ACP_SLOW_SWITCH` make a new
+session or a change take a minute.
 """
 
 import asyncio
@@ -148,6 +149,8 @@ class FakeAgent(acp.Agent):
         self, config_id: str, session_id: str, value: str | bool, **_: object
     ) -> schema.SetSessionConfigOptionResponse:
         self._note(event='option', option=config_id, value=value)
+        if os.environ.get('FAKE_ACP_SLOW_SWITCH'):
+            await asyncio.sleep(60)
         if config_id == 'llm':
             if value == os.environ.get('FAKE_ACP_REFUSE_MODEL'):
                 raise acp.RequestError.invalid_params({'model': value})
