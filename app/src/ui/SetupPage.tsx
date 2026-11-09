@@ -56,9 +56,11 @@ export function SetupPage(props: {
   const [error, setError] = useState<string | null>(null);
   const total = agentCount(picks);
   // A saved time limit that isn't one of the usual ones gets a button of its own.
-  const times: readonly TimeChoice[] = TIMES.some((time) => time.minutes === defaults.minutes)
-    ? TIMES
-    : [...TIMES, { minutes: defaults.minutes, label: duration(defaults.minutes ?? 0) }];
+  const [times] = useState<readonly TimeChoice[]>(() =>
+    TIMES.some((time) => time.minutes === defaults.minutes)
+      ? TIMES
+      : [...TIMES, { minutes: defaults.minutes, label: duration(defaults.minutes ?? 0) }],
+  );
   const probing = props.setup.harnesses.some((option) => option.probing);
   const { onRefresh } = props;
 
@@ -83,12 +85,15 @@ export function SetupPage(props: {
         }),
       )
       .then(
-        () =>
+        () => {
           setSaved(
             level === 'project'
               ? 'Saved. New labs in this project start with these choices.'
               : 'Saved. New labs in each project start with these choices, unless the project has its own.',
-          ),
+          );
+          // The app reads the setup again, so the next visit to this screen starts with the saved choices.
+          props.onRefresh();
+        },
         (failure: unknown) => setError(messageOf(failure)),
       );
   };
@@ -129,6 +134,7 @@ export function SetupPage(props: {
               option={option}
               first={index === 0}
               pick={picks.find((pick) => pick.harness === option.name)}
+              full={total >= MAX_AGENTS}
               onStep={(change) => setPicks((old) => step(old, option.name, change))}
               onPick={(changed) =>
                 setPicks((old) =>
@@ -220,6 +226,8 @@ function HarnessRow(props: {
   readonly option: HarnessOption;
   readonly first: boolean;
   readonly pick: HarnessPick | undefined;
+  /** The lab has as many agents as it can start. */
+  readonly full: boolean;
   readonly onStep: (change: number) => void;
   readonly onPick: (pick: HarnessPick) => void;
 }): ReactElement {
@@ -247,7 +255,7 @@ function HarnessRow(props: {
         <button
           type="button"
           aria-label={`One more ${option.title} agent`}
-          disabled={!option.available || count >= MAX_AGENTS}
+          disabled={!option.available || props.full}
           onClick={() => props.onStep(1)}
         >
           +
@@ -338,7 +346,7 @@ function Menu(props: {
   );
 }
 
-/** The fields for a harness that didn't tell Verifold what it offers: the person types the model and the effort. */
+/** The fields for a harness that didn't tell Verifold what it offers: the person types the model, effort, and mode. */
 function Typed(props: {
   readonly title: string;
   readonly pick: HarnessPick;
@@ -347,6 +355,7 @@ function Typed(props: {
   const { pick } = props;
   const modelId = useId();
   const effortId = useId();
+  const modeId = useId();
   return (
     <>
       <label htmlFor={modelId}>Model</label>
@@ -362,6 +371,13 @@ function Typed(props: {
         placeholder="Your default"
         value={pick.effort}
         onChange={(event) => props.onPick({ ...pick, effort: event.target.value })}
+      />
+      <label htmlFor={modeId}>Mode</label>
+      <input
+        id={modeId}
+        placeholder="Your auto mode answer"
+        value={pick.mode}
+        onChange={(event) => props.onPick({ ...pick, mode: event.target.value.trim() })}
       />
       <p>Leave a field blank to keep your own setting for {props.title}.</p>
     </>

@@ -176,5 +176,6 @@ describe('the settings page', () => {
       html.includes('One agent of each harness that this computer has. Auto mode. No time limit.'),
     );
     assert.equal(html.includes('Use Verifold&#x27;s defaults'), false);
+    assert.ok(html.includes('This project has saved choices of its own, and they win over these.'));
   });
 });

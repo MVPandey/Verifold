@@ -27,7 +27,12 @@ export function App(props: { readonly api: Api; readonly token: string }): React
         <Header folder={data.setup.folder} lab={null} route={route} now={now} needs={0} />
         <main className="page">
           {route.page === 'settings' ? (
-            <SettingsPage api={props.api} labOpen={false} harnesses={data.setup.harnesses} />
+            <SettingsPage
+              api={props.api}
+              labOpen={false}
+              harnesses={data.setup.harnesses}
+              onChanged={data.reload}
+            />
           ) : (
             <SetupPage
               api={props.api}
@@ -59,7 +64,12 @@ export function App(props: { readonly api: Api; readonly token: string }): React
         {route.page === 'needs' ? (
           <NeedsPage {...shared} />
         ) : route.page === 'settings' ? (
-          <SettingsPage api={props.api} labOpen harnesses={data.setup.harnesses} />
+          <SettingsPage
+            api={props.api}
+            labOpen
+            harnesses={data.setup.harnesses}
+            onChanged={data.reload}
+          />
         ) : route.page === 'thread' ? (
           <ThreadPage key={route.id} {...shared} id={route.id} />
         ) : (

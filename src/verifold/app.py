@@ -15,9 +15,8 @@ import uvicorn
 from pydantic import Field, JsonValue
 
 from verifold.harnesses.catalog import CATALOG, HarnessEntry, available, catalog_with
-from verifold.protocol.agents import Agent, ModelSpec
+from verifold.protocol.agents import Agent, AgentChoice, ModelSpec
 from verifold.protocol.app import (
-    AgentChoice,
     HarnessOption,
     Offer,
     SettingsChange,
@@ -240,7 +239,8 @@ class Host:
                 for entry in self._catalog.values()
             ),
             question=self._lab.board.opened.question if self._lab else None,
-            defaults=self._defaults(),
+            # The lab's pages don't use the choices for new labs, so a running lab reads no settings file here.
+            defaults=self._defaults() if self._lab is None else SetupDefaults(),
         )
 
     def _defaults(self) -> SetupDefaults:
