@@ -37,13 +37,13 @@ A lab can have a time limit: `--minutes`, or the time choice in the setup. At th
 - `jobs.at_time_limit` says what happens to the processes that agents left running when the lab's time ends, or when you stop the lab. `pause`, the default, pauses them until you give the lab more time. `stop` ends them, and `finish` lets them run. The agents' harnesses keep running either way.
 - `jobs.at_exit` says what happens to those processes when Verifold exits. `stop`, the default, ends them. `keep` leaves them as they are for the next `verifold` in the folder, so a paused process stays paused until that run gets more time.
 
-`harnesses` adds a harness, or replaces a built-in one of the same name. Any agent that speaks ACP can be one:
+`harnesses` in `~/.verifold/settings.json` adds a harness, or replaces a built-in one of the same name. Any agent that speaks ACP can be one:
 
 ```json
 {"harnesses": {"my-agent": {"command": ["my-agent", "acp"], "family": "google", "title": "My agent"}}}
 ```
 
-`command` starts the harness's ACP agent, and `family` names the model family of its models, which blind reruns compare. `title`, `executable`, and `auto_mode` are optional. `executable` is the harness's own command, when `command` starts an adapter for it. `auto_mode` is the ID of the harness's auto mode. Verifold finds a harness's model and effort options by their ACP category, so an entry needs no option IDs. A lab reads the harnesses again each time it starts, because they describe your computer.
+`command` starts the harness's ACP agent, and `family` names the model family of its models, which blind reruns compare. `title`, `executable`, and `auto_mode` are optional. `executable` is the harness's own command, when `command` starts an adapter for it. `auto_mode` is the ID of the harness's auto mode. Verifold finds a harness's model and effort options by their ACP category, so an entry needs no option IDs. A lab reads the harnesses again each time it starts, because they describe your computer. Only the file for all projects can add or change a harness, because its command runs on your computer, so Verifold refuses a project's file that holds harnesses.
 
 ## Set up
 

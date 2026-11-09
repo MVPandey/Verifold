@@ -180,7 +180,7 @@ class Host:
         """Return the person's settings files, and the copy that the folder's lab follows."""
         paths = {level: settings_path(level, self._project) for level in SettingsLevel}
         # Each file is read once, so that its values, its revision, and what it adds up to agree.
-        read = {level: read_settings_file(path) for level, path in paths.items()}
+        read = {level: read_settings_file(path, level) for level, path in paths.items()}
         values = {level: data for level, (data, _) in read.items()}
 
         def view(level: SettingsLevel, adds_up: Mapping[SettingsLevel, SettingsValues]) -> SettingsFileView:
