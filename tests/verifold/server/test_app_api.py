@@ -24,7 +24,7 @@ from verifold.server.activity import Activity
 from verifold.server.app_api import _changes, app_api
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.server.lab import Lab
-from verifold.store.errors import SettingsChanged, SettingsInvalid
+from verifold.store.errors import SettingsChanged, SettingsInvalid, SettingsUnwritable
 
 TOKEN = 'person-secret'
 START = {'question': 'Is it faster?', 'agents': [{'harness': 'fake', 'count': 2}]}
@@ -59,10 +59,12 @@ class Host:
         )
 
     async def change_settings(self, change: SettingsChange) -> SettingsView:
-        if change.revision == 'old':
-            raise SettingsChanged('.verifold/settings.json changed since you opened it.')
+        if change.revisions.project == 'old':
+            raise SettingsChanged('.verifold/settings.json changed since you opened the settings.')
         if change.value == 'later':
             raise SettingsInvalid('.verifold/settings.json is not valid settings: later.')
+        if change.value == 'full':
+            raise SettingsUnwritable("Can't write .verifold/settings.json: No space left on device")
         return self.settings()
 
 
@@ -123,19 +125,27 @@ async def test_a_broken_settings_file_comes_back_as_a_readable_refusal(activity:
 
 
 async def test_settings_pass_through_and_refusals_say_why(client: httpx2.AsyncClient) -> None:
-    change = {'level': 'project', 'key': 'jobs.at_exit', 'value': 'keep', 'revision': ''}
+    revisions = {'project': '', 'all_projects': ''}
+    change = {'level': 'project', 'key': 'jobs.at_exit', 'value': 'keep', 'revisions': revisions}
 
     view = (await client.get('/settings')).json()
     changed = await client.post('/settings', json=change)
-    stale = await client.post('/settings', json={**change, 'revision': 'old'})
+    stale = await client.post('/settings', json={**change, 'revisions': {**revisions, 'project': 'old'}})
     invalid = await client.post('/settings', json={**change, 'value': 'later'})
-    bad_key = await client.post('/settings', json={**change, 'key': '../server'})
+    unwritable = await client.post('/settings', json={**change, 'value': 'full'})
+    # The app changes job settings only, so it can't put a command in a harness entry.
+    command = {'command': ['/bin/sh', '-c', 'true'], 'family': 'anthropic'}
+    harness = await client.post('/settings', json={**change, 'key': 'harnesses.claude-code', 'value': command})
 
     assert view['lab'] == {'version': 1, 'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'}}
     assert view['project']['path'] == '.verifold/settings.json'
     assert changed.status_code == 200
-    assert (stale.status_code, invalid.status_code, bad_key.status_code) == (409, 400, 422)
-    assert 'changed since you opened it' in stale.json()['detail']
+    assert (stale.status_code, invalid.status_code, harness.status_code) == (409, 400, 422)
+    assert 'changed since you opened the settings' in stale.json()['detail']
+    assert (unwritable.status_code, unwritable.json()['detail']) == (
+        500,
+        "Can't write .verifold/settings.json: No space left on device",
+    )
 
 
 async def test_a_folder_with_a_lab_refuses_another(client: httpx2.AsyncClient) -> None:

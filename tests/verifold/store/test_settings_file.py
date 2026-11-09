@@ -1,15 +1,17 @@
 import json
+import stat
 from pathlib import Path
 
 import pytest
 
 from verifold.protocol.settings import AtExit, AtTimeLimit, HarnessSettings, Settings, SettingsFile, SettingsLevel
-from verifold.store.errors import SettingsChanged, SettingsInvalid
+from verifold.store.errors import SettingsChanged, SettingsInvalid, SettingsUnwritable
 from verifold.store.settings_file import (
+    SettingsValues,
     change_setting,
-    load_global_settings,
     load_settings,
     read_settings_file,
+    settings_of,
     settings_path,
 )
 
@@ -82,60 +84,118 @@ def test_a_harness_entry_without_a_command_is_refused(tmp_path: Path) -> None:
         load_settings(project, home=tmp_path / 'home')
 
 
+PROJECT, ALL = SettingsLevel.PROJECT, SettingsLevel.ALL
+
+
+class Files:
+    """The two settings files of a project in `tmp_path`, with a home folder of their own."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        self.home, self.project = tmp_path / 'home', tmp_path / 'project'
+        self.paths = {level: settings_path(level, self.project, self.home) for level in SettingsLevel}
+
+    def revisions(self) -> dict[SettingsLevel, str]:
+        return {level: read_settings_file(path)[1] for level, path in self.paths.items()}
+
+    def change(self, level: SettingsLevel, key: str, value: str | None) -> dict[SettingsLevel, SettingsValues]:
+        return change_setting(self.paths, level, key, value, self.revisions())
+
+
 def test_a_change_sets_one_setting_and_keeps_the_rest_as_written(tmp_path: Path) -> None:
-    home = tmp_path / 'home'
+    files = Files(tmp_path)
     gemini = {'command': ['gemini'], 'family': 'google'}
-    write(home / '.verifold', {'harnesses': {'gemini': gemini}, 'jobs': {'at_exit': 'keep'}})
-    path = settings_path(SettingsLevel.ALL, tmp_path / 'project', home)
-    _, revision = read_settings_file(path)
+    write(files.home / '.verifold', {'harnesses': {'gemini': gemini}, 'jobs': {'at_exit': 'keep'}})
+    before = files.revisions()
 
-    change_setting(path, 'jobs.at_time_limit', 'stop', revision)
+    values = files.change(ALL, 'jobs.at_time_limit', 'stop')
 
-    values, changed = read_settings_file(path)
-    assert values == {'harnesses': {'gemini': gemini}, 'jobs': {'at_exit': 'keep', 'at_time_limit': 'stop'}}
-    assert changed not in ('', revision)
-    assert load_global_settings(home).jobs == load_settings(tmp_path / 'project', home).jobs
-    assert sorted(item.name for item in path.parent.iterdir()) == ['settings.json']
+    written = {'harnesses': {'gemini': gemini}, 'jobs': {'at_exit': 'keep', 'at_time_limit': 'stop'}}
+    assert values == {ALL: written, PROJECT: {}}
+    assert read_settings_file(files.paths[ALL])[0] == written
+    assert files.revisions()[ALL] not in ('', before[ALL])
+    assert settings_of(values).jobs == load_settings(files.project, files.home).jobs
+    assert sorted(item.name for item in files.paths[ALL].parent.iterdir()) == ['settings.json']
 
 
 def test_a_change_to_a_missing_file_creates_it_and_a_removal_drops_the_emptied_table(tmp_path: Path) -> None:
-    path = settings_path(SettingsLevel.PROJECT, tmp_path / 'project')
-    assert read_settings_file(path) == ({}, '')
+    files = Files(tmp_path)
+    assert read_settings_file(files.paths[PROJECT]) == ({}, '')
 
-    change_setting(path, 'jobs.at_exit', 'keep', '')
-    change_setting(path, 'jobs.at_exit', None, read_settings_file(path)[1])
+    files.change(PROJECT, 'jobs.at_exit', 'keep')
+    files.change(PROJECT, 'jobs.at_exit', None)
 
-    assert read_settings_file(path)[0] == {}
+    assert read_settings_file(files.paths[PROJECT])[0] == {}
 
 
-def test_a_change_to_a_file_that_changed_since_it_was_read_is_refused(tmp_path: Path) -> None:
-    project = tmp_path / 'project'
-    write(project / '.verifold', {'jobs': {'at_exit': 'keep'}})
-    path = settings_path(SettingsLevel.PROJECT, project)
-    _, revision = read_settings_file(path)
-    write(project / '.verifold', {'jobs': {'at_exit': 'stop'}})
+@pytest.mark.parametrize('level', list(SettingsLevel))
+def test_a_change_is_refused_when_either_file_changed_since_it_was_read(tmp_path: Path, level: SettingsLevel) -> None:
+    files = Files(tmp_path)
+    revisions = files.revisions()
+    # The file that changed may be the other one: the two add up, so either could change what the change means.
+    write(files.paths[level].parent, {'jobs': {'at_exit': 'keep'}})
 
-    with pytest.raises(SettingsChanged, match=r'settings\.json changed since you opened it'):
-        change_setting(path, 'jobs.at_time_limit', 'stop', revision)
+    with pytest.raises(SettingsChanged, match=r'settings\.json changed since you opened the settings'):
+        change_setting(files.paths, PROJECT, 'jobs.at_time_limit', 'stop', revisions)
 
-    assert read_settings_file(path)[0] == {'jobs': {'at_exit': 'stop'}}
+    assert read_settings_file(files.paths[PROJECT])[0] == ({'jobs': {'at_exit': 'keep'}} if level is PROJECT else {})
 
 
 @pytest.mark.parametrize(('key', 'value'), [('jobs.at_exit', 'later'), ('colour', 'blue'), ('jobs', 'all')])
 def test_a_change_that_makes_the_file_invalid_is_refused_and_writes_nothing(
     tmp_path: Path, key: str, value: str
 ) -> None:
-    path = settings_path(SettingsLevel.PROJECT, tmp_path / 'project')
+    files = Files(tmp_path)
 
     with pytest.raises(SettingsInvalid, match=r'settings\.json is not valid settings'):
-        change_setting(path, key, value, '')
+        files.change(PROJECT, key, value)
 
-    assert not path.exists()
+    assert not files.paths[PROJECT].exists()
+
+
+def test_a_change_keeps_the_files_mode_and_writes_through_a_link(tmp_path: Path) -> None:
+    files = Files(tmp_path)
+    dotfiles = tmp_path / 'dotfiles' / 'verifold.json'
+    dotfiles.parent.mkdir()
+    dotfiles.write_text('{}')
+    dotfiles.chmod(0o600)
+    files.paths[ALL].parent.mkdir(parents=True)
+    files.paths[ALL].symlink_to(dotfiles)
+
+    files.change(ALL, 'jobs.at_exit', 'keep')
+
+    assert files.paths[ALL].is_symlink()
+    assert json.loads(dotfiles.read_text()) == {'jobs': {'at_exit': 'keep'}}
+    assert stat.S_IMODE(dotfiles.stat().st_mode) == 0o600
+
+
+def test_a_change_never_writes_through_a_file_that_waits_at_a_fixed_name(tmp_path: Path) -> None:
+    files = Files(tmp_path)
+    victim = tmp_path / 'victim.txt'
+    victim.write_text('keep me')
+    folder = files.paths[PROJECT].parent
+    folder.mkdir(parents=True)
+    (folder / '.settings.json.new').symlink_to(victim)
+
+    files.change(PROJECT, 'jobs.at_exit', 'keep')
+
+    assert victim.read_text() == 'keep me'
+    assert not files.paths[PROJECT].is_symlink()
+
+
+def test_a_file_that_cant_be_written_says_why_and_leaves_nothing_behind(tmp_path: Path) -> None:
+    files = Files(tmp_path)
+    files.home.mkdir()
+    # The folder of the file for all projects is a file, so nothing can be written in it.
+    (files.home / '.verifold').write_text('')
+
+    with pytest.raises(SettingsUnwritable, match=r"Can't write .*settings\.json"):
+        change_setting(files.paths, ALL, 'jobs.at_exit', 'keep', {ALL: '', PROJECT: ''})
 
 
 def test_the_settings_for_all_projects_leave_out_the_projects_file(tmp_path: Path) -> None:
-    home, project = tmp_path / 'home', tmp_path / 'project'
-    write(project / '.verifold', {'jobs': {'at_exit': 'keep'}})
+    files = Files(tmp_path)
+    write(files.project / '.verifold', {'jobs': {'at_exit': 'keep'}})
+    values = {level: read_settings_file(path)[0] for level, path in files.paths.items()}
 
-    assert load_global_settings(home).jobs.at_exit is AtExit.STOP
-    assert load_settings(project, home).jobs.at_exit is AtExit.KEEP
+    assert settings_of({ALL: values[ALL]}).jobs.at_exit is AtExit.STOP
+    assert settings_of(values).jobs.at_exit is AtExit.KEEP

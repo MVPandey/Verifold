@@ -101,12 +101,18 @@ export interface SettingsView {
   readonly lab: Settings | null;
 }
 
-/** The person changes one setting. A `null` value removes it, so the one from the next level applies. */
+/** The settings that the app changes. */
+export type SettingKey = 'jobs.at_time_limit' | 'jobs.at_exit';
+
+/**
+ * The person changes one setting. A `null` value removes it, so the one for all projects, or Verifold's default,
+ * applies. The change names both files' revisions, because the files add up.
+ */
 export interface SettingsChange {
   readonly level: SettingsLevel;
-  readonly key: string;
+  readonly key: SettingKey;
   readonly value: string | null;
-  readonly revision: string;
+  readonly revisions: { readonly project: string; readonly all_projects: string };
 }
 
 /** One value that a harness offers for an option, with the name that the harness shows for it. */

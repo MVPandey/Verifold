@@ -2,16 +2,25 @@
 
 import hashlib
 import json
-from collections.abc import Iterable, Sequence
+import os
+import stat
+import tempfile
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 from pydantic import JsonValue
 
 from verifold.protocol.events import Event, SettingsSet
 from verifold.protocol.settings import Settings, SettingsFile, SettingsLevel
-from verifold.store.errors import SettingsChanged, SettingsInvalid
+from verifold.store.errors import SettingsChanged, SettingsInvalid, SettingsUnwritable
 
 SETTINGS_FILE = 'settings.json'
+
+LEVELS = (SettingsLevel.ALL, SettingsLevel.PROJECT)
+"""The levels in the order that they add up: a project's file wins over the one for all projects."""
+
+type SettingsValues = dict[str, JsonValue]
+"""What a settings file holds, as written."""
 
 
 def settings_path(level: SettingsLevel, project: Path, home: Path | None = None) -> Path:
@@ -30,21 +39,18 @@ def load_settings(project: Path, home: Path | None = None) -> SettingsFile:
         SettingsInvalid: A file is not a JSON object, or holds a setting that Verifold doesn't know or accept.
 
     """
-    return _load(settings_path(level, project, home) for level in (SettingsLevel.ALL, SettingsLevel.PROJECT))
+    return _load(settings_path(level, project, home) for level in LEVELS)
 
 
-def load_global_settings(home: Path | None = None) -> SettingsFile:
-    """
-    Return the settings for all projects: the global file over the defaults.
-
-    Raises:
-        SettingsInvalid: The file is not a JSON object, or holds a setting that Verifold doesn't know or accept.
-
-    """
-    return _load([settings_path(SettingsLevel.ALL, Path(), home)])
+def settings_of(values: Mapping[SettingsLevel, SettingsValues]) -> SettingsFile:
+    """Return the settings that files with `values` add up to, over the defaults. A missing level holds nothing."""
+    merged: SettingsValues = {}
+    for level in LEVELS:
+        merged = _merged(merged, values.get(level, {}))
+    return SettingsFile.model_validate(merged)
 
 
-def read_settings_file(path: Path) -> tuple[dict[str, JsonValue], str]:
+def read_settings_file(path: Path) -> tuple[SettingsValues, str]:
     """
     Return what a settings file holds, as written, and its revision: a hash of its content.
 
@@ -63,32 +69,67 @@ def read_settings_file(path: Path) -> tuple[dict[str, JsonValue], str]:
     return _parsed(path, content), hashlib.sha256(content).hexdigest()
 
 
-def change_setting(path: Path, key: str, value: JsonValue, revision: str) -> None:
+def change_setting(
+    paths: Mapping[SettingsLevel, Path],
+    level: SettingsLevel,
+    key: str,
+    value: JsonValue,
+    revisions: Mapping[SettingsLevel, str],
+) -> dict[SettingsLevel, SettingsValues]:
     """
-    Set one setting in a settings file, or remove it when `value` is `None`, and keep the rest as written.
+    Set one setting in the file of `level`, or remove it when `value` is `None`, and keep the rest as written.
 
-    `key` names the setting with dots, such as `jobs.at_exit`. The file changes only when it is still at `revision`,
-    so that a change never overwrites one that the person didn't see. A removal also removes a table that it empties.
+    `key` names the setting with dots, such as `jobs.at_exit`. A removal also removes a table that it empties. Each
+    file in `paths` must still be at its revision in `revisions`, because the files add up: a change on top of a file
+    that changed since the person read it could apply a setting that the person didn't see. Return what each file
+    holds after the change, as this call read and wrote it.
 
     Raises:
-        SettingsChanged: The file changed since `revision`.
-        SettingsInvalid: The file or the change is not valid.
+        SettingsChanged: A file changed since the person read it.
+        SettingsInvalid: A file or the change is not valid.
+        SettingsUnwritable: The file can't be written.
 
     """
-    data, current = read_settings_file(path)
-    if current != revision:
-        raise SettingsChanged(f'{path} changed since you opened it. Look at its new values, then change them again.')
-    changed = _with(data, key.split('.'), value)
-    _check(path, changed)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # Write a whole new file and then replace the old one, so that a reader never sees half a file.
-    written = path.with_name(f'.{path.name}.new')
-    written.write_text(json.dumps(changed, indent=2) + '\n')
-    written.replace(path)
+    values: dict[SettingsLevel, SettingsValues] = {}
+    for each, path in paths.items():
+        values[each], revision = read_settings_file(path)
+        if revision != revisions.get(each):
+            raise SettingsChanged(
+                f'{path} changed since you opened the settings. Look at its new values, then change them again.'
+            )
+    values[level] = _with(values[level], key.split('.'), value)
+    _check(paths[level], values[level])
+    _write(paths[level], values[level])
+    return values
+
+
+def _write(path: Path, values: SettingsValues) -> None:
+    # A settings file can link to a file in a dotfiles folder. The change then goes to that file.
+    target = path.resolve() if path.exists() else path
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
+        # A new file with a name of its own: nothing that waits at a fixed name can take the write somewhere else.
+        descriptor, name = tempfile.mkstemp(dir=target.parent, prefix=f'.{target.name}.', suffix='.new')
+    except OSError as error:
+        raise SettingsUnwritable(f"Can't write {path}: {error}") from error
+    written = Path(name)
+    try:
+        with os.fdopen(descriptor, 'w') as file:
+            file.write(json.dumps(values, indent=2) + '\n')
+            file.flush()
+            os.fsync(file.fileno())
+        if mode is not None:
+            written.chmod(mode)
+        # The new file replaces the old one at once, so that a reader never sees half a file.
+        written.replace(target)
+    except OSError as error:
+        written.unlink(missing_ok=True)
+        raise SettingsUnwritable(f"Can't write {path}: {error}") from error
 
 
 def _load(paths: Iterable[Path]) -> SettingsFile:
-    merged: dict[str, JsonValue] = {}
+    merged: SettingsValues = {}
     for path in paths:
         if path.exists():
             merged = _merged(merged, read_settings_file(path)[0])

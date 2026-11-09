@@ -131,6 +131,11 @@ describe('the settings page', () => {
     );
     assert.ok(html.includes('<button type="button" aria-pressed="true"><b>Keep them</b>'));
     assert.equal(html.split('aria-pressed="true"').length - 1, 2);
+    // The lab started before the project kept its processes, and follows its own copy until the person chooses.
+    assert.ok(
+      html.includes('The running lab still follows “Stop them”. Choose an answer to change it.'),
+    );
+    assert.equal(html.includes('has its own setting'), false);
   });
 
   it('shows the settings for all projects with the defaults where the file has nothing', () => {
@@ -140,5 +145,9 @@ describe('the settings page', () => {
     assert.equal(html.includes('Same as all projects'), false);
     assert.ok(html.includes('<button type="button" aria-pressed="true"><b>Pause them</b>'));
     assert.ok(html.includes('<button type="button" aria-pressed="true"><b>Stop them</b>'));
+    assert.ok(
+      html.includes('This project has its own setting, “Keep them”, and it wins over this one.'),
+    );
+    assert.equal(html.split('has its own setting').length - 1, 1);
   });
 });
