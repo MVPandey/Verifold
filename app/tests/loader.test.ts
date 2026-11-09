@@ -39,6 +39,8 @@ function slowServer(): {
     post: () => Promise.reject(new Error('unused')),
     rerun: () => Promise.reject(new Error('unused')),
     setTime: () => Promise.reject(new Error('unused')),
+    settings: () => Promise.reject(new Error('unused')),
+    changeSetting: () => Promise.reject(new Error('unused')),
   };
   return {
     api,

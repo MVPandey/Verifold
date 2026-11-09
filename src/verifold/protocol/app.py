@@ -2,12 +2,13 @@
 
 from typing import Literal
 
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, Field, JsonValue
 
 from verifold.protocol.agents import Agent, Label, ValueId
 from verifold.protocol.events import Question
 from verifold.protocol.ids import PostId
 from verifold.protocol.record import Record
+from verifold.protocol.settings import Settings, SettingsLevel
 from verifold.protocol.usage import Usage
 
 MAX_MINUTES = 7 * 24 * 60
@@ -52,6 +53,8 @@ class LabView(Record):
     """When the agents stop. `None` means no time limit."""
     out_of_time: bool = False
     """The lab reached its end. Its agents wait until the person gives it more time."""
+    settings: Settings = Settings()
+    """The settings that the lab follows, such as what happens to the agents' processes when the person stops it."""
 
 
 class RerunRequest(Record):
@@ -131,6 +134,38 @@ class StartRequest(Record):
     auto_mode: bool = True
     minutes: int | None = Field(default=None, ge=1, le=MAX_MINUTES)
     """How long the agents may work. `None` means no time limit."""
+
+
+class SettingsFileView(Record):
+    """One of the person's settings files: where it is, what it holds as written, and what it adds up to."""
+
+    path: str
+    values: dict[str, JsonValue]
+    revision: str
+    """A hash of the file. A change names it, so that it can't overwrite a change that the person didn't see."""
+    settings: Settings
+    """For all projects: the file over Verifold's defaults. For a project: its file over the one for all projects."""
+
+
+class SettingsView(Record):
+    """The person's settings for all projects and for this project, and the copy that the folder's lab follows."""
+
+    all_projects: SettingsFileView
+    project: SettingsFileView
+    lab: Settings | None = None
+    """The settings that the folder's lab follows, or `None` before a lab starts."""
+
+
+class SettingsChange(Record):
+    """The person changes one setting in one of their settings files."""
+
+    level: SettingsLevel
+    key: str = Field(pattern=r'^[a-z_]+(\.[a-z_]+)*$')
+    """The setting, with dots between its parts, such as `jobs.at_exit`."""
+    value: JsonValue = None
+    """The new value. `None` removes the setting, so the one from the next level applies."""
+    revision: str
+    """The file's revision when the person read it."""
 
 
 class TimeRequest(Record):

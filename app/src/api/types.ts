@@ -61,6 +61,52 @@ export interface LabView {
   readonly needs_you: number;
   readonly ends_at: string | null;
   readonly out_of_time: boolean;
+  /** The settings that the lab follows. */
+  readonly settings: Settings;
+}
+
+/** What happens to the processes that agents left running when the lab's time ends, or the person stops it. */
+export type AtTimeLimit = 'pause' | 'stop' | 'finish';
+
+/** What happens to the processes that agents left running when Verifold exits. */
+export type AtExit = 'stop' | 'keep';
+
+export interface JobSettings {
+  readonly at_time_limit: AtTimeLimit;
+  readonly at_exit: AtExit;
+}
+
+export interface Settings {
+  readonly version: number;
+  readonly jobs: JobSettings;
+}
+
+/** Where a setting lives: in one project's file, which wins, or in the file for all projects. */
+export type SettingsLevel = 'project' | 'all';
+
+/** One of the person's settings files: where it is, what it holds as written, and what it adds up to. */
+export interface SettingsFileView {
+  readonly path: string;
+  readonly values: Readonly<Record<string, unknown>>;
+  /** A hash of the file. A change names it, so that it can't overwrite a change that the person didn't see. */
+  readonly revision: string;
+  /** For all projects: the file over Verifold's defaults. For a project: its file over the one for all projects. */
+  readonly settings: Settings;
+}
+
+export interface SettingsView {
+  readonly all_projects: SettingsFileView;
+  readonly project: SettingsFileView;
+  /** The settings that the folder's lab follows, or `null` before a lab starts. */
+  readonly lab: Settings | null;
+}
+
+/** The person changes one setting. A `null` value removes it, so the one from the next level applies. */
+export interface SettingsChange {
+  readonly level: SettingsLevel;
+  readonly key: string;
+  readonly value: string | null;
+  readonly revision: string;
 }
 
 /** One value that a harness offers for an option, with the name that the harness shows for it. */

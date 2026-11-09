@@ -16,9 +16,18 @@ from pydantic import Field
 
 from verifold.harnesses.catalog import CATALOG, HarnessEntry, available, catalog_with
 from verifold.protocol.agents import Agent, ModelSpec
-from verifold.protocol.app import AgentChoice, HarnessOption, Offer, SetupView, StartRequest
+from verifold.protocol.app import (
+    AgentChoice,
+    HarnessOption,
+    Offer,
+    SettingsChange,
+    SettingsFileView,
+    SettingsView,
+    SetupView,
+    StartRequest,
+)
 from verifold.protocol.record import Record
-from verifold.protocol.settings import AtExit
+from verifold.protocol.settings import AtExit, Settings, SettingsLevel
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.folders import LAB_FOLDER, agent_folder
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
@@ -37,7 +46,14 @@ from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.board import Board
 from verifold.store.record_file import RecordFile
 from verifold.store.server_file import running_server, server_file
-from verifold.store.settings_file import load_settings, recorded_settings
+from verifold.store.settings_file import (
+    change_setting,
+    load_global_settings,
+    load_settings,
+    read_settings_file,
+    recorded_settings,
+    settings_path,
+)
 
 SERVER_FILE = 'server.json'
 """The file in the lab folder that names the process serving the lab."""
@@ -158,6 +174,29 @@ class Host:
                 self._offers[harness.name] = await offer_of(harness, place, PROBE_TIMEOUT)
         finally:
             self._probing.discard(harness.name)
+
+    def settings(self) -> SettingsView:
+        """Return the person's settings files, and the copy that the folder's lab follows."""
+        project, all_projects = (settings_path(level, self._project) for level in SettingsLevel)
+        return SettingsView(
+            all_projects=_file_view(all_projects, load_global_settings().lab_settings()),
+            project=_file_view(project, load_settings(self._project).lab_settings()),
+            lab=self._lab.board.settings if self._lab else None,
+        )
+
+    async def change_settings(self, change: SettingsChange) -> SettingsView:
+        """
+        Change one setting in one of the person's settings files, and apply the change to the folder's lab.
+
+        The lab takes only the settings that the change moves. An agent can edit the files too, and its edits stay
+        out of a running lab.
+        """
+        before = load_settings(self._project).lab_settings()
+        change_setting(settings_path(change.level, self._project), change.key, change.value, change.revision)
+        after = load_settings(self._project).lab_settings()
+        if self._lab is not None and after != before:
+            await self._lab.set_settings(_moved(self._lab.board.settings, before, after))
+        return self.settings()
 
     def setup(self) -> SetupView:
         """Return the harnesses that this computer has, and the folder's lab, if any."""
@@ -386,6 +425,17 @@ def _crew(agents: tuple[Agent, ...], catalog: Mapping[str, HarnessEntry], *, aut
         (catalog[name], _options(first[name].model_copy(update={'mode': None}), auto_mode=auto_mode))
         for name in harnesses
     )
+
+
+def _file_view(path: Path, settings: Settings) -> SettingsFileView:
+    values, revision = read_settings_file(path)
+    return SettingsFileView(path=_shown(path), values=values, revision=revision, settings=settings)
+
+
+def _moved(running: Settings, before: Settings, after: Settings) -> Settings:
+    # Each job setting that the change moved takes its new value. The rest stay as the lab has them.
+    moved = {name: value for name, value in after.jobs if getattr(before.jobs, name) != value}
+    return running.model_copy(update={'jobs': running.jobs.model_copy(update=moved)})
 
 
 def _shown(path: Path) -> str:

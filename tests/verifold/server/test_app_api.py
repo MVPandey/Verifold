@@ -7,16 +7,24 @@ import httpx2
 import pytest
 from pydantic import SecretStr
 
-from verifold.protocol.app import HarnessOption, SetupView, StartRequest
+from verifold.protocol.app import (
+    HarnessOption,
+    SettingsChange,
+    SettingsFileView,
+    SettingsView,
+    SetupView,
+    StartRequest,
+)
 from verifold.protocol.events import TurnSummary
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import FileEvidence
+from verifold.protocol.settings import Settings
 from verifold.protocol.usage import Usage
 from verifold.server.activity import Activity
 from verifold.server.app_api import _changes, app_api
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.server.lab import Lab
-from verifold.store.errors import SettingsInvalid
+from verifold.store.errors import SettingsChanged, SettingsInvalid
 
 TOKEN = 'person-secret'
 START = {'question': 'Is it faster?', 'agents': [{'harness': 'fake', 'count': 2}]}
@@ -40,6 +48,22 @@ class Host:
         if request.agents[0].harness != 'fake':
             raise SetupRejected('Unknown harness nope.')
         self.started.append(request)
+
+    def settings(self) -> SettingsView:
+        def level(path: str) -> SettingsFileView:
+            return SettingsFileView(path=path, values={}, revision='', settings=Settings())
+
+        lab = self.lab.board.settings if self.lab else None
+        return SettingsView(
+            all_projects=level('~/.verifold/settings.json'), project=level('.verifold/settings.json'), lab=lab
+        )
+
+    async def change_settings(self, change: SettingsChange) -> SettingsView:
+        if change.revision == 'old':
+            raise SettingsChanged('.verifold/settings.json changed since you opened it.')
+        if change.value == 'later':
+            raise SettingsInvalid('.verifold/settings.json is not valid settings: later.')
+        return self.settings()
 
 
 @pytest.fixture
@@ -96,6 +120,22 @@ async def test_a_broken_settings_file_comes_back_as_a_readable_refusal(activity:
 
     assert refused.status_code == 400
     assert 'settings.json is not valid settings' in refused.json()['detail']
+
+
+async def test_settings_pass_through_and_refusals_say_why(client: httpx2.AsyncClient) -> None:
+    change = {'level': 'project', 'key': 'jobs.at_exit', 'value': 'keep', 'revision': ''}
+
+    view = (await client.get('/settings')).json()
+    changed = await client.post('/settings', json=change)
+    stale = await client.post('/settings', json={**change, 'revision': 'old'})
+    invalid = await client.post('/settings', json={**change, 'value': 'later'})
+    bad_key = await client.post('/settings', json={**change, 'key': '../server'})
+
+    assert view['lab'] == {'version': 1, 'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'}}
+    assert view['project']['path'] == '.verifold/settings.json'
+    assert changed.status_code == 200
+    assert (stale.status_code, invalid.status_code, bad_key.status_code) == (409, 400, 422)
+    assert 'changed since you opened it' in stale.json()['detail']
 
 
 async def test_a_folder_with_a_lab_refuses_another(client: httpx2.AsyncClient) -> None:

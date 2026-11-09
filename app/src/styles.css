@@ -1890,6 +1890,25 @@ button.btn:disabled {
 .run {
   margin-left: auto;
 }
+.settingslink {
+  margin-left: auto;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--ink-2);
+}
+.run ~ .settingslink {
+  margin-left: 0;
+}
+.settingslink[aria-current='page'] {
+  color: var(--ink);
+}
+.stopline {
+  margin: 8px 0 0;
+  font-size: 13.5px;
+}
+.settings .filters {
+  margin: 16px 0 12px;
+}
 h2 {
   text-transform: uppercase;
 }
