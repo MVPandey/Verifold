@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 from pathlib import Path
 
@@ -227,3 +228,18 @@ def test_the_settings_for_all_projects_leave_out_the_projects_file(tmp_path: Pat
 
     assert settings_of({ALL: values[ALL]}).jobs.at_exit is AtExit.STOP
     assert settings_of(values).jobs.at_exit is AtExit.KEEP
+
+
+def test_only_a_regular_file_of_a_sane_size_is_read(tmp_path: Path) -> None:
+    files = Files(tmp_path)
+    folder = files.paths[PROJECT].parent
+    folder.mkdir(parents=True)
+    # A pipe would block the server's reads. A huge file would only cost memory.
+    os.mkfifo(files.paths[PROJECT])
+    with pytest.raises(SettingsInvalid, match=r'settings\.json is not a regular file'):
+        load_settings(files.project, home=files.home)
+
+    files.paths[PROJECT].unlink()
+    files.paths[PROJECT].write_text('{"jobs": {}' + ' ' * (64 * 1024) + '}')
+    with pytest.raises(SettingsInvalid, match=r'settings\.json is larger than 64 KiB'):
+        load_settings(files.project, home=files.home)

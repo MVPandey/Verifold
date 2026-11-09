@@ -5,7 +5,7 @@ import asyncio
 import signal
 import sys
 import webbrowser
-from collections.abc import Coroutine, Sequence
+from collections.abc import Coroutine, Mapping, Sequence
 from contextlib import suppress
 from functools import partial
 from importlib.metadata import version
@@ -15,16 +15,15 @@ from pydantic import ValidationError
 
 from verifold import DISTRIBUTION
 from verifold.app import ServeHooks, serve, stop_lab
-from verifold.harnesses.catalog import CATALOG
-from verifold.protocol.app import AgentChoice, StartRequest
+from verifold.harnesses.catalog import CATALOG, HarnessEntry, available, catalog_with
+from verifold.protocol.agents import AgentChoice
+from verifold.protocol.app import StartRequest
+from verifold.protocol.settings import SettingsLevel, SetupDefaults
 from verifold.runner.errors import RunnerError
 from verifold.runner.jobs import Job, Sweep
-from verifold.server.errors import ServerError
+from verifold.server.errors import ServerError, SetupRejected
 from verifold.store.errors import SettingsInvalid, StoreError
-from verifold.store.settings_file import load_settings
-
-DEFAULT_AGENTS = (AgentChoice(harness='claude-code'), AgentChoice(harness='codex'))
-"""One agent of each harness, with the person's own models."""
+from verifold.store.settings_file import read_settings_file, settings_of, settings_path
 
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 """Ctrl+C, a plain `kill`, and a closed terminal. Each one stops the lab in the same way."""
@@ -49,8 +48,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         return
     try:
         start = _start(args) if args.command == 'run' else None
-    except (ValidationError, SettingsInvalid) as error:
+    except (ValidationError, SettingsInvalid, SetupRejected) as error:
         sys.exit(f'verifold: {error}')
+    if start:
+        _say(f'Starting a lab with {_plan(start)}.')
     _say(f'Serving Verifold for {Path.cwd()}. Its record is .verifold/record.jsonl. Press Ctrl+C to stop.')
     try:
         announce = partial(_announce, open_browser=not args.no_browser)
@@ -73,15 +74,72 @@ def _reported(error: BaseException) -> BaseException:
 
 
 def _start(args: argparse.Namespace) -> StartRequest:
-    # The person's saved choices for new labs fill in what the command line leaves out.
-    defaults = load_settings(Path.cwd()).setup
-    agents = tuple(_agent(value) for value in args.agent) if args.agent else defaults.agents or DEFAULT_AGENTS
+    """
+    Return what `verifold run` starts: the command line's choices, and the saved choices for new labs for the rest.
+
+    `verifold run` starts at once, without showing the saved choices, and a project's file can come from someone else.
+    So a project's file can make the lab stricter, not looser: it can turn auto mode off and shorten the time limit,
+    and its agents get no modes. Under `--ask-me`, no saved agent gets a mode.
+
+    Raises:
+        SetupRejected: No harness that Verifold knows is on this computer.
+
+    """
+    project = Path.cwd()
+    values = {level: read_settings_file(settings_path(level, project), level)[0] for level in SettingsLevel}
+    files = settings_of(values)
+    everywhere, here = settings_of({SettingsLevel.ALL: values[SettingsLevel.ALL]}).setup, files.setup
+    if args.agent:
+        agents = tuple(_agent(value) for value in args.agent)
+    else:
+        saved = values[SettingsLevel.PROJECT].get('setup')
+        from_project = isinstance(saved, dict) and 'agents' in saved
+        agents = _saved_agents(here, catalog_with(files.harnesses), drop_modes=args.ask_me or from_project)
+    shorter = min((minutes for minutes in (everywhere.minutes, here.minutes) if minutes is not None), default=None)
     return StartRequest(
         question=args.question,
         agents=agents,
-        auto_mode=defaults.auto_mode and not args.ask_me,
-        minutes=defaults.minutes if args.minutes is None else args.minutes,
+        auto_mode=everywhere.auto_mode and here.auto_mode and not args.ask_me,
+        minutes=shorter if args.minutes is None else args.minutes,
     )
+
+
+def _saved_agents(
+    defaults: SetupDefaults, catalog: Mapping[str, HarnessEntry], *, drop_modes: bool
+) -> tuple[AgentChoice, ...]:
+    kept: list[AgentChoice] = []
+    for choice in defaults.agents or ():
+        entry = catalog.get(choice.harness)
+        if entry is None or not available(entry):
+            _say(f'Skipped {choice.harness} from your saved choices for new labs: it is not on this computer.')
+            continue
+        kept.append(choice.model_copy(update={'mode': None}) if drop_modes else choice)
+    if kept:
+        return tuple(kept)
+    found = tuple(AgentChoice(harness=name) for name, entry in catalog.items() if available(entry))
+    if not found:
+        raise SetupRejected(
+            f'No harness that Verifold knows is on this computer: {", ".join(catalog)}. Install one, or add one to '
+            '~/.verifold/settings.json.'
+        )
+    return found
+
+
+def _plan(start: StartRequest) -> str:
+    # What `verifold run` starts, in words, so that the person sees the saved choices that it used.
+    agents = ', '.join(_agent_words(choice) for choice in start.agents)
+    time = f'a time limit of {start.minutes} min' if start.minutes else 'no time limit'
+    return f'{agents}; {"auto mode" if start.auto_mode else "no auto mode"}; {time}'
+
+
+def _agent_words(choice: AgentChoice) -> str:
+    details = [
+        detail
+        for detail in (choice.model, choice.effort and f'{choice.effort} effort', choice.mode and f'{choice.mode} mode')
+        if detail
+    ]
+    agents = f'{choice.count} {choice.harness}'
+    return f'{agents} ({", ".join(details)})' if details else agents
 
 
 async def _until_stopped(serving: Coroutine[None, None, None]) -> None:
@@ -166,7 +224,7 @@ def _parser() -> argparse.ArgumentParser:
         '--agent',
         action='append',
         metavar='HARNESS[:MODEL[:EFFORT[:MODE]]]',
-        help=f'Add an agent: {", ".join(CATALOG)}, or a harness from your settings, with an optional model, effort, and mode. Default: your saved choices for new labs, or one of each with your usual settings.',
+        help=f'Add an agent: {", ".join(CATALOG)}, or a harness from your settings, with an optional model, effort, and mode. Default: your saved choices for new labs, or one agent of each harness that this computer has.',
     )
     run.add_argument(
         '--minutes',

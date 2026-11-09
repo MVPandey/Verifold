@@ -19,7 +19,8 @@ from pydantic import TypeAdapter
 
 from verifold.app import ServeHooks, WebServer, serve
 from verifold.harnesses.catalog import HarnessEntry
-from verifold.protocol.app import AgentChoice, StartRequest
+from verifold.protocol.agents import AgentChoice
+from verifold.protocol.app import StartRequest
 from verifold.protocol.events import AgentJoined, Event, Posted, SettingsSet, TimeRanOut
 from verifold.protocol.settings import AtExit, AtTimeLimit
 from verifold.runner.environment import harness_environment
@@ -522,6 +523,25 @@ async def test_saved_choices_for_new_labs_fill_the_setup_and_leave_a_running_lab
     assert setup['defaults'] == changed['project']['defaults']
     assert wrong.status_code == 400
     assert record(project) == []
+
+
+async def test_saved_choices_change_while_a_lab_runs_without_touching_the_lab(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('HOME', str(project.parent))
+    async with serving(project, ONE_AGENT) as client:
+        await until(lambda: any(isinstance(event, SettingsSet) for event in record(project)))
+        view = (await client.get('/settings')).json()
+        saved = {'agents': [{'harness': 'fake', 'count': 2}], 'auto_mode': False}
+        change = {'level': 'project', 'key': 'setup', 'value': saved, 'revisions': revisions_of(view)}
+        changed = await client.post('/settings', json=change)
+        setup = (await client.get('/setup')).json()
+
+    assert changed.status_code == 200
+    assert changed.json()['project']['defaults']['auto_mode'] is False
+    assert lab_settings(project) == [(AtTimeLimit.PAUSE, AtExit.STOP)]
+    # The lab's pages read no saved choices while the lab runs.
+    assert setup['defaults'] == {'agents': None, 'auto_mode': True, 'minutes': None}
 
 
 async def test_a_broken_settings_file_still_shows_the_setup_with_verifolds_defaults(project: Path) -> None:

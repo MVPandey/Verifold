@@ -256,6 +256,15 @@ describe('setup', () => {
       [1, 0],
     );
     assert.equal(agentCount(step(step(picks, 'claude-code', 30), 'codex', -1)), 20);
+    // The limit is for the whole lab: a second harness gets only the room that the first leaves.
+    const both = [
+      { harness: 'claude-code', count: 15, model: '', effort: '', mode: '' },
+      { harness: 'codex', count: 0, model: '', effort: '', mode: '' },
+    ];
+    assert.deepEqual(
+      step(both, 'codex', 10).map((pick) => pick.count),
+      [15, 5],
+    );
   });
 
   it('sends only the choices that the person made', () => {
@@ -368,7 +377,6 @@ describe('choices for new labs', () => {
   const saved = {
     agents: [
       { harness: 'claude-code', count: 2, model: 'opus', effort: null, mode: 'plan' },
-      { harness: 'claude-code', count: 1, model: 'haiku', effort: null, mode: null },
       { harness: 'codex', count: 3, model: null, effort: 'low', mode: null },
     ],
     auto_mode: false,
@@ -377,7 +385,7 @@ describe('choices for new labs', () => {
 
   it('start the setup, with nothing for a harness that this computer lacks', () => {
     assert.deepEqual(firstPicks(HARNESSES, saved), [
-      { harness: 'claude-code', count: 3, model: 'opus', effort: '', mode: 'plan' },
+      { harness: 'claude-code', count: 2, model: 'opus', effort: '', mode: 'plan' },
       { harness: 'codex', count: 0, model: '', effort: 'low', mode: '' },
     ]);
     assert.deepEqual(
@@ -389,13 +397,13 @@ describe('choices for new labs', () => {
   it('come from the setup as the person left it, and read as words', () => {
     const picks = firstPicks(HARNESSES, saved);
     assert.deepEqual(setupChoices(picks, false, 45), {
-      agents: [{ harness: 'claude-code', count: 3, model: 'opus', mode: 'plan' }],
+      agents: [{ harness: 'claude-code', count: 2, model: 'opus', mode: 'plan' }],
       auto_mode: false,
       minutes: 45,
     });
     assert.equal(
       defaultsLine(saved, HARNESSES),
-      'Claude Code: 2 agents (opus, plan mode); Claude Code: 1 agent (haiku); Codex: 3 agents (low effort). No auto mode. Time limit: 45 min.',
+      'Claude Code: 2 agents (opus, plan mode); Codex: 3 agents (low effort). No auto mode. Time limit: 45 min.',
     );
     assert.equal(
       defaultsLine(DEFAULTS, HARNESSES),

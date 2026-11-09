@@ -10,7 +10,7 @@ import type {
 } from '../api/types.ts';
 import { duration } from './format.ts';
 
-/** The most agents of one harness that a lab can start, as the server allows. */
+/** The most agents that a lab starts in all, as the server allows. */
 export const MAX_AGENTS = 20;
 
 /**
@@ -50,28 +50,29 @@ export function firstPicks(
         mode: '',
       };
     }
-    const saved = defaults.agents.filter((choice) => choice.harness === option.name);
-    const count = saved.reduce((sum, choice) => sum + choice.count, 0);
-    const first = saved[0];
+    // The server keeps one saved choice for each harness, and at most `MAX_AGENTS` agents in all.
+    const saved = defaults.agents.find((choice) => choice.harness === option.name);
     return {
       harness: option.name,
-      count: option.available ? Math.min(MAX_AGENTS, count) : 0,
-      model: first?.model ?? '',
-      effort: first?.effort ?? '',
-      mode: first?.mode ?? '',
+      count: option.available && saved ? saved.count : 0,
+      model: saved?.model ?? '',
+      effort: saved?.effort ?? '',
+      mode: saved?.mode ?? '',
     };
   });
 }
 
-/** Return the picks with one harness's count changed by `step`, kept between zero and `MAX_AGENTS`. */
+/** Return the picks with one harness's count changed by `step`, kept at zero or more, and `MAX_AGENTS` in all. */
 export function step(
   picks: readonly HarnessPick[],
   harness: string,
   change: number,
 ): readonly HarnessPick[] {
+  const others = picks.filter((pick) => pick.harness !== harness);
+  const room = MAX_AGENTS - agentCount(others);
   return picks.map((pick) =>
     pick.harness === harness
-      ? { ...pick, count: Math.min(MAX_AGENTS, Math.max(0, pick.count + change)) }
+      ? { ...pick, count: Math.min(room, Math.max(0, pick.count + change)) }
       : pick,
   );
 }

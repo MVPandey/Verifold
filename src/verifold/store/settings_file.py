@@ -65,10 +65,7 @@ def read_settings_file(path: Path, level: SettingsLevel) -> tuple[SettingsValues
     """
     if not path.exists():
         return {}, ''
-    try:
-        content = path.read_bytes()
-    except OSError as error:
-        raise SettingsInvalid(f'{path} is not valid settings: {error}') from error
+    content = _content(path)
     data = _parsed(path, content)
     # In the home folder, the project's file is the file for all projects.
     own = path.parent.parent.resolve() != Path.home().resolve()
@@ -79,6 +76,25 @@ def read_settings_file(path: Path, level: SettingsLevel) -> tuple[SettingsValues
             'this file, and add one to ~/.verifold/settings.json only if you trust its command.'
         )
     return data, hashlib.sha256(content).hexdigest()
+
+
+MAX_SETTINGS_BYTES = 64 * 1024
+"""The largest settings file that Verifold reads. Settings files are small, and a huge one would only cost memory."""
+
+
+def _content(path: Path) -> bytes:
+    # A pipe or a device in place of the file would block a read or never end it, so only a regular file is read.
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        with os.fdopen(descriptor, 'rb') as file:
+            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+                raise SettingsInvalid(f'{path} is not a regular file.')
+            content = file.read(MAX_SETTINGS_BYTES + 1)
+    except OSError as error:
+        raise SettingsInvalid(f'{path} is not valid settings: {error}') from error
+    if len(content) > MAX_SETTINGS_BYTES:
+        raise SettingsInvalid(f'{path} is larger than {MAX_SETTINGS_BYTES // 1024} KiB.')
+    return content
 
 
 def change_setting(

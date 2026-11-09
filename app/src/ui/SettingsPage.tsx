@@ -23,6 +23,8 @@ export function SettingsPage(props: {
   readonly labOpen: boolean;
   /** The harnesses that the setup offers, for their names. */
   readonly harnesses: readonly HarnessOption[];
+  /** A setting changed. The app reads the lab and the setup again. */
+  readonly onChanged: () => void;
 }): ReactElement {
   const { api } = props;
   const [view, setView] = useState<SettingsView | null>(null);
@@ -46,6 +48,7 @@ export function SettingsPage(props: {
       (changed) => {
         setView(changed);
         setSaving(false);
+        props.onChanged();
       },
       (failure: unknown) => {
         if (!(failure instanceof ApiError && failure.status === 409)) {
@@ -162,6 +165,7 @@ export function SettingsForm(props: {
       <NewLabs
         file={file}
         project={project}
+        projectOwn={!project && valueAt(props.view.project.values, 'setup') !== undefined}
         harnesses={props.harnesses}
         disabled={props.disabled}
         onRemove={() => props.onChange('setup', null)}
@@ -174,6 +178,8 @@ export function SettingsForm(props: {
 function NewLabs(props: {
   readonly file: SettingsFileView;
   readonly project: boolean;
+  /** On the page for all projects: this project has saved choices of its own, which win. */
+  readonly projectOwn: boolean;
   readonly harnesses: readonly HarnessOption[];
   readonly disabled: boolean;
   readonly onRemove: () => void;
@@ -195,6 +201,9 @@ function NewLabs(props: {
         >
           {props.project ? 'Use the choices for all projects' : "Use Verifold's defaults"}
         </button>
+      ) : null}
+      {props.projectOwn ? (
+        <p className="note">This project has saved choices of its own, and they win over these.</p>
       ) : null}
       <p className="note">
         To save other choices, set up a lab and choose “Save these choices for the next labs”.
