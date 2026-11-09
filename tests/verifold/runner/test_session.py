@@ -3,13 +3,24 @@ import json
 import os
 from pathlib import Path
 
+import psutil
 import pytest
+from acp import schema
 from conftest import ServedBoard
 from fakes import FAKE_HARNESS
 
 from verifold.protocol.usage import Usage
 from verifold.runner.errors import RunnerError
-from verifold.runner.session import AgentSession, BoardAccess, PermissionRequest, Place, SessionHooks, SessionOptions
+from verifold.runner.session import (
+    AgentSession,
+    BoardAccess,
+    PermissionRequest,
+    Place,
+    SessionHooks,
+    SessionOptions,
+    _offer,
+    offer_of,
+)
 
 
 def calls(log: Path) -> list[dict[str, object]]:
@@ -154,3 +165,60 @@ async def test_a_harness_without_a_model_option_refuses_a_model_instead_of_ignor
             FAKE_HARNESS, folder, BoardAccess(url=served.url, token=token), SessionOptions(model='big'), NO_PERMISSION
         ):
             pass
+
+
+async def test_a_probe_reads_what_a_harness_offers_and_stops_it(folder: Place) -> None:
+    offer = await offer_of(FAKE_HARNESS, folder)
+
+    assert [value.value for value in offer.models] == ['default', 'small', 'small-model']
+    assert [value.value for value in offer.efforts] == ['default', 'low', 'high']
+    assert [(value.value, value.name) for value in offer.modes] == [('ask', 'Ask'), ('auto', 'Auto')]
+    assert (offer.model, offer.effort, offer.mode) == ('default', 'default', 'ask')
+    assert not [child for child in psutil.Process().children() if 'fake_acp_agent.py' in ' '.join(child.cmdline())]
+
+
+async def test_a_probe_of_a_harness_without_options_still_reads_its_modes(
+    folder: Place, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_NO_OPTIONS', '1')
+
+    offer = await offer_of(FAKE_HARNESS, folder)
+
+    assert (offer.models, offer.efforts, offer.model, offer.effort) == ((), (), None, None)
+    assert offer.mode == 'ask'
+
+
+def test_an_offer_lists_grouped_values_one_after_another() -> None:
+    small = schema.SessionConfigSelectOption(value='small', name='Small')
+    big = schema.SessionConfigSelectOption(value='big', name='Big')
+    grouped = schema.SessionConfigOptionSelect(
+        id='model',
+        name='Model',
+        category='model',
+        current_value='small',
+        type='select',
+        options=[
+            schema.SessionConfigSelectGroup(group='a', name='A', options=[small]),
+            schema.SessionConfigSelectGroup(group='b', name='B', options=[big]),
+        ],
+    )
+
+    offer = _offer(schema.NewSessionResponse(session_id='s', config_options=[grouped]))
+
+    assert [value.value for value in offer.models] == ['small', 'big']
+    assert offer.modes == ()
+
+
+async def test_a_chosen_mode_wins_over_auto_mode(served: ServedBoard, folder: Place, log: Path) -> None:
+    _, token = served.seat('bo')
+
+    async with AgentSession.open(
+        FAKE_HARNESS,
+        folder,
+        BoardAccess(url=served.url, token=token),
+        SessionOptions(mode='ask', auto_mode=True),
+        NO_PERMISSION,
+    ):
+        pass
+
+    assert [call['mode'] for call in calls(log) if call['event'] == 'mode'] == ['ask']

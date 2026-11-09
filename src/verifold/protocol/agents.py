@@ -34,6 +34,8 @@ class Agent(Record):
     role: Annotated[str, StringConstraints(max_length=40)] = ''
     brief: Annotated[str, StringConstraints(max_length=8_000)] = ''
     """Older records give agent 1 a planner's role and brief. Verifold no longer sets or sends either."""
+    mode: Label | None = None
+    """The harness mode that the person chose for the agent. `None` follows the lab's auto mode choice."""
     recruited_by: AgentId | None = None
     checks: PostId | None = None
     """For a blind checker that Verifold starts: the post that it reruns. It posts one check and reads nothing else."""

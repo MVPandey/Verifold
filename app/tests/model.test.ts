@@ -21,12 +21,23 @@ import {
   agentCount,
   firstPicks,
   initials,
+  menuEntries,
+  modeEntries,
   modelSummary,
   startRequest,
   step,
 } from '../src/model/setup.ts';
 import { endLine, MAX_MINUTES, moreTime, runStatus } from '../src/model/time.ts';
-import { HARNESSES, agentView, ask, labView, postView, result, summary } from './fixtures.ts';
+import {
+  HARNESSES,
+  OFFER,
+  agentView,
+  ask,
+  labView,
+  postView,
+  result,
+  summary,
+} from './fixtures.ts';
 
 function memoryStore(): {
   getItem(key: string): string | null;
@@ -243,21 +254,45 @@ describe('setup', () => {
 
   it('sends only the choices that the person made', () => {
     const picks = [
-      { harness: 'claude-code', count: 3, model: ' opus ', effort: '' },
-      { harness: 'codex', count: 0, model: '', effort: 'low' },
+      { harness: 'claude-code', count: 3, model: ' opus ', effort: '', mode: 'plan' },
+      { harness: 'codex', count: 0, model: '', effort: 'low', mode: '' },
     ];
     assert.deepEqual(startRequest(' Is it faster? ', picks, false, 30), {
       question: 'Is it faster?',
-      agents: [{ harness: 'claude-code', count: 3, model: 'opus' }],
+      agents: [{ harness: 'claude-code', count: 3, model: 'opus', mode: 'plan' }],
       auto_mode: false,
       minutes: 30,
     });
     assert.equal('minutes' in startRequest('Q?', picks, true, null), false);
     assert.deepEqual(['Claude Code', 'Codex'].map(initials), ['CC', 'CX']);
+  });
+
+  it('names the choices with the names that the harness offered', () => {
+    const pick = { harness: 'claude-code', count: 1, model: '', effort: '', mode: '' };
+    assert.equal(modelSummary(pick, OFFER), 'Opus, High effort (your default)');
+    assert.equal(modelSummary({ ...pick, model: 'haiku' }, OFFER), 'Haiku, High effort');
     assert.equal(
-      modelSummary({ harness: 'codex', count: 0, model: '', effort: 'low' }),
-      'Your default model, low effort',
+      modelSummary({ ...pick, mode: 'plan' }, OFFER),
+      'Opus, High effort (your default), Plan mode',
     );
+    assert.equal(modelSummary(pick, null), 'Your default model and effort');
+    assert.equal(modelSummary({ ...pick, effort: 'low' }, null), 'Your default model, low effort');
+    assert.equal(modelSummary({ ...pick, model: 'gpt-x' }, null), 'gpt-x, default effort');
+  });
+
+  it("puts the person's own setting first in each menu, and sends nothing for it", () => {
+    assert.deepEqual(menuEntries(OFFER.models, OFFER.model), [
+      { value: '', label: 'Opus (your default)' },
+      { value: 'default', label: 'Default (recommended)' },
+      { value: 'haiku', label: 'Haiku' },
+    ]);
+    assert.deepEqual(menuEntries(OFFER.efforts, null)[0], { value: '', label: 'Your default' });
+    assert.deepEqual(menuEntries([], 'opus'), []);
+    assert.deepEqual(
+      modeEntries(OFFER).map((entry) => entry.label),
+      ['Your auto mode answer', 'Manual (your default)', 'Plan', 'Auto'],
+    );
+    assert.deepEqual(modeEntries({ ...OFFER, modes: [] }), []);
   });
 });
 

@@ -15,6 +15,7 @@ from pydantic import SecretStr
 
 from verifold import DISTRIBUTION
 from verifold.harnesses.catalog import HarnessEntry
+from verifold.protocol.app import Offer, OptionValue
 from verifold.protocol.ids import AgentId
 from verifold.protocol.record import Record
 from verifold.protocol.usage import Usage
@@ -80,6 +81,8 @@ class SessionOptions(Record):
 
     model: str | None = None
     effort: str | None = None
+    mode: str | None = None
+    """One of the harness's own modes. It wins over `auto_mode`."""
     auto_mode: bool = False
     resume: str | None = None
     """A session ID to load, so the agent keeps its conversation."""
@@ -198,17 +201,80 @@ def _unsupported(method: str) -> NoReturn:
     raise acp.RequestError.method_not_found(method)
 
 
+async def offer_of(harness: HarnessEntry, place: Place) -> Offer:
+    """
+    Open a session of the harness without a prompt, and return the models, effort levels, and modes that it offers.
+
+    The session gets no board and no message. Verifold stops the harness before this returns, also after a failure.
+    """
+    place.folder.mkdir(parents=True, exist_ok=True)
+    async with _connected(harness, place, _Client(SessionHooks(permissions=_refuse))) as connection:
+        return _offer(await connection.new_session(cwd=str(place.folder), mcp_servers=[]))
+
+
+@asynccontextmanager
+async def _connected(harness: HarnessEntry, place: Place, client: _Client) -> AsyncGenerator[ClientSideConnection]:
+    """Start the harness's ACP agent in the place's folder, and stop its whole process group when the block ends."""
+    place.log.parent.mkdir(parents=True, exist_ok=True)
+    with place.log.open('ab') as errors:
+        process = await start(harness.command, place.folder, errors, harness_environment(place.lab, place.agent))
+        if process.stdin is None or process.stdout is None:
+            await stop(process)
+            raise RunnerError(f'{harness.name} started without its protocol pipes.')
+        connection = acp.connect_to_agent(client, process.stdin, process.stdout)
+        try:
+            await connection.initialize(
+                protocol_version=acp.PROTOCOL_VERSION,
+                client_capabilities=schema.ClientCapabilities(
+                    fs=schema.FileSystemCapabilities(read_text_file=False, write_text_file=False), terminal=False
+                ),
+                client_info=schema.Implementation(name='verifold', version=version(DISTRIBUTION)),
+            )
+            yield connection
+        finally:
+            # Stop the harness first: the connection's reader waits for output that only ends with the process.
+            await stop(process)
+            with suppress(TimeoutError):
+                async with asyncio.timeout(STOP_GRACE):
+                    await connection.close()
+
+
+async def _refuse(_: PermissionRequest) -> str | None:
+    # A session without a prompt asks nothing. If it did, the answer is no.
+    return None
+
+
+def _offer(opened: schema.NewSessionResponse) -> Offer:
+    by_category = {
+        option.category: option
+        for option in opened.config_options or []
+        if isinstance(option, schema.SessionConfigOptionSelect) and isinstance(option.category, str)
+    }
+    model, effort, modes = by_category.get('model'), by_category.get('thought_level'), opened.modes
+    return Offer(
+        models=_values(model),
+        efforts=_values(effort),
+        modes=tuple(OptionValue(value=mode.id, name=mode.name) for mode in modes.available_modes) if modes else (),
+        model=model.current_value if model else None,
+        effort=effort.current_value if effort else None,
+        mode=modes.current_mode_id if modes else None,
+    )
+
+
+def _values(option: schema.SessionConfigOptionSelect | None) -> tuple[OptionValue, ...]:
+    if option is None:
+        return ()
+    # A harness can group its values, such as models by provider.
+    flat: list[schema.SessionConfigSelectOption] = []
+    for entry in option.options:
+        flat.extend(entry.options if isinstance(entry, schema.SessionConfigSelectGroup) else [entry])
+    return tuple(OptionValue(value=value.value, name=value.name) for value in flat)
+
+
 async def _begin(
     connection: ClientSideConnection, harness: HarnessEntry, folder: Path, board: BoardAccess, options: SessionOptions
 ) -> str:
-    """Initialize the connection, open or load the session, and set the options that the lab asks for."""
-    await connection.initialize(
-        protocol_version=acp.PROTOCOL_VERSION,
-        client_capabilities=schema.ClientCapabilities(
-            fs=schema.FileSystemCapabilities(read_text_file=False, write_text_file=False), terminal=False
-        ),
-        client_info=schema.Implementation(name='verifold', version=version(DISTRIBUTION)),
-    )
+    """Open or load the session, and set the options that the lab asks for."""
     servers: McpServers = [
         schema.HttpMcpServer(
             type='http',
@@ -223,8 +289,8 @@ async def _begin(
     else:
         opened = await connection.new_session(cwd=str(folder), mcp_servers=servers)
         session_id, offered = opened.session_id, opened.config_options
-    if options.auto_mode and harness.auto_mode:
-        await connection.set_session_mode(session_id=session_id, mode_id=harness.auto_mode)
+    if mode := options.mode or (harness.auto_mode if options.auto_mode else None):
+        await connection.set_session_mode(session_id=session_id, mode_id=mode)
     for category, value in (('model', options.model), ('thought_level', options.effort)):
         if value:
             option = _option_id(offered or [], category, harness)
@@ -269,22 +335,8 @@ class AgentSession:
         group.
         """
         client = _Client(hooks)
-        place.log.parent.mkdir(parents=True, exist_ok=True)
-        with place.log.open('ab') as errors:
-            process = await start(harness.command, place.folder, errors, harness_environment(place.lab, place.agent))
-            if process.stdin is None or process.stdout is None:
-                await stop(process)
-                raise RunnerError(f'{harness.name} started without its protocol pipes.')
-            connection = acp.connect_to_agent(client, process.stdin, process.stdout)
-            try:
-                session_id = await _begin(connection, harness, place.folder, board, options)
-                yield cls(connection, session_id, client)
-            finally:
-                # Stop the harness first: the connection's reader waits for output that only ends with the process.
-                await stop(process)
-                with suppress(TimeoutError):
-                    async with asyncio.timeout(STOP_GRACE):
-                        await connection.close()
+        async with _connected(harness, place, client) as connection:
+            yield cls(connection, await _begin(connection, harness, place.folder, board, options), client)
 
     async def send(self, text: str) -> TurnResult:
         """Send one message, and return once the harness ends its turn."""

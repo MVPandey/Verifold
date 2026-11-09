@@ -8,7 +8,7 @@ child that holds the agent's pipes open and writes its process ID to that path. 
 session of its own, the way that a harness starts a background command, and writes its process ID to that path.
 
 Each session offers a model option `llm` and an effort option `thinking`, under their ACP categories, as real
-adapters do under their own IDs. `FAKE_ACP_NO_OPTIONS` makes it offer none.
+adapters do under their own IDs, and the modes `ask` and `auto`. `FAKE_ACP_NO_OPTIONS` makes it offer no options.
 """
 
 import asyncio
@@ -54,10 +54,12 @@ class FakeAgent(acp.Agent):
                 log.write(json.dumps({'agent': self._name, **entry}) + '\n')
 
     def _connect(self, cwd: str, servers: Servers | None) -> None:
-        server = next(server for server in servers or [] if isinstance(server, schema.HttpMcpServer))
-        self._url = server.url
-        self._headers = {header.name: header.value for header in server.headers}
         self._name = Path(cwd).name
+        # A session without the board, such as Verifold's question about what the harness offers, posts nothing.
+        server = next((server for server in servers or [] if isinstance(server, schema.HttpMcpServer)), None)
+        if server:
+            self._url = server.url
+            self._headers = {header.name: header.value for header in server.headers}
 
     async def _call(self, tool: str, arguments: dict[str, object]) -> dict[str, object]:
         if self._client:
@@ -107,7 +109,11 @@ class FakeAgent(acp.Agent):
         self._connect(cwd, mcp_servers)
         self._session = f'session-{self._name}'
         self._note(event='new_session')
-        return schema.NewSessionResponse(session_id=self._session, config_options=self._options())
+        modes = schema.SessionModeState(
+            current_mode_id='ask',
+            available_modes=[schema.SessionMode(id='ask', name='Ask'), schema.SessionMode(id='auto', name='Auto')],
+        )
+        return schema.NewSessionResponse(session_id=self._session, config_options=self._options(), modes=modes)
 
     @override
     async def load_session(
