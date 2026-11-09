@@ -128,7 +128,11 @@ export function SettingsForm(props: {
         current={file.settings.jobs.at_time_limit}
         inherited={inherited?.jobs.at_time_limit ?? null}
         projectOwn={own('jobs.at_time_limit') ? chosen.at_time_limit : null}
-        lab={lab && lab.at_time_limit !== chosen.at_time_limit ? lab.at_time_limit : null}
+        lab={
+          lab && lab.at_time_limit !== chosen.at_time_limit && !own('jobs.at_time_limit')
+            ? lab.at_time_limit
+            : null
+        }
         disabled={props.disabled}
         onChange={(value) => props.onChange('jobs.at_time_limit', value)}
       />
@@ -140,7 +144,7 @@ export function SettingsForm(props: {
         current={file.settings.jobs.at_exit}
         inherited={inherited?.jobs.at_exit ?? null}
         projectOwn={own('jobs.at_exit') ? chosen.at_exit : null}
-        lab={lab && lab.at_exit !== chosen.at_exit ? lab.at_exit : null}
+        lab={lab && lab.at_exit !== chosen.at_exit && !own('jobs.at_exit') ? lab.at_exit : null}
         disabled={props.disabled}
         onChange={(value) => props.onChange('jobs.at_exit', value)}
       />
@@ -154,7 +158,7 @@ export function SettingsForm(props: {
  * `inherited` is the value for all projects, on a project's page only. There, the setting can follow it, and an
  * answer counts as chosen only when the project's file holds it. `projectOwn` is this project's own value, on the
  * page for all projects, because it wins there. `lab` is what the running lab follows when that differs from the
- * files, for example after an edit by hand.
+ * files, for example after an edit by hand, and only where an answer on this page can change it.
  */
 function Setting<T extends string>(props: {
   readonly title: string;

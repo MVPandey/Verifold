@@ -104,13 +104,17 @@ def change_setting(
 
 
 def _write(path: Path, values: SettingsValues) -> None:
-    # A settings file can link to a file in a dotfiles folder. The change then goes to that file.
-    target = path.resolve() if path.exists() else path
+    # A link could take the write to any file, so Verifold writes only a regular file. A link that appears after this
+    # check is replaced, not followed.
+    if path.is_symlink():
+        raise SettingsUnwritable(
+            f'{path} is a link. Verifold changes only a regular file, so edit the file that it links to.'
+        )
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
+        path.parent.mkdir(parents=True, exist_ok=True)
+        mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
         # A new file with a name of its own: nothing that waits at a fixed name can take the write somewhere else.
-        descriptor, name = tempfile.mkstemp(dir=target.parent, prefix=f'.{target.name}.', suffix='.new')
+        descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f'.{path.name}.', suffix='.new')
     except OSError as error:
         raise SettingsUnwritable(f"Can't write {path}: {error}") from error
     written = Path(name)
@@ -122,7 +126,7 @@ def _write(path: Path, values: SettingsValues) -> None:
         if mode is not None:
             written.chmod(mode)
         # The new file replaces the old one at once, so that a reader never sees half a file.
-        written.replace(target)
+        written.replace(path)
     except OSError as error:
         written.unlink(missing_ok=True)
         raise SettingsUnwritable(f"Can't write {path}: {error}") from error
