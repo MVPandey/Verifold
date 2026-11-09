@@ -89,6 +89,8 @@ class AgentLoop:
         self._setup = setup
         self._settings = settings
         self._notified = self._lab.board.seq
+        self._turn_ended = self._lab.board.seq
+        """The board's sequence number when the agent's last turn ended. A stop after it concerns the agent's jobs."""
 
     async def run(self) -> None:
         """Run the agent until it fails too often, or until the caller cancels the loop."""
@@ -177,6 +179,8 @@ class AgentLoop:
             await lab.wait_for_change(lab.board.seq)
 
     async def _record(self, started: float, usage: Usage, cost_usd: float | None, error: str | None) -> None:
+        # Mark the end of the turn before the snapshot, which can take seconds in a large folder.
+        self._turn_ended = self._lab.board.seq
         agent_id = self._setup.agent.id
         try:
             commit = await snapshot(self._setup.folder, agent_id)
@@ -195,20 +199,21 @@ class AgentLoop:
         lab gets more time, and its message says so, followed by the doorbell when posts came meanwhile.
         """
         agent_id = self._setup.agent.id
-        since = self._lab.board.seq
         while True:
             board = self._lab.board
             # The record shows a stop also when the lab got more time before this wait looked.
             stopped = board.settings.jobs.at_time_limit is AtTimeLimit.STOP and any(
-                isinstance(entry, TimeRanOut) and entry.seq > since for entry in board.times
+                isinstance(entry, TimeRanOut) and entry.seq > self._turn_ended for entry in board.times
             )
             posts = bool(update(board, agent_id, max(self._notified, self._member.seen)).posts)
-            if posts:
-                self._notified = board.seq
+            # A post during a stop waits for the wake after more time, so the doorbell rings then.
             if stopped and not board.out_of_time:
+                if posts:
+                    self._notified = board.seq
                 message = more_time_message(board.ends_at, AtTimeLimit.STOP)
                 return f'{message} {DOORBELL}' if posts else message
             if posts and not stopped:
+                self._notified = board.seq
                 return DOORBELL
             await self._lab.wait_for_change(board.seq)
 
