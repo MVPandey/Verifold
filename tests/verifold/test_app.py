@@ -23,6 +23,7 @@ from verifold.protocol.app import AgentChoice, StartRequest
 from verifold.protocol.events import AgentJoined, Event, Posted, SettingsSet, TimeRanOut
 from verifold.protocol.settings import AtExit, AtTimeLimit
 from verifold.runner.environment import harness_environment
+from verifold.runner.git import git
 from verifold.runner.jobs import Sweep, sweep
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.server.lab import Lab
@@ -520,6 +521,24 @@ async def test_a_broken_settings_file_refuses_the_start_and_leaves_no_lab(projec
     assert refused.status_code == 400
     assert 'settings.json' in refused.json()['detail']
     assert record(project) == []
+
+
+async def test_a_repository_that_tracks_lab_files_is_refused_but_its_settings_file_is_not(
+    project: Path, home: Path
+) -> None:
+    # Verifold's own git helper drops the GIT_ variables that a Git hook sets, which would point at another repository.
+    await git('init', '--quiet', cwd=project)
+    write_settings(project, {'at_exit': 'keep'})
+    await git('add', '.verifold/settings.json', cwd=project)
+    author = ('-c', 'user.name=Someone', '-c', 'user.email=someone@example.com')
+    await git(*author, 'commit', '--quiet', '-m', 'settings', cwd=project)
+    async with serving(project):
+        pass
+    assert (home / '.verifold' / 'npx').is_dir()
+
+    await git('add', '--force', '.verifold/record.jsonl', cwd=project)
+    with pytest.raises(SetupRejected, match=r'The repository tracks \.verifold/record\.jsonl\. Verifold keeps its own'):
+        await serve(project, hooks=ServeHooks(ready=lambda _: None))
 
 
 async def test_a_lab_from_before_settings_takes_the_files_on_its_next_run(project: Path) -> None:

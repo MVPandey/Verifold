@@ -3,10 +3,25 @@
 from pathlib import Path
 
 from verifold.protocol.ids import AgentId, CommitId
-from verifold.runner.git import commit_of, git
+from verifold.runner.git import GitError, commit_of, git
 
 LAB_FOLDER = '.verifold'
 """The folder in the project that holds the lab: its record, the agents' folders, and their private files."""
+
+
+async def tracked_lab_files(project: Path) -> tuple[str, ...]:
+    """
+    Return the files in the project's lab folder that its Git repository tracks, other than the settings file.
+
+    The lab's record and its norms are Verifold's own. A repository that tracks them brings a lab that someone else
+    wrote, with its agents, their modes, and their prompts. A folder outside a repository tracks nothing.
+    """
+    try:
+        # A file system that ignores case, as macOS does by default, checks `.VERIFOLD/` out into the lab folder too.
+        listed = await git('ls-files', '--', f':(icase){LAB_FOLDER}', cwd=project)
+    except GitError:
+        return ()
+    return tuple(name for name in listed.splitlines() if name.casefold() != f'{LAB_FOLDER}/settings.json')
 
 
 def agents_folder(project: Path) -> Path:

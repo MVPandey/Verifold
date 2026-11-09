@@ -3,8 +3,6 @@ import os
 import sys
 from pathlib import Path
 
-import psutil
-
 from verifold.runner.processes import start, stop
 
 STUBBORN = (
@@ -25,5 +23,5 @@ async def test_a_cancelled_stop_still_kills_the_group(tmp_path: Path) -> None:
     await asyncio.gather(stopping, return_exceptions=True)
 
     async with asyncio.timeout(5):
-        while psutil.pid_exists(process.pid) and psutil.Process(process.pid).status() != psutil.STATUS_ZOMBIE:
-            await asyncio.sleep(0.05)
+        # The killed process ends, and collecting it leaves no zombie for later tests to trip over.
+        await process.wait()

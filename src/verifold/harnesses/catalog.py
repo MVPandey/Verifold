@@ -2,6 +2,7 @@
 
 import shutil
 from collections.abc import Mapping
+from pathlib import Path
 from types import MappingProxyType
 
 from pydantic import Field
@@ -31,6 +32,18 @@ class HarnessEntry(Record):
     """The ID of the harness's own auto mode, set when the person allows auto mode for the lab's agents."""
 
 
+NPX_PROJECT = Path.home() / '.verifold' / 'npx'
+"""
+The folder that the built-in adapters' `npx` takes as its project. Verifold starts an adapter in the project or in an
+agent's worktree, and `npx` would run a package from that folder's `node_modules` and read its `.npmrc`. This folder
+holds neither, so `npx` runs the pinned adapter from its own cache.
+"""
+
+
+def _adapter(package: str) -> tuple[str, ...]:
+    return ('npx', '--prefix', str(NPX_PROJECT), '-y', package)
+
+
 CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
     {
         entry.name: entry
@@ -39,7 +52,7 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
                 name='claude-code',
                 title='Claude Code',
                 executable='claude',
-                command=('npx', '-y', '@agentclientprotocol/claude-agent-acp@0.101.0'),
+                command=_adapter('@agentclientprotocol/claude-agent-acp@0.101.0'),
                 family='anthropic',
                 auto_mode='auto',
             ),
@@ -47,7 +60,7 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
                 name='codex',
                 title='Codex',
                 executable='codex',
-                command=('npx', '-y', '@agentclientprotocol/codex-acp@2.5.0'),
+                command=_adapter('@agentclientprotocol/codex-acp@2.5.0'),
                 family='openai',
                 auto_mode='agent',
             ),
