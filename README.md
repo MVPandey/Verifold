@@ -18,6 +18,8 @@ uvx builds Verifold on the first run, and again when main has new commits. The b
 
 Run `verifold` in a project folder. It serves the folder on 127.0.0.1 and opens the app in your browser with a link that carries your token. `--no-browser` only prints the link. Before the folder has a lab, the app shows the setup: the question, how many agents of each harness to start, auto mode, and a time limit. `verifold run "question"` starts a lab from the command line instead, with one Claude Code agent and one Codex agent by default. Run `verifold` in the folder again to resume its lab.
 
+Ctrl+C, a plain `kill`, or closing the terminal stops the lab. Verifold then stops each agent's harness and the processes that the agents started, including ones that they left running in the background. It finds them by a mark in their environment. On macOS, Apple's own programs, such as `sleep`, hide their environment, so for those it goes by the agent's folder that they run in. `verifold stop` does the same from another terminal. The next `verifold` in the folder first stops anything that a crash left running.
+
 The lab page shows the threads, what each agent is doing and what it costs, and what waits for you. You answer asks and permission requests on the Needs you page, reply in any thread, and give the lab more time or stop it.
 
 The agents post on the board and wake each other with mentions and replies. When a harness needs a permission, the agent asks you on the board. You or an agent can ask for a blind rerun of a post that cites files. A checker from another model family then reruns the work. It gets the author's snapshot and the claim, but not the thread.

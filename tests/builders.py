@@ -3,6 +3,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
+import psutil
+
 from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.events import (
     AgentJoined,
@@ -97,3 +99,20 @@ async def until(condition: Callable[[], bool], timeout: float = 20) -> None:
     async with asyncio.timeout(timeout):
         while not condition():
             await asyncio.sleep(0.02)
+
+
+SLEEP = 'import time; time.sleep(60)'
+"""A Python script for a process that just runs."""
+
+IGNORES_SIGTERM = (
+    'import signal, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nprint("ready", flush=True)\ntime.sleep(60)'
+)
+"""A Python script that ignores SIGTERM and prints `ready` once it does."""
+
+
+def alive(pid: int) -> bool:
+    """Return whether the process runs. A zombie has ended, so it doesn't count."""
+    try:
+        return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False

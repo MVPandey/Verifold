@@ -4,11 +4,10 @@ import asyncio
 import os
 import signal
 from asyncio.subprocess import PIPE, Process
+from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
 from typing import IO
-
-from verifold.runner.environment import clean_environment
 
 EXIT_GRACE = 2.0
 """Seconds that a harness gets to exit on its own after its stdin closes, so it can save its session."""
@@ -20,17 +19,17 @@ STREAM_LIMIT = 64 * 1024 * 1024
 """The longest line of protocol output that Verifold reads from a harness, in bytes."""
 
 
-async def start(command: tuple[str, ...], cwd: Path, errors: IO[bytes]) -> Process:
+async def start(command: tuple[str, ...], cwd: Path, errors: IO[bytes], environment: Mapping[str, str]) -> Process:
     """
     Start `command` in its own process group, with pipes for stdin and stdout, and stderr into `errors`.
 
-    The harness gets the person's environment without Git hook variables. Its own group lets Verifold stop the
-    harness together with every process that it starts, such as an adapter's harness or a shell command.
+    Its own group lets Verifold stop the harness together with the processes that stay in the group, such as an
+    adapter's harness. A process that leaves the group carries the marks in `environment` instead.
     """
     return await asyncio.create_subprocess_exec(
         *command,
         cwd=cwd,
-        env=clean_environment(),
+        env=environment,
         stdin=PIPE,
         stdout=PIPE,
         stderr=errors,

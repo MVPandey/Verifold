@@ -26,7 +26,7 @@ def log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def folder(tmp_path: Path) -> Place:
     path = tmp_path / 'bo'
     path.mkdir()
-    return Place(folder=path, log=tmp_path / 'logs' / 'bo.log')
+    return Place(folder=path, log=tmp_path / 'logs' / 'bo.log', lab=tmp_path, agent='bo')
 
 
 async def no_permission(request: PermissionRequest) -> str | None:
