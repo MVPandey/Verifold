@@ -17,6 +17,7 @@ import {
 } from '../src/model/posts.ts';
 import { href, parseRoute } from '../src/model/route.ts';
 import { hasNew, markSeen, readSeen } from '../src/model/seen.ts';
+import { AT_EXIT, labelOf, stopLine, valueAt } from '../src/model/settings.ts';
 import {
   agentCount,
   effortsOf,
@@ -331,5 +332,31 @@ describe('time', () => {
       30,
     );
     assert.equal(moreTime(labView({ ends_at: '2026-11-20T14:00:00Z' }), 60, now), MAX_MINUTES);
+  });
+});
+
+describe('settings', () => {
+  it('reads a setting by its key with dots, and finds nothing where a file has nothing', () => {
+    const values = { jobs: { at_exit: 'keep' }, harnesses: ['odd'] };
+    assert.equal(valueAt(values, 'jobs.at_exit'), 'keep');
+    assert.equal(valueAt(values, 'jobs.at_time_limit'), undefined);
+    assert.equal(valueAt(values, 'harnesses.0'), undefined);
+    assert.equal(valueAt({}, 'jobs.at_exit'), undefined);
+    assert.equal(labelOf(AT_EXIT, 'keep'), 'Keep them');
+    assert.deepEqual(parseRoute('#/settings'), { page: 'settings' });
+    assert.equal(href({ page: 'settings' }), '#/settings');
+  });
+
+  it('says what a stop does to the processes that agents left running', () => {
+    const settings = labView().settings;
+    assert.match(stopLine(settings), /pause until you give the lab more time/);
+    assert.match(
+      stopLine({ ...settings, jobs: { ...settings.jobs, at_time_limit: 'stop' } }),
+      /stop too/,
+    );
+    assert.match(
+      stopLine({ ...settings, jobs: { ...settings.jobs, at_time_limit: 'finish' } }),
+      /continue until they end/,
+    );
   });
 });

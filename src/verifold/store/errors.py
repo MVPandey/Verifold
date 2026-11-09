@@ -15,3 +15,7 @@ class CorruptRecord(StoreError):
 
 class SettingsInvalid(StoreError):
     """A settings file is not valid JSON, or holds a setting that Verifold doesn't know or accept."""
+
+
+class SettingsChanged(StoreError):
+    """A settings file changed since the person read it, so a change to it could overwrite something they didn't see."""

@@ -17,6 +17,7 @@ import { isPermission, personMessage } from '../model/posts.ts';
 import type { Chip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { hasNew, readSeen } from '../model/seen.ts';
+import { stopLine } from '../model/settings.ts';
 import type { Seen } from '../model/seen.ts';
 import { endLine, moreTime } from '../model/time.ts';
 import { messageOf } from '../api/client.ts';
@@ -252,6 +253,11 @@ function TimePanel(props: {
           </button>
         )}
       </div>
+      {confirming && !lab.out_of_time ? (
+        <p className="quiet stopline">
+          {stopLine(lab.settings)} <a href={href({ page: 'settings' })}>Change this</a>
+        </p>
+      ) : null}
       {error ? (
         <p className="error" role="alert">
           {error}
