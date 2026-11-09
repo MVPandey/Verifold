@@ -44,14 +44,17 @@ async def stop(process: Process) -> None:
 
     Closing stdin asks an ACP agent to exit, so it can save its session. After `EXIT_GRACE` seconds the group gets
     SIGTERM, and after `STOP_GRACE` more seconds SIGKILL. The group is signalled even when its leader exited already,
-    because its children can still run and hold the pipes open.
+    because its children can still run and hold the pipes open. A cancel during the waits sends SIGKILL at once, so
+    the group never outlives a cancelled stop.
     """
-    if process.stdin:
-        process.stdin.close()
-    await _exited(process, EXIT_GRACE)
-    _signal_group(process, signal.SIGTERM)
-    await _exited(process, STOP_GRACE)
-    _signal_group(process, signal.SIGKILL)
+    try:
+        if process.stdin:
+            process.stdin.close()
+        await _exited(process, EXIT_GRACE)
+        _signal_group(process, signal.SIGTERM)
+        await _exited(process, STOP_GRACE)
+    finally:
+        _signal_group(process, signal.SIGKILL)
     await _exited(process, None)
 
 

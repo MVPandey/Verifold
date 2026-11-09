@@ -1364,6 +1364,10 @@ details.more ul {
   font-size: 13.5px;
   color: var(--muted);
 }
+/* The model menu opens below its row, past the list's edge. */
+.rows.harnesses {
+  overflow: visible;
+}
 .hrow {
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr) auto;
@@ -1979,7 +1983,8 @@ h3 {
 .modelpick .menu label:hover {
   background: none;
 }
-.modelpick .menu input {
+.modelpick .menu input,
+.modelpick .menu select {
   width: 100%;
   min-height: 36px;
   padding: 0 10px;

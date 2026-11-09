@@ -21,6 +21,8 @@ export interface Agent {
   readonly model: ModelSpec;
   readonly role: string;
   readonly brief: string;
+  /** The harness mode that the person chose. `null` follows the lab's auto mode choice. */
+  readonly mode: string | null;
   readonly recruited_by: string | null;
   /** For a blind checker: the post that it reruns. */
   readonly checks: string | null;
@@ -61,11 +63,41 @@ export interface LabView {
   readonly out_of_time: boolean;
 }
 
+/** One value that a harness offers for an option, with the name that the harness shows for it. */
+export interface OptionValue {
+  readonly value: string;
+  readonly name: string;
+}
+
+/** A model that a harness offers, and the effort levels that the harness offers with it. */
+export interface ModelValue extends OptionValue {
+  /** `null` when the harness didn't switch to the model, so its effort levels are not known. */
+  readonly efforts: readonly OptionValue[] | null;
+}
+
+/**
+ * The models, effort levels, and modes that a harness offers, and the person's current ones.
+ *
+ * `efforts` and `effort` are for the person's current model. Each model in `models` has its own effort levels.
+ */
+export interface Offer {
+  readonly models: readonly ModelValue[];
+  readonly efforts: readonly OptionValue[];
+  readonly modes: readonly OptionValue[];
+  readonly model: string | null;
+  readonly effort: string | null;
+  readonly mode: string | null;
+}
+
 export interface HarnessOption {
   readonly name: string;
   readonly title: string;
   readonly family: string;
   readonly available: boolean;
+  /** Verifold is still asking the harness what it offers. */
+  readonly probing: boolean;
+  /** What the harness offers, or `null` until it answers, or when it didn't. */
+  readonly offer: Offer | null;
 }
 
 export interface SetupView {
@@ -80,6 +112,8 @@ export interface AgentChoice {
   readonly count: number;
   readonly model?: string;
   readonly effort?: string;
+  /** One of the harness's own modes. Without it, the agents follow the lab's auto mode choice. */
+  readonly mode?: string;
 }
 
 export interface StartRequest {

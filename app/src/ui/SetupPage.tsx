@@ -1,18 +1,22 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
-import type { HarnessOption, SetupView } from '../api/types.ts';
+import type { HarnessOption, Offer, SetupView } from '../api/types.ts';
 import {
   MAX_AGENTS,
   agentCount,
   firstPicks,
+  effortsOf,
   initials,
+  menuEntries,
+  modeEntries,
   modelSummary,
   startRequest,
   step,
+  withModel,
 } from '../model/setup.ts';
-import type { HarnessPick } from '../model/setup.ts';
+import type { HarnessPick, MenuEntry } from '../model/setup.ts';
 import { messageOf } from '../api/client.ts';
 import { Avatar } from './parts.tsx';
 
@@ -24,11 +28,16 @@ const TIMES: readonly { readonly minutes: number | null; readonly label: string 
   { minutes: 240, label: '4 hours' },
 ];
 
+/** Milliseconds between reads of the setup while Verifold asks the harnesses what they offer. */
+const PROBE_POLL = 1000;
+
 /** The setup screen: the question, the agents of each harness, auto mode, and the time limit. */
 export function SetupPage(props: {
   readonly api: Api;
   readonly setup: SetupView;
   readonly onStarted: () => void;
+  /** Read the setup again. */
+  readonly onRefresh: () => void;
 }): ReactElement {
   const [question, setQuestion] = useState('');
   const [picks, setPicks] = useState(() => firstPicks(props.setup.harnesses));
@@ -37,6 +46,14 @@ export function SetupPage(props: {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const total = agentCount(picks);
+  const probing = props.setup.harnesses.some((option) => option.probing);
+  const { onRefresh } = props;
+
+  useEffect(() => {
+    if (!probing) return undefined;
+    const timer = setTimeout(onRefresh, PROBE_POLL);
+    return () => clearTimeout(timer);
+  }, [probing, props.setup, onRefresh]);
 
   const start = (): void => {
     setStarting(true);
@@ -145,8 +162,6 @@ function HarnessRow(props: {
   readonly onPick: (pick: HarnessPick) => void;
 }): ReactElement {
   const { option, pick } = props;
-  const modelId = useId();
-  const effortId = useId();
   const count = pick?.count ?? 0;
   return (
     <div className="hrow">
@@ -178,26 +193,115 @@ function HarnessRow(props: {
       </div>
       {option.available && pick ? (
         <details className="modelpick">
-          <summary>{modelSummary(pick)}</summary>
+          <summary>{modelSummary(pick, option.offer)}</summary>
           <div className="menu">
-            <label htmlFor={modelId}>Model</label>
-            <input
-              id={modelId}
-              placeholder="Your default"
-              value={pick.model}
-              onChange={(event) => props.onPick({ ...pick, model: event.target.value })}
-            />
-            <label htmlFor={effortId}>Effort</label>
-            <input
-              id={effortId}
-              placeholder="Your default"
-              value={pick.effort}
-              onChange={(event) => props.onPick({ ...pick, effort: event.target.value })}
-            />
-            <p>Leave a field blank to keep your own setting for {option.title}.</p>
+            {option.probing ? (
+              <p>Asking {option.title} what it offers.</p>
+            ) : option.offer ? (
+              <Offered
+                title={option.title}
+                offer={option.offer}
+                pick={pick}
+                onPick={props.onPick}
+              />
+            ) : (
+              <Typed title={option.title} pick={pick} onPick={props.onPick} />
+            )}
           </div>
         </details>
       ) : null}
     </div>
+  );
+}
+
+/** The menus for a harness that told Verifold what it offers. */
+function Offered(props: {
+  readonly title: string;
+  readonly offer: Offer;
+  readonly pick: HarnessPick;
+  readonly onPick: (pick: HarnessPick) => void;
+}): ReactElement {
+  const { offer, pick } = props;
+  const models = menuEntries(offer.models, offer.model);
+  const levels = effortsOf(offer, pick.model);
+  const efforts = menuEntries(levels.values, levels.current);
+  const modes = modeEntries(offer);
+  if (models.length + efforts.length + modes.length === 0) {
+    return <p>{props.title} offers no model, effort, or mode choices.</p>;
+  }
+  return (
+    <>
+      <Menu
+        label="Model"
+        entries={models}
+        value={pick.model}
+        onChange={(model) => props.onPick(withModel(pick, offer, model))}
+      />
+      <Menu
+        label="Effort"
+        entries={efforts}
+        value={pick.effort}
+        onChange={(effort) => props.onPick({ ...pick, effort })}
+      />
+      <Menu
+        label="Mode"
+        entries={modes}
+        value={pick.mode}
+        onChange={(mode) => props.onPick({ ...pick, mode })}
+      />
+    </>
+  );
+}
+
+/** One menu of a harness's values, or nothing when the harness offers none. */
+function Menu(props: {
+  readonly label: string;
+  readonly entries: readonly MenuEntry[];
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+}): ReactElement | null {
+  const id = useId();
+  if (props.entries.length === 0) return null;
+  return (
+    <>
+      <label htmlFor={id}>{props.label}</label>
+      <select id={id} value={props.value} onChange={(event) => props.onChange(event.target.value)}>
+        {props.entries.map((entry) => (
+          <option key={entry.value} value={entry.value}>
+            {entry.label}
+          </option>
+        ))}
+      </select>
+    </>
+  );
+}
+
+/** The fields for a harness that didn't tell Verifold what it offers: the person types the model and the effort. */
+function Typed(props: {
+  readonly title: string;
+  readonly pick: HarnessPick;
+  readonly onPick: (pick: HarnessPick) => void;
+}): ReactElement {
+  const { pick } = props;
+  const modelId = useId();
+  const effortId = useId();
+  return (
+    <>
+      <label htmlFor={modelId}>Model</label>
+      <input
+        id={modelId}
+        placeholder="Your default"
+        value={pick.model}
+        onChange={(event) => props.onPick({ ...pick, model: event.target.value })}
+      />
+      <label htmlFor={effortId}>Effort</label>
+      <input
+        id={effortId}
+        placeholder="Your default"
+        value={pick.effort}
+        onChange={(event) => props.onPick({ ...pick, effort: event.target.value })}
+      />
+      <p>Leave a field blank to keep your own setting for {props.title}.</p>
+    </>
   );
 }
