@@ -1,12 +1,15 @@
 """The person's settings: what Verifold does by default, at two levels, for all projects and for one project."""
 
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
-from verifold.protocol.agents import Label
+from verifold.protocol.agents import AgentChoices, Label
 from verifold.protocol.record import Record
+
+MAX_MINUTES = 7 * 24 * 60
+"""The longest time that the person can give a lab at once: one week."""
 
 
 class AtTimeLimit(StrEnum):
@@ -73,15 +76,36 @@ class HarnessSettings(Record):
     """The ID of the harness's own auto mode, which Verifold sets when the person allows auto mode."""
 
 
+class SetupDefaults(Record):
+    """What a new lab starts with unless the person chooses otherwise: in the setup, and for `verifold run`."""
+
+    agents: AgentChoices | None = None
+    """
+    One entry for each harness that a new lab starts. `None` starts one agent of each harness that this computer
+    has, with the person's own settings.
+    """
+    auto_mode: bool = True
+    minutes: int | None = Field(default=None, ge=1, le=MAX_MINUTES)
+    """How long the agents may work. `None` means no time limit."""
+
+    @model_validator(mode='after')
+    def _one_entry_for_each_harness(self) -> Self:
+        names = [agent.harness for agent in self.agents or ()]
+        if len(set(names)) != len(names):
+            raise ValueError('The choices for new labs name each harness once.')
+        return self
+
+
 class SettingsFile(Record):
     """
-    What a settings file holds: the settings that a lab follows, and the harnesses that this computer offers.
+    What a settings file holds: the settings that a lab follows, how new labs start, and this computer's harnesses.
 
     A lab records only its settings. It reads the harnesses again at each start, because they describe this computer.
     """
 
     version: Literal[1] = 1
     jobs: JobSettings = JobSettings()
+    setup: SetupDefaults = SetupDefaults()
     harnesses: dict[Label, HarnessSettings] = Field(default_factory=dict)
 
     def lab_settings(self) -> Settings:

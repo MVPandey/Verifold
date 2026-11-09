@@ -8,7 +8,7 @@ import type { HarnessOption, SettingsView, ThreadView } from '../src/api/types.t
 import { SettingsForm } from '../src/ui/SettingsPage.tsx';
 import { SetupPage } from '../src/ui/SetupPage.tsx';
 import { PostItem } from '../src/ui/ThreadPage.tsx';
-import { HARNESSES, OFFER, agentView, postView, result } from './fixtures.ts';
+import { DEFAULTS, HARNESSES, OFFER, agentView, postView, result } from './fixtures.ts';
 
 const HOSTILE =
   '<img src="https://evil.example/x.png" onerror="alert(1)"> ![x](https://evil.example/y.png)';
@@ -52,7 +52,13 @@ describe('the setup screen', () => {
     const html = renderToStaticMarkup(
       <SetupPage
         api={api}
-        setup={{ folder: '~/code/sort-bench', harnesses: HARNESSES, question: null }}
+        setup={{
+          folder: '~/code/sort-bench',
+          harnesses: HARNESSES,
+          question: null,
+          defaults: DEFAULTS,
+          defaults_from: '~/code/sort-bench/.verifold/settings.json',
+        }}
         onStarted={() => undefined}
         onRefresh={() => undefined}
       />,
@@ -61,6 +67,11 @@ describe('the setup screen', () => {
     assert.ok(html.includes('~/code/sort-bench'));
     assert.ok(html.includes('Not found on this computer'));
     assert.ok(html.includes('Start lab with 1 agent'));
+    assert.ok(
+      html.includes(
+        'Its first choices come from <code>~/code/sort-bench/.verifold/settings.json</code>.',
+      ),
+    );
     assert.ok(html.includes('<summary>Opus, High effort (your default)</summary>'));
     assert.ok(html.includes('<option value="" selected="">Opus (your default)</option>'));
     assert.ok(html.includes('<option value="plan">Plan</option>'));
@@ -72,7 +83,13 @@ describe('the setup screen', () => {
       renderToStaticMarkup(
         <SetupPage
           api={{} as Api}
-          setup={{ folder: '~/code', harnesses: [option], question: null }}
+          setup={{
+            folder: '~/code',
+            harnesses: [option],
+            question: null,
+            defaults: DEFAULTS,
+            defaults_from: null,
+          }}
           onStarted={() => undefined}
           onRefresh={() => undefined}
         />,
@@ -99,12 +116,25 @@ describe('the settings page', () => {
       values: {},
       revision: '',
       settings: pause,
+      defaults: DEFAULTS,
     },
     project: {
       path: '~/code/sort-bench/.verifold/settings.json',
-      values: { jobs: { at_exit: 'keep' } },
+      values: {
+        jobs: { at_exit: 'keep' },
+        setup: {
+          agents: [{ harness: 'claude-code', count: 2, model: 'opus' }],
+          auto_mode: false,
+          minutes: 90,
+        },
+      },
       revision: 'abc',
       settings: { ...pause, jobs: { ...pause.jobs, at_exit: 'keep' } },
+      defaults: {
+        agents: [{ harness: 'claude-code', count: 2, model: 'opus', effort: null, mode: null }],
+        auto_mode: false,
+        minutes: 90,
+      },
     },
     lab: pause,
   };
@@ -114,6 +144,7 @@ describe('the settings page', () => {
         view={view}
         level={level}
         labOpen
+        harnesses={HARNESSES}
         disabled={false}
         onChange={() => undefined}
       />,
@@ -136,6 +167,8 @@ describe('the settings page', () => {
       html.includes('The running lab still follows “Stop them”. Choose an answer to change it.'),
     );
     assert.equal(html.includes('has its own setting'), false);
+    assert.ok(html.includes('Claude Code: 2 agents (opus). No auto mode. Time limit: 1 h 30 min.'));
+    assert.ok(html.includes('Use the choices for all projects'));
   });
 
   it('shows the settings for all projects with the defaults where the file has nothing', () => {
@@ -151,5 +184,10 @@ describe('the settings page', () => {
     assert.equal(html.split('has its own setting').length - 1, 1);
     // No answer here changes the lab where the project has its own setting, so the page doesn't offer one.
     assert.equal(html.includes('The running lab still follows'), false);
+    assert.ok(
+      html.includes('One agent of each harness that this computer has. Auto mode. No time limit.'),
+    );
+    assert.equal(html.includes('Use Verifold&#x27;s defaults'), false);
+    assert.ok(html.includes('This project has saved choices of its own, and they win over these.'));
   });
 });

@@ -1,6 +1,7 @@
 import asyncio
 import errno
 import io
+import json
 import os
 import signal
 import subprocess
@@ -17,8 +18,10 @@ from fakes import FAKE_HARNESS
 
 from verifold import DISTRIBUTION
 from verifold.app import ServeHooks, serve
-from verifold.cli import DEFAULT_AGENTS, _until_stopped, main
-from verifold.protocol.app import AgentChoice, StartRequest
+from verifold.cli import _until_stopped, main
+from verifold.harnesses.catalog import HarnessEntry
+from verifold.protocol.agents import AgentChoice
+from verifold.protocol.app import StartRequest
 from verifold.runner.environment import harness_environment
 from verifold.runner.jobs import Job, Sweep
 from verifold.server.errors import LabExists, SetupRejected
@@ -67,7 +70,7 @@ def test_no_command_serves_the_folder_prints_the_link_and_opens_it(
     assert opened == ['http://127.0.0.1:1234/#token=abc']
 
 
-@pytest.mark.usefixtures('serves')
+@pytest.mark.usefixtures('serves', 'project')
 @pytest.mark.parametrize('argv', [['--no-browser'], ['--no-browser', 'run', 'Q?'], ['run', 'Q?', '--no-browser']])
 def test_no_browser_only_prints_the_link(argv: list[str], opened: list[str]) -> None:
     main(argv)
@@ -75,6 +78,7 @@ def test_no_browser_only_prints_the_link(argv: list[str], opened: list[str]) -> 
     assert opened == []
 
 
+@pytest.mark.usefixtures('project')
 def test_run_starts_a_lab_with_the_given_agents(serves: list[StartRequest | None]) -> None:
     main(['run', 'Does it hold?', '--agent', 'claude-code:opus', '--agent', 'codex::low', '--agent', 'codex:::plan'])
 
@@ -90,12 +94,158 @@ def test_run_starts_a_lab_with_the_given_agents(serves: list[StartRequest | None
     ]
 
 
+@pytest.fixture
+def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Run in a project folder of its own, with a home folder of its own, so that no real settings apply."""
+    folder = tmp_path / 'project'
+    (folder / '.verifold').mkdir(parents=True)
+    monkeypatch.chdir(folder)
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    installed(monkeypatch, 'claude-code', 'codex')
+    return folder
+
+
+def installed(monkeypatch: pytest.MonkeyPatch, *names: str) -> None:
+    """Make the harnesses `names` the ones that this computer has."""
+
+    def found(entry: HarnessEntry) -> bool:
+        return entry.name in names
+
+    monkeypatch.setattr('verifold.cli.available', found)
+
+
+def global_settings(project: Path, data: object) -> None:
+    folder = project.parent / 'home' / '.verifold'
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / 'settings.json').write_text(json.dumps(data))
+
+
+def project_settings(project: Path, data: object) -> None:
+    (project / '.verifold' / 'settings.json').write_text(json.dumps(data))
+
+
+@pytest.mark.usefixtures('project')
 def test_run_defaults_to_one_agent_of_each_harness_and_ask_me_turns_auto_mode_off(
     serves: list[StartRequest | None],
 ) -> None:
     main(['run', 'Does it hold?', '--ask-me', '--minutes', '90'])
 
-    assert serves == [StartRequest(question='Does it hold?', agents=DEFAULT_AGENTS, auto_mode=False, minutes=90)]
+    agents = (AgentChoice(harness='claude-code'), AgentChoice(harness='codex'))
+    assert serves == [StartRequest(question='Does it hold?', agents=agents, auto_mode=False, minutes=90)]
+
+
+def test_run_fills_in_the_saved_choices_for_new_labs_and_the_command_line_wins(
+    serves: list[StartRequest | None], project: Path
+) -> None:
+    saved = {'agents': [{'harness': 'codex', 'count': 2, 'model': 'mini'}], 'auto_mode': False, 'minutes': 45}
+    (project / '.verifold' / 'settings.json').write_text(json.dumps({'setup': saved}))
+
+    main(['run', 'Does it hold?'])
+    main(['run', 'Does it hold?', '--agent', 'claude-code', '--minutes', '10'])
+
+    choice = AgentChoice(harness='codex', count=2, model='mini')
+    claude = AgentChoice(harness='claude-code')
+    assert serves == [
+        StartRequest(question='Does it hold?', agents=(choice,), auto_mode=False, minutes=45),
+        StartRequest(question='Does it hold?', agents=(claude,), auto_mode=False, minutes=10),
+    ]
+
+
+def test_a_projects_saved_choices_make_run_stricter_but_never_looser(
+    serves: list[StartRequest | None], project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    global_settings(project, {'setup': {'auto_mode': False, 'minutes': 60}})
+    agents = [{'harness': 'claude-code', 'count': 2, 'model': 'opus', 'mode': 'bypassPermissions'}]
+    project_settings(project, {'setup': {'agents': agents, 'auto_mode': True, 'minutes': None}})
+
+    main(['run', 'Does it hold?'])
+
+    # The project's agent loses its mode, and the project can't turn auto mode on or drop the time limit.
+    choice = AgentChoice(harness='claude-code', count=2, model='opus')
+    assert serves == [StartRequest(question='Does it hold?', agents=(choice,), auto_mode=False, minutes=60)]
+    printed = capsys.readouterr().out
+    assert 'Started a lab with 2 claude-code (opus); no auto mode; a time limit of 60 min.' in printed
+    assert printed.index('Started a lab') < printed.index('Open the lab')
+
+
+def test_saved_modes_come_only_from_the_file_for_all_projects_and_not_under_ask_me(
+    serves: list[StartRequest | None], project: Path
+) -> None:
+    global_settings(project, {'setup': {'agents': [{'harness': 'codex', 'mode': 'read-only'}], 'minutes': 30}})
+    project_settings(project, {'setup': {'minutes': 90}})
+
+    main(['run', 'Does it hold?'])
+    main(['run', 'Does it hold?', '--ask-me'])
+
+    assert [start.agents for start in serves if start] == [
+        (AgentChoice(harness='codex', mode='read-only'),),
+        (AgentChoice(harness='codex'),),
+    ]
+    assert [start.minutes for start in serves if start] == [30, 30]
+
+
+def test_in_the_home_folder_run_keeps_the_persons_own_saved_modes(
+    serves: list[StartRequest | None], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / 'home'
+    (home / '.verifold').mkdir(parents=True)
+    (home / '.verifold' / 'settings.json').write_text(
+        json.dumps({'setup': {'agents': [{'harness': 'codex', 'mode': 'plan'}]}})
+    )
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.chdir(home)
+    installed(monkeypatch, 'codex')
+
+    main(['run', 'Does it hold?'])
+
+    assert serves == [StartRequest(question='Does it hold?', agents=(AgentChoice(harness='codex', mode='plan'),))]
+
+
+def test_run_without_saved_agents_starts_at_most_twenty_harnesses(
+    serves: list[StartRequest | None], project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harnesses = {f'h{number:02}': {'command': [f'h{number:02}'], 'family': 'test'} for number in range(25)}
+    global_settings(project, {'harnesses': harnesses})
+    installed(monkeypatch, *harnesses)
+
+    main(['run', 'Does it hold?'])
+
+    started = serves[0]
+    assert started is not None
+    assert [choice.harness for choice in started.agents] == [f'h{number:02}' for number in range(20)]
+
+
+def test_run_skips_a_saved_harness_that_this_computer_lacks(
+    serves: list[StartRequest | None],
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    installed(monkeypatch, 'claude-code')
+    global_settings(project, {'setup': {'agents': [{'harness': 'codex', 'count': 3}, {'harness': 'gone'}]}})
+
+    main(['run', 'Does it hold?'])
+
+    # Nothing saved is left, so the lab starts one agent of each harness that this computer has.
+    assert serves == [StartRequest(question='Does it hold?', agents=(AgentChoice(harness='claude-code'),))]
+    printed = capsys.readouterr().out
+    assert 'Skipped codex from your saved choices for new labs: it is not on this computer.' in printed
+    assert 'Skipped gone from your saved choices' in printed
+
+
+@pytest.mark.usefixtures('project')
+def test_run_without_any_harness_on_this_computer_exits_and_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    installed(monkeypatch)
+
+    with pytest.raises(SystemExit, match=r'verifold: No harness that Verifold knows is on this computer: claude-code'):
+        main(['run', 'Does it hold?'])
+
+
+def test_run_with_a_broken_settings_file_exits_with_its_error(project: Path) -> None:
+    (project / '.verifold' / 'settings.json').write_text('{not json')
+
+    with pytest.raises(SystemExit, match=r'verifold: .*settings\.json is not valid settings'):
+        main(['run', 'Does it hold?'])
 
 
 def stand_in(monkeypatch: pytest.MonkeyPatch, error: BaseException) -> None:
@@ -119,6 +269,7 @@ def test_a_known_error_exits_with_its_message(monkeypatch: pytest.MonkeyPatch, e
         main([])
 
 
+@pytest.mark.usefixtures('project')
 def test_an_invalid_option_exits_with_its_message() -> None:
     with pytest.raises(SystemExit, match='verifold: 1 validation error for StartRequest'):
         main(['run', 'Does it hold?', '--minutes', '0'])

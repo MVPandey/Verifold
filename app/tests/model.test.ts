@@ -20,18 +20,21 @@ import { hasNew, markSeen, readSeen } from '../src/model/seen.ts';
 import { AT_EXIT, labelOf, stopLine, valueAt } from '../src/model/settings.ts';
 import {
   agentCount,
+  defaultsLine,
   effortsOf,
   firstPicks,
   initials,
   menuEntries,
   modeEntries,
   modelSummary,
+  setupChoices,
   startRequest,
   step,
   withModel,
 } from '../src/model/setup.ts';
 import { endLine, MAX_MINUTES, moreTime, runStatus } from '../src/model/time.ts';
 import {
+  DEFAULTS,
   HARNESSES,
   OFFER,
   agentView,
@@ -247,12 +250,43 @@ describe('seen', () => {
 
 describe('setup', () => {
   it('starts with one agent of each harness that this computer has', () => {
-    const picks = firstPicks(HARNESSES);
+    const picks = firstPicks(HARNESSES, DEFAULTS);
     assert.deepEqual(
       picks.map((pick) => pick.count),
       [1, 0],
     );
     assert.equal(agentCount(step(step(picks, 'claude-code', 30), 'codex', -1)), 20);
+    // The limit is for the whole lab: a second harness gets only the room that the first leaves.
+    const both = [
+      { harness: 'claude-code', count: 15, model: '', effort: '', mode: '' },
+      { harness: 'codex', count: 0, model: '', effort: '', mode: '' },
+    ];
+    assert.deepEqual(
+      step(both, 'codex', 10).map((pick) => pick.count),
+      [15, 5],
+    );
+    // Over the limit, a step down still works, and nothing goes below zero or grows.
+    const over = [
+      { harness: 'claude-code', count: 18, model: '', effort: '', mode: '' },
+      { harness: 'codex', count: 5, model: '', effort: '', mode: '' },
+    ];
+    assert.deepEqual(
+      step(over, 'codex', -1).map((pick) => pick.count),
+      [18, 4],
+    );
+    assert.deepEqual(
+      step(over, 'codex', 1).map((pick) => pick.count),
+      [18, 5],
+    );
+    assert.deepEqual(
+      step(step(over, 'codex', -5), 'codex', -1).map((pick) => pick.count),
+      [18, 0],
+    );
+    const many = Array.from({ length: 25 }, (_, number) => ({
+      ...HARNESSES[0],
+      name: `h${String(number)}`,
+    })) as typeof HARNESSES;
+    assert.equal(agentCount(firstPicks(many, DEFAULTS)), 20);
   });
 
   it('sends only the choices that the person made', () => {
@@ -358,5 +392,60 @@ describe('settings', () => {
       stopLine({ ...settings, jobs: { ...settings.jobs, at_time_limit: 'finish' } }),
       /continue until they end/,
     );
+  });
+});
+
+describe('choices for new labs', () => {
+  const saved = {
+    agents: [
+      { harness: 'claude-code', count: 2, model: 'opus', effort: null, mode: 'plan' },
+      { harness: 'codex', count: 3, model: null, effort: 'low', mode: null },
+    ],
+    auto_mode: false,
+    minutes: 45,
+  };
+
+  it('start the setup, with nothing for a harness that this computer lacks', () => {
+    assert.deepEqual(firstPicks(HARNESSES, saved), [
+      { harness: 'claude-code', count: 2, model: 'opus', effort: '', mode: 'plan' },
+      { harness: 'codex', count: 0, model: '', effort: 'low', mode: '' },
+    ]);
+    assert.deepEqual(
+      firstPicks(HARNESSES, DEFAULTS).map((pick) => pick.count),
+      [1, 0],
+    );
+  });
+
+  it('come from the setup as the person left it, and read as words', () => {
+    const picks = firstPicks(HARNESSES, saved);
+    assert.deepEqual(setupChoices(picks, false, 45), {
+      agents: [{ harness: 'claude-code', count: 2, model: 'opus', mode: 'plan' }],
+      auto_mode: false,
+      minutes: 45,
+    });
+    assert.equal(
+      defaultsLine(saved, HARNESSES),
+      'Claude Code: 2 agents (opus, plan mode); Codex: 3 agents (low effort). No auto mode. Time limit: 45 min.',
+    );
+    assert.equal(
+      defaultsLine(DEFAULTS, HARNESSES),
+      'One agent of each harness that this computer has. Auto mode. No time limit.',
+    );
+  });
+
+  it('keep a saved value in its menu when the harness no longer offers it', () => {
+    assert.deepEqual(menuEntries(OFFER.models, OFFER.model, 'gone').at(-1), {
+      value: 'gone',
+      label: 'gone',
+    });
+    assert.equal(menuEntries(OFFER.models, OFFER.model, 'haiku').length, 4);
+    assert.deepEqual(menuEntries([], null, 'high'), [
+      { value: '', label: 'Your default' },
+      { value: 'high', label: 'high' },
+    ]);
+    assert.deepEqual(modeEntries({ ...OFFER, modes: [] }, 'yolo'), [
+      { value: '', label: 'Your auto mode answer' },
+      { value: 'yolo', label: 'yolo' },
+    ]);
   });
 });

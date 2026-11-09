@@ -36,6 +36,7 @@ A lab can have a time limit: `--minutes`, or the time choice in the setup. At th
 
 - `jobs.at_time_limit` says what happens to the processes that agents left running when the lab's time ends, or when you stop the lab. `pause`, the default, pauses them until you give the lab more time. `stop` ends them, and `finish` lets them run. The agents' harnesses keep running either way.
 - `jobs.at_exit` says what happens to those processes when Verifold exits. `stop`, the default, ends them. `keep` leaves them as they are for the next `verifold` in the folder, so a paused process stays paused until that run gets more time.
+- `setup` holds the choices that new labs start with: `agents`, a list of harnesses with a `count` and an optional `model`, `effort`, and `mode`, then `auto_mode` and `minutes`. The setup starts with them, and `verifold run` uses them for what its options leave out. The setup saves all of its choices at once, for this project or for all projects. `verifold run` starts without showing the choices, so a project's `setup` can only make it stricter: it can turn auto mode off and shorten the time limit, and its agents get no modes. `verifold run` prints what it starts. A lab starts at most 20 agents.
 
 `harnesses` in `~/.verifold/settings.json` adds a harness, or replaces a built-in one of the same name. Any agent that speaks ACP can be one:
 
