@@ -156,16 +156,29 @@ class SettingsView(Record):
     """The settings that the folder's lab follows, or `None` before a lab starts."""
 
 
+type SettingKey = Literal['jobs.at_time_limit', 'jobs.at_exit']
+"""The settings that the app changes. Harness commands are not among them, so the app can't change what a lab runs."""
+
+
+class SettingsRevisions(Record):
+    """The revision of each settings file when the person read it."""
+
+    project: str
+    all_projects: str
+
+
 class SettingsChange(Record):
     """The person changes one setting in one of their settings files."""
 
     level: SettingsLevel
-    key: str = Field(pattern=r'^[a-z_]+(\.[a-z_]+)*$')
-    """The setting, with dots between its parts, such as `jobs.at_exit`."""
-    value: JsonValue = None
-    """The new value. `None` removes the setting, so the one from the next level applies."""
-    revision: str
-    """The file's revision when the person read it."""
+    key: SettingKey
+    value: str | None = None
+    """The new value. `None` removes the setting, so the one for all projects, or Verifold's default, applies."""
+    revisions: SettingsRevisions
+    """
+    Both files' revisions. The files add up, so a change refuses to apply when either one changed since the person
+    read it: it could apply a setting that the person didn't see.
+    """
 
 
 class TimeRequest(Record):

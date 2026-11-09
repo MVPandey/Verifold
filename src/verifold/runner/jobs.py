@@ -126,25 +126,41 @@ async def keep_jobs(lab: Lab, project: Path, report: Callable[[Sweep], None]) ->
     Apply the lab's job setting when the lab runs out of time, and resume paused jobs when it gets more time.
 
     The person's Stop also ends the lab's time. The harnesses keep running, so that the agents can be woken when the
-    lab gets more time. `report` gets what each pause or stop did. Run it for as long as the lab runs.
+    lab gets more time. A change to the setting while the lab is out of time applies at once. `report` gets what each
+    pause or stop did. Run it for as long as the lab runs.
     """
     out_of_time: bool | None = None
+    applied: AtTimeLimit | None = None
+    """The setting that the lab's current time-out applied, or `None` while the lab has time."""
     while True:
         board = lab.board
-        if board.out_of_time != out_of_time:
-            out_of_time = board.out_of_time
-            # Only `pause` pauses, so only `pause` resumes. A job that someone else paused stays paused.
-            match board.settings.jobs.at_time_limit:
-                case AtTimeLimit.PAUSE if out_of_time:
-                    report(await asyncio.to_thread(pause_jobs, project))
-                case AtTimeLimit.PAUSE:
-                    await asyncio.to_thread(resume_jobs, project)
-                case AtTimeLimit.STOP if out_of_time:
-                    stopping = await asyncio.to_thread(
-                        sweep, project, spare_harnesses=True, still=lambda: lab.board.out_of_time
-                    )
-                    report(stopping)
+        setting = board.settings.jobs.at_time_limit
+        if board.out_of_time and (out_of_time is not True or setting != applied):
+            await _time_out(lab, project, report, setting, applied)
+            applied = setting
+        elif not board.out_of_time and out_of_time is not False:
+            # Only `pause` pauses, so only a pause resumes. A job that someone else paused stays paused. A new run
+            # under `pause` resumes what an earlier run paused and kept.
+            if applied is AtTimeLimit.PAUSE or (out_of_time is None and setting is AtTimeLimit.PAUSE):
+                await asyncio.to_thread(resume_jobs, project)
+            applied = None
+        out_of_time = board.out_of_time
         await lab.wait_for_change(board.seq)
+
+
+async def _time_out(
+    lab: Lab, project: Path, report: Callable[[Sweep], None], setting: AtTimeLimit, applied: AtTimeLimit | None
+) -> None:
+    # Apply `setting` to the jobs of a lab that is out of time. `applied` is what the time-out applied before, if
+    # the person changed the setting since.
+    match setting:
+        case AtTimeLimit.PAUSE:
+            report(await asyncio.to_thread(pause_jobs, project))
+        case AtTimeLimit.STOP:
+            report(await asyncio.to_thread(sweep, project, spare_harnesses=True, still=lambda: lab.board.out_of_time))
+        case AtTimeLimit.FINISH if applied is AtTimeLimit.PAUSE:
+            # The jobs that this time-out paused run on until they end.
+            await asyncio.to_thread(resume_jobs, project)
 
 
 def _stop(processes: list[psutil.Process], grace: float) -> set[psutil.Process]:

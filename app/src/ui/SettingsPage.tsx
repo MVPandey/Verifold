@@ -3,7 +3,7 @@ import type { ReactElement } from 'react';
 
 import { ApiError, messageOf } from '../api/client.ts';
 import type { Api } from '../api/client.ts';
-import type { SettingsLevel, SettingsView } from '../api/types.ts';
+import type { SettingKey, SettingsLevel, SettingsView } from '../api/types.ts';
 import { AT_EXIT, AT_TIME_LIMIT, labelOf, valueAt } from '../model/settings.ts';
 import type { Choice } from '../model/settings.ts';
 
@@ -25,24 +25,37 @@ export function SettingsPage(props: {
     api.settings().then(setView, (failure: unknown) => setError(messageOf(failure)));
   }, [api]);
 
-  const change = (key: string, value: string | null): void => {
+  const change = (key: SettingKey, value: string | null): void => {
     if (view === null) return;
-    const file = level === 'project' ? view.project : view.all_projects;
+    const revisions = {
+      project: view.project.revision,
+      all_projects: view.all_projects.revision,
+    };
     setSaving(true);
     setError(null);
-    api.changeSetting({ level, key, value, revision: file.revision }).then(
+    api.changeSetting({ level, key, value, revisions }).then(
       (changed) => {
         setView(changed);
         setSaving(false);
       },
       (failure: unknown) => {
-        setSaving(false);
-        if (failure instanceof ApiError && failure.status === 409) {
-          setError(CHANGED);
-          api.settings().then(setView, () => undefined);
-        } else {
+        if (!(failure instanceof ApiError && failure.status === 409)) {
+          setSaving(false);
           setError(messageOf(failure));
+          return;
         }
+        // A file changed since the page read it. The page shows the new values before the person chooses again.
+        api.settings().then(
+          (fresh) => {
+            setView(fresh);
+            setSaving(false);
+            setError(CHANGED);
+          },
+          (reading: unknown) => {
+            setSaving(false);
+            setError(messageOf(reading));
+          },
+        );
       },
     );
   };
@@ -88,11 +101,16 @@ export function SettingsForm(props: {
   readonly level: SettingsLevel;
   readonly labOpen: boolean;
   readonly disabled: boolean;
-  readonly onChange: (key: string, value: string | null) => void;
+  readonly onChange: (key: SettingKey, value: string | null) => void;
 }): ReactElement {
   const project = props.level === 'project';
   const file = project ? props.view.project : props.view.all_projects;
   const inherited = project ? props.view.all_projects.settings : null;
+  // What this project adds up to, which a running lab follows once the person chooses it.
+  const chosen = props.view.project.settings.jobs;
+  const lab = props.view.lab?.jobs ?? null;
+  const own = (key: SettingKey): boolean =>
+    !project && valueAt(props.view.project.values, key) !== undefined;
   return (
     <>
       <p className="sub">
@@ -109,6 +127,8 @@ export function SettingsForm(props: {
         written={valueAt(file.values, 'jobs.at_time_limit')}
         current={file.settings.jobs.at_time_limit}
         inherited={inherited?.jobs.at_time_limit ?? null}
+        projectOwn={own('jobs.at_time_limit') ? chosen.at_time_limit : null}
+        lab={lab && lab.at_time_limit !== chosen.at_time_limit ? lab.at_time_limit : null}
         disabled={props.disabled}
         onChange={(value) => props.onChange('jobs.at_time_limit', value)}
       />
@@ -119,6 +139,8 @@ export function SettingsForm(props: {
         written={valueAt(file.values, 'jobs.at_exit')}
         current={file.settings.jobs.at_exit}
         inherited={inherited?.jobs.at_exit ?? null}
+        projectOwn={own('jobs.at_exit') ? chosen.at_exit : null}
+        lab={lab && lab.at_exit !== chosen.at_exit ? lab.at_exit : null}
         disabled={props.disabled}
         onChange={(value) => props.onChange('jobs.at_exit', value)}
       />
@@ -130,7 +152,9 @@ export function SettingsForm(props: {
  * One setting and its answers.
  *
  * `inherited` is the value for all projects, on a project's page only. There, the setting can follow it, and an
- * answer counts as chosen only when the project's file holds it.
+ * answer counts as chosen only when the project's file holds it. `projectOwn` is this project's own value, on the
+ * page for all projects, because it wins there. `lab` is what the running lab follows when that differs from the
+ * files, for example after an edit by hand.
  */
 function Setting<T extends string>(props: {
   readonly title: string;
@@ -139,6 +163,8 @@ function Setting<T extends string>(props: {
   readonly written: unknown;
   readonly current: T;
   readonly inherited: T | null;
+  readonly projectOwn: T | null;
+  readonly lab: T | null;
   readonly disabled: boolean;
   readonly onChange: (value: T | null) => void;
 }): ReactElement {
@@ -174,6 +200,18 @@ function Setting<T extends string>(props: {
           </button>
         ))}
       </div>
+      {props.projectOwn === null ? null : (
+        <p className="note">
+          This project has its own setting, “{labelOf(props.choices, props.projectOwn)}”, and it
+          wins over this one.
+        </p>
+      )}
+      {props.lab === null ? null : (
+        <p className="note">
+          The running lab still follows “{labelOf(props.choices, props.lab)}”. Choose an answer to
+          change it.
+        </p>
+      )}
     </section>
   );
 }
