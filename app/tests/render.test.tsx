@@ -4,10 +4,10 @@ import { describe, it } from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { Api } from '../src/api/client.ts';
-import type { ThreadView } from '../src/api/types.ts';
+import type { HarnessOption, ThreadView } from '../src/api/types.ts';
 import { SetupPage } from '../src/ui/SetupPage.tsx';
 import { PostItem } from '../src/ui/ThreadPage.tsx';
-import { HARNESSES, agentView, postView, result } from './fixtures.ts';
+import { HARNESSES, OFFER, agentView, postView, result } from './fixtures.ts';
 
 const HOSTILE =
   '<img src="https://evil.example/x.png" onerror="alert(1)"> ![x](https://evil.example/y.png)';
@@ -53,11 +53,39 @@ describe('the setup screen', () => {
         api={api}
         setup={{ folder: '~/code/sort-bench', harnesses: HARNESSES, question: null }}
         onStarted={() => undefined}
+        onRefresh={() => undefined}
       />,
     );
 
     assert.ok(html.includes('~/code/sort-bench'));
     assert.ok(html.includes('Not found on this computer'));
     assert.ok(html.includes('Start lab with 1 agent'));
+    assert.ok(html.includes('<summary>Opus, High effort (your default)</summary>'));
+    assert.ok(html.includes('<option value="" selected="">Opus (your default)</option>'));
+    assert.ok(html.includes('<option value="plan">Plan</option>'));
+  });
+
+  it('waits for a harness that Verifold still asks, and takes typed choices from one that did not answer', () => {
+    const [claude] = HARNESSES;
+    const page = (option: HarnessOption): string =>
+      renderToStaticMarkup(
+        <SetupPage
+          api={{} as Api}
+          setup={{ folder: '~/code', harnesses: [option], question: null }}
+          onStarted={() => undefined}
+          onRefresh={() => undefined}
+        />,
+      );
+    assert.ok(claude);
+
+    const asking = page({ ...claude, probing: true, offer: null });
+    const typed = page({ ...claude, offer: null });
+    const empty = page({ ...claude, offer: { ...OFFER, models: [], efforts: [], modes: [] } });
+
+    assert.ok(asking.includes('Asking Claude Code what it offers.'));
+    assert.equal(asking.includes('<select'), false);
+    assert.ok(typed.includes('placeholder="Your default"'));
+    assert.ok(typed.includes('Leave a field blank to keep your own setting for Claude Code.'));
+    assert.ok(empty.includes('Claude Code offers no model, effort, or mode choices.'));
   });
 });

@@ -16,7 +16,7 @@ from pydantic import Field
 
 from verifold.harnesses.catalog import CATALOG, HarnessEntry, available, catalog_with
 from verifold.protocol.agents import Agent, ModelSpec
-from verifold.protocol.app import HarnessOption, SetupView, StartRequest
+from verifold.protocol.app import AgentChoice, HarnessOption, Offer, SetupView, StartRequest
 from verifold.protocol.record import Record
 from verifold.protocol.settings import AtExit
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
@@ -24,7 +24,7 @@ from verifold.runner.folders import LAB_FOLDER, agent_folder
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
 from verifold.runner.messages import start_message
 from verifold.runner.reruns import Crew, Reruns
-from verifold.runner.session import SessionOptions
+from verifold.runner.session import Place, SessionOptions, offer_of
 from verifold.runner.snapshots import pin
 from verifold.server.activity import Activity
 from verifold.server.app_api import app_api, new_person_token
@@ -44,6 +44,9 @@ SERVER_FILE = 'server.json'
 
 SERVER_GRACE = 10.0
 """Seconds that the web server gets to close its connections after the agents stop, before Verifold cancels it."""
+
+PROBE_TIMEOUT = 60.0
+"""Seconds that a harness gets to tell the setup screen what it offers. A first run can download its adapter."""
 
 SERVER_STOP_GRACE = 30.0
 """Seconds that `stop_lab` gives a server to stop its agents and exit, before it kills the server."""
@@ -115,6 +118,8 @@ class Host:
         self._group: asyncio.TaskGroup | None = None
         self._settings: LoopSettings | None = None
         self._swept: Callable[[Sweep], None] = _ignore
+        self._offers: dict[str, Offer] = {}
+        self._probing: set[str] = set()
 
     @property
     def lab(self) -> Lab | None:
@@ -127,12 +132,45 @@ class Host:
         self._settings = settings
         self._swept = swept
 
+    async def probe(self) -> None:
+        """
+        Ask each harness that this computer has what it offers, for the setup screen, all at once.
+
+        A harness that fails or takes longer than `PROBE_TIMEOUT` seconds offers nothing, and the setup screen then
+        takes free text for it.
+        """
+        harnesses = [entry for entry in self._catalog.values() if available(entry)]
+        self._probing = {entry.name for entry in harnesses}
+        await asyncio.gather(*(self._probe(entry) for entry in harnesses))
+
+    async def _probe(self, harness: HarnessEntry) -> None:
+        place = Place(
+            folder=self._project / LAB_FOLDER / 'probe',
+            log=self._project / LAB_FOLDER / 'logs' / f'probe-{harness.name}.log',
+            lab=self._project,
+            agent='probe',
+        )
+        try:
+            # Whatever goes wrong, the harness offers nothing, and the person types the model and the effort instead.
+            with suppress(Exception):
+                async with asyncio.timeout(PROBE_TIMEOUT):
+                    self._offers[harness.name] = await offer_of(harness, place)
+        finally:
+            self._probing.discard(harness.name)
+
     def setup(self) -> SetupView:
         """Return the harnesses that this computer has, and the folder's lab, if any."""
         return SetupView(
             folder=_shown(self._project),
             harnesses=tuple(
-                HarnessOption(name=entry.name, title=entry.title, family=entry.family, available=available(entry))
+                HarnessOption(
+                    name=entry.name,
+                    title=entry.title,
+                    family=entry.family,
+                    available=available(entry),
+                    probing=entry.name in self._probing,
+                    offer=self._offers.get(entry.name),
+                )
                 for entry in self._catalog.values()
             ),
             question=self._lab.board.opened.question if self._lab else None,
@@ -160,7 +198,7 @@ class Host:
         self._lab = lab
         chosen = [choice for choice in request.agents for _ in range(choice.count)]
         for number, choice in enumerate(chosen, start=1):
-            await lab.join(_agent(number, self._catalog[choice.harness], choice.model, choice.effort))
+            await lab.join(_agent(number, self._catalog[choice.harness], choice))
         await self._launch()
 
     async def resume(self) -> None:
@@ -267,6 +305,8 @@ async def serve(
                     await host.resume()
                 elif start:
                     await host.start(start)
+                else:
+                    group.create_task(host.probe())
                 hooks.ready(f'http://127.0.0.1:{port}/#token={person_token.get_secret_value()}')
                 await asyncio.Event().wait()
         finally:
@@ -321,17 +361,18 @@ async def _closed(serving: asyncio.Task[None]) -> None:
         await serving
 
 
-def _agent(number: int, harness: HarnessEntry, model: str | None, effort: str | None) -> Agent:
+def _agent(number: int, harness: HarnessEntry, choice: AgentChoice) -> Agent:
     return Agent(
         id=f'agent-{number}',
         name=f'Agent {number}',
         harness=harness.name,
-        model=ModelSpec(family=harness.family, name=model, effort=effort),
+        model=ModelSpec(family=harness.family, name=choice.model, effort=choice.effort),
+        mode=choice.mode,
     )
 
 
 def _options(agent: Agent, *, auto_mode: bool) -> SessionOptions:
-    return SessionOptions(model=agent.model.name, effort=agent.model.effort, auto_mode=auto_mode)
+    return SessionOptions(model=agent.model.name, effort=agent.model.effort, mode=agent.mode, auto_mode=auto_mode)
 
 
 def _crew(agents: tuple[Agent, ...], catalog: Mapping[str, HarnessEntry], *, auto_mode: bool) -> Crew:

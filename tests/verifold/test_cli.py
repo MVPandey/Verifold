@@ -76,12 +76,16 @@ def test_no_browser_only_prints_the_link(argv: list[str], opened: list[str]) -> 
 
 
 def test_run_starts_a_lab_with_the_given_agents(serves: list[StartRequest | None]) -> None:
-    main(['run', 'Does it hold?', '--agent', 'claude-code:opus', '--agent', 'codex::low'])
+    main(['run', 'Does it hold?', '--agent', 'claude-code:opus', '--agent', 'codex::low', '--agent', 'codex:::plan'])
 
     assert serves == [
         StartRequest(
             question='Does it hold?',
-            agents=(AgentChoice(harness='claude-code', model='opus'), AgentChoice(harness='codex', effort='low')),
+            agents=(
+                AgentChoice(harness='claude-code', model='opus'),
+                AgentChoice(harness='codex', effort='low'),
+                AgentChoice(harness='codex', mode='plan'),
+            ),
         )
     ]
 

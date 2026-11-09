@@ -69,7 +69,9 @@ async def test_the_setup_screen_starts_a_lab_once_and_refuses_unknown_harnesses(
         empty = await client.post('/labs', json={**START, 'question': '  '})
 
     assert setup['folder'] == '~/code/sort-bench'
-    assert setup['harnesses'] == [{'name': 'fake', 'title': 'Fake', 'family': 'test', 'available': True}]
+    assert setup['harnesses'] == [
+        {'name': 'fake', 'title': 'Fake', 'family': 'test', 'available': True, 'probing': False, 'offer': None}
+    ]
     assert (no_lab.status_code, no_lab.json()['detail']) == (
         409,
         'This folder has no lab yet. Start one from the setup screen.',

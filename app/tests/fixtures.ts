@@ -2,14 +2,49 @@ import type {
   AgentView,
   HarnessOption,
   LabView,
+  Offer,
   Post,
   PostView,
   ThreadSummary,
 } from '../src/api/types.ts';
 
+export const OFFER: Offer = {
+  models: [
+    { value: 'default', name: 'Default (recommended)' },
+    { value: 'opus', name: 'Opus' },
+    { value: 'haiku', name: 'Haiku' },
+  ],
+  efforts: [
+    { value: 'low', name: 'Low' },
+    { value: 'high', name: 'High' },
+  ],
+  modes: [
+    { value: 'default', name: 'Manual' },
+    { value: 'plan', name: 'Plan' },
+    { value: 'auto', name: 'Auto' },
+  ],
+  model: 'opus',
+  effort: 'high',
+  mode: 'default',
+};
+
 export const HARNESSES: readonly HarnessOption[] = [
-  { name: 'claude-code', title: 'Claude Code', family: 'anthropic', available: true },
-  { name: 'codex', title: 'Codex', family: 'openai', available: false },
+  {
+    name: 'claude-code',
+    title: 'Claude Code',
+    family: 'anthropic',
+    available: true,
+    probing: false,
+    offer: OFFER,
+  },
+  {
+    name: 'codex',
+    title: 'Codex',
+    family: 'openai',
+    available: false,
+    probing: false,
+    offer: null,
+  },
 ];
 
 export function agentView(id: string, changes: Partial<AgentView> = {}): AgentView {
@@ -21,6 +56,7 @@ export function agentView(id: string, changes: Partial<AgentView> = {}): AgentVi
       model: { family: 'anthropic', name: null, effort: null },
       role: '',
       brief: '',
+      mode: null,
       recruited_by: null,
       checks: null,
     },
