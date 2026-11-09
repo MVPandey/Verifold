@@ -17,10 +17,11 @@ async def tracked_lab_files(project: Path) -> tuple[str, ...]:
     wrote, with its agents, their modes, and their prompts. A folder outside a repository tracks nothing.
     """
     try:
-        listed = await git('ls-files', '--', LAB_FOLDER, cwd=project)
+        # A file system that ignores case, as macOS does by default, checks `.VERIFOLD/` out into the lab folder too.
+        listed = await git('ls-files', '--', f':(icase){LAB_FOLDER}', cwd=project)
     except GitError:
         return ()
-    return tuple(name for name in listed.splitlines() if name != f'{LAB_FOLDER}/settings.json')
+    return tuple(name for name in listed.splitlines() if name.casefold() != f'{LAB_FOLDER}/settings.json')
 
 
 def agents_folder(project: Path) -> Path:
