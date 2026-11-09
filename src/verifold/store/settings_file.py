@@ -5,7 +5,7 @@ import json
 import os
 import stat
 import tempfile
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from pydantic import JsonValue
@@ -33,13 +33,14 @@ def load_settings(project: Path, home: Path | None = None) -> SettingsFile:
     """
     Return the settings for `project`: the project's file over the global file over the defaults.
 
-    Each file may set only some settings. A project's value wins over the global one, setting by setting.
+    Each file may set only some settings. A project's value wins over the global one, setting by setting. Harnesses
+    come only from the global file.
 
     Raises:
-        SettingsInvalid: A file is not a JSON object, or holds a setting that Verifold doesn't know or accept.
+        SettingsInvalid: A file is not a JSON object, or holds a setting that Verifold doesn't know or accept there.
 
     """
-    return _load(settings_path(level, project, home) for level in LEVELS)
+    return settings_of({level: read_settings_file(settings_path(level, project, home), level)[0] for level in LEVELS})
 
 
 def settings_of(values: Mapping[SettingsLevel, SettingsValues]) -> SettingsFile:
@@ -50,14 +51,16 @@ def settings_of(values: Mapping[SettingsLevel, SettingsValues]) -> SettingsFile:
     return SettingsFile.model_validate(merged)
 
 
-def read_settings_file(path: Path) -> tuple[SettingsValues, str]:
+def read_settings_file(path: Path, level: SettingsLevel) -> tuple[SettingsValues, str]:
     """
-    Return what a settings file holds, as written, and its revision: a hash of its content.
+    Return what the settings file of `level` holds, as written, and its revision: a hash of its content.
 
     A file that doesn't exist holds nothing, and its revision is empty.
 
     Raises:
-        SettingsInvalid: The file is not a JSON object, or holds a setting that Verifold doesn't know or accept.
+        SettingsInvalid: The file is not a JSON object, or holds a setting that Verifold doesn't know or accept at
+            its level. A project's file can't hold harnesses: it can come from someone else, such as a cloned
+            repository, or from an agent, and a harness's command runs on this computer.
 
     """
     if not path.exists():
@@ -66,7 +69,16 @@ def read_settings_file(path: Path) -> tuple[SettingsValues, str]:
         content = path.read_bytes()
     except OSError as error:
         raise SettingsInvalid(f'{path} is not valid settings: {error}') from error
-    return _parsed(path, content), hashlib.sha256(content).hexdigest()
+    data = _parsed(path, content)
+    # In the home folder, the project's file is the file for all projects.
+    own = path.parent.parent.resolve() != Path.home().resolve()
+    if level is SettingsLevel.PROJECT and own and 'harnesses' in data:
+        raise SettingsInvalid(
+            f"{path} holds harnesses. A project's file can come from someone else, such as a cloned repository, or "
+            'from an agent, so only ~/.verifold/settings.json may add or change a harness. Remove the harnesses from '
+            'this file, and add one to ~/.verifold/settings.json only if you trust its command.'
+        )
+    return data, hashlib.sha256(content).hexdigest()
 
 
 def change_setting(
@@ -92,7 +104,7 @@ def change_setting(
     """
     values: dict[SettingsLevel, SettingsValues] = {}
     for each, path in paths.items():
-        values[each], revision = read_settings_file(path)
+        values[each], revision = read_settings_file(path, each)
         if revision != revisions.get(each):
             raise SettingsChanged(
                 f'{path} changed since you opened the settings. Look at its new values, then change them again.'
@@ -130,14 +142,6 @@ def _write(path: Path, values: SettingsValues) -> None:
     except OSError as error:
         written.unlink(missing_ok=True)
         raise SettingsUnwritable(f"Can't write {path}: {error}") from error
-
-
-def _load(paths: Iterable[Path]) -> SettingsFile:
-    merged: SettingsValues = {}
-    for path in paths:
-        if path.exists():
-            merged = _merged(merged, read_settings_file(path)[0])
-    return SettingsFile.model_validate(merged)
 
 
 def _parsed(path: Path, content: bytes) -> dict[str, JsonValue]:

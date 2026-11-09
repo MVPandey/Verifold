@@ -561,8 +561,11 @@ async def test_under_pause_a_new_run_resumes_a_paused_job_that_keep_kept(project
         await until(lambda: not paused(orphan))
 
 
-async def test_a_harness_from_the_projects_settings_shows_in_the_setup_and_runs_a_lab(project: Path) -> None:
-    folder = project / '.verifold'
+async def test_a_harness_from_the_persons_settings_shows_in_the_setup_and_runs_a_lab(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('HOME', str(project.parent))
+    folder = project.parent / '.verifold'
     folder.mkdir()
     entry = {'command': list(FAKE_HARNESS.command), 'family': 'local', 'title': 'Local agent'}
     (folder / 'settings.json').write_text(json.dumps({'harnesses': {'local': entry}}))
