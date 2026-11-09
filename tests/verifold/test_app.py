@@ -86,12 +86,25 @@ async def serving(
             await running
 
 
+async def probed_setup(client: httpx2.AsyncClient) -> dict[str, object]:
+    """Return the setup view once Verifold has asked every harness what it offers."""
+    while True:
+        setup = (await client.get('/setup')).json()
+        if not any(harness['probing'] for harness in setup['harnesses']):
+            return setup
+        await asyncio.sleep(0.05)
+
+
+def named(*values: str) -> list[dict[str, str]]:
+    return [{'value': value, 'name': value} for value in values]
+
+
 async def test_the_person_starts_a_lab_from_the_setup_screen(
     project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv('HOME', str(project.parent))
     async with serving(project) as client:
-        before = (await client.get('/setup')).json()
+        before = await probed_setup(client)
         no_lab = await client.get('/lab')
         started = await client.post('/labs', json=TWO_AGENTS.model_dump(mode='json'))
         await until(lambda: len(posts(project)) == 2)
@@ -99,10 +112,32 @@ async def test_the_person_starts_a_lab_from_the_setup_screen(
 
     assert before == {
         'folder': '~/project',
-        'harnesses': [{'name': 'fake', 'title': 'Fake', 'family': 'test', 'available': True}],
+        'harnesses': [
+            {
+                'name': 'fake',
+                'title': 'Fake',
+                'family': 'test',
+                'available': True,
+                'probing': False,
+                'offer': {
+                    'models': [
+                        {'value': 'default', 'name': 'default', 'efforts': named('default', 'low', 'high')},
+                        {'value': 'small', 'name': 'small', 'efforts': named('default', 'low')},
+                        {'value': 'small-model', 'name': 'small-model', 'efforts': []},
+                    ],
+                    'efforts': named('default', 'low', 'high'),
+                    'modes': [{'value': 'ask', 'name': 'Ask'}, {'value': 'auto', 'name': 'Auto'}],
+                    'model': 'default',
+                    'effort': 'default',
+                    'mode': 'ask',
+                },
+            }
+        ],
         'question': None,
     }
     assert (no_lab.status_code, started.status_code, again.status_code) == (409, 200, 409)
+    # The probe runs in the project folder, which the fake agent takes for its name.
+    assert [call['event'] for call in calls(log) if call['agent'] == project.name][:1] == ['new_session']
     assert started.json()['question'] == 'Does it hold?'
     assert sorted((entry.post.author, entry.post.text) for entry in posts(project)) == [
         ('agent-1', 'Hello from agent-1.'),
@@ -174,11 +209,14 @@ async def test_a_question_for_a_folder_with_a_lab_is_refused(project: Path) -> N
 
 @pytest.mark.usefixtures('log')
 async def test_a_rerun_request_starts_a_blind_checker_from_another_family(
-    project: Path, monkeypatch: pytest.MonkeyPatch
+    project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
     catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
-    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other')))
+    # The other harness's worker asks before it acts. Its checker must still follow the auto mode answer.
+    start = StartRequest(
+        question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other', mode='ask'))
+    )
 
     async with serving(project, start, catalog):
         await until(lambda: any(entry.post.kind == 'check' for entry in posts(project)), timeout=60)
@@ -196,6 +234,10 @@ async def test_a_rerun_request_starts_a_blind_checker_from_another_family(
     check = next(entry.post for entry in board.posts if entry.post.kind == 'check')
     assert check.text == 'Reran it blind: 11.8.'
     assert check.evidence[0].path == 'rerun.txt'
+    modes = [(call['agent'], call['mode']) for call in calls(log) if call['event'] == 'mode']
+    assert ('agent-2', 'ask') in modes
+    assert [mode for agent, mode in modes if agent == checker.id] == ['auto']
+    assert checker.mode is None
 
 
 ONE_AGENT = StartRequest(question='Does it hold?', agents=(AgentChoice(harness='fake'),))
@@ -420,3 +462,27 @@ async def test_a_harness_from_the_projects_settings_shows_in_the_setup_and_runs_
     ]
     assert started.status_code == 200
     assert posts(project)[0].post.author == 'agent-1'
+
+
+async def test_a_mode_from_the_setup_reaches_the_agents_harness_and_its_record(project: Path, log: Path) -> None:
+    start = StartRequest(question='Does it hold?', agents=(AgentChoice(harness='fake', mode='ask'),))
+
+    async with serving(project, start):
+        await until(lambda: len(posts(project)) == 1)
+
+    joined = next(event.agent for event in record(project) if isinstance(event, AgentJoined))
+    assert joined.mode == 'ask'
+    assert [call['mode'] for call in calls(log) if call['event'] == 'mode' and call['agent'] == 'agent-1'] == ['ask']
+
+
+async def test_a_harness_that_fails_its_probe_offers_nothing_and_stops_probing(project: Path) -> None:
+    broken = FAKE_HARNESS.model_copy(
+        update={'name': 'broken', 'command': (sys.executable, '-c', 'raise SystemExit(1)')}
+    )
+
+    async with serving(project, catalog={'broken': broken}) as client:
+        setup = await probed_setup(client)
+
+    assert setup['harnesses'] == [
+        {'name': 'broken', 'title': 'Fake', 'family': 'test', 'available': True, 'probing': False, 'offer': None}
+    ]

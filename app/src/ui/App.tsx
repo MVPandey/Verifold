@@ -25,7 +25,12 @@ export function App(props: { readonly api: Api; readonly token: string }): React
       <>
         <Header folder={data.setup.folder} lab={null} route={route} now={now} needs={0} />
         <main className="page">
-          <SetupPage api={props.api} setup={data.setup} onStarted={data.reload} />
+          <SetupPage
+            api={props.api}
+            setup={data.setup}
+            onStarted={data.reload}
+            onRefresh={data.reload}
+          />
         </main>
       </>
     );

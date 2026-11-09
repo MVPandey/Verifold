@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import AwareDatetime, Field
 
-from verifold.protocol.agents import Agent, Label
+from verifold.protocol.agents import Agent, Label, ValueId
 from verifold.protocol.events import Question
 from verifold.protocol.ids import PostId
 from verifold.protocol.record import Record
@@ -60,13 +60,46 @@ class RerunRequest(Record):
     post: PostId
 
 
+class OptionValue(Record):
+    """One value that a harness offers for an option, such as a model, with the name that the harness shows for it."""
+
+    value: ValueId
+    name: str
+
+
+class ModelValue(OptionValue):
+    """A model that a harness offers, and the effort levels that the harness offers with it."""
+
+    efforts: tuple[OptionValue, ...] | None = None
+    """`None` when the harness didn't switch to the model, so its effort levels are not known."""
+
+
+class Offer(Record):
+    """
+    The models, effort levels, and modes that a harness offers, and the person's current ones.
+
+    `efforts` and `effort` are for the person's current model. Each model in `models` has its own effort levels.
+    """
+
+    models: tuple[ModelValue, ...] = ()
+    efforts: tuple[OptionValue, ...] = ()
+    modes: tuple[OptionValue, ...] = ()
+    model: str | None = None
+    effort: str | None = None
+    mode: str | None = None
+
+
 class HarnessOption(Record):
-    """A harness that the setup screen offers, and whether this computer has it."""
+    """A harness that the setup screen offers, whether this computer has it, and what the harness offers."""
 
     name: Label
     title: Label
     family: Label
     available: bool
+    probing: bool = False
+    """Verifold is still asking the harness what it offers."""
+    offer: Offer | None = None
+    """What a session of the harness offers, or `None` until the harness answers, or when it didn't."""
 
 
 class SetupView(Record):
@@ -80,12 +113,14 @@ class SetupView(Record):
 
 
 class AgentChoice(Record):
-    """How many agents of one harness to start, and with which model and effort."""
+    """How many agents of one harness to start, and with which model, effort, and mode."""
 
     harness: Label
     count: int = Field(default=1, ge=1, le=20)
-    model: Label | None = None
-    effort: Label | None = None
+    model: ValueId | None = None
+    effort: ValueId | None = None
+    mode: ValueId | None = None
+    """One of the harness's own modes. `None` follows the lab's auto mode choice."""
 
 
 class StartRequest(Record):
