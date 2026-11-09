@@ -4,7 +4,11 @@ The processes that agents start on their own, such as a script that runs in the 
 A harness can start a command in a new process group or session, and a command in the background outlives the shell
 that started it. Stopping the harness's process group misses such a process. So every harness gets the lab's marks in
 its environment (`harness_environment`), every process that it starts inherits them, and a sweep finds and stops the
-marked processes when the lab stops and when it starts again.
+lab's processes when the lab stops and when it starts again.
+
+macOS hides the environment of its own programs, such as `sleep` and `zsh`, from other processes. So a process whose
+environment shows nothing counts as the lab's when it runs in an agent's folder without a terminal. A shell that the
+person opens there has a terminal.
 """
 
 import os
@@ -34,37 +38,37 @@ class Job(Record):
 
 
 class Sweep(Record):
-    """What a sweep stopped, what survived it, and the unmarked processes in agents' folders that it left alone."""
+    """What a sweep stopped, what survived it, and the processes in agents' folders that it left alone."""
 
     stopped: tuple[Job, ...] = ()
     survived: tuple[Job, ...] = ()
     unmarked: tuple[Job, ...] = ()
-    """Processes that run in an agent's folder without the lab's mark, such as a shell that the person opened there."""
+    """Processes in an agent's folder that may not be the lab's, such as a shell that the person opened there."""
     earlier_run: bool = False
     """Whether the sweep ran at the start, so its processes came from an earlier run, such as one that crashed."""
 
 
 def sweep(lab: Path, grace: float = JOB_GRACE) -> Sweep:
     """
-    Stop every process that carries the lab's mark, and list the unmarked processes that run in an agent's folder.
+    Stop every process of the lab, and list the processes in agents' folders that may not be the lab's.
 
-    Each marked process gets SIGTERM and then SIGCONT, so that a paused process can exit too. The ones that still run
-    after `grace` seconds get SIGKILL. Call it only while this process holds the lab's record, so that no other
-    server's agents can carry the same mark. It blocks, so async code calls it in a thread.
+    Each process gets SIGTERM and then SIGCONT, so that a paused process can exit too. The ones that still run after
+    `grace` seconds get SIGKILL. Call it only while this process holds the lab's record, so that no other server's
+    agents can carry the same mark. It blocks, so async code calls it in a thread.
     """
-    marked, unmarked = _lab_processes(lab)
-    for process, _ in marked:
+    found, unmarked = _lab_processes(lab)
+    for process, _ in found:
         with suppress(psutil.Error):
             process.terminate()
             process.resume()
-    running = _running_after([process for process, _ in marked], grace)
+    running = _running_after([process for process, _ in found], grace)
     for process in running:
         with suppress(psutil.Error):
             process.kill()
     survived = set(_running_after(running, grace))
     return Sweep(
-        stopped=tuple(job for process, job in marked if process not in survived),
-        survived=tuple(job for process, job in marked if process in survived),
+        stopped=tuple(job for process, job in found if process not in survived),
+        survived=tuple(job for process, job in found if process in survived),
         unmarked=tuple(job for _, job in unmarked),
     )
 
@@ -72,7 +76,7 @@ def sweep(lab: Path, grace: float = JOB_GRACE) -> Sweep:
 def _lab_processes(lab: Path) -> tuple[list[tuple[psutil.Process, Job]], list[tuple[psutil.Process, Job]]]:
     # A process reports its working folder with symbolic links resolved.
     agents = agents_folder(lab).resolve()
-    marked: list[tuple[psutil.Process, Job]] = []
+    found: list[tuple[psutil.Process, Job]] = []
     unmarked: list[tuple[psutil.Process, Job]] = []
     for process in psutil.process_iter():
         if process.pid == os.getpid():
@@ -81,10 +85,18 @@ def _lab_processes(lab: Path) -> tuple[list[tuple[psutil.Process, Job]], list[tu
         with suppress(psutil.Error):
             environment = process.environ()
             if environment.get(LAB_VARIABLE) == str(lab):
-                marked.append((process, _job(process, environment.get(AGENT_VARIABLE))))
-            elif (folder := Path(process.cwd())).is_relative_to(agents) and folder != agents:
-                unmarked.append((process, _job(process, folder.relative_to(agents).parts[0])))
-    return marked, unmarked
+                found.append((process, _job(process, environment.get(AGENT_VARIABLE))))
+            elif agent := _agent_of_folder(process, agents):
+                hidden = not environment and process.terminal() is None
+                (found if hidden else unmarked).append((process, _job(process, agent)))
+    return found, unmarked
+
+
+def _agent_of_folder(process: psutil.Process, agents: Path) -> str | None:
+    folder = Path(process.cwd())
+    if folder == agents or not folder.is_relative_to(agents):
+        return None
+    return folder.relative_to(agents).parts[0]
 
 
 def _job(process: psutil.Process, agent: str | None) -> Job:
