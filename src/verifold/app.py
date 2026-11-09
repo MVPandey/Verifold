@@ -14,7 +14,7 @@ import psutil
 import uvicorn
 from pydantic import Field, JsonValue
 
-from verifold.harnesses.catalog import CATALOG, HarnessEntry, available, catalog_with
+from verifold.harnesses.catalog import CATALOG, NPX_PROJECT, HarnessEntry, available, catalog_with
 from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.app import (
     AgentChoice,
@@ -29,7 +29,7 @@ from verifold.protocol.app import (
 from verifold.protocol.record import Record
 from verifold.protocol.settings import AtExit, SettingsLevel
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
-from verifold.runner.folders import LAB_FOLDER, agent_folder
+from verifold.runner.folders import LAB_FOLDER, agent_folder, tracked_lab_files
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
 from verifold.runner.messages import start_message
 from verifold.runner.reruns import Crew, Reruns
@@ -326,11 +326,20 @@ async def serve(
 
     Raises:
         LabExists: `start` is given, and the folder has a lab already.
-        SetupRejected: `start` names a harness that Verifold does not know. It comes in an exception group.
+        SetupRejected: `start` names a harness that Verifold does not know, which comes in an exception group, or
+            the project's repository tracks lab files.
         RecordLocked: Another process serves this folder already.
 
     """
     options, hooks = options or ServeOptions(), hooks or ServeHooks()
+    if tracked := await tracked_lab_files(project):
+        raise SetupRejected(
+            f'The repository tracks {", ".join(tracked)}. Verifold keeps its own lab in {LAB_FOLDER}/, so it does not '
+            f'start on lab files that came with the repository. Remove them with `git rm --cached {" ".join(tracked)}` '
+            'or delete them, then run verifold again.'
+        )
+    # The built-in adapters' npm project, which holds nothing, so that npm reads nothing from the project.
+    NPX_PROJECT.mkdir(parents=True, exist_ok=True)
     with RecordFile(project / LAB_FOLDER / 'record.jsonl') as record, server_file(project / LAB_FOLDER / SERVER_FILE):
         events = record.read()
         resuming = bool(events)

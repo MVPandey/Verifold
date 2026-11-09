@@ -522,6 +522,25 @@ async def test_a_broken_settings_file_refuses_the_start_and_leaves_no_lab(projec
     assert record(project) == []
 
 
+async def test_a_repository_that_tracks_lab_files_is_refused_but_its_settings_file_is_not(
+    project: Path, home: Path
+) -> None:
+    def git(*args: str) -> None:
+        subprocess.run(['git', *args], cwd=project, check=True, capture_output=True)
+
+    git('init', '--quiet')
+    write_settings(project, {'at_exit': 'keep'})
+    git('add', '.verifold/settings.json')
+    git('-c', 'user.name=Someone', '-c', 'user.email=someone@example.com', 'commit', '--quiet', '-m', 'settings')
+    async with serving(project):
+        pass
+    assert (home / '.verifold' / 'npx').is_dir()
+
+    git('add', '--force', '.verifold/record.jsonl')
+    with pytest.raises(SetupRejected, match=r'The repository tracks \.verifold/record\.jsonl\. Verifold keeps its own'):
+        await serve(project, hooks=ServeHooks(ready=lambda _: None))
+
+
 async def test_a_lab_from_before_settings_takes_the_files_on_its_next_run(project: Path) -> None:
     with RecordFile(project / '.verifold' / 'record.jsonl') as file:
         Lab.create(file, 'Does it hold?')
