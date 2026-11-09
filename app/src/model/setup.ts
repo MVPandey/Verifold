@@ -85,16 +85,53 @@ export function initials(title: string): string {
   return letters.toUpperCase();
 }
 
+/** The effort levels that a harness offers with one model, and the person's own level, when the harness said it. */
+export interface Efforts {
+  readonly values: readonly OptionValue[];
+  readonly current: string | null;
+}
+
+/**
+ * Return the effort levels that a harness offers with a pick's model. A blank model is the person's own model.
+ *
+ * The harness reports the person's own effort level only for their own model. A model that the harness didn't
+ * switch to offers no levels, so the agent keeps the harness's default for it.
+ */
+export function effortsOf(offer: Offer, model: string): Efforts {
+  if (!model || model === offer.model) return { values: offer.efforts, current: offer.effort };
+  return {
+    values: offer.models.find((option) => option.value === model)?.efforts ?? [],
+    current: null,
+  };
+}
+
+/** Return the pick with another model, and without an effort level that the harness doesn't offer with it. */
+export function withModel(pick: HarnessPick, offer: Offer, model: string): HarnessPick {
+  const kept = effortsOf(offer, model).values.some((option) => option.value === pick.effort);
+  return { ...pick, model, effort: kept ? pick.effort : '' };
+}
+
 /** Return what a pick's model menu says when it is closed, with the names that the harness offered. */
 export function modelSummary(pick: HarnessPick, offer: Offer | null): string {
-  const model = pick.model.trim() || offer?.model;
-  const effort = pick.effort.trim() || offer?.effort;
   const mode = pick.mode ? `, ${nameOf(offer?.modes ?? [], pick.mode)} mode` : '';
-  if (!model && !effort) return `Your default model and effort${mode}`;
-  const own = pick.model.trim() || pick.effort.trim() ? '' : ' (your default)';
-  const modelName = model ? nameOf(offer?.models ?? [], model) : 'Your default model';
-  const effortName = effort ? `${nameOf(offer?.efforts ?? [], effort)} effort` : 'default effort';
-  return `${modelName}, ${effortName}${own}${mode}`;
+  const chosen = pick.model.trim() || pick.effort.trim();
+  if (offer === null) {
+    if (!chosen) return `Your default model and effort${mode}`;
+    const effort = pick.effort.trim() ? `${pick.effort.trim()} effort` : 'default effort';
+    return `${pick.model.trim() || 'Your default model'}, ${effort}${mode}`;
+  }
+  const model = pick.model.trim() || offer.model;
+  const efforts = effortsOf(offer, pick.model.trim());
+  const effort = pick.effort.trim() || efforts.current;
+  const parts = [
+    model ? nameOf(offer.models, model) : 'Your default model',
+    ...(effort
+      ? [`${nameOf(efforts.values, effort)} effort`]
+      : efforts.values.length > 0 || !model
+        ? ['default effort']
+        : []),
+  ];
+  return `${parts.join(', ')}${chosen ? '' : ' (your default)'}${mode}`;
 }
 
 /**

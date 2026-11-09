@@ -18,7 +18,7 @@ from verifold.runner.session import (
     Place,
     SessionHooks,
     SessionOptions,
-    _offer,
+    _values,
     offer_of,
 )
 
@@ -52,7 +52,7 @@ async def test_a_session_posts_on_the_board_and_reports_usage_and_cost(
     served: ServedBoard, folder: Place, log: Path
 ) -> None:
     _, token = served.seat('bo')
-    options = SessionOptions(model='small-model', effort='low', auto_mode=True)
+    options = SessionOptions(model='small', effort='low', auto_mode=True)
 
     async with AgentSession.open(
         FAKE_HARNESS, folder, BoardAccess(url=served.url, token=token), options, NO_PERMISSION
@@ -72,7 +72,7 @@ async def test_a_session_posts_on_the_board_and_reports_usage_and_cost(
     settings = [call for call in calls(log) if call['event'] in ('mode', 'option')]
     assert settings == [
         {'agent': 'bo', 'event': 'mode', 'mode': 'auto'},
-        {'agent': 'bo', 'event': 'option', 'option': 'llm', 'value': 'small-model'},
+        {'agent': 'bo', 'event': 'option', 'option': 'llm', 'value': 'small'},
         {'agent': 'bo', 'event': 'option', 'option': 'thinking', 'value': 'low'},
     ]
 
@@ -167,14 +167,26 @@ async def test_a_harness_without_a_model_option_refuses_a_model_instead_of_ignor
             pass
 
 
-async def test_a_probe_reads_what_a_harness_offers_and_stops_it(folder: Place) -> None:
-    offer = await offer_of(FAKE_HARNESS, folder)
+def fake_harnesses() -> list[psutil.Process]:
+    return [child for child in psutil.Process().children() if 'fake_acp_agent.py' in ' '.join(child.cmdline())]
 
-    assert [value.value for value in offer.models] == ['default', 'small', 'small-model']
+
+async def test_a_probe_reads_each_models_effort_levels_and_stops_the_harness(
+    folder: Place, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_REFUSE_MODEL', 'small')
+
+    offer = await offer_of(FAKE_HARNESS, folder, timeout=30)
+
+    efforts = {
+        model.value: None if model.efforts is None else [effort.value for effort in model.efforts]
+        for model in offer.models
+    }
+    assert efforts == {'default': ['default', 'low', 'high'], 'small': None, 'small-model': []}
     assert [value.value for value in offer.efforts] == ['default', 'low', 'high']
     assert [(value.value, value.name) for value in offer.modes] == [('ask', 'Ask'), ('auto', 'Auto')]
     assert (offer.model, offer.effort, offer.mode) == ('default', 'default', 'ask')
-    assert not [child for child in psutil.Process().children() if 'fake_acp_agent.py' in ' '.join(child.cmdline())]
+    assert not fake_harnesses()
 
 
 async def test_a_probe_of_a_harness_without_options_still_reads_its_modes(
@@ -182,13 +194,24 @@ async def test_a_probe_of_a_harness_without_options_still_reads_its_modes(
 ) -> None:
     monkeypatch.setenv('FAKE_ACP_NO_OPTIONS', '1')
 
-    offer = await offer_of(FAKE_HARNESS, folder)
+    offer = await offer_of(FAKE_HARNESS, folder, timeout=30)
 
     assert (offer.models, offer.efforts, offer.model, offer.effort) == ((), (), None, None)
     assert offer.mode == 'ask'
 
 
-def test_an_offer_lists_grouped_values_one_after_another() -> None:
+async def test_a_probe_that_runs_out_of_time_still_stops_the_harness(
+    folder: Place, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_SLOW_SESSION', '1')
+
+    with pytest.raises(TimeoutError):
+        await offer_of(FAKE_HARNESS, folder, timeout=0.5)
+
+    assert not fake_harnesses()
+
+
+def test_grouped_values_come_one_after_another() -> None:
     small = schema.SessionConfigSelectOption(value='small', name='Small')
     big = schema.SessionConfigSelectOption(value='big', name='Big')
     grouped = schema.SessionConfigOptionSelect(
@@ -203,10 +226,21 @@ def test_an_offer_lists_grouped_values_one_after_another() -> None:
         ],
     )
 
-    offer = _offer(schema.NewSessionResponse(session_id='s', config_options=[grouped]))
+    assert [value.value for value in _values(grouped)] == ['small', 'big']
 
-    assert [value.value for value in offer.models] == ['small', 'big']
-    assert offer.modes == ()
+
+async def test_an_effort_comes_from_the_options_of_the_chosen_model(served: ServedBoard, folder: Place) -> None:
+    _, token = served.seat('bo')
+
+    with pytest.raises(RunnerError, match='Fake offers no effort option over ACP'):
+        async with AgentSession.open(
+            FAKE_HARNESS,
+            folder,
+            BoardAccess(url=served.url, token=token),
+            SessionOptions(model='small-model', effort='low'),
+            NO_PERMISSION,
+        ):
+            pass
 
 
 async def test_a_chosen_mode_wins_over_auto_mode(served: ServedBoard, folder: Place, log: Path) -> None:

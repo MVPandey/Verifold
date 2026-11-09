@@ -10,9 +10,24 @@ import type {
 
 export const OFFER: Offer = {
   models: [
-    { value: 'default', name: 'Default (recommended)' },
-    { value: 'opus', name: 'Opus' },
-    { value: 'haiku', name: 'Haiku' },
+    {
+      value: 'default',
+      name: 'Default (recommended)',
+      efforts: [
+        { value: 'low', name: 'Low' },
+        { value: 'high', name: 'High' },
+      ],
+    },
+    {
+      value: 'opus',
+      name: 'Opus',
+      efforts: [
+        { value: 'low', name: 'Low' },
+        { value: 'high', name: 'High' },
+      ],
+    },
+    { value: 'haiku', name: 'Haiku', efforts: [] },
+    { value: 'sonnet', name: 'Sonnet', efforts: null },
   ],
   efforts: [
     { value: 'low', name: 'Low' },

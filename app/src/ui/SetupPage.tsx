@@ -7,12 +7,14 @@ import {
   MAX_AGENTS,
   agentCount,
   firstPicks,
+  effortsOf,
   initials,
   menuEntries,
   modeEntries,
   modelSummary,
   startRequest,
   step,
+  withModel,
 } from '../model/setup.ts';
 import type { HarnessPick, MenuEntry } from '../model/setup.ts';
 import { messageOf } from '../api/client.ts';
@@ -221,7 +223,8 @@ function Offered(props: {
 }): ReactElement {
   const { offer, pick } = props;
   const models = menuEntries(offer.models, offer.model);
-  const efforts = menuEntries(offer.efforts, offer.effort);
+  const levels = effortsOf(offer, pick.model);
+  const efforts = menuEntries(levels.values, levels.current);
   const modes = modeEntries(offer);
   if (models.length + efforts.length + modes.length === 0) {
     return <p>{props.title} offers no model, effort, or mode choices.</p>;
@@ -232,7 +235,7 @@ function Offered(props: {
         label="Model"
         entries={models}
         value={pick.model}
-        onChange={(model) => props.onPick({ ...pick, model })}
+        onChange={(model) => props.onPick(withModel(pick, offer, model))}
       />
       <Menu
         label="Effort"

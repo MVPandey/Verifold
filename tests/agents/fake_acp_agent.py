@@ -8,7 +8,9 @@ child that holds the agent's pipes open and writes its process ID to that path. 
 session of its own, the way that a harness starts a background command, and writes its process ID to that path.
 
 Each session offers a model option `llm` and an effort option `thinking`, under their ACP categories, as real
-adapters do under their own IDs, and the modes `ask` and `auto`. `FAKE_ACP_NO_OPTIONS` makes it offer no options.
+adapters do under their own IDs, and the modes `ask` and `auto`. As in real adapters, each model has its own effort
+levels, and `small-model` has none. `FAKE_ACP_NO_OPTIONS` makes it offer no options, `FAKE_ACP_REFUSE_MODEL`
+names a model that it refuses to switch to, and `FAKE_ACP_SLOW_SESSION` makes a new session take a minute.
 """
 
 import asyncio
@@ -29,6 +31,9 @@ from mcp.client.streamable_http import streamable_http_client
 from verifold.protocol.join import Update
 from verifold.runner.messages import DOORBELL
 
+EFFORTS = {'default': ('default', 'low', 'high'), 'small': ('default', 'low'), 'small-model': ()}
+"""The effort levels of each model."""
+
 type Servers = list[schema.HttpMcpServer | schema.SseMcpServer | schema.AcpMcpServer | schema.McpServerStdio]
 type Prompt = list[
     schema.TextContentBlock
@@ -46,6 +51,7 @@ class FakeAgent(acp.Agent):
         self._headers: dict[str, str] = {}
         self._name = ''
         self._session = ''
+        self._model = 'default'
         self._cost = 0.0
 
     def _note(self, **entry: object) -> None:
@@ -97,16 +103,20 @@ class FakeAgent(acp.Agent):
     def _options(self) -> list[schema.SessionConfigOptionSelect | schema.SessionConfigOptionBoolean] | None:
         if os.environ.get('FAKE_ACP_NO_OPTIONS'):
             return None
-        return [
-            _select('llm', 'model', ('default', 'small', 'small-model')),
-            _select('thinking', 'thought_level', ('default', 'low', 'high')),
+        options: list[schema.SessionConfigOptionSelect | schema.SessionConfigOptionBoolean] = [
+            _select('llm', 'model', tuple(EFFORTS), self._model)
         ]
+        if efforts := EFFORTS[self._model]:
+            options.append(_select('thinking', 'thought_level', efforts, efforts[0]))
+        return options
 
     @override
     async def new_session(
         self, cwd: str, additional_directories: list[str] | None = None, mcp_servers: Servers | None = None, **_: object
     ) -> schema.NewSessionResponse:
         self._connect(cwd, mcp_servers)
+        if os.environ.get('FAKE_ACP_SLOW_SESSION'):
+            await asyncio.sleep(60)
         self._session = f'session-{self._name}'
         self._note(event='new_session')
         modes = schema.SessionModeState(
@@ -138,7 +148,11 @@ class FakeAgent(acp.Agent):
         self, config_id: str, session_id: str, value: str | bool, **_: object
     ) -> schema.SetSessionConfigOptionResponse:
         self._note(event='option', option=config_id, value=value)
-        return schema.SetSessionConfigOptionResponse(config_options=[])
+        if config_id == 'llm':
+            if value == os.environ.get('FAKE_ACP_REFUSE_MODEL'):
+                raise acp.RequestError.invalid_params({'model': value})
+            self._model = str(value)
+        return schema.SetSessionConfigOptionResponse(config_options=self._options() or [])
 
     @override
     async def cancel(self, session_id: str, **_: object) -> None:
@@ -231,11 +245,11 @@ class FakeAgent(acp.Agent):
 
 
 def _select(
-    option: str, category: Literal['model', 'thought_level'], values: tuple[str, ...]
+    option: str, category: Literal['model', 'thought_level'], values: tuple[str, ...], current: str
 ) -> schema.SessionConfigOptionSelect:
     choices = [schema.SessionConfigSelectOption(value=value, name=value) for value in values]
     return schema.SessionConfigOptionSelect(
-        id=option, name=option, category=category, current_value=values[0], options=choices, type='select'
+        id=option, name=option, category=category, current_value=current, options=choices, type='select'
     )
 
 

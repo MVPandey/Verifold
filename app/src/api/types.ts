@@ -69,9 +69,19 @@ export interface OptionValue {
   readonly name: string;
 }
 
-/** The models, effort levels, and modes that a harness offers, and the person's current ones. */
+/** A model that a harness offers, and the effort levels that the harness offers with it. */
+export interface ModelValue extends OptionValue {
+  /** `null` when the harness didn't switch to the model, so its effort levels are not known. */
+  readonly efforts: readonly OptionValue[] | null;
+}
+
+/**
+ * The models, effort levels, and modes that a harness offers, and the person's current ones.
+ *
+ * `efforts` and `effort` are for the person's current model. Each model in `models` has its own effort levels.
+ */
 export interface Offer {
-  readonly models: readonly OptionValue[];
+  readonly models: readonly ModelValue[];
   readonly efforts: readonly OptionValue[];
   readonly modes: readonly OptionValue[];
   readonly model: string | null;

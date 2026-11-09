@@ -95,6 +95,10 @@ async def probed_setup(client: httpx2.AsyncClient) -> dict[str, object]:
         await asyncio.sleep(0.05)
 
 
+def named(*values: str) -> list[dict[str, str]]:
+    return [{'value': value, 'name': value} for value in values]
+
+
 async def test_the_person_starts_a_lab_from_the_setup_screen(
     project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -116,8 +120,12 @@ async def test_the_person_starts_a_lab_from_the_setup_screen(
                 'available': True,
                 'probing': False,
                 'offer': {
-                    'models': [{'value': value, 'name': value} for value in ('default', 'small', 'small-model')],
-                    'efforts': [{'value': value, 'name': value} for value in ('default', 'low', 'high')],
+                    'models': [
+                        {'value': 'default', 'name': 'default', 'efforts': named('default', 'low', 'high')},
+                        {'value': 'small', 'name': 'small', 'efforts': named('default', 'low')},
+                        {'value': 'small-model', 'name': 'small-model', 'efforts': []},
+                    ],
+                    'efforts': named('default', 'low', 'high'),
                     'modes': [{'value': 'ask', 'name': 'Ask'}, {'value': 'auto', 'name': 'Auto'}],
                     'model': 'default',
                     'effort': 'default',
@@ -128,6 +136,8 @@ async def test_the_person_starts_a_lab_from_the_setup_screen(
         'question': None,
     }
     assert (no_lab.status_code, started.status_code, again.status_code) == (409, 200, 409)
+    # The probe runs in the project folder, which the fake agent takes for its name.
+    assert [call['event'] for call in calls(log) if call['agent'] == project.name][:1] == ['new_session']
     assert started.json()['question'] == 'Does it hold?'
     assert sorted((entry.post.author, entry.post.text) for entry in posts(project)) == [
         ('agent-1', 'Hello from agent-1.'),
@@ -199,11 +209,14 @@ async def test_a_question_for_a_folder_with_a_lab_is_refused(project: Path) -> N
 
 @pytest.mark.usefixtures('log')
 async def test_a_rerun_request_starts_a_blind_checker_from_another_family(
-    project: Path, monkeypatch: pytest.MonkeyPatch
+    project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
     catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
-    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other')))
+    # The other harness's worker asks before it acts. Its checker must still follow the auto mode answer.
+    start = StartRequest(
+        question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other', mode='ask'))
+    )
 
     async with serving(project, start, catalog):
         await until(lambda: any(entry.post.kind == 'check' for entry in posts(project)), timeout=60)
@@ -221,6 +234,10 @@ async def test_a_rerun_request_starts_a_blind_checker_from_another_family(
     check = next(entry.post for entry in board.posts if entry.post.kind == 'check')
     assert check.text == 'Reran it blind: 11.8.'
     assert check.evidence[0].path == 'rerun.txt'
+    modes = [(call['agent'], call['mode']) for call in calls(log) if call['event'] == 'mode']
+    assert ('agent-2', 'ask') in modes
+    assert [mode for agent, mode in modes if agent == checker.id] == ['auto']
+    assert checker.mode is None
 
 
 ONE_AGENT = StartRequest(question='Does it hold?', agents=(AgentChoice(harness='fake'),))

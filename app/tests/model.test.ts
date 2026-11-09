@@ -19,6 +19,7 @@ import { href, parseRoute } from '../src/model/route.ts';
 import { hasNew, markSeen, readSeen } from '../src/model/seen.ts';
 import {
   agentCount,
+  effortsOf,
   firstPicks,
   initials,
   menuEntries,
@@ -26,6 +27,7 @@ import {
   modelSummary,
   startRequest,
   step,
+  withModel,
 } from '../src/model/setup.ts';
 import { endLine, MAX_MINUTES, moreTime, runStatus } from '../src/model/time.ts';
 import {
@@ -270,7 +272,12 @@ describe('setup', () => {
   it('names the choices with the names that the harness offered', () => {
     const pick = { harness: 'claude-code', count: 1, model: '', effort: '', mode: '' };
     assert.equal(modelSummary(pick, OFFER), 'Opus, High effort (your default)');
-    assert.equal(modelSummary({ ...pick, model: 'haiku' }, OFFER), 'Haiku, High effort');
+    assert.equal(
+      modelSummary({ ...pick, model: 'default' }, OFFER),
+      'Default (recommended), default effort',
+    );
+    assert.equal(modelSummary({ ...pick, model: 'haiku' }, OFFER), 'Haiku');
+    assert.equal(modelSummary({ ...pick, effort: 'low' }, OFFER), 'Opus, Low effort');
     assert.equal(
       modelSummary({ ...pick, mode: 'plan' }, OFFER),
       'Opus, High effort (your default), Plan mode',
@@ -285,6 +292,7 @@ describe('setup', () => {
       { value: '', label: 'Opus (your default)' },
       { value: 'default', label: 'Default (recommended)' },
       { value: 'haiku', label: 'Haiku' },
+      { value: 'sonnet', label: 'Sonnet' },
     ]);
     assert.deepEqual(menuEntries(OFFER.efforts, null)[0], { value: '', label: 'Your default' });
     assert.deepEqual(menuEntries([], 'opus'), []);
@@ -293,6 +301,16 @@ describe('setup', () => {
       ['Your auto mode answer', 'Manual (your default)', 'Plan', 'Auto'],
     );
     assert.deepEqual(modeEntries({ ...OFFER, modes: [] }), []);
+  });
+
+  it('offers the effort levels of the chosen model, and drops a level that the model lacks', () => {
+    const pick = { harness: 'claude-code', count: 1, model: '', effort: 'low', mode: '' };
+    assert.deepEqual(effortsOf(OFFER, ''), { values: OFFER.efforts, current: 'high' });
+    assert.deepEqual(effortsOf(OFFER, 'default').current, null);
+    assert.deepEqual(effortsOf(OFFER, 'haiku').values, []);
+    assert.deepEqual(effortsOf(OFFER, 'sonnet').values, []);
+    assert.equal(withModel(pick, OFFER, 'default').effort, 'low');
+    assert.deepEqual(withModel(pick, OFFER, 'haiku'), { ...pick, model: 'haiku', effort: '' });
   });
 });
 
