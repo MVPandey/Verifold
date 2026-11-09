@@ -1,4 +1,4 @@
-"""How to start each harness over ACP, and the IDs of the options that Verifold can set."""
+"""The harnesses that a lab can start over ACP: the ones that Verifold knows, and the ones in the person's settings."""
 
 import shutil
 from collections.abc import Mapping
@@ -8,13 +8,15 @@ from pydantic import Field
 
 from verifold.protocol.agents import Label
 from verifold.protocol.record import Record
+from verifold.protocol.settings import HarnessSettings
 
 
 class HarnessEntry(Record):
     """
-    One harness: the command that starts its ACP agent, and the IDs of its session options.
+    One harness: the command that starts its ACP agent, and what Verifold needs to know about it.
 
-    The harness keeps the person's own settings. Verifold sets an option only when the lab asks for it.
+    The harness keeps the person's own settings. Verifold sets a model, an effort, or the auto mode only when the lab
+    asks for it, and it finds the model and effort options by their ACP category.
     """
 
     name: Label
@@ -25,8 +27,6 @@ class HarnessEntry(Record):
     command: tuple[str, ...] = Field(min_length=1)
     family: Label
     """The model family of the harness's default models. Blind checks compare families."""
-    model_option: str | None = 'model'
-    effort_option: str | None = None
     auto_mode: str | None = None
     """The ID of the harness's own auto mode, set when the person allows auto mode for the lab's agents."""
 
@@ -41,7 +41,6 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
                 executable='claude',
                 command=('npx', '-y', '@agentclientprotocol/claude-agent-acp@0.101.0'),
                 family='anthropic',
-                effort_option='effort',
                 auto_mode='auto',
             ),
             HarnessEntry(
@@ -50,13 +49,30 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
                 executable='codex',
                 command=('npx', '-y', '@agentclientprotocol/codex-acp@2.5.0'),
                 family='openai',
-                effort_option='reasoning_effort',
                 auto_mode='agent',
             ),
         )
     }
 )
-"""The harnesses that a lab can name, with the adapter versions that Verifold was tested against."""
+"""The harnesses that Verifold knows, with the adapter versions that it was tested against."""
+
+
+def catalog_with(
+    harnesses: Mapping[str, HarnessSettings], base: Mapping[str, HarnessEntry] = CATALOG
+) -> Mapping[str, HarnessEntry]:
+    """Return `base` with the person's harnesses added. An entry with the name of a harness in `base` replaces it."""
+    added = {
+        name: HarnessEntry(
+            name=name,
+            title=entry.title or name,
+            executable=entry.executable or entry.command[0],
+            command=entry.command,
+            family=entry.family,
+            auto_mode=entry.auto_mode,
+        )
+        for name, entry in harnesses.items()
+    }
+    return MappingProxyType({**base, **added})
 
 
 def available(entry: HarnessEntry) -> bool:

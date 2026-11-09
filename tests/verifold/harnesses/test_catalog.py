@@ -1,6 +1,7 @@
 from fakes import FAKE_HARNESS
 
-from verifold.harnesses.catalog import CATALOG, available
+from verifold.harnesses.catalog import CATALOG, available, catalog_with
+from verifold.protocol.settings import HarnessSettings
 
 
 def test_a_harness_is_available_when_its_command_and_its_adapter_are_on_the_path() -> None:
@@ -11,3 +12,23 @@ def test_a_harness_is_available_when_its_command_and_its_adapter_are_on_the_path
 
 def test_the_catalog_names_each_harness_by_its_own_name() -> None:
     assert all(name == entry.name for name, entry in CATALOG.items())
+
+
+def test_the_persons_harnesses_join_the_built_in_ones_and_replace_a_built_in_by_name() -> None:
+    harnesses = {
+        'gemini': HarnessSettings(command=('gemini', '--experimental-acp'), family='google'),
+        'codex': HarnessSettings(command=('codex-acp',), family='openai', title='My Codex', executable='codex'),
+    }
+
+    catalog = catalog_with(harnesses)
+
+    assert list(catalog) == ['claude-code', 'codex', 'gemini']
+    assert catalog['claude-code'] == CATALOG['claude-code']
+    gemini = catalog['gemini']
+    assert (gemini.title, gemini.executable, gemini.command, gemini.family) == (
+        'gemini',
+        'gemini',
+        ('gemini', '--experimental-acp'),
+        'google',
+    )
+    assert (catalog['codex'].title, catalog['codex'].command) == ('My Codex', ('codex-acp',))

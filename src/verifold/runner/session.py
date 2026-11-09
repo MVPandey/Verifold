@@ -1,7 +1,7 @@
 """One agent's ACP session: its harness process, the board attached as its MCP server, and the messages sent to it."""
 
 import asyncio
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -40,6 +40,7 @@ class PermissionRequest(Record):
 
 
 type McpServers = list[schema.HttpMcpServer | schema.SseMcpServer | schema.AcpMcpServer | schema.McpServerStdio]
+type ConfigOption = schema.SessionConfigOptionSelect | schema.SessionConfigOptionBoolean
 
 type Permissions = Callable[[PermissionRequest], Awaitable[str | None]]
 """Decides a permission request: the ID of the chosen answer, or `None` to cancel the action."""
@@ -217,16 +218,33 @@ async def _begin(
         )
     ]
     if options.resume:
-        await connection.load_session(cwd=str(folder), session_id=options.resume, mcp_servers=servers)
-        session_id = options.resume
+        loaded = await connection.load_session(cwd=str(folder), session_id=options.resume, mcp_servers=servers)
+        session_id, offered = options.resume, loaded.config_options
     else:
-        session_id = (await connection.new_session(cwd=str(folder), mcp_servers=servers)).session_id
+        opened = await connection.new_session(cwd=str(folder), mcp_servers=servers)
+        session_id, offered = opened.session_id, opened.config_options
     if options.auto_mode and harness.auto_mode:
         await connection.set_session_mode(session_id=session_id, mode_id=harness.auto_mode)
-    for option_id, value in ((harness.model_option, options.model), (harness.effort_option, options.effort)):
-        if option_id and value:
-            await connection.set_config_option(session_id=session_id, config_id=option_id, value=value)
+    for category, value in (('model', options.model), ('thought_level', options.effort)):
+        if value:
+            option = _option_id(offered or [], category, harness)
+            await connection.set_config_option(session_id=session_id, config_id=option, value=value)
     return session_id
+
+
+def _option_id(offered: Sequence[ConfigOption], category: str, harness: HarnessEntry) -> str:
+    """
+    Return the ID of the session option in an ACP category, such as `model`, whatever the harness calls it.
+
+    Raises:
+        RunnerError: The harness offers no option in that category, so Verifold can't set what the lab asks for.
+
+    """
+    found = next((option.id for option in offered if option.category == category), None)
+    if found is None:
+        what = {'model': 'model', 'thought_level': 'effort'}[category]
+        raise RunnerError(f'{harness.title} offers no {what} option over ACP, so Verifold cannot set the {what}.')
+    return found
 
 
 class AgentSession:
