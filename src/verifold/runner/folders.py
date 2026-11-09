@@ -9,6 +9,11 @@ LAB_FOLDER = '.verifold'
 """The folder in the project that holds the lab: its record, the agents' folders, and their private files."""
 
 
+def agents_folder(project: Path) -> Path:
+    """Return the folder that holds each agent's folder."""
+    return project / LAB_FOLDER / 'agents'
+
+
 async def agent_folder(project: Path, agent_id: AgentId) -> Path:
     """
     Return the agent's folder, and create it on the first call.
@@ -17,7 +22,7 @@ async def agent_folder(project: Path, agent_id: AgentId) -> Path:
     the lab folder is excluded from the project's Git status. In any other project, the folder is a new repository,
     so the agent can still commit its work. A later call returns the same folder, so a resumed agent keeps its work.
     """
-    folder = project / LAB_FOLDER / 'agents' / agent_id
+    folder = agents_folder(project) / agent_id
     if folder.exists():
         return folder
     folder.parent.mkdir(parents=True, exist_ok=True)
@@ -50,7 +55,7 @@ async def checker_folder(project: Path, checker_id: AgentId, source: Path, ref: 
     The folder holds only what the author's snapshot holds, fetched from the author's folder. A later call returns the
     same folder.
     """
-    folder = project / LAB_FOLDER / 'agents' / checker_id
+    folder = agents_folder(project) / checker_id
     if folder.exists():
         return folder
     folder.mkdir(parents=True)

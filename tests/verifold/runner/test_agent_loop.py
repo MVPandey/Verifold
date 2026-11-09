@@ -37,7 +37,13 @@ def loop_for(served: ServedBoard, tmp_path: Path, activity: Activity | None = No
     folder = tmp_path / 'bo'
     folder.mkdir(exist_ok=True)
     setup = AgentSetup(
-        agent=joined.agent, harness=FAKE_HARNESS, folder=folder, log=tmp_path / 'bo.log', token=token, start='Start.'
+        agent=joined.agent,
+        harness=FAKE_HARNESS,
+        lab=tmp_path,
+        folder=folder,
+        log=tmp_path / 'bo.log',
+        token=token,
+        start='Start.',
     )
     return AgentLoop(member, setup, LoopSettings(mcp_url=served.url, retry_after=0, **settings), activity=activity)
 
