@@ -122,7 +122,7 @@ def _report(sweep: Sweep) -> None:
     for job in sweep.survived:
         print(f"Couldn't stop {_owner(job)} process: {job.command} ({job.pid}). Run `kill -9 {job.pid}`.")
     for job in sweep.unmarked:
-        print(f"Left running in {_owner(job)} folder, as nothing marks it as the lab's: {job.command} ({job.pid})")
+        print(f"Left running in {_owner(job)} folder, as it may not be the lab's: {job.command} ({job.pid})")
 
 
 def _owner(job: Job) -> str:

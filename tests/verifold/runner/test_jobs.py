@@ -107,3 +107,44 @@ def test_a_long_command_line_is_shortened(lab: Path, started: list[subprocess.Po
 
     assert len(job.command) == COMMAND_LENGTH
     assert job.command.endswith('…')
+
+
+def hide_environment(monkeypatch: pytest.MonkeyPatch, pid: int) -> None:
+    """Make one process show no environment, as macOS does for its own programs, such as sleep and zsh."""
+    environ = psutil.Process.environ
+    monkeypatch.setattr(psutil.Process, 'environ', lambda process: {} if process.pid == pid else environ(process))
+
+
+def test_a_process_that_hides_its_environment_counts_as_the_agents_whose_folder_it_runs_in(
+    lab: Path, started: list[subprocess.Popen[bytes]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = lab / '.verifold' / 'agents' / 'agent-2'
+    folder.mkdir(parents=True)
+    job = subprocess.Popen([sys.executable, '-c', SLEEP], cwd=folder, start_new_session=True)
+    started.append(job)
+    hide_environment(monkeypatch, job.pid)
+
+    result = sweep(lab, grace=0.5)
+
+    assert [(found.pid, found.agent) for found in result.stopped] == [(job.pid, 'agent-2')]
+    assert job.poll() is not None
+
+
+def test_a_process_that_hides_its_environment_but_has_a_terminal_is_left_running(
+    lab: Path, started: list[subprocess.Popen[bytes]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = lab / '.verifold' / 'agents' / 'agent-2'
+    folder.mkdir(parents=True)
+    shell = subprocess.Popen([sys.executable, '-c', SLEEP], cwd=folder)
+    started.append(shell)
+    hide_environment(monkeypatch, shell.pid)
+    terminal = psutil.Process.terminal
+    monkeypatch.setattr(
+        psutil.Process, 'terminal', lambda process: '/dev/ttys009' if process.pid == shell.pid else terminal(process)
+    )
+
+    result = sweep(lab, grace=0.1)
+
+    assert [(found.pid, found.agent) for found in result.unmarked] == [(shell.pid, 'agent-2')]
+    assert result.stopped == ()
+    assert shell.poll() is None

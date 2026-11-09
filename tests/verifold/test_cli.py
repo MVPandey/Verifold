@@ -223,7 +223,7 @@ def test_the_command_reports_what_each_sweep_did(
     assert "Stopped agent-1's process from an earlier run: python old.py (11)" in out
     assert "Stopped an agent's process: sleep 60 (12)" in out
     assert "Couldn't stop agent-2's process: stubborn (13). Run `kill -9 13`." in out
-    assert "Left running in agent-2's folder, as nothing marks it as the lab's: zsh (14)" in out
+    assert "Left running in agent-2's folder, as it may not be the lab's: zsh (14)" in out
 
 
 def test_stop_says_when_nothing_of_the_lab_runs(
