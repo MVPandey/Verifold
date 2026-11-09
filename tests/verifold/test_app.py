@@ -237,8 +237,14 @@ async def test_serving_first_stops_what_an_earlier_run_of_the_lab_left(
     assert not sweeps[-1].earlier_run
 
 
-def test_the_web_server_leaves_the_stop_signals_to_verifold() -> None:
+async def test_the_web_server_leaves_the_stop_signals_to_verifold() -> None:
     handlers = {stop: signal.getsignal(stop) for stop in (signal.SIGINT, signal.SIGTERM)}
+    server = WebServer(uvicorn.Config(web_app(), host='127.0.0.1', port=0, log_level='warning'))
+    serving = asyncio.create_task(server.serve())
 
-    with WebServer(uvicorn.Config(web_app())).capture_signals():
+    try:
+        await until(lambda: server.started)
         assert {stop: signal.getsignal(stop) for stop in handlers} == handlers
+    finally:
+        server.should_exit = True
+        await serving

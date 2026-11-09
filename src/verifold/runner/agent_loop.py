@@ -121,7 +121,10 @@ class AgentLoop:
                             await self._news()
                             message = DOORBELL
             # Any failure of one harness restarts that harness. It must not stop the lab's other agents.
-            except Exception as error:  # noqa: BLE001
+            except Exception as error:
+                # While the lab stops, the harness's cleanup can fail too. That error ends the agent and restarts nothing.
+                if (task := asyncio.current_task()) and task.cancelling():
+                    raise asyncio.CancelledError from error
                 failures += 1
                 failed = TurnSummary(
                     agent=setup.agent.id, seconds=0, usage=Usage(), error=f'{type(error).__name__}: {error}'

@@ -148,3 +148,43 @@ def test_a_process_that_hides_its_environment_but_has_a_terminal_is_left_running
     assert [(found.pid, found.agent) for found in result.unmarked] == [(shell.pid, 'agent-2')]
     assert result.stopped == ()
     assert shell.poll() is None
+
+
+FORKS_WHEN_STOPPED = (
+    'import signal, subprocess, sys, time\n'
+    'def stop(*_):\n'
+    '    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)\n'
+    '    sys.exit(0)\n'
+    'signal.signal(signal.SIGTERM, stop)\n'
+    'print("ready", flush=True)\n'
+    'time.sleep(60)'
+)
+
+
+def test_a_sweep_looks_again_for_processes_that_a_stopping_process_started(
+    lab: Path, started: list[subprocess.Popen[bytes]]
+) -> None:
+    parent = marked(started, lab, FORKS_WHEN_STOPPED, stdout=subprocess.PIPE)
+    assert parent.stdout is not None
+    assert parent.stdout.readline() == b'ready\n'
+
+    result = sweep(lab, grace=1)
+
+    assert len(result.stopped) == 2
+    assert result.survived == ()
+    assert sweep(lab, grace=0.1).stopped == ()
+
+
+def test_a_marked_sleep_in_an_agents_folder_stops(lab: Path, started: list[subprocess.Popen[bytes]]) -> None:
+    folder = lab / '.verifold' / 'agents' / 'agent-1'
+    folder.mkdir(parents=True)
+    # On macOS, /bin/sleep hides its environment, so the agent's folder is what finds it.
+    job = subprocess.Popen(
+        ['/bin/sleep', '60'], cwd=folder, env=harness_environment(lab, 'agent-1'), start_new_session=True
+    )
+    started.append(job)
+
+    result = sweep(lab, grace=0.5)
+
+    assert [(found.pid, found.agent) for found in result.stopped] == [(job.pid, 'agent-1')]
+    assert job.poll() is not None

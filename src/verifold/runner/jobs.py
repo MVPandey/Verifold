@@ -3,12 +3,15 @@ The processes that agents start on their own, such as a script that runs in the 
 
 A harness can start a command in a new process group or session, and a command in the background outlives the shell
 that started it. Stopping the harness's process group misses such a process. So every harness gets the lab's marks in
-its environment (`harness_environment`), every process that it starts inherits them, and a sweep finds and stops the
-lab's processes when the lab stops and when it starts again.
+its environment (`harness_environment`), the processes that it starts inherit them, and a sweep stops the lab's
+processes when the lab stops and when it starts again.
 
-macOS hides the environment of its own programs, such as `sleep` and `zsh`, from other processes. So a process whose
-environment shows nothing counts as the lab's when it runs in an agent's folder without a terminal. A shell that the
-person opens there has a terminal.
+A process whose environment shows nothing also counts as the lab's when it runs in an agent's folder without a
+terminal. macOS hides the environment of its own programs, such as `sleep` and `zsh`, and a program can clear its
+environment. A shell that the person opens in an agent's folder has a terminal, so it keeps running.
+
+A sweep doesn't find a process that clears its environment and works outside the agents' folders. Nor does it find a
+process that something outside the lab starts for an agent, such as Docker.
 """
 
 import os
@@ -23,6 +26,9 @@ from verifold.runner.folders import agents_folder
 
 JOB_GRACE = 5.0
 """Seconds that a process gets to exit after SIGTERM, before a sweep kills it."""
+
+SWEEP_PASSES = 3
+"""How often a sweep looks again, for processes that the stopped ones started while they stopped."""
 
 COMMAND_LENGTH = 120
 """The longest command line that a `Job` keeps, in characters."""
@@ -53,24 +59,39 @@ def sweep(lab: Path, grace: float = JOB_GRACE) -> Sweep:
     Stop every process of the lab, and list the processes in agents' folders that may not be the lab's.
 
     Each process gets SIGTERM and then SIGCONT, so that a paused process can exit too. The ones that still run after
-    `grace` seconds get SIGKILL. Call it only while this process holds the lab's record, so that no other server's
-    agents can carry the same mark. It blocks, so async code calls it in a thread.
+    `grace` seconds get SIGKILL. A stopping process can start new ones, so the sweep looks again, up to `SWEEP_PASSES`
+    times in all. Call it only while this process holds the lab's record, so that no other server's agents can carry
+    the same mark. It blocks, so async code calls it in a thread.
     """
-    found, unmarked = _lab_processes(lab)
-    for process, _ in found:
+    stopped: list[Job] = []
+    survived: dict[int, Job] = {}
+    unmarked: list[Job] = []
+    for _ in range(SWEEP_PASSES):
+        found, left = _lab_processes(lab)
+        unmarked = [job for _, job in left]
+        new = [(process, job) for process, job in found if job.pid not in survived]
+        if not new:
+            break
+        alive = _stop([process for process, _ in new], grace)
+        for process, job in new:
+            if process in alive:
+                survived[job.pid] = job
+            else:
+                stopped.append(job)
+    return Sweep(stopped=tuple(stopped), survived=tuple(survived.values()), unmarked=tuple(unmarked))
+
+
+def _stop(processes: list[psutil.Process], grace: float) -> set[psutil.Process]:
+    """Stop `processes`, and return the ones that still run."""
+    for process in processes:
         with suppress(psutil.Error):
             process.terminate()
             process.resume()
-    running = _running_after([process for process, _ in found], grace)
+    running = _running_after(processes, grace)
     for process in running:
         with suppress(psutil.Error):
             process.kill()
-    survived = set(_running_after(running, grace))
-    return Sweep(
-        stopped=tuple(job for process, job in found if process not in survived),
-        survived=tuple(job for process, job in found if process in survived),
-        unmarked=tuple(job for _, job in unmarked),
-    )
+    return set(_running_after(running, grace))
 
 
 def _lab_processes(lab: Path) -> tuple[list[tuple[psutil.Process, Job]], list[tuple[psutil.Process, Job]]]:

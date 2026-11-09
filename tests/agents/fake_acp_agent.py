@@ -227,5 +227,8 @@ if job_file := os.environ.get('FAKE_ACP_JOB'):
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    Path(job_file).write_text(str(job.pid))
+    # The test reads the file as soon as it exists, so it appears with its content.
+    written = Path(f'{job_file}.tmp')
+    written.write_text(str(job.pid))
+    written.replace(job_file)
 asyncio.run(acp.run_agent(FakeAgent()))  # ty: ignore[call-non-callable]
