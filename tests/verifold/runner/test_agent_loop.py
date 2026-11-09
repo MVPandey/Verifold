@@ -197,7 +197,9 @@ async def test_running_out_of_time_stops_the_turn_until_the_person_gives_more_ti
         with suppress(asyncio.CancelledError):
             await running
 
-    assert calls(log, 'prompt')[1]['text'] == more_time_message(lab.board.ends_at)
+    assert calls(log, 'prompt')[1]['text'] == more_time_message(
+        lab.board.ends_at, lab.board.settings.jobs.at_time_limit
+    )
     assert activity.of('bo').detail == ''
     assert ('waiting', 'The lab is out of time. The person can give it more.') in [
         (state, detail) for _, state, detail in activity.changes
