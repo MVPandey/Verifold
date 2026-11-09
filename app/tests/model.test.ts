@@ -265,6 +265,28 @@ describe('setup', () => {
       step(both, 'codex', 10).map((pick) => pick.count),
       [15, 5],
     );
+    // Over the limit, a step down still works, and nothing goes below zero or grows.
+    const over = [
+      { harness: 'claude-code', count: 18, model: '', effort: '', mode: '' },
+      { harness: 'codex', count: 5, model: '', effort: '', mode: '' },
+    ];
+    assert.deepEqual(
+      step(over, 'codex', -1).map((pick) => pick.count),
+      [18, 4],
+    );
+    assert.deepEqual(
+      step(over, 'codex', 1).map((pick) => pick.count),
+      [18, 5],
+    );
+    assert.deepEqual(
+      step(step(over, 'codex', -5), 'codex', -1).map((pick) => pick.count),
+      [18, 0],
+    );
+    const many = Array.from({ length: 25 }, (_, number) => ({
+      ...HARNESSES[0],
+      name: `h${String(number)}`,
+    })) as typeof HARNESSES;
+    assert.equal(agentCount(firstPicks(many, DEFAULTS)), 20);
   });
 
   it('sends only the choices that the person made', () => {

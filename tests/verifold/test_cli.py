@@ -163,7 +163,9 @@ def test_a_projects_saved_choices_make_run_stricter_but_never_looser(
     # The project's agent loses its mode, and the project can't turn auto mode on or drop the time limit.
     choice = AgentChoice(harness='claude-code', count=2, model='opus')
     assert serves == [StartRequest(question='Does it hold?', agents=(choice,), auto_mode=False, minutes=60)]
-    assert 'Starting a lab with 2 claude-code (opus); no auto mode; a time limit of 60 min.' in capsys.readouterr().out
+    printed = capsys.readouterr().out
+    assert 'Started a lab with 2 claude-code (opus); no auto mode; a time limit of 60 min.' in printed
+    assert printed.index('Started a lab') < printed.index('Open the lab')
 
 
 def test_saved_modes_come_only_from_the_file_for_all_projects_and_not_under_ask_me(
@@ -180,6 +182,37 @@ def test_saved_modes_come_only_from_the_file_for_all_projects_and_not_under_ask_
         (AgentChoice(harness='codex'),),
     ]
     assert [start.minutes for start in serves if start] == [30, 30]
+
+
+def test_in_the_home_folder_run_keeps_the_persons_own_saved_modes(
+    serves: list[StartRequest | None], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / 'home'
+    (home / '.verifold').mkdir(parents=True)
+    (home / '.verifold' / 'settings.json').write_text(
+        json.dumps({'setup': {'agents': [{'harness': 'codex', 'mode': 'plan'}]}})
+    )
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.chdir(home)
+    installed(monkeypatch, 'codex')
+
+    main(['run', 'Does it hold?'])
+
+    assert serves == [StartRequest(question='Does it hold?', agents=(AgentChoice(harness='codex', mode='plan'),))]
+
+
+def test_run_without_saved_agents_starts_at_most_twenty_harnesses(
+    serves: list[StartRequest | None], project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harnesses = {f'h{number:02}': {'command': [f'h{number:02}'], 'family': 'test'} for number in range(25)}
+    global_settings(project, {'harnesses': harnesses})
+    installed(monkeypatch, *harnesses)
+
+    main(['run', 'Does it hold?'])
+
+    started = serves[0]
+    assert started is not None
+    assert [choice.harness for choice in started.agents] == [f'h{number:02}' for number in range(20)]
 
 
 def test_run_skips_a_saved_harness_that_this_computer_lacks(

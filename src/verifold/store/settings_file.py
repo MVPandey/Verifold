@@ -86,12 +86,17 @@ def _content(path: Path) -> bytes:
     # A pipe or a device in place of the file would block a read or never end it, so only a regular file is read.
     try:
         descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-        with os.fdopen(descriptor, 'rb') as file:
-            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
-                raise SettingsInvalid(f'{path} is not a regular file.')
+    except OSError as error:
+        raise SettingsInvalid(f'{path} is not valid settings: {error.strerror}') from error
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise SettingsInvalid(f'{path} is not a regular file.')
+        with os.fdopen(descriptor, 'rb', closefd=False) as file:
             content = file.read(MAX_SETTINGS_BYTES + 1)
     except OSError as error:
-        raise SettingsInvalid(f'{path} is not valid settings: {error}') from error
+        raise SettingsInvalid(f'{path} is not valid settings: {error.strerror}') from error
+    finally:
+        os.close(descriptor)
     if len(content) > MAX_SETTINGS_BYTES:
         raise SettingsInvalid(f'{path} is larger than {MAX_SETTINGS_BYTES // 1024} KiB.')
     return content

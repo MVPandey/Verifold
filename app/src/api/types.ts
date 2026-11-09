@@ -161,6 +161,8 @@ export interface SetupView {
   readonly question: string | null;
   /** What the setup starts with: the person's saved choices for new labs, or Verifold's defaults. */
   readonly defaults: SetupDefaults;
+  /** The settings file that the saved choices come from, which can be the project's own, or `null`. */
+  readonly defaults_from: string | null;
 }
 
 /** An agent choice as the server sends it back, with `null` for what it leaves to the harness. */

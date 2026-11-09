@@ -137,6 +137,7 @@ async def test_the_person_starts_a_lab_from_the_setup_screen(
         ],
         'question': None,
         'defaults': {'agents': None, 'auto_mode': True, 'minutes': None},
+        'defaults_from': None,
     }
     assert (no_lab.status_code, started.status_code, again.status_code) == (409, 200, 409)
     # The probe runs in the project folder, which the fake agent takes for its name.
@@ -517,6 +518,8 @@ async def test_saved_choices_for_new_labs_fill_the_setup_and_leave_a_running_lab
 
     written = {'agents': [{'harness': 'fake', 'count': 3, 'model': 'small'}], 'auto_mode': False, 'minutes': None}
     assert changed['project']['values'] == {'setup': written}
+    # The setup names the file that its first choices come from, which here is the project's own.
+    assert setup['defaults_from'] == changed['project']['path']
     assert changed['project']['defaults'] == {
         **written,
         'agents': [{**written['agents'][0], 'effort': None, 'mode': None}],

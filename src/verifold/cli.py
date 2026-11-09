@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from verifold import DISTRIBUTION
 from verifold.app import ServeHooks, serve, stop_lab
 from verifold.harnesses.catalog import CATALOG, HarnessEntry, available, catalog_with
-from verifold.protocol.agents import AgentChoice
+from verifold.protocol.agents import MAX_AGENTS, AgentChoice
 from verifold.protocol.app import StartRequest
 from verifold.protocol.settings import SettingsLevel, SetupDefaults
 from verifold.runner.errors import RunnerError
@@ -50,11 +50,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         start = _start(args) if args.command == 'run' else None
     except (ValidationError, SettingsInvalid, SetupRejected) as error:
         sys.exit(f'verifold: {error}')
-    if start:
-        _say(f'Starting a lab with {_plan(start)}.')
     _say(f'Serving Verifold for {Path.cwd()}. Its record is .verifold/record.jsonl. Press Ctrl+C to stop.')
     try:
-        announce = partial(_announce, open_browser=not args.no_browser)
+        announce = partial(_announce, open_browser=not args.no_browser, plan=_plan(start) if start else None)
         asyncio.run(_until_stopped(serve(Path.cwd(), start, hooks=ServeHooks(ready=announce, swept=_report))))
     except KeyboardInterrupt:
         pass  # Ctrl+C came before the event loop took over the signal.
@@ -93,7 +91,12 @@ def _start(args: argparse.Namespace) -> StartRequest:
         agents = tuple(_agent(value) for value in args.agent)
     else:
         saved = values[SettingsLevel.PROJECT].get('setup')
-        from_project = isinstance(saved, dict) and 'agents' in saved
+        # In the home folder, the project's file is the person's own file for all projects.
+        own = (
+            settings_path(SettingsLevel.PROJECT, project).resolve()
+            == settings_path(SettingsLevel.ALL, project).resolve()
+        )
+        from_project = not own and isinstance(saved, dict) and 'agents' in saved
         agents = _saved_agents(here, catalog_with(files.harnesses), drop_modes=args.ask_me or from_project)
     shorter = min((minutes for minutes in (everywhere.minutes, here.minutes) if minutes is not None), default=None)
     return StartRequest(
@@ -116,7 +119,7 @@ def _saved_agents(
         kept.append(choice.model_copy(update={'mode': None}) if drop_modes else choice)
     if kept:
         return tuple(kept)
-    found = tuple(AgentChoice(harness=name) for name, entry in catalog.items() if available(entry))
+    found = tuple(AgentChoice(harness=name) for name, entry in catalog.items() if available(entry))[:MAX_AGENTS]
     if not found:
         raise SetupRejected(
             f'No harness that Verifold knows is on this computer: {", ".join(catalog)}. Install one, or add one to '
@@ -205,7 +208,10 @@ def _say(text: str) -> None:
         print(text, flush=True)
 
 
-def _announce(link: str, *, open_browser: bool) -> None:
+def _announce(link: str, *, open_browser: bool, plan: str | None = None) -> None:
+    # The plan shows once the server is up, so that it never comes before an error about the folder.
+    if plan:
+        _say(f'Started a lab with {plan}.')
     _say(f'Open the lab: {link}')
     if open_browser:
         webbrowser.open(link)
