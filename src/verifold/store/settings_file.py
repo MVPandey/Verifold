@@ -59,8 +59,8 @@ def read_settings_file(path: Path, level: SettingsLevel) -> tuple[SettingsValues
 
     Raises:
         SettingsInvalid: The file is not a JSON object, or holds a setting that Verifold doesn't know or accept at
-            its level. A project's file can't hold harnesses: a harness's command runs on this computer, and only the
-            person's own file for all projects may set one.
+            its level. A project's file can't hold harnesses: it can come from someone else, such as a cloned
+            repository, or from an agent, and a harness's command runs on this computer.
 
     """
     if not path.exists():
@@ -70,10 +70,13 @@ def read_settings_file(path: Path, level: SettingsLevel) -> tuple[SettingsValues
     except OSError as error:
         raise SettingsInvalid(f'{path} is not valid settings: {error}') from error
     data = _parsed(path, content)
-    if level is SettingsLevel.PROJECT and 'harnesses' in data:
+    # In the home folder, the project's file is the file for all projects.
+    own = path.parent.parent.resolve() != Path.home().resolve()
+    if level is SettingsLevel.PROJECT and own and 'harnesses' in data:
         raise SettingsInvalid(
-            f'{path} holds harnesses, but only ~/.verifold/settings.json may add or change a harness, because its '
-            'command runs on this computer. Move the harnesses there.'
+            f"{path} holds harnesses. A project's file can come from someone else, such as a cloned repository, or "
+            'from an agent, so only ~/.verifold/settings.json may add or change a harness. Remove the harnesses from '
+            'this file, and add one to ~/.verifold/settings.json only if you trust its command.'
         )
     return data, hashlib.sha256(content).hexdigest()
 

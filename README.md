@@ -43,7 +43,7 @@ A lab can have a time limit: `--minutes`, or the time choice in the setup. At th
 {"harnesses": {"my-agent": {"command": ["my-agent", "acp"], "family": "google", "title": "My agent"}}}
 ```
 
-`command` starts the harness's ACP agent, and `family` names the model family of its models, which blind reruns compare. `title`, `executable`, and `auto_mode` are optional. `executable` is the harness's own command, when `command` starts an adapter for it. `auto_mode` is the ID of the harness's auto mode. Verifold finds a harness's model and effort options by their ACP category, so an entry needs no option IDs. A lab reads the harnesses again each time it starts, because they describe your computer. Only the file for all projects can add or change a harness, because its command runs on your computer, so Verifold refuses a project's file that holds harnesses.
+`command` starts the harness's ACP agent, and `family` names the model family of its models, which blind reruns compare. `title`, `executable`, and `auto_mode` are optional. `executable` is the harness's own command, when `command` starts an adapter for it. `auto_mode` is the ID of the harness's auto mode. Verifold finds a harness's model and effort options by their ACP category, so an entry needs no option IDs. Verifold reads the harnesses each time it starts, because they describe your computer. A project's file can come from someone else, such as a cloned repository, or from an agent, so only the file for all projects can add or change a harness. Verifold refuses a project's file that holds harnesses.
 
 ## Set up
 

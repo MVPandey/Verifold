@@ -80,8 +80,18 @@ def test_a_projects_file_with_harnesses_is_refused(tmp_path: Path) -> None:
         project / '.verifold', {'harnesses': {'claude-code': {'command': ['claude-code-acp'], 'family': 'anthropic'}}}
     )
 
-    with pytest.raises(SettingsInvalid, match=r'settings\.json holds harnesses, but only ~/\.verifold/settings\.json'):
+    with pytest.raises(SettingsInvalid, match=r'settings\.json holds harnesses\. A project.s file can come from'):
         load_settings(project, home=tmp_path / 'home')
+
+
+def test_in_the_home_folder_the_projects_file_is_the_file_for_all_projects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / 'home'
+    monkeypatch.setenv('HOME', str(home))
+    write(home / '.verifold', {'harnesses': {'gemini': {'command': ['gemini'], 'family': 'google'}}})
+
+    assert list(load_settings(home, home=home).harnesses) == ['gemini']
 
 
 def test_a_harness_entry_without_a_command_is_refused(tmp_path: Path) -> None:
