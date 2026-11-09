@@ -20,9 +20,11 @@ from verifold.store.record_file import RecordFile
 
 @pytest.fixture(autouse=True)
 def home(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Give each test an empty home folder, so that no test reads the person's own `~/.verifold` settings."""
+    """Give each test an empty home folder, so that no test reads or writes the person's own `~/.verifold`."""
     path = tmp_path_factory.mktemp('home')
     monkeypatch.setenv('HOME', str(path))
+    # The catalog takes its npm folder from the home folder when it is imported, before this fixture runs.
+    monkeypatch.setattr('verifold.app.NPX_PROJECT', path / '.verifold' / 'npx')
     return path
 
 

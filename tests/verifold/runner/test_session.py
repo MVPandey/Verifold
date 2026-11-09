@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from contextlib import suppress
 from pathlib import Path
 
 import psutil
@@ -169,7 +170,13 @@ async def test_a_harness_without_a_model_option_refuses_a_model_instead_of_ignor
 
 
 def fake_harnesses() -> list[psutil.Process]:
-    return [child for child in psutil.Process().children() if 'fake_acp_agent.py' in ' '.join(child.cmdline())]
+    found: list[psutil.Process] = []
+    for child in psutil.Process().children():
+        # A child that exited and waits to be collected can't show its command line.
+        with suppress(psutil.Error):
+            if 'fake_acp_agent.py' in ' '.join(child.cmdline()):
+                found.append(child)
+    return found
 
 
 def efforts_of(offer: Offer) -> dict[str, list[str] | None]:
