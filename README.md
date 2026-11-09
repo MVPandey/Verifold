@@ -35,7 +35,7 @@ A lab can have a time limit: `--minutes`, or the time choice in the setup. At th
 ```
 
 - `jobs.at_time_limit` says what happens to the processes that agents left running when the lab's time ends, or when you stop the lab. `pause`, the default, pauses them until you give the lab more time. `stop` ends them, and `finish` lets them run. The agents' harnesses keep running either way.
-- `jobs.at_exit` says what happens to those processes when Verifold exits. `stop`, the default, ends them. `keep` leaves them for the next `verifold` in the folder.
+- `jobs.at_exit` says what happens to those processes when Verifold exits. `stop`, the default, ends them. `keep` leaves them as they are for the next `verifold` in the folder, so a paused process stays paused until that run gets more time.
 
 ## Set up
 

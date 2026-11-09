@@ -35,10 +35,9 @@ from verifold.server.member import Member
 from verifold.server.timekeeper import keep_time
 from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.board import Board
-from verifold.society.fold import fold
 from verifold.store.record_file import RecordFile
 from verifold.store.server_file import running_server, server_file
-from verifold.store.settings_file import load_settings
+from verifold.store.settings_file import load_settings, recorded_settings
 
 SERVER_FILE = 'server.json'
 """The file in the lab folder that names the process serving the lab."""
@@ -154,8 +153,10 @@ class Host:
         if unknown:
             raise SetupRejected(f'Unknown harness {", ".join(unknown)}. Choose from: {", ".join(self._catalog)}.')
         time_left = timedelta(minutes=request.minutes) if request.minutes else None
+        # A broken settings file must refuse the start before the record holds anything.
+        settings = load_settings(self._project)
         lab = Lab.create(self._record, request.question, auto_mode=request.auto_mode, time_left=time_left)
-        await lab.set_settings(load_settings(self._project))
+        await lab.set_settings(settings)
         self._lab = lab
         chosen = [choice for choice in request.agents for _ in range(choice.count)]
         for number, choice in enumerate(chosen, start=1):
@@ -165,6 +166,8 @@ class Host:
     async def resume(self) -> None:
         """Serve the lab that the folder's record holds, and start its agents again."""
         self._lab = Lab.load(self._record)
+        if recorded_settings(self._record.read()) is None:
+            await self._lab.set_settings(load_settings(self._project))
         await self._launch()
 
     async def _launch(self) -> None:
@@ -238,7 +241,7 @@ async def serve(
         if resuming and start:
             raise LabExists('This folder has a lab already. Run `verifold` here to resume it.')
         # A lab follows the settings in its record. The files matter only for a lab that starts now.
-        opening = fold(events).settings if events else load_settings(project)
+        opening = recorded_settings(events) or load_settings(project)
         if opening.jobs.at_exit is AtExit.STOP:
             # This process holds the record, so no other server runs the lab, and every marked process is a leftover.
             leftovers = await asyncio.to_thread(sweep, project)

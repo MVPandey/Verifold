@@ -40,3 +40,12 @@ def test_an_invalid_file_is_refused_with_its_path(tmp_path: Path, content: str) 
 
     with pytest.raises(SettingsInvalid, match=r'settings\.json'):
         load_settings(project, home=tmp_path / 'home')
+
+
+def test_a_file_that_is_not_utf8_is_refused_with_its_path(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    (project / '.verifold').mkdir(parents=True)
+    (project / '.verifold' / 'settings.json').write_bytes(b'{"jobs": "\xff"}')
+
+    with pytest.raises(SettingsInvalid, match=r'settings\.json'):
+        load_settings(project, home=tmp_path / 'home')
