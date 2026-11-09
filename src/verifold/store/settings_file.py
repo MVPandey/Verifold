@@ -5,15 +5,15 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from verifold.protocol.events import Event, SettingsSet
-from verifold.protocol.settings import Settings
+from verifold.protocol.settings import Settings, SettingsFile
 from verifold.store.errors import SettingsInvalid
 
 SETTINGS_FILE = 'settings.json'
 
 
-def load_settings(project: Path, home: Path | None = None) -> Settings:
+def load_settings(project: Path, home: Path | None = None) -> SettingsFile:
     """
-    Return the settings for a new lab in `project`: the project's file over the global file over the defaults.
+    Return the settings for `project`: the project's file over the global file over the defaults.
 
     Each file may set only some settings. A project's value wins over the global one, setting by setting.
 
@@ -25,7 +25,7 @@ def load_settings(project: Path, home: Path | None = None) -> Settings:
     for path in ((home or Path.home()) / '.verifold' / SETTINGS_FILE, project / '.verifold' / SETTINGS_FILE):
         if path.exists():
             merged = _merged(merged, _read(path))
-    return Settings.model_validate(merged)
+    return SettingsFile.model_validate(merged)
 
 
 def _read(path: Path) -> dict[str, object]:
@@ -34,7 +34,7 @@ def _read(path: Path) -> dict[str, object]:
         if not isinstance(data, dict):
             raise SettingsInvalid(f'{path} must hold a JSON object.')
         # Each file on its own must be valid, so that an error names the file that holds it.
-        Settings.model_validate(data)
+        SettingsFile.model_validate(data)
     # A file that isn't UTF-8 raises a ValueError, and so do JSON and validation errors.
     except (OSError, ValueError) as error:
         raise SettingsInvalid(f'{path} is not valid settings: {error}') from error

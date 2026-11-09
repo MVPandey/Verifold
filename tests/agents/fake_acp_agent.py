@@ -6,6 +6,9 @@ Environment variables change its behavior: `FAKE_ACP_LOG` logs each call, `FAKE_
 first, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, and `FAKE_ACP_CHILD` starts a
 child that holds the agent's pipes open and writes its process ID to that path. `FAKE_ACP_JOB` starts a job in a
 session of its own, the way that a harness starts a background command, and writes its process ID to that path.
+
+Each session offers a model option `llm` and an effort option `thinking`, under their ACP categories, as real
+adapters do under their own IDs. `FAKE_ACP_NO_OPTIONS` makes it offer none.
 """
 
 import asyncio
@@ -15,7 +18,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import override
+from typing import Literal, override
 
 import acp
 import httpx2
@@ -89,6 +92,14 @@ class FakeAgent(acp.Agent):
             agent_info=schema.Implementation(name='fake', version='0'),
         )
 
+    def _options(self) -> list[schema.SessionConfigOptionSelect | schema.SessionConfigOptionBoolean] | None:
+        if os.environ.get('FAKE_ACP_NO_OPTIONS'):
+            return None
+        return [
+            _select('llm', 'model', ('default', 'small', 'small-model')),
+            _select('thinking', 'thought_level', ('default', 'low', 'high')),
+        ]
+
     @override
     async def new_session(
         self, cwd: str, additional_directories: list[str] | None = None, mcp_servers: Servers | None = None, **_: object
@@ -96,7 +107,7 @@ class FakeAgent(acp.Agent):
         self._connect(cwd, mcp_servers)
         self._session = f'session-{self._name}'
         self._note(event='new_session')
-        return schema.NewSessionResponse(session_id=self._session)
+        return schema.NewSessionResponse(session_id=self._session, config_options=self._options())
 
     @override
     async def load_session(
@@ -110,7 +121,7 @@ class FakeAgent(acp.Agent):
         self._connect(cwd, mcp_servers)
         self._session = session_id
         self._note(event='load_session', session=session_id)
-        return schema.LoadSessionResponse()
+        return schema.LoadSessionResponse(config_options=self._options())
 
     @override
     async def set_session_mode(self, session_id: str, mode_id: str, **_: object) -> None:
@@ -211,6 +222,15 @@ class FakeAgent(acp.Agent):
                 'reply_to': post.id,
             }
             await self._call('post', request)
+
+
+def _select(
+    option: str, category: Literal['model', 'thought_level'], values: tuple[str, ...]
+) -> schema.SessionConfigOptionSelect:
+    choices = [schema.SessionConfigSelectOption(value=value, name=value) for value in values]
+    return schema.SessionConfigOptionSelect(
+        id=option, name=option, category=category, current_value=values[0], options=choices, type='select'
+    )
 
 
 sys.stderr.write('fake agent ready\n')
