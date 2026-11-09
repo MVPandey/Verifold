@@ -112,8 +112,8 @@ class SettingsSet(EventBase):
     """
     The person's settings for the lab. The lab follows the latest ones.
 
-    The first comes when the lab opens, as a copy of the settings files. Only the person changes them after that, so an
-    agent that edits the files can't change the rules of a running lab.
+    The first comes when the lab opens, as a copy of the settings files, or on the first run of a lab from before
+    settings existed. No agent tool records settings, so an agent that edits the files can't change a running lab.
     """
 
     type: Literal['settings_set'] = 'settings_set'

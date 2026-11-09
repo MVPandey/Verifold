@@ -65,11 +65,15 @@ class Sweep(Record):
     """Whether the sweep ran at the start, so its processes came from an earlier run, such as one that crashed."""
 
 
-def sweep(lab: Path, grace: float = JOB_GRACE, *, spare_harnesses: bool = False) -> Sweep:
+def sweep(
+    lab: Path, grace: float = JOB_GRACE, *, spare_harnesses: bool = False, still: Callable[[], bool] = lambda: True
+) -> Sweep:
     """
     Stop every process of the lab, and list the processes in agents' folders that may not be the lab's.
 
-    With `spare_harnesses`, it stops only the jobs that agents started, and the harnesses keep running.
+    With `spare_harnesses`, it stops only the jobs that agents started, and the harnesses keep running. A pass after
+    the first runs only while `still()` holds, so a stop at the time limit leaves alone what agents start once the lab
+    has more time.
 
     Each process gets SIGTERM and then SIGCONT, so that a paused process can exit too. The ones that still run after
     the grace period get SIGKILL. A stopping process can start new ones, so the sweep looks again, up to
@@ -81,7 +85,9 @@ def sweep(lab: Path, grace: float = JOB_GRACE, *, spare_harnesses: bool = False)
     stopped: list[Job] = []
     survived: dict[int, Job] = {}
     unmarked: list[Job] = []
-    for _ in range(SWEEP_PASSES):
+    for number in range(SWEEP_PASSES):
+        if number and not still():
+            break
         found, left = _lab_processes(lab, _harness_groups() if spare_harnesses else frozenset())
         unmarked = [job for _, job in left]
         new = [(process, job) for process, job in found if job.pid not in survived]
@@ -127,13 +133,17 @@ async def keep_jobs(lab: Lab, project: Path, report: Callable[[Sweep], None]) ->
         board = lab.board
         if board.out_of_time != out_of_time:
             out_of_time = board.out_of_time
-            setting = board.settings.jobs.at_time_limit
-            if not out_of_time:
-                await asyncio.to_thread(resume_jobs, project)
-            elif setting is AtTimeLimit.PAUSE:
-                report(await asyncio.to_thread(pause_jobs, project))
-            elif setting is AtTimeLimit.STOP:
-                report(await asyncio.to_thread(sweep, project, spare_harnesses=True))
+            # Only `pause` pauses, so only `pause` resumes. A job that someone else paused stays paused.
+            match board.settings.jobs.at_time_limit:
+                case AtTimeLimit.PAUSE if out_of_time:
+                    report(await asyncio.to_thread(pause_jobs, project))
+                case AtTimeLimit.PAUSE:
+                    await asyncio.to_thread(resume_jobs, project)
+                case AtTimeLimit.STOP if out_of_time:
+                    stopping = await asyncio.to_thread(
+                        sweep, project, spare_harnesses=True, still=lambda: lab.board.out_of_time
+                    )
+                    report(stopping)
         await lab.wait_for_change(board.seq)
 
 

@@ -1,10 +1,10 @@
 """The person's settings files: `~/.verifold/settings.json` for all projects, and `.verifold/settings.json` in one."""
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
-from pydantic import ValidationError
-
+from verifold.protocol.events import Event, SettingsSet
 from verifold.protocol.settings import Settings
 from verifold.store.errors import SettingsInvalid
 
@@ -35,7 +35,8 @@ def _read(path: Path) -> dict[str, object]:
             raise SettingsInvalid(f'{path} must hold a JSON object.')
         # Each file on its own must be valid, so that an error names the file that holds it.
         Settings.model_validate(data)
-    except (OSError, json.JSONDecodeError, ValidationError) as error:
+    # A file that isn't UTF-8 raises a ValueError, and so do JSON and validation errors.
+    except (OSError, ValueError) as error:
         raise SettingsInvalid(f'{path} is not valid settings: {error}') from error
     return data
 
@@ -46,3 +47,8 @@ def _merged(base: dict[str, object], over: dict[str, object]) -> dict[str, objec
         below = merged.get(key)
         merged[key] = _merged(below, value) if isinstance(below, dict) and isinstance(value, dict) else value
     return merged
+
+
+def recorded_settings(events: Sequence[Event]) -> Settings | None:
+    """Return the latest settings that a lab's record holds, or `None` for a record from before settings existed."""
+    return next((event.settings for event in reversed(events) if isinstance(event, SettingsSet)), None)

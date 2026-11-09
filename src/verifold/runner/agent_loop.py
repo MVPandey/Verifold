@@ -15,8 +15,9 @@ from pydantic import Field, SecretStr
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent
 from verifold.protocol.app import AgentState
-from verifold.protocol.events import TurnSummary
+from verifold.protocol.events import TimeRanOut, TurnSummary
 from verifold.protocol.record import Record
+from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.usage import Usage
 from verifold.runner.git import GitError
 from verifold.runner.messages import DOORBELL, more_time_message
@@ -119,8 +120,7 @@ class AgentLoop:
                             current = self._lab.board
                             message = more_time_message(current.ends_at, current.settings.jobs.at_time_limit)
                         else:
-                            await self._news()
-                            message = DOORBELL
+                            message = await self._news()
             # Any failure of one harness restarts that harness. It must not stop the lab's other agents.
             except Exception as error:
                 # While the lab stops, the harness's cleanup can fail too. That error ends the agent and restarts nothing.
@@ -187,11 +187,30 @@ class AgentLoop:
             TurnSummary(agent=agent_id, seconds=seconds, usage=usage, cost_usd=cost_usd, error=error, snapshot=commit)
         )
 
-    async def _news(self) -> None:
+    async def _news(self) -> str:
+        """
+        Wait for posts for the agent, and return the message that wakes it.
+
+        Under `stop`, the time limit also ends the processes of an agent that waits here. That agent wakes when the
+        lab gets more time, and its message says so, followed by the doorbell when posts came meanwhile.
+        """
         agent_id = self._setup.agent.id
-        while not update(self._lab.board, agent_id, max(self._notified, self._member.seen)).posts:
-            await self._lab.wait_for_change(self._lab.board.seq)
-        self._notified = self._lab.board.seq
+        since = self._lab.board.seq
+        while True:
+            board = self._lab.board
+            # The record shows a stop also when the lab got more time before this wait looked.
+            stopped = board.settings.jobs.at_time_limit is AtTimeLimit.STOP and any(
+                isinstance(entry, TimeRanOut) and entry.seq > since for entry in board.times
+            )
+            posts = bool(update(board, agent_id, max(self._notified, self._member.seen)).posts)
+            if posts:
+                self._notified = board.seq
+            if stopped and not board.out_of_time:
+                message = more_time_message(board.ends_at, AtTimeLimit.STOP)
+                return f'{message} {DOORBELL}' if posts else message
+            if posts and not stopped:
+                return DOORBELL
+            await self._lab.wait_for_change(board.seq)
 
     async def _permission(self, request: PermissionRequest) -> str | None:
         await self._report('waiting', f'Asks you: {request.title}')

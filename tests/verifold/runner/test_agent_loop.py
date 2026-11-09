@@ -12,6 +12,7 @@ from fakes import FAKE_HARNESS
 
 from verifold.protocol.app import AgentState
 from verifold.protocol.join import PostRequest
+from verifold.protocol.settings import AtTimeLimit, JobSettings, Settings
 from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.git import git
@@ -265,3 +266,40 @@ async def test_a_cleanup_that_fails_while_the_lab_stops_ends_the_agent_and_resta
             await running
 
     assert opened == [True]
+
+
+async def run_through_a_stop(served: ServedBoard, tmp_path: Path, *, post: bool) -> None:
+    """Let the agent end its first turn, stop the lab under `stop`, maybe post for the agent, and add time."""
+    lab = served.lab
+    await lab.set_settings(Settings(jobs=JobSettings(at_time_limit=AtTimeLimit.STOP)))
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        await lab.set_time_left(timedelta(0))
+        await lab.run_out_of_time()
+        if post:
+            await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'person')
+        await lab.set_time_left(timedelta(hours=1))
+        await until(lambda: len(lab.board.turns) == 2)
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+
+async def test_under_stop_an_idle_agent_hears_that_its_processes_stopped_once_time_comes_back(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    await run_through_a_stop(served, tmp_path, post=False)
+
+    stopped = more_time_message(served.lab.board.ends_at, AtTimeLimit.STOP)
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', stopped]
+
+
+async def test_under_stop_posts_that_came_meanwhile_ring_after_the_stop_message(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    await run_through_a_stop(served, tmp_path, post=True)
+
+    stopped = more_time_message(served.lab.board.ends_at, AtTimeLimit.STOP)
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', f'{stopped} {DOORBELL}']
