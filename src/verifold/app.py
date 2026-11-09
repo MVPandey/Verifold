@@ -6,6 +6,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
+from importlib.resources import files
 from pathlib import Path
 from typing import override
 
@@ -20,7 +21,7 @@ from verifold.protocol.record import Record
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.folders import LAB_FOLDER, agent_folder
 from verifold.runner.jobs import JOB_GRACE, Sweep, sweep
-from verifold.runner.messages import LAB_TEMPLATE, start_message
+from verifold.runner.messages import start_message
 from verifold.runner.reruns import Crew, Reruns
 from verifold.runner.session import SessionOptions
 from verifold.runner.snapshots import pin
@@ -45,11 +46,8 @@ SERVER_GRACE = 10.0
 SERVER_STOP_GRACE = 30.0
 """Seconds that `stop_lab` gives a server to stop its agents and exit, before it kills the server."""
 
-PLANNER_ROLE = 'Planner'
-PLANNER_BRIEF = (
-    'Open a thread titled "Plan" with 2 to 6 different ways to attack the question, each with what would count as a '
-    'result. Then work on one of them yourself.'
-)
+NORMS_TEMPLATE = files('verifold.society').joinpath('LAB.md').read_text()
+"""The norms that a new lab starts with. The person edits the copy in the lab's folder."""
 
 
 class ServeOptions(Record):
@@ -167,15 +165,15 @@ class Host:
         lab, group, settings = self._lab, self._group, self._settings
         if lab is None or group is None or settings is None:
             raise SetupRejected('Attach the host to the server before a lab starts.')
-        lab_file = self._project / LAB_FOLDER / 'LAB.md'
-        if not lab_file.exists():
-            lab_file.write_text(LAB_TEMPLATE)
+        norms = self._project / LAB_FOLDER / 'LAB.md'
+        if not norms.exists():
+            norms.write_text(NORMS_TEMPLATE)
         group.create_task(keep_time(lab))
         workers = tuple(
             entry.agent for entry in lab.board.agents if not entry.agent.checks and entry.agent.harness in self._catalog
         )
         for agent in workers:
-            member, setup = await self._seat(lab, agent, start_message(lab.board, agent, lab_file))
+            member, setup = await self._seat(lab, agent, start_message(lab.board, agent, norms))
             await self._activity.set(agent.id, 'starting')
             group.create_task(AgentLoop(member, setup, settings, activity=self._activity).run())
         crew = _crew(workers, self._catalog, auto_mode=lab.board.opened.auto_mode)
@@ -306,14 +304,11 @@ async def _closed(serving: asyncio.Task[None]) -> None:
 
 
 def _agent(number: int, harness: HarnessEntry, model: str | None, effort: str | None) -> Agent:
-    planner = number == 1
     return Agent(
         id=f'agent-{number}',
         name=f'Agent {number}',
         harness=harness.name,
         model=ModelSpec(family=harness.family, name=model, effort=effort),
-        role=PLANNER_ROLE if planner else '',
-        brief=PLANNER_BRIEF if planner else '',
     )
 
 

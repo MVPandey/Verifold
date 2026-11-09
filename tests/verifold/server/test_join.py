@@ -3,7 +3,7 @@ from mcp import Client
 
 from verifold.protocol.posts import FileEvidence
 from verifold.server.errors import UnknownAgent
-from verifold.server.join import Members, join_server
+from verifold.server.join import INSTRUCTIONS, Members, join_server
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 
@@ -88,3 +88,19 @@ async def test_the_post_tool_pins_the_files_that_it_names(lab: Lab) -> None:
 
     assert posted.structured_content is not None
     assert posted.structured_content['post']['evidence'] == [{'type': 'file', 'path': 'a.json', 'commit': 'b' * 40}]
+
+
+async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) -> None:
+    async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
+        instructions = client.instructions
+
+    assert instructions == INSTRUCTIONS
+    for rule in (
+        '`person` in `mentions`',
+        'end your turn',
+        'pins each file',
+        'blind rerun',
+        'time limit',
+        "person's norms",
+    ):
+        assert rule in instructions
