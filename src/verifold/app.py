@@ -25,8 +25,10 @@ from verifold.protocol.app import (
     SetupView,
     StartRequest,
 )
+from verifold.protocol.events import TurnSummary
 from verifold.protocol.record import Record
 from verifold.protocol.settings import AtExit, SettingsLevel, SetupDefaults
+from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.folders import LAB_FOLDER, agent_folder, tracked_lab_files
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
@@ -327,8 +329,14 @@ class Host:
     async def _supervise(self, member: Member, setup: AgentSetup, done: Callable[[Board], bool]) -> None:
         if self._settings is None:
             return
-        async with asyncio.timeout(self._settings.turn_timeout):
-            await AgentLoop(member, setup, self._settings, done, self._activity).run()
+        limit = self._settings.turn_timeout
+        try:
+            async with asyncio.timeout(limit):
+                await AgentLoop(member, setup, self._settings, done, self._activity).run()
+        except TimeoutError:
+            # A checker that runs too long stops, and the lab goes on. Its post stays unchecked, and the board says why.
+            error = f'The check ran past {limit:g} seconds, so Verifold stopped the checker.'
+            await member.lab.end_turn(TurnSummary(agent=setup.agent.id, seconds=limit, usage=Usage(), error=error))
 
 
 async def serve(
