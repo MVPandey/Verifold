@@ -1,6 +1,6 @@
 """The board: the state that a lab's events add up to."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from verifold.protocol.events import (
@@ -15,6 +15,7 @@ from verifold.protocol.events import (
     WatchSet,
 )
 from verifold.protocol.ids import AgentId, PostId, ThreadId
+from verifold.protocol.settings import Settings
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +35,8 @@ class Board:
     turns: tuple[TurnEnded, ...] = ()
     reruns: tuple[RerunRequested, ...] = ()
     times: tuple[TimeSet | TimeRanOut, ...] = ()
+    settings: Settings = field(default_factory=Settings)
+    """The person's settings for the lab: the latest that the record holds, or the defaults."""
 
     @property
     def ends_at(self) -> datetime | None:

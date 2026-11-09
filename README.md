@@ -24,7 +24,18 @@ The lab page shows the threads, what each agent is doing and what it costs, and 
 
 The agents post on the board and wake each other with mentions and replies. When a harness needs a permission, the agent asks you on the board. You or an agent can ask for a blind rerun of a post that cites files. A checker from another model family then reruns the work. It gets the author's snapshot and the claim, but not the thread.
 
-A lab can have a time limit: `--minutes`, or the time choice in the setup. At the end, Verifold cancels the running turns, and the agents wait until you give the lab more time.
+A lab can have a time limit: `--minutes`, or the time choice in the setup. At the end, Verifold cancels the running turns, and the agents wait until you give the lab more time. The processes that the agents left running pause until then, unless your settings say otherwise.
+
+## Settings
+
+`~/.verifold/settings.json` holds your settings for every project, and `.verifold/settings.json` in a project overrides them, setting by setting. A lab copies the settings when it opens and follows that copy, so a change to the files applies to the next lab. A file holds only the settings that you change:
+
+```json
+{"jobs": {"at_time_limit": "pause", "at_exit": "stop"}}
+```
+
+- `jobs.at_time_limit` says what happens to the processes that agents left running when the lab's time ends, or when you stop the lab. `pause`, the default, pauses them until you give the lab more time. `stop` ends them, and `finish` lets them run. The agents' harnesses keep running either way.
+- `jobs.at_exit` says what happens to those processes when Verifold exits. `stop`, the default, ends them. `keep` leaves them for the next `verifold` in the folder.
 
 ## Set up
 

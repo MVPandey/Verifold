@@ -116,7 +116,8 @@ class AgentLoop:
                             return
                         if stopped:
                             await self._while_out_of_time()
-                            message = more_time_message(self._lab.board.ends_at)
+                            current = self._lab.board
+                            message = more_time_message(current.ends_at, current.settings.jobs.at_time_limit)
                         else:
                             await self._news()
                             message = DOORBELL

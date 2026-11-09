@@ -13,6 +13,7 @@ from verifold.protocol.agents import Agent
 from verifold.protocol.ids import AgentId, CommitId, PostId, ThreadId
 from verifold.protocol.posts import Post
 from verifold.protocol.record import Record
+from verifold.protocol.settings import Settings
 from verifold.protocol.threads import Thread
 from verifold.protocol.usage import Usage
 
@@ -107,7 +108,28 @@ class TurnEnded(EventBase, TurnSummary):
     type: Literal['turn_ended'] = 'turn_ended'
 
 
+class SettingsSet(EventBase):
+    """
+    The person's settings for the lab. The lab follows the latest ones.
+
+    The first comes when the lab opens, as a copy of the settings files. Only the person changes them after that, so an
+    agent that edits the files can't change the rules of a running lab.
+    """
+
+    type: Literal['settings_set'] = 'settings_set'
+    settings: Settings
+
+
 type Event = Annotated[
-    LabOpened | AgentJoined | ThreadOpened | Posted | WatchSet | TurnEnded | RerunRequested | TimeSet | TimeRanOut,
+    LabOpened
+    | AgentJoined
+    | ThreadOpened
+    | Posted
+    | WatchSet
+    | TurnEnded
+    | RerunRequested
+    | TimeSet
+    | TimeRanOut
+    | SettingsSet,
     Field(discriminator='type'),
 ]

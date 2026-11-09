@@ -9,6 +9,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import httpx2
+import psutil
 import pytest
 import uvicorn
 from builders import SLEEP, alive, until
@@ -18,9 +19,10 @@ from pydantic import TypeAdapter
 from verifold.app import ServeHooks, WebServer, serve
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.app import AgentChoice, StartRequest
-from verifold.protocol.events import AgentJoined, Event, Posted
+from verifold.protocol.events import AgentJoined, Event, Posted, SettingsSet, TimeRanOut
+from verifold.protocol.settings import AtTimeLimit
 from verifold.runner.environment import harness_environment
-from verifold.runner.jobs import Sweep
+from verifold.runner.jobs import Sweep, sweep
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.server.web import web_app
 from verifold.society.fold import fold
@@ -248,3 +250,95 @@ async def test_the_web_server_leaves_the_stop_signals_to_verifold() -> None:
     finally:
         server.should_exit = True
         await serving
+
+
+def write_settings(project: Path, jobs: dict[str, str]) -> None:
+    folder = project / '.verifold'
+    folder.mkdir(exist_ok=True)
+    (folder / 'settings.json').write_text(json.dumps({'jobs': jobs}))
+
+
+def paused(pid: int) -> bool:
+    return psutil.Process(pid).status() == psutil.STATUS_STOPPED
+
+
+def harness_pids() -> list[int]:
+    return [child.pid for child in psutil.Process().children() if 'fake_acp_agent.py' in ' '.join(child.cmdline())]
+
+
+@pytest.fixture
+def job_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, project: Path) -> Iterator[Path]:
+    """Make the fake agent start a job in a session of its own, and stop every process of the lab after the test."""
+    path = tmp_path / 'job.pid'
+    monkeypatch.setenv('FAKE_ACP_JOB', str(path))
+    yield path
+    sweep(project, grace=1)
+
+
+async def test_at_the_time_limit_the_agents_jobs_pause_and_more_time_resumes_them(
+    project: Path, job_file: Path
+) -> None:
+    sweeps: list[Sweep] = []
+
+    async with serving(project, ONE_AGENT, sweeps=sweeps) as client:
+        await until(job_file.exists)
+        job = int(job_file.read_text())
+        await client.post('/time', json={'minutes': 0})
+        await until(lambda: paused(job))
+        assert harness_pids()
+        assert not any(paused(pid) for pid in harness_pids())
+        await client.post('/time', json={'minutes': 5})
+        await until(lambda: not paused(job))
+
+    assert [found.pid for found in sweeps[1].paused] == [job]
+
+
+async def test_with_stop_the_time_limit_ends_the_agents_jobs_but_not_their_harnesses(
+    project: Path, job_file: Path
+) -> None:
+    write_settings(project, {'at_time_limit': 'stop'})
+
+    async with serving(project, ONE_AGENT) as client:
+        await until(job_file.exists)
+        job = int(job_file.read_text())
+        await client.post('/time', json={'minutes': 0})
+        await until(lambda: not alive(job))
+        assert all(alive(pid) for pid in harness_pids())
+
+
+async def test_with_finish_the_agents_jobs_run_past_the_time_limit(project: Path, job_file: Path) -> None:
+    write_settings(project, {'at_time_limit': 'finish'})
+
+    async with serving(project, ONE_AGENT) as client:
+        await until(job_file.exists)
+        job = int(job_file.read_text())
+        await client.post('/time', json={'minutes': 0})
+        await until(lambda: any(isinstance(event, TimeRanOut) for event in record(project)))
+        await asyncio.sleep(0.3)
+        assert alive(job)
+        assert not paused(job)
+
+
+async def test_with_keep_the_agents_jobs_outlive_verifold_and_its_next_start(project: Path, job_file: Path) -> None:
+    write_settings(project, {'at_exit': 'keep'})
+
+    async with serving(project, ONE_AGENT):
+        await until(job_file.exists)
+        job = int(job_file.read_text())
+    assert alive(job)
+
+    async with serving(project):
+        assert alive(job)
+
+
+async def test_a_lab_follows_the_settings_from_when_it_opened(project: Path) -> None:
+    write_settings(project, {'at_time_limit': 'stop'})
+    async with serving(project, ONE_AGENT):
+        await until(lambda: any(isinstance(event, SettingsSet) for event in record(project)))
+
+    write_settings(project, {'at_time_limit': 'finish'})
+    async with serving(project):
+        pass
+
+    kept = [event.settings.jobs.at_time_limit for event in record(project) if isinstance(event, SettingsSet)]
+    assert kept == [AtTimeLimit.STOP]

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from verifold.protocol.agents import Agent
 from verifold.protocol.posts import Post
+from verifold.protocol.settings import AtTimeLimit
 from verifold.society.board import Board
 
 DOORBELL = 'New posts for you on the lab board.'
@@ -32,10 +33,21 @@ def start_message(board: Board, agent: Agent, norms: Path) -> str:
     return '\n'.join(lines)
 
 
-def more_time_message(ends_at: datetime | None) -> str:
-    """Return the message that resumes an agent whose turn stopped when the lab ran out of time."""
+JOBS_AFTER_TIME = {
+    AtTimeLimit.PAUSE: ' Verifold paused any process that you left running, and it runs again now.',
+    AtTimeLimit.STOP: ' Verifold stopped any process that you left running.',
+    AtTimeLimit.FINISH: '',
+}
+"""What the message that resumes an agent says about its processes, for each setting."""
+
+
+def more_time_message(ends_at: datetime | None, jobs: AtTimeLimit) -> str:
+    """Return the message that resumes an agent whose turn stopped when the lab ran out of time, per `jobs`."""
     until = f' The lab now ends at {_utc(ends_at)}.' if ends_at else ''
-    return f'Your last turn stopped when the lab ran out of time. The person gave the lab more time.{until}'
+    return (
+        f'Your last turn stopped when the lab ran out of time. The person gave the lab more time.{until}'
+        f'{JOBS_AFTER_TIME[jobs]}'
+    )
 
 
 def rerun_message(post: Post) -> str:
