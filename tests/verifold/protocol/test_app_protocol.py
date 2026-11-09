@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from verifold.protocol.app import AgentChoice
+from verifold.protocol.agents import AgentChoice
 
 BEDROCK_MODEL = 'amazon-bedrock/anthropic.claude-sonnet-4-20250514-v1:0'
 """A cloud provider's model ID, longer than a label."""

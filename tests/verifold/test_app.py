@@ -19,7 +19,8 @@ from pydantic import TypeAdapter
 
 from verifold.app import ServeHooks, WebServer, serve
 from verifold.harnesses.catalog import HarnessEntry
-from verifold.protocol.app import AgentChoice, StartRequest
+from verifold.protocol.agents import AgentChoice
+from verifold.protocol.app import StartRequest
 from verifold.protocol.events import AgentJoined, Event, Posted, SettingsSet, TimeRanOut
 from verifold.protocol.settings import AtExit, AtTimeLimit
 from verifold.runner.environment import harness_environment
@@ -135,6 +136,8 @@ async def test_the_person_starts_a_lab_from_the_setup_screen(
             }
         ],
         'question': None,
+        'defaults': {'agents': None, 'auto_mode': True, 'minutes': None},
+        'defaults_from': None,
     }
     assert (no_lab.status_code, started.status_code, again.status_code) == (409, 200, 409)
     # The probe runs in the project folder, which the fake agent takes for its name.
@@ -445,6 +448,7 @@ async def test_the_persons_change_applies_to_the_running_lab_but_an_agents_edit_
         'values': {},
         'revision': '',
         'settings': {'version': 1, 'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'}},
+        'defaults': {'agents': None, 'auto_mode': True, 'minutes': None},
     }
     assert after['all_projects']['values'] == {'jobs': {'at_time_limit': 'stop'}}
     assert after['project']['settings']['jobs'] == {'at_time_limit': 'stop', 'at_exit': 'keep'}
@@ -498,6 +502,59 @@ async def test_choosing_the_value_that_the_files_hold_makes_the_lab_follow_it(
     assert view['lab']['jobs']['at_time_limit'] == 'pause'
     assert changed['lab']['jobs']['at_time_limit'] == 'finish'
     assert lab_settings(project) == [(AtTimeLimit.PAUSE, AtExit.STOP), (AtTimeLimit.FINISH, AtExit.STOP)]
+
+
+async def test_saved_choices_for_new_labs_fill_the_setup_and_leave_a_running_lab_alone(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('HOME', str(project.parent))
+    saved = {'agents': [{'harness': 'fake', 'count': 3, 'model': 'small', 'mode': None}], 'auto_mode': False}
+    async with serving(project) as client:
+        view = (await client.get('/settings')).json()
+        change = {'level': 'project', 'key': 'setup', 'value': saved, 'revisions': revisions_of(view)}
+        changed = (await client.post('/settings', json=change)).json()
+        setup = (await client.get('/setup')).json()
+        wrong = await client.post('/settings', json={**change, 'value': 'all', 'revisions': revisions_of(changed)})
+
+    written = {'agents': [{'harness': 'fake', 'count': 3, 'model': 'small'}], 'auto_mode': False, 'minutes': None}
+    assert changed['project']['values'] == {'setup': written}
+    # The setup names the file that its first choices come from, which here is the project's own.
+    assert setup['defaults_from'] == changed['project']['path']
+    assert changed['project']['defaults'] == {
+        **written,
+        'agents': [{**written['agents'][0], 'effort': None, 'mode': None}],
+    }
+    assert setup['defaults'] == changed['project']['defaults']
+    assert wrong.status_code == 400
+    assert record(project) == []
+
+
+async def test_saved_choices_change_while_a_lab_runs_without_touching_the_lab(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('HOME', str(project.parent))
+    async with serving(project, ONE_AGENT) as client:
+        await until(lambda: any(isinstance(event, SettingsSet) for event in record(project)))
+        view = (await client.get('/settings')).json()
+        saved = {'agents': [{'harness': 'fake', 'count': 2}], 'auto_mode': False}
+        change = {'level': 'project', 'key': 'setup', 'value': saved, 'revisions': revisions_of(view)}
+        changed = await client.post('/settings', json=change)
+        setup = (await client.get('/setup')).json()
+
+    assert changed.status_code == 200
+    assert changed.json()['project']['defaults']['auto_mode'] is False
+    assert lab_settings(project) == [(AtTimeLimit.PAUSE, AtExit.STOP)]
+    # The lab's pages read no saved choices while the lab runs.
+    assert setup['defaults'] == {'agents': None, 'auto_mode': True, 'minutes': None}
+
+
+async def test_a_broken_settings_file_still_shows_the_setup_with_verifolds_defaults(project: Path) -> None:
+    async with serving(project) as client:
+        (project / '.verifold' / 'settings.json').write_text('{not json')
+        setup = await client.get('/setup')
+
+    assert setup.status_code == 200
+    assert setup.json()['defaults'] == {'agents': None, 'auto_mode': True, 'minutes': None}
 
 
 async def test_settings_can_change_before_a_lab_starts(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:

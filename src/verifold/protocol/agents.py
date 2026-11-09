@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from pydantic import StringConstraints
+from pydantic import AfterValidator, Field, StringConstraints
 
 from verifold.protocol.ids import AgentId, PostId
 from verifold.protocol.record import Record
@@ -42,3 +42,28 @@ class Agent(Record):
     recruited_by: AgentId | None = None
     checks: PostId | None = None
     """For a blind checker that Verifold starts: the post that it reruns. It posts one check and reads nothing else."""
+
+
+MAX_AGENTS = 20
+"""The most agents that one lab starts."""
+
+
+class AgentChoice(Record):
+    """How many agents of one harness to start, and with which model, effort, and mode."""
+
+    harness: Label
+    count: int = Field(default=1, ge=1, le=MAX_AGENTS)
+    model: ValueId | None = None
+    effort: ValueId | None = None
+    mode: ValueId | None = None
+    """One of the harness's own modes. `None` follows the lab's auto mode choice."""
+
+
+def _within_limit(agents: tuple[AgentChoice, ...]) -> tuple[AgentChoice, ...]:
+    if sum(agent.count for agent in agents) > MAX_AGENTS:
+        raise ValueError(f'A lab starts at most {MAX_AGENTS} agents in all.')
+    return agents
+
+
+type AgentChoices = Annotated[tuple[AgentChoice, ...], Field(min_length=1), AfterValidator(_within_limit)]
+"""The agents that a lab starts: at least one, and at most `MAX_AGENTS` in all."""

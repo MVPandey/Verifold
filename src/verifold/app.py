@@ -15,9 +15,8 @@ import uvicorn
 from pydantic import Field, JsonValue
 
 from verifold.harnesses.catalog import CATALOG, NPX_PROJECT, HarnessEntry, available, catalog_with
-from verifold.protocol.agents import Agent, ModelSpec
+from verifold.protocol.agents import Agent, AgentChoice, ModelSpec
 from verifold.protocol.app import (
-    AgentChoice,
     HarnessOption,
     Offer,
     SettingsChange,
@@ -27,7 +26,7 @@ from verifold.protocol.app import (
     StartRequest,
 )
 from verifold.protocol.record import Record
-from verifold.protocol.settings import AtExit, SettingsLevel
+from verifold.protocol.settings import AtExit, SettingsLevel, SetupDefaults
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.folders import LAB_FOLDER, agent_folder, tracked_lab_files
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
@@ -44,6 +43,7 @@ from verifold.server.member import Member
 from verifold.server.timekeeper import keep_time
 from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.board import Board
+from verifold.store.errors import SettingsInvalid
 from verifold.store.record_file import RecordFile
 from verifold.store.server_file import running_server, server_file
 from verifold.store.settings_file import (
@@ -185,8 +185,14 @@ class Host:
 
         def view(level: SettingsLevel, adds_up: Mapping[SettingsLevel, SettingsValues]) -> SettingsFileView:
             data, revision = read[level]
-            settings = settings_of(adds_up).lab_settings()
-            return SettingsFileView(path=_shown(paths[level]), values=data, revision=revision, settings=settings)
+            total = settings_of(adds_up)
+            return SettingsFileView(
+                path=_shown(paths[level]),
+                values=data,
+                revision=revision,
+                settings=total.lab_settings(),
+                defaults=total.setup,
+            )
 
         return SettingsView(
             all_projects=view(SettingsLevel.ALL, {SettingsLevel.ALL: values[SettingsLevel.ALL]}),
@@ -204,9 +210,10 @@ class Host:
         """
         paths = {level: settings_path(level, self._project) for level in SettingsLevel}
         revisions = {SettingsLevel.PROJECT: change.revisions.project, SettingsLevel.ALL: change.revisions.all_projects}
-        values = change_setting(paths, change.level, change.key, change.value, revisions)
+        values = change_setting(paths, change.level, change.key, _written(change.value), revisions)
         decides = change.level is SettingsLevel.PROJECT or not _holds(values[SettingsLevel.PROJECT], change.key)
-        if self._lab is not None and decides:
+        # The choices for new labs don't change a running lab. Only the job settings do.
+        if self._lab is not None and decides and change.key.startswith('jobs.'):
             name = change.key.removeprefix('jobs.')
             chosen = getattr(settings_of(values).jobs, name)
             running = self._lab.board.settings
@@ -218,7 +225,11 @@ class Host:
 
     def setup(self) -> SetupView:
         """Return the harnesses that this computer has, and the folder's lab, if any."""
+        # The lab's pages don't use the choices for new labs, so a running lab reads no settings file here.
+        defaults, source = self._defaults() if self._lab is None else (SetupDefaults(), None)
         return SetupView(
+            defaults=defaults,
+            defaults_from=source,
             folder=_shown(self._project),
             harnesses=tuple(
                 HarnessOption(
@@ -233,6 +244,18 @@ class Host:
             ),
             question=self._lab.board.opened.question if self._lab else None,
         )
+
+    def _defaults(self) -> tuple[SetupDefaults, str | None]:
+        # The saved choices for new labs, and the file that they come from. A broken settings file doesn't hide the
+        # setup: the start then refuses, with the file's error.
+        paths = {level: settings_path(level, self._project) for level in SettingsLevel}
+        try:
+            values = {level: read_settings_file(path, level)[0] for level, path in paths.items()}
+            defaults = settings_of(values).setup
+        except SettingsInvalid:
+            return SetupDefaults(), None
+        holder = next((level for level in (SettingsLevel.PROJECT, SettingsLevel.ALL) if 'setup' in values[level]), None)
+        return defaults, None if holder is None else _shown(paths[holder])
 
     async def start(self, request: StartRequest) -> None:
         """
@@ -452,6 +475,18 @@ def _crew(agents: tuple[Agent, ...], catalog: Mapping[str, HarnessEntry], *, aut
         (catalog[name], _options(first[name].model_copy(update={'mode': None}), auto_mode=auto_mode))
         for name in harnesses
     )
+
+
+def _written(value: str | SetupDefaults | None) -> JsonValue:
+    # The choices for new labs go into the file in full, so that a project's choices never take a part from the ones
+    # for all projects. Each agent leaves out what it doesn't set.
+    if not isinstance(value, SetupDefaults):
+        return value
+    agents: list[JsonValue] | None = None
+    if value.agents is not None:
+        agents = [agent.model_dump(mode='json', exclude_defaults=True) for agent in value.agents]
+    written: dict[str, JsonValue] = {'agents': agents, 'auto_mode': value.auto_mode, 'minutes': value.minutes}
+    return written
 
 
 def _holds(values: SettingsValues, key: str) -> bool:
