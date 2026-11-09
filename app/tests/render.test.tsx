@@ -4,7 +4,8 @@ import { describe, it } from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { Api } from '../src/api/client.ts';
-import type { HarnessOption, ThreadView } from '../src/api/types.ts';
+import type { HarnessOption, SettingsView, ThreadView } from '../src/api/types.ts';
+import { SettingsForm } from '../src/ui/SettingsPage.tsx';
 import { SetupPage } from '../src/ui/SetupPage.tsx';
 import { PostItem } from '../src/ui/ThreadPage.tsx';
 import { HARNESSES, OFFER, agentView, postView, result } from './fixtures.ts';
@@ -87,5 +88,68 @@ describe('the setup screen', () => {
     assert.ok(typed.includes('placeholder="Your default"'));
     assert.ok(typed.includes('Leave a field blank to keep your own setting for Claude Code.'));
     assert.ok(empty.includes('Claude Code offers no model, effort, or mode choices.'));
+  });
+});
+
+describe('the settings page', () => {
+  const pause = { version: 1, jobs: { at_time_limit: 'pause', at_exit: 'stop' } } as const;
+  const view: SettingsView = {
+    all_projects: {
+      path: '~/.verifold/settings.json',
+      values: {},
+      revision: '',
+      settings: pause,
+    },
+    project: {
+      path: '~/code/sort-bench/.verifold/settings.json',
+      values: { jobs: { at_exit: 'keep' } },
+      revision: 'abc',
+      settings: { ...pause, jobs: { ...pause.jobs, at_exit: 'keep' } },
+    },
+    lab: pause,
+  };
+  const page = (level: 'project' | 'all'): string =>
+    renderToStaticMarkup(
+      <SettingsForm
+        view={view}
+        level={level}
+        labOpen
+        disabled={false}
+        onChange={() => undefined}
+      />,
+    );
+
+  it('lets a project follow the setting for all projects, or hold its own', () => {
+    const html = page('project');
+
+    assert.ok(html.includes('~/code/sort-bench/.verifold/settings.json'));
+    assert.ok(html.includes('A change applies to the running lab now'));
+    assert.ok(
+      html.includes(
+        '<button type="button" aria-pressed="true"><b>Same as all projects</b><span>Now: Pause them.</span>',
+      ),
+    );
+    assert.ok(html.includes('<button type="button" aria-pressed="true"><b>Keep them</b>'));
+    assert.equal(html.split('aria-pressed="true"').length - 1, 2);
+    // The lab started before the project kept its processes, and follows its own copy until the person chooses.
+    assert.ok(
+      html.includes('The running lab still follows “Stop them”. Choose an answer to change it.'),
+    );
+    assert.equal(html.includes('has its own setting'), false);
+  });
+
+  it('shows the settings for all projects with the defaults where the file has nothing', () => {
+    const html = page('all');
+
+    assert.ok(html.includes('~/.verifold/settings.json'));
+    assert.equal(html.includes('Same as all projects'), false);
+    assert.ok(html.includes('<button type="button" aria-pressed="true"><b>Pause them</b>'));
+    assert.ok(html.includes('<button type="button" aria-pressed="true"><b>Stop them</b>'));
+    assert.ok(
+      html.includes('This project has its own setting, “Keep them”, and it wins over this one.'),
+    );
+    assert.equal(html.split('has its own setting').length - 1, 1);
+    // No answer here changes the lab where the project has its own setting, so the page doesn't offer one.
+    assert.equal(html.includes('The running lab still follows'), false);
   });
 });

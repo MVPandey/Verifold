@@ -8,6 +8,7 @@ import { runStatus } from '../model/time.ts';
 import { useLab, useNow, useRoute } from './hooks.ts';
 import { LabPage } from './LabPage.tsx';
 import { NeedsPage } from './NeedsPage.tsx';
+import { SettingsPage } from './SettingsPage.tsx';
 import { SetupPage } from './SetupPage.tsx';
 import { ThreadPage } from './ThreadPage.tsx';
 
@@ -25,12 +26,16 @@ export function App(props: { readonly api: Api; readonly token: string }): React
       <>
         <Header folder={data.setup.folder} lab={null} route={route} now={now} needs={0} />
         <main className="page">
-          <SetupPage
-            api={props.api}
-            setup={data.setup}
-            onStarted={data.reload}
-            onRefresh={data.reload}
-          />
+          {route.page === 'settings' ? (
+            <SettingsPage api={props.api} labOpen={false} />
+          ) : (
+            <SetupPage
+              api={props.api}
+              setup={data.setup}
+              onStarted={data.reload}
+              onRefresh={data.reload}
+            />
+          )}
         </main>
       </>
     );
@@ -53,6 +58,8 @@ export function App(props: { readonly api: Api; readonly token: string }): React
       <main className="page">
         {route.page === 'needs' ? (
           <NeedsPage {...shared} />
+        ) : route.page === 'settings' ? (
+          <SettingsPage api={props.api} labOpen />
         ) : route.page === 'thread' ? (
           <ThreadPage key={route.id} {...shared} id={route.id} />
         ) : (
@@ -97,7 +104,9 @@ function Header(props: {
           <nav className="tabs" aria-label="Pages">
             <a
               href={href({ page: 'lab' })}
-              aria-current={props.route.page === 'needs' ? undefined : 'page'}
+              aria-current={
+                props.route.page === 'lab' || props.route.page === 'thread' ? 'page' : undefined
+              }
             >
               Lab
             </a>
@@ -115,6 +124,13 @@ function Header(props: {
           </span>
         </>
       ) : null}
+      <a
+        className="settingslink"
+        href={href({ page: 'settings' })}
+        aria-current={props.route.page === 'settings' ? 'page' : undefined}
+      >
+        Settings
+      </a>
     </header>
   );
 }

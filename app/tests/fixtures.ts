@@ -150,6 +150,7 @@ export function labView(changes: Partial<LabView> = {}): LabView {
     needs_you: 0,
     ends_at: null,
     out_of_time: false,
+    settings: { version: 1, jobs: { at_time_limit: 'pause', at_exit: 'stop' } },
     ...changes,
   };
 }

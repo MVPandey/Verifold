@@ -12,13 +12,22 @@ from typing import override
 
 import psutil
 import uvicorn
-from pydantic import Field
+from pydantic import Field, JsonValue
 
 from verifold.harnesses.catalog import CATALOG, HarnessEntry, available, catalog_with
 from verifold.protocol.agents import Agent, ModelSpec
-from verifold.protocol.app import AgentChoice, HarnessOption, Offer, SetupView, StartRequest
+from verifold.protocol.app import (
+    AgentChoice,
+    HarnessOption,
+    Offer,
+    SettingsChange,
+    SettingsFileView,
+    SettingsView,
+    SetupView,
+    StartRequest,
+)
 from verifold.protocol.record import Record
-from verifold.protocol.settings import AtExit
+from verifold.protocol.settings import AtExit, SettingsLevel
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.folders import LAB_FOLDER, agent_folder
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
@@ -37,7 +46,15 @@ from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.board import Board
 from verifold.store.record_file import RecordFile
 from verifold.store.server_file import running_server, server_file
-from verifold.store.settings_file import load_settings, recorded_settings
+from verifold.store.settings_file import (
+    SettingsValues,
+    change_setting,
+    load_settings,
+    read_settings_file,
+    recorded_settings,
+    settings_of,
+    settings_path,
+)
 
 SERVER_FILE = 'server.json'
 """The file in the lab folder that names the process serving the lab."""
@@ -158,6 +175,46 @@ class Host:
                 self._offers[harness.name] = await offer_of(harness, place, PROBE_TIMEOUT)
         finally:
             self._probing.discard(harness.name)
+
+    def settings(self) -> SettingsView:
+        """Return the person's settings files, and the copy that the folder's lab follows."""
+        paths = {level: settings_path(level, self._project) for level in SettingsLevel}
+        # Each file is read once, so that its values, its revision, and what it adds up to agree.
+        read = {level: read_settings_file(path) for level, path in paths.items()}
+        values = {level: data for level, (data, _) in read.items()}
+
+        def view(level: SettingsLevel, adds_up: Mapping[SettingsLevel, SettingsValues]) -> SettingsFileView:
+            data, revision = read[level]
+            settings = settings_of(adds_up).lab_settings()
+            return SettingsFileView(path=_shown(paths[level]), values=data, revision=revision, settings=settings)
+
+        return SettingsView(
+            all_projects=view(SettingsLevel.ALL, {SettingsLevel.ALL: values[SettingsLevel.ALL]}),
+            project=view(SettingsLevel.PROJECT, values),
+            lab=self._lab.board.settings if self._lab else None,
+        )
+
+    async def change_settings(self, change: SettingsChange) -> SettingsView:
+        """
+        Change one setting in one of the person's settings files, and apply it to the folder's lab.
+
+        The lab takes the setting when the change decides it for this project. A change for all projects doesn't
+        reach a lab whose project has a setting of its own. The lab takes nothing else from the files, so an edit that
+        an agent made to them stays out of it.
+        """
+        paths = {level: settings_path(level, self._project) for level in SettingsLevel}
+        revisions = {SettingsLevel.PROJECT: change.revisions.project, SettingsLevel.ALL: change.revisions.all_projects}
+        values = change_setting(paths, change.level, change.key, change.value, revisions)
+        decides = change.level is SettingsLevel.PROJECT or not _holds(values[SettingsLevel.PROJECT], change.key)
+        if self._lab is not None and decides:
+            name = change.key.removeprefix('jobs.')
+            chosen = getattr(settings_of(values).jobs, name)
+            running = self._lab.board.settings
+            # The lab follows the person's choice, also when the files held it already but the lab doesn't.
+            if getattr(running.jobs, name) != chosen:
+                jobs = running.jobs.model_copy(update={name: chosen})
+                await self._lab.set_settings(running.model_copy(update={'jobs': jobs}))
+        return self.settings()
 
     def setup(self) -> SetupView:
         """Return the harnesses that this computer has, and the folder's lab, if any."""
@@ -386,6 +443,16 @@ def _crew(agents: tuple[Agent, ...], catalog: Mapping[str, HarnessEntry], *, aut
         (catalog[name], _options(first[name].model_copy(update={'mode': None}), auto_mode=auto_mode))
         for name in harnesses
     )
+
+
+def _holds(values: SettingsValues, key: str) -> bool:
+    # Whether a settings file holds the setting with dots in `key`.
+    found: JsonValue = values
+    for part in key.split('.'):
+        if not isinstance(found, dict) or part not in found:
+            return False
+        found = found[part]
+    return True
 
 
 def _shown(path: Path) -> str:

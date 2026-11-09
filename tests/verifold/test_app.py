@@ -21,7 +21,7 @@ from verifold.app import ServeHooks, WebServer, serve
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.app import AgentChoice, StartRequest
 from verifold.protocol.events import AgentJoined, Event, Posted, SettingsSet, TimeRanOut
-from verifold.protocol.settings import AtTimeLimit
+from verifold.protocol.settings import AtExit, AtTimeLimit
 from verifold.runner.environment import harness_environment
 from verifold.runner.jobs import Sweep, sweep
 from verifold.server.errors import LabExists, SetupRejected
@@ -371,6 +371,29 @@ async def test_with_finish_the_agents_jobs_run_past_the_time_limit(project: Path
         assert not paused(job)
 
 
+@pytest.mark.parametrize('changed', ['finish', 'stop'])
+async def test_a_change_while_the_lab_is_out_of_time_applies_to_its_paused_jobs_at_once(
+    project: Path, job_file: Path, monkeypatch: pytest.MonkeyPatch, changed: str
+) -> None:
+    monkeypatch.setenv('HOME', str(project.parent))
+    async with serving(project, ONE_AGENT) as client:
+        await until(job_file.exists)
+        job = int(job_file.read_text())
+        await client.post('/time', json={'minutes': 0})
+        await until(lambda: paused(job))
+        view = (await client.get('/settings')).json()
+        change = {'level': 'project', 'key': 'jobs.at_time_limit', 'value': changed, 'revisions': revisions_of(view)}
+        await client.post('/settings', json=change)
+        if changed == 'finish':
+            await until(lambda: not paused(job))
+            await client.post('/time', json={'minutes': 5})
+            await asyncio.sleep(0.3)
+            assert alive(job)
+            assert not paused(job)
+        else:
+            await until(lambda: not alive(job))
+
+
 async def test_with_keep_the_agents_jobs_outlive_verifold_and_its_next_start(project: Path, job_file: Path) -> None:
     write_settings(project, {'at_exit': 'keep'})
 
@@ -394,6 +417,99 @@ async def test_a_lab_follows_the_settings_from_when_it_opened(project: Path) -> 
 
     kept = [event.settings.jobs.at_time_limit for event in record(project) if isinstance(event, SettingsSet)]
     assert kept == [AtTimeLimit.STOP]
+
+
+async def test_the_persons_change_applies_to_the_running_lab_but_an_agents_edit_does_not(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('HOME', str(project.parent))
+    async with serving(project, ONE_AGENT) as client:
+        await until(lambda: any(isinstance(event, SettingsSet) for event in record(project)))
+        # An agent edits the project's file during the lab. Its edit stays out of the lab.
+        write_settings(project, {'at_exit': 'keep'})
+        before = (await client.get('/settings')).json()
+        change = {
+            'level': 'all',
+            'key': 'jobs.at_time_limit',
+            'value': 'stop',
+            'revisions': revisions_of(before),
+        }
+        after = (await client.post('/settings', json=change)).json()
+        stale = await client.post('/settings', json={**change, 'value': 'finish'})
+        lab = (await client.get('/lab')).json()
+
+    assert before['project']['values'] == {'jobs': {'at_exit': 'keep'}}
+    assert before['all_projects'] == {
+        'path': '~/.verifold/settings.json',
+        'values': {},
+        'revision': '',
+        'settings': {'version': 1, 'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'}},
+    }
+    assert after['all_projects']['values'] == {'jobs': {'at_time_limit': 'stop'}}
+    assert after['project']['settings']['jobs'] == {'at_time_limit': 'stop', 'at_exit': 'keep'}
+    assert after['lab']['jobs'] == {'at_time_limit': 'stop', 'at_exit': 'stop'}
+    assert lab['settings'] == after['lab']
+    assert stale.status_code == 409
+    kept = [event.settings.jobs for event in record(project) if isinstance(event, SettingsSet)]
+    assert [(jobs.at_time_limit, jobs.at_exit) for jobs in kept] == [
+        (AtTimeLimit.PAUSE, AtExit.STOP),
+        (AtTimeLimit.STOP, AtExit.STOP),
+    ]
+
+
+def revisions_of(view: dict[str, dict[str, str]]) -> dict[str, str]:
+    return {'project': view['project']['revision'], 'all_projects': view['all_projects']['revision']}
+
+
+def lab_settings(project: Path) -> list[tuple[AtTimeLimit, AtExit]]:
+    kept = [event.settings.jobs for event in record(project) if isinstance(event, SettingsSet)]
+    return [(jobs.at_time_limit, jobs.at_exit) for jobs in kept]
+
+
+async def test_a_change_for_all_projects_skips_a_lab_whose_project_has_its_own_setting(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('HOME', str(project.parent))
+    write_settings(project, {'at_exit': 'stop'})
+    async with serving(project, ONE_AGENT) as client:
+        await until(lambda: any(isinstance(event, SettingsSet) for event in record(project)))
+        view = (await client.get('/settings')).json()
+        change = {'level': 'all', 'key': 'jobs.at_exit', 'value': 'keep', 'revisions': revisions_of(view)}
+        changed = (await client.post('/settings', json=change)).json()
+
+    assert changed['all_projects']['settings']['jobs']['at_exit'] == 'keep'
+    assert changed['lab']['jobs']['at_exit'] == 'stop'
+    assert lab_settings(project) == [(AtTimeLimit.PAUSE, AtExit.STOP)]
+
+
+async def test_choosing_the_value_that_the_files_hold_makes_the_lab_follow_it(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('HOME', str(project.parent))
+    async with serving(project, ONE_AGENT) as client:
+        await until(lambda: any(isinstance(event, SettingsSet) for event in record(project)))
+        # Someone edits the file by hand. The lab keeps its copy until the person chooses the value in the app.
+        write_settings(project, {'at_time_limit': 'finish'})
+        view = (await client.get('/settings')).json()
+        change = {'level': 'project', 'key': 'jobs.at_time_limit', 'value': 'finish', 'revisions': revisions_of(view)}
+        changed = (await client.post('/settings', json=change)).json()
+
+    assert view['lab']['jobs']['at_time_limit'] == 'pause'
+    assert changed['lab']['jobs']['at_time_limit'] == 'finish'
+    assert lab_settings(project) == [(AtTimeLimit.PAUSE, AtExit.STOP), (AtTimeLimit.FINISH, AtExit.STOP)]
+
+
+async def test_settings_can_change_before_a_lab_starts(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('HOME', str(project.parent))
+    revisions = {'project': '', 'all_projects': ''}
+    change = {'level': 'project', 'key': 'jobs.at_exit', 'value': 'keep', 'revisions': revisions}
+
+    async with serving(project) as client:
+        changed = (await client.post('/settings', json=change)).json()
+
+    assert changed['lab'] is None
+    assert changed['project']['settings']['jobs']['at_exit'] == 'keep'
+    assert record(project) == []
 
 
 async def test_a_broken_settings_file_refuses_the_start_and_leaves_no_lab(project: Path) -> None:

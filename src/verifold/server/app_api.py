@@ -17,7 +17,16 @@ from fastapi.responses import JSONResponse
 from pydantic import SecretStr, ValidationError
 from sse_starlette import EventSourceResponse
 
-from verifold.protocol.app import AgentView, LabView, RerunRequest, SetupView, StartRequest, TimeRequest
+from verifold.protocol.app import (
+    AgentView,
+    LabView,
+    RerunRequest,
+    SettingsChange,
+    SettingsView,
+    SetupView,
+    StartRequest,
+    TimeRequest,
+)
 from verifold.protocol.events import RerunRequested
 from verifold.protocol.ids import PERSON, ThreadId
 from verifold.protocol.join import PostRequest, PostView, ThreadSummary, ThreadView
@@ -29,7 +38,7 @@ from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
 from verifold.society.views import needs_person, thread_summaries, thread_view
-from verifold.store.errors import SettingsInvalid
+from verifold.store.errors import SettingsChanged, SettingsInvalid, SettingsUnwritable
 
 HEARTBEAT = 15.0
 """Seconds between messages on a quiet event stream, so that proxies and browsers keep it open."""
@@ -51,6 +60,14 @@ class Host(Protocol):
         """Start a lab and its agents."""
         ...
 
+    def settings(self) -> SettingsView:
+        """Return the person's settings files, and the copy that the folder's lab follows."""
+        ...
+
+    async def change_settings(self, change: SettingsChange) -> SettingsView:
+        """Change one setting, and apply the change to the folder's lab."""
+        ...
+
 
 def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     """Return the app API for the folder's lab. It acts as the person who holds `person_token`."""
@@ -66,9 +83,14 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     @api.exception_handler(SocietyError)
     @api.exception_handler(ServerError)
     @api.exception_handler(SettingsInvalid)
+    @api.exception_handler(SettingsChanged)
+    @api.exception_handler(SettingsUnwritable)
     @api.exception_handler(ValidationError)
     async def _refused(_: Request, error: Exception) -> JSONResponse:
-        status = 404 if isinstance(error, NotFound) else 409 if isinstance(error, NoLab | LabExists) else 400
+        conflict = isinstance(error, NoLab | LabExists | SettingsChanged)
+        status = 404 if isinstance(error, NotFound) else 409 if conflict else 400
+        # A file that Verifold can't write is its own failure, not the request's. The reason still reaches the app.
+        status = 500 if isinstance(error, SettingsUnwritable) else status
         return JSONResponse({'detail': str(error)}, status_code=status)
 
     @api.get('/setup', dependencies=[authorized])
@@ -79,6 +101,14 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     async def start(request: StartRequest) -> SetupView:
         await host.start(request)
         return host.setup()
+
+    @api.get('/settings', dependencies=[authorized])
+    async def settings() -> SettingsView:
+        return host.settings()
+
+    @api.post('/settings', dependencies=[authorized])
+    async def change_settings(change: SettingsChange) -> SettingsView:
+        return await host.change_settings(change)
 
     @api.get('/lab', dependencies=[authorized])
     async def lab() -> LabView:
@@ -143,6 +173,7 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
         needs_you=len(needs_person(board)),
         ends_at=board.ends_at,
         out_of_time=board.out_of_time,
+        settings=board.settings,
     )
 
 
