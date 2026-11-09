@@ -17,14 +17,14 @@ from builders import SLEEP, alive, start_orphan, until
 from fakes import FAKE_HARNESS
 from pydantic import TypeAdapter
 
-from verifold.app import ServeHooks, WebServer, serve
+from verifold.app import ServeHooks, ServeOptions, WebServer, serve
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import StartRequest
-from verifold.protocol.events import AgentJoined, Event, Posted, SettingsSet, TimeRanOut
+from verifold.protocol.events import AgentJoined, Event, Posted, SettingsSet, TimeRanOut, TurnEnded
 from verifold.protocol.settings import AtExit, AtTimeLimit
 from verifold.runner.environment import harness_environment
-from verifold.runner.git import git
+from verifold.runner.git import GitError, git
 from verifold.runner.jobs import Sweep, sweep
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.server.lab import Lab
@@ -71,11 +71,12 @@ async def serving(
     start: StartRequest | None = None,
     catalog: Mapping[str, HarnessEntry] = CATALOG,
     sweeps: list[Sweep] | None = None,
+    options: ServeOptions | None = None,
 ) -> AsyncGenerator[httpx2.AsyncClient]:
     """Serve the folder, and yield a client of its app API that acts as the person. `sweeps` collects each sweep."""
     ready: asyncio.Future[str] = asyncio.get_running_loop().create_future()
     hooks = ServeHooks(ready=ready.set_result, swept=(sweeps if sweeps is not None else []).append)
-    running = asyncio.create_task(serve(project, start, catalog=catalog, hooks=hooks))
+    running = asyncio.create_task(serve(project, start, options=options, catalog=catalog, hooks=hooks))
     try:
         async with asyncio.timeout(20):
             base, _, token = (await ready).partition('/#token=')
@@ -245,6 +246,59 @@ async def test_a_rerun_request_starts_a_blind_checker_from_another_family(
 
 
 ONE_AGENT = StartRequest(question='Does it hold?', agents=(AgentChoice(harness='fake'),))
+
+
+async def test_a_checker_that_runs_too_long_stops_and_the_lab_goes_on(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
+    monkeypatch.setenv('FAKE_ACP_SLOW_AGENT', 'checker')
+    catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other')))
+
+    def stopped_checker() -> TurnEnded | None:
+        stops = (
+            event
+            for event in record(project)
+            if isinstance(event, TurnEnded) and event.error and 'Verifold stopped the checker' in event.error
+        )
+        return next(stops, None)
+
+    async with serving(project, start, catalog, options=ServeOptions(turn_timeout=3)) as client:
+        await until(lambda: stopped_checker() is not None, timeout=60)
+        lab = await client.get('/lab')
+
+    summary = stopped_checker()
+    assert summary is not None
+    assert summary.agent.startswith('checker-')
+    assert summary.error == 'The check ran past 3 seconds, so Verifold stopped the checker.'
+    assert lab.status_code == 200
+    assert not any(entry.post.kind == 'check' for entry in posts(project))
+
+
+async def test_a_rerun_that_fails_to_prepare_its_checker_shows_why_and_the_lab_goes_on(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
+
+    async def broken(*_: object) -> Path:
+        raise GitError('git worktree add failed: no space left on device')
+
+    monkeypatch.setattr('verifold.runner.reruns.checker_folder', broken)
+    catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other')))
+
+    def failed() -> list[TurnEnded]:
+        return [event for event in record(project) if isinstance(event, TurnEnded) and event.error]
+
+    async with serving(project, start, catalog) as client:
+        await until(lambda: bool(failed()), timeout=60)
+        lab = await client.get('/lab')
+
+    assert [(event.agent.startswith('checker-'), event.error) for event in failed()] == [
+        (True, 'GitError: git worktree add failed: no space left on device')
+    ]
+    assert lab.status_code == 200
 
 
 async def test_a_job_that_an_agent_starts_in_a_session_of_its_own_stops_with_the_lab(

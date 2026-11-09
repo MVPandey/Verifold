@@ -2,13 +2,15 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from functools import partial
 from pathlib import Path
 
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent, ModelSpec
-from verifold.protocol.events import RerunRequested
+from verifold.protocol.events import RerunRequested, TurnSummary
 from verifold.protocol.posts import Check
+from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentSetup
 from verifold.runner.folders import LAB_FOLDER, agent_folder, checker_folder
 from verifold.runner.messages import rerun_message
@@ -18,6 +20,7 @@ from verifold.server.join import Members
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.board import Board
+from verifold.society.errors import SocietyError
 
 type Crew = tuple[tuple[HarnessEntry, SessionOptions], ...]
 """The lab's harnesses, each with the options that its agents use."""
@@ -50,9 +53,25 @@ class Reruns:
                 board = self._lab.board
                 for request in board.reruns[started:]:
                     if not _checked(board, _checker_id(request), request.post):
-                        group.create_task(self._check(request))
+                        group.create_task(self._contained(request))
                 started = len(board.reruns)
                 await self._lab.wait_for_change(board.seq)
+
+    async def _contained(self, request: RerunRequested) -> None:
+        # One rerun that fails, for example because Git can't prepare the checker's folder, must not stop the lab or
+        # its other reruns. The post stays unchecked, and the board shows the failure as the checker's.
+        try:
+            await self._check(request)
+        except Exception as error:
+            # While the lab stops, the check's cleanup can fail too. That error ends the check, and nothing more.
+            if (task := asyncio.current_task()) and task.cancelling():
+                raise asyncio.CancelledError from error
+            failed = TurnSummary(
+                agent=_checker_id(request), seconds=0, usage=Usage(), error=f'{type(error).__name__}: {error}'
+            )
+            # A checker that never joined can't have a turn. Its failure then shows nowhere but in the missing check.
+            with suppress(SocietyError):
+                await self._lab.end_turn(failed)
 
     async def _check(self, request: RerunRequested) -> None:
         board = self._lab.board
