@@ -152,20 +152,28 @@ def test_a_change_that_makes_the_file_invalid_is_refused_and_writes_nothing(
     assert not files.paths[PROJECT].exists()
 
 
-def test_a_change_keeps_the_files_mode_and_writes_through_a_link(tmp_path: Path) -> None:
+def test_a_change_keeps_the_files_mode(tmp_path: Path) -> None:
     files = Files(tmp_path)
-    dotfiles = tmp_path / 'dotfiles' / 'verifold.json'
-    dotfiles.parent.mkdir()
-    dotfiles.write_text('{}')
-    dotfiles.chmod(0o600)
-    files.paths[ALL].parent.mkdir(parents=True)
-    files.paths[ALL].symlink_to(dotfiles)
+    write(files.paths[PROJECT].parent, {})
+    files.paths[PROJECT].chmod(0o600)
 
-    files.change(ALL, 'jobs.at_exit', 'keep')
+    files.change(PROJECT, 'jobs.at_exit', 'keep')
 
-    assert files.paths[ALL].is_symlink()
-    assert json.loads(dotfiles.read_text()) == {'jobs': {'at_exit': 'keep'}}
-    assert stat.S_IMODE(dotfiles.stat().st_mode) == 0o600
+    assert stat.S_IMODE(files.paths[PROJECT].stat().st_mode) == 0o600
+
+
+def test_a_change_to_a_settings_file_that_is_a_link_is_refused(tmp_path: Path) -> None:
+    files = Files(tmp_path)
+    # A link can point at any file that holds valid settings, such as another config file or the global settings.
+    other = tmp_path / 'other.json'
+    other.write_text('{}')
+    files.paths[PROJECT].parent.mkdir(parents=True)
+    files.paths[PROJECT].symlink_to(other)
+
+    with pytest.raises(SettingsUnwritable, match=r'settings\.json is a link'):
+        files.change(PROJECT, 'jobs.at_exit', 'keep')
+
+    assert other.read_text() == '{}'
 
 
 def test_a_change_never_writes_through_a_file_that_waits_at_a_fixed_name(tmp_path: Path) -> None:

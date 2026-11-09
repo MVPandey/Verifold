@@ -149,5 +149,7 @@ describe('the settings page', () => {
       html.includes('This project has its own setting, “Keep them”, and it wins over this one.'),
     );
     assert.equal(html.split('has its own setting').length - 1, 1);
+    // No answer here changes the lab where the project has its own setting, so the page doesn't offer one.
+    assert.equal(html.includes('The running lab still follows'), false);
   });
 });
