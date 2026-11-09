@@ -3,7 +3,8 @@ A fake ACP agent for tests. It reaches the lab's board over MCP with its token, 
 
 The first message makes it post in a new thread. The doorbell makes it read its posts with `wait` and answer each one.
 Environment variables change its behavior: `FAKE_ACP_LOG` logs each call, `FAKE_ACP_PERMISSION` asks permission
-first, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, and `FAKE_ACP_CHILD` starts a
+first, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, `FAKE_ACP_SLOW_AGENT` does the
+same for an agent whose name starts with its value, and `FAKE_ACP_CHILD` starts a
 child that holds the agent's pipes open and writes its process ID to that path. `FAKE_ACP_JOB` starts a job in a
 session of its own, the way that a harness starts a background command, and writes its process ID to that path.
 
@@ -167,7 +168,8 @@ class FakeAgent(acp.Agent):
         self._note(event='prompt', text=text)
         if os.environ.get('FAKE_ACP_CRASH'):
             os._exit(3)
-        if os.environ.get('FAKE_ACP_SLOW'):
+        slow_agent = os.environ.get('FAKE_ACP_SLOW_AGENT')
+        if os.environ.get('FAKE_ACP_SLOW') or (slow_agent and self._name.startswith(slow_agent)):
             await asyncio.sleep(60)
         if text == DOORBELL:
             await self._answer_news()
