@@ -144,8 +144,10 @@ class Host:
         await asyncio.gather(*(self._probe(entry) for entry in harnesses))
 
     async def _probe(self, harness: HarnessEntry) -> None:
+        # The probe runs in the project folder, so the harness reads the project's own settings, as the agents'
+        # worktrees do.
         place = Place(
-            folder=self._project / LAB_FOLDER / 'probe',
+            folder=self._project,
             log=self._project / LAB_FOLDER / 'logs' / f'probe-{harness.name}.log',
             lab=self._project,
             agent='probe',
@@ -153,8 +155,7 @@ class Host:
         try:
             # Whatever goes wrong, the harness offers nothing, and the person types the model and the effort instead.
             with suppress(Exception):
-                async with asyncio.timeout(PROBE_TIMEOUT):
-                    self._offers[harness.name] = await offer_of(harness, place)
+                self._offers[harness.name] = await offer_of(harness, place, PROBE_TIMEOUT)
         finally:
             self._probing.discard(harness.name)
 
@@ -376,11 +377,15 @@ def _options(agent: Agent, *, auto_mode: bool) -> SessionOptions:
 
 
 def _crew(agents: tuple[Agent, ...], catalog: Mapping[str, HarnessEntry], *, auto_mode: bool) -> Crew:
-    # One entry per harness, in the order that the agents joined, with the options of the harness's first agent.
-    # Checkers come from this crew.
+    # One entry per harness, in the order that the agents joined, with the model and effort of the harness's first
+    # agent. Checkers come from this crew. A checker follows the auto mode answer, not a worker's mode, because it
+    # must be able to run the work again.
     first = {agent.harness: agent for agent in reversed(agents)}
     harnesses = dict.fromkeys(agent.harness for agent in agents)
-    return tuple((catalog[name], _options(first[name], auto_mode=auto_mode)) for name in harnesses)
+    return tuple(
+        (catalog[name], _options(first[name].model_copy(update={'mode': None}), auto_mode=auto_mode))
+        for name in harnesses
+    )
 
 
 def _shown(path: Path) -> str:

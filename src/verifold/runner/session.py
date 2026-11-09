@@ -15,7 +15,7 @@ from pydantic import SecretStr
 
 from verifold import DISTRIBUTION
 from verifold.harnesses.catalog import HarnessEntry
-from verifold.protocol.app import Offer, OptionValue
+from verifold.protocol.app import ModelValue, Offer, OptionValue
 from verifold.protocol.ids import AgentId
 from verifold.protocol.record import Record
 from verifold.protocol.usage import Usage
@@ -201,15 +201,22 @@ def _unsupported(method: str) -> NoReturn:
     raise acp.RequestError.method_not_found(method)
 
 
-async def offer_of(harness: HarnessEntry, place: Place) -> Offer:
+async def offer_of(harness: HarnessEntry, place: Place, timeout: float) -> Offer:
     """
     Open a session of the harness without a prompt, and return the models, effort levels, and modes that it offers.
 
-    The session gets no board and no message. Verifold stops the harness before this returns, also after a failure.
+    The session gets no board and no message. It switches to each model, because a model can have its own effort
+    levels. A switch changes only this session. `timeout` limits the talk with the harness, but not its stop: Verifold
+    stops the harness before this returns, also after a failure.
+
+    Raises:
+        TimeoutError: The harness took longer than `timeout` seconds.
+
     """
-    place.folder.mkdir(parents=True, exist_ok=True)
     async with _connected(harness, place, _Client(SessionHooks(permissions=_refuse))) as connection:
-        return _offer(await connection.new_session(cwd=str(place.folder), mcp_servers=[]))
+        async with asyncio.timeout(timeout):
+            await _initialize(connection)
+            return await _offer(connection, await connection.new_session(cwd=str(place.folder), mcp_servers=[]))
 
 
 @asynccontextmanager
@@ -223,13 +230,6 @@ async def _connected(harness: HarnessEntry, place: Place, client: _Client) -> As
             raise RunnerError(f'{harness.name} started without its protocol pipes.')
         connection = acp.connect_to_agent(client, process.stdin, process.stdout)
         try:
-            await connection.initialize(
-                protocol_version=acp.PROTOCOL_VERSION,
-                client_capabilities=schema.ClientCapabilities(
-                    fs=schema.FileSystemCapabilities(read_text_file=False, write_text_file=False), terminal=False
-                ),
-                client_info=schema.Implementation(name='verifold', version=version(DISTRIBUTION)),
-            )
             yield connection
         finally:
             # Stop the harness first: the connection's reader waits for output that only ends with the process.
@@ -239,26 +239,60 @@ async def _connected(harness: HarnessEntry, place: Place, client: _Client) -> As
                     await connection.close()
 
 
+async def _initialize(connection: ClientSideConnection) -> None:
+    await connection.initialize(
+        protocol_version=acp.PROTOCOL_VERSION,
+        client_capabilities=schema.ClientCapabilities(
+            fs=schema.FileSystemCapabilities(read_text_file=False, write_text_file=False), terminal=False
+        ),
+        client_info=schema.Implementation(name='verifold', version=version(DISTRIBUTION)),
+    )
+
+
 async def _refuse(_: PermissionRequest) -> str | None:
     # A session without a prompt asks nothing. If it did, the answer is no.
     return None
 
 
-def _offer(opened: schema.NewSessionResponse) -> Offer:
-    by_category = {
-        option.category: option
-        for option in opened.config_options or []
-        if isinstance(option, schema.SessionConfigOptionSelect) and isinstance(option.category, str)
-    }
-    model, effort, modes = by_category.get('model'), by_category.get('thought_level'), opened.modes
+async def _offer(connection: ClientSideConnection, opened: schema.NewSessionResponse) -> Offer:
+    options = _by_category(opened.config_options)
+    model, effort, modes = options.get('model'), options.get('thought_level'), opened.modes
+    efforts = _values(effort)
+    models: list[ModelValue] = []
+    for value in _values(model):
+        found = (
+            efforts
+            if model is None or value.value == model.current_value
+            else await _efforts_with(connection, opened.session_id, model.id, value.value)
+        )
+        models.append(ModelValue(value=value.value, name=value.name, efforts=found))
     return Offer(
-        models=_values(model),
-        efforts=_values(effort),
+        models=tuple(models),
+        efforts=efforts,
         modes=tuple(OptionValue(value=mode.id, name=mode.name) for mode in modes.available_modes) if modes else (),
         model=model.current_value if model else None,
         effort=effort.current_value if effort else None,
         mode=modes.current_mode_id if modes else None,
     )
+
+
+async def _efforts_with(
+    connection: ClientSideConnection, session_id: str, option: str, model: str
+) -> tuple[OptionValue, ...] | None:
+    """Return the effort levels that the harness offers with `model`, or `None` when it refuses to switch to it."""
+    try:
+        switched = await connection.set_config_option(config_id=option, session_id=session_id, value=model)
+    except acp.RequestError:
+        return None
+    return _values(_by_category(switched.config_options).get('thought_level'))
+
+
+def _by_category(offered: Sequence[ConfigOption] | None) -> dict[str, schema.SessionConfigOptionSelect]:
+    return {
+        option.category: option
+        for option in offered or []
+        if isinstance(option, schema.SessionConfigOptionSelect) and isinstance(option.category, str)
+    }
 
 
 def _values(option: schema.SessionConfigOptionSelect | None) -> tuple[OptionValue, ...]:
@@ -274,7 +308,8 @@ def _values(option: schema.SessionConfigOptionSelect | None) -> tuple[OptionValu
 async def _begin(
     connection: ClientSideConnection, harness: HarnessEntry, folder: Path, board: BoardAccess, options: SessionOptions
 ) -> str:
-    """Open or load the session, and set the options that the lab asks for."""
+    """Initialize the connection, open or load the session, and set the options that the lab asks for."""
+    await _initialize(connection)
     servers: McpServers = [
         schema.HttpMcpServer(
             type='http',
@@ -294,7 +329,10 @@ async def _begin(
     for category, value in (('model', options.model), ('thought_level', options.effort)):
         if value:
             option = _option_id(offered or [], category, harness)
-            await connection.set_config_option(session_id=session_id, config_id=option, value=value)
+            changed = await connection.set_config_option(session_id=session_id, config_id=option, value=value)
+            # A model can have its own effort levels, so the next option comes from the harness's answer. An answer
+            # without options keeps the ones from before.
+            offered = changed.config_options or offered
     return session_id
 
 

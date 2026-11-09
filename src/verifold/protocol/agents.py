@@ -9,6 +9,9 @@ from verifold.protocol.record import Record
 
 type Label = Annotated[str, StringConstraints(min_length=1, max_length=40)]
 
+type ValueId = Annotated[str, StringConstraints(min_length=1, max_length=200)]
+"""The ID of a value that a harness offers, such as a model. A cloud provider's model IDs can be long."""
+
 
 class ModelSpec(Record):
     """
@@ -18,9 +21,9 @@ class ModelSpec(Record):
     """
 
     family: Label
-    name: Label | None = None
+    name: ValueId | None = None
     """The model's name, or `None` for the harness's default model."""
-    effort: Label | None = None
+    effort: ValueId | None = None
     """The reasoning effort, or `None` for the harness's default."""
 
 
@@ -34,7 +37,7 @@ class Agent(Record):
     role: Annotated[str, StringConstraints(max_length=40)] = ''
     brief: Annotated[str, StringConstraints(max_length=8_000)] = ''
     """Older records give agent 1 a planner's role and brief. Verifold no longer sets or sends either."""
-    mode: Label | None = None
+    mode: ValueId | None = None
     """The harness mode that the person chose for the agent. `None` follows the lab's auto mode choice."""
     recruited_by: AgentId | None = None
     checks: PostId | None = None
