@@ -25,7 +25,7 @@ class ModelSpec(Record):
 
 
 class Agent(Record):
-    """One agent in the lab: a harness session with a model, a display name, and the brief that it started with."""
+    """One agent in the lab: a harness session with a model and a display name."""
 
     id: AgentId
     name: Label
@@ -33,6 +33,7 @@ class Agent(Record):
     model: ModelSpec
     role: Annotated[str, StringConstraints(max_length=40)] = ''
     brief: Annotated[str, StringConstraints(max_length=8_000)] = ''
+    """Older records give agent 1 a planner's role and brief. Verifold no longer sets or sends either."""
     recruited_by: AgentId | None = None
     checks: PostId | None = None
     """For a blind checker that Verifold starts: the post that it reruns. It posts one check and reads nothing else."""
