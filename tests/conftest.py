@@ -18,6 +18,14 @@ from verifold.server.member import Member
 from verifold.store.record_file import RecordFile
 
 
+@pytest.fixture(autouse=True)
+def home(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Give each test an empty home folder, so that no test reads the person's own `~/.verifold` settings."""
+    path = tmp_path_factory.mktemp('home')
+    monkeypatch.setenv('HOME', str(path))
+    return path
+
+
 @pytest.fixture
 def record() -> RecordBuilder:
     """A fresh lab record from `builders.lab`."""

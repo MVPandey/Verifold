@@ -15,16 +15,20 @@ its environment or because it is one of macOS's own programs. Nor does it find a
 lab starts for an agent, such as Docker.
 """
 
+import asyncio
 import os
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 
 import psutil
 
 from verifold.protocol.record import Record
+from verifold.protocol.settings import AtTimeLimit
 from verifold.runner.environment import AGENT_VARIABLE, LAB_VARIABLE
 from verifold.runner.folders import agents_folder
+from verifold.server.lab import Lab
 
 JOB_GRACE = 5.0
 """Seconds that the lab's processes get to exit after SIGTERM, before a sweep kills them."""
@@ -49,9 +53,11 @@ class Job(Record):
 
 
 class Sweep(Record):
-    """What a sweep stopped, what survived it, and the processes in agents' folders that it left alone."""
+    """What a sweep stopped or paused, what survived it, and the processes in agents' folders that it left alone."""
 
     stopped: tuple[Job, ...] = ()
+    paused: tuple[Job, ...] = ()
+    """Jobs that the lab's time limit paused. They run again when the person gives the lab more time."""
     survived: tuple[Job, ...] = ()
     unmarked: tuple[Job, ...] = ()
     """Processes in an agent's folder that may not be the lab's, such as a shell that the person opened there."""
@@ -59,9 +65,15 @@ class Sweep(Record):
     """Whether the sweep ran at the start, so its processes came from an earlier run, such as one that crashed."""
 
 
-def sweep(lab: Path, grace: float = JOB_GRACE) -> Sweep:
+def sweep(
+    lab: Path, grace: float = JOB_GRACE, *, spare_harnesses: bool = False, still: Callable[[], bool] = lambda: True
+) -> Sweep:
     """
     Stop every process of the lab, and list the processes in agents' folders that may not be the lab's.
+
+    With `spare_harnesses`, it stops only the jobs that agents started, and the harnesses keep running. A pass after
+    the first runs only while `still()` holds, so a stop at the time limit leaves alone what agents start once the lab
+    has more time.
 
     Each process gets SIGTERM and then SIGCONT, so that a paused process can exit too. The ones that still run after
     the grace period get SIGKILL. A stopping process can start new ones, so the sweep looks again, up to
@@ -73,8 +85,10 @@ def sweep(lab: Path, grace: float = JOB_GRACE) -> Sweep:
     stopped: list[Job] = []
     survived: dict[int, Job] = {}
     unmarked: list[Job] = []
-    for _ in range(SWEEP_PASSES):
-        found, left = _lab_processes(lab)
+    for number in range(SWEEP_PASSES):
+        if number and not still():
+            break
+        found, left = _lab_processes(lab, _harness_groups() if spare_harnesses else frozenset())
         unmarked = [job for _, job in left]
         new = [(process, job) for process, job in found if job.pid not in survived]
         if not new:
@@ -86,6 +100,51 @@ def sweep(lab: Path, grace: float = JOB_GRACE) -> Sweep:
             else:
                 stopped.append(job)
     return Sweep(stopped=tuple(stopped), survived=tuple(survived.values()), unmarked=tuple(unmarked))
+
+
+def pause_jobs(lab: Path) -> Sweep:
+    """Pause the jobs that the lab's agents started, and return them. The harnesses keep running."""
+    found, _ = _lab_processes(lab, _harness_groups())
+    paused: list[Job] = []
+    for process, job in found:
+        with suppress(psutil.Error):
+            process.suspend()
+            paused.append(job)
+    return Sweep(paused=tuple(paused))
+
+
+def resume_jobs(lab: Path) -> None:
+    """Resume the jobs that the lab's agents started. A job that runs already doesn't notice."""
+    found, _ = _lab_processes(lab, _harness_groups())
+    for process, _ in found:
+        with suppress(psutil.Error):
+            process.resume()
+
+
+async def keep_jobs(lab: Lab, project: Path, report: Callable[[Sweep], None]) -> None:
+    """
+    Apply the lab's job setting when the lab runs out of time, and resume paused jobs when it gets more time.
+
+    The person's Stop also ends the lab's time. The harnesses keep running, so that the agents can be woken when the
+    lab gets more time. `report` gets what each pause or stop did. Run it for as long as the lab runs.
+    """
+    out_of_time: bool | None = None
+    while True:
+        board = lab.board
+        if board.out_of_time != out_of_time:
+            out_of_time = board.out_of_time
+            # Only `pause` pauses, so only `pause` resumes. A job that someone else paused stays paused.
+            match board.settings.jobs.at_time_limit:
+                case AtTimeLimit.PAUSE if out_of_time:
+                    report(await asyncio.to_thread(pause_jobs, project))
+                case AtTimeLimit.PAUSE:
+                    await asyncio.to_thread(resume_jobs, project)
+                case AtTimeLimit.STOP if out_of_time:
+                    stopping = await asyncio.to_thread(
+                        sweep, project, spare_harnesses=True, still=lambda: lab.board.out_of_time
+                    )
+                    report(stopping)
+        await lab.wait_for_change(board.seq)
 
 
 def _stop(processes: list[psutil.Process], grace: float) -> set[psutil.Process]:
@@ -101,7 +160,9 @@ def _stop(processes: list[psutil.Process], grace: float) -> set[psutil.Process]:
     return set(_running_after(running, KILL_WAIT))
 
 
-def _lab_processes(lab: Path) -> tuple[list[tuple[psutil.Process, Job]], list[tuple[psutil.Process, Job]]]:
+def _lab_processes(
+    lab: Path, spared: frozenset[int] = frozenset()
+) -> tuple[list[tuple[psutil.Process, Job]], list[tuple[psutil.Process, Job]]]:
     # A process reports its working folder with symbolic links resolved.
     agents = agents_folder(lab).resolve()
     found: list[tuple[psutil.Process, Job]] = []
@@ -110,7 +171,9 @@ def _lab_processes(lab: Path) -> tuple[list[tuple[psutil.Process, Job]], list[tu
         if process.pid == os.getpid():
             continue
         # Other people's processes refuse to show their environment, and a process can end while the sweep looks.
-        with suppress(psutil.Error):
+        with suppress(psutil.Error, OSError):
+            if os.getpgid(process.pid) in spared:
+                continue
             environment = process.environ()
             if environment.get(LAB_VARIABLE) == str(lab):
                 found.append((process, _job(process, environment.get(AGENT_VARIABLE))))
@@ -118,6 +181,12 @@ def _lab_processes(lab: Path) -> tuple[list[tuple[psutil.Process, Job]], list[tu
                 hidden = not environment and process.terminal() is None
                 (found if hidden else unmarked).append((process, _job(process, agent)))
     return found, unmarked
+
+
+def _harness_groups() -> frozenset[int]:
+    # Each harness leads a process group of its own, which this server started. So the IDs of those groups are the
+    # IDs of this server's children.
+    return frozenset(child.pid for child in psutil.Process().children())
 
 
 def _agent_of_folder(process: psutil.Process, agents: Path) -> str | None:

@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 from datetime import timedelta
+from typing import override
 
 import httpx2
 import pytest
@@ -15,6 +16,7 @@ from verifold.server.activity import Activity
 from verifold.server.app_api import _changes, app_api
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.server.lab import Lab
+from verifold.store.errors import SettingsInvalid
 
 TOKEN = 'person-secret'
 START = {'question': 'Is it faster?', 'agents': [{'harness': 'fake', 'count': 2}]}
@@ -76,6 +78,22 @@ async def test_the_setup_screen_starts_a_lab_once_and_refuses_unknown_harnesses(
     assert started.status_code == 200
     assert empty.status_code == 422
     assert host.started == [StartRequest.model_validate(START)]
+
+
+class BrokenSettingsHost(Host):
+    """A host whose settings file is broken."""
+
+    @override
+    async def start(self, request: StartRequest) -> None:
+        raise SettingsInvalid('~/code/sort-bench/.verifold/settings.json is not valid settings: not JSON.')
+
+
+async def test_a_broken_settings_file_comes_back_as_a_readable_refusal(activity: Activity) -> None:
+    async with client_of(BrokenSettingsHost(None), activity) as client:
+        refused = await client.post('/labs', json=START)
+
+    assert refused.status_code == 400
+    assert 'settings.json is not valid settings' in refused.json()['detail']
 
 
 async def test_a_folder_with_a_lab_refuses_another(client: httpx2.AsyncClient) -> None:

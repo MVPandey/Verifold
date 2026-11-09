@@ -12,7 +12,9 @@ from fakes import FAKE_HARNESS
 
 from verifold.protocol.app import AgentState
 from verifold.protocol.join import PostRequest
+from verifold.protocol.settings import AtTimeLimit, JobSettings, Settings
 from verifold.protocol.usage import Usage
+from verifold.runner import agent_loop
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.git import git
 from verifold.runner.messages import DOORBELL, more_time_message
@@ -197,7 +199,9 @@ async def test_running_out_of_time_stops_the_turn_until_the_person_gives_more_ti
         with suppress(asyncio.CancelledError):
             await running
 
-    assert calls(log, 'prompt')[1]['text'] == more_time_message(lab.board.ends_at)
+    assert calls(log, 'prompt')[1]['text'] == more_time_message(
+        lab.board.ends_at, lab.board.settings.jobs.at_time_limit
+    )
     assert activity.of('bo').detail == ''
     assert ('waiting', 'The lab is out of time. The person can give it more.') in [
         (state, detail) for _, state, detail in activity.changes
@@ -263,3 +267,70 @@ async def test_a_cleanup_that_fails_while_the_lab_stops_ends_the_agent_and_resta
             await running
 
     assert opened == [True]
+
+
+async def run_through_a_stop(served: ServedBoard, tmp_path: Path, *, post: bool) -> None:
+    """Let the agent end its first turn, stop the lab under `stop`, maybe post for the agent, and add time."""
+    lab = served.lab
+    await lab.set_settings(Settings(jobs=JobSettings(at_time_limit=AtTimeLimit.STOP)))
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        await lab.set_time_left(timedelta(0))
+        await lab.run_out_of_time()
+        if post:
+            await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'person')
+            # The loop sees the post while the lab is still out of time.
+            await asyncio.sleep(0.2)
+        await lab.set_time_left(timedelta(hours=1))
+        await until(lambda: len(lab.board.turns) == 2)
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+
+async def test_under_stop_an_idle_agent_hears_that_its_processes_stopped_once_time_comes_back(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    await run_through_a_stop(served, tmp_path, post=False)
+
+    stopped = more_time_message(served.lab.board.ends_at, AtTimeLimit.STOP)
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', stopped]
+
+
+async def test_under_stop_posts_that_came_meanwhile_ring_after_the_stop_message(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    await run_through_a_stop(served, tmp_path, post=True)
+
+    stopped = more_time_message(served.lab.board.ends_at, AtTimeLimit.STOP)
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', f'{stopped} {DOORBELL}']
+
+
+async def test_under_stop_a_stop_while_the_turn_is_recorded_still_reaches_the_agent(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    await lab.set_settings(Settings(jobs=JobSettings(at_time_limit=AtTimeLimit.STOP)))
+    record_snapshot = agent_loop.snapshot
+
+    async def slow_snapshot(folder: Path, agent_id: str) -> str | None:
+        # The lab stops and gets more time while the first turn's snapshot runs, as in a large folder.
+        if not lab.board.turns:
+            await lab.set_time_left(timedelta(0))
+            await lab.run_out_of_time()
+            await lab.set_time_left(timedelta(hours=1))
+        return await record_snapshot(folder, agent_id)
+
+    monkeypatch.setattr(agent_loop, 'snapshot', slow_snapshot)
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 2)
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+    stopped = more_time_message(lab.board.ends_at, AtTimeLimit.STOP)
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', stopped]

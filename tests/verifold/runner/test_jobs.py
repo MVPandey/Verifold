@@ -188,3 +188,15 @@ def test_a_marked_sleep_in_an_agents_folder_stops(lab: Path, started: list[subpr
 
     assert [(found.pid, found.agent) for found in result.stopped] == [(job.pid, 'agent-1')]
     assert job.poll() is not None
+
+
+def test_a_sweep_looks_again_only_while_still_holds(lab: Path, started: list[subprocess.Popen[bytes]]) -> None:
+    parent = marked(started, lab, FORKS_WHEN_STOPPED, stdout=subprocess.PIPE)
+    assert parent.stdout is not None
+    assert parent.stdout.readline() == b'ready\n'
+
+    first = sweep(lab, grace=1, still=lambda: False)
+    later = sweep(lab, grace=0.5)
+
+    assert [job.pid for job in first.stopped] == [parent.pid]
+    assert len(later.stopped) == 1

@@ -18,9 +18,10 @@ from verifold.harnesses.catalog import CATALOG, HarnessEntry, available
 from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.app import HarnessOption, SetupView, StartRequest
 from verifold.protocol.record import Record
+from verifold.protocol.settings import AtExit
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.folders import LAB_FOLDER, agent_folder
-from verifold.runner.jobs import JOB_GRACE, Sweep, sweep
+from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
 from verifold.runner.messages import start_message
 from verifold.runner.reruns import Crew, Reruns
 from verifold.runner.session import SessionOptions
@@ -36,6 +37,7 @@ from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.board import Board
 from verifold.store.record_file import RecordFile
 from verifold.store.server_file import running_server, server_file
+from verifold.store.settings_file import load_settings, recorded_settings
 
 SERVER_FILE = 'server.json'
 """The file in the lab folder that names the process serving the lab."""
@@ -112,16 +114,18 @@ class Host:
         self._lab: Lab | None = None
         self._group: asyncio.TaskGroup | None = None
         self._settings: LoopSettings | None = None
+        self._swept: Callable[[Sweep], None] = _ignore
 
     @property
     def lab(self) -> Lab | None:
         """The folder's lab, or `None` before it starts."""
         return self._lab
 
-    def attach(self, group: asyncio.TaskGroup, settings: LoopSettings) -> None:
-        """Run the lab's agents in `group`, with `settings`, from now on."""
+    def attach(self, group: asyncio.TaskGroup, settings: LoopSettings, swept: Callable[[Sweep], None]) -> None:
+        """Run the lab's agents in `group`, with `settings`, from now on. `swept` gets what each pause or stop did."""
         self._group = group
         self._settings = settings
+        self._swept = swept
 
     def setup(self) -> SetupView:
         """Return the harnesses that this computer has, and the folder's lab, if any."""
@@ -149,7 +153,10 @@ class Host:
         if unknown:
             raise SetupRejected(f'Unknown harness {", ".join(unknown)}. Choose from: {", ".join(self._catalog)}.')
         time_left = timedelta(minutes=request.minutes) if request.minutes else None
+        # A broken settings file must refuse the start before the record holds anything.
+        settings = load_settings(self._project)
         lab = Lab.create(self._record, request.question, auto_mode=request.auto_mode, time_left=time_left)
+        await lab.set_settings(settings)
         self._lab = lab
         chosen = [choice for choice in request.agents for _ in range(choice.count)]
         for number, choice in enumerate(chosen, start=1):
@@ -159,6 +166,8 @@ class Host:
     async def resume(self) -> None:
         """Serve the lab that the folder's record holds, and start its agents again."""
         self._lab = Lab.load(self._record)
+        if recorded_settings(self._record.read()) is None:
+            await self._lab.set_settings(load_settings(self._project))
         await self._launch()
 
     async def _launch(self) -> None:
@@ -169,6 +178,7 @@ class Host:
         if not norms.exists():
             norms.write_text(NORMS_TEMPLATE)
         group.create_task(keep_time(lab))
+        group.create_task(keep_jobs(lab, self._project, self._swept))
         workers = tuple(
             entry.agent for entry in lab.board.agents if not entry.agent.checks and entry.agent.harness in self._catalog
         )
@@ -226,12 +236,16 @@ async def serve(
     """
     options, hooks = options or ServeOptions(), hooks or ServeHooks()
     with RecordFile(project / LAB_FOLDER / 'record.jsonl') as record, server_file(project / LAB_FOLDER / SERVER_FILE):
-        resuming = bool(record.read())
+        events = record.read()
+        resuming = bool(events)
         if resuming and start:
             raise LabExists('This folder has a lab already. Run `verifold` here to resume it.')
-        # This process holds the record, so no other server runs the lab, and every marked process is a leftover.
-        leftovers = await asyncio.to_thread(sweep, project)
-        hooks.swept(leftovers.model_copy(update={'earlier_run': True}))
+        # A lab follows the settings in its record. The files matter only for a lab that starts now.
+        opening = recorded_settings(events) or load_settings(project)
+        if opening.jobs.at_exit is AtExit.STOP:
+            # This process holds the record, so no other server runs the lab, and every marked process is a leftover.
+            leftovers = await asyncio.to_thread(sweep, project)
+            hooks.swept(leftovers.model_copy(update={'earlier_run': True}))
         members, activity, person_token = Members(), Activity(), new_person_token()
         host = Host(project, record, catalog, members, activity)
         http = join_server(members.resolve).streamable_http_app(host='127.0.0.1')
@@ -245,7 +259,7 @@ async def serve(
             port = await _bound_port(server)
             settings = LoopSettings(mcp_url=f'http://127.0.0.1:{port}/mcp', turn_timeout=options.turn_timeout)
             async with asyncio.TaskGroup() as group:
-                host.attach(group, settings)
+                host.attach(group, settings, hooks.swept)
                 if resuming:
                     await host.resume()
                 elif start:
@@ -256,7 +270,8 @@ async def serve(
             # The task group has stopped the agents' harnesses. Their processes stop next, and the web server last, also
             # when the hook fails.
             try:
-                hooks.swept(await asyncio.to_thread(sweep, project))
+                if (host.lab.board.settings if host.lab else opening).jobs.at_exit is AtExit.STOP:
+                    hooks.swept(await asyncio.to_thread(sweep, project))
             finally:
                 server.should_exit = True
                 await _closed(serving)

@@ -1,4 +1,6 @@
 import asyncio
+import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -116,3 +118,18 @@ def alive(pid: int) -> bool:
         return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
     except psutil.NoSuchProcess:
         return False
+
+
+def start_orphan(environment: dict[str, str]) -> int:
+    """Start a sleeping process whose parent exits at once, so it belongs to no one here, and return its ID."""
+    # The job holds none of its parent's pipes, or this would wait for the job to end.
+    script = (
+        'import subprocess, sys\n'
+        'quiet = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}\n'
+        'job = subprocess.Popen(\n'
+        '    [sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True, **quiet\n'
+        ')\n'
+        'print(job.pid)'
+    )
+    parent = subprocess.run([sys.executable, '-c', script], env=environment, capture_output=True, text=True, check=True)
+    return int(parent.stdout)
