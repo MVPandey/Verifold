@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from verifold.runner.folders import agent_folder, checker_folder
+from verifold.runner.folders import agent_folder, checker_folder, tracked_lab_files
 from verifold.runner.git import GitError, commit_of, git
 from verifold.runner.snapshots import snapshot, snapshot_ref
 
@@ -76,3 +76,25 @@ async def test_a_checker_folder_holds_the_authors_files_at_the_cited_commit(tmp_
     assert (folder / 'result.txt').read_text() == '11.8'
     assert (folder / 'data.csv').exists()
     assert await checker_folder(project, 'checker-9', author, snapshot_ref('ada'), cited) == folder
+
+
+async def track(project: Path, name: str) -> None:
+    # Put a path in the index as written, whatever the file system does with its case.
+    blob = await git('hash-object', '-w', '--stdin', cwd=project)
+    await git('update-index', '--add', '--cacheinfo', f'100644,{blob},{name}', cwd=project)
+
+
+async def test_tracked_lab_files_are_found_in_any_case_and_the_settings_file_is_allowed(tmp_path: Path) -> None:
+    project = await committed_project(tmp_path / 'project')
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    assert await tracked_lab_files(project) == ()
+    assert await tracked_lab_files(outside) == ()
+
+    await track(project, '.verifold/settings.json')
+    await track(project, '.VERIFOLD/Settings.json')
+    assert await tracked_lab_files(project) == ()
+
+    # A file system that ignores case checks this out into `.verifold/`, so it counts as a lab file.
+    await track(project, '.VERIFOLD/record.jsonl')
+    assert await tracked_lab_files(project) == ('.VERIFOLD/record.jsonl',)
