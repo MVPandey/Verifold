@@ -1909,6 +1909,14 @@ button.btn:disabled {
 .settings .filters {
   margin: 16px 0 12px;
 }
+.savechoices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  margin: 14px 0 0;
+  font-size: 14px;
+}
 h2 {
   text-transform: uppercase;
 }

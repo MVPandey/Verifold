@@ -4,6 +4,7 @@ import type {
   LabView,
   Offer,
   Post,
+  SetupDefaults,
   PostView,
   ThreadSummary,
 } from '../src/api/types.ts';
@@ -42,6 +43,9 @@ export const OFFER: Offer = {
   effort: 'high',
   mode: 'default',
 };
+
+/** Verifold's defaults for new labs: one agent of each harness, auto mode, and no time limit. */
+export const DEFAULTS: SetupDefaults = { agents: null, auto_mode: true, minutes: null };
 
 export const HARNESSES: readonly HarnessOption[] = [
   {

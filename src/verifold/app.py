@@ -27,7 +27,7 @@ from verifold.protocol.app import (
     StartRequest,
 )
 from verifold.protocol.record import Record
-from verifold.protocol.settings import AtExit, SettingsLevel
+from verifold.protocol.settings import AtExit, SettingsLevel, SetupDefaults
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.folders import LAB_FOLDER, agent_folder
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
@@ -44,6 +44,7 @@ from verifold.server.member import Member
 from verifold.server.timekeeper import keep_time
 from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.board import Board
+from verifold.store.errors import SettingsInvalid
 from verifold.store.record_file import RecordFile
 from verifold.store.server_file import running_server, server_file
 from verifold.store.settings_file import (
@@ -185,8 +186,14 @@ class Host:
 
         def view(level: SettingsLevel, adds_up: Mapping[SettingsLevel, SettingsValues]) -> SettingsFileView:
             data, revision = read[level]
-            settings = settings_of(adds_up).lab_settings()
-            return SettingsFileView(path=_shown(paths[level]), values=data, revision=revision, settings=settings)
+            total = settings_of(adds_up)
+            return SettingsFileView(
+                path=_shown(paths[level]),
+                values=data,
+                revision=revision,
+                settings=total.lab_settings(),
+                defaults=total.setup,
+            )
 
         return SettingsView(
             all_projects=view(SettingsLevel.ALL, {SettingsLevel.ALL: values[SettingsLevel.ALL]}),
@@ -204,9 +211,10 @@ class Host:
         """
         paths = {level: settings_path(level, self._project) for level in SettingsLevel}
         revisions = {SettingsLevel.PROJECT: change.revisions.project, SettingsLevel.ALL: change.revisions.all_projects}
-        values = change_setting(paths, change.level, change.key, change.value, revisions)
+        values = change_setting(paths, change.level, change.key, _written(change.value), revisions)
         decides = change.level is SettingsLevel.PROJECT or not _holds(values[SettingsLevel.PROJECT], change.key)
-        if self._lab is not None and decides:
+        # The choices for new labs don't change a running lab. Only the job settings do.
+        if self._lab is not None and decides and change.key.startswith('jobs.'):
             name = change.key.removeprefix('jobs.')
             chosen = getattr(settings_of(values).jobs, name)
             running = self._lab.board.settings
@@ -232,7 +240,15 @@ class Host:
                 for entry in self._catalog.values()
             ),
             question=self._lab.board.opened.question if self._lab else None,
+            defaults=self._defaults(),
         )
+
+    def _defaults(self) -> SetupDefaults:
+        # A broken settings file doesn't hide the setup. The start then refuses, with the file's error.
+        try:
+            return load_settings(self._project).setup
+        except SettingsInvalid:
+            return SetupDefaults()
 
     async def start(self, request: StartRequest) -> None:
         """
@@ -443,6 +459,18 @@ def _crew(agents: tuple[Agent, ...], catalog: Mapping[str, HarnessEntry], *, aut
         (catalog[name], _options(first[name].model_copy(update={'mode': None}), auto_mode=auto_mode))
         for name in harnesses
     )
+
+
+def _written(value: str | SetupDefaults | None) -> JsonValue:
+    # The choices for new labs go into the file in full, so that a project's choices never take a part from the ones
+    # for all projects. Each agent leaves out what it doesn't set.
+    if not isinstance(value, SetupDefaults):
+        return value
+    agents: list[JsonValue] | None = None
+    if value.agents is not None:
+        agents = [agent.model_dump(mode='json', exclude_defaults=True) for agent in value.agents]
+    written: dict[str, JsonValue] = {'agents': agents, 'auto_mode': value.auto_mode, 'minutes': value.minutes}
+    return written
 
 
 def _holds(values: SettingsValues, key: str) -> bool:

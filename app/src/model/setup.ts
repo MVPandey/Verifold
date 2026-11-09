@@ -1,4 +1,14 @@
-import type { AgentChoice, HarnessOption, Offer, OptionValue, StartRequest } from '../api/types.ts';
+import type {
+  AgentChoice,
+  HarnessOption,
+  Offer,
+  OptionValue,
+  SavedChoice,
+  SetupChoices,
+  SetupDefaults,
+  StartRequest,
+} from '../api/types.ts';
+import { duration } from './format.ts';
 
 /** The most agents of one harness that a lab can start, as the server allows. */
 export const MAX_AGENTS = 20;
@@ -22,15 +32,35 @@ export interface MenuEntry {
   readonly label: string;
 }
 
-/** Return the first picks: one agent of each harness that this computer has. */
-export function firstPicks(harnesses: readonly HarnessOption[]): readonly HarnessPick[] {
-  return harnesses.map((option) => ({
-    harness: option.name,
-    count: option.available ? 1 : 0,
-    model: '',
-    effort: '',
-    mode: '',
-  }));
+/**
+ * Return the first picks: the person's saved choices for new labs, or one agent of each harness that this computer
+ * has. A harness that this computer doesn't have starts no agents.
+ */
+export function firstPicks(
+  harnesses: readonly HarnessOption[],
+  defaults: SetupDefaults,
+): readonly HarnessPick[] {
+  return harnesses.map((option) => {
+    if (defaults.agents === null) {
+      return {
+        harness: option.name,
+        count: option.available ? 1 : 0,
+        model: '',
+        effort: '',
+        mode: '',
+      };
+    }
+    const saved = defaults.agents.filter((choice) => choice.harness === option.name);
+    const count = saved.reduce((sum, choice) => sum + choice.count, 0);
+    const first = saved[0];
+    return {
+      harness: option.name,
+      count: option.available ? Math.min(MAX_AGENTS, count) : 0,
+      model: first?.model ?? '',
+      effort: first?.effort ?? '',
+      mode: first?.mode ?? '',
+    };
+  });
 }
 
 /** Return the picks with one harness's count changed by `step`, kept between zero and `MAX_AGENTS`. */
@@ -58,7 +88,25 @@ export function startRequest(
   autoMode: boolean,
   minutes: number | null,
 ): StartRequest {
-  const agents: readonly AgentChoice[] = picks
+  return {
+    question: question.trim(),
+    agents: chosenAgents(picks),
+    auto_mode: autoMode,
+    ...(minutes ? { minutes } : {}),
+  };
+}
+
+/** Return the person's choices on the setup screen as the choices that new labs start with. */
+export function setupChoices(
+  picks: readonly HarnessPick[],
+  autoMode: boolean,
+  minutes: number | null,
+): SetupChoices {
+  return { agents: chosenAgents(picks), auto_mode: autoMode, minutes };
+}
+
+function chosenAgents(picks: readonly HarnessPick[]): readonly AgentChoice[] {
+  return picks
     .filter((pick) => pick.count > 0)
     .map((pick) => ({
       harness: pick.harness,
@@ -67,12 +115,28 @@ export function startRequest(
       ...(pick.effort.trim() ? { effort: pick.effort.trim() } : {}),
       ...(pick.mode ? { mode: pick.mode } : {}),
     }));
-  return {
-    question: question.trim(),
-    agents,
-    auto_mode: autoMode,
-    ...(minutes ? { minutes } : {}),
-  };
+}
+
+/** Return what new labs start with, in words. */
+export function defaultsLine(defaults: SetupDefaults, harnesses: readonly HarnessOption[]): string {
+  const agents =
+    defaults.agents === null
+      ? 'One agent of each harness that this computer has'
+      : defaults.agents.map((choice) => agentWords(choice, harnesses)).join('; ');
+  const time =
+    defaults.minutes === null ? 'No time limit' : `Time limit: ${duration(defaults.minutes)}`;
+  return `${agents}. ${defaults.auto_mode ? 'Auto mode' : 'No auto mode'}. ${time}.`;
+}
+
+function agentWords(choice: SavedChoice, harnesses: readonly HarnessOption[]): string {
+  const title = harnesses.find((option) => option.name === choice.harness)?.title ?? choice.harness;
+  const details = [
+    choice.model,
+    choice.effort ? `${choice.effort} effort` : null,
+    choice.mode ? `${choice.mode} mode` : null,
+  ].filter((detail) => detail !== null);
+  const agents = `${title}: ${choice.count} ${choice.count === 1 ? 'agent' : 'agents'}`;
+  return details.length > 0 ? `${agents} (${details.join(', ')})` : agents;
 }
 
 /** Return the two letters in a harness's avatar: the first letters of two words, or the ends of one word. */
@@ -137,30 +201,36 @@ export function modelSummary(pick: HarnessPick, offer: Offer | null): string {
 /**
  * Return a menu of a harness's values: first the person's own value, which sends nothing, then the others.
  *
- * `current` is the person's own value, as the harness reported it.
+ * `current` is the person's own value, as the harness reported it. `chosen` is the pick's value: a saved one that
+ * the harness doesn't offer now stays in the menu, so the menu shows what the lab would get.
  */
 export function menuEntries(
   values: readonly OptionValue[],
   current: string | null,
+  chosen = '',
 ): readonly MenuEntry[] {
-  if (values.length === 0) return [];
+  const kept = chosen !== '' && !values.some((option) => option.value === chosen);
+  if (values.length === 0 && !kept) return [];
   return [
     { value: '', label: current ? `${nameOf(values, current)} (your default)` : 'Your default' },
     ...values
       .filter((option) => option.value !== current)
       .map((option) => ({ value: option.value, label: option.name })),
+    ...(kept ? [{ value: chosen, label: chosen }] : []),
   ];
 }
 
 /** Return a menu of a harness's modes: first the answer to the auto mode question, then each mode. */
-export function modeEntries(offer: Offer): readonly MenuEntry[] {
-  if (offer.modes.length === 0) return [];
+export function modeEntries(offer: Offer, chosen = ''): readonly MenuEntry[] {
+  const kept = chosen !== '' && !offer.modes.some((mode) => mode.value === chosen);
+  if (offer.modes.length === 0 && !kept) return [];
   return [
     { value: '', label: 'Your auto mode answer' },
     ...offer.modes.map((mode) => ({
       value: mode.value,
       label: mode.value === offer.mode ? `${mode.name} (your default)` : mode.name,
     })),
+    ...(kept ? [{ value: chosen, label: chosen }] : []),
   ];
 }
 

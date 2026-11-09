@@ -6,7 +6,7 @@ import type { Api } from '../src/api/client.ts';
 import type { LabView } from '../src/api/types.ts';
 import { EMPTY, LOST, createLoader } from '../src/ui/loader.ts';
 import type { LabData } from '../src/ui/loader.ts';
-import { labView } from './fixtures.ts';
+import { DEFAULTS, labView } from './fixtures.ts';
 
 /** A server whose lab view answers only when the test says so, and whose other views answer at once. */
 function slowServer(): {
@@ -27,7 +27,8 @@ function slowServer(): {
     return Promise.resolve(value);
   };
   const api: Api = {
-    setup: () => answer('setup', { folder: '~/lab', harnesses: [], question: 'Q?' }),
+    setup: () =>
+      answer('setup', { folder: '~/lab', harnesses: [], question: 'Q?', defaults: DEFAULTS }),
     lab: () => {
       calls.push('lab');
       return new Promise((resolve) => waiting.push(resolve));

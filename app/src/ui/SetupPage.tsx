@@ -2,7 +2,8 @@ import { useEffect, useId, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
-import type { HarnessOption, Offer, SetupView } from '../api/types.ts';
+import type { HarnessOption, Offer, SettingsLevel, SetupView } from '../api/types.ts';
+import { duration } from '../model/format.ts';
 import {
   MAX_AGENTS,
   agentCount,
@@ -12,6 +13,7 @@ import {
   menuEntries,
   modeEntries,
   modelSummary,
+  setupChoices,
   startRequest,
   step,
   withModel,
@@ -20,7 +22,12 @@ import type { HarnessPick, MenuEntry } from '../model/setup.ts';
 import { messageOf } from '../api/client.ts';
 import { Avatar } from './parts.tsx';
 
-const TIMES: readonly { readonly minutes: number | null; readonly label: string }[] = [
+interface TimeChoice {
+  readonly minutes: number | null;
+  readonly label: string;
+}
+
+const TIMES: readonly TimeChoice[] = [
   { minutes: null, label: 'No limit' },
   { minutes: 30, label: '30 min' },
   { minutes: 60, label: '1 hour' },
@@ -39,13 +46,19 @@ export function SetupPage(props: {
   /** Read the setup again. */
   readonly onRefresh: () => void;
 }): ReactElement {
+  const { defaults } = props.setup;
   const [question, setQuestion] = useState('');
-  const [picks, setPicks] = useState(() => firstPicks(props.setup.harnesses));
-  const [autoMode, setAutoMode] = useState(true);
-  const [minutes, setMinutes] = useState<number | null>(null);
+  const [picks, setPicks] = useState(() => firstPicks(props.setup.harnesses, defaults));
+  const [autoMode, setAutoMode] = useState(defaults.auto_mode);
+  const [minutes, setMinutes] = useState<number | null>(defaults.minutes);
   const [starting, setStarting] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const total = agentCount(picks);
+  // A saved time limit that isn't one of the usual ones gets a button of its own.
+  const times: readonly TimeChoice[] = TIMES.some((time) => time.minutes === defaults.minutes)
+    ? TIMES
+    : [...TIMES, { minutes: defaults.minutes, label: duration(defaults.minutes ?? 0) }];
   const probing = props.setup.harnesses.some((option) => option.probing);
   const { onRefresh } = props;
 
@@ -54,6 +67,31 @@ export function SetupPage(props: {
     const timer = setTimeout(onRefresh, PROBE_POLL);
     return () => clearTimeout(timer);
   }, [probing, props.setup, onRefresh]);
+
+  const save = (level: SettingsLevel): void => {
+    setSaved(null);
+    setError(null);
+    const value = setupChoices(picks, autoMode, minutes);
+    props.api
+      .settings()
+      .then((view) =>
+        props.api.changeSetting({
+          level,
+          key: 'setup',
+          value,
+          revisions: { project: view.project.revision, all_projects: view.all_projects.revision },
+        }),
+      )
+      .then(
+        () =>
+          setSaved(
+            level === 'project'
+              ? 'Saved. New labs in this project start with these choices.'
+              : 'Saved. New labs in each project start with these choices, unless the project has its own.',
+          ),
+        (failure: unknown) => setError(messageOf(failure)),
+      );
+  };
 
   const start = (): void => {
     setStarting(true);
@@ -121,7 +159,7 @@ export function SetupPage(props: {
         <h3>How long may the agents work?</h3>
         <p className="sub">You can give the lab more time while it runs.</p>
         <div className="filters">
-          {TIMES.map((time) => (
+          {times.map((time) => (
             <button
               key={time.label}
               type="button"
@@ -145,6 +183,30 @@ export function SetupPage(props: {
         </button>
         <span className="quiet">You can stop the lab at any time.</span>
       </div>
+      <p className="savechoices">
+        <span className="quiet">Save these choices for the next labs:</span>
+        <button
+          className="linkbtn"
+          type="button"
+          disabled={total === 0}
+          onClick={() => save('project')}
+        >
+          In this project
+        </button>
+        <button
+          className="linkbtn"
+          type="button"
+          disabled={total === 0}
+          onClick={() => save('all')}
+        >
+          In all projects
+        </button>
+      </p>
+      {saved ? (
+        <p className="quiet" role="status">
+          {saved}
+        </p>
+      ) : null}
       {error ? (
         <p className="error" role="alert">
           {error}
@@ -222,10 +284,10 @@ function Offered(props: {
   readonly onPick: (pick: HarnessPick) => void;
 }): ReactElement {
   const { offer, pick } = props;
-  const models = menuEntries(offer.models, offer.model);
+  const models = menuEntries(offer.models, offer.model, pick.model);
   const levels = effortsOf(offer, pick.model);
-  const efforts = menuEntries(levels.values, levels.current);
-  const modes = modeEntries(offer);
+  const efforts = menuEntries(levels.values, levels.current, pick.effort);
+  const modes = modeEntries(offer, pick.mode);
   if (models.length + efforts.length + modes.length === 0) {
     return <p>{props.title} offers no model, effort, or mode choices.</p>;
   }
