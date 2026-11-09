@@ -210,6 +210,7 @@ def test_the_command_reports_what_each_sweep_did(
 ) -> None:
     async def serve(*_: object, hooks: ServeHooks, **__: object) -> None:
         hooks.swept(Sweep(stopped=(Job(pid=11, agent='agent-1', command='python old.py'),), earlier_run=True))
+        hooks.swept(Sweep(paused=(Job(pid=10, agent='agent-3', command='python train.py'),)))
         hooks.swept(
             Sweep(
                 stopped=(Job(pid=12, agent=None, command='sleep 60'),),
@@ -223,6 +224,7 @@ def test_the_command_reports_what_each_sweep_did(
     main([])
 
     out = capsys.readouterr().out
+    assert "Paused agent-3's process until the lab gets more time: python train.py (10)" in out
     assert "Stopped agent-1's process from an earlier run: python old.py (11)" in out
     assert "Stopped an agent's process: sleep 60 (12)" in out
     assert "Couldn't stop agent-2's process: stubborn (13). Run `kill -9 13`." in out

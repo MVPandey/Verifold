@@ -12,6 +12,7 @@ from verifold.protocol.events import (
     LabOpened,
     Posted,
     RerunRequested,
+    SettingsSet,
     ThreadOpened,
     TimeRanOut,
     TimeSet,
@@ -22,6 +23,7 @@ from verifold.protocol.events import (
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import FileEvidence
+from verifold.protocol.settings import Settings
 from verifold.protocol.threads import Thread
 from verifold.server.changes import wait_until
 from verifold.server.errors import LabExists
@@ -138,6 +140,10 @@ class Lab:
     async def set_time_left(self, left: timedelta) -> None:
         """Record that the lab ends `left` from now. A `left` of zero stops the agents now."""
         await self._commit(lambda _, seq, at: TimeSet(seq=seq, at=at, ends_at=at + left))
+
+    async def set_settings(self, settings: Settings) -> None:
+        """Record the person's settings for the lab. The lab follows the latest ones."""
+        await self._commit(lambda _, seq, at: SettingsSet(seq=seq, at=at, settings=settings))
 
     async def run_out_of_time(self) -> None:
         """

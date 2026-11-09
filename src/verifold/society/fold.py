@@ -11,6 +11,7 @@ from verifold.protocol.events import (
     LabOpened,
     Posted,
     RerunRequested,
+    SettingsSet,
     ThreadOpened,
     TimeRanOut,
     TimeSet,
@@ -69,6 +70,8 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911
         case TimeRanOut():
             check_time_out(board, event)
             return replace(board, seq=event.seq, times=(*board.times, event))
+        case SettingsSet(settings=settings):
+            return replace(board, seq=event.seq, settings=settings)
         case _:
             assert_never(event)
 

@@ -11,3 +11,7 @@ class RecordLocked(StoreError):
 
 class CorruptRecord(StoreError):
     """A complete line of the record is not a valid event."""
+
+
+class SettingsInvalid(StoreError):
+    """A settings file is not valid JSON, or holds a setting that Verifold doesn't know or accept."""

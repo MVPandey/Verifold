@@ -5,6 +5,7 @@ from builders import START, lab
 
 from verifold.app import NORMS_TEMPLATE
 from verifold.protocol.posts import FileEvidence, Result
+from verifold.protocol.settings import AtTimeLimit
 from verifold.runner.messages import DOORBELL, more_time_message, rerun_message, start_message
 
 
@@ -32,8 +33,8 @@ def test_a_lab_with_a_time_limit_tells_each_agent_when_it_ends_in_utc() -> None:
     message = start_message(board, board.agents[1].agent, Path('LAB.md'))
 
     assert message.splitlines()[-1] == 'The lab ends at 2026-11-06 14:00 UTC, unless the person gives it more time.'
-    assert more_time_message(ends_at).endswith('The lab now ends at 2026-11-06 14:00 UTC.')
-    assert more_time_message(None) == (
+    assert more_time_message(ends_at, AtTimeLimit.FINISH).endswith('The lab now ends at 2026-11-06 14:00 UTC.')
+    assert more_time_message(None, AtTimeLimit.FINISH) == (
         'Your last turn stopped when the lab ran out of time. The person gave the lab more time.'
     )
 
@@ -60,3 +61,10 @@ def test_a_rerun_message_gives_the_claim_its_files_and_where_to_check_but_not_th
     assert 'bench.py, out.json' in message
     assert 'thread t-2 that replies to p-4' in message
     assert 'reasoning' not in message
+
+
+def test_the_message_after_more_time_says_what_happened_to_the_agents_processes() -> None:
+    assert more_time_message(None, AtTimeLimit.PAUSE).endswith(
+        'Verifold paused any process that you left running, and it runs again now.'
+    )
+    assert more_time_message(None, AtTimeLimit.STOP).endswith('Verifold stopped any process that you left running.')

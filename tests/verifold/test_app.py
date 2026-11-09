@@ -1,30 +1,35 @@
 import asyncio
 import json
+import os
 import signal
 import subprocess
 import sys
 from collections.abc import AsyncGenerator, Iterator, Mapping
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import timedelta
 from pathlib import Path
 
 import httpx2
+import psutil
 import pytest
 import uvicorn
-from builders import SLEEP, alive, until
+from builders import SLEEP, alive, start_orphan, until
 from fakes import FAKE_HARNESS
 from pydantic import TypeAdapter
 
 from verifold.app import ServeHooks, WebServer, serve
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.app import AgentChoice, StartRequest
-from verifold.protocol.events import AgentJoined, Event, Posted
+from verifold.protocol.events import AgentJoined, Event, Posted, SettingsSet, TimeRanOut
+from verifold.protocol.settings import AtTimeLimit
 from verifold.runner.environment import harness_environment
-from verifold.runner.jobs import Sweep
+from verifold.runner.jobs import Sweep, sweep
 from verifold.server.errors import LabExists, SetupRejected
+from verifold.server.lab import Lab
 from verifold.server.web import web_app
 from verifold.society.fold import fold
 from verifold.society.standing import standing
+from verifold.store.record_file import RecordFile
 
 events: TypeAdapter[Event] = TypeAdapter(Event)
 CATALOG = {'fake': FAKE_HARNESS}
@@ -248,3 +253,151 @@ async def test_the_web_server_leaves_the_stop_signals_to_verifold() -> None:
     finally:
         server.should_exit = True
         await serving
+
+
+def write_settings(project: Path, jobs: dict[str, str]) -> None:
+    folder = project / '.verifold'
+    folder.mkdir(exist_ok=True)
+    (folder / 'settings.json').write_text(json.dumps({'jobs': jobs}))
+
+
+def paused(pid: int) -> bool:
+    return psutil.Process(pid).status() == psutil.STATUS_STOPPED
+
+
+def harness_pids() -> list[int]:
+    pids: list[int] = []
+    for child in psutil.Process().children():
+        # A child that exited and waits to be collected can't show its command line.
+        with suppress(psutil.Error):
+            if 'fake_acp_agent.py' in ' '.join(child.cmdline()):
+                pids.append(child.pid)
+    return pids
+
+
+@pytest.fixture
+def job_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, project: Path) -> Iterator[Path]:
+    """Make the fake agent start a job in a session of its own, and stop every process of the lab after the test."""
+    path = tmp_path / 'job.pid'
+    monkeypatch.setenv('FAKE_ACP_JOB', str(path))
+    yield path
+    sweep(project, grace=1)
+
+
+async def test_at_the_time_limit_the_agents_jobs_pause_and_more_time_resumes_them(
+    project: Path, job_file: Path
+) -> None:
+    sweeps: list[Sweep] = []
+
+    async with serving(project, ONE_AGENT, sweeps=sweeps) as client:
+        await until(job_file.exists)
+        job = int(job_file.read_text())
+        await client.post('/time', json={'minutes': 0})
+        await until(lambda: paused(job))
+        assert harness_pids()
+        assert not any(paused(pid) for pid in harness_pids())
+        await client.post('/time', json={'minutes': 5})
+        await until(lambda: not paused(job))
+
+    assert [found.pid for found in sweeps[1].paused] == [job]
+
+
+async def test_with_stop_the_time_limit_ends_the_agents_jobs_but_not_their_harnesses(
+    project: Path, job_file: Path
+) -> None:
+    write_settings(project, {'at_time_limit': 'stop'})
+
+    async with serving(project, ONE_AGENT) as client:
+        await until(job_file.exists)
+        job = int(job_file.read_text())
+        await client.post('/time', json={'minutes': 0})
+        await until(lambda: not alive(job))
+        assert harness_pids()
+        assert all(alive(pid) for pid in harness_pids())
+
+
+async def test_with_finish_the_agents_jobs_run_past_the_time_limit(project: Path, job_file: Path) -> None:
+    write_settings(project, {'at_time_limit': 'finish'})
+
+    async with serving(project, ONE_AGENT) as client:
+        await until(job_file.exists)
+        job = int(job_file.read_text())
+        await client.post('/time', json={'minutes': 0})
+        await until(lambda: any(isinstance(event, TimeRanOut) for event in record(project)))
+        await asyncio.sleep(0.3)
+        assert alive(job)
+        assert not paused(job)
+
+
+async def test_with_keep_the_agents_jobs_outlive_verifold_and_its_next_start(project: Path, job_file: Path) -> None:
+    write_settings(project, {'at_exit': 'keep'})
+
+    async with serving(project, ONE_AGENT):
+        await until(job_file.exists)
+        job = int(job_file.read_text())
+    assert alive(job)
+
+    async with serving(project):
+        assert alive(job)
+
+
+async def test_a_lab_follows_the_settings_from_when_it_opened(project: Path) -> None:
+    write_settings(project, {'at_time_limit': 'stop'})
+    async with serving(project, ONE_AGENT):
+        await until(lambda: any(isinstance(event, SettingsSet) for event in record(project)))
+
+    write_settings(project, {'at_time_limit': 'finish'})
+    async with serving(project):
+        pass
+
+    kept = [event.settings.jobs.at_time_limit for event in record(project) if isinstance(event, SettingsSet)]
+    assert kept == [AtTimeLimit.STOP]
+
+
+async def test_a_broken_settings_file_refuses_the_start_and_leaves_no_lab(project: Path) -> None:
+    async with serving(project) as client:
+        (project / '.verifold' / 'settings.json').write_text('{not json')
+        refused = await client.post('/labs', json={'question': 'Does it hold?', 'agents': [{'harness': 'fake'}]})
+
+    assert refused.status_code == 400
+    assert 'settings.json' in refused.json()['detail']
+    assert record(project) == []
+
+
+async def test_a_lab_from_before_settings_takes_the_files_on_its_next_run(project: Path) -> None:
+    with RecordFile(project / '.verifold' / 'record.jsonl') as file:
+        Lab.create(file, 'Does it hold?')
+    write_settings(project, {'at_time_limit': 'finish'})
+
+    async with serving(project):
+        pass
+
+    kept = [event.settings.jobs.at_time_limit for event in record(project) if isinstance(event, SettingsSet)]
+    assert kept == [AtTimeLimit.FINISH]
+
+
+@pytest.fixture
+def orphan(project: Path) -> Iterator[int]:
+    """A job that an earlier run of the lab left: it carries the lab's mark, and its parent is gone."""
+    pid = start_orphan(harness_environment(project, 'agent-1'))
+    yield pid
+    with suppress(psutil.NoSuchProcess):
+        psutil.Process(pid).kill()
+
+
+async def test_only_pause_resumes_jobs_so_under_stop_a_paused_job_stays_paused(project: Path, orphan: int) -> None:
+    write_settings(project, {'at_time_limit': 'stop', 'at_exit': 'keep'})
+    os.kill(orphan, signal.SIGSTOP)
+
+    async with serving(project, ONE_AGENT):
+        await until(lambda: any(isinstance(event, SettingsSet) for event in record(project)))
+        await asyncio.sleep(0.3)
+        assert paused(orphan)
+
+
+async def test_under_pause_a_new_run_resumes_a_paused_job_that_keep_kept(project: Path, orphan: int) -> None:
+    write_settings(project, {'at_exit': 'keep'})
+    os.kill(orphan, signal.SIGSTOP)
+
+    async with serving(project, ONE_AGENT):
+        await until(lambda: not paused(orphan))

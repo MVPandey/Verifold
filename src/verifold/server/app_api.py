@@ -29,6 +29,7 @@ from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
 from verifold.society.views import needs_person, thread_summaries, thread_view
+from verifold.store.errors import SettingsInvalid
 
 HEARTBEAT = 15.0
 """Seconds between messages on a quiet event stream, so that proxies and browsers keep it open."""
@@ -64,6 +65,7 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
 
     @api.exception_handler(SocietyError)
     @api.exception_handler(ServerError)
+    @api.exception_handler(SettingsInvalid)
     @api.exception_handler(ValidationError)
     async def _refused(_: Request, error: Exception) -> JSONResponse:
         status = 404 if isinstance(error, NotFound) else 409 if isinstance(error, NoLab | LabExists) else 400

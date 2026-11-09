@@ -121,6 +121,8 @@ def _report(sweep: Sweep) -> None:
     earlier = ' from an earlier run' if sweep.earlier_run else ''
     for job in sweep.stopped:
         _say(f'Stopped {_owner(job)} process{earlier}: {job.command} ({job.pid})')
+    for job in sweep.paused:
+        _say(f'Paused {_owner(job)} process until the lab gets more time: {job.command} ({job.pid})')
     for job in sweep.survived:
         _say(f"Couldn't stop {_owner(job)} process: {job.command} ({job.pid}). Run `kill -9 {job.pid}`.")
     for job in sweep.unmarked:
