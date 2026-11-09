@@ -20,7 +20,8 @@ from verifold.protocol.app import AgentChoice, StartRequest
 from verifold.runner.errors import RunnerError
 from verifold.runner.jobs import Job, Sweep
 from verifold.server.errors import ServerError
-from verifold.store.errors import StoreError
+from verifold.store.errors import SettingsInvalid, StoreError
+from verifold.store.settings_file import load_settings
 
 DEFAULT_AGENTS = (AgentChoice(harness='claude-code'), AgentChoice(harness='codex'))
 """One agent of each harness, with the person's own models."""
@@ -48,7 +49,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         return
     try:
         start = _start(args) if args.command == 'run' else None
-    except ValidationError as error:
+    except (ValidationError, SettingsInvalid) as error:
         sys.exit(f'verifold: {error}')
     _say(f'Serving Verifold for {Path.cwd()}. Its record is .verifold/record.jsonl. Press Ctrl+C to stop.')
     try:
@@ -72,8 +73,15 @@ def _reported(error: BaseException) -> BaseException:
 
 
 def _start(args: argparse.Namespace) -> StartRequest:
-    agents = tuple(_agent(value) for value in args.agent) if args.agent else DEFAULT_AGENTS
-    return StartRequest(question=args.question, agents=agents, auto_mode=not args.ask_me, minutes=args.minutes)
+    # The person's saved choices for new labs fill in what the command line leaves out.
+    defaults = load_settings(Path.cwd()).setup
+    agents = tuple(_agent(value) for value in args.agent) if args.agent else defaults.agents or DEFAULT_AGENTS
+    return StartRequest(
+        question=args.question,
+        agents=agents,
+        auto_mode=defaults.auto_mode and not args.ask_me,
+        minutes=defaults.minutes if args.minutes is None else args.minutes,
+    )
 
 
 async def _until_stopped(serving: Coroutine[None, None, None]) -> None:
@@ -158,12 +166,12 @@ def _parser() -> argparse.ArgumentParser:
         '--agent',
         action='append',
         metavar='HARNESS[:MODEL[:EFFORT[:MODE]]]',
-        help=f'Add an agent: {", ".join(CATALOG)}, or a harness from your settings, with an optional model, effort, and mode. Default: one of each, with your usual settings.',
+        help=f'Add an agent: {", ".join(CATALOG)}, or a harness from your settings, with an optional model, effort, and mode. Default: your saved choices for new labs, or one of each with your usual settings.',
     )
     run.add_argument(
         '--minutes',
         type=int,
-        help='How long the agents may work. You can give the lab more time from the app. Default: no time limit.',
+        help='How long the agents may work. You can give the lab more time from the app. Default: your saved time limit, or none.',
     )
     run.add_argument(
         '--ask-me',

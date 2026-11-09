@@ -92,6 +92,8 @@ export interface SettingsFileView {
   readonly revision: string;
   /** For all projects: the file over Verifold's defaults. For a project: its file over the one for all projects. */
   readonly settings: Settings;
+  /** What new labs start with at this level, added up in the same way. */
+  readonly defaults: SetupDefaults;
 }
 
 export interface SettingsView {
@@ -102,7 +104,7 @@ export interface SettingsView {
 }
 
 /** The settings that the app changes. */
-export type SettingKey = 'jobs.at_time_limit' | 'jobs.at_exit';
+export type SettingKey = 'jobs.at_time_limit' | 'jobs.at_exit' | 'setup';
 
 /**
  * The person changes one setting. A `null` value removes it, so the one for all projects, or Verifold's default,
@@ -111,7 +113,7 @@ export type SettingKey = 'jobs.at_time_limit' | 'jobs.at_exit';
 export interface SettingsChange {
   readonly level: SettingsLevel;
   readonly key: SettingKey;
-  readonly value: string | null;
+  readonly value: string | SetupChoices | null;
   readonly revisions: { readonly project: string; readonly all_projects: string };
 }
 
@@ -157,6 +159,33 @@ export interface SetupView {
   readonly harnesses: readonly HarnessOption[];
   /** The question of the folder's lab, or `null` before a lab starts. */
   readonly question: string | null;
+  /** What the setup starts with: the person's saved choices for new labs, or Verifold's defaults. */
+  readonly defaults: SetupDefaults;
+}
+
+/** An agent choice as the server sends it back, with `null` for what it leaves to the harness. */
+export interface SavedChoice {
+  readonly harness: string;
+  readonly count: number;
+  readonly model: string | null;
+  readonly effort: string | null;
+  readonly mode: string | null;
+}
+
+/** What new labs start with unless the person chooses otherwise. */
+export interface SetupDefaults {
+  /** `null` starts one agent of each harness that this computer has. */
+  readonly agents: readonly SavedChoice[] | null;
+  readonly auto_mode: boolean;
+  /** `null` means no time limit. */
+  readonly minutes: number | null;
+}
+
+/** The choices for new labs, as the app saves them. */
+export interface SetupChoices {
+  readonly agents: readonly AgentChoice[];
+  readonly auto_mode: boolean;
+  readonly minutes: number | null;
 }
 
 export interface AgentChoice {

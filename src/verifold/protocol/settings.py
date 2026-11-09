@@ -5,8 +5,11 @@ from typing import Literal
 
 from pydantic import Field
 
-from verifold.protocol.agents import Label
+from verifold.protocol.agents import AgentChoice, Label
 from verifold.protocol.record import Record
+
+MAX_MINUTES = 7 * 24 * 60
+"""The longest time that the person can give a lab at once: one week."""
 
 
 class AtTimeLimit(StrEnum):
@@ -73,15 +76,26 @@ class HarnessSettings(Record):
     """The ID of the harness's own auto mode, which Verifold sets when the person allows auto mode."""
 
 
+class SetupDefaults(Record):
+    """What a new lab starts with unless the person chooses otherwise: in the setup, and for `verifold run`."""
+
+    agents: tuple[AgentChoice, ...] | None = Field(default=None, min_length=1)
+    """`None` starts one agent of each harness that this computer has, with the person's own settings."""
+    auto_mode: bool = True
+    minutes: int | None = Field(default=None, ge=1, le=MAX_MINUTES)
+    """How long the agents may work. `None` means no time limit."""
+
+
 class SettingsFile(Record):
     """
-    What a settings file holds: the settings that a lab follows, and the harnesses that this computer offers.
+    What a settings file holds: the settings that a lab follows, how new labs start, and this computer's harnesses.
 
     A lab records only its settings. It reads the harnesses again at each start, because they describe this computer.
     """
 
     version: Literal[1] = 1
     jobs: JobSettings = JobSettings()
+    setup: SetupDefaults = SetupDefaults()
     harnesses: dict[Label, HarnessSettings] = Field(default_factory=dict)
 
     def lab_settings(self) -> Settings:

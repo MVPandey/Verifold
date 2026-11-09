@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from pydantic import StringConstraints
+from pydantic import Field, StringConstraints
 
 from verifold.protocol.ids import AgentId, PostId
 from verifold.protocol.record import Record
@@ -42,3 +42,14 @@ class Agent(Record):
     recruited_by: AgentId | None = None
     checks: PostId | None = None
     """For a blind checker that Verifold starts: the post that it reruns. It posts one check and reads nothing else."""
+
+
+class AgentChoice(Record):
+    """How many agents of one harness to start, and with which model, effort, and mode."""
+
+    harness: Label
+    count: int = Field(default=1, ge=1, le=20)
+    model: ValueId | None = None
+    effort: ValueId | None = None
+    mode: ValueId | None = None
+    """One of the harness's own modes. `None` follows the lab's auto mode choice."""

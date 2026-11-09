@@ -4,15 +4,12 @@ from typing import Literal
 
 from pydantic import AwareDatetime, Field, JsonValue
 
-from verifold.protocol.agents import Agent, Label, ValueId
+from verifold.protocol.agents import Agent, AgentChoice, Label, ValueId
 from verifold.protocol.events import Question
 from verifold.protocol.ids import PostId
 from verifold.protocol.record import Record
-from verifold.protocol.settings import Settings, SettingsLevel
+from verifold.protocol.settings import MAX_MINUTES, Settings, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
-
-MAX_MINUTES = 7 * 24 * 60
-"""The longest time that the person can give a lab at once: one week."""
 
 type AgentState = Literal['starting', 'working', 'waiting', 'idle', 'stopped']
 """`waiting` means that the harness waits for the person, for example for a permission answer."""
@@ -113,17 +110,8 @@ class SetupView(Record):
     harnesses: tuple[HarnessOption, ...]
     question: str | None = None
     """The question of the lab in this folder, or `None` when the folder has no lab yet."""
-
-
-class AgentChoice(Record):
-    """How many agents of one harness to start, and with which model, effort, and mode."""
-
-    harness: Label
-    count: int = Field(default=1, ge=1, le=20)
-    model: ValueId | None = None
-    effort: ValueId | None = None
-    mode: ValueId | None = None
-    """One of the harness's own modes. `None` follows the lab's auto mode choice."""
+    defaults: SetupDefaults = SetupDefaults()
+    """What the setup starts with: the person's saved choices for new labs, or Verifold's defaults."""
 
 
 class StartRequest(Record):
@@ -145,6 +133,8 @@ class SettingsFileView(Record):
     """A hash of the file. A change names it, so that it can't overwrite a change that the person didn't see."""
     settings: Settings
     """For all projects: the file over Verifold's defaults. For a project: its file over the one for all projects."""
+    defaults: SetupDefaults = SetupDefaults()
+    """What new labs start with at this level, added up in the same way."""
 
 
 class SettingsView(Record):
@@ -156,7 +146,7 @@ class SettingsView(Record):
     """The settings that the folder's lab follows, or `None` before a lab starts."""
 
 
-type SettingKey = Literal['jobs.at_time_limit', 'jobs.at_exit']
+type SettingKey = Literal['jobs.at_time_limit', 'jobs.at_exit', 'setup']
 """The settings that the app changes. Harness commands are not among them, so the app can't change what a lab runs."""
 
 
@@ -172,8 +162,11 @@ class SettingsChange(Record):
 
     level: SettingsLevel
     key: SettingKey
-    value: str | None = None
-    """The new value. `None` removes the setting, so the one for all projects, or Verifold's default, applies."""
+    value: str | SetupDefaults | None = None
+    """
+    The new value: a job setting's answer, or the choices for new labs. `None` removes the setting, so the one for
+    all projects, or Verifold's default, applies.
+    """
     revisions: SettingsRevisions
     """
     Both files' revisions. The files add up, so a change refuses to apply when either one changed since the person

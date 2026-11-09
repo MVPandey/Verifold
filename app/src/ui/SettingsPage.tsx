@@ -3,7 +3,14 @@ import type { ReactElement } from 'react';
 
 import { ApiError, messageOf } from '../api/client.ts';
 import type { Api } from '../api/client.ts';
-import type { SettingKey, SettingsLevel, SettingsView } from '../api/types.ts';
+import type {
+  HarnessOption,
+  SettingKey,
+  SettingsFileView,
+  SettingsLevel,
+  SettingsView,
+} from '../api/types.ts';
+import { defaultsLine } from '../model/setup.ts';
 import { AT_EXIT, AT_TIME_LIMIT, labelOf, valueAt } from '../model/settings.ts';
 import type { Choice } from '../model/settings.ts';
 
@@ -14,6 +21,8 @@ const CHANGED =
 export function SettingsPage(props: {
   readonly api: Api;
   readonly labOpen: boolean;
+  /** The harnesses that the setup offers, for their names. */
+  readonly harnesses: readonly HarnessOption[];
 }): ReactElement {
   const { api } = props;
   const [view, setView] = useState<SettingsView | null>(null);
@@ -80,6 +89,7 @@ export function SettingsPage(props: {
           view={view}
           level={level}
           labOpen={props.labOpen}
+          harnesses={props.harnesses}
           disabled={saving}
           onChange={change}
         />
@@ -100,6 +110,7 @@ export function SettingsForm(props: {
   readonly view: SettingsView;
   readonly level: SettingsLevel;
   readonly labOpen: boolean;
+  readonly harnesses: readonly HarnessOption[];
   readonly disabled: boolean;
   readonly onChange: (key: SettingKey, value: string | null) => void;
 }): ReactElement {
@@ -148,7 +159,47 @@ export function SettingsForm(props: {
         disabled={props.disabled}
         onChange={(value) => props.onChange('jobs.at_exit', value)}
       />
+      <NewLabs
+        file={file}
+        project={project}
+        harnesses={props.harnesses}
+        disabled={props.disabled}
+        onRemove={() => props.onChange('setup', null)}
+      />
     </>
+  );
+}
+
+/** What new labs start with at this level. The person saves other choices from the setup screen. */
+function NewLabs(props: {
+  readonly file: SettingsFileView;
+  readonly project: boolean;
+  readonly harnesses: readonly HarnessOption[];
+  readonly disabled: boolean;
+  readonly onRemove: () => void;
+}): ReactElement {
+  const own = valueAt(props.file.values, 'setup') !== undefined;
+  return (
+    <section className="section">
+      <h3>New labs</h3>
+      <p className="sub">
+        {props.project && !own ? 'Same as all projects: ' : ''}
+        {defaultsLine(props.file.defaults, props.harnesses)}
+      </p>
+      {own ? (
+        <button
+          className="linkbtn"
+          type="button"
+          disabled={props.disabled}
+          onClick={props.onRemove}
+        >
+          {props.project ? 'Use the choices for all projects' : "Use Verifold's defaults"}
+        </button>
+      ) : null}
+      <p className="note">
+        To save other choices, set up a lab and choose “Save these choices for the next labs”.
+      </p>
+    </section>
   );
 }
 
