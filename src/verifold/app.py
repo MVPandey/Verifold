@@ -1,11 +1,15 @@
 """Runs Verifold in a project folder: the server, the setup screen, and the folder's lab once it starts."""
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
+from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
 from pathlib import Path
+from typing import override
 
+import psutil
 import uvicorn
 from pydantic import Field
 
@@ -15,6 +19,7 @@ from verifold.protocol.app import HarnessOption, SetupView, StartRequest
 from verifold.protocol.record import Record
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.folders import LAB_FOLDER, agent_folder
+from verifold.runner.jobs import JOB_GRACE, Sweep, sweep
 from verifold.runner.messages import LAB_TEMPLATE, start_message
 from verifold.runner.reruns import Crew, Reruns
 from verifold.runner.session import SessionOptions
@@ -29,6 +34,16 @@ from verifold.server.timekeeper import keep_time
 from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.board import Board
 from verifold.store.record_file import RecordFile
+from verifold.store.server_file import running_server, server_file
+
+SERVER_FILE = 'server.json'
+"""The file in the lab folder that names the process serving the lab."""
+
+SERVER_GRACE = 10.0
+"""Seconds that the web server gets to close its connections after the agents stop, before Verifold cancels it."""
+
+SERVER_STOP_GRACE = 30.0
+"""Seconds that `stop_lab` gives a server to stop its agents and exit, before it kills the server."""
 
 PLANNER_ROLE = 'Planner'
 PLANNER_BRIEF = (
@@ -45,6 +60,38 @@ class ServeOptions(Record):
     turn_timeout: float = Field(default=2 * 3_600, gt=0)
     web: Path = WEB_FOLDER
     """The folder of the built app."""
+
+
+def _ignore(_: object) -> None:
+    """Drop what a hook reports."""
+
+
+@dataclass(frozen=True, slots=True)
+class ServeHooks:
+    """What the caller of `serve` hears: the link to the app, and what each sweep of the lab's processes did."""
+
+    ready: Callable[[str], None] = _ignore
+    """Gets the link to the app, with the person's token, once the server listens."""
+    swept: Callable[[Sweep], None] = _ignore
+    """Gets what each sweep did: one sweep when the server starts, and one when it stops."""
+
+
+class LabStop(Record):
+    """What `stop_lab` stopped: the server's process ID, when a server ran, and what the sweep after it did."""
+
+    server: int | None
+    sweep: Sweep
+
+
+class WebServer(uvicorn.Server):
+    """A uvicorn server that leaves the stop signals to Verifold, which stops the agents before the server."""
+
+    @override
+    @contextmanager
+    def capture_signals(self) -> Generator[None]:
+        # uvicorn's own handler closes the server on Ctrl+C and then waits for the agents' board connections. Those
+        # stay open until the agents stop, and the agents would stop only after the server.
+        yield
 
 
 class Host:
@@ -141,6 +188,7 @@ class Host:
         setup = AgentSetup(
             agent=agent,
             harness=self._catalog[agent.harness],
+            lab=self._project,
             folder=folder,
             log=self._project / LAB_FOLDER / 'logs' / f'{agent.id}.log',
             token=self._members.add(member),
@@ -161,13 +209,16 @@ async def serve(
     start: StartRequest | None = None,
     options: ServeOptions | None = None,
     catalog: Mapping[str, HarnessEntry] = CATALOG,
-    on_ready: Callable[[str], None] | None = None,
+    hooks: ServeHooks | None = None,
 ) -> None:
     """
     Serve Verifold for the folder at `project` until the caller cancels it.
 
     A folder with a lab resumes it. A folder without one starts `start` when given, or waits for the person to start a
-    lab from the setup screen. `on_ready` gets the link to the app, with the person's token, once the server listens.
+    lab from the setup screen.
+
+    When it starts and when it stops, the server sweeps the processes that carry the lab's mark: first the ones that an
+    earlier run left, and at the end the ones that the agents started.
 
     Raises:
         LabExists: `start` is given, and the folder has a lab already.
@@ -175,17 +226,20 @@ async def serve(
         RecordLocked: Another process serves this folder already.
 
     """
-    options = options or ServeOptions()
-    with RecordFile(project / LAB_FOLDER / 'record.jsonl') as record:
+    options, hooks = options or ServeOptions(), hooks or ServeHooks()
+    with RecordFile(project / LAB_FOLDER / 'record.jsonl') as record, server_file(project / LAB_FOLDER / SERVER_FILE):
         resuming = bool(record.read())
         if resuming and start:
             raise LabExists('This folder has a lab already. Run `verifold` here to resume it.')
+        # This process holds the record, so no other server runs the lab, and every marked process is a leftover.
+        leftovers = await asyncio.to_thread(sweep, project)
+        hooks.swept(leftovers.model_copy(update={'earlier_run': True}))
         members, activity, person_token = Members(), Activity(), new_person_token()
         host = Host(project, record, catalog, members, activity)
         http = join_server(members.resolve).streamable_http_app(host='127.0.0.1')
         http.mount('/api', app_api(host, activity, person_token))
         http.mount('/', web_app(options.web))
-        server = uvicorn.Server(
+        server = WebServer(
             uvicorn.Config(http, host='127.0.0.1', port=options.port, log_level='warning', timeout_graceful_shutdown=5)
         )
         serving = asyncio.create_task(server.serve())
@@ -198,12 +252,57 @@ async def serve(
                     await host.resume()
                 elif start:
                     await host.start(start)
-                if on_ready:
-                    on_ready(f'http://127.0.0.1:{port}/#token={person_token.get_secret_value()}')
+                hooks.ready(f'http://127.0.0.1:{port}/#token={person_token.get_secret_value()}')
                 await asyncio.Event().wait()
         finally:
-            server.should_exit = True
-            await serving
+            # The task group has stopped the agents' harnesses. Their processes stop next, and the web server last, also
+            # when the hook fails.
+            try:
+                hooks.swept(await asyncio.to_thread(sweep, project))
+            finally:
+                server.should_exit = True
+                await _closed(serving)
+
+
+def stop_lab(project: Path) -> LabStop:
+    """
+    Stop the server that serves the lab in `project`, and then every process that the lab's agents started.
+
+    The server gets SIGTERM and SIGCONT, so that a paused server stops too, and SIGKILL after `SERVER_STOP_GRACE`
+    seconds. Then this process takes the record and sweeps, which also stops what a killed or crashed server left. It
+    blocks while it waits.
+
+    Raises:
+        RecordLocked: A process that the server file doesn't name still serves the lab.
+
+    """
+    server = running_server(project / LAB_FOLDER / SERVER_FILE)
+    if server:
+        _end(server)
+    record = project / LAB_FOLDER / 'record.jsonl'
+    if not record.exists():
+        return LabStop(server=server.pid if server else None, sweep=Sweep())
+    with RecordFile(record):
+        return LabStop(server=server.pid if server else None, sweep=sweep(project))
+
+
+def _end(server: psutil.Process) -> None:
+    with suppress(psutil.Error):
+        server.terminate()
+        server.resume()
+        try:
+            server.wait(SERVER_STOP_GRACE)
+        except psutil.TimeoutExpired:
+            server.kill()
+            server.wait(JOB_GRACE)
+
+
+async def _closed(serving: asyncio.Task[None]) -> None:
+    # uvicorn waits for its open connections, such as the event stream of an app tab that stays open.
+    await asyncio.wait({serving}, timeout=SERVER_GRACE)
+    serving.cancel()
+    with suppress(asyncio.CancelledError):
+        await serving
 
 
 def _agent(number: int, harness: HarnessEntry, model: str | None, effort: str | None) -> Agent:

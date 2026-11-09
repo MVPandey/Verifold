@@ -1,21 +1,28 @@
 import asyncio
 import json
-from collections.abc import AsyncGenerator, Mapping
+import signal
+import subprocess
+import sys
+from collections.abc import AsyncGenerator, Iterator, Mapping
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
 
 import httpx2
 import pytest
-from builders import until
+import uvicorn
+from builders import SLEEP, alive, until
 from fakes import FAKE_HARNESS
 from pydantic import TypeAdapter
 
-from verifold.app import serve
+from verifold.app import ServeHooks, WebServer, serve
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.app import AgentChoice, StartRequest
 from verifold.protocol.events import AgentJoined, Event, Posted
+from verifold.runner.environment import harness_environment
+from verifold.runner.jobs import Sweep
 from verifold.server.errors import LabExists, SetupRejected
+from verifold.server.web import web_app
 from verifold.society.fold import fold
 from verifold.society.standing import standing
 
@@ -53,11 +60,15 @@ def project(tmp_path: Path) -> Path:
 
 @asynccontextmanager
 async def serving(
-    project: Path, start: StartRequest | None = None, catalog: Mapping[str, HarnessEntry] = CATALOG
+    project: Path,
+    start: StartRequest | None = None,
+    catalog: Mapping[str, HarnessEntry] = CATALOG,
+    sweeps: list[Sweep] | None = None,
 ) -> AsyncGenerator[httpx2.AsyncClient]:
-    """Serve the folder, and yield a client of its app API that acts as the person."""
+    """Serve the folder, and yield a client of its app API that acts as the person. `sweeps` collects each sweep."""
     ready: asyncio.Future[str] = asyncio.get_running_loop().create_future()
-    running = asyncio.create_task(serve(project, start, catalog=catalog, on_ready=ready.set_result))
+    hooks = ServeHooks(ready=ready.set_result, swept=(sweeps if sweeps is not None else []).append)
+    running = asyncio.create_task(serve(project, start, catalog=catalog, hooks=hooks))
     try:
         async with asyncio.timeout(20):
             base, _, token = (await ready).partition('/#token=')
@@ -180,3 +191,60 @@ async def test_a_rerun_request_starts_a_blind_checker_from_another_family(
     check = next(entry.post for entry in board.posts if entry.post.kind == 'check')
     assert check.text == 'Reran it blind: 11.8.'
     assert check.evidence[0].path == 'rerun.txt'
+
+
+ONE_AGENT = StartRequest(question='Does it hold?', agents=(AgentChoice(harness='fake'),))
+
+
+async def test_a_job_that_an_agent_starts_in_a_session_of_its_own_stops_with_the_lab(
+    project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job_file = tmp_path / 'job.pid'
+    monkeypatch.setenv('FAKE_ACP_JOB', str(job_file))
+    sweeps: list[Sweep] = []
+
+    async with serving(project, ONE_AGENT, sweeps=sweeps):
+        await until(job_file.exists)
+        job = int(job_file.read_text())
+        assert alive(job)
+
+    assert not alive(job)
+    assert [(found.pid, found.agent) for found in sweeps[-1].stopped] == [(job, 'agent-1')]
+
+
+@pytest.fixture
+def leftover(project: Path) -> Iterator[subprocess.Popen[bytes]]:
+    """A process that an earlier run of the lab left, which still carries the lab's mark."""
+    process = subprocess.Popen(
+        [sys.executable, '-c', SLEEP], env=harness_environment(project, 'agent-1'), start_new_session=True
+    )
+    yield process
+    if process.poll() is None:
+        process.kill()
+        process.wait()
+
+
+async def test_serving_first_stops_what_an_earlier_run_of_the_lab_left(
+    project: Path, leftover: subprocess.Popen[bytes]
+) -> None:
+    sweeps: list[Sweep] = []
+
+    async with serving(project, sweeps=sweeps):
+        assert leftover.poll() is not None
+
+    assert sweeps[0].earlier_run
+    assert [found.pid for found in sweeps[0].stopped] == [leftover.pid]
+    assert not sweeps[-1].earlier_run
+
+
+async def test_the_web_server_leaves_the_stop_signals_to_verifold() -> None:
+    handlers = {stop: signal.getsignal(stop) for stop in (signal.SIGINT, signal.SIGTERM)}
+    server = WebServer(uvicorn.Config(web_app(), host='127.0.0.1', port=0, log_level='warning'))
+    serving = asyncio.create_task(server.serve())
+
+    try:
+        await until(lambda: server.started)
+        assert {stop: signal.getsignal(stop) for stop in handlers} == handlers
+    finally:
+        server.should_exit = True
+        await serving

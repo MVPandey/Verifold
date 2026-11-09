@@ -14,15 +14,19 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from verifold import DISTRIBUTION
-from verifold.app import serve
+from verifold.app import ServeHooks, serve, stop_lab
 from verifold.harnesses.catalog import CATALOG
 from verifold.protocol.app import AgentChoice, StartRequest
 from verifold.runner.errors import RunnerError
+from verifold.runner.jobs import Job, Sweep
 from verifold.server.errors import ServerError
 from verifold.store.errors import StoreError
 
 DEFAULT_AGENTS = (AgentChoice(harness='claude-code'), AgentChoice(harness='codex'))
 """One agent of each harness, with the person's own models."""
+
+STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+"""Ctrl+C, a plain `kill`, and a closed terminal. Each one stops the lab in the same way."""
 
 _REPORTED = (RunnerError, StoreError, ServerError)
 
@@ -32,26 +36,29 @@ def main(argv: Sequence[str] | None = None) -> None:
     Parse the arguments and run the command.
 
     `verifold` serves the folder: the setup screen, or the lab that the folder holds. `verifold run` starts a lab on a
-    question from the command line.
+    question from the command line. `verifold stop` stops the folder's lab from another terminal.
 
     Args:
         argv: The arguments after the program name. `None` reads them from `sys.argv`.
 
     """
     args = _parser().parse_args(argv)
+    if args.command == 'stop':
+        _stop()
+        return
     try:
         start = _start(args) if args.command == 'run' else None
     except ValidationError as error:
         sys.exit(f'verifold: {error}')
-    print(f'Serving Verifold for {Path.cwd()}. Its record is .verifold/record.jsonl. Press Ctrl+C to stop.')
+    _say(f'Serving Verifold for {Path.cwd()}. Its record is .verifold/record.jsonl. Press Ctrl+C to stop.')
     try:
         announce = partial(_announce, open_browser=not args.no_browser)
-        asyncio.run(_until_stopped(serve(Path.cwd(), start, on_ready=announce)))
+        asyncio.run(_until_stopped(serve(Path.cwd(), start, hooks=ServeHooks(ready=announce, swept=_report))))
     except KeyboardInterrupt:
         pass  # Ctrl+C came before the event loop took over the signal.
     except (BaseExceptionGroup, *_REPORTED) as error:
         sys.exit(f'verifold: {_reported(error)}')
-    print('Stopped. Run `verifold` here again to come back.')
+    _say('Stopped. Run `verifold` here again to come back.')
 
 
 def _reported(error: BaseException) -> BaseException:
@@ -71,24 +78,67 @@ def _start(args: argparse.Namespace) -> StartRequest:
 
 async def _until_stopped(serving: Coroutine[None, None, None]) -> None:
     """
-    Serve until Ctrl+C or SIGTERM, and return once the server and the agents' harnesses have stopped.
+    Serve until one of `STOP_SIGNALS` comes, and return once the agents, their processes, and the server have stopped.
 
-    SIGTERM cancels the server the way Ctrl+C does, so each agent's harness stops with its process group. The harnesses
-    run in their own groups, so a plain SIGTERM would otherwise leave them running.
+    The harnesses run in their own process groups, so a signal to Verifold's group doesn't reach them. Each signal
+    cancels the server instead, and the server stops the harnesses and the processes that they started. A signal that
+    this process ignores stays ignored, such as SIGHUP under `nohup`.
     """
-    task = asyncio.ensure_future(serving)
+    task = asyncio.create_task(serving)
     loop = asyncio.get_running_loop()
-    loop.add_signal_handler(signal.SIGTERM, task.cancel)
+    handled = [stop for stop in STOP_SIGNALS if signal.getsignal(stop) is not signal.SIG_IGN]
+    for stop in handled:
+        loop.add_signal_handler(stop, _stop_once, task)
     try:
         # A cancel is the normal way to stop. It reaches this await after the server has cleaned up.
         with suppress(asyncio.CancelledError):
             await task
     finally:
-        loop.remove_signal_handler(signal.SIGTERM)
+        for stop in handled:
+            loop.remove_signal_handler(stop)
+
+
+def _stop_once(task: asyncio.Task[None]) -> None:
+    # A second Ctrl+C would cut the cleanup short and leave the agents' processes running.
+    if not task.cancelling():
+        task.cancel()
+        _say('Stopping the agents and the processes that they started.')
+
+
+def _stop() -> None:
+    try:
+        stopped = stop_lab(Path.cwd())
+    except StoreError as error:
+        sys.exit(f'verifold: {error}')
+    if stopped.server:
+        _say(f"Stopped the Verifold server ({stopped.server}) that served this folder's lab.")
+    _report(stopped.sweep)
+    if not stopped.server and not stopped.sweep.stopped:
+        _say("Nothing of this folder's lab was running.")
+
+
+def _report(sweep: Sweep) -> None:
+    earlier = ' from an earlier run' if sweep.earlier_run else ''
+    for job in sweep.stopped:
+        _say(f'Stopped {_owner(job)} process{earlier}: {job.command} ({job.pid})')
+    for job in sweep.survived:
+        _say(f"Couldn't stop {_owner(job)} process: {job.command} ({job.pid}). Run `kill -9 {job.pid}`.")
+    for job in sweep.unmarked:
+        _say(f"Left running in {_owner(job)} folder, as it may not be the lab's: {job.command} ({job.pid})")
+
+
+def _owner(job: Job) -> str:
+    return f"{job.agent}'s" if job.agent else "an agent's"
+
+
+def _say(text: str) -> None:
+    # Once the terminal closes, writing to it fails. The lab must still stop.
+    with suppress(OSError):
+        print(text, flush=True)
 
 
 def _announce(link: str, *, open_browser: bool) -> None:
-    print(f'Open the lab: {link}', flush=True)
+    _say(f'Open the lab: {link}')
     if open_browser:
         webbrowser.open(link)
 
@@ -117,6 +167,9 @@ def _parser() -> argparse.ArgumentParser:
         '--ask-me',
         action='store_true',
         help="Keep each harness's own default mode. Permission requests then come to you on the board.",
+    )
+    commands.add_parser(
+        'stop', help="Stop this folder's lab from another terminal: its server, its agents, and their processes."
     )
     return parser
 

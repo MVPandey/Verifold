@@ -17,6 +17,8 @@ dependencies = [
     "agent-client-protocol>=0.12.1,<0.13",
     "fastapi>=0.120,<1",
     "mcp>=2.3,<3",
+    # Finds the processes that agents start, by the marks in their environment, on macOS and Linux.
+    "psutil>=7.2,<8",
     "pydantic>=2.12,<3",
     "sse-starlette>=3.6,<4",
     "uvicorn>=0.54,<1",
@@ -112,4 +114,5 @@ dev = [
     "pytest-mock>=3.17.0,<4",
     "ruff>=0.17.2,<1",
     "ty>=0.0.91,<1",
+    "types-psutil>=7.2,<8",
 ]

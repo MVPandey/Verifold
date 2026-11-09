@@ -4,7 +4,8 @@ A fake ACP agent for tests. It reaches the lab's board over MCP with its token, 
 The first message makes it post in a new thread. The doorbell makes it read its posts with `wait` and answer each one.
 Environment variables change its behavior: `FAKE_ACP_LOG` logs each call, `FAKE_ACP_PERMISSION` asks permission
 first, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, and `FAKE_ACP_CHILD` starts a
-child that holds the agent's pipes open and writes its process ID to that path.
+child that holds the agent's pipes open and writes its process ID to that path. `FAKE_ACP_JOB` starts a job in a
+session of its own, the way that a harness starts a background command, and writes its process ID to that path.
 """
 
 import asyncio
@@ -217,4 +218,17 @@ sys.stderr.flush()
 if pid_file := os.environ.get('FAKE_ACP_CHILD'):
     child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
     Path(pid_file).write_text(str(child.pid))
+if job_file := os.environ.get('FAKE_ACP_JOB'):
+    # Its own session takes the job out of the agent's process group, and it needs none of the agent's pipes.
+    job = subprocess.Popen(
+        [sys.executable, '-c', 'import time; time.sleep(60)'],
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    # The test reads the file as soon as it exists, so it appears with its content.
+    written = Path(f'{job_file}.tmp')
+    written.write_text(str(job.pid))
+    written.replace(job_file)
 asyncio.run(acp.run_agent(FakeAgent()))  # ty: ignore[call-non-callable]

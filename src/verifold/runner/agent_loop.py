@@ -53,6 +53,8 @@ class AgentSetup(Record):
 
     agent: Agent
     harness: HarnessEntry
+    lab: Path
+    """The lab's folder, which marks every process of the agent's harness."""
     folder: Path
     log: Path
     """The file that receives the harness's error output."""
@@ -103,7 +105,7 @@ class AgentLoop:
         while True:
             try:
                 options = setup.options.model_copy(update={'resume': resume})
-                place = Place(folder=setup.folder, log=setup.log)
+                place = Place(folder=setup.folder, log=setup.log, lab=setup.lab, agent=setup.agent.id)
                 async with AgentSession.open(setup.harness, place, board, options, hooks) as session:
                     resume = session.id
                     while True:
@@ -119,7 +121,10 @@ class AgentLoop:
                             await self._news()
                             message = DOORBELL
             # Any failure of one harness restarts that harness. It must not stop the lab's other agents.
-            except Exception as error:  # noqa: BLE001
+            except Exception as error:
+                # While the lab stops, the harness's cleanup can fail too. That error ends the agent and restarts nothing.
+                if (task := asyncio.current_task()) and task.cancelling():
+                    raise asyncio.CancelledError from error
                 failures += 1
                 failed = TurnSummary(
                     agent=setup.agent.id, seconds=0, usage=Usage(), error=f'{type(error).__name__}: {error}'
