@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from verifold.protocol.settings import AtExit, AtTimeLimit, Settings
+from verifold.protocol.settings import AtExit, AtTimeLimit, HarnessSettings, Settings, SettingsFile
 from verifold.store.errors import SettingsInvalid
 from verifold.store.settings_file import load_settings
 
@@ -16,7 +16,9 @@ def write(folder: Path, data: object) -> None:
 def test_without_files_a_lab_gets_the_defaults(tmp_path: Path) -> None:
     settings = load_settings(tmp_path / 'project', home=tmp_path / 'home')
 
-    assert settings == Settings()
+    assert settings == SettingsFile()
+    assert settings.lab_settings() == Settings()
+    assert settings.harnesses == {}
     assert settings.jobs.at_time_limit is AtTimeLimit.PAUSE
     assert settings.jobs.at_exit is AtExit.STOP
 
@@ -46,6 +48,29 @@ def test_a_file_that_is_not_utf8_is_refused_with_its_path(tmp_path: Path) -> Non
     project = tmp_path / 'project'
     (project / '.verifold').mkdir(parents=True)
     (project / '.verifold' / 'settings.json').write_bytes(b'{"jobs": "\xff"}')
+
+    with pytest.raises(SettingsInvalid, match=r'settings\.json'):
+        load_settings(project, home=tmp_path / 'home')
+
+
+def test_harness_entries_merge_setting_by_setting_and_stay_out_of_the_labs_settings(tmp_path: Path) -> None:
+    home, project = tmp_path / 'home', tmp_path / 'project'
+    write(
+        home / '.verifold', {'harnesses': {'gemini': {'command': ['gemini'], 'family': 'google', 'auto_mode': 'yolo'}}}
+    )
+    write(project / '.verifold', {'harnesses': {'gemini': {'command': ['gemini', '--acp'], 'family': 'google'}}})
+
+    settings = load_settings(project, home=home)
+
+    assert settings.harnesses == {
+        'gemini': HarnessSettings(command=('gemini', '--acp'), family='google', auto_mode='yolo')
+    }
+    assert settings.lab_settings() == Settings()
+
+
+def test_a_harness_entry_without_a_command_is_refused(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    write(project / '.verifold', {'harnesses': {'gemini': {'family': 'google'}}})
 
     with pytest.raises(SettingsInvalid, match=r'settings\.json'):
         load_settings(project, home=tmp_path / 'home')

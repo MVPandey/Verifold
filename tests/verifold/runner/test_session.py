@@ -8,6 +8,7 @@ from conftest import ServedBoard
 from fakes import FAKE_HARNESS
 
 from verifold.protocol.usage import Usage
+from verifold.runner.errors import RunnerError
 from verifold.runner.session import AgentSession, BoardAccess, PermissionRequest, Place, SessionHooks, SessionOptions
 
 
@@ -60,8 +61,8 @@ async def test_a_session_posts_on_the_board_and_reports_usage_and_cost(
     settings = [call for call in calls(log) if call['event'] in ('mode', 'option')]
     assert settings == [
         {'agent': 'bo', 'event': 'mode', 'mode': 'auto'},
-        {'agent': 'bo', 'event': 'option', 'option': 'model', 'value': 'small-model'},
-        {'agent': 'bo', 'event': 'option', 'option': 'effort', 'value': 'low'},
+        {'agent': 'bo', 'event': 'option', 'option': 'llm', 'value': 'small-model'},
+        {'agent': 'bo', 'event': 'option', 'option': 'thinking', 'value': 'low'},
     ]
 
 
@@ -140,3 +141,16 @@ async def test_closing_a_session_stops_the_harness_with_its_children_and_keeps_i
 
     assert not alive(child)
     assert 'fake agent ready' in folder.log.read_text()
+
+
+async def test_a_harness_without_a_model_option_refuses_a_model_instead_of_ignoring_it(
+    served: ServedBoard, folder: Place, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_NO_OPTIONS', '1')
+    _, token = served.seat('bo')
+
+    with pytest.raises(RunnerError, match='Fake offers no model option over ACP'):
+        async with AgentSession.open(
+            FAKE_HARNESS, folder, BoardAccess(url=served.url, token=token), SessionOptions(model='big'), NO_PERMISSION
+        ):
+            pass

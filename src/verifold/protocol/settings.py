@@ -3,6 +3,9 @@
 from enum import StrEnum
 from typing import Literal
 
+from pydantic import Field
+
+from verifold.protocol.agents import Label
 from verifold.protocol.record import Record
 
 
@@ -41,3 +44,39 @@ class Settings(Record):
 
     version: Literal[1] = 1
     jobs: JobSettings = JobSettings()
+
+
+class HarnessSettings(Record):
+    """
+    A harness that the person adds, or that replaces a built-in harness of the same name.
+
+    Any agent that speaks ACP can be one. Verifold finds its model, effort, and mode options by their ACP category, so
+    an entry needs only the command and the model family.
+    """
+
+    command: tuple[str, ...] = Field(min_length=1)
+    """The command that starts the harness's ACP agent."""
+    family: Label
+    """The model family of the harness's default models. A blind check needs a checker from another family."""
+    title: Label | None = None
+    """The name that people know the harness by. Default: the harness's key in the settings."""
+    executable: str | None = None
+    """The harness's own command, when `command` starts an adapter for it. Default: the first word of `command`."""
+    auto_mode: str | None = None
+    """The ID of the harness's own auto mode, which Verifold sets when the person allows auto mode."""
+
+
+class SettingsFile(Record):
+    """
+    What a settings file holds: the settings that a lab follows, and the harnesses that this computer offers.
+
+    A lab records only its settings. It reads the harnesses again at each start, because they describe this computer.
+    """
+
+    version: Literal[1] = 1
+    jobs: JobSettings = JobSettings()
+    harnesses: dict[Label, HarnessSettings] = Field(default_factory=dict)
+
+    def lab_settings(self) -> Settings:
+        """Return the settings that a new lab records and follows."""
+        return Settings(version=self.version, jobs=self.jobs)
