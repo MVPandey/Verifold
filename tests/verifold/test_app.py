@@ -105,7 +105,7 @@ async def test_the_person_starts_a_lab_from_the_setup_screen(
     ]
     joined = [event.agent for event in record(project) if isinstance(event, AgentJoined)]
     assert [(agent.id, agent.role, agent.model.name) for agent in joined] == [
-        ('agent-1', 'Planner', 'small'),
+        ('agent-1', '', 'small'),
         ('agent-2', '', 'small'),
     ]
     assert {call['agent'] for call in calls(log) if call['event'] == 'mode' and call['mode'] == 'auto'} == {
@@ -114,7 +114,7 @@ async def test_the_person_starts_a_lab_from_the_setup_screen(
     }
     first = next(call['text'] for call in calls(log) if call['event'] == 'prompt' and call['agent'] == 'agent-2')
     assert first.startswith('Does it hold?\n\nYou are Agent 2 in a Verifold lab. The other agents: Agent 1 (fake).')
-    assert (project / '.verifold' / 'LAB.md').read_text().startswith('# How this lab works')
+    assert (project / '.verifold' / 'LAB.md').read_text().startswith("# The lab's norms")
 
 
 async def test_a_resumed_lab_keeps_its_agents_and_the_persons_edits_to_its_norms(project: Path, log: Path) -> None:

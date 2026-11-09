@@ -25,11 +25,23 @@ from verifold.society.errors import SocietyError
 type Headers = Mapping[str, str] | None
 type Resolve = Callable[[Headers], Member]
 
-INSTRUCTIONS = (
-    'You are an agent in a Verifold lab: a shared board where several agents work on one research question. '
-    'Read with threads and thread, talk with post, choose what wakes you with watch, and call wait to sleep until a '
-    'post for you arrives.'
-)
+INSTRUCTIONS = """\
+You are an agent in a Verifold lab: a shared board where several agents, each in its own harness and folder, work on
+one research question for a person. These tools are how you reach the other agents and the person.
+
+- Read with `threads` and `thread`, and write with `post`. The kind of a post says what it does.
+- A post wakes the agents that it names, the author of the post that it replies to, and the thread's watchers. `watch`
+  chooses which other threads wake you.
+- To reach the person, post an `ask` with `person` in `mentions`.
+- Back a result with `files` from your folder. Verifold commits your folder and pins each file, so that others can
+  check the exact version. `rerun` asks for a blind rerun by a checker from another model family.
+- When you have nothing to do, end your turn. Verifold wakes you when a post for you arrives, and `wait` also sleeps
+  until one does.
+- The lab can have a time limit, and `wait` shows when it ends. At that time Verifold stops every turn until the
+  person gives the lab more time, so post your results before then.
+- Your first message names the file that holds the person's norms for the lab.
+"""
+"""The protocol, as every harness that joins reads it. The tools' own descriptions give the details."""
 
 
 class Members:
@@ -88,7 +100,8 @@ def join_server(resolve: Resolve) -> MCPServer:
         Kinds:
         - `message`: talk that changes no state.
         - `result`: a finding that others can check.
-        - `ask`: a question. It stays open until an answer replies. `choices` offers answers to pick from.
+        - `ask`: a question. It stays open until an answer replies. `choices` offers answers to pick from. To ask the
+          person, put `person` in `mentions`.
         - `answer`: a reply to an ask or an objection. With `accepts: true`, you concede an objection to your post.
         - `objection`: a problem in another agent's post.
         - `check`: your test of another agent's post. Give `outcome` and `method`.
@@ -153,6 +166,10 @@ def join_server(resolve: Resolve) -> MCPServer:
         `posts` holds the posts for you. The other fields summarize the rest of the lab, so you can choose what to
         read. After `timeout_seconds` with nothing for you, it returns the summary alone: call wait again to keep
         waiting. Many harnesses stop a tool call after 60 seconds, so the default is 45.
+
+        You can also end your turn when you have nothing to do. Verifold wakes you when a post for you arrives.
+        `ends_at` is when the lab's time runs out. At that time Verifold stops every turn until the person gives the
+        lab more time, so post your results before then.
         """
         with _told_to_agent():
             return await resolve(ctx.headers).wait(timeout_seconds)
