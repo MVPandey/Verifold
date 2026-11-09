@@ -15,8 +15,10 @@ from pydantic import SecretStr
 
 from verifold import DISTRIBUTION
 from verifold.harnesses.catalog import HarnessEntry
+from verifold.protocol.ids import AgentId
 from verifold.protocol.record import Record
 from verifold.protocol.usage import Usage
+from verifold.runner.environment import harness_environment
 from verifold.runner.errors import RunnerError
 from verifold.runner.processes import STOP_GRACE, start, stop
 
@@ -64,10 +66,12 @@ class BoardAccess(Record):
 
 
 class Place(Record):
-    """Where an agent's harness runs, and where its error output goes."""
+    """Where an agent's harness runs, where its error output goes, and the lab and agent that mark its processes."""
 
     folder: Path
     log: Path
+    lab: Path
+    agent: AgentId
 
 
 class SessionOptions(Record):
@@ -249,7 +253,7 @@ class AgentSession:
         client = _Client(hooks)
         place.log.parent.mkdir(parents=True, exist_ok=True)
         with place.log.open('ab') as errors:
-            process = await start(harness.command, place.folder, errors)
+            process = await start(harness.command, place.folder, errors, harness_environment(place.lab, place.agent))
             if process.stdin is None or process.stdout is None:
                 await stop(process)
                 raise RunnerError(f'{harness.name} started without its protocol pipes.')

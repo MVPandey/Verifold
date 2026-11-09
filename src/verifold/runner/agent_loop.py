@@ -53,6 +53,8 @@ class AgentSetup(Record):
 
     agent: Agent
     harness: HarnessEntry
+    lab: Path
+    """The lab's folder, which marks every process of the agent's harness."""
     folder: Path
     log: Path
     """The file that receives the harness's error output."""
@@ -103,7 +105,7 @@ class AgentLoop:
         while True:
             try:
                 options = setup.options.model_copy(update={'resume': resume})
-                place = Place(folder=setup.folder, log=setup.log)
+                place = Place(folder=setup.folder, log=setup.log, lab=setup.lab, agent=setup.agent.id)
                 async with AgentSession.open(setup.harness, place, board, options, hooks) as session:
                     resume = session.id
                     while True:

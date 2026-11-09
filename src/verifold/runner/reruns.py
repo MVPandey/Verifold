@@ -74,6 +74,7 @@ class Reruns:
         setup = AgentSetup(
             agent=checker,
             harness=harness,
+            lab=self._project,
             folder=folder,
             log=self._project / LAB_FOLDER / 'logs' / f'{checker_id}.log',
             token=self._members.add(member),

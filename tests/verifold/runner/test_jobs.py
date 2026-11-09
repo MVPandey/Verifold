@@ -1,0 +1,109 @@
+import signal
+import subprocess
+import sys
+from collections.abc import Iterator
+from pathlib import Path
+
+import psutil
+import pytest
+from builders import IGNORES_SIGTERM, SLEEP
+
+from verifold.runner.environment import harness_environment
+from verifold.runner.jobs import COMMAND_LENGTH, sweep
+
+
+@pytest.fixture
+def lab(tmp_path: Path) -> Path:
+    path = tmp_path / 'lab'
+    path.mkdir()
+    return path
+
+
+@pytest.fixture
+def started() -> Iterator[list[subprocess.Popen[bytes]]]:
+    """Collect the processes that a test starts, and kill the ones that still run after it."""
+    processes: list[subprocess.Popen[bytes]] = []
+    yield processes
+    for process in processes:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+def marked(
+    started: list[subprocess.Popen[bytes]], lab: Path, script: str = SLEEP, stdout: int | None = None
+) -> subprocess.Popen[bytes]:
+    # A session of its own, as a harness's background command has.
+    process = subprocess.Popen(
+        [sys.executable, '-c', script], env=harness_environment(lab, 'agent-1'), start_new_session=True, stdout=stdout
+    )
+    started.append(process)
+    return process
+
+
+def test_a_sweep_stops_the_labs_marked_processes_and_leaves_other_labs_alone(
+    lab: Path, tmp_path: Path, started: list[subprocess.Popen[bytes]]
+) -> None:
+    mine = marked(started, lab)
+    theirs = marked(started, tmp_path / 'other-lab')
+
+    result = sweep(lab)
+
+    assert [(job.pid, job.agent) for job in result.stopped] == [(mine.pid, 'agent-1')]
+    assert result.stopped[0].command.endswith(SLEEP)
+    assert (result.survived, result.unmarked, result.earlier_run) == ((), (), False)
+    assert mine.poll() is not None
+    assert theirs.poll() is None
+
+
+def test_a_paused_process_and_one_that_ignores_sigterm_stop_too(
+    lab: Path, started: list[subprocess.Popen[bytes]]
+) -> None:
+    paused = marked(started, lab)
+    paused.send_signal(signal.SIGSTOP)
+    stubborn = marked(started, lab, IGNORES_SIGTERM, stdout=subprocess.PIPE)
+    assert stubborn.stdout is not None
+    assert stubborn.stdout.readline() == b'ready\n'
+
+    result = sweep(lab, grace=0.5)
+
+    assert sorted(job.pid for job in result.stopped) == sorted([paused.pid, stubborn.pid])
+    assert paused.poll() is not None
+    assert stubborn.poll() is not None
+
+
+def test_a_process_that_outlives_the_sweep_is_reported(
+    lab: Path, started: list[subprocess.Popen[bytes]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    survivor = marked(started, lab)
+    monkeypatch.setattr(psutil.Process, 'terminate', lambda _: None)
+    monkeypatch.setattr(psutil.Process, 'kill', lambda _: None)
+
+    result = sweep(lab, grace=0.1)
+
+    assert [job.pid for job in result.survived] == [survivor.pid]
+    assert result.stopped == ()
+
+
+def test_an_unmarked_process_in_an_agents_folder_is_listed_and_left_running(
+    lab: Path, started: list[subprocess.Popen[bytes]]
+) -> None:
+    folder = lab / '.verifold' / 'agents' / 'agent-2' / 'exp'
+    folder.mkdir(parents=True)
+    shell = subprocess.Popen([sys.executable, '-c', SLEEP], cwd=folder)
+    started.append(shell)
+
+    result = sweep(lab, grace=0.1)
+
+    assert [(job.pid, job.agent) for job in result.unmarked] == [(shell.pid, 'agent-2')]
+    assert result.stopped == ()
+    assert shell.poll() is None
+
+
+def test_a_long_command_line_is_shortened(lab: Path, started: list[subprocess.Popen[bytes]]) -> None:
+    marked(started, lab, SLEEP + '  # ' + 'x' * 200)
+
+    (job,) = sweep(lab).stopped
+
+    assert len(job.command) == COMMAND_LENGTH
+    assert job.command.endswith('…')
