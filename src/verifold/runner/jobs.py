@@ -10,11 +10,13 @@ A process whose environment shows nothing also counts as the lab's when it runs 
 terminal. macOS hides the environment of its own programs, such as `sleep` and `zsh`, and a program can clear its
 environment. A shell that the person opens in an agent's folder has a terminal, so it keeps running.
 
-A sweep doesn't find a process that clears its environment and works outside the agents' folders. Nor does it find a
-process that something outside the lab starts for an agent, such as Docker.
+A sweep doesn't find a process outside the agents' folders whose environment shows nothing, either because it cleared
+its environment or because it is one of macOS's own programs. Nor does it find a process that something outside the
+lab starts for an agent, such as Docker.
 """
 
 import os
+import time
 from contextlib import suppress
 from pathlib import Path
 
@@ -25,7 +27,10 @@ from verifold.runner.environment import AGENT_VARIABLE, LAB_VARIABLE
 from verifold.runner.folders import agents_folder
 
 JOB_GRACE = 5.0
-"""Seconds that a process gets to exit after SIGTERM, before a sweep kills it."""
+"""Seconds that the lab's processes get to exit after SIGTERM, before a sweep kills them."""
+
+KILL_WAIT = 1.0
+"""Seconds that a sweep waits for the processes that it killed to end."""
 
 SWEEP_PASSES = 3
 """How often a sweep looks again, for processes that the stopped ones started while they stopped."""
@@ -59,10 +64,12 @@ def sweep(lab: Path, grace: float = JOB_GRACE) -> Sweep:
     Stop every process of the lab, and list the processes in agents' folders that may not be the lab's.
 
     Each process gets SIGTERM and then SIGCONT, so that a paused process can exit too. The ones that still run after
-    `grace` seconds get SIGKILL. A stopping process can start new ones, so the sweep looks again, up to `SWEEP_PASSES`
-    times in all. Call it only while this process holds the lab's record, so that no other server's agents can carry
-    the same mark. It blocks, so async code calls it in a thread.
+    the grace period get SIGKILL. A stopping process can start new ones, so the sweep looks again, up to
+    `SWEEP_PASSES` times in all. The passes share one grace period of `grace` seconds, so a sweep takes at most `grace`
+    seconds plus `KILL_WAIT` for each pass. Call it only while this process holds the lab's record, so that no other
+    server's agents can carry the same mark. It blocks, so async code calls it in a thread.
     """
+    deadline = time.monotonic() + grace
     stopped: list[Job] = []
     survived: dict[int, Job] = {}
     unmarked: list[Job] = []
@@ -72,7 +79,7 @@ def sweep(lab: Path, grace: float = JOB_GRACE) -> Sweep:
         new = [(process, job) for process, job in found if job.pid not in survived]
         if not new:
             break
-        alive = _stop([process for process, _ in new], grace)
+        alive = _stop([process for process, _ in new], max(deadline - time.monotonic(), 0.0))
         for process, job in new:
             if process in alive:
                 survived[job.pid] = job
@@ -91,7 +98,7 @@ def _stop(processes: list[psutil.Process], grace: float) -> set[psutil.Process]:
     for process in running:
         with suppress(psutil.Error):
             process.kill()
-    return set(_running_after(running, grace))
+    return set(_running_after(running, KILL_WAIT))
 
 
 def _lab_processes(lab: Path) -> tuple[list[tuple[psutil.Process, Job]], list[tuple[psutil.Process, Job]]]:
