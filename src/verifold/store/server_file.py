@@ -9,8 +9,8 @@ from pydantic import ValidationError
 
 from verifold.protocol.record import Record
 
-START_TOLERANCE = 0.01
-"""Seconds by which two readings of one process's start time can differ."""
+START_TOLERANCE = 1.0
+"""Seconds by which two readings of one process's start time can differ, such as after a clock change on Linux."""
 
 
 class ServerProcess(Record):

@@ -255,10 +255,13 @@ async def serve(
                 hooks.ready(f'http://127.0.0.1:{port}/#token={person_token.get_secret_value()}')
                 await asyncio.Event().wait()
         finally:
-            # The task group has stopped the agents' harnesses. Their processes stop next, and the web server last.
-            hooks.swept(await asyncio.to_thread(sweep, project))
-            server.should_exit = True
-            await _closed(serving)
+            # The task group has stopped the agents' harnesses. Their processes stop next, and the web server last, also
+            # when the hook fails.
+            try:
+                hooks.swept(await asyncio.to_thread(sweep, project))
+            finally:
+                server.should_exit = True
+                await _closed(serving)
 
 
 def stop_lab(project: Path) -> LabStop:

@@ -1,6 +1,7 @@
 import asyncio
 import json
-from contextlib import suppress
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager, suppress
 from datetime import timedelta
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.git import git
 from verifold.runner.messages import DOORBELL, more_time_message
+from verifold.runner.session import AgentSession
 from verifold.server.activity import Activity
 
 
@@ -223,3 +225,41 @@ async def test_an_agent_out_of_time_wakes_for_its_posts_only_after_more_time(
             await running
 
     assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL]
+
+
+class BlockingSession:
+    """A session whose turns never end, so the loop waits in a turn until the lab stops it."""
+
+    id = 'session-1'
+
+    async def send(self, _: str) -> None:
+        await asyncio.Event().wait()
+
+
+async def test_a_cleanup_that_fails_while_the_lab_stops_ends_the_agent_and_restarts_nothing(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[bool] = []
+
+    @asynccontextmanager
+    async def open_session(*_: object) -> AsyncGenerator[BlockingSession]:
+        opened.append(True)
+        if len(opened) > 1:
+            # The loop restarted the harness. Ending the loop here makes the test fail instead of hang.
+            raise asyncio.CancelledError
+        try:
+            yield BlockingSession()
+        finally:
+            # A harness that closed its pipe early makes closing the connection fail.
+            raise BrokenPipeError('The harness closed its stdin.')
+
+    monkeypatch.setattr(AgentSession, 'open', open_session)
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    await until(lambda: bool(opened))
+
+    running.cancel()
+    async with asyncio.timeout(5):
+        with pytest.raises(asyncio.CancelledError):
+            await running
+
+    assert opened == [True]

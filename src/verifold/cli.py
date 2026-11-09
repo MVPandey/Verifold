@@ -50,7 +50,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         start = _start(args) if args.command == 'run' else None
     except ValidationError as error:
         sys.exit(f'verifold: {error}')
-    print(f'Serving Verifold for {Path.cwd()}. Its record is .verifold/record.jsonl. Press Ctrl+C to stop.')
+    _say(f'Serving Verifold for {Path.cwd()}. Its record is .verifold/record.jsonl. Press Ctrl+C to stop.')
     try:
         announce = partial(_announce, open_browser=not args.no_browser)
         asyncio.run(_until_stopped(serve(Path.cwd(), start, hooks=ServeHooks(ready=announce, swept=_report))))
@@ -58,7 +58,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         pass  # Ctrl+C came before the event loop took over the signal.
     except (BaseExceptionGroup, *_REPORTED) as error:
         sys.exit(f'verifold: {_reported(error)}')
-    print('Stopped. Run `verifold` here again to come back.')
+    _say('Stopped. Run `verifold` here again to come back.')
 
 
 def _reported(error: BaseException) -> BaseException:
@@ -81,26 +81,28 @@ async def _until_stopped(serving: Coroutine[None, None, None]) -> None:
     Serve until one of `STOP_SIGNALS` comes, and return once the agents, their processes, and the server have stopped.
 
     The harnesses run in their own process groups, so a signal to Verifold's group doesn't reach them. Each signal
-    cancels the server instead, and the server stops the harnesses and the processes that they started.
+    cancels the server instead, and the server stops the harnesses and the processes that they started. A signal that
+    this process ignores stays ignored, such as SIGHUP under `nohup`.
     """
     task = asyncio.create_task(serving)
     loop = asyncio.get_running_loop()
-    for stop in STOP_SIGNALS:
+    handled = [stop for stop in STOP_SIGNALS if signal.getsignal(stop) is not signal.SIG_IGN]
+    for stop in handled:
         loop.add_signal_handler(stop, _stop_once, task)
     try:
         # A cancel is the normal way to stop. It reaches this await after the server has cleaned up.
         with suppress(asyncio.CancelledError):
             await task
     finally:
-        for stop in STOP_SIGNALS:
+        for stop in handled:
             loop.remove_signal_handler(stop)
 
 
 def _stop_once(task: asyncio.Task[None]) -> None:
     # A second Ctrl+C would cut the cleanup short and leave the agents' processes running.
     if not task.cancelling():
-        print('Stopping the agents and the processes that they started.', flush=True)
         task.cancel()
+        _say('Stopping the agents and the processes that they started.')
 
 
 def _stop() -> None:
@@ -109,28 +111,34 @@ def _stop() -> None:
     except StoreError as error:
         sys.exit(f'verifold: {error}')
     if stopped.server:
-        print(f"Stopped the Verifold server ({stopped.server}) that served this folder's lab.")
+        _say(f"Stopped the Verifold server ({stopped.server}) that served this folder's lab.")
     _report(stopped.sweep)
     if not stopped.server and not stopped.sweep.stopped:
-        print("Nothing of this folder's lab was running.")
+        _say("Nothing of this folder's lab was running.")
 
 
 def _report(sweep: Sweep) -> None:
     earlier = ' from an earlier run' if sweep.earlier_run else ''
     for job in sweep.stopped:
-        print(f'Stopped {_owner(job)} process{earlier}: {job.command} ({job.pid})')
+        _say(f'Stopped {_owner(job)} process{earlier}: {job.command} ({job.pid})')
     for job in sweep.survived:
-        print(f"Couldn't stop {_owner(job)} process: {job.command} ({job.pid}). Run `kill -9 {job.pid}`.")
+        _say(f"Couldn't stop {_owner(job)} process: {job.command} ({job.pid}). Run `kill -9 {job.pid}`.")
     for job in sweep.unmarked:
-        print(f"Left running in {_owner(job)} folder, as it may not be the lab's: {job.command} ({job.pid})")
+        _say(f"Left running in {_owner(job)} folder, as it may not be the lab's: {job.command} ({job.pid})")
 
 
 def _owner(job: Job) -> str:
     return f"{job.agent}'s" if job.agent else "an agent's"
 
 
+def _say(text: str) -> None:
+    # Once the terminal closes, writing to it fails. The lab must still stop.
+    with suppress(OSError):
+        print(text, flush=True)
+
+
 def _announce(link: str, *, open_browser: bool) -> None:
-    print(f'Open the lab: {link}', flush=True)
+    _say(f'Open the lab: {link}')
     if open_browser:
         webbrowser.open(link)
 

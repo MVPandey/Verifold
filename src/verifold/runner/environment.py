@@ -26,7 +26,7 @@ def harness_environment(lab: Path, agent: AgentId) -> dict[str, str]:
     """
     Return the environment for an agent's harness: the clean environment, marked with the lab and the agent.
 
-    Every process that the harness starts inherits the marks, also one that leaves the harness's process group or
-    outlives its parent. So Verifold can find those processes and stop them with the lab.
+    Every process that the harness starts inherits the marks unless it clears its environment, also one that leaves the
+    harness's process group or outlives its parent. Verifold can then find those processes and stop them with the lab.
     """
     return clean_environment() | {LAB_VARIABLE: str(lab), AGENT_VARIABLE: agent}

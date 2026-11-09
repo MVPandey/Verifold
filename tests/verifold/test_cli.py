@@ -1,4 +1,6 @@
 import asyncio
+import errno
+import io
 import os
 import signal
 import subprocess
@@ -6,6 +8,7 @@ import sys
 from collections.abc import Iterator
 from importlib.metadata import version
 from pathlib import Path
+from typing import override
 
 import psutil
 import pytest
@@ -308,3 +311,50 @@ def test_stop_refuses_while_a_process_that_no_file_names_holds_the_record(lab_fo
         pytest.raises(SystemExit, match='verifold: Another process has the record'),
     ):
         main(['stop'])
+
+
+class ClosedTerminal(io.TextIOBase):
+    """Standard output after the terminal closes: each write fails."""
+
+    @override
+    def write(self, text: str) -> int:
+        raise OSError(errno.EIO, 'Input/output error')
+
+
+@pytest.mark.usefixtures('default_sigint')
+def test_a_closed_terminal_still_stops_the_lab(monkeypatch: pytest.MonkeyPatch) -> None:
+    cancelled: list[bool] = []
+
+    async def serve(*_: object, **__: object) -> None:
+        os.kill(os.getpid(), signal.SIGHUP)
+        try:
+            # Without the cancel, this sleep ends on its own and the test fails.
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+
+    monkeypatch.setattr('verifold.cli.serve', serve)
+    monkeypatch.setattr('sys.stdout', ClosedTerminal())
+
+    main([])
+
+    assert cancelled == [True]
+
+
+def test_a_signal_that_nohup_ignores_stays_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    during: list[object] = []
+
+    async def serve(*_: object, **__: object) -> None:
+        during.append(signal.getsignal(signal.SIGHUP))
+
+    monkeypatch.setattr('verifold.cli.serve', serve)
+    previous = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    try:
+        main([])
+        after = signal.getsignal(signal.SIGHUP)
+    finally:
+        signal.signal(signal.SIGHUP, previous)
+
+    assert during == [signal.SIG_IGN]
+    assert after is signal.SIG_IGN
