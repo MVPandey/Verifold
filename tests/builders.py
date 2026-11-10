@@ -55,11 +55,9 @@ class RecordBuilder:
         self.events.append(AgentJoined(seq=seq, at=at, agent=agent))
         return self
 
-    def thread(self, thread_id: str, opened_by: str) -> 'RecordBuilder':
+    def thread(self, thread_id: str, opened_by: str, title: str = 'Subject') -> 'RecordBuilder':
         seq, at = self._stamp()
-        self.events.append(
-            ThreadOpened(seq=seq, at=at, thread=Thread(id=thread_id, title='Subject', opened_by=opened_by))
-        )
+        self.events.append(ThreadOpened(seq=seq, at=at, thread=Thread(id=thread_id, title=title, opened_by=opened_by)))
         return self
 
     def post(self, post: Post) -> 'RecordBuilder':

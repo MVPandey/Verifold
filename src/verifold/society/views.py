@@ -1,9 +1,11 @@
 """The board as one agent, or the person, sees it."""
 
+from verifold.protocol.agents import Agent
 from verifold.protocol.events import Posted, ThreadOpened
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
-from verifold.protocol.join import PostLine, PostView, ThreadSummary, ThreadView
-from verifold.protocol.posts import Ask, Result
+from verifold.protocol.join import MAX_NEWS, AgentLine, Brief, News, PostLine, PostView, ThreadSummary, ThreadView
+from verifold.protocol.posts import Ask, Plan, Result
+from verifold.protocol.threads import QUESTION_TITLE
 from verifold.society.attention import watches_thread
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
@@ -48,7 +50,7 @@ def _summary(board: Board, agent_id: AgentId, opened: ThreadOpened) -> ThreadSum
         watching=watches_thread(board, agent_id, opened.thread.id),
         posts=len(entries),
         last_at=latest.at if latest else opened.at,
-        latest=_line(latest) if latest else None,
+        latest=PostLine.of(latest) if latest else None,
         disputed=results.count('disputed'),
         checked=sum(state in {'checked', 'held_up'} for state in results),
         not_checked=results.count('open'),
@@ -56,9 +58,51 @@ def _summary(board: Board, agent_id: AgentId, opened: ThreadOpened) -> ThreadSum
     )
 
 
-def _line(entry: Posted) -> PostLine:
-    post = entry.post
-    return PostLine(seq=entry.seq, at=entry.at, author=post.author, kind=post.kind, text=post.text)
+def question_thread(board: Board) -> ThreadId | None:
+    """Return the thread that a lab opens with, which holds the person's question, or `None` for an older lab."""
+    first = board.threads[0].thread if board.threads else None
+    return first.id if first and first.opened_by == PERSON and first.title == QUESTION_TITLE else None
+
+
+def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
+    """
+    Return the lab for one agent in one read.
+
+    It holds the other agents with their latest plans, their results that nobody has checked, the disputed posts,
+    the newest threads, and the agent's `news`. `how` says how the board works.
+    """
+    others = tuple(joined.agent for joined in board.agents if joined.agent.id != agent_id and not joined.agent.checks)
+    stands = tuple((entry, standing(board, entry.post.id)) for entry in board.posts)
+    not_checked = tuple(
+        PostLine.of(entry)
+        for entry, state in stands
+        if isinstance(entry.post, Result) and entry.post.author != agent_id and state == 'open'
+    )
+    disputed = tuple(PostLine.of(entry) for entry, state in stands if state == 'disputed')
+    summaries = thread_summaries(board, agent_id)
+    return Brief(
+        you=agent_id,
+        how=how,
+        agents=tuple(_agent_line(board, agent) for agent in others),
+        not_checked=not_checked[-MAX_NEWS:],
+        disputed=disputed[-MAX_NEWS:],
+        threads=summaries[:MAX_NEWS],
+        more_threads=max(len(summaries) - MAX_NEWS, 0),
+        news=news,
+        ends_at=board.ends_at,
+    )
+
+
+def _agent_line(board: Board, agent: Agent) -> AgentLine:
+    posts = tuple(entry for entry in board.posts if entry.post.author == agent.id)
+    plan = next((entry for entry in reversed(posts) if isinstance(entry.post, Plan)), None)
+    return AgentLine(
+        id=agent.id,
+        name=agent.name,
+        harness=agent.harness,
+        plan=PostLine.of(plan) if plan else None,
+        latest=PostLine.of(posts[-1]) if posts and posts[-1] is not plan else None,
+    )
 
 
 def needs_person(board: Board) -> tuple[PostView, ...]:

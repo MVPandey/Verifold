@@ -1,8 +1,10 @@
 import pytest
+from builders import START
 from pydantic import ValidationError
 
-from verifold.protocol.join import PostRequest
-from verifold.protocol.posts import Answer, Ask, Check, Message
+from verifold.protocol.events import Posted
+from verifold.protocol.join import PostLine, PostRequest
+from verifold.protocol.posts import Answer, Ask, Check, Message, Plan
 
 
 def test_a_request_becomes_a_post_of_its_kind() -> None:
@@ -12,6 +14,25 @@ def test_a_request_becomes_a_post_of_its_kind() -> None:
 
     assert isinstance(post, Check)
     assert (post.id, post.author, post.outcome) == ('p-2', 'bo', 'fails')
+
+
+def test_a_plan_is_a_post_of_its_own_kind_and_becomes_one_line() -> None:
+    post = PostRequest(kind='plan', text='I take the small models.', thread='t-1', reply_to='p-1').to_post(
+        'p-2', 't-1', 'bo'
+    )
+
+    line = PostLine.of(Posted(seq=7, at=START, post=post))
+
+    assert isinstance(post, Plan)
+    assert line.model_dump(exclude={'at'}) == {
+        'id': 'p-2',
+        'thread': 't-1',
+        'author': 'bo',
+        'kind': 'plan',
+        'text': 'I take the small models.',
+        'reply_to': 'p-1',
+        'seq': 7,
+    }
 
 
 def test_a_false_accepts_is_the_same_as_none() -> None:

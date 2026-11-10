@@ -1,7 +1,7 @@
 """
 A fake ACP agent for tests. It reaches the lab's board over MCP with its token, the way a real harness does.
 
-The first message makes it post in a new thread. The doorbell makes it read its posts with `wait` and answer each one.
+The first message makes it post in a new thread. The doorbell makes it read its posts with `wait` and answer each ask.
 Environment variables change its behavior: `FAKE_ACP_LOG` logs each call, `FAKE_ACP_PERMISSION` asks permission
 first, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, `FAKE_ACP_SLOW_AGENT` does the
 same for an agent whose name starts with its value, and `FAKE_ACP_CHILD` starts a
@@ -238,8 +238,8 @@ class FakeAgent(acp.Agent):
 
     async def _answer_news(self) -> None:
         news = Update.model_validate(await self._call('wait', {'timeout_seconds': 0}))
-        for entry in news.posts:
-            post = entry.post
+        # Only asks get an answer. An answer to every post would make two fake agents answer each other without end.
+        for post in (entry.post for entry in news.posts if entry.post.kind == 'ask'):
             request: dict[str, object] = {
                 'kind': 'answer',
                 'text': f'Seen {post.id}.',

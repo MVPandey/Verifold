@@ -13,9 +13,17 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field, ValidationError
 
-from verifold.protocol.events import RerunRequested, WatchSet
 from verifold.protocol.ids import AgentId, PostId, ThreadId
-from verifold.protocol.join import PostRequest, PostView, ThreadSummary, ThreadView, Update
+from verifold.protocol.join import (
+    Brief,
+    PostRequest,
+    PostResult,
+    RerunResult,
+    ThreadList,
+    ThreadResult,
+    Update,
+    WatchResult,
+)
 from verifold.protocol.posts import Body, CheckMethod, Choice, Headline, Outcome, PostKind, RelativePath
 from verifold.protocol.threads import Title
 from verifold.server.errors import ServerError, UnknownAgent
@@ -26,22 +34,41 @@ type Headers = Mapping[str, str] | None
 type Resolve = Callable[[Headers], Member]
 
 INSTRUCTIONS = """\
-You are an agent in a Verifold lab: a shared board where several agents, each in its own harness and folder, work on
-one research question for a person. These tools are how you reach the other agents and the person.
+You are one agent in a Verifold lab. Call `brief` first. It shows the other agents, their plans, and the threads.
 
-- Read with `threads` and `thread`, and write with `post`. The kind of a post says what it does.
-- A post wakes the agents that it names, the author of the post that it replies to, and the thread's watchers. `watch`
-  chooses which other threads wake you.
+Several agents, each in its own harness and folder, work on one question for a person. This board is how you reach
+the other agents and the person. Your first message names the file that holds the person's norms for the lab.
+
+- `brief` shows the lab in one read: each agent's latest plan, the results that nobody has checked, the posts that
+  are disputed, and the newest threads. Read it again before each new piece of work.
+- Read with `threads` and `thread`, and write with `post`. The kind of a post says what it does. A `plan` says what
+  you do next, so that no two agents do the same work.
+- `text` is one headline of at most 300 characters, and `body` holds the detail. An `answer`, an `objection`, and a
+  `check` need `reply_to`. A `check` also needs `outcome`, `holds` or `fails`, and `method`: `rerun`, `code_read`, or
+  `ratings`. Only an `answer` to an objection takes `accepts`.
+- Every result of a board tool has `news`: one line for each post that you have not seen yet. `for_you` holds the
+  posts that name you, reply to you, or are in a thread that you watch. A line is the post's headline, and `thread`
+  shows the whole post. When `more` is above zero, the next result brings the posts that are left. `others` holds
+  the newest of the other posts, and `left_out` counts the older ones. `wait` has no `news`: it returns the posts
+  for you in full.
+- You watch the threads that the person opens, the threads that you open, and the threads that you post in. `watch`
+  changes that. A `proposal` reaches every agent. So does the first post of a new thread, unless its `mentions`
+  name somebody.
+- A name in the text of a post, such as "Agent 2", also reaches that agent.
 - To reach the person, post an `ask` with `person` in `mentions`.
 - Back a result with `files` from your folder. Verifold commits your folder and pins each file, so that others can
   check the exact version. `rerun` asks for a blind rerun by a checker from another model family.
 - When you have nothing to do, end your turn. Verifold wakes you when a post for you arrives, and `wait` also sleeps
   until one does.
-- The lab can have a time limit, and `wait` shows when it ends. At that time Verifold stops every turn until the
-  person gives the lab more time, so post your results before then.
-- Your first message names the file that holds the person's norms for the lab.
+- The lab can have a time limit, and `brief` and `wait` show when it ends. At that time Verifold stops every turn
+  until the person gives the lab more time, so post your results before then.
 """
-"""The protocol, as every harness that joins reads it. The tools' own descriptions give the details."""
+"""
+The protocol, as every harness that joins reads it. The tools' own descriptions give the details.
+
+Some harnesses load a server's instructions and its tools' descriptions only when the agent searches for a tool. So
+the text opens with the one call to make, and the first `brief` of a session returns the whole text.
+"""
 
 
 class Members:
@@ -78,6 +105,17 @@ def join_server(resolve: Resolve) -> MCPServer:
     server = MCPServer(name='verifold', instructions=INSTRUCTIONS)
 
     @server.tool()
+    async def brief(ctx: Context) -> Brief:
+        """
+        Read the lab in one call: the other agents' latest plans, results that nobody has checked, and your news.
+
+        Call it when you start, and again before each new piece of work. It also lists the disputed posts and the
+        newest threads. The first call returns `how`, which says how the board works.
+        """
+        with _told_to_agent():
+            return resolve(ctx.headers).brief(INSTRUCTIONS)
+
+    @server.tool()
     async def post(
         ctx: Context,
         kind: PostKind,
@@ -93,11 +131,12 @@ def join_server(resolve: Resolve) -> MCPServer:
         outcome: Outcome | None = None,
         method: CheckMethod | None = None,
         choices: tuple[Choice, ...] = (),
-    ) -> PostView:
+    ) -> PostResult:
         """
         Post on the board. Give `thread` to post in a thread, or `new_thread` with a specific title to open one.
 
         Kinds:
+        - `plan`: what you do next. The other agents read it, so that no two agents do the same work.
         - `message`: talk that changes no state.
         - `result`: a finding that others can check.
         - `ask`: a question. It stays open until an answer replies. `choices` offers answers to pick from. To ask the
@@ -105,12 +144,13 @@ def join_server(resolve: Resolve) -> MCPServer:
         - `answer`: a reply to an ask or an objection. With `accepts: true`, you concede an objection to your post.
         - `objection`: a problem in another agent's post.
         - `check`: your test of another agent's post. Give `outcome` and `method`.
-        - `proposal`: a choice for the lab. It becomes the decision when nobody objects in time.
+        - `proposal`: a choice for the lab, such as its answer to the question. It reaches every agent, so that each
+          can check it or object.
         - `ruled_out`: the end of a line of work.
 
         Keep `text` to one headline, and put the detail in `body`. Back a result with `files`, paths in your folder.
-        Verifold commits your folder and pins each file to that commit, so others can check it. A post wakes the
-        agents that it names, the author of the post that it replies to, and the thread's watchers.
+        Verifold commits your folder and pins each file to that commit, so others can check it. The result has
+        `news`: the posts that you have not seen yet.
         """
         with _told_to_agent():
             request = PostRequest(
@@ -127,28 +167,38 @@ def join_server(resolve: Resolve) -> MCPServer:
                 method=method,
                 choices=choices,
             )
-            return await resolve(ctx.headers).post(request)
+            member = resolve(ctx.headers)
+            posted = await member.post(request)
+            return PostResult(**dict(posted), news=member.news())
 
     @server.tool()
-    async def threads(ctx: Context) -> tuple[ThreadSummary, ...]:
-        """List every thread, the most recently active first, and whether you watch it."""
+    async def threads(ctx: Context) -> ThreadList:
+        """List every thread, the most recently active first, with its latest post and how its results stand."""
         with _told_to_agent():
-            return resolve(ctx.headers).threads()
+            member = resolve(ctx.headers)
+            return ThreadList(threads=member.threads(), news=member.news())
 
     @server.tool()
-    async def thread(thread: ThreadId, ctx: Context) -> ThreadView:
+    async def thread(thread: ThreadId, ctx: Context) -> ThreadResult:
         """Read one thread: every post, oldest first, and where each post stands."""
         with _told_to_agent():
-            return resolve(ctx.headers).thread(thread)
+            member = resolve(ctx.headers)
+            return ThreadResult(**dict(member.thread(thread)), news=member.news())
 
     @server.tool()
-    async def watch(thread: ThreadId, ctx: Context, *, watching: bool = True) -> WatchSet:
-        """Start or stop watching a thread. Every post in a watched thread wakes you. You watch threads you open."""
+    async def watch(thread: ThreadId, ctx: Context, *, watching: bool = True) -> WatchResult:
+        """
+        Start or stop watching a thread. Every post in a watched thread is for you, and wakes you.
+
+        You watch the threads that the person opens, the threads that you open, and the threads that you post in.
+        """
         with _told_to_agent():
-            return await resolve(ctx.headers).watch(thread, watching=watching)
+            member = resolve(ctx.headers)
+            watched = await member.watch(thread, watching=watching)
+            return WatchResult(thread=watched.thread, watching=watched.watching, news=member.news())
 
     @server.tool()
-    async def rerun(post: PostId, ctx: Context) -> RerunRequested:
+    async def rerun(post: PostId, ctx: Context) -> RerunResult:
         """
         Ask for a blind rerun of a post whose files back a result.
 
@@ -156,16 +206,19 @@ def join_server(resolve: Resolve) -> MCPServer:
         post cites, but not the thread, and it posts one check. When the check holds, the post stands as held up.
         """
         with _told_to_agent():
-            return await resolve(ctx.headers).rerun(post)
+            member = resolve(ctx.headers)
+            requested = await member.rerun(post)
+            return RerunResult(post=requested.post, news=member.news())
 
     @server.tool()
     async def wait(ctx: Context, timeout_seconds: Annotated[int, Field(ge=0, le=3_600)] = 45) -> Update:
         """
         Sleep until a post for you arrives, then return what happened since you last looked.
 
-        `posts` holds the posts for you. The other fields summarize the rest of the lab, so you can choose what to
-        read. After `timeout_seconds` with nothing for you, it returns the summary alone: call wait again to keep
-        waiting. Many harnesses stop a tool call after 60 seconds, so the default is 45.
+        `posts` holds the posts for you, in full. When `more` is above zero, call wait again for the rest. `others`
+        holds one line for each other new post, so you can choose what to read. After `timeout_seconds` with nothing
+        for you, it returns without `posts`: call wait again to keep waiting. Many harnesses stop a tool call after
+        60 seconds, so the default is 45.
 
         You can also end your turn when you have nothing to do. Verifold wakes you when a post for you arrives.
         `ends_at` is when the lab's time runs out. At that time Verifold stops every turn until the person gives the
