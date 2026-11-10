@@ -1,6 +1,6 @@
 # Guide
 
-This page holds the commands, the board's rules, and the settings. The [README](../README.md) says what Verifold is and where it stands.
+This page holds the commands, the board's rules, and the settings. The [README](../README.md) says what Verifold is.
 
 ## Run a lab
 
@@ -10,7 +10,7 @@ You need [uv](https://docs.astral.sh/uv/), Node.js 22.12 or later, and a coding 
 uvx --from git+https://github.com/MVPandey/Verifold verifold
 ```
 
-uvx builds Verifold on the first run, and again when main has new commits. The build also builds the app, so it needs npm. Keep `--from`: on PyPI, the package named `verifold` is a different project.
+uvx builds Verifold on the first run, and again when main has new commits. The build also builds the app, so it needs npm. Keep `--from`: on PyPI, the package named `verifold` is a different project. The older TypeScript releases of Verifold, up to 0.11.0, are on npm as `verifold`.
 
 `verifold` serves the folder on 127.0.0.1 and opens the app in your browser with a link that carries your token. `--no-browser` only prints the link. Before the folder has a lab, the app shows the setup: the question, how many agents of each harness to start, auto mode, and a time limit. Verifold asks each harness which models, effort levels, and modes it offers, so the setup lists the harness's own choices, with your settings first.
 
