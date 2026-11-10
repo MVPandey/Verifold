@@ -26,7 +26,7 @@ type Standing = Literal['open', 'checked', 'held_up', 'disputed', 'conceded']
 """Where a post stands after the objections, checks, and answers to it."""
 
 MAX_NEWS = 20
-"""The most posts in each list of an agent's news, and the most threads in a brief."""
+"""The most posts in each list of an agent's news or update, and the most threads in a brief."""
 
 _posts: TypeAdapter[Post] = TypeAdapter(Post)
 
@@ -153,14 +153,20 @@ class News(Record):
     """
     The posts that an agent has not seen yet, oldest first. Every result of a board tool carries them.
 
-    `for_you` holds the posts that name the agent, reply to one of its posts, or are in a thread that it watches.
-    `others` holds the rest. Each list holds the newest posts, at most `MAX_NEWS`.
+    `for_you` holds the posts that name the agent, reply to one of its posts, or are in a thread that it watches,
+    at most `MAX_NEWS` of them. When more wait, the news stops at the last one that it holds, and the next result
+    brings the others. `others` holds the newest of the remaining posts. A line is a post's headline, and `thread`
+    shows the whole post.
     """
 
+    seq: int
+    """The event that this news reaches. The agent's next news starts after it."""
     for_you: tuple[PostLine, ...] = ()
+    more: int = 0
+    """How many more posts for the agent wait. The next result of a board tool brings them."""
     others: tuple[PostLine, ...] = ()
     left_out: int = 0
-    """How many older posts the lists leave out. `threads` and `thread` show them."""
+    """How many older posts `others` leaves out. `threads` and `thread` show them."""
 
 
 class PostResult(PostView):
@@ -206,6 +212,7 @@ class AgentLine(Record):
     harness: Label
     plan: PostLine | None = None
     latest: PostLine | None = None
+    """The agent's latest post, when that is not its plan."""
 
 
 class Brief(Record):
@@ -237,12 +244,14 @@ class Update(Record):
     """
     What happened in the lab after an agent last looked, up to event `seq`.
 
-    `posts` holds the posts for the agent, in full. `others` holds one line for each of the newest other posts, so
-    the agent can choose what to read.
+    `posts` holds the posts for the agent, in full, at most `MAX_NEWS` of them. `others` holds one line for each
+    of the newest other posts, so the agent can choose what to read.
     """
 
     seq: int
     posts: tuple[Posted, ...] = ()
+    more: int = 0
+    """How many more posts for the agent wait. The next `wait` brings them."""
     others: tuple[PostLine, ...] = ()
     other_posts: int = 0
     """How many posts were not for the agent. `others` holds the newest of them, at most `MAX_NEWS`."""

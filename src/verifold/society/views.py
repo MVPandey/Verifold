@@ -101,7 +101,7 @@ def _agent_line(board: Board, agent: Agent) -> AgentLine:
         name=agent.name,
         harness=agent.harness,
         plan=PostLine.of(plan) if plan else None,
-        latest=PostLine.of(posts[-1]) if posts else None,
+        latest=PostLine.of(posts[-1]) if posts and posts[-1] is not plan else None,
     )
 
 

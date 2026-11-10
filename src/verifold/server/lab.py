@@ -119,10 +119,12 @@ class Lab:
         Open the thread that holds the person's question, with the question as its first post.
 
         A new lab opens it before its agents join. The agents post their plans and the lab's answer there, and every
-        agent watches it. The first line of the question is the headline, and a longer question is also the body.
+        agent watches it. The question's first line with text is the headline, and a longer question is also the
+        body.
         """
         question = self._board.opened.question
-        first = question.splitlines()[0].strip()
+        # A question can start with a separator that `splitlines` breaks on and the schema's strip keeps.
+        first = next((line.strip() for line in question.splitlines() if line.strip()), QUESTION_TITLE)
         headline = first if len(first) <= MAX_HEADLINE else f'{first[: MAX_HEADLINE - 1]}…'
         body = '' if headline == question else question
         return await self.post(PostRequest(kind='message', text=headline, body=body, new_thread=QUESTION_TITLE), PERSON)

@@ -63,6 +63,20 @@ async def test_news_gives_each_post_once_and_a_post_that_the_agent_got_does_not_
     assert (second.for_you, second.others, later.posts, bo.seen) == ((), (), (), lab.board.seq)
 
 
+async def test_a_rewind_brings_back_the_posts_that_a_failed_turn_lost(lab: Lab) -> None:
+    bo = Member(lab, 'bo')
+    before = bo.seen
+    await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+    assert bo.news() is not None
+
+    bo.rewind(before)
+    again = await bo.wait(timeout=0)
+    bo.rewind(lab.board.seq + 5)
+
+    assert [entry.post.text for entry in again.posts] == ['Which layer?']
+    assert bo.seen == lab.board.seq
+
+
 async def test_the_first_brief_says_how_the_board_works_and_every_brief_carries_the_news(lab: Lab) -> None:
     bo = Member(lab, 'bo')
     await lab.post(PostRequest(kind='plan', text='I take the small models.', new_thread='Plans'), 'ada')

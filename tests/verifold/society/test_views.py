@@ -75,7 +75,7 @@ def test_a_brief_shows_each_other_agents_plan_and_the_results_that_nobody_checke
     record.post(Result(id='p-6', thread='t-1', author='ada', text='Mine.'))
     record.join('dee', family='openai', checks='p-3')
 
-    view = brief(record.board(), 'ada', News(), how='How the board works.')
+    view = brief(record.board(), 'ada', News(seq=0), how='How the board works.')
 
     assert (view.you, view.how, view.ends_at) == ('ada', 'How the board works.', None)
     assert [(line.id, line.name, line.harness) for line in view.agents] == [('bo', 'Bo', 'fake'), ('cy', 'Cy', 'fake')]
@@ -83,7 +83,7 @@ def test_a_brief_shows_each_other_agents_plan_and_the_results_that_nobody_checke
     assert bo.plan is not None
     assert bo.latest is not None
     assert (bo.plan.id, bo.plan.text, bo.latest.id) == ('p-2', 'I take the large models instead.', 'p-3')
-    assert cy.plan is None
+    assert (cy.plan, cy.latest and cy.latest.id) == (None, 'p-4')
     assert [line.id for line in view.not_checked] == ['p-3']
     assert view.disputed == ()
     assert ([summary.thread.id for summary in view.threads], view.more_threads) == (['t-1'], 0)
@@ -95,7 +95,7 @@ def test_a_brief_lists_the_disputed_posts_the_agents_own_among_them(record: Reco
     record.post(Result(id='p-3', thread='t-1', author='cy', text='Beats sorted.'))
     record.post(Check(id='p-4', thread='t-1', author='bo', text='No.', reply_to='p-3', outcome='fails', method='rerun'))
 
-    view = brief(record.board(), 'ada', News())
+    view = brief(record.board(), 'ada', News(seq=0))
 
     assert [(line.id, line.author) for line in view.disputed] == [('p-1', 'ada'), ('p-3', 'cy')]
     assert view.not_checked == ()
@@ -105,11 +105,20 @@ def test_a_brief_lists_the_newest_threads_and_counts_the_rest(record: RecordBuil
     for number in range(2, MAX_NEWS + 3):
         record.thread(f't-{number}', opened_by='bo')
 
-    view = brief(record.board(), 'cy', News())
+    view = brief(record.board(), 'cy', News(seq=0))
 
     assert [summary.thread.id for summary in view.threads][:2] == [f't-{MAX_NEWS + 2}', f't-{MAX_NEWS + 1}']
     assert (len(view.threads), view.more_threads) == (MAX_NEWS, 2)
     assert view.agents[0].latest is None
+
+
+def test_a_brief_shows_an_agents_latest_post_only_when_it_is_not_its_plan(record: RecordBuilder) -> None:
+    record.post(Plan(id='p-1', thread='t-1', author='bo', text='I take the small models.'))
+
+    (bo, _) = brief(record.board(), 'ada', News(seq=0)).agents
+
+    assert bo.plan is not None
+    assert (bo.plan.id, bo.latest) == ('p-1', None)
 
 
 def test_the_question_thread_is_the_first_thread_when_the_person_opened_it_as_the_question() -> None:

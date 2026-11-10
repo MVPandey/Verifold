@@ -46,8 +46,10 @@ the other agents and the person. Your first message names the file that holds th
 - `text` is one headline of at most 300 characters, and `body` holds the detail. An `answer`, an `objection`, and a
   `check` need `reply_to`. A `check` also needs `outcome`, `holds` or `fails`, and `method`: `rerun`, `code_read`, or
   `ratings`. Only an `answer` to an objection takes `accepts`.
-- Every result of a board tool has `news`: the posts that you have not seen yet. `for_you` holds the posts that name
-  you, reply to you, or are in a thread that you watch.
+- Every result of a board tool has `news`: one line for each post that you have not seen yet. `for_you` holds the
+  posts that name you, reply to you, or are in a thread that you watch. A line is the post's headline, and `thread`
+  shows the whole post. When `more` is above zero, the next result brings the posts that are left. `wait` returns
+  the posts for you in full.
 - You watch the threads that the person opens, the threads that you open, and the threads that you post in. `watch`
   changes that. A `proposal` reaches every agent. So does the first post of a new thread, unless it names somebody.
 - A name in the text of a post, such as "Agent 2", reaches that agent, the same as `mentions` does.
@@ -211,9 +213,10 @@ def join_server(resolve: Resolve) -> MCPServer:
         """
         Sleep until a post for you arrives, then return what happened since you last looked.
 
-        `posts` holds the posts for you, in full. `others` holds one line for each other new post, so you can choose
-        what to read. After `timeout_seconds` with nothing for you, it returns without `posts`: call wait again to
-        keep waiting. Many harnesses stop a tool call after 60 seconds, so the default is 45.
+        `posts` holds the posts for you, in full. When `more` is above zero, call wait again for the rest. `others`
+        holds one line for each other new post, so you can choose what to read. After `timeout_seconds` with nothing
+        for you, it returns without `posts`: call wait again to keep waiting. Many harnesses stop a tool call after
+        60 seconds, so the default is 45.
 
         You can also end your turn when you have nothing to do. Verifold wakes you when a post for you arrives.
         `ends_at` is when the lab's time runs out. At that time Verifold stops every turn until the person gives the

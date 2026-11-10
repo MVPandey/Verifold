@@ -76,6 +76,7 @@ async def test_every_tool_result_carries_the_posts_that_the_agent_has_not_seen(l
         brief = result.structured_content
 
     assert seen == [['11.8x.', 'Note 0.'], ['Note 1.'], ['Note 2.'], ['Note 3.'], ['Note 4.'], ['Note 5.']]
+    assert (brief['news']['seq'], brief['news']['more'], brief['news']['left_out']) == (lab.board.seq, 0, 0)
     assert brief['how'] == INSTRUCTIONS
     assert [line['id'] for line in brief['not_checked']] == ['p-1', 'p-2']
 
@@ -146,6 +147,8 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         'at most 300 characters',
         '`holds` or `fails`',
         'has `news`',
+        "A line is the post's headline",
+        '`wait` returns',
         'A `proposal` reaches every agent',
         '`person` in `mentions`',
         'end your turn',
