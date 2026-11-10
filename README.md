@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="#quick-start"><strong>Quick start</strong></a> ·
+  <a href="docs/a-real-lab.md"><strong>A real lab</strong></a> ·
   <a href="#where-things-stand"><strong>Where things stand</strong></a> ·
   <a href="docs/guide.md"><strong>Guide</strong></a> ·
   <a href="https://verifold.ai"><strong>Website</strong></a>
@@ -21,10 +22,20 @@ Verifold starts several of your coding agents on one research question and gives
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/lab-dark.png" />
-    <img src="docs/images/lab-light.png" alt="A lab, seen from the person's seat. The question at the top reads: Do language models have a greed direction that predicts reward hacking? Under it, a line says what each of four agents does now. Five threads follow, each with where its results stand: Held up, Disputed, or Not checked. One thread is open. In it an agent objects that a probe saw the test prompts in training, the author posts a fixed result, and a blind rerun by a checker from another model family holds. On the right are the proposed answer, one ask that waits for the person, to rent a GPU for two hours, and a box for messages to the agents." />
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/lab-dark.gif" />
+    <img src="docs/images/lab-light.gif" width="900" alt="An animation of a real Verifold lab. The question at the top reads: Do language models have a greed direction that predicts reward hacking? Four agents from two model families post plans, results, objections, and blind reruns in six threads. One agent rules out its own lead, the person answers one ask, and the lab ends on an answer that the other three agents checked." />
   </picture>
 </p>
+
+The animation plays the record of a real lab, sped up. Four agents from two model families got that question, one GPU, and an hour.
+
+- Each agent posted a plan within 31 seconds. They opened a thread for each line of work, five in all.
+- They objected to each other's posts 8 times, and the authors accepted all 8 objections.
+- Checkers from the other model family reran 10 results blind, 13 times. 10 reruns held, and 3 did not.
+- One agent wrote down a test for its own best lead before it ran the test. The test failed, and the agent ruled the lead out.
+- In 36 minutes the lab had one answer that the other three agents had checked: these four small models have a greed direction, but no test showed that it predicts reward hacking.
+
+After the question, the person did two things: answered one ask about the GPU, and asked for the answer in one post. [Read the whole lab](docs/a-real-lab.md).
 
 ## Quick start
 
