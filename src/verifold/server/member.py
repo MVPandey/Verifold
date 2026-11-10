@@ -5,12 +5,12 @@ from collections.abc import Awaitable, Callable
 
 from verifold.protocol.events import RerunRequested, WatchSet
 from verifold.protocol.ids import AgentId, PostId, ThreadId
-from verifold.protocol.join import PostRequest, PostView, ThreadSummary, ThreadView, Update
+from verifold.protocol.join import Brief, News, PostRequest, PostView, ThreadSummary, ThreadView, Update
 from verifold.protocol.posts import FileEvidence
 from verifold.server.errors import BlindCheck, EvidenceRejected
 from verifold.server.lab import Lab
-from verifold.society.attention import update
-from verifold.society.views import post_view, thread_summaries, thread_view
+from verifold.society.attention import news, update
+from verifold.society.views import brief, post_view, thread_summaries, thread_view
 
 type Pin = Callable[[tuple[str, ...]], Awaitable[tuple[FileEvidence, ...]]]
 """Commits an agent's folder and returns each named file pinned to that commit."""
@@ -20,7 +20,8 @@ class Member:
     """
     What one agent does in its lab: post, read, watch, and wait.
 
-    The member remembers how far its agent has read, so `wait` returns only what came after.
+    The member remembers how far its agent has read. `news` and `wait` return only what came after, so the agent
+    gets each post once, and a post that it got during a turn does not wake it later.
     """
 
     # ponytail: the read position lives in memory. After a restart the agent starts from the newest event, and it
@@ -35,10 +36,11 @@ class Member:
         self.agent_id = agent_id
         self._seen = lab.board.seq
         self._pin = pin
+        self._briefed = False
 
     @property
     def seen(self) -> int:
-        """The last event that the agent read with `wait`."""
+        """The last event that the agent got, from `news` or `wait`."""
         return self._seen
 
     @property
@@ -62,6 +64,31 @@ class Member:
         posted = await self._lab.post(request, self.agent_id, evidence)
         return post_view(self._lab.board, posted)
 
+    def news(self) -> News | None:
+        """
+        Return the posts that the agent has not seen yet, and count them as seen.
+
+        Every board tool adds it to its result, so posts reach an agent that works, not only one that waits. A blind
+        checker gets `None`.
+        """
+        return None if self._checks() else self._unseen()
+
+    def brief(self, how: str) -> Brief:
+        """
+        Return the lab in one read: the other agents and their plans, what waits for a check, and the threads.
+
+        `how` says how the board works. Only the member's first brief carries it.
+        """
+        self._check_not_blind()
+        first, self._briefed = not self._briefed, True
+        return brief(self._lab.board, self.agent_id, self._unseen(), how if first else '')
+
+    def _unseen(self) -> News:
+        board = self._lab.board
+        unseen = news(board, self.agent_id, self._seen)
+        self._seen = board.seq
+        return unseen
+
     def threads(self) -> tuple[ThreadSummary, ...]:
         """Return a summary of each thread, the most recently active first."""
         self._check_not_blind()
@@ -76,10 +103,13 @@ class Member:
         """Ask for a blind rerun of a post that has files as evidence."""
         return await self._lab.request_rerun(self.agent_id, post_id)
 
-    def _check_not_blind(self) -> None:
+    def _checks(self) -> str | None:
         joined = self._lab.board.agent(self.agent_id)
-        if joined and joined.agent.checks:
-            raise BlindCheck(f'You rerun {joined.agent.checks} blind, so you cannot read the board.')
+        return joined.agent.checks if joined else None
+
+    def _check_not_blind(self) -> None:
+        if target := self._checks():
+            raise BlindCheck(f'You rerun {target} blind, so you cannot read the board.')
 
     async def watch(self, thread_id: ThreadId, *, watching: bool) -> WatchSet:
         """Start or stop watching a thread."""

@@ -5,7 +5,15 @@
 
 export type AgentState = 'starting' | 'working' | 'waiting' | 'idle' | 'stopped';
 export type PostKind =
-  'message' | 'result' | 'ask' | 'answer' | 'objection' | 'proposal' | 'check' | 'ruled_out';
+  | 'message'
+  | 'plan'
+  | 'result'
+  | 'ask'
+  | 'answer'
+  | 'objection'
+  | 'proposal'
+  | 'check'
+  | 'ruled_out';
 export type Standing = 'open' | 'checked' | 'held_up' | 'disputed' | 'conceded';
 
 export interface ModelSpec {
@@ -232,7 +240,9 @@ interface PostBase {
 }
 
 export type Post =
-  | (PostBase & { readonly kind: 'message' | 'result' | 'objection' | 'proposal' | 'ruled_out' })
+  | (PostBase & {
+      readonly kind: 'message' | 'plan' | 'result' | 'objection' | 'proposal' | 'ruled_out';
+    })
   | (PostBase & { readonly kind: 'ask'; readonly choices: readonly string[] })
   | (PostBase & { readonly kind: 'answer'; readonly accepts: boolean })
   | (PostBase & {
@@ -255,11 +265,14 @@ export interface ThreadView {
 }
 
 export interface PostLine {
-  readonly seq: number;
-  readonly at: string;
+  readonly id: string;
+  readonly thread: string;
   readonly author: string;
   readonly kind: PostKind;
   readonly text: string;
+  readonly reply_to: string | null;
+  readonly seq: number;
+  readonly at: string;
 }
 
 export interface ThreadSummary {

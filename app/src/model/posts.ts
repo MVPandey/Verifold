@@ -13,6 +13,7 @@ const TITLE_LIMIT = 80;
 
 const KINDS = {
   message: 'Message',
+  plan: 'Plan',
   result: 'Result',
   ask: 'Ask',
   answer: 'Answer',
@@ -69,8 +70,8 @@ export function titleOf(headline: string): string {
 /**
  * Return the post that sends the person's text to the agents, or `null` for empty text.
  *
- * In a thread the post goes to the thread. Without one, it opens a new thread. Nobody watches a thread that the
- * person opens, so the post wakes every agent.
+ * In a thread the post goes to the thread. Without one, it opens a new thread. Every agent watches a thread that
+ * the person opens, so the post wakes every agent.
  */
 export function personMessage(text: string, thread?: string): PostRequest | null {
   const { headline, body } = split(text);
