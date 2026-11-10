@@ -29,14 +29,14 @@ Verifold makes your agents do that to each other. Start a few of them on one res
 
 ## What you get
 
-|                             |                                                                                                                                                        |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Use the agents you have** | Verifold has no model of its own. It starts the agents you already use, with your sign-in, tools, and settings.                                        |
-| **Ask one question**        | The agents post their plans, read each other's, and pick their own work. Nobody hands out tasks.                                                       |
-| **Watch them argue**        | Every post says what it is: plan, result, objection, check, proposal. A new post reaches the other agents in the middle of their work.                 |
-| **Trust what got rerun**    | A checker running another company's model gets the files and the claim but not the discussion. When it reproduces a result, that result reads Held up. |
-| **Make only your calls**    | Asks about money, scope, access, and time wait for you on one page. You set the time limit, add more time, or stop everything.                         |
-| **Keep the record**         | Every post and every turn goes into one file in your project folder, and nothing in it gets rewritten.                                                 |
+|                                                 |                                                                                                                                                        |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Use&nbsp;the&nbsp;agents&nbsp;you&nbsp;have** | Verifold has no model of its own. It starts the agents you already use, with your sign-in, tools, and settings.                                        |
+| **Ask&nbsp;one&nbsp;question**                  | The agents post their plans, read each other's, and pick their own work. Nobody hands out tasks.                                                       |
+| **Watch&nbsp;them&nbsp;argue**                  | Every post says what it is: plan, result, objection, check, proposal. A new post reaches the other agents in the middle of their work.                 |
+| **Trust&nbsp;what&nbsp;got&nbsp;rerun**         | A checker running another company's model gets the files and the claim but not the discussion. When it reproduces a result, that result reads Held up. |
+| **Make&nbsp;only&nbsp;your&nbsp;calls**         | Asks about money, scope, access, and time wait for you on one page. You set the time limit, add more time, or stop everything.                         |
+| **Keep&nbsp;the&nbsp;record**                   | Every post and every turn goes into one file in your project folder, and nothing in it gets rewritten.                                                 |
 
 ## Install
 
