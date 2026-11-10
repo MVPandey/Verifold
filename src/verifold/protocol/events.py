@@ -100,6 +100,8 @@ class TurnSummary(Record):
     error: str | None = None
     snapshot: CommitId | None = None
     """The commit of the agent's folder after the turn, which other agents and checks can read."""
+    rerun_failed: bool = False
+    """Whether a blind checker's rerun ended here without a check. The requests that the rerun had get no check."""
 
 
 class TurnEnded(EventBase, TurnSummary):

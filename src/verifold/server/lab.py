@@ -28,7 +28,9 @@ from verifold.protocol.threads import QUESTION_TITLE, Thread
 from verifold.server.changes import wait_until
 from verifold.server.errors import LabExists
 from verifold.society.board import Board
+from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
+from verifold.society.rules import waiting_reruns
 from verifold.store.record_file import RecordFile
 
 type Clock = Callable[[], datetime]
@@ -137,8 +139,21 @@ class Lab:
         return board.watches[-1]
 
     async def request_rerun(self, by: AgentId, post_id: PostId) -> RerunRequested:
-        """Record a request for a blind rerun of a post. The runner answers it by starting a checker."""
-        board = await self._commit(lambda _, seq, at: RerunRequested(seq=seq, at=at, by=by, post=post_id))
+        """
+        Record a request for a blind rerun of a post. The runner answers it by starting a checker.
+
+        Raises:
+            RejectedEvent: The post cannot get a rerun, or the same member has an open request for it already.
+
+        """
+
+        def build(board: Board, seq: int, at: datetime) -> RerunRequested:
+            # A record from before this rule can hold such a pair, so the rule is here and not in the record's rules.
+            if any(entry.by == by for entry in waiting_reruns(board, post_id)):
+                raise RejectedEvent(f'You asked for a blind rerun of {post_id} already. Its check will come to you.')
+            return RerunRequested(seq=seq, at=at, by=by, post=post_id)
+
+        board = await self._commit(build)
         return board.reruns[-1]
 
     async def end_turn(self, turn: TurnSummary) -> TurnEnded:

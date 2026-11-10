@@ -84,8 +84,9 @@ class AgentLoop:
         Prepare to supervise an agent that joined the lab.
 
         `member` is the same seat that serves the agent's tool calls, so a doorbell never repeats what the agent read
-        with `wait`. `done` ends the loop after a turn, as for a checker that posted its check. `activity` receives
-        what the agent is doing now, for the person's view.
+        with `wait`. `done` says whether the agent's one job is done, as for a checker that posted its check. An
+        agent with one job gets one turn for it, and the loop ends after that turn. `activity` receives what the
+        agent is doing now, for the person's view.
         """
         self._done = done
         self._activity = activity
@@ -122,7 +123,9 @@ class AgentLoop:
                         await self._while_out_of_time()
                         stopped = await self._send(session, message)
                         failures = 0
-                        if self._done and self._done(self._lab.board):
+                        # A loop with one job, such as a blind checker's, gets one turn for it. Nothing wakes a blind
+                        # checker, so one that ended its turn without its check would wait for ever.
+                        if self._done and (self._done(self._lab.board) or not stopped):
                             return
                         if stopped:
                             await self._while_out_of_time()

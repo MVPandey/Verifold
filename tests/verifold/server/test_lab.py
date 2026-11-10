@@ -4,8 +4,11 @@ from datetime import UTC, timedelta
 import pytest
 from builders import START
 
+from verifold.protocol.agents import Agent, ModelSpec
+from verifold.protocol.events import TurnSummary
 from verifold.protocol.join import PostRequest
-from verifold.protocol.posts import MAX_HEADLINE
+from verifold.protocol.posts import MAX_HEADLINE, FileEvidence
+from verifold.protocol.usage import Usage
 from verifold.server.errors import LabExists
 from verifold.server.lab import Lab
 from verifold.society.errors import RejectedEvent
@@ -141,3 +144,29 @@ async def test_a_question_that_starts_with_a_line_separator_still_gets_a_headlin
     lab = Lab.create(record_file, question)
 
     assert (await lab.open_question_thread()).post.text == headline
+
+
+async def test_a_member_cannot_ask_twice_for_a_rerun_while_its_request_is_open(lab: Lab) -> None:
+    evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
+    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
+    before = lab.board.seq
+
+    await lab.request_rerun('bo', 'p-2')
+    await lab.request_rerun('person', 'p-2')
+    with pytest.raises(RejectedEvent, match='You asked for a blind rerun of p-2 already'):
+        await lab.request_rerun('bo', 'p-2')
+
+    assert ([entry.by for entry in lab.board.reruns], lab.board.seq) == (['bo', 'person'], before + 2)
+
+
+async def test_a_member_can_ask_again_after_its_checker_failed(lab: Lab) -> None:
+    evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
+    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
+    await lab.request_rerun('bo', 'p-2')
+    await lab.join(Agent(id='dee', name='Dee', harness='fake', model=ModelSpec(family='openai'), checks='p-2'))
+    stopped = TurnSummary(agent='dee', seconds=0, usage=Usage(), error='It stopped.', rerun_failed=True)
+    await lab.end_turn(stopped)
+
+    again = await lab.request_rerun('bo', 'p-2')
+
+    assert (again.by, len(lab.board.reruns)) == ('bo', 2)

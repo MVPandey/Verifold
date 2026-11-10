@@ -21,7 +21,7 @@ from verifold.app import ServeHooks, ServeOptions, WebServer, serve
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import StartRequest
-from verifold.protocol.events import AgentJoined, Event, Posted, SettingsSet, TimeRanOut, TurnEnded
+from verifold.protocol.events import AgentJoined, Event, Posted, RerunRequested, SettingsSet, TimeRanOut, TurnEnded
 from verifold.protocol.settings import AtExit, AtTimeLimit
 from verifold.runner.environment import harness_environment
 from verifold.runner.git import GitError, git
@@ -285,8 +285,84 @@ async def test_a_checker_that_runs_too_long_stops_and_the_lab_goes_on(
     assert summary is not None
     assert summary.agent.startswith('checker-')
     assert summary.error == 'The check ran past 3 seconds, so Verifold stopped the checker.'
+    assert summary.rerun_failed
     assert lab.status_code == 200
     assert not any(entry.post.kind == 'check' for entry in posts(project))
+
+
+async def test_a_checker_that_runs_too_long_after_its_check_leaves_a_rerun_that_did_not_fail(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
+    monkeypatch.setenv('FAKE_ACP_SLOW_AFTER_CHECK', '1')
+    catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other')))
+
+    def stops() -> list[TurnEnded]:
+        return [
+            event
+            for event in record(project)
+            if isinstance(event, TurnEnded) and event.error and 'Verifold stopped the checker' in event.error
+        ]
+
+    async with serving(project, start, catalog, options=ServeOptions(turn_timeout=3)):
+        await until(lambda: bool(stops()), timeout=60)
+
+    assert [stop.rerun_failed for stop in stops()] == [False]
+    assert [entry.post.kind for entry in posts(project) if entry.post.author.startswith('checker-')] == ['check']
+
+
+async def test_two_requests_for_a_rerun_of_one_post_start_one_checker(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
+    # The checker's turn takes a minute, so its check cannot answer the first request before the second one comes.
+    monkeypatch.setenv('FAKE_ACP_SLOW_AGENT', 'checker')
+    catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other')))
+
+    def requests() -> list[RerunRequested]:
+        return [event for event in record(project) if isinstance(event, RerunRequested)]
+
+    def checkers() -> list[str]:
+        return [event.agent.id for event in record(project) if isinstance(event, AgentJoined) and event.agent.checks]
+
+    async with serving(project, start, catalog) as client:
+        await until(lambda: len(requests()) == 1, timeout=60)
+        again = await client.post('/reruns', json={'post': requests()[0].post})
+        await until(lambda: len(checkers()) == 1, timeout=60)
+        await asyncio.sleep(1.5)
+
+    assert again.status_code == 200
+    assert [request.by for request in requests()] == ['agent-1', 'person']
+    assert len(checkers()) == 1
+
+
+async def test_a_checker_that_stops_without_a_check_says_so_and_the_person_can_ask_again(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
+    monkeypatch.setenv('FAKE_ACP_NO_CHECK', '1')
+    catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other')))
+
+    def stopped() -> list[str]:
+        return [
+            event.agent
+            for event in record(project)
+            if isinstance(event, TurnEnded)
+            and event.rerun_failed
+            and event.error == 'The checker stopped without a check.'
+        ]
+
+    async with serving(project, start, catalog) as client:
+        await until(lambda: len(stopped()) == 1, timeout=60)
+        result = next(event.post for event in record(project) if isinstance(event, RerunRequested))
+        again = await client.post('/reruns', json={'post': result})
+        await until(lambda: len(stopped()) == 2, timeout=60)
+
+    assert again.status_code == 200
+    assert len(set(stopped())) == 2
 
 
 async def test_a_rerun_that_fails_to_prepare_its_checker_shows_why_and_the_lab_goes_on(
@@ -308,8 +384,8 @@ async def test_a_rerun_that_fails_to_prepare_its_checker_shows_why_and_the_lab_g
         await until(lambda: bool(failed()), timeout=60)
         lab = await client.get('/lab')
 
-    assert [(event.agent.startswith('checker-'), event.error) for event in failed()] == [
-        (True, 'GitError: git worktree add failed: no space left on device')
+    assert [(event.agent.startswith('checker-'), event.error, event.rerun_failed) for event in failed()] == [
+        (True, 'GitError: git worktree add failed: no space left on device', True)
     ]
     assert lab.status_code == 200
 

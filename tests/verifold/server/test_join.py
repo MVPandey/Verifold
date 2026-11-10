@@ -81,6 +81,24 @@ async def test_every_tool_result_carries_the_posts_that_the_agent_has_not_seen(l
     assert [line['id'] for line in brief['not_checked']] == ['p-1', 'p-2']
 
 
+async def test_a_rerun_request_says_when_it_joins_a_rerun_that_runs_already(lab: Lab) -> None:
+    evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
+    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
+    async with (
+        Client(join_server(lambda _: Member(lab, 'ada'))) as ada,
+        Client(join_server(lambda _: Member(lab, 'bo'))) as bo,
+    ):
+        first = await ada.call_tool('rerun', {'post': 'p-2'})
+        second = await bo.call_tool('rerun', {'post': 'p-2'})
+        third = await bo.call_tool('rerun', {'post': 'p-2'})
+
+    assert first.structured_content is not None
+    assert second.structured_content is not None
+    assert (first.structured_content['joins'], second.structured_content['joins']) == (None, 'ada')
+    assert third.is_error
+    assert 'You asked for a blind rerun of p-2 already' in str(third.content)
+
+
 async def test_a_blind_checker_posts_its_check_and_gets_no_news(lab: Lab) -> None:
     evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
     await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)

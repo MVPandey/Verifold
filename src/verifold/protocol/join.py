@@ -201,6 +201,8 @@ class RerunResult(Record):
     """What the `rerun` tool returns: the post that gets a blind rerun, and the agent's news."""
 
     post: PostId
+    joins: AgentId | None = None
+    """Who asked first, when a blind rerun of the post runs already. This request joins it: one check answers both."""
     news: News | None = None
 
 

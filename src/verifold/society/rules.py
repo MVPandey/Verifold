@@ -7,15 +7,18 @@ here.
 """
 
 from verifold.protocol.agents import Agent
-from verifold.protocol.events import RerunRequested, TimeRanOut, TimeSet, TurnEnded, WatchSet
-from verifold.protocol.ids import PERSON, AgentId
+from verifold.protocol.events import Posted, RerunRequested, TimeRanOut, TimeSet, TurnEnded, WatchSet
+from verifold.protocol.ids import PERSON, AgentId, PostId
 from verifold.protocol.posts import Answer, Check, Objection, Post
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 
 MAX_RERUNS = 2
-"""The most blind reruns that one post can have."""
+"""The most blind reruns that one post can have. Each one ends with a blind checker's check."""
+
+MAX_CHECKERS = 4
+"""The most blind checkers that one post can get. A checker that fails counts, so failures can't start checkers without end."""
 
 
 def check_agent(board: Board, agent: Agent) -> None:
@@ -93,14 +96,17 @@ def check_watch(board: Board, watch: WatchSet) -> None:
 
 def check_turn(board: Board, turn: TurnEnded) -> None:
     """
-    Check that a turn belongs to an agent in the lab.
+    Check that a turn belongs to an agent in the lab, and that only a blind checker's turn ends a rerun.
 
     Raises:
-        RejectedEvent: The agent is not in the lab.
+        RejectedEvent: The agent is not in the lab, or the turn ends a rerun and the agent is not a blind checker.
 
     """
-    if not board.agent(turn.agent):
+    joined = board.agent(turn.agent)
+    if not joined:
         raise RejectedEvent(f'{turn.agent} is not an agent in this lab.')
+    if turn.rerun_failed and not joined.agent.checks:
+        raise RejectedEvent(f'{turn.agent} is not a blind checker, so its turn cannot end a rerun.')
 
 
 def check_rerun(board: Board, rerun: RerunRequested) -> None:
@@ -108,7 +114,8 @@ def check_rerun(board: Board, rerun: RerunRequested) -> None:
     Check that a post can get a blind rerun.
 
     Raises:
-        RejectedEvent: The post does not exist, has no files as evidence, or has all its reruns already.
+        RejectedEvent: The post does not exist, has no files as evidence, has all its blind reruns already, or got
+            all the blind checkers that a post can get.
 
     """
     _check_member(board, rerun.by)
@@ -117,8 +124,49 @@ def check_rerun(board: Board, rerun: RerunRequested) -> None:
         raise RejectedEvent(f'Post {rerun.post} does not exist.')
     if not target.post.evidence:
         raise RejectedEvent(f'Post {rerun.post} has no files as evidence, so a checker has nothing to rerun.')
-    if sum(entry.post == rerun.post for entry in board.reruns) >= MAX_RERUNS:
-        raise RejectedEvent(f'Post {rerun.post} has {MAX_RERUNS} reruns already.')
+    if len(blind_checks(board, rerun.post)) >= MAX_RERUNS:
+        raise RejectedEvent(f'Post {rerun.post} has {MAX_RERUNS} blind reruns already.')
+    # A request that joins the rerun of a request that waits starts no checker of its own.
+    if len(_checkers(board, rerun.post)) >= MAX_CHECKERS and not waiting_reruns(board, rerun.post):
+        raise RejectedEvent(f'Post {rerun.post} got {MAX_CHECKERS} blind checkers already, and a post gets no more.')
+
+
+def blind_checks(board: Board, post_id: PostId) -> tuple[Posted, ...]:
+    """Return the first check of each blind checker of a post, oldest first. One checker is one blind rerun."""
+    checkers = _checkers(board, post_id)
+    first: dict[AgentId, Posted] = {}
+    for entry in board.replies(post_id):
+        if isinstance(entry.post, Check) and entry.post.author in checkers:
+            first.setdefault(entry.post.author, entry)
+    return tuple(first.values())
+
+
+def open_reruns(board: Board, post_id: PostId) -> tuple[RerunRequested, ...]:
+    """
+    Return the requests for a blind rerun of a post that no blind check has answered yet, oldest first.
+
+    One blind check answers every request that came before it. So a request that arrives while a rerun runs joins
+    that rerun, and the lab starts one checker for both.
+    """
+    latest = max((entry.seq for entry in blind_checks(board, post_id)), default=0)
+    return tuple(entry for entry in board.reruns if entry.post == post_id and entry.seq > latest)
+
+
+def waiting_reruns(board: Board, post_id: PostId) -> tuple[RerunRequested, ...]:
+    """
+    Return the open requests for a post that came after its last failed rerun, oldest first.
+
+    A rerun that fails leaves the requests before it without a check. Those requests start no other checker, and
+    their members can ask again. A turn that fails without the end of the rerun, such as one that the time limit
+    cancelled, frees no request, because the same checker goes on.
+    """
+    checkers = _checkers(board, post_id)
+    failed = max((turn.seq for turn in board.turns if turn.rerun_failed and turn.agent in checkers), default=0)
+    return tuple(entry for entry in open_reruns(board, post_id) if entry.seq > failed)
+
+
+def _checkers(board: Board, post_id: PostId) -> set[AgentId]:
+    return {joined.agent.id for joined in board.agents if joined.agent.checks == post_id}
 
 
 def check_time(time: TimeSet) -> None:
