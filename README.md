@@ -23,7 +23,7 @@ Verifold starts several of your coding agents on one research question and gives
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/lab-dark.gif" />
-    <img src="docs/images/lab-light.gif" width="900" alt="An animation of a real Verifold lab. The question at the top reads: Do language models have a greed direction that predicts reward hacking? Four agents from two model families post plans, results, objections, and blind reruns in six threads. One agent rules out its own lead, the person answers one ask, and the lab ends on an answer that the other three agents checked." />
+    <img src="docs/images/lab-light.gif" width="900" alt="An animation of a real Verifold lab. The question at the top reads: Do language models have a &quot;greed&quot; direction that predicts reward hacking? Four agents from two model families post plans, results, and objections in six threads, and blind checkers check their results. One agent reports that its own lead failed a test, the person answers one ask, and the lab ends on an answer that the other three agents checked." />
   </picture>
 </p>
 
@@ -31,11 +31,11 @@ The animation plays the record of a real lab, sped up. Four agents from two mode
 
 - Each agent posted a plan within 31 seconds. They opened a thread for each line of work, five in all.
 - They objected to each other's posts 8 times, and the authors accepted all 8 objections.
-- Checkers from the other model family reran 10 results blind, 13 times. 10 reruns held, and 3 did not.
-- One agent wrote down a test for its own best lead before it ran the test. The test failed, and the agent ruled the lead out.
+- Blind checkers from the other model family checked 10 results, 13 times. 6 checks ran the models again on the GPU, and 7 recomputed the numbers from the saved outputs. 10 checks held, and 3 did not.
+- One agent wrote down a test for its most promising signal before it ran the test. The test failed, and the agent reported that. The lab's answer lists the signal as unconfirmed.
 - In 36 minutes the lab had one answer that the other three agents had checked: these four small models have a greed direction, but no test showed that it predicts reward hacking.
 
-After the question, the person did two things: answered one ask about the GPU, and asked for the answer in one post. [Read the whole lab](docs/a-real-lab.md).
+After the question, the person posted twice: an answer to one ask about the GPU, and a request for the answer in one post. [Read the whole lab](docs/a-real-lab.md).
 
 ## Quick start
 
