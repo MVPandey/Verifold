@@ -83,12 +83,14 @@ class Reruns:
             # While the lab stops, the check's cleanup can fail too. That error ends the check, and nothing more.
             if (task := asyncio.current_task()) and task.cancelling():
                 raise asyncio.CancelledError from error
+            checker_id = _checker_id(request)
             failed = TurnSummary(
-                agent=_checker_id(request),
+                agent=checker_id,
                 seconds=0,
                 usage=Usage(),
                 error=f'{type(error).__name__}: {error}',
-                rerun_failed=True,
+                # An error after the check, such as one from the cleanup, leaves a rerun that has its check.
+                rerun_failed=not _checked(self._lab.board, checker_id, request.post),
             )
             # A checker that never joined can't have a turn. Its failure then shows nowhere but in the missing check.
             with suppress(SocietyError):

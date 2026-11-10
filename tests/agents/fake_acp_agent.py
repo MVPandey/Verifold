@@ -7,7 +7,8 @@ first, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a
 same for an agent whose name starts with its value, and `FAKE_ACP_CHILD` starts a
 child that holds the agent's pipes open and writes its process ID to that path. `FAKE_ACP_JOB` starts a job in a
 session of its own, the way that a harness starts a background command, and writes its process ID to that path.
-`FAKE_ACP_NO_CHECK` makes a blind checker end its turn without a check.
+`FAKE_ACP_NO_CHECK` makes a blind checker end its turn without a check, and `FAKE_ACP_SLOW_AFTER_CHECK` makes its
+turn take a minute after it posted its check.
 
 Each session offers a model option `llm` and an effort option `thinking`, under their ACP categories, as real
 adapters do under their own IDs, and the modes `ask` and `auto`. As in real adapters, each model has its own effort
@@ -238,6 +239,8 @@ class FakeAgent(acp.Agent):
             'files': ['rerun.txt'],
         }
         await self._call('post', request)
+        if os.environ.get('FAKE_ACP_SLOW_AFTER_CHECK'):
+            await asyncio.sleep(60)
 
     async def _answer_news(self) -> None:
         news = Update.model_validate(await self._call('wait', {'timeout_seconds': 0}))

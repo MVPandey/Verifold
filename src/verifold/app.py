@@ -337,11 +337,13 @@ class Host:
         except TimeoutError:
             # A checker that runs too long stops, and the lab goes on. Its post stays unchecked, and the board says why.
             error = f'The check ran past {limit:g} seconds, so Verifold stopped the checker.'
-            await member.lab.end_turn(_failed_rerun(setup.agent.id, error, seconds=limit))
+            checked = done(member.lab.board)
+            await member.lab.end_turn(_stopped_checker(setup.agent.id, error, checked=checked, seconds=limit))
             return
         if not done(member.lab.board):
             # The failed rerun frees its requests, so a member can ask again and get another checker.
-            await member.lab.end_turn(_failed_rerun(setup.agent.id, 'The checker stopped without a check.'))
+            error = 'The checker stopped without a check.'
+            await member.lab.end_turn(_stopped_checker(setup.agent.id, error, checked=False))
 
 
 async def serve(
@@ -464,8 +466,9 @@ async def _closed(serving: asyncio.Task[None]) -> None:
         await serving
 
 
-def _failed_rerun(checker: str, error: str, seconds: float = 0) -> TurnSummary:
-    return TurnSummary(agent=checker, seconds=seconds, usage=Usage(), error=error, rerun_failed=True)
+def _stopped_checker(checker: str, error: str, *, checked: bool, seconds: float = 0) -> TurnSummary:
+    # The rerun failed only when the checker stopped before it posted its check.
+    return TurnSummary(agent=checker, seconds=seconds, usage=Usage(), error=error, rerun_failed=not checked)
 
 
 def _agent(number: int, harness: HarnessEntry, choice: AgentChoice) -> Agent:

@@ -290,6 +290,28 @@ async def test_a_checker_that_runs_too_long_stops_and_the_lab_goes_on(
     assert not any(entry.post.kind == 'check' for entry in posts(project))
 
 
+async def test_a_checker_that_runs_too_long_after_its_check_leaves_a_rerun_that_did_not_fail(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
+    monkeypatch.setenv('FAKE_ACP_SLOW_AFTER_CHECK', '1')
+    catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other')))
+
+    def stops() -> list[TurnEnded]:
+        return [
+            event
+            for event in record(project)
+            if isinstance(event, TurnEnded) and event.error and 'Verifold stopped the checker' in event.error
+        ]
+
+    async with serving(project, start, catalog, options=ServeOptions(turn_timeout=3)):
+        await until(lambda: bool(stops()), timeout=60)
+
+    assert [stop.rerun_failed for stop in stops()] == [False]
+    assert [entry.post.kind for entry in posts(project) if entry.post.author.startswith('checker-')] == ['check']
+
+
 async def test_two_requests_for_a_rerun_of_one_post_start_one_checker(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

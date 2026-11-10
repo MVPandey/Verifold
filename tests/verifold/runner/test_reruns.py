@@ -151,3 +151,28 @@ async def test_a_new_loop_starts_checkers_only_for_the_requests_that_still_wait(
         running.cancel()
 
     assert started == ['p-3', 'p-4']
+
+
+async def test_an_error_after_the_check_leaves_a_rerun_that_did_not_fail(
+    lab: Lab, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def check(_: Reruns, request: RerunRequested) -> None:
+        # The checker posts its check, and then its cleanup fails.
+        checker = f'checker-{request.seq}'
+        await lab.join(Agent(id=checker, name=checker, harness='fake', model=ModelSpec(family='openai'), checks='p-2'))
+        answer = PostRequest(kind='check', text='So.', thread='t-1', reply_to='p-2', outcome='holds', method='rerun')
+        await Member(lab, checker).post(answer)
+        raise RuntimeError('The folder is gone.')
+
+    monkeypatch.setattr(Reruns, '_check', check)
+    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', EVIDENCE)
+    await lab.request_rerun('bo', 'p-2')
+    running = asyncio.create_task(a_rerun_loop(lab, tmp_path).run())
+    try:
+        await until(lambda: bool(lab.board.turns))
+    finally:
+        running.cancel()
+
+    assert [(turn.error, turn.rerun_failed) for turn in lab.board.turns] == [
+        ('RuntimeError: The folder is gone.', False)
+    ]
