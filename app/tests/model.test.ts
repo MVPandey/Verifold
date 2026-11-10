@@ -148,6 +148,7 @@ describe('posts', () => {
       }),
       'Check by rerun',
     );
+    assert.equal(kindLabel({ ...result('p-1'), kind: 'plan' }), 'Plan');
     assert.deepEqual(standingChip(result('p-1'), 'open'), { label: 'Not checked', tone: 'none' });
     assert.deepEqual(standingChip(result('p-1'), 'held_up'), { label: 'Held up', tone: 'hold' });
     assert.equal(standingChip({ ...result('p-1'), kind: 'message' }, 'open'), null);
@@ -229,11 +230,14 @@ describe('seen', () => {
     assert.equal(hasNew(summary(), readSeen(store, 'lab')), false);
     const fromPerson = summary({
       latest: {
-        seq: 9,
-        at: '2026-11-06T14:10:00Z',
+        id: 'p-4',
+        thread: 't-1',
         author: 'person',
         kind: 'message',
         text: 'Go on.',
+        reply_to: null,
+        seq: 9,
+        at: '2026-11-06T14:10:00Z',
       },
     });
     assert.equal(hasNew(fromPerson, readSeen(store, 'lab')), false);

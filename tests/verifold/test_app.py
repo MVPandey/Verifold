@@ -44,7 +44,8 @@ def record(project: Path) -> list[Event]:
 
 
 def posts(project: Path) -> list[Posted]:
-    return [event for event in record(project) if isinstance(event, Posted)]
+    """Return the agents' posts. The person's question, which opens every lab, is not among them."""
+    return [event for event in record(project) if isinstance(event, Posted) and event.post.author != 'person']
 
 
 def calls(log: Path) -> list[dict[str, str]]:
@@ -158,7 +159,19 @@ async def test_the_person_starts_a_lab_from_the_setup_screen(
         'agent-2',
     }
     first = next(call['text'] for call in calls(log) if call['event'] == 'prompt' and call['agent'] == 'agent-2')
-    assert first.startswith('Does it hold?\n\nYou are Agent 2 in a Verifold lab. The other agents: Agent 1 (fake).')
+    assert first.startswith(
+        'Does it hold?\n\nYou are Agent 2 (agent-2) in a Verifold lab. '
+        'The other agents got this question at the same moment: Agent 1 (agent-1, fake).'
+    )
+    assert 'Thread t-1 on the board holds this question, and every agent watches it.' in first
+    board = fold(record(project))
+    question = board.posts[0].post
+    assert (board.threads[0].thread.title, question.author, question.text) == (
+        'The question',
+        'person',
+        'Does it hold?',
+    )
+    assert board.posts[0].seq < board.agents[0].seq
     assert (project / '.verifold' / 'LAB.md').read_text().startswith("# The lab's norms")
 
 

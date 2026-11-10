@@ -11,14 +11,14 @@ from conftest import ServedBoard
 from fakes import FAKE_HARNESS
 
 from verifold.protocol.app import AgentState
-from verifold.protocol.join import PostRequest
+from verifold.protocol.join import MAX_NEWS, PostRequest
 from verifold.protocol.settings import AtTimeLimit, JobSettings, Settings
 from verifold.protocol.usage import Usage
 from verifold.runner import agent_loop
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.git import git
 from verifold.runner.messages import DOORBELL, more_time_message
-from verifold.runner.session import AgentSession
+from verifold.runner.session import AgentSession, TurnResult
 from verifold.server.activity import Activity
 
 
@@ -49,7 +49,9 @@ def loop_for(served: ServedBoard, tmp_path: Path, activity: Activity | None = No
         token=token,
         start='Start.',
     )
-    return AgentLoop(member, setup, LoopSettings(mcp_url=served.url, retry_after=0, **settings), activity=activity)
+    # No quiet window by default, so a doorbell rings as soon as a post for the agent arrives.
+    options = {'retry_after': 0.0, 'quiet': 0.0} | settings
+    return AgentLoop(member, setup, LoopSettings(mcp_url=served.url, **options), activity=activity)
 
 
 def posts_by(served: ServedBoard, author: str) -> list[str]:
@@ -63,7 +65,7 @@ async def test_the_agent_starts_and_the_doorbell_rings_only_for_posts_for_it(
     running = asyncio.create_task(loop_for(served, tmp_path).run())
     try:
         await until(lambda: len(lab.board.turns) == 1)
-        await lab.post(PostRequest(kind='message', text='Not for bo.', thread='t-1'), 'ada')
+        await lab.post(PostRequest(kind='message', text='A side note.', thread='t-1'), 'ada')
         await asyncio.sleep(0.3)
         assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
 
@@ -82,6 +84,125 @@ async def test_the_agent_starts_and_the_doorbell_rings_only_for_posts_for_it(
         None,
     )
     assert turn.cost_usd == pytest.approx(0.01)
+
+
+async def test_a_post_that_the_agent_got_in_a_tool_result_during_its_turn_rings_no_doorbell(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        # The ask arrives before the agent's first post, so the result of that post carries it as news.
+        await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+        await until(lambda: len(lab.board.turns) == 1)
+        await asyncio.sleep(0.3)
+    finally:
+        running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
+    assert posts_by(served, 'bo') == ['Hello from bo.']
+
+
+async def test_one_doorbell_covers_a_burst_of_posts(served: ServedBoard, tmp_path: Path, log: Path) -> None:
+    lab = served.lab
+    # The quiet window is far longer than the gaps, so a slow machine cannot split the burst.
+    running = asyncio.create_task(loop_for(served, tmp_path, quiet=1.5, max_quiet=10).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        for number in range(3):
+            await lab.post(PostRequest(kind='ask', text=f'Question {number}?', thread='t-1', mentions=('bo',)), 'ada')
+            await asyncio.sleep(0.05)
+        await until(lambda: len(lab.board.turns) == 2)
+        await asyncio.sleep(2)
+    finally:
+        running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL]
+    assert len([text for text in posts_by(served, 'bo') if text.startswith('Seen p-')]) == 3
+
+
+async def test_an_agent_that_read_one_page_of_its_posts_gets_a_doorbell_for_the_rest(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    member, token = served.seat('bo')
+    prompts: list[str] = []
+    pages: list[int] = []
+
+    async def read_one_page(_: AgentSession, message: str) -> TurnResult:
+        # The agent reads one page of its posts after a doorbell, and then ends its turn.
+        prompts.append(message)
+        if message == DOORBELL:
+            pages.append(len((await member.wait(timeout=0)).posts))
+        return TurnResult(stop_reason='end_turn', usage=Usage())
+
+    monkeypatch.setattr(AgentSession, 'send', read_one_page)
+    monkeypatch.setattr(served, 'seat', lambda _: (member, token))
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        asks = (
+            PostRequest(kind='ask', text=f'Question {number}?', thread='t-1', mentions=('bo',))
+            for number in range(MAX_NEWS + 3)
+        )
+        await asyncio.gather(*(lab.post(ask, 'ada') for ask in asks))
+        await until(lambda: len(pages) == 2)
+        await asyncio.sleep(0.3)
+    finally:
+        running.cancel()
+
+    assert prompts == ['Start.', DOORBELL, DOORBELL]
+    assert pages == [MAX_NEWS, 3]
+
+
+async def test_a_doorbell_does_not_wait_longer_than_the_limit_for_a_board_that_stays_busy(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+
+    async def chatter() -> None:
+        while True:
+            await lab.post(PostRequest(kind='message', text='Still busy.', thread='t-1'), 'ada')
+            await asyncio.sleep(0.1)
+
+    running = asyncio.create_task(loop_for(served, tmp_path, quiet=5, max_quiet=0.5).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+        busy = asyncio.create_task(chatter())
+        try:
+            await until(lambda: len(calls(log, 'prompt')) == 2, timeout=5)
+        finally:
+            busy.cancel()
+    finally:
+        running.cancel()
+
+    assert calls(log, 'prompt')[1]['text'] == DOORBELL
+
+
+async def test_a_failed_turn_gives_the_agent_its_news_again(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    member, token = served.seat('bo')
+    before = member.seen
+
+    async def read_then_crash(*_: object) -> None:
+        # The harness got the post in a tool result, and then its process died.
+        assert member.news() is not None
+        raise BrokenPipeError('The harness closed its stdin.')
+
+    monkeypatch.setattr(AgentSession, 'send', read_then_crash)
+    # The loop gets this member, so the test can read as the agent and look at its cursor.
+    monkeypatch.setattr(served, 'seat', lambda _: (member, token))
+    loop = loop_for(served, tmp_path, max_failures=1)
+    await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+
+    async with asyncio.timeout(30):
+        await loop.run()
+
+    assert member.seen == before
+    assert [entry.post.text for entry in (await member.wait(timeout=0)).posts] == ['Which layer?']
 
 
 async def test_a_failing_harness_is_restarted_with_its_session_and_stops_after_three_failures(

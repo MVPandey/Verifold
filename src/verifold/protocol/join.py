@@ -4,7 +4,7 @@ from typing import Literal, Self
 
 from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
 
-from verifold.protocol.agents import Agent
+from verifold.protocol.agents import Agent, Label
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.posts import (
@@ -24,6 +24,9 @@ from verifold.protocol.threads import Thread, Title
 
 type Standing = Literal['open', 'checked', 'held_up', 'disputed', 'conceded']
 """Where a post stands after the objections, checks, and answers to it."""
+
+MAX_NEWS = 20
+"""The most posts in each list of an agent's news or update, and the most threads in a brief."""
 
 _posts: TypeAdapter[Post] = TypeAdapter(Post)
 
@@ -101,13 +104,31 @@ class ThreadView(Record):
 
 
 class PostLine(Record):
-    """One post as a single line: who wrote it, what kind it is, and its headline."""
+    """One post as a single line: where it is, who wrote it, what kind it is, and its headline."""
 
-    seq: int
-    at: AwareDatetime
+    id: PostId
+    thread: ThreadId
     author: AgentId
     kind: PostKind
     text: Headline
+    reply_to: PostId | None = None
+    seq: int
+    at: AwareDatetime
+
+    @classmethod
+    def of(cls, entry: Posted) -> Self:
+        """Return the line of a post on the board."""
+        post = entry.post
+        return cls(
+            id=post.id,
+            thread=post.thread,
+            author=post.author,
+            kind=post.kind,
+            text=post.text,
+            reply_to=post.reply_to,
+            seq=entry.seq,
+            at=entry.at,
+        )
 
 
 class ThreadSummary(Record):
@@ -128,17 +149,113 @@ class ThreadSummary(Record):
     open_asks: int = 0
 
 
+class News(Record):
+    """
+    The posts that an agent has not seen yet, oldest first. Every result of a board tool carries them.
+
+    `for_you` holds the posts that name the agent, reply to one of its posts, or are in a thread that it watches,
+    at most `MAX_NEWS` of them. When more wait, the news stops at the last one that it holds, and the next result
+    brings the others. `others` holds the newest of the remaining posts. A line is a post's headline, and `thread`
+    shows the whole post.
+    """
+
+    seq: int
+    """The event that this news reaches. The agent's next news starts after it."""
+    for_you: tuple[PostLine, ...] = ()
+    more: int = 0
+    """How many more posts for the agent wait. The next result of a board tool brings them."""
+    others: tuple[PostLine, ...] = ()
+    left_out: int = 0
+    """How many older posts `others` leaves out. `threads` and `thread` show them."""
+
+
+class PostResult(PostView):
+    """What the `post` tool returns: the post as it stands, and the agent's news."""
+
+    news: News | None = None
+    """`None` for a blind checker, which reads nothing but its claim."""
+
+
+class ThreadResult(ThreadView):
+    """What the `thread` tool returns: the thread, and the agent's news from the rest of the board."""
+
+    news: News | None = None
+
+
+class ThreadList(Record):
+    """What the `threads` tool returns: a summary of each thread, and the agent's news."""
+
+    threads: tuple[ThreadSummary, ...]
+    news: News | None = None
+
+
+class WatchResult(Record):
+    """What the `watch` tool returns: whether the agent watches the thread now, and the agent's news."""
+
+    thread: ThreadId
+    watching: bool
+    news: News | None = None
+
+
+class RerunResult(Record):
+    """What the `rerun` tool returns: the post that gets a blind rerun, and the agent's news."""
+
+    post: PostId
+    news: News | None = None
+
+
+class AgentLine(Record):
+    """Another agent of the lab at a glance: the plan that it posted last, and its latest post."""
+
+    id: AgentId
+    name: Label
+    harness: Label
+    plan: PostLine | None = None
+    latest: PostLine | None = None
+    """The agent's latest post, when that is not its plan."""
+
+
+class Brief(Record):
+    """
+    The lab for one agent, in one read: how the board works, who works on what, and what waits for a check.
+
+    An agent reads it when it starts, and again before each new piece of work.
+    """
+
+    you: AgentId
+    how: str = ''
+    """How the board works. The first brief of a session carries it, and later ones leave it out."""
+    agents: tuple[AgentLine, ...] = ()
+    """The other agents. Blind checkers are not among them."""
+    not_checked: tuple[PostLine, ...] = ()
+    """Other agents' results that nobody has checked yet, newest last."""
+    disputed: tuple[PostLine, ...] = ()
+    """The posts that a failed check or a standing objection disputes, the agent's own among them, newest last."""
+    threads: tuple[ThreadSummary, ...] = ()
+    """The threads, the most recently active first, at most `MAX_NEWS`."""
+    more_threads: int = 0
+    """How many threads the list leaves out. `threads` shows all of them."""
+    news: News
+    ends_at: AwareDatetime | None = None
+    """When the lab ends. At that time Verifold stops the agents' turns. `None` means no time limit."""
+
+
 class Update(Record):
     """
     What happened in the lab after an agent last looked, up to event `seq`.
 
-    `posts` holds the posts for the agent. The other fields summarize the rest, so the agent can choose what to read.
+    `posts` holds the posts for the agent, in full, at most `MAX_NEWS` of them. `others` holds one line for each
+    of the newest other posts, so the agent can choose what to read.
     """
 
     seq: int
     posts: tuple[Posted, ...] = ()
+    more: int = 0
+    """How many more posts for the agent wait. The next `wait` brings them."""
+    others: tuple[PostLine, ...] = ()
+    other_posts: int = 0
+    """How many posts were not for the agent. `others` holds the newest of them, at most `MAX_NEWS`."""
     threads: tuple[Thread, ...] = ()
     agents: tuple[Agent, ...] = ()
-    other_posts: int = 0
     ends_at: AwareDatetime | None = None
     """When the lab ends. At that time Verifold stops the agents' turns. `None` means no time limit."""

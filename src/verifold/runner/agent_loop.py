@@ -2,7 +2,8 @@
 Supervises one agent.
 
 The agent's harness owns its work. Verifold keeps the agent's ACP session open, rings a doorbell when posts for the
-agent arrive after it ended its turn, and starts the harness again when its process fails.
+agent arrive after it ended its turn, and starts the harness again when its process fails. The doorbell waits for a
+quiet moment on the board, so that a burst of posts wakes the agent once.
 """
 
 import asyncio
@@ -47,6 +48,10 @@ class LoopSettings(Record):
     """How many harness failures in a row stop the agent."""
     retry_after: float = Field(default=30, ge=0)
     """Seconds before the first restart of a failed harness. Each later restart waits twice as long."""
+    quiet: float = Field(default=10, ge=0)
+    """Seconds without a new event on the board before a doorbell rings, so that one doorbell covers a burst."""
+    max_quiet: float = Field(default=45, ge=0)
+    """The most seconds that a doorbell waits for the board to go quiet."""
 
 
 class AgentSetup(Record):
@@ -89,6 +94,8 @@ class AgentLoop:
         self._setup = setup
         self._settings = settings
         self._notified = self._lab.board.seq
+        self._seen_at_turn = member.seen
+        """What the agent had seen when its turn started. A failed turn takes the agent back to it."""
         self._turn_ended = self._lab.board.seq
         """The board's sequence number when the agent's last turn ended. A stop after it concerns the agent's jobs."""
 
@@ -129,6 +136,8 @@ class AgentLoop:
                 if (task := asyncio.current_task()) and task.cancelling():
                     raise asyncio.CancelledError from error
                 failures += 1
+                # The failed turn can have lost the tool results that carried its news.
+                self._member.rewind(self._seen_at_turn)
                 failed = TurnSummary(
                     agent=setup.agent.id, seconds=0, usage=Usage(), error=f'{type(error).__name__}: {error}'
                 )
@@ -142,6 +151,7 @@ class AgentLoop:
         # Return whether the turn stopped because the lab ran out of time.
         await self._report('working')
         started = time.monotonic()
+        self._seen_at_turn = self._member.seen
         try:
             async with asyncio.timeout(self._settings.turn_timeout) as limit:
                 stopper = asyncio.create_task(self._stop_when_out_of_time(limit))
@@ -199,6 +209,11 @@ class AgentLoop:
         lab gets more time, and its message says so, followed by the doorbell when posts came meanwhile.
         """
         agent_id = self._setup.agent.id
+        # An agent that read one page of its posts in its turn gets a doorbell for the rest. An agent that read
+        # nothing gets no second doorbell for the same posts.
+        if self._member.seen > self._seen_at_turn:
+            self._notified = min(self._notified, self._member.seen)
+        settled = False
         while True:
             board = self._lab.board
             # The record shows a stop also when the lab got more time before this wait looked.
@@ -213,9 +228,24 @@ class AgentLoop:
                 message = more_time_message(board.ends_at, AtTimeLimit.STOP)
                 return f'{message} {DOORBELL}' if posts else message
             if posts and not stopped:
+                if not settled:
+                    await self._settle()
+                    settled = True
+                    continue
                 self._notified = board.seq
                 return DOORBELL
             await self._lab.wait_for_change(board.seq)
+
+    async def _settle(self) -> None:
+        # Wait until the board has no new event for `quiet` seconds, and for `max_quiet` seconds at most.
+        lab, settings = self._lab, self._settings
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + settings.max_quiet
+        while (left := deadline - loop.time()) > 0:
+            seq = lab.board.seq
+            await lab.wait_for_change(seq, min(settings.quiet, left))
+            if lab.board.seq == seq:
+                return
 
     async def _permission(self, request: PermissionRequest) -> str | None:
         await self._report('waiting', f'Asks you: {request.title}')

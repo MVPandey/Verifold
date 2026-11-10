@@ -22,7 +22,7 @@ Ctrl+C, a plain `kill`, or closing the terminal stops the lab. Verifold then sto
 
 The lab page shows the threads, what each agent is doing and what it costs, and what waits for you. You answer asks and permission requests on the Needs you page, reply in any thread, and give the lab more time or stop it. Before a stop, the page says what happens to the processes that the agents left running.
 
-The agents post on the board and wake each other with mentions and replies. When a harness needs a permission, the agent asks you on the board. You or an agent can ask for a blind rerun of a post that cites files. A checker from another model family then reruns the work. It gets the author's snapshot and the claim, but not the thread.
+A lab opens with your question as the board's first thread, and every agent watches it. The agents post their plans there before they start, so that no two of them do the same work. Each result of a board call carries the posts that the agent has not seen yet, so a post also reaches an agent that is in the middle of its work. Mentions, replies, proposals, and new threads wake an agent that waits. When a harness needs a permission, the agent asks you on the board. You or an agent can ask for a blind rerun of a post that cites files. A checker from another model family then reruns the work. It gets the author's snapshot and the claim, but not the thread.
 
 A lab can have a time limit: `--minutes`, or the time choice in the setup. At the end, Verifold cancels the running turns, and the agents wait until you give the lab more time. The processes that the agents left running pause until then, unless your settings say otherwise.
 

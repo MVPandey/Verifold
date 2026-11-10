@@ -20,11 +20,11 @@ from verifold.protocol.events import (
     TurnSummary,
     WatchSet,
 )
-from verifold.protocol.ids import AgentId, PostId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import PostRequest
-from verifold.protocol.posts import FileEvidence
+from verifold.protocol.posts import MAX_HEADLINE, FileEvidence
 from verifold.protocol.settings import Settings
-from verifold.protocol.threads import Thread
+from verifold.protocol.threads import QUESTION_TITLE, Thread
 from verifold.server.changes import wait_until
 from verifold.server.errors import LabExists
 from verifold.society.board import Board
@@ -113,6 +113,21 @@ class Lab:
         opens = (_open_thread(request.new_thread, author),) if request.new_thread else ()
         board = await self._commit(*opens, _add_post(request, author, evidence))
         return board.posts[-1]
+
+    async def open_question_thread(self) -> Posted:
+        """
+        Open the thread that holds the person's question, with the question as its first post.
+
+        A new lab opens it before its agents join. The agents post their plans and the lab's answer there, and every
+        agent watches it. The question's first line with text is the headline, and a longer question is also the
+        body.
+        """
+        question = self._board.opened.question
+        # A question can start with a separator that `splitlines` breaks on and the schema's strip keeps.
+        first = next((line.strip() for line in question.splitlines() if line.strip()), QUESTION_TITLE)
+        headline = first if len(first) <= MAX_HEADLINE else f'{first[: MAX_HEADLINE - 1]}…'
+        body = '' if headline == question else question
+        return await self.post(PostRequest(kind='message', text=headline, body=body, new_thread=QUESTION_TITLE), PERSON)
 
     async def watch(self, agent_id: AgentId, thread_id: ThreadId, *, watching: bool) -> WatchSet:
         """Record that an agent starts or stops watching a thread."""

@@ -7,27 +7,42 @@ from verifold.protocol.agents import Agent
 from verifold.protocol.posts import Post
 from verifold.protocol.settings import AtTimeLimit
 from verifold.society.board import Board
+from verifold.society.views import question_thread
 
 DOORBELL = 'New posts for you on the lab board.'
 """The message that wakes an agent after it ended its turn. The agent reads the posts with its board tools."""
 
+BOARD = (
+    "The lab's shared board is the MCP server `verifold`. "
+    'Its `brief` tool says how the board works and shows what is on it.'
+)
+"""The line of the start message that points an agent at the board. It names the server, so no agent tries a shell."""
+
 
 def start_message(board: Board, agent: Agent, norms: Path) -> str:
     """
-    Return an agent's first message: the question, who the agent is, and where the person's norms are.
+    Return an agent's first message: the question, who the agent is, who else works on it, and where the norms are.
 
-    The board's own instructions say how the board works, so the message doesn't repeat them, and it gives no role.
+    The message holds facts only. `brief` says how the board works, the norms file says how the person wants the
+    work done, and the message gives no role.
     """
     peers = ', '.join(
-        f'{entry.agent.name} ({entry.agent.harness})' for entry in board.agents if entry.agent.id != agent.id
+        f'{entry.agent.name} ({entry.agent.id}, {entry.agent.harness})'
+        for entry in board.agents
+        if entry.agent.id != agent.id and not entry.agent.checks
+    )
+    others = (
+        f'The other agents got this question at the same moment: {peers}.' if peers else 'No other agent works here.'
     )
     lines = [
         board.opened.question,
         '',
-        f'You are {agent.name} in a Verifold lab. The other agents: {peers or "none yet"}.',
-        "The `verifold` tools are the lab's shared board, and their instructions say how it works.",
-        f"{norms} holds the lab's norms, which the person sets.",
+        f'You are {agent.name} ({agent.id}) in a Verifold lab. {others}',
+        BOARD,
     ]
+    if thread := question_thread(board):
+        lines.append(f'Thread {thread} on the board holds this question, and every agent watches it.')
+    lines.append(f"{norms} holds the lab's norms, which the person sets.")
     if board.ends_at:
         lines.append(f'The lab ends at {_utc(board.ends_at)}, unless the person gives it more time.')
     return '\n'.join(lines)
