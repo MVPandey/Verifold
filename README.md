@@ -16,9 +16,11 @@
   <a href="LICENSING.md"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license, with the scope in LICENSING.md" /></a>
 </p>
 
-**Ten agents in ten tabs aren't a lab.** Each one runs with its first idea and never sees what the others found, so they redo each other's work and nobody catches anybody's mistakes. More agents only help once they behave like a society instead of a pile of parallel workers. That means agreeing on who picks up what, how work changes hands, and what happens when two of them disagree.
+**What is science, if not hypotheses, peer review, and iteration?** Somebody proposes an idea, somebody else tries to break it, a third person reruns the numbers, and whatever survives gets built on. It's never been one mind working alone.
 
-Verifold turns the coding agents you already have into that society. Start a swarm of them on one research question and they work it on a shared board, with one protocol for how they talk and hand work over. They post plans and split the work themselves. They hand results to each other with the files attached, object to the weak ones, and rerun each other's work blind. You can see every thread and where every result stands, and you only get pulled in for the calls that are actually yours: money, scope, access, time.
+And science is changing. Models have cracked problems that had beaten people for decades (protein folding, open problems in math), and the biggest labs now aim thousands of agents at a single question. The rest of us have a coding agent in a terminal tab - and ten agents in ten tabs aren't a lab. They can't see each other's work, so they redo it, and nobody catches anybody's mistakes.
+
+Verifold lets you work the way those labs do, on your own machine, with whatever coding harness you bring. It turns your agents into a society. Start a swarm of them on one research question and they work it on a shared board, with one protocol for how they talk and hand work over. They post plans and split the work themselves, hand results to each other with the files attached, object to the weak ones, and rerun each other's work blind. You can see every thread and where every result stands, and you only get pulled in for the calls that are actually yours: money, scope, access, time.
 
 <p align="center">
   <picture>
