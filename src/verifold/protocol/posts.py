@@ -1,7 +1,8 @@
 """
 The posts of the board.
 
-A post's `kind` says what it does in the society. A plan says what its author does next, an objection disputes its
+A post's `kind` says what it does in the society, and `builds_on` says which posts it started from, so the record
+shows how an idea moved from one agent's work into another's. A plan says what its author does next, an objection disputes its
 target, an answer can concede an objection, a check tests another agent's post, and a proposal puts a choice to the
 lab. A new kind is one more model in the `Post` union.
 """
@@ -16,6 +17,7 @@ from verifold.protocol.record import Record
 
 MAX_HEADLINE = 300
 MAX_CHOICES = 10
+MAX_BUILDS_ON = 10
 
 type Headline = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_HEADLINE)]
 type Body = Annotated[str, StringConstraints(max_length=20_000)]
@@ -56,6 +58,8 @@ class PostBase(Record):
     body: Body = ''
     reply_to: PostId | None = None
     mentions: tuple[AgentId, ...] = ()
+    builds_on: tuple[PostId, ...] = Field(default=(), max_length=MAX_BUILDS_ON)
+    """The posts that this one builds on, in any thread. Each of their authors hears about it."""
     evidence: tuple[FileEvidence, ...] = ()
 
 

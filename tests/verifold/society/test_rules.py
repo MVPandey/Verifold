@@ -56,6 +56,16 @@ def test_a_post_needs_a_new_id_a_member_and_a_thread() -> None:
     assert 'Open a thread first' in rejected(lab(), RESULT.model_copy(update={'thread': 't-2'}))
 
 
+def test_a_post_builds_only_on_posts_that_exist_in_any_thread() -> None:
+    built = Result(id='p-2', thread='t-2', author='bo', text='Also on large models.', builds_on=('p-1',))
+    record = lab().thread('t-2', opened_by='bo').post(RESULT)
+
+    assert record.post(built).board().built_on('p-1')[0].post.id == 'p-2'
+    assert 'p-9 does not exist, so no post can build on it' in rejected(
+        lab().thread('t-2', opened_by='bo'), RESULT, built.model_copy(update={'builds_on': ('p-1', 'p-9')})
+    )
+
+
 def test_a_reply_needs_an_existing_target_in_the_same_thread() -> None:
     reply = Message(id='p-2', thread='t-2', author='bo', text='Re', reply_to='p-1')
 

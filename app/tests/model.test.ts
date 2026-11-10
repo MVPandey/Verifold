@@ -7,6 +7,7 @@ import { costLine, labTotal, mark, stateLine, tone } from '../src/model/agents.t
 import { duration, minutesBetween, money, tokens } from '../src/model/format.ts';
 import { orderNeeds, pauses } from '../src/model/needs.ts';
 import {
+  builtOnLabel,
   isPermission,
   kindLabel,
   personAnswer,
@@ -152,6 +153,9 @@ describe('posts', () => {
     assert.deepEqual(standingChip(result('p-1'), 'open'), { label: 'Not checked', tone: 'none' });
     assert.deepEqual(standingChip(result('p-1'), 'held_up'), { label: 'Held up', tone: 'hold' });
     assert.equal(standingChip({ ...result('p-1'), kind: 'message' }, 'open'), null);
+    assert.equal(builtOnLabel([]), null);
+    assert.equal(builtOnLabel(['p-4']), 'Built on by 1 post');
+    assert.equal(builtOnLabel(['p-4', 'p-9']), 'Built on by 2 posts');
     assert.equal(isPermission(ask('p-1', 'agent-1')), true);
     assert.equal(isPermission(result('p-1')), false);
   });

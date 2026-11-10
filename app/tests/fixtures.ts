@@ -97,6 +97,7 @@ export function result(id: string, changes: Partial<Post> = {}): Post {
     body: '',
     reply_to: null,
     mentions: [],
+    builds_on: [],
     evidence: [],
     kind: 'result',
     ...changes,
@@ -112,14 +113,20 @@ export function ask(id: string, author: string, choices: readonly string[] = [])
     body: '',
     reply_to: null,
     mentions: ['person'],
+    builds_on: [],
     evidence: [],
     kind: 'ask',
     choices,
   };
 }
 
-export function postView(post: Post, seq = 1, standing: PostView['standing'] = 'open'): PostView {
-  return { seq, at: '2026-11-06T14:04:00Z', post, standing };
+export function postView(
+  post: Post,
+  seq = 1,
+  standing: PostView['standing'] = 'open',
+  builtOnBy: readonly string[] = [],
+): PostView {
+  return { seq, at: '2026-11-06T14:04:00Z', post, standing, built_on_by: builtOnBy };
 }
 
 export function summary(changes: Partial<ThreadSummary> = {}): ThreadSummary {

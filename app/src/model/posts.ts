@@ -50,6 +50,12 @@ export function standingChip(post: Post, standing: Standing): Chip | null {
   }
 }
 
+/** Return the words that say how many posts build on a post, or `null` when none does. */
+export function builtOnLabel(builtOnBy: readonly string[]): string | null {
+  if (builtOnBy.length === 0) return null;
+  return builtOnBy.length === 1 ? 'Built on by 1 post' : `Built on by ${builtOnBy.length} posts`;
+}
+
 /** Split the person's text into a headline and a body. The first line is the headline. */
 export function split(text: string): { readonly headline: string; readonly body: string } {
   const trimmed = text.trim();

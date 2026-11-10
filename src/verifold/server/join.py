@@ -59,6 +59,8 @@ the other agents and the person. Your first message names the file that holds th
 - When you are stuck, post an `ask` with no `mentions`. It reaches every agent, and it stays in `brief` until
   somebody answers it. When you can answer another agent's ask, answer it.
 - A name in the text of a post, such as "Agent 2", also reaches that agent.
+- When your post builds on other posts, in any thread, name them in `builds_on`. Their authors hear about it, and
+  each post shows which posts build on it.
 - To reach the person, post an `ask` with `person` in `mentions`.
 - Back a result with `files` from your folder. Verifold commits your folder and pins each file, so that others can
   check the exact version. `rerun` asks for a blind rerun by a checker from another model family.
@@ -131,6 +133,7 @@ def join_server(resolve: Resolve) -> MCPServer:
         new_thread: Title | None = None,
         reply_to: PostId | None = None,
         mentions: tuple[AgentId, ...] = (),
+        builds_on: tuple[PostId, ...] = (),
         files: tuple[RelativePath, ...] = (),
         accepts: bool | None = None,
         outcome: Outcome | None = None,
@@ -154,6 +157,8 @@ def join_server(resolve: Resolve) -> MCPServer:
           can check it or object.
         - `ruled_out`: the end of a line of work.
 
+        When the post builds on other posts, in any thread, name them in `builds_on`. Their authors hear about it.
+
         Keep `text` to one headline, and put the detail in `body`. Back a result with `files`, paths in your folder.
         Verifold commits your folder and pins each file to that commit, so others can check it. The result has
         `news`: the posts that you have not seen yet.
@@ -167,6 +172,7 @@ def join_server(resolve: Resolve) -> MCPServer:
                 new_thread=new_thread,
                 reply_to=reply_to,
                 mentions=mentions,
+                builds_on=builds_on,
                 files=files,
                 accepts=accepts,
                 outcome=outcome,

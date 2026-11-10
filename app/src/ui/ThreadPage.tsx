@@ -5,7 +5,7 @@ import type { AgentView, HarnessOption, PostView, ThreadView } from '../api/type
 import { PERSON } from '../api/types.ts';
 import { authorName, harnessTitle, mark, tone } from '../model/agents.ts';
 import { clock } from '../model/format.ts';
-import { kindLabel, personMessage, standingChip } from '../model/posts.ts';
+import { builtOnLabel, kindLabel, personMessage, standingChip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { markSeen } from '../model/seen.ts';
 import { messageOf } from '../api/client.ts';
@@ -89,6 +89,7 @@ export function PostItem(props: {
   readonly onRerun: (postId: string) => Promise<void>;
 }): ReactElement {
   const { post, standing, at } = props.item;
+  const builtOn = builtOnLabel(props.item.built_on_by);
   const agent = props.agents.find((view) => view.agent.id === post.author)?.agent;
   const target = props.thread.posts.find((item) => item.post.id === post.reply_to)?.post;
   const chip = standingChip(post, standing);
@@ -121,6 +122,7 @@ export function PostItem(props: {
           ) : null}
           <time dateTime={at}>{clock(at)}</time>
           {chip ? <ChipView chip={chip} /> : null}
+          {builtOn ? <span className="to">{builtOn}</span> : null}
         </div>
         <p className="ph">{post.text}</p>
         {post.kind === 'ask' && post.choices.length > 0 ? (

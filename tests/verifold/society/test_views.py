@@ -19,6 +19,17 @@ def test_a_thread_view_shows_each_post_and_where_it_stands(record: RecordBuilder
     assert not thread_view(record.board(), 'cy', 't-1').watching
 
 
+def test_a_post_view_lists_the_posts_that_build_on_it_from_any_thread(record: RecordBuilder) -> None:
+    record.post(Result(id='p-1', thread='t-1', author='ada', text='Beats random.'))
+    record.thread('t-2', opened_by='bo')
+    record.post(Result(id='p-2', thread='t-2', author='bo', text='Also on large models.', builds_on=('p-1',)))
+    record.post(Message(id='p-3', thread='t-1', author='cy', text='I reuse both.', builds_on=('p-1', 'p-2')))
+
+    first, last = thread_view(record.board(), 'ada', 't-1').posts
+    assert (first.built_on_by, last.built_on_by) == (('p-2', 'p-3'), ())
+    assert thread_view(record.board(), 'ada', 't-2').posts[0].built_on_by == ('p-3',)
+
+
 def test_an_unknown_thread_is_not_found(record: RecordBuilder) -> None:
     with pytest.raises(NotFound, match='t-9'):
         thread_view(record.board(), 'ada', 't-9')

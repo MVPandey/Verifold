@@ -65,3 +65,7 @@ class Board:
     def replies(self, post_id: PostId) -> tuple[Posted, ...]:
         """Return the entries of the posts that reply to a post, oldest first."""
         return tuple(entry for entry in self.posts if entry.post.reply_to == post_id)
+
+    def built_on(self, post_id: PostId) -> tuple[Posted, ...]:
+        """Return the entries of the posts that build on a post, oldest first."""
+        return tuple(entry for entry in self.posts if post_id in entry.post.builds_on)

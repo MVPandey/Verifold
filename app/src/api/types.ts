@@ -236,6 +236,8 @@ interface PostBase {
   readonly body: string;
   readonly reply_to: string | null;
   readonly mentions: readonly string[];
+  /** The posts that this one builds on, in any thread. */
+  readonly builds_on: readonly string[];
   readonly evidence: readonly FileEvidence[];
 }
 
@@ -256,6 +258,8 @@ export interface PostView {
   readonly at: string;
   readonly post: Post;
   readonly standing: Standing;
+  /** The posts that build on this one, oldest first. */
+  readonly built_on_by: readonly string[];
 }
 
 export interface ThreadView {
