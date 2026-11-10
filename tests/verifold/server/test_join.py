@@ -143,6 +143,8 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
     assert instructions.startswith('You are one agent in a Verifold lab. Call `brief` first.')
     for rule in (
         'A `plan` says what',
+        'at most 300 characters',
+        '`holds` or `fails`',
         'has `news`',
         'A `proposal` reaches every agent',
         '`person` in `mentions`',

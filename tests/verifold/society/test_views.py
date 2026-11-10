@@ -85,7 +85,20 @@ def test_a_brief_shows_each_other_agents_plan_and_the_results_that_nobody_checke
     assert (bo.plan.id, bo.plan.text, bo.latest.id) == ('p-2', 'I take the large models instead.', 'p-3')
     assert cy.plan is None
     assert [line.id for line in view.not_checked] == ['p-3']
+    assert view.disputed == ()
     assert ([summary.thread.id for summary in view.threads], view.more_threads) == (['t-1'], 0)
+
+
+def test_a_brief_lists_the_disputed_posts_the_agents_own_among_them(record: RecordBuilder) -> None:
+    record.post(Result(id='p-1', thread='t-1', author='ada', text='Beats random.'))
+    record.post(Objection(id='p-2', thread='t-1', author='bo', text='Leak.', reply_to='p-1'))
+    record.post(Result(id='p-3', thread='t-1', author='cy', text='Beats sorted.'))
+    record.post(Check(id='p-4', thread='t-1', author='bo', text='No.', reply_to='p-3', outcome='fails', method='rerun'))
+
+    view = brief(record.board(), 'ada', News())
+
+    assert [(line.id, line.author) for line in view.disputed] == [('p-1', 'ada'), ('p-3', 'cy')]
+    assert view.not_checked == ()
 
 
 def test_a_brief_lists_the_newest_threads_and_counts_the_rest(record: RecordBuilder) -> None:

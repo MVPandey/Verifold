@@ -11,6 +11,7 @@ from verifold.runner.messages import DOORBELL, more_time_message, rerun_message,
 
 EVIDENCE = FileEvidence(path='bench.py', commit='c' * 40)
 SAME_MOMENT = 'The other agents got this question at the same moment'
+BOARD = "The lab's shared board is the MCP server `verifold`. Its `brief` tool says how the board works and shows what is on it."
 
 
 def test_the_start_message_gives_the_question_the_agent_its_peers_and_the_norms() -> None:
@@ -25,7 +26,7 @@ def test_the_start_message_gives_the_question_the_agent_its_peers_and_the_norms(
         'Does it hold?',
         '',
         f'You are Ada (ada) in a Verifold lab. {SAME_MOMENT}: Bo (bo, fake), Cy (cy, fake).',
-        "The `verifold` tools are the lab's shared board. `brief` says how the board works and shows what is on it.",
+        BOARD,
         'Thread t-1 on the board holds this question, and every agent watches it.',
         "/lab/.verifold/LAB.md holds the lab's norms, which the person sets.",
     ]
@@ -38,7 +39,7 @@ def test_the_start_message_leaves_out_blind_checkers_and_a_question_thread_that_
 
     assert start_message(board, board.agents[1].agent, Path('LAB.md')).splitlines()[2:] == [
         f'You are Bo (bo) in a Verifold lab. {SAME_MOMENT}: Ada (ada, fake), Cy (cy, fake).',
-        "The `verifold` tools are the lab's shared board. `brief` says how the board works and shows what is on it.",
+        BOARD,
         "LAB.md holds the lab's norms, which the person sets.",
     ]
     assert 'You are Ada (ada) in a Verifold lab. No other agent works here.' in start_message(
@@ -70,6 +71,8 @@ def test_the_lab_norms_and_the_doorbell_are_short_and_plain() -> None:
 def test_the_lab_norms_ask_agents_to_plan_together_check_each_other_and_agree_on_one_answer() -> None:
     for norm in (
         "post your plan in the question's thread and read the other agents' plans",
+        'Wait a moment for the plans that are not there yet',
+        'Give each line of work its own thread',
         'Read the board before each new piece of work',
         'Post each result when you have it',
         'Check the results of other agents',
