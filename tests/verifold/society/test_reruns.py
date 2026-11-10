@@ -116,21 +116,41 @@ def test_one_checker_is_one_blind_rerun_however_many_checks_it_posts() -> None:
     assert len(record.rerun('cy', 'p-1').board().reruns) == 2
 
 
-def test_a_failed_checker_frees_the_requests_before_it() -> None:
+def test_a_failed_rerun_frees_the_requests_before_it() -> None:
     record = lab().post(RESULT).rerun('bo', 'p-1').join('dee', family='openai', checks='p-1')
     waiting = [entry.by for entry in waiting_reruns(record.board(), 'p-1')]
-    record.turn('dee', error='The checker stopped without a check.')
+    record.turn('dee', error='The checker stopped without a check.', rerun_failed=True)
 
     assert waiting == ['bo']
     assert waiting_reruns(record.board(), 'p-1') == ()
     assert [entry.by for entry in open_reruns(record.board(), 'p-1')] == ['bo']
 
 
+def test_a_failed_turn_that_does_not_end_the_rerun_frees_no_request() -> None:
+    record = lab().post(RESULT).rerun('bo', 'p-1').join('dee', family='openai', checks='p-1')
+    # The time limit cancelled the checker's turn. The same checker goes on when the lab gets more time.
+    record.turn('dee', error='The lab ran out of time, so Verifold cancelled the turn.')
+
+    assert [entry.by for entry in waiting_reruns(record.board(), 'p-1')] == ['bo']
+
+
+def test_only_a_blind_checkers_turn_can_end_a_rerun() -> None:
+    with pytest.raises(RejectedEvent, match='ada is not a blind checker'):
+        lab().post(RESULT).turn('ada', error='It crashed.', rerun_failed=True).board()
+
+
 def test_a_post_gets_at_most_four_blind_checkers_however_they_end() -> None:
     record = lab().post(RESULT)
-    for number in range(MAX_CHECKERS):
+    for number in range(MAX_CHECKERS - 1):
         checker = f'checker-{number}'
-        record.rerun('bo', 'p-1').join(checker, family='openai', checks='p-1').turn(checker, error='It crashed.')
+        record.rerun('bo', 'p-1').join(checker, family='openai', checks='p-1')
+        record.turn(checker, error='It crashed.', rerun_failed=True)
+    record.rerun('bo', 'p-1').join('checker-3', family='openai', checks='p-1')
+
+    # The fourth checker runs, so one more request joins its rerun and starts no checker.
+    assert [entry.by for entry in waiting_reruns(record.rerun('cy', 'p-1').board(), 'p-1')] == ['bo', 'cy']
+
+    record.turn('checker-3', error='It crashed.', rerun_failed=True)
 
     assert waiting_reruns(record.board(), 'p-1') == ()
     with pytest.raises(RejectedEvent, match='got 4 blind checkers already'):

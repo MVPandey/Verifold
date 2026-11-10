@@ -164,7 +164,8 @@ async def test_a_member_can_ask_again_after_its_checker_failed(lab: Lab) -> None
     await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
     await lab.request_rerun('bo', 'p-2')
     await lab.join(Agent(id='dee', name='Dee', harness='fake', model=ModelSpec(family='openai'), checks='p-2'))
-    await lab.end_turn(TurnSummary(agent='dee', seconds=0, usage=Usage(), error='The checker stopped without a check.'))
+    stopped = TurnSummary(agent='dee', seconds=0, usage=Usage(), error='It stopped.', rerun_failed=True)
+    await lab.end_turn(stopped)
 
     again = await lab.request_rerun('bo', 'p-2')
 

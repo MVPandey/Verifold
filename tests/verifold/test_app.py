@@ -285,6 +285,7 @@ async def test_a_checker_that_runs_too_long_stops_and_the_lab_goes_on(
     assert summary is not None
     assert summary.agent.startswith('checker-')
     assert summary.error == 'The check ran past 3 seconds, so Verifold stopped the checker.'
+    assert summary.rerun_failed
     assert lab.status_code == 200
     assert not any(entry.post.kind == 'check' for entry in posts(project))
 
@@ -327,7 +328,9 @@ async def test_a_checker_that_stops_without_a_check_says_so_and_the_person_can_a
         return [
             event.agent
             for event in record(project)
-            if isinstance(event, TurnEnded) and event.error == 'The checker stopped without a check.'
+            if isinstance(event, TurnEnded)
+            and event.rerun_failed
+            and event.error == 'The checker stopped without a check.'
         ]
 
     async with serving(project, start, catalog) as client:
@@ -359,8 +362,8 @@ async def test_a_rerun_that_fails_to_prepare_its_checker_shows_why_and_the_lab_g
         await until(lambda: bool(failed()), timeout=60)
         lab = await client.get('/lab')
 
-    assert [(event.agent.startswith('checker-'), event.error) for event in failed()] == [
-        (True, 'GitError: git worktree add failed: no space left on device')
+    assert [(event.agent.startswith('checker-'), event.error, event.rerun_failed) for event in failed()] == [
+        (True, 'GitError: git worktree add failed: no space left on device', True)
     ]
     assert lab.status_code == 200
 

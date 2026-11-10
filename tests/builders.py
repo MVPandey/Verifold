@@ -77,9 +77,12 @@ class RecordBuilder:
         self.events.append(RerunRequested(seq=seq, at=at, by=by, post=post_id))
         return self
 
-    def turn(self, agent_id: str, error: str | None = None) -> 'RecordBuilder':
+    def turn(self, agent_id: str, error: str | None = None, *, rerun_failed: bool = False) -> 'RecordBuilder':
         seq, at = self._stamp()
-        self.events.append(TurnEnded(seq=seq, at=at, agent=agent_id, seconds=0, usage=Usage(), error=error))
+        turn = TurnEnded(
+            seq=seq, at=at, agent=agent_id, seconds=0, usage=Usage(), error=error, rerun_failed=rerun_failed
+        )
+        self.events.append(turn)
         return self
 
     def time_set(self, ends_at: datetime) -> 'RecordBuilder':

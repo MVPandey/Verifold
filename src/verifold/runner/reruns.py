@@ -84,7 +84,11 @@ class Reruns:
             if (task := asyncio.current_task()) and task.cancelling():
                 raise asyncio.CancelledError from error
             failed = TurnSummary(
-                agent=_checker_id(request), seconds=0, usage=Usage(), error=f'{type(error).__name__}: {error}'
+                agent=_checker_id(request),
+                seconds=0,
+                usage=Usage(),
+                error=f'{type(error).__name__}: {error}',
+                rerun_failed=True,
             )
             # A checker that never joined can't have a turn. Its failure then shows nowhere but in the missing check.
             with suppress(SocietyError):

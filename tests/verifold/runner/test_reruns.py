@@ -29,7 +29,7 @@ def a_rerun_loop(lab: Lab, tmp_path: Path) -> Reruns:
 async def a_failed_checker(lab: Lab, checker: str, post: str) -> None:
     """Record a blind checker that joined for `post` and failed, as one whose harness crashed."""
     await lab.join(Agent(id=checker, name=checker, harness='fake', model=ModelSpec(family='openai'), checks=post))
-    await lab.end_turn(TurnSummary(agent=checker, seconds=0, usage=Usage(), error='It crashed.'))
+    await lab.end_turn(TurnSummary(agent=checker, seconds=0, usage=Usage(), error='It crashed.', rerun_failed=True))
 
 
 async def test_requests_for_one_post_share_one_checker_and_the_next_request_follows_a_checker_without_a_check(
@@ -134,15 +134,20 @@ async def test_a_new_loop_starts_checkers_only_for_the_requests_that_still_wait(
     monkeypatch.setattr(Reruns, '_check', check)
     await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', EVIDENCE)
     await lab.post(PostRequest(kind='result', text='9.1x.', thread='t-1'), 'ada', EVIDENCE)
-    # Before the restart, the checker of p-2 failed, and the request for p-3 had no checker yet.
+    await lab.post(PostRequest(kind='result', text='7.4x.', thread='t-1'), 'ada', EVIDENCE)
+    # Before the restart, the rerun of p-2 failed, the time limit cancelled the turn of the checker of p-3, and the
+    # request for p-4 had no checker yet.
     await lab.request_rerun('bo', 'p-2')
     await a_failed_checker(lab, 'dee', 'p-2')
-    await lab.request_rerun('person', 'p-3')
+    await lab.request_rerun('bo', 'p-3')
+    await lab.join(Agent(id='eve', name='Eve', harness='fake', model=ModelSpec(family='openai'), checks='p-3'))
+    await lab.end_turn(TurnSummary(agent='eve', seconds=1, usage=Usage(), error='The lab ran out of time.'))
+    await lab.request_rerun('person', 'p-4')
     running = asyncio.create_task(a_rerun_loop(lab, tmp_path).run())
     try:
-        await until(lambda: bool(started))
+        await until(lambda: len(started) == 2)
         await asyncio.sleep(0.1)
     finally:
         running.cancel()
 
-    assert started == ['p-3']
+    assert started == ['p-3', 'p-4']

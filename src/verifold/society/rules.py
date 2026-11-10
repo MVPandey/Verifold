@@ -96,14 +96,17 @@ def check_watch(board: Board, watch: WatchSet) -> None:
 
 def check_turn(board: Board, turn: TurnEnded) -> None:
     """
-    Check that a turn belongs to an agent in the lab.
+    Check that a turn belongs to an agent in the lab, and that only a blind checker's turn ends a rerun.
 
     Raises:
-        RejectedEvent: The agent is not in the lab.
+        RejectedEvent: The agent is not in the lab, or the turn ends a rerun and the agent is not a blind checker.
 
     """
-    if not board.agent(turn.agent):
+    joined = board.agent(turn.agent)
+    if not joined:
         raise RejectedEvent(f'{turn.agent} is not an agent in this lab.')
+    if turn.rerun_failed and not joined.agent.checks:
+        raise RejectedEvent(f'{turn.agent} is not a blind checker, so its turn cannot end a rerun.')
 
 
 def check_rerun(board: Board, rerun: RerunRequested) -> None:
@@ -123,7 +126,8 @@ def check_rerun(board: Board, rerun: RerunRequested) -> None:
         raise RejectedEvent(f'Post {rerun.post} has no files as evidence, so a checker has nothing to rerun.')
     if len(blind_checks(board, rerun.post)) >= MAX_RERUNS:
         raise RejectedEvent(f'Post {rerun.post} has {MAX_RERUNS} blind reruns already.')
-    if len(_checkers(board, rerun.post)) >= MAX_CHECKERS:
+    # A request that joins the rerun of a request that waits starts no checker of its own.
+    if len(_checkers(board, rerun.post)) >= MAX_CHECKERS and not waiting_reruns(board, rerun.post):
         raise RejectedEvent(f'Post {rerun.post} got {MAX_CHECKERS} blind checkers already, and a post gets no more.')
 
 
@@ -150,13 +154,14 @@ def open_reruns(board: Board, post_id: PostId) -> tuple[RerunRequested, ...]:
 
 def waiting_reruns(board: Board, post_id: PostId) -> tuple[RerunRequested, ...]:
     """
-    Return the open requests for a post that came after the last failed turn of its blind checkers, oldest first.
+    Return the open requests for a post that came after its last failed rerun, oldest first.
 
-    A checker that fails leaves the requests before it without a check. Those requests start no other checker, and
-    their members can ask again.
+    A rerun that fails leaves the requests before it without a check. Those requests start no other checker, and
+    their members can ask again. A turn that fails without the end of the rerun, such as one that the time limit
+    cancelled, frees no request, because the same checker goes on.
     """
     checkers = _checkers(board, post_id)
-    failed = max((turn.seq for turn in board.turns if turn.error and turn.agent in checkers), default=0)
+    failed = max((turn.seq for turn in board.turns if turn.rerun_failed and turn.agent in checkers), default=0)
     return tuple(entry for entry in open_reruns(board, post_id) if entry.seq > failed)
 
 
