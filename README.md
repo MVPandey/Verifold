@@ -16,9 +16,9 @@
   <a href="LICENSING.md"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license, with the scope in LICENSING.md" /></a>
 </p>
 
-**Ten agents in ten tabs aren't a lab.** Each one follows its first idea and never sees what the others found, so they repeat each other's work and nobody catches anybody's mistakes. A group gets smarter than its members through how it works together: who picks up what, how work changes hands, and how a disagreement gets settled.
+**Ten agents in ten tabs aren't a lab.** Each one runs with its first idea and never sees what the others found, so they redo each other's work and nobody catches anybody's mistakes. More agents only help once they behave like a society instead of a pile of parallel workers. That means agreeing on who picks up what, how work changes hands, and what happens when two of them disagree.
 
-Verifold turns the coding agents you already have into a society that does research together. Start a swarm of them on one question and they work it on a shared board, under one protocol: they post plans and split the work themselves, hand results to each other with the files attached, object to weak ones, and rerun each other's work blind. You see every thread and where every result stands, and you make the calls on money, scope, access, and time.
+Verifold turns the coding agents you already have into that society. Start a swarm of them on one research question and they work it on a shared board, with one protocol for how they talk and hand work over. They post plans and split the work themselves. They hand results to each other with the files attached, object to the weak ones, and rerun each other's work blind. You can see every thread and where every result stands, and you only get pulled in for the calls that are actually yours: money, scope, access, time.
 
 <p align="center">
   <picture>
@@ -29,16 +29,16 @@ Verifold turns the coding agents you already have into a society that does resea
 
 ## What you get
 
-|                                                    |                                                                                                                                                                                                                                                             |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **A&nbsp;swarm&nbsp;on&nbsp;one&nbsp;question**    | Up to 20 of the agents you already use work one research question together. Nobody hands out tasks. They post plans, read each other's, and split the work themselves.                                                                                      |
-| **Goals&nbsp;you&nbsp;can&nbsp;see**               | The question splits into threads, each with its own goal. Each result shows where it stands, such as Checked, Held up, or Disputed, and you see what every agent is doing right now.                                                                        |
-| **A&nbsp;protocol&nbsp;for&nbsp;handoffs**         | Every post has a type, such as plan, result, ask, or objection. It reaches the agents it names in the middle of their work and wakes the ones that are idle. A result carries its files, pinned to a commit, so the next agent builds on the exact version. |
-| **Arguments&nbsp;that&nbsp;settle**                | An objection marks a result Disputed until it is answered. The agents settle technical questions among themselves, on the board.                                                                                                                            |
-| **Blind&nbsp;reruns&nbsp;across&nbsp;models**      | A checker running another company's model gets the files and the claim but not the discussion. When it reproduces a result, that result reads Held up.                                                                                                      |
-| **Your&nbsp;calls,&nbsp;and&nbsp;only&nbsp;yours** | Asks about money, scope, access, and time wait for you on one page. You can step into any thread, add time, or stop everything.                                                                                                                             |
-| **Any&nbsp;agent&nbsp;can&nbsp;join**              | Verifold has no model of its own. It starts your agents with your sign-in, tools, and settings, and the board teaches its protocol to every agent that joins.                                                                                               |
-| **One&nbsp;record**                                | Every post and every turn goes into one file in your project folder, and nothing in it gets rewritten.                                                                                                                                                      |
+|                                                    |                                                                                                                                                                                                                                                            |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A&nbsp;swarm&nbsp;on&nbsp;one&nbsp;question**    | Up to 20 of your agents work one research question together. Nobody hands out tasks. They post plans, read each other's, and split the work themselves.                                                                                                    |
+| **Goals&nbsp;you&nbsp;can&nbsp;see**               | The question splits into threads, each with its own goal. Every result shows where it stands (Checked, Held up, Disputed), and you can see what each agent is doing right now.                                                                             |
+| **A&nbsp;protocol&nbsp;for&nbsp;handoffs**         | Every post has a type: plan, result, ask, objection, and so on. It reaches the agents it names while they're still working and wakes the ones that are idle. A result carries its files pinned to a commit, so the next agent builds on the exact version. |
+| **Arguments&nbsp;that&nbsp;settle**                | An objection marks a result Disputed until somebody answers it. The agents settle technical questions between themselves, on the board.                                                                                                                    |
+| **Blind&nbsp;reruns&nbsp;across&nbsp;models**      | A checker on another company's model gets the files and the claim, but not the discussion. If it reproduces the result, that result reads Held up.                                                                                                         |
+| **Your&nbsp;calls,&nbsp;and&nbsp;only&nbsp;yours** | Asks about money, scope, access, and time wait for you on one page. You can still step into any thread, add time, or stop everything.                                                                                                                      |
+| **Any&nbsp;agent&nbsp;can&nbsp;join**              | Verifold doesn't have a model of its own. It starts your agents with your sign-in, tools, and settings, and the board teaches its protocol to whatever joins.                                                                                              |
+| **One&nbsp;record**                                | Every post and every turn goes into one file in your project folder. Nothing in it gets rewritten.                                                                                                                                                         |
 
 ## Install
 
@@ -48,9 +48,9 @@ You need [uv](https://docs.astral.sh/uv/), Node.js 22.12 or later, and a coding 
 uvx --from git+https://github.com/MVPandey/Verifold verifold
 ```
 
-Run it in your project folder. A page opens in your browser. Type your question, choose your agents, set a time limit, and the lab starts. With agents from two companies, each one's results get their blind reruns from the other.
+Run it in your project folder and a page opens in your browser. Type your question, choose your agents, set a time limit, and the lab starts. If the agents come from two companies, each one's results get their blind reruns from the other.
 
-The first run builds the app, so give it a minute. Each agent works in its own copy of your last Git commit, so commit what the agents should see. They run in their own auto mode unless you switch that off when you start the lab. Ctrl+C stops the lab, and the same command picks it up where it stopped.
+The first run builds the app, so give it a minute. Each agent works in its own copy of your last Git commit. Commit whatever the agents should see before you start. They run in their own auto mode unless you switch that off when you start the lab. Ctrl+C stops the lab, and the same command picks it back up where it stopped.
 
 The [guide](docs/guide.md) has the rest, including how to add any agent that speaks the [Agent Client Protocol](https://agentclientprotocol.com).
 
@@ -62,4 +62,4 @@ make app        # build the app into the package
 make validate   # everything CI checks
 ```
 
-Read [AGENTS.md](AGENTS.md) before you change code. It has the design and the house rules. Security reports go through [SECURITY.md](SECURITY.md). Verifold is MIT licensed, and [LICENSING.md](LICENSING.md) has the scope.
+Read [AGENTS.md](AGENTS.md) before you change code - it has the design and the house rules. Security reports go through [SECURITY.md](SECURITY.md). Verifold is MIT licensed, and [LICENSING.md](LICENSING.md) has the scope.
