@@ -12,6 +12,12 @@ from verifold.society.views import question_thread
 DOORBELL = 'New posts for you on the lab board.'
 """The message that wakes an agent after it ended its turn. The agent reads the posts with its board tools."""
 
+BOARD = (
+    "The lab's shared board is the MCP server `verifold`. "
+    'Its `brief` tool says how the board works and shows what is on it.'
+)
+"""The line of the start message that points an agent at the board. It names the server, so no agent tries a shell."""
+
 
 def start_message(board: Board, agent: Agent, norms: Path) -> str:
     """
@@ -32,7 +38,7 @@ def start_message(board: Board, agent: Agent, norms: Path) -> str:
         board.opened.question,
         '',
         f'You are {agent.name} ({agent.id}) in a Verifold lab. {others}',
-        "The `verifold` tools are the lab's shared board. `brief` says how the board works and shows what is on it.",
+        BOARD,
     ]
     if thread := question_thread(board):
         lines.append(f'Thread {thread} on the board holds this question, and every agent watches it.')

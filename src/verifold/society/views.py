@@ -68,21 +68,24 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
     """
     Return the lab for one agent in one read.
 
-    It holds the other agents with their latest plans, their results that nobody has checked, the newest threads,
-    and the agent's `news`. `how` says how the board works.
+    It holds the other agents with their latest plans, their results that nobody has checked, the disputed posts,
+    the newest threads, and the agent's `news`. `how` says how the board works.
     """
     others = tuple(joined.agent for joined in board.agents if joined.agent.id != agent_id and not joined.agent.checks)
+    stands = tuple((entry, standing(board, entry.post.id)) for entry in board.posts)
     not_checked = tuple(
         PostLine.of(entry)
-        for entry in board.posts
-        if isinstance(entry.post, Result) and entry.post.author != agent_id and standing(board, entry.post.id) == 'open'
+        for entry, state in stands
+        if isinstance(entry.post, Result) and entry.post.author != agent_id and state == 'open'
     )
+    disputed = tuple(PostLine.of(entry) for entry, state in stands if state == 'disputed')
     summaries = thread_summaries(board, agent_id)
     return Brief(
         you=agent_id,
         how=how,
         agents=tuple(_agent_line(board, agent) for agent in others),
         not_checked=not_checked[-MAX_NEWS:],
+        disputed=disputed[-MAX_NEWS:],
         threads=summaries[:MAX_NEWS],
         more_threads=max(len(summaries) - MAX_NEWS, 0),
         news=news,

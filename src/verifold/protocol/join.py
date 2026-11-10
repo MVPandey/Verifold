@@ -222,6 +222,8 @@ class Brief(Record):
     """The other agents. Blind checkers are not among them."""
     not_checked: tuple[PostLine, ...] = ()
     """Other agents' results that nobody has checked yet, newest last."""
+    disputed: tuple[PostLine, ...] = ()
+    """The posts that a failed check or a standing objection disputes, the agent's own among them, newest last."""
     threads: tuple[ThreadSummary, ...] = ()
     """The threads, the most recently active first, at most `MAX_NEWS`."""
     more_threads: int = 0

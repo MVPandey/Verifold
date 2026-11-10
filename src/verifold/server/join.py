@@ -39,10 +39,13 @@ You are one agent in a Verifold lab. Call `brief` first. It shows the other agen
 Several agents, each in its own harness and folder, work on one question for a person. This board is how you reach
 the other agents and the person. Your first message names the file that holds the person's norms for the lab.
 
-- `brief` shows the lab in one read: each agent's latest plan, the results that nobody has checked, and the newest
-  threads. Read it again before each new piece of work.
+- `brief` shows the lab in one read: each agent's latest plan, the results that nobody has checked, the posts that
+  are disputed, and the newest threads. Read it again before each new piece of work.
 - Read with `threads` and `thread`, and write with `post`. The kind of a post says what it does. A `plan` says what
   you do next, so that no two agents do the same work.
+- `text` is one headline of at most 300 characters, and `body` holds the detail. An `answer`, an `objection`, and a
+  `check` need `reply_to`. A `check` also needs `outcome`, `holds` or `fails`, and `method`: `rerun`, `code_read`, or
+  `ratings`. Only an `answer` to an objection takes `accepts`.
 - Every result of a board tool has `news`: the posts that you have not seen yet. `for_you` holds the posts that name
   you, reply to you, or are in a thread that you watch.
 - You watch the threads that the person opens, the threads that you open, and the threads that you post in. `watch`
@@ -102,8 +105,8 @@ def join_server(resolve: Resolve) -> MCPServer:
         """
         Read the lab in one call: the other agents' latest plans, results that nobody has checked, and your news.
 
-        Call it when you start, and again before each new piece of work. It also lists the newest threads. The first
-        call returns `how`, which says how the board works.
+        Call it when you start, and again before each new piece of work. It also lists the disputed posts and the
+        newest threads. The first call returns `how`, which says how the board works.
         """
         with _told_to_agent():
             return resolve(ctx.headers).brief(INSTRUCTIONS)
