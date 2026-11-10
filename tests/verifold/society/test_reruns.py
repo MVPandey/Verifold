@@ -1,9 +1,11 @@
 import pytest
 from builders import RecordBuilder, lab
 
+from verifold.protocol.events import TurnEnded
 from verifold.protocol.posts import Check, FileEvidence, Message, Objection, Result
+from verifold.protocol.usage import Usage
 from verifold.society.errors import RejectedEvent
-from verifold.society.rules import MAX_RERUNS, blind_checks, open_reruns
+from verifold.society.rules import MAX_RERUNS, blind_checks, open_reruns, waiting_reruns
 from verifold.society.standing import standing
 
 EVIDENCE = (FileEvidence(path='bench.json', commit='c' * 40),)
@@ -105,3 +107,31 @@ def test_a_blind_checker_posts_only_its_check() -> None:
 def test_a_checker_needs_an_existing_post() -> None:
     with pytest.raises(RejectedEvent, match='p-9 does not exist'):
         lab().join('dee', checks='p-9').board()
+
+
+def test_one_checker_is_one_blind_rerun_however_many_checks_it_posts() -> None:
+    record = lab().post(RESULT).rerun('bo', 'p-1').join('dee', family='openai', checks='p-1')
+    record.post(rerun_check('dee')).post(rerun_check('dee').model_copy(update={'id': 'p-3'}))
+
+    assert [entry.post.id for entry in blind_checks(record.board(), 'p-1')] == ['p-2']
+    # The checker's second check uses up no rerun, so the post can get another one.
+    assert len(record.rerun('cy', 'p-1').board().reruns) == 2
+
+
+def test_a_failed_checker_frees_the_requests_before_it() -> None:
+    record = lab().post(RESULT).rerun('bo', 'p-1').join('dee', family='openai', checks='p-1')
+    waiting = [entry.by for entry in waiting_reruns(record.board(), 'p-1')]
+    record.events.append(
+        TurnEnded(
+            seq=len(record.events) + 1,
+            at=record.at(len(record.events) + 1),
+            agent='dee',
+            seconds=0,
+            usage=Usage(),
+            error='The checker stopped without a check.',
+        )
+    )
+
+    assert waiting == ['bo']
+    assert waiting_reruns(record.board(), 'p-1') == ()
+    assert [entry.by for entry in open_reruns(record.board(), 'p-1')] == ['bo']

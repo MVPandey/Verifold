@@ -205,6 +205,17 @@ async def test_a_failed_turn_gives_the_agent_its_news_again(
     assert [entry.post.text for entry in (await member.wait(timeout=0)).posts] == ['Which layer?']
 
 
+async def test_an_agent_with_one_job_gets_one_turn_for_it(served: ServedBoard, tmp_path: Path, log: Path) -> None:
+    loop = loop_for(served, tmp_path)
+    loop._done = lambda _: False
+
+    async with asyncio.timeout(30):
+        await loop.run()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
+    assert len(served.lab.board.turns) == 1
+
+
 async def test_a_failing_harness_is_restarted_with_its_session_and_stops_after_three_failures(
     served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

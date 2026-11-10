@@ -30,7 +30,7 @@ from verifold.server.errors import LabExists
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
-from verifold.society.rules import open_reruns
+from verifold.society.rules import waiting_reruns
 from verifold.store.record_file import RecordFile
 
 type Clock = Callable[[], datetime]
@@ -149,7 +149,7 @@ class Lab:
 
         def build(board: Board, seq: int, at: datetime) -> RerunRequested:
             # A record from before this rule can hold such a pair, so the rule is here and not in the record's rules.
-            if any(entry.by == by for entry in open_reruns(board, post_id)):
+            if any(entry.by == by for entry in waiting_reruns(board, post_id)):
                 raise RejectedEvent(f'You asked for a blind rerun of {post_id} already. Its check will come to you.')
             return RerunRequested(seq=seq, at=at, by=by, post=post_id)
 

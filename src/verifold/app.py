@@ -338,6 +338,11 @@ class Host:
             # A checker that runs too long stops, and the lab goes on. Its post stays unchecked, and the board says why.
             error = f'The check ran past {limit:g} seconds, so Verifold stopped the checker.'
             await member.lab.end_turn(TurnSummary(agent=setup.agent.id, seconds=limit, usage=Usage(), error=error))
+            return
+        if not done(member.lab.board):
+            # The failed turn lets the next request for this post start its own checker.
+            error = 'The checker stopped without a check.'
+            await member.lab.end_turn(TurnSummary(agent=setup.agent.id, seconds=0, usage=Usage(), error=error))
 
 
 async def serve(

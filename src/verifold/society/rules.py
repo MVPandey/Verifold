@@ -122,11 +122,13 @@ def check_rerun(board: Board, rerun: RerunRequested) -> None:
 
 
 def blind_checks(board: Board, post_id: PostId) -> tuple[Posted, ...]:
-    """Return the checks of a post that its blind checkers posted, oldest first."""
+    """Return the first check of each blind checker of a post, oldest first. One checker is one blind rerun."""
     checkers = {joined.agent.id for joined in board.agents if joined.agent.checks == post_id}
-    return tuple(
-        entry for entry in board.replies(post_id) if isinstance(entry.post, Check) and entry.post.author in checkers
-    )
+    first: dict[AgentId, Posted] = {}
+    for entry in board.replies(post_id):
+        if isinstance(entry.post, Check) and entry.post.author in checkers:
+            first.setdefault(entry.post.author, entry)
+    return tuple(first.values())
 
 
 def open_reruns(board: Board, post_id: PostId) -> tuple[RerunRequested, ...]:
@@ -138,6 +140,17 @@ def open_reruns(board: Board, post_id: PostId) -> tuple[RerunRequested, ...]:
     """
     latest = max((entry.seq for entry in blind_checks(board, post_id)), default=0)
     return tuple(entry for entry in board.reruns if entry.post == post_id and entry.seq > latest)
+
+
+def waiting_reruns(board: Board, post_id: PostId) -> tuple[RerunRequested, ...]:
+    """
+    Return the open requests for a post that came after the last failed turn of its blind checkers, oldest first.
+
+    A checker that fails leaves the requests before it without a check. Those members can ask again.
+    """
+    checkers = {joined.agent.id for joined in board.agents if joined.agent.checks == post_id}
+    failed = max((turn.seq for turn in board.turns if turn.error and turn.agent in checkers), default=0)
+    return tuple(entry for entry in open_reruns(board, post_id) if entry.seq > failed)
 
 
 def check_time(time: TimeSet) -> None:

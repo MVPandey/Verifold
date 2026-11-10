@@ -1,7 +1,7 @@
 """Answers rerun requests by starting blind checkers."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import suppress
 from functools import partial
 from pathlib import Path
@@ -56,7 +56,10 @@ class Reruns:
         async with asyncio.TaskGroup() as group:
             tried: set[int] = set()
             running: dict[str, asyncio.Task[None]] = {}
+            ended = asyncio.Event()
             while True:
+                # A checker can end without an event on the board, so its end also wakes this loop.
+                ended.clear()
                 board = self._lab.board
                 running = {post: task for post, task in running.items() if not task.done()}
                 for request in board.reruns:
@@ -65,8 +68,10 @@ class Reruns:
                         continue
                     tried.add(request.seq)
                     if request in open_reruns(board, request.post):
-                        running[request.post] = group.create_task(self._contained(request))
-                await self._lab.wait_for_change(board.seq)
+                        task = group.create_task(self._contained(request))
+                        task.add_done_callback(lambda _: ended.set())
+                        running[request.post] = task
+                await _first(self._lab.wait_for_change(board.seq), ended.wait())
 
     async def _contained(self, request: RerunRequested) -> None:
         # One rerun that fails, for example because Git can't prepare the checker's folder, must not stop the lab or
@@ -112,6 +117,17 @@ class Reruns:
             start=rerun_message(target.post),
         )
         await self._supervise(member, setup, partial(_checked, agent_id=checker_id, post_id=request.post))
+
+
+async def _first(*waits: Coroutine[None, None, object]) -> None:
+    # Return when the first of the waits ends, and cancel the others.
+    tasks = [asyncio.ensure_future(wait) for wait in waits]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _checker_id(request: RerunRequested) -> str:
