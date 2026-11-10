@@ -62,6 +62,24 @@ def test_the_first_post_of_a_thread_wakes_every_agent_unless_it_names_somebody()
     assert woken(lab(), RESULT.model_copy(update={'mentions': ('cy',)})) == {'cy'}
 
 
+def test_an_ask_that_names_nobody_wakes_every_agent_so_a_stuck_agent_reaches_the_whole_lab() -> None:
+    stuck = Ask(id='p-2', thread='t-1', author='bo', text='The probe stays at chance. What am I missing?')
+
+    assert woken(started(), stuck) == {'ada', 'cy'}
+    assert woken(started(), stuck.model_copy(update={'mentions': ('cy',)})) == {'ada', 'cy'}
+    assert woken(started().watch('ada', 't-1', watching=False), stuck.model_copy(update={'mentions': ('cy',)})) == {
+        'cy'
+    }
+
+
+def test_an_ask_to_the_person_or_in_reply_to_a_post_is_not_for_every_agent() -> None:
+    quiet = started().watch('ada', 't-1', watching=False)
+    ask = Ask(id='p-2', thread='t-1', author='bo', text='Rent a GPU?')
+
+    assert woken(quiet, ask.model_copy(update={'mentions': ('person',)})) == set()
+    assert woken(started(), ask.model_copy(update={'text': 'Which seed?', 'reply_to': 'p-1'})) == {'ada'}
+
+
 def test_a_proposal_wakes_every_agent() -> None:
     assert woken(started(), Proposal(id='p-2', thread='t-1', author='bo', text='The answer: it holds.')) == {
         'ada',

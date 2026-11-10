@@ -89,6 +89,20 @@ def test_a_brief_shows_each_other_agents_plan_and_the_results_that_nobody_checke
     assert ([summary.thread.id for summary in view.threads], view.more_threads) == (['t-1'], 0)
 
 
+def test_a_brief_lists_the_asks_from_others_that_nobody_answered_but_not_the_ones_for_the_person_alone(
+    record: RecordBuilder,
+) -> None:
+    record.post(Ask(id='p-1', thread='t-1', author='bo', text='The probe stays at chance. What am I missing?'))
+    record.post(Ask(id='p-2', thread='t-1', author='cy', text='Rent a GPU?', mentions=('person',)))
+    record.post(Ask(id='p-3', thread='t-1', author='cy', text='Which tokenizer?', mentions=('person', 'ada')))
+    record.post(Ask(id='p-4', thread='t-1', author='ada', text='Who has the baseline?'))
+    record.post(Ask(id='p-5', thread='t-1', author='cy', text='Which layer?'))
+    record.post(Answer(id='p-6', thread='t-1', author='bo', text='Layer 6.', reply_to='p-5'))
+
+    assert [line.id for line in brief(record.board(), 'ada', News(seq=0)).open_asks] == ['p-1', 'p-3']
+    assert [line.id for line in brief(record.board(), 'bo', News(seq=0)).open_asks] == ['p-3', 'p-4']
+
+
 def test_a_brief_lists_the_disputed_posts_the_agents_own_among_them(record: RecordBuilder) -> None:
     record.post(Result(id='p-1', thread='t-1', author='ada', text='Beats random.'))
     record.post(Objection(id='p-2', thread='t-1', author='bo', text='Leak.', reply_to='p-1'))

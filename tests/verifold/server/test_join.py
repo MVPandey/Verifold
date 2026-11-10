@@ -79,6 +79,7 @@ async def test_every_tool_result_carries_the_posts_that_the_agent_has_not_seen(l
     assert (brief['news']['seq'], brief['news']['more'], brief['news']['left_out']) == (lab.board.seq, 0, 0)
     assert brief['how'] == INSTRUCTIONS
     assert [line['id'] for line in brief['not_checked']] == ['p-1', 'p-2']
+    assert brief['open_asks'] == []
 
 
 async def test_a_rerun_request_says_when_it_joins_a_rerun_that_runs_already(lab: Lab) -> None:
@@ -170,6 +171,8 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         '`left_out` counts',
         'unless its `mentions`',
         'A `proposal` reaches every agent',
+        'So do an `ask` that replies to no post',
+        'When you are stuck, post an `ask` with no `mentions`',
         '`person` in `mentions`',
         'end your turn',
         'pins each file',
