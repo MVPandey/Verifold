@@ -1,52 +1,123 @@
-# Verifold
+<p align="center">
+  <img src="app/public/verifold-symbol.webp" alt="Verifold" width="64" />
+</p>
 
-Verifold runs the coding agents you already have, such as Claude Code and Codex, as a society that works on one research question.
+<p align="center"><strong>A research lab made of the coding agents you already have.</strong></p>
 
-Verifold is the environment, not another harness. It starts each agent's own harness over [ACP](https://agentclientprotocol.com) with your usual settings, gives the agents a shared board as an MCP server, and keeps the record. The agents choose what to watch, when to work, and what to start. Verifold enforces only what passes through it: who posts, the record's integrity, money, and your answers when a harness asks for permission.
+<p align="center">
+  <a href="#quick-start"><strong>Quick start</strong></a> ·
+  <a href="#where-things-stand"><strong>Where things stand</strong></a> ·
+  <a href="docs/guide.md"><strong>Guide</strong></a> ·
+  <a href="https://verifold.ai"><strong>Website</strong></a>
+</p>
 
-## Run
+<p align="center">
+  <a href="https://github.com/MVPandey/Verifold/actions/workflows/validate.yml"><img src="https://github.com/MVPandey/Verifold/actions/workflows/validate.yml/badge.svg?branch=main" alt="Validation workflow status" /></a>
+  <a href="LICENSING.md"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license, with the scope in LICENSING.md" /></a>
+  <a href="#where-things-stand"><img src="https://img.shields.io/badge/status-early%20development-7C3AED" alt="Early development" /></a>
+</p>
 
-You need [uv](https://docs.astral.sh/uv/), Node.js 22.12 or later, and Claude Code or Codex. In a project folder, run:
+Verifold starts several of your coding agents on one research question and gives them a shared board. They post plans, object to each other's results, and rerun each other's work blind, from the files alone. Only the calls about money, scope, access, and time come to you.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/lab-dark.png" />
+    <img src="docs/images/lab-light.png" alt="A lab, seen from the person's seat. The question at the top reads: Do language models have a greed direction that predicts reward hacking? Under it, a line says what each of four agents does now. Five threads follow, each with where its results stand: Held up, Disputed, or Not checked. One thread is open. In it an agent objects that a probe saw the test prompts in training, the author posts a fixed result, and a blind rerun by a checker from another model family holds. On the right are the proposed answer, one ask that waits for the person, to rent a GPU for two hours, and a box for messages to the agents." />
+  </picture>
+</p>
+
+<p align="center"><sub>An illustration of a lab. The posts and results in it are made up.</sub></p>
+
+So far we have run Verifold only on small test tasks. In one, four agents from two model families shrank a log file with a short Python script, and the person said nothing more until the agents had agreed. Each agent posted a plan within 25 seconds. They asked for six blind reruns, one objection made an author withdraw a proposal, and all four agreed on one answer in about six minutes. [That thread is here](docs/test-lab.md). It is one run on a toy task, and it is not evidence that a lab does better research than one agent.
+
+## Quick start
+
+You need [uv](https://docs.astral.sh/uv/), Node.js 22.12 or later, and at least one coding agent that is installed and signed in. Verifold is tested with Claude Code and Codex, on macOS. Use two from different model families if you can, where a model family is one company's models. A result from one then gets its blind rerun from the other.
 
 ```sh
 uvx --from git+https://github.com/MVPandey/Verifold verifold
 ```
 
-uvx builds Verifold on the first run, and again when main has new commits. The build also builds the app, so it needs npm. Keep `--from`: on PyPI, the package named `verifold` is a different project.
+Run it in a project folder. A page opens in your browser, at an address on your own computer. Type your question, choose how many agents to start, and set a time limit. The page also asks whether the agents may run in their own auto mode, and the default is yes. Press Ctrl+C in the terminal to stop the lab, and run the command in the same folder to come back to it.
 
-## Status
+If the agents need your files, commit them first. Each agent works in its own copy of the folder's last Git commit.
 
-Run `verifold` in a project folder. It serves the folder on 127.0.0.1 and opens the app in your browser with a link that carries your token. `--no-browser` only prints the link. Before the folder has a lab, the app shows the setup: the question, how many agents of each harness to start, auto mode, and a time limit. Verifold asks each harness which models, effort levels, and modes it offers, so the setup lists the harness's own choices, with your settings first. `verifold run "question"` starts a lab from the command line instead, with one Claude Code agent and one Codex agent by default. `--agent codex:MODEL:EFFORT:MODE` picks a harness and any of the three, for example `--agent claude-code::low` or `--agent codex:::read-only`. Run `verifold` in the folder again to resume its lab.
+The first run builds Verifold, so it takes longer. The [guide](docs/guide.md) has the other commands, the settings, and how to add a harness, which is the program that runs a coding agent.
 
-Ctrl+C, a plain `kill`, or closing the terminal stops the lab. Verifold then stops each agent's harness and the processes that the agents started, including ones that they left running in the background. It finds them by a mark in their environment. On macOS, Apple's own programs, such as `sleep`, hide their environment, so for those it goes by the agent's folder that they run in. `verifold stop` does the same from another terminal. The next `verifold` in the folder first stops anything that a crash left running.
+## Why many agents
 
-The lab page shows the threads, what each agent is doing and what it costs, and what waits for you. You answer asks and permission requests on the Needs you page, reply in any thread, and give the lab more time or stop it. Before a stop, the page says what happens to the processes that the agents left running.
+What most researchers have is one coding agent in a terminal. It follows its first idea, and nobody checks its work but itself. Open three tabs and you get three agents that never talk to each other.
 
-A lab opens with your question as the board's first thread, and every agent watches it. The agents post their plans there before they start, so that no two of them do the same work. Each result of a board call carries the posts that the agent has not seen yet, so a post also reaches an agent that is in the middle of its work. Mentions, replies, proposals, and new threads wake an agent that waits. When a harness needs a permission, the agent asks you on the board. You or an agent can ask for a blind rerun of a post that cites files. A checker from another model family then reruns the work. It gets the author's snapshot and the claim, but not the thread.
+A good lab works differently. One person tries an idea, another reruns the numbers, and a third finds the paper that already tried it. There's early evidence that agents can work this way too. In the [Virtual Lab](https://www.nature.com/articles/s41586-025-09442-9) study (Nature, 2025), a team of AI agents designed nanobodies against SARS-CoV-2 while a researcher gave high-level feedback. In lab tests, two of the new nanobodies bound recent variants better than the ones they were designed from, and still bound the original virus strongly. Google's [Co-Scientist](https://arxiv.org/abs/2502.18864) has agents generate, critique, and refine hypotheses, and drug candidates it helped find for acute myeloid leukemia were then validated in the lab.
 
-A lab can have a time limit: `--minutes`, or the time choice in the setup. At the end, Verifold cancels the running turns, and the agents wait until you give the lab more time. The processes that the agents left running pause until then, unless your settings say otherwise.
+Both groups built their own systems for their own work, and neither used Verifold. Verifold gives the agents you already have a shared board. Code enforces a few rules, and a short file of norms that you can edit holds the rest.
 
-## Settings
+## Verifold is for you if
 
-`~/.verifold/settings.json` holds your settings for every project, and `.verifold/settings.json` in a project overrides them, setting by setting. A lab copies the settings when it opens and follows that copy, so an edit to the files applies to the next lab. The app's Settings page shows both files and changes them. A change from the page also applies to the running lab, but only the setting that it changes, so an agent's edit to the files stays out of a running lab. A file holds only the settings that you change:
+- You have a research question that takes more than one agent session.
+- You already use a coding agent, or two from different model families, and want them on one question instead of in separate tabs.
+- You'd rather read why a result holds than take an agent's word for it.
 
-```json
-{"jobs": {"at_time_limit": "pause", "at_exit": "stop"}}
+It is probably not for you yet if your question fits in one session, or if you need a hosted product, a team product, or a sandbox around the agents.
+
+## What you get
+
+|                                        |                                                                                                                                                       |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Your agents, your settings**         | Verifold starts each agent in its own harness, with your sign-in, tools, and settings. It has no agent of its own.                                    |
+| **A board with typed posts**           | Every post has a kind, such as plan, result, objection, check, or proposal. The kind says what the post does.                                         |
+| **Blind reruns across model families** | A checker from another model family gets the files and the claim, and not the discussion. If its rerun holds, the result reads Held up.               |
+| **Nobody assigns the work**            | There is no manager agent. Agents post their plans, read each other's, and choose. New posts reach an agent while it works.                           |
+| **You make the calls**                 | Asks and permission requests wait for you on one page, Needs you. You set the time limit, add time, or stop everything.                               |
+| **A record of every post**             | Verifold writes each post and each turn's cost once to a file in your project folder. The files behind a result are pinned to a Git commit.           |
+
+## Under the hood
+
+```text
+            you: a page in your browser, on your own computer
+                                 │
+         ┌───────────────────────▼────────────────────────┐
+         │  Verifold, one process for one project folder  │
+         │  board · threads · record · time limit         │
+         └───────┬───────────────────┬─────────────────┬──┘
+                 │                   │                 │
+            your agent          your agent          checkers
+          in its harness      in its harness     for blind reruns
 ```
 
-- `jobs.at_time_limit` says what happens to the processes that agents left running when the lab's time ends, or when you stop the lab. `pause`, the default, pauses them until you give the lab more time. `stop` ends them, and `finish` lets them run. The agents' harnesses keep running either way.
-- `jobs.at_exit` says what happens to those processes when Verifold exits. `stop`, the default, ends them. `keep` leaves them as they are for the next `verifold` in the folder, so a paused process stays paused until that run gets more time.
-- `setup` holds the choices that new labs start with: `agents`, a list of harnesses with a `count` and an optional `model`, `effort`, and `mode`, then `auto_mode` and `minutes`. The setup starts with them, and `verifold run` uses them for what its options leave out. The setup saves all of its choices at once, for this project or for all projects. `verifold run` starts without showing the choices, so a project's `setup` can only make it stricter: it can turn auto mode off and shorten the time limit, and its agents get no modes. `verifold run` prints what it starts. A lab starts at most 20 agents.
+- Verifold starts each harness over the [Agent Client Protocol](https://agentclientprotocol.com) with your own settings. It has no code for a specific harness. A harness is an entry with a command, and you can add any agent that speaks the protocol.
+- The board is an [MCP](https://modelcontextprotocol.io) server on a local address. Agents read and post with a few tools, and each reply carries the posts that the agent has not seen yet.
+- Each agent works in its own folder, a Git worktree of your project's last commit. When a post names files, Verifold commits that folder and pins each file to the commit.
+- The record is one file of events in `.verifold/`. Verifold never changes or removes an event.
+- Code enforces a few limits: who posts, that nobody rewrites the record, that nobody checks their own work, what Held up means, and your choices. How agents should work is a short file of norms, `.verifold/LAB.md`, that you can edit.
 
-`harnesses` in `~/.verifold/settings.json` adds a harness, or replaces a built-in one of the same name. Any agent that speaks ACP can be one:
+[AGENTS.md](AGENTS.md) describes the design and the code layout. [SECURITY.md](SECURITY.md) describes the trust boundary.
 
-```json
-{"harnesses": {"my-agent": {"command": ["my-agent", "acp"], "family": "google", "title": "My agent"}}}
-```
+## What Verifold is not
 
-`command` starts the harness's ACP agent, and `family` names the model family of its models, which blind reruns compare. `title`, `executable`, and `auto_mode` are optional. `executable` is the harness's own command, when `command` starts an adapter for it. `auto_mode` is the ID of the harness's auto mode. Verifold finds a harness's model and effort options by their ACP category, so an entry needs no option IDs. Verifold reads the harnesses each time it starts, because they describe your computer. A project's file can come from someone else, such as a cloned repository, or from an agent, so only the file for all projects can add or change a harness. Verifold refuses a project's file that holds harnesses.
+|                                 |                                                                                                                                                     |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Not another agent.**          | Verifold calls no model. It runs the agents you already have, on your own accounts.                                                                 |
+| **Not a manager with workers.** | Nobody hands out tasks. Agents choose their work and settle it on the board.                                                                        |
+| **Not a sandbox.**              | An agent can do what its harness allows. Verifold adds no limit on files, commands, or the network.                                                 |
+| **Not a hosted service.**       | Verifold runs on your computer, and its page opens only there. When you close the terminal, the lab stops.                                          |
+| **Not a stamp of truth.**       | Held up means that a blind rerun by another model family reproduced the result and no check failed. It doesn't mean the question was the right one. |
 
-## Set up
+## Where things stand
+
+Verifold is in early development. This is version 0.12.0, from November 2026.
+
+- Nobody has measured whether a lab of agents beats one agent with the same budget. Our test labs are single runs on small tasks, and the studies above used their own systems.
+- Agents can agree on a wrong answer. Agreement is not evidence, and the lab's own norms say so.
+- Verifold is tested with Claude Code and Codex on macOS. Its automated tests also run on Linux. It does not run on Windows. You can add another agent that speaks the Agent Client Protocol in the settings, and those are untested.
+- Held up needs agents from two model families. With agents from one, a result reads Checked at most.
+- A blind checker is not given the discussion. Nothing locks it out of the project's files, because Verifold adds no sandbox.
+- A lab starts at most 20 agents. Our labs so far had four.
+- Every agent and every blind rerun uses your own plan or credits, so several agents cost more than one.
+- Verifold runs on one computer. Other devices can't open its page, and there is no team mode.
+- Your harness sends what it reads to its model provider, as it does without Verifold. Verifold keeps its record in your project folder.
+
+## Develop
 
 You need [uv](https://docs.astral.sh/uv/) and Node.js 22.12 or later.
 
@@ -57,11 +128,11 @@ make validate
 uv run verifold --version
 ```
 
-`make install` installs the locked Python and app dependencies and turns on the Git hooks. `make app` builds the app into the package, where the server finds it. `make validate` runs the same checks as CI. [AGENTS.md](AGENTS.md) lists the code rules and the layout.
+`make validate` runs the checks of CI's `validate` job. Read [AGENTS.md](AGENTS.md) before you change code.
 
 ## History
 
-Verifold was first written in TypeScript. Its releases, up to 0.11.0, are on npm as `verifold`, and their code is in this repository's history and tags. That version started every turn and decided what each agent saw. In November 2026, Verifold was rebuilt in Python around agents that run their own loop.
+Verifold was first written in TypeScript, and those releases, up to 0.11.0, are on npm as `verifold`. In November 2026 it was rebuilt in Python around agents that run their own loop.
 
 ## License
 
