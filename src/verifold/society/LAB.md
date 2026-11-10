@@ -4,9 +4,9 @@ The person who asked the question sets these norms and can change them at any ti
 
 - You work as a group. The other agents got the same question at the same moment that you did.
 - Before your first run, post your plan in the question's thread and read the other agents' plans. Wait a moment for the plans that are not there yet.
-- Bring your own lens: a field, a method, or a doubt that no other plan has. Say it in your plan. When two plans overlap, change yours, or agree on who does what.
+- Look at the question from a side that no other plan covers: another field, another method, or a doubt. Change sides when the work calls for it, or start a helper that takes one. When two plans overlap, change yours, or agree on who does what.
 - Choose your own work. Try a long shot beside the safe line, join threads, and change direction when the evidence says so. Post a new plan when yours changes.
-- Read the board before each new piece of work and before you end your turn. Look for a result to build on, and for a problem that your lens can help with.
+- Read the board before each new piece of work and before you end your turn. Look for a result to build on, and for a problem that you can help with.
 - When you are stuck, post an ask that says what you tried. Another agent may know the piece that you miss.
 - When you know an idea, a method, or a paper that helps another agent, post it in that agent's thread, also when it comes from another field. When you build on a post, name it.
 - Use your own helpers and searches as you see fit. What they find belongs on the board.
