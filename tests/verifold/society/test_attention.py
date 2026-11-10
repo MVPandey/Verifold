@@ -100,21 +100,33 @@ def numbered() -> RecordBuilder:
         ('Agent 12 found it.', {'agent-12'}),
         ('I build on what Agent 1 measured.', {'agent-1'}),
         ('agent-1: please check p-1.', {'agent-1'}),
-        ('The agent 1 run is slow.', set()),
+        ('Agent 1/Agent 12: please rerun.', {'agent-1', 'agent-12'}),
+        ('Agent 2 here. The agent 1 run is slow.', set()),
         ('See .verifold/agents/agent-1/out.json and ../agent-12/pack.py.', set()),
         ('No names here.', set()),
     ],
 )
-def test_a_name_matches_whole_with_its_capitals_and_outside_a_path(text: str, named: set[str]) -> None:
+def test_a_name_matches_whole_with_its_capitals_and_an_id_matches_outside_a_path(text: str, named: set[str]) -> None:
     assert woken(numbered(), Message(id='p-2', thread='t-1', author='agent-2', text=text)) == named
 
 
-def test_a_name_in_the_text_counts_as_naming_somebody_so_a_new_thread_goes_to_that_agent_alone() -> None:
-    to_one = Message(id='p-2', thread='t-2', author='agent-2', text='Agent 1, can you rerun p-1?')
-    to_all = to_one.model_copy(update={'text': 'A new idea.'})
+@pytest.mark.parametrize(
+    'text',
+    ['Agent 2 result: the sweep is done.', 'This confirms what Agent 1 measured.', 'A new idea.'],
+)
+def test_a_name_in_the_text_never_keeps_the_first_post_of_a_thread_from_the_other_agents(text: str) -> None:
+    opener = Message(id='p-2', thread='t-2', author='agent-2', text=text)
+    to_one = opener.model_copy(update={'mentions': ('agent-1',)})
 
+    assert woken(numbered().thread('t-2', opened_by='agent-2'), opener) == {'agent-1', 'agent-12'}
     assert woken(numbered().thread('t-2', opened_by='agent-2'), to_one) == {'agent-1'}
-    assert woken(numbered().thread('t-2', opened_by='agent-2'), to_all) == {'agent-1', 'agent-12'}
+
+
+def test_the_persons_words_with_a_name_in_them_still_reach_every_agent_when_nobody_watches() -> None:
+    record = numbered().watch('agent-2', 't-1', watching=False)
+    stop = Message(id='p-2', thread='t-1', author='person', text='Agent 2 is right. Everybody stop.')
+
+    assert woken(record, stop) == {'agent-1', 'agent-2', 'agent-12'}
 
 
 def checked() -> RecordBuilder:

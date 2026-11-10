@@ -11,14 +11,14 @@ from conftest import ServedBoard
 from fakes import FAKE_HARNESS
 
 from verifold.protocol.app import AgentState
-from verifold.protocol.join import PostRequest
+from verifold.protocol.join import MAX_NEWS, PostRequest
 from verifold.protocol.settings import AtTimeLimit, JobSettings, Settings
 from verifold.protocol.usage import Usage
 from verifold.runner import agent_loop
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
 from verifold.runner.git import git
 from verifold.runner.messages import DOORBELL, more_time_message
-from verifold.runner.session import AgentSession
+from verifold.runner.session import AgentSession, TurnResult
 from verifold.server.activity import Activity
 
 
@@ -105,19 +105,54 @@ async def test_a_post_that_the_agent_got_in_a_tool_result_during_its_turn_rings_
 
 async def test_one_doorbell_covers_a_burst_of_posts(served: ServedBoard, tmp_path: Path, log: Path) -> None:
     lab = served.lab
-    running = asyncio.create_task(loop_for(served, tmp_path, quiet=0.4, max_quiet=5).run())
+    # The quiet window is far longer than the gaps, so a slow machine cannot split the burst.
+    running = asyncio.create_task(loop_for(served, tmp_path, quiet=1.5, max_quiet=10).run())
     try:
         await until(lambda: len(lab.board.turns) == 1)
         for number in range(3):
             await lab.post(PostRequest(kind='ask', text=f'Question {number}?', thread='t-1', mentions=('bo',)), 'ada')
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
         await until(lambda: len(lab.board.turns) == 2)
-        await asyncio.sleep(0.6)
+        await asyncio.sleep(2)
     finally:
         running.cancel()
 
     assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL]
     assert len([text for text in posts_by(served, 'bo') if text.startswith('Seen p-')]) == 3
+
+
+async def test_an_agent_that_read_one_page_of_its_posts_gets_a_doorbell_for_the_rest(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    member, token = served.seat('bo')
+    prompts: list[str] = []
+    pages: list[int] = []
+
+    async def read_one_page(_: AgentSession, message: str) -> TurnResult:
+        # The agent reads one page of its posts after a doorbell, and then ends its turn.
+        prompts.append(message)
+        if message == DOORBELL:
+            pages.append(len((await member.wait(timeout=0)).posts))
+        return TurnResult(stop_reason='end_turn', usage=Usage())
+
+    monkeypatch.setattr(AgentSession, 'send', read_one_page)
+    monkeypatch.setattr(served, 'seat', lambda _: (member, token))
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        asks = (
+            PostRequest(kind='ask', text=f'Question {number}?', thread='t-1', mentions=('bo',))
+            for number in range(MAX_NEWS + 3)
+        )
+        await asyncio.gather(*(lab.post(ask, 'ada') for ask in asks))
+        await until(lambda: len(pages) == 2)
+        await asyncio.sleep(0.3)
+    finally:
+        running.cancel()
+
+    assert prompts == ['Start.', DOORBELL, DOORBELL]
+    assert pages == [MAX_NEWS, 3]
 
 
 async def test_a_doorbell_does_not_wait_longer_than_the_limit_for_a_board_that_stays_busy(
