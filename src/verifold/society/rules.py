@@ -108,8 +108,7 @@ def check_rerun(board: Board, rerun: RerunRequested) -> None:
     Check that a post can get a blind rerun.
 
     Raises:
-        RejectedEvent: The post does not exist, has no files as evidence, or has all its blind reruns already, or the
-            same member asked already and that request is still open.
+        RejectedEvent: The post does not exist, has no files as evidence, or has all its blind reruns already.
 
     """
     _check_member(board, rerun.by)
@@ -120,8 +119,6 @@ def check_rerun(board: Board, rerun: RerunRequested) -> None:
         raise RejectedEvent(f'Post {rerun.post} has no files as evidence, so a checker has nothing to rerun.')
     if len(blind_checks(board, rerun.post)) >= MAX_RERUNS:
         raise RejectedEvent(f'Post {rerun.post} has {MAX_RERUNS} blind reruns already.')
-    if any(entry.by == rerun.by for entry in open_reruns(board, rerun.post)):
-        raise RejectedEvent(f'You asked for a blind rerun of {rerun.post} already. Its check will come to you.')
 
 
 def blind_checks(board: Board, post_id: PostId) -> tuple[Posted, ...]:

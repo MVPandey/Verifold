@@ -73,8 +73,8 @@ def test_a_request_while_a_rerun_runs_joins_it_and_one_check_answers_both() -> N
     record = lab().post(RESULT).rerun('bo', 'p-1').rerun('cy', 'p-1')
 
     assert [entry.by for entry in open_reruns(record.board(), 'p-1')] == ['bo', 'cy']
-    with pytest.raises(RejectedEvent, match='You asked for a blind rerun of p-1 already'):
-        lab().post(RESULT).rerun('bo', 'p-1').rerun('bo', 'p-1').board()
+    # A record from before the lab refused double requests still loads.
+    assert len(lab().post(RESULT).rerun('bo', 'p-1').rerun('bo', 'p-1').board().reruns) == 2
 
     record.join('dee', family='openai', checks='p-1').post(rerun_check('dee'))
 

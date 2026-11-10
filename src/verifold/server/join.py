@@ -211,8 +211,9 @@ def join_server(resolve: Resolve) -> MCPServer:
         with _told_to_agent():
             member = resolve(ctx.headers)
             requested = await member.rerun(post)
-            earlier = next(entry for entry in open_reruns(member.lab.board, requested.post))
-            joins = earlier.by if earlier.seq < requested.seq else None
+            # The first open request for the post is this one, or the one that it joins.
+            first = next(iter(open_reruns(member.lab.board, requested.post)), requested)
+            joins = first.by if first.seq < requested.seq else None
             return RerunResult(post=requested.post, joins=joins, news=member.news())
 
     @server.tool()
