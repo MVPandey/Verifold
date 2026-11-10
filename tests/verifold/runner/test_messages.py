@@ -81,11 +81,12 @@ def test_the_lab_norms_ask_agents_to_plan_together_check_each_other_and_agree_on
         assert norm in NORMS_TEMPLATE
 
 
-def test_the_lab_norms_ask_agents_to_bring_a_lens_say_when_they_are_stuck_and_carry_ideas_across_threads() -> None:
+def test_the_lab_norms_ask_agents_to_take_other_sides_say_when_they_are_stuck_and_carry_ideas_across() -> None:
     for norm in (
-        'Bring your own lens: a field, a method, or a doubt that no other plan has',
+        'Look at the question from a side that no other plan covers',
+        'Change sides when the work calls for it, or start a helper that takes one',
         'Try a long shot beside the safe line',
-        'Look for a result to build on, and for a problem that your lens can help with',
+        'Look for a result to build on, and for a problem that you can help with',
         'When you are stuck, post an ask that says what you tried',
         "post it in that agent's thread, also when it comes from another field",
         'When you build on a post, name it',
