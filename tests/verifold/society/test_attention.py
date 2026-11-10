@@ -3,8 +3,10 @@ from datetime import timedelta
 import pytest
 from builders import RecordBuilder, lab
 
-from verifold.protocol.join import MAX_NEWS
-from verifold.protocol.posts import Check, FileEvidence, Message, Objection, Post, Proposal, Result
+from verifold.protocol.agents import Agent, ModelSpec
+from verifold.protocol.events import AgentJoined
+from verifold.protocol.join import MAX_NEWS, News
+from verifold.protocol.posts import Ask, Check, FileEvidence, Message, Objection, Post, Proposal, Result
 from verifold.society.attention import news, update, wakes, watches_thread
 from verifold.society.errors import RejectedEvent
 
@@ -82,16 +84,73 @@ def test_a_name_in_the_text_wakes_its_agent() -> None:
     assert woken(started(), in_body) == {'cy'}
 
 
-def test_a_name_matches_whole() -> None:
-    record = RecordBuilder().join('agent-1').join('agent-12').join('agent-2').thread('t-1', opened_by='agent-2')
-    record.post(Message(id='p-1', thread='t-1', author='agent-2', text='Start.', mentions=('person',)))
+def numbered() -> RecordBuilder:
+    """A lab whose agents have the IDs and the display names that Verifold gives: `agent-1` and "Agent 1"."""
+    record = RecordBuilder()
+    for number in (1, 2, 12):
+        agent = Agent(id=f'agent-{number}', name=f'Agent {number}', harness='fake', model=ModelSpec(family='test'))
+        record.events.append(AgentJoined(seq=len(record.events) + 1, at=record.at(len(record.events) + 1), agent=agent))
+    record.thread('t-1', opened_by='agent-2')
+    return record.post(Message(id='p-1', thread='t-1', author='agent-2', text='Start.', mentions=('person',)))
 
-    assert woken(record, Message(id='p-2', thread='t-1', author='agent-2', text='Agent-12 found it.')) == {'agent-12'}
+
+@pytest.mark.parametrize(
+    ('text', 'named'),
+    [
+        ('Agent 12 found it.', {'agent-12'}),
+        ('I build on what Agent 1 measured.', {'agent-1'}),
+        ('agent-1: please check p-1.', {'agent-1'}),
+        ('The agent 1 run is slow.', set()),
+        ('See .verifold/agents/agent-1/out.json and ../agent-12/pack.py.', set()),
+        ('No names here.', set()),
+    ],
+)
+def test_a_name_matches_whole_with_its_capitals_and_outside_a_path(text: str, named: set[str]) -> None:
+    assert woken(numbered(), Message(id='p-2', thread='t-1', author='agent-2', text=text)) == named
+
+
+def test_a_name_in_the_text_counts_as_naming_somebody_so_a_new_thread_goes_to_that_agent_alone() -> None:
+    to_one = Message(id='p-2', thread='t-2', author='agent-2', text='Agent 1, can you rerun p-1?')
+    to_all = to_one.model_copy(update={'text': 'A new idea.'})
+
+    assert woken(numbered().thread('t-2', opened_by='agent-2'), to_one) == {'agent-1'}
+    assert woken(numbered().thread('t-2', opened_by='agent-2'), to_all) == {'agent-1', 'agent-12'}
+
+
+def checked() -> RecordBuilder:
+    """The lab with ada's result, a rerun that bo asked for, and the blind checker dee."""
+    record = lab().post(RESULT.model_copy(update={'evidence': (FileEvidence(path='a.json', commit='c' * 40),)}))
+    return record.rerun('bo', 'p-1').join('dee', family='openai', checks='p-1')
+
+
+@pytest.mark.parametrize(
+    'post',
+    [
+        Proposal(id='p-2', thread='t-1', author='bo', text='The answer: it holds.'),
+        Message(id='p-2', thread='t-2', author='cy', text='A new thread that names nobody.'),
+        Message(id='p-2', thread='t-1', author='ada', text='Dee, how far are you?', mentions=('dee',)),
+        Message(id='p-2', thread='t-2', author='person', text='Stop the sweep.'),
+    ],
+)
+def test_no_post_wakes_a_blind_checker(post: Post) -> None:
+    record = checked().thread('t-2', opened_by='person')
+
+    assert 'dee' not in woken(record, post)
+    assert update(record.board(), 'dee', after=0).posts == ()
+
+
+def test_the_persons_words_reach_every_agent_when_only_a_blind_checker_is_in_the_thread() -> None:
+    record = checked()
+    record.post(
+        Check(id='p-2', thread='t-1', author='dee', text='So.', reply_to='p-1', outcome='holds', method='rerun')
+    )
+    record.watch('ada', 't-1', watching=False)
+
+    assert woken(record, Message(id='p-3', thread='t-1', author='person', text='Try the 5090s.')) == {'ada', 'bo', 'cy'}
 
 
 def test_a_check_wakes_the_author_and_the_agent_that_asked_for_the_rerun() -> None:
-    record = lab().post(RESULT.model_copy(update={'evidence': (FileEvidence(path='a.json', commit='c' * 40),)}))
-    record.rerun('bo', 'p-1').join('dee', family='openai', checks='p-1')
+    record = checked()
     check = Check(
         id='p-2', thread='t-1', author='dee', text='Reran it.', reply_to='p-1', outcome='holds', method='rerun'
     )
@@ -143,18 +202,19 @@ def test_news_has_one_line_for_each_unseen_post_and_says_which_are_for_the_agent
     record.post(Message(id='p-3', thread='t-1', author='ada', text='Checking.'))
     record.thread('t-2', opened_by='bo')
     record.post(Message(id='p-4', thread='t-2', author='bo', text='Which seeds?', mentions=('cy',)))
+    board = record.board()
 
-    unseen = news(record.board(), 'ada', after=seen)
+    unseen = news(board, 'ada', after=seen)
 
     assert [(line.id, line.thread, line.kind, line.reply_to) for line in unseen.for_you] == [
         ('p-2', 't-1', 'objection', 'p-1')
     ]
     assert [(line.id, line.author, line.text) for line in unseen.others] == [('p-4', 'bo', 'Which seeds?')]
-    assert unseen.left_out == 0
-    assert news(record.board(), 'ada', after=record.board().seq) == news(lab().board(), 'ada', after=0)
+    assert (unseen.seq, unseen.more, unseen.left_out) == (board.seq, 0, 0)
+    assert news(board, 'ada', after=board.seq) == News(seq=board.seq)
 
 
-def test_news_keeps_the_newest_posts_and_counts_the_ones_that_it_leaves_out() -> None:
+def test_news_keeps_the_newest_of_the_other_posts_and_counts_the_ones_that_it_leaves_out() -> None:
     record = started()
     for number in range(2, MAX_NEWS + 4):
         record.post(Message(id=f'p-{number}', thread='t-1', author='bo', text=f'Note {number}.'))
@@ -163,4 +223,39 @@ def test_news_keeps_the_newest_posts_and_counts_the_ones_that_it_leaves_out() ->
 
     assert [line.id for line in unseen.for_you] == ['p-1']
     assert [line.id for line in unseen.others] == [f'p-{number}' for number in range(4, MAX_NEWS + 4)]
-    assert unseen.left_out == 2
+    assert (unseen.left_out, unseen.more, unseen.seq) == (2, 0, record.board().seq)
+
+
+def test_news_never_leaves_out_a_post_for_the_agent_and_brings_the_rest_with_the_next_read() -> None:
+    record = started()
+    record.post(Ask(id='p-2', thread='t-1', author='bo', text='Which layer?', mentions=('ada',)))
+    for number in range(3, MAX_NEWS + 9):
+        record.post(Message(id=f'p-{number}', thread='t-1', author='bo', text=f'Note {number}.'))
+    board = record.board()
+
+    first = news(board, 'ada', after=0)
+    second = news(board, 'ada', after=first.seq)
+    waited = update(board, 'ada', after=0)
+
+    assert [line.id for line in first.for_you] == [f'p-{number}' for number in range(2, MAX_NEWS + 2)]
+    assert (first.more, first.seq) == (7, board.posts[MAX_NEWS].seq)
+    assert [line.id for line in second.for_you] == [f'p-{number}' for number in range(MAX_NEWS + 2, MAX_NEWS + 9)]
+    assert (second.more, second.seq) == (0, board.seq)
+    assert ([entry.post.id for entry in waited.posts], waited.more, waited.seq) == (
+        [line.id for line in first.for_you],
+        7,
+        first.seq,
+    )
+
+
+def test_an_update_that_stops_early_leaves_the_later_threads_and_agents_for_the_next_one() -> None:
+    record = started()
+    for number in range(2, MAX_NEWS + 3):
+        record.post(Message(id=f'p-{number}', thread='t-1', author='bo', text=f'Note {number}.'))
+    board = record.join('dee').thread('t-2', opened_by='cy').board()
+
+    first = update(board, 'ada', after=0)
+    second = update(board, 'ada', after=first.seq)
+
+    assert (first.more, [agent.id for agent in first.agents], first.threads) == (1, ['bo', 'cy'], ())
+    assert ([agent.id for agent in second.agents], [thread.id for thread in second.threads]) == (['dee'], ['t-2'])

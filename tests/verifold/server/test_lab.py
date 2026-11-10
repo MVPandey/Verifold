@@ -132,3 +132,12 @@ async def test_a_long_question_keeps_its_first_line_as_the_headline_and_all_of_i
     assert len(post.text) == MAX_HEADLINE
     assert post.text.endswith('…')
     assert post.body == question
+
+
+@pytest.mark.parametrize(('question', 'headline'), [('\x1cDoes it hold?', 'Does it hold?'), ('\x1c', 'The question')])
+async def test_a_question_that_starts_with_a_line_separator_still_gets_a_headline(
+    record_file: RecordFile, question: str, headline: str
+) -> None:
+    lab = Lab.create(record_file, question)
+
+    assert (await lab.open_question_thread()).post.text == headline

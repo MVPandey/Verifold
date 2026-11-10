@@ -63,7 +63,7 @@ export function LabPage({ api, data, now }: PageProps): ReactElement {
               ))}
             </div>
           ) : (
-            <p className="empty">No threads yet. The first agent opens a plan thread.</p>
+            <p className="empty">No threads yet.</p>
           )}
         </section>
       </div>

@@ -84,10 +84,17 @@ class Member:
         return brief(self._lab.board, self.agent_id, self._unseen(), how if first else '')
 
     def _unseen(self) -> News:
-        board = self._lab.board
-        unseen = news(board, self.agent_id, self._seen)
-        self._seen = board.seq
+        unseen = news(self._lab.board, self.agent_id, self._seen)
+        self._seen = unseen.seq
         return unseen
+
+    def rewind(self, seq: int) -> None:
+        """
+        Count the posts after event `seq` as not seen again.
+
+        A turn that fails can lose the tool results that carried them, so the agent gets them once more.
+        """
+        self._seen = min(self._seen, seq)
 
     def threads(self) -> tuple[ThreadSummary, ...]:
         """Return a summary of each thread, the most recently active first."""

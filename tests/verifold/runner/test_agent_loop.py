@@ -49,7 +49,9 @@ def loop_for(served: ServedBoard, tmp_path: Path, activity: Activity | None = No
         token=token,
         start='Start.',
     )
-    return AgentLoop(member, setup, LoopSettings(mcp_url=served.url, retry_after=0, **settings), activity=activity)
+    # No quiet window by default, so a doorbell rings as soon as a post for the agent arrives.
+    options = {'retry_after': 0.0, 'quiet': 0.0} | settings
+    return AgentLoop(member, setup, LoopSettings(mcp_url=served.url, **options), activity=activity)
 
 
 def posts_by(served: ServedBoard, author: str) -> list[str]:
@@ -99,6 +101,73 @@ async def test_a_post_that_the_agent_got_in_a_tool_result_during_its_turn_rings_
 
     assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
     assert posts_by(served, 'bo') == ['Hello from bo.']
+
+
+async def test_one_doorbell_covers_a_burst_of_posts(served: ServedBoard, tmp_path: Path, log: Path) -> None:
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path, quiet=0.4, max_quiet=5).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        for number in range(3):
+            await lab.post(PostRequest(kind='ask', text=f'Question {number}?', thread='t-1', mentions=('bo',)), 'ada')
+            await asyncio.sleep(0.1)
+        await until(lambda: len(lab.board.turns) == 2)
+        await asyncio.sleep(0.6)
+    finally:
+        running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL]
+    assert len([text for text in posts_by(served, 'bo') if text.startswith('Seen p-')]) == 3
+
+
+async def test_a_doorbell_does_not_wait_longer_than_the_limit_for_a_board_that_stays_busy(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+
+    async def chatter() -> None:
+        while True:
+            await lab.post(PostRequest(kind='message', text='Still busy.', thread='t-1'), 'ada')
+            await asyncio.sleep(0.1)
+
+    running = asyncio.create_task(loop_for(served, tmp_path, quiet=5, max_quiet=0.5).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+        busy = asyncio.create_task(chatter())
+        try:
+            await until(lambda: len(calls(log, 'prompt')) == 2, timeout=5)
+        finally:
+            busy.cancel()
+    finally:
+        running.cancel()
+
+    assert calls(log, 'prompt')[1]['text'] == DOORBELL
+
+
+async def test_a_failed_turn_gives_the_agent_its_news_again(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    member, token = served.seat('bo')
+    before = member.seen
+
+    async def read_then_crash(*_: object) -> None:
+        # The harness got the post in a tool result, and then its process died.
+        assert member.news() is not None
+        raise BrokenPipeError('The harness closed its stdin.')
+
+    monkeypatch.setattr(AgentSession, 'send', read_then_crash)
+    # The loop gets this member, so the test can read as the agent and look at its cursor.
+    monkeypatch.setattr(served, 'seat', lambda _: (member, token))
+    loop = loop_for(served, tmp_path, max_failures=1)
+    await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+
+    async with asyncio.timeout(30):
+        await loop.run()
+
+    assert member.seen == before
+    assert [entry.post.text for entry in (await member.wait(timeout=0)).posts] == ['Which layer?']
 
 
 async def test_a_failing_harness_is_restarted_with_its_session_and_stops_after_three_failures(
