@@ -21,7 +21,7 @@ from verifold.app import ServeHooks, ServeOptions, WebServer, serve
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import StartRequest
-from verifold.protocol.events import AgentJoined, Event, Posted, SettingsSet, TimeRanOut, TurnEnded
+from verifold.protocol.events import AgentJoined, Event, Posted, RerunRequested, SettingsSet, TimeRanOut, TurnEnded
 from verifold.protocol.settings import AtExit, AtTimeLimit
 from verifold.runner.environment import harness_environment
 from verifold.runner.git import GitError, git
@@ -287,6 +287,32 @@ async def test_a_checker_that_runs_too_long_stops_and_the_lab_goes_on(
     assert summary.error == 'The check ran past 3 seconds, so Verifold stopped the checker.'
     assert lab.status_code == 200
     assert not any(entry.post.kind == 'check' for entry in posts(project))
+
+
+async def test_two_requests_for_a_rerun_of_one_post_start_one_checker(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
+    # The checker's turn takes a minute, so its check cannot answer the first request before the second one comes.
+    monkeypatch.setenv('FAKE_ACP_SLOW_AGENT', 'checker')
+    catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other')))
+
+    def requests() -> list[RerunRequested]:
+        return [event for event in record(project) if isinstance(event, RerunRequested)]
+
+    def checkers() -> list[str]:
+        return [event.agent.id for event in record(project) if isinstance(event, AgentJoined) and event.agent.checks]
+
+    async with serving(project, start, catalog) as client:
+        await until(lambda: len(requests()) == 1, timeout=60)
+        again = await client.post('/reruns', json={'post': requests()[0].post})
+        await until(lambda: len(checkers()) == 1, timeout=60)
+        await asyncio.sleep(1.5)
+
+    assert again.status_code == 200
+    assert [request.by for request in requests()] == ['agent-1', 'person']
+    assert len(checkers()) == 1
 
 
 async def test_a_rerun_that_fails_to_prepare_its_checker_shows_why_and_the_lab_goes_on(

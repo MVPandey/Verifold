@@ -21,6 +21,7 @@ from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.errors import SocietyError
+from verifold.society.rules import open_reruns
 
 type Crew = tuple[tuple[HarnessEntry, SessionOptions], ...]
 """The lab's harnesses, each with the options that its agents use."""
@@ -31,7 +32,7 @@ type Supervise = Callable[[Member, AgentSetup, Callable[[Board], bool]], Awaitab
 
 class Reruns:
     """
-    Starts a blind checker for each rerun request.
+    Starts a blind checker for each post that has an open rerun request.
 
     The checker comes from a harness of the lab whose model family differs from the author's, when the lab has one.
     It gets the author's files at the cited commit and the claim, but not the thread, and it stops after its check.
@@ -46,15 +47,25 @@ class Reruns:
         self._supervise = supervise
 
     async def run(self) -> None:
-        """Start a checker for each request that has no check yet, now and as requests arrive."""
+        """
+        Start a checker for each post with an open request, now and as requests arrive.
+
+        One post has one checker at a time. A request that arrives while a rerun runs gets that rerun's check. When
+        a checker ends without a check, the next request for the post gets its own checker.
+        """
         async with asyncio.TaskGroup() as group:
-            started = 0
+            tried: set[int] = set()
+            running: dict[str, asyncio.Task[None]] = {}
             while True:
                 board = self._lab.board
-                for request in board.reruns[started:]:
-                    if not _checked(board, _checker_id(request), request.post):
-                        group.create_task(self._contained(request))
-                started = len(board.reruns)
+                running = {post: task for post, task in running.items() if not task.done()}
+                for request in board.reruns:
+                    # A request waits while its post has a checker. Each request gets at most one checker.
+                    if request.seq in tried or request.post in running:
+                        continue
+                    tried.add(request.seq)
+                    if request in open_reruns(board, request.post):
+                        running[request.post] = group.create_task(self._contained(request))
                 await self._lab.wait_for_change(board.seq)
 
     async def _contained(self, request: RerunRequested) -> None:

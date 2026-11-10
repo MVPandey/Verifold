@@ -3,6 +3,7 @@ from builders import RecordBuilder, lab
 
 from verifold.protocol.posts import Check, FileEvidence, Message, Objection, Result
 from verifold.society.errors import RejectedEvent
+from verifold.society.rules import MAX_RERUNS, blind_checks, open_reruns
 from verifold.society.standing import standing
 
 EVIDENCE = (FileEvidence(path='bench.json', commit='c' * 40),)
@@ -57,7 +58,7 @@ def test_a_standing_objection_outweighs_a_held_up_rerun() -> None:
     assert standing(record.board(), 'p-1') == 'disputed'
 
 
-def test_a_rerun_needs_files_as_evidence_and_at_most_two_requests() -> None:
+def test_a_rerun_needs_a_post_with_files_and_a_member_of_the_lab() -> None:
     no_files = Result(id='p-1', thread='t-1', author='ada', text='Faster.')
 
     with pytest.raises(RejectedEvent, match='no files as evidence'):
@@ -66,8 +67,32 @@ def test_a_rerun_needs_files_as_evidence_and_at_most_two_requests() -> None:
         lab().rerun('bo', 'p-9').board()
     with pytest.raises(RejectedEvent, match='zed is not an agent'):
         lab().post(RESULT).rerun('zed', 'p-1').board()
-    with pytest.raises(RejectedEvent, match='2 reruns already'):
-        lab().post(RESULT).rerun('bo', 'p-1').rerun('person', 'p-1').rerun('cy', 'p-1').board()
+
+
+def test_a_request_while_a_rerun_runs_joins_it_and_one_check_answers_both() -> None:
+    record = lab().post(RESULT).rerun('bo', 'p-1').rerun('cy', 'p-1')
+
+    assert [entry.by for entry in open_reruns(record.board(), 'p-1')] == ['bo', 'cy']
+    with pytest.raises(RejectedEvent, match='You asked for a blind rerun of p-1 already'):
+        lab().post(RESULT).rerun('bo', 'p-1').rerun('bo', 'p-1').board()
+
+    record.join('dee', family='openai', checks='p-1').post(rerun_check('dee'))
+
+    assert open_reruns(record.board(), 'p-1') == ()
+    assert [entry.post.author for entry in blind_checks(record.board(), 'p-1')] == ['dee']
+
+
+def test_a_post_gets_at_most_two_blind_reruns_and_other_checks_do_not_count() -> None:
+    record = lab().post(RESULT).rerun('bo', 'p-1').rerun('cy', 'p-1').rerun('person', 'p-1')
+    record.join('dee', family='openai', checks='p-1').post(rerun_check('dee'))
+    record.post(rerun_check('cy').model_copy(update={'id': 'p-3'}))
+    # One blind rerun answered three requests, and cy's own check is not blind, so the post can get one more.
+    record.rerun('bo', 'p-1').join('eve', family='openai', checks='p-1')
+    record.post(rerun_check('eve').model_copy(update={'id': 'p-4'}))
+
+    assert len(blind_checks(record.board(), 'p-1')) == MAX_RERUNS
+    with pytest.raises(RejectedEvent, match='2 blind reruns already'):
+        record.rerun('cy', 'p-1').board()
 
 
 def test_a_blind_checker_posts_only_its_check() -> None:
