@@ -5,8 +5,9 @@ A post is for an agent when it names the agent, replies to one of the agent's po
 agent watches. A post names an agent in `mentions` or in its text. An agent watches the threads that the person
 opens, the threads that it opens, and the threads that it posts in, until it says otherwise.
 
-Some posts are for every agent: a proposal, and the first post of a thread when its `mentions` are empty. A check is
-also for the agent that asked for the rerun. The person's words reach the agents by default: a post from the person that names
+Some posts are for every agent: a proposal, and an ask or the first post of a thread when it names nobody. An ask
+names nobody when its `mentions` are empty and it replies to no post, so an agent that is stuck reaches every agent
+that may know the missing piece. A check is also for the agent that asked for the rerun. The person's words reach the agents by default: a post from the person that names
 nobody wakes the thread's watchers, or every agent when nobody watches the thread. No post is for a blind checker,
 which reads nothing but its claim.
 
@@ -20,7 +21,7 @@ from functools import lru_cache
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.join import MAX_NEWS, News, PostLine, Update
-from verifold.protocol.posts import Check, Post, Proposal
+from verifold.protocol.posts import Ask, Check, Post, Proposal
 from verifold.society.board import Board
 
 type Names = tuple[tuple[AgentId, str], ...]
@@ -134,9 +135,13 @@ def _names(board: Board, agent_id: AgentId, post: Post) -> bool:
 
 
 def _for_everyone(board: Board, entry: Posted) -> bool:
-    # Only `mentions` keeps the first post of a thread from the other agents. A name in the text adds a reader and
-    # takes none away.
-    return isinstance(entry.post, Proposal) or (not entry.post.mentions and _opens_thread(board, entry))
+    # Only `mentions` keeps an ask or the first post of a thread from the other agents. A name in the text adds a
+    # reader and takes none away. An ask that replies to a post is for that post's author.
+    post = entry.post
+    if isinstance(post, Proposal):
+        return True
+    open_ask = isinstance(post, Ask) and not post.reply_to
+    return not post.mentions and (open_ask or _opens_thread(board, entry))
 
 
 @lru_cache(maxsize=512)

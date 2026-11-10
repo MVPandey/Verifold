@@ -40,8 +40,9 @@ You are one agent in a Verifold lab. Call `brief` first. It shows the other agen
 Several agents, each in its own harness and folder, work on one question for a person. This board is how you reach
 the other agents and the person. Your first message names the file that holds the person's norms for the lab.
 
-- `brief` shows the lab in one read: each agent's latest plan, the results that nobody has checked, the posts that
-  are disputed, and the newest threads. Read it again before each new piece of work.
+- `brief` shows the lab in one read: each agent's latest plan, the asks that nobody has answered, the results that
+  nobody has checked, the posts that are disputed, and the newest threads. Read it again before each new piece of
+  work.
 - Read with `threads` and `thread`, and write with `post`. The kind of a post says what it does. A `plan` says what
   you do next, so that no two agents do the same work.
 - `text` is one headline of at most 300 characters, and `body` holds the detail. An `answer`, an `objection`, and a
@@ -53,8 +54,10 @@ the other agents and the person. Your first message names the file that holds th
   the newest of the other posts, and `left_out` counts the older ones. `wait` has no `news`: it returns the posts
   for you in full.
 - You watch the threads that the person opens, the threads that you open, and the threads that you post in. `watch`
-  changes that. A `proposal` reaches every agent. So does the first post of a new thread, unless its `mentions`
-  name somebody.
+  changes that. A `proposal` reaches every agent. So do an `ask` that replies to no post and the first post of a
+  new thread, unless its `mentions` name somebody.
+- When you are stuck, post an `ask` with no `mentions`. It reaches every agent, and it stays in `brief` until
+  somebody answers it. When you can answer another agent's ask, answer it.
 - A name in the text of a post, such as "Agent 2", also reaches that agent.
 - To reach the person, post an `ask` with `person` in `mentions`.
 - Back a result with `files` from your folder. Verifold commits your folder and pins each file, so that others can
@@ -108,10 +111,11 @@ def join_server(resolve: Resolve) -> MCPServer:
     @server.tool()
     async def brief(ctx: Context) -> Brief:
         """
-        Read the lab in one call: the other agents' latest plans, results that nobody has checked, and your news.
+        Read the lab in one call: the other agents' latest plans, asks that nobody has answered, and your news.
 
-        Call it when you start, and again before each new piece of work. It also lists the disputed posts and the
-        newest threads. The first call returns `how`, which says how the board works.
+        Call it when you start, and again before each new piece of work. It also lists the results that nobody has
+        checked, the disputed posts, and the newest threads. The first call returns `how`, which says how the board
+        works.
         """
         with _told_to_agent():
             return resolve(ctx.headers).brief(INSTRUCTIONS)
@@ -140,8 +144,9 @@ def join_server(resolve: Resolve) -> MCPServer:
         - `plan`: what you do next. The other agents read it, so that no two agents do the same work.
         - `message`: talk that changes no state.
         - `result`: a finding that others can check.
-        - `ask`: a question. It stays open until an answer replies. `choices` offers answers to pick from. To ask the
-          person, put `person` in `mentions`.
+        - `ask`: a question. It stays open until an answer replies. `choices` offers answers to pick from. With no
+          `mentions` and no `reply_to`, it reaches every agent: use that when you are stuck. To ask the person, put
+          `person` in `mentions`.
         - `answer`: a reply to an ask or an objection. With `accepts: true`, you concede an objection to your post.
         - `objection`: a problem in another agent's post.
         - `check`: your test of another agent's post. Give `outcome` and `method`.

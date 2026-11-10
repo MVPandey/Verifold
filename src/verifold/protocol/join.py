@@ -219,7 +219,7 @@ class AgentLine(Record):
 
 class Brief(Record):
     """
-    The lab for one agent, in one read: how the board works, who works on what, and what waits for a check.
+    The lab for one agent, in one read: how the board works, who works on what, and who needs help or a check.
 
     An agent reads it when it starts, and again before each new piece of work.
     """
@@ -229,6 +229,8 @@ class Brief(Record):
     """How the board works. The first brief of a session carries it, and later ones leave it out."""
     agents: tuple[AgentLine, ...] = ()
     """The other agents. Blind checkers are not among them."""
+    open_asks: tuple[PostLine, ...] = ()
+    """Asks from others that nobody has answered yet, newest last. Asks for the person alone are not among them."""
     not_checked: tuple[PostLine, ...] = ()
     """Other agents' results that nobody has checked yet, newest last."""
     disputed: tuple[PostLine, ...] = ()
