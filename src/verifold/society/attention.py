@@ -5,8 +5,8 @@ A post is for an agent when it names the agent, replies to one of the agent's po
 agent watches. A post names an agent in `mentions` or in its text. An agent watches the threads that the person
 opens, the threads that it opens, and the threads that it posts in, until it says otherwise.
 
-Some posts are for every agent: a proposal, and the first post of a thread when it names nobody. A check is also for
-the agent that asked for the rerun. The person's words reach the agents by default: a post from the person that names
+Some posts are for every agent: a proposal, and the first post of a thread when its `mentions` are empty. A check is
+also for the agent that asked for the rerun. The person's words reach the agents by default: a post from the person that names
 nobody wakes the thread's watchers, or every agent when nobody watches the thread. No post is for a blind checker,
 which reads nothing but its claim.
 
@@ -48,16 +48,10 @@ def wakes(board: Board, agent_id: AgentId, entry: Posted) -> bool:
     reader = board.agent(agent_id)
     if post.author == agent_id or (reader and reader.agent.checks):
         return False
-    target = board.post(post.reply_to) if post.reply_to else None
-    named = _named(board, post)
-    if agent_id in named or (target and target.post.author == agent_id):
-        return True
-    if isinstance(post, Proposal) or (not named and _opens_thread(board, entry)):
-        return True
-    if isinstance(post, Check) and any(rerun.by == agent_id and rerun.post == post.reply_to for rerun in board.reruns):
+    if _names(board, agent_id, post) or _for_everyone(board, entry):
         return True
     watching = watches_thread(board, agent_id, post.thread)
-    if post.author == PERSON and not named and target is None:
+    if post.author == PERSON and not post.mentions and not post.reply_to:
         return watching or not any(watches_thread(board, worker, post.thread) for worker, _ in _workers(board))
     return watching
 
@@ -128,25 +122,35 @@ def _workers(board: Board) -> Names:
     return tuple((joined.agent.id, joined.agent.name) for joined in board.agents if not joined.agent.checks)
 
 
-def _named(board: Board, post: Post) -> frozenset[AgentId]:
-    # Agents write "Agent 2" or "agent-2" in their text more often than they fill `mentions`.
-    return frozenset(post.mentions) | _in_text(f'{post.text}\n{post.body}', _workers(board))
+def _names(board: Board, agent_id: AgentId, post: Post) -> bool:
+    # A post names an agent in `mentions`, in its text, as a reply to the agent's post, or as the check that the
+    # agent asked for.
+    target = board.post(post.reply_to) if post.reply_to else None
+    if agent_id in post.mentions or (target and target.post.author == agent_id):
+        return True
+    if isinstance(post, Check) and any(rerun.by == agent_id and rerun.post == post.reply_to for rerun in board.reruns):
+        return True
+    return agent_id in _in_text(f'{post.text}\n{post.body}', _workers(board))
 
 
-@lru_cache(maxsize=4_096)
+def _for_everyone(board: Board, entry: Posted) -> bool:
+    # Only `mentions` keeps the first post of a thread from the other agents. A name in the text adds a reader and
+    # takes none away.
+    return isinstance(entry.post, Proposal) or (not entry.post.mentions and _opens_thread(board, entry))
+
+
+@lru_cache(maxsize=512)
 def _in_text(text: str, names: Names) -> frozenset[AgentId]:
-    # Every reader asks about the same post, so the scan of a long body runs once. An ID or a name matches whole
-    # and outside a path: "Agent 1" is not in "Agent 12", and "agent-3" is not in "agents/agent-3/out.json". A
-    # display name also needs its capitals, so "the agent 1 run" names nobody.
+    # Agents write "Agent 2" or "agent-2" in their text more often than they fill `mentions`. Every reader asks
+    # about the same post, so the scan of a long body runs once.
     return frozenset(
         agent_id
         for agent_id, name in names
-        if re.search(_whole(agent_id), text, re.IGNORECASE) or re.search(_whole(name), text)
+        # A display name matches whole and with its capitals: "Agent 1" is not in "Agent 12" or "the agent 1 run".
+        # An ID matches whole and outside a path: "agent-3" is not in "agents/agent-3/out.json".
+        if re.search(rf'(?<![\w-]){re.escape(name)}(?![\w-])', text)
+        or re.search(rf'(?<![\w/.-]){re.escape(agent_id)}(?![\w/-])', text, re.IGNORECASE)
     )
-
-
-def _whole(name: str) -> str:
-    return rf'(?<![\w/.-]){re.escape(name)}(?![\w/-])'
 
 
 def _opens_thread(board: Board, entry: Posted) -> bool:

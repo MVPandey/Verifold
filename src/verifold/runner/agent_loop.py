@@ -209,6 +209,10 @@ class AgentLoop:
         lab gets more time, and its message says so, followed by the doorbell when posts came meanwhile.
         """
         agent_id = self._setup.agent.id
+        # An agent that read one page of its posts in its turn gets a doorbell for the rest. An agent that read
+        # nothing gets no second doorbell for the same posts.
+        if self._member.seen > self._seen_at_turn:
+            self._notified = min(self._notified, self._member.seen)
         settled = False
         while True:
             board = self._lab.board
