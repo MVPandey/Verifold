@@ -7,6 +7,7 @@ The MIT license in `LICENSE` applies to Verifold's code and its supporting files
 - `tests/`, `hatch_build.py`, `.githooks/`, and `.github/`.
 - The package, build, lint, formatting, and validation configuration files.
 - `README.md`, `SECURITY.md`, and this file.
+- The guide and the screenshots in `docs/`.
 
 Other files in the repository remain reserved unless they carry their own license notice.
 
