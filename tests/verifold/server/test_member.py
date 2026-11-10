@@ -34,7 +34,7 @@ async def test_wait_returns_at_once_when_a_post_for_the_agent_is_there(lab: Lab)
 async def test_wait_sleeps_through_posts_that_do_not_wake_the_agent(lab: Lab) -> None:
     bo = Member(lab, 'bo')
     waiting = asyncio.create_task(bo.wait(timeout=5))
-    await lab.post(PostRequest(kind='message', text='Side note.', new_thread='Elsewhere'), 'ada')
+    await lab.post(PostRequest(kind='message', text='Side note.', thread='t-1'), 'ada')
     await asyncio.sleep(0.01)
     assert not waiting.done()
 
@@ -42,7 +42,40 @@ async def test_wait_sleeps_through_posts_that_do_not_wake_the_agent(lab: Lab) ->
     news = await waiting
 
     assert [entry.post.text for entry in news.posts] == ['Over to you.']
-    assert (news.other_posts, [thread.title for thread in news.threads]) == (1, ['Elsewhere'])
+    assert (news.other_posts, [line.text for line in news.others]) == (1, ['Side note.'])
+
+
+async def test_news_gives_each_post_once_and_a_post_that_the_agent_got_does_not_end_a_wait(lab: Lab) -> None:
+    bo = Member(lab, 'bo')
+    await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+    await lab.post(PostRequest(kind='message', text='Side note.', thread='t-1'), 'ada')
+
+    first = bo.news()
+    second = bo.news()
+    later = await bo.wait(timeout=0)
+
+    assert first is not None
+    assert ([line.text for line in first.for_you], [line.text for line in first.others]) == (
+        ['Which layer?'],
+        ['Side note.'],
+    )
+    assert second is not None
+    assert (second.for_you, second.others, later.posts, bo.seen) == ((), (), (), lab.board.seq)
+
+
+async def test_the_first_brief_says_how_the_board_works_and_every_brief_carries_the_news(lab: Lab) -> None:
+    bo = Member(lab, 'bo')
+    await lab.post(PostRequest(kind='plan', text='I take the small models.', new_thread='Plans'), 'ada')
+
+    first = bo.brief('How the board works.')
+    second = bo.brief('How the board works.')
+
+    assert (first.you, first.how, second.how) == ('bo', 'How the board works.', '')
+    assert [line.text for line in first.news.for_you] == ['I take the small models.']
+    assert second.news.for_you == ()
+    assert [(line.id, line.plan.text if line.plan else None) for line in first.agents] == [
+        ('ada', 'I take the small models.')
+    ]
 
 
 async def test_wait_returns_the_summary_after_the_timeout_and_moves_on(lab: Lab) -> None:
@@ -84,8 +117,9 @@ async def test_a_blind_checker_cannot_read_the_board_but_others_can_ask_for_reru
     dee = Member(lab, 'dee')
 
     assert (requested.by, requested.post) == ('bo', 'p-2')
-    for read in (dee.threads, lambda: dee.thread('t-1')):
+    for read in (dee.threads, lambda: dee.thread('t-1'), lambda: dee.brief('How the board works.')):
         with pytest.raises(BlindCheck, match='rerun p-2 blind'):
             read()
+    assert dee.news() is None
     with pytest.raises(BlindCheck):
         await dee.wait(timeout=0)

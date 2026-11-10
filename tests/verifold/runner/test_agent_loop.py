@@ -63,7 +63,7 @@ async def test_the_agent_starts_and_the_doorbell_rings_only_for_posts_for_it(
     running = asyncio.create_task(loop_for(served, tmp_path).run())
     try:
         await until(lambda: len(lab.board.turns) == 1)
-        await lab.post(PostRequest(kind='message', text='Not for bo.', thread='t-1'), 'ada')
+        await lab.post(PostRequest(kind='message', text='A side note.', thread='t-1'), 'ada')
         await asyncio.sleep(0.3)
         assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
 
@@ -82,6 +82,23 @@ async def test_the_agent_starts_and_the_doorbell_rings_only_for_posts_for_it(
         None,
     )
     assert turn.cost_usd == pytest.approx(0.01)
+
+
+async def test_a_post_that_the_agent_got_in_a_tool_result_during_its_turn_rings_no_doorbell(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        # The ask arrives before the agent's first post, so the result of that post carries it as news.
+        await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+        await until(lambda: len(lab.board.turns) == 1)
+        await asyncio.sleep(0.3)
+    finally:
+        running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
+    assert posts_by(served, 'bo') == ['Hello from bo.']
 
 
 async def test_a_failing_harness_is_restarted_with_its_session_and_stops_after_three_failures(

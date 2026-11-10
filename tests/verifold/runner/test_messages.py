@@ -1,16 +1,21 @@
 from datetime import timedelta, timezone
 from pathlib import Path
 
-from builders import START, lab
+from builders import START, RecordBuilder, lab
 
 from verifold.app import NORMS_TEMPLATE
 from verifold.protocol.posts import FileEvidence, Result
 from verifold.protocol.settings import AtTimeLimit
+from verifold.protocol.threads import QUESTION_TITLE
 from verifold.runner.messages import DOORBELL, more_time_message, rerun_message, start_message
+
+EVIDENCE = FileEvidence(path='bench.py', commit='c' * 40)
+SAME_MOMENT = 'The other agents got this question at the same moment'
 
 
 def test_the_start_message_gives_the_question_the_agent_its_peers_and_the_norms() -> None:
-    board = lab().board()
+    record = RecordBuilder().thread('t-1', opened_by='person', title=QUESTION_TITLE)
+    board = record.join('ada').join('bo').join('cy').board()
     # An older record gives agent 1 a planner's role. Verifold no longer sends roles.
     ada = board.agents[0].agent.model_copy(update={'role': 'Planner', 'brief': 'Open a plan thread.'})
 
@@ -19,10 +24,26 @@ def test_the_start_message_gives_the_question_the_agent_its_peers_and_the_norms(
     assert message.splitlines() == [
         'Does it hold?',
         '',
-        'You are Ada in a Verifold lab. The other agents: Bo (fake), Cy (fake).',
-        "The `verifold` tools are the lab's shared board, and their instructions say how it works.",
+        f'You are Ada (ada) in a Verifold lab. {SAME_MOMENT}: Bo (bo, fake), Cy (cy, fake).',
+        "The `verifold` tools are the lab's shared board. `brief` says how the board works and shows what is on it.",
+        'Thread t-1 on the board holds this question, and every agent watches it.',
         "/lab/.verifold/LAB.md holds the lab's norms, which the person sets.",
     ]
+
+
+def test_the_start_message_leaves_out_blind_checkers_and_a_question_thread_that_the_lab_does_not_have() -> None:
+    record = lab().post(Result(id='p-1', thread='t-1', author='ada', text='x', evidence=(EVIDENCE,)))
+    board = record.join('dee', family='openai', checks='p-1').board()
+    alone = RecordBuilder().join('ada').board()
+
+    assert start_message(board, board.agents[1].agent, Path('LAB.md')).splitlines()[2:] == [
+        f'You are Bo (bo) in a Verifold lab. {SAME_MOMENT}: Ada (ada, fake), Cy (cy, fake).',
+        "The `verifold` tools are the lab's shared board. `brief` says how the board works and shows what is on it.",
+        "LAB.md holds the lab's norms, which the person sets.",
+    ]
+    assert 'You are Ada (ada) in a Verifold lab. No other agent works here.' in start_message(
+        alone, alone.agents[0].agent, Path('LAB.md')
+    )
 
 
 def test_a_lab_with_a_time_limit_tells_each_agent_when_it_ends_in_utc() -> None:
@@ -41,8 +62,20 @@ def test_a_lab_with_a_time_limit_tells_each_agent_when_it_ends_in_utc() -> None:
 
 def test_the_lab_norms_and_the_doorbell_are_short_and_plain() -> None:
     assert NORMS_TEMPLATE.startswith("# The lab's norms")
-    assert '`post`' not in NORMS_TEMPLATE
+    assert '`' not in NORMS_TEMPLATE
+    assert len(NORMS_TEMPLATE) < 2_500
     assert DOORBELL == 'New posts for you on the lab board.'
+
+
+def test_the_lab_norms_ask_agents_to_plan_together_check_each_other_and_agree_on_one_answer() -> None:
+    for norm in (
+        "post your plan in the question's thread and read the other agents' plans",
+        'Read the board before each new piece of work',
+        'Post each result when you have it',
+        'Check the results of other agents',
+        "propose the lab's answer in the question's thread",
+    ):
+        assert norm in NORMS_TEMPLATE
 
 
 def test_a_rerun_message_gives_the_claim_its_files_and_where_to_check_but_not_the_thread() -> None:

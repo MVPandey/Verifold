@@ -278,6 +278,7 @@ class Host:
         settings = load_settings(self._project).lab_settings()
         lab = Lab.create(self._record, request.question, auto_mode=request.auto_mode, time_left=time_left)
         await lab.set_settings(settings)
+        await lab.open_question_thread()
         self._lab = lab
         chosen = [choice for choice in request.agents for _ in range(choice.count)]
         for number, choice in enumerate(chosen, start=1):

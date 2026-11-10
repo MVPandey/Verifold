@@ -1,6 +1,8 @@
 import pytest
 from mcp import Client
 
+from verifold.protocol.agents import Agent, ModelSpec
+from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import FileEvidence
 from verifold.server.errors import UnknownAgent
 from verifold.server.join import INSTRUCTIONS, Members, join_server
@@ -38,16 +40,59 @@ async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
         threads = await client.call_tool('threads', {})
         news = await client.call_tool('wait', {'timeout_seconds': 0})
 
-    assert tools == {'post', 'threads', 'thread', 'watch', 'rerun', 'wait'}
+    assert tools == {'brief', 'post', 'threads', 'thread', 'watch', 'rerun', 'wait'}
     assert posted.structured_content is not None
     assert posted.structured_content['post']['id'] == 'p-2'
     assert watched.structured_content is not None
-    assert watched.structured_content['watching'] is True
+    assert (watched.structured_content['thread'], watched.structured_content['watching']) == ('t-1', True)
     assert thread.structured_content is not None
     assert [item['standing'] for item in thread.structured_content['posts']] == ['disputed', 'open']
     assert threads.structured_content is not None
+    assert [summary['thread']['id'] for summary in threads.structured_content['threads']] == ['t-1']
     assert news.structured_content is not None
     assert news.structured_content['posts'] == []
+
+
+async def test_every_tool_result_carries_the_posts_that_the_agent_has_not_seen(lab: Lab) -> None:
+    evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
+    bo = Member(lab, 'bo')
+    calls = (
+        ('post', {'kind': 'plan', 'text': 'I take the large models.', 'thread': 't-1'}),
+        ('threads', {}),
+        ('thread', {'thread': 't-1'}),
+        ('watch', {'thread': 't-1'}),
+        ('rerun', {'post': 'p-2'}),
+        ('brief', {}),
+    )
+    seen: list[list[str]] = []
+    async with Client(join_server(lambda _: bo)) as client:
+        await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
+        for number, (tool, arguments) in enumerate(calls):
+            await lab.post(PostRequest(kind='message', text=f'Note {number}.', thread='t-1'), 'ada')
+            result = await client.call_tool(tool, arguments)
+            assert result.structured_content is not None
+            news = result.structured_content['news']
+            seen.append([line['text'] for line in (*news['for_you'], *news['others'])])
+        brief = result.structured_content
+
+    assert seen == [['11.8x.', 'Note 0.'], ['Note 1.'], ['Note 2.'], ['Note 3.'], ['Note 4.'], ['Note 5.']]
+    assert brief['how'] == INSTRUCTIONS
+    assert [line['id'] for line in brief['not_checked']] == ['p-1', 'p-2']
+
+
+async def test_a_blind_checker_posts_its_check_and_gets_no_news(lab: Lab) -> None:
+    evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
+    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
+    await lab.join(Agent(id='dee', name='Dee', harness='fake', model=ModelSpec(family='openai'), checks='p-2'))
+    check = {'kind': 'check', 'text': 'Reran it.', 'thread': 't-1', 'reply_to': 'p-2', 'outcome': 'holds'}
+    async with Client(join_server(lambda _: Member(lab, 'dee'))) as client:
+        posted = await client.call_tool('post', check | {'method': 'rerun'})
+        refused = await client.call_tool('brief', {})
+
+    assert posted.structured_content is not None
+    assert (posted.structured_content['standing'], posted.structured_content['news']) == ('open', None)
+    assert refused.is_error
+    assert 'rerun p-2 blind' in str(refused.content)
 
 
 async def test_a_broken_rule_comes_back_to_the_agent_as_a_readable_error(lab: Lab) -> None:
@@ -95,7 +140,11 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         instructions = client.instructions
 
     assert instructions == INSTRUCTIONS
+    assert instructions.startswith('You are one agent in a Verifold lab. Call `brief` first.')
     for rule in (
+        'A `plan` says what',
+        'has `news`',
+        'A `proposal` reaches every agent',
         '`person` in `mentions`',
         'end your turn',
         'pins each file',

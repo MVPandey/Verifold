@@ -1,9 +1,9 @@
 """
 The posts of the board.
 
-A post's `kind` says what it does in the society. An objection disputes its target, an answer can concede an
-objection, a check tests another agent's post, and a proposal becomes a decision when nobody objects in time. A new
-kind is one more model in the `Post` union.
+A post's `kind` says what it does in the society. A plan says what its author does next, an objection disputes its
+target, an answer can concede an objection, a check tests another agent's post, and a proposal puts a choice to the
+lab. A new kind is one more model in the `Post` union.
 """
 
 from pathlib import PurePosixPath
@@ -19,7 +19,7 @@ MAX_CHOICES = 10
 
 type Headline = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_HEADLINE)]
 type Body = Annotated[str, StringConstraints(max_length=20_000)]
-type PostKind = Literal['message', 'result', 'ask', 'answer', 'objection', 'proposal', 'check', 'ruled_out']
+type PostKind = Literal['message', 'plan', 'result', 'ask', 'answer', 'objection', 'proposal', 'check', 'ruled_out']
 """The values of `kind` across the `Post` union."""
 type Outcome = Literal['holds', 'fails']
 type CheckMethod = Literal['rerun', 'code_read', 'ratings']
@@ -65,6 +65,12 @@ class Message(PostBase):
     kind: Literal['message'] = 'message'
 
 
+class Plan(PostBase):
+    """What the author does next. The other agents read it, so that no two agents do the same work."""
+
+    kind: Literal['plan'] = 'plan'
+
+
 class Result(PostBase):
     """A finding that other agents can object to or check."""
 
@@ -94,7 +100,7 @@ class Objection(PostBase):
 
 
 class Proposal(PostBase):
-    """A choice for the lab. It becomes the decision when nobody objects in time."""
+    """A choice for the lab, such as its answer to the question. It reaches every agent, so that each can object."""
 
     kind: Literal['proposal'] = 'proposal'
 
@@ -115,6 +121,6 @@ class RuledOut(PostBase):
 
 
 type Post = Annotated[
-    Message | Result | Ask | Answer | Objection | Proposal | Check | RuledOut,
+    Message | Plan | Result | Ask | Answer | Objection | Proposal | Check | RuledOut,
     Field(discriminator='kind'),
 ]

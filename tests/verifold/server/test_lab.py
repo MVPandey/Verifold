@@ -5,6 +5,7 @@ import pytest
 from builders import START
 
 from verifold.protocol.join import PostRequest
+from verifold.protocol.posts import MAX_HEADLINE
 from verifold.server.errors import LabExists
 from verifold.server.lab import Lab
 from verifold.society.errors import RejectedEvent
@@ -105,3 +106,29 @@ async def test_a_lab_with_a_time_limit_ends_that_long_after_it_opens(record_file
 
     assert lab.board.out_of_time
     assert [event.type for event in record_file.read()][-2:] == ['time_set', 'time_ran_out']
+
+
+async def test_a_lab_opens_the_question_thread_with_the_question_as_the_persons_first_post(
+    record_file: RecordFile,
+) -> None:
+    lab = Lab.create(record_file, 'Does it hold?')
+
+    posted = await lab.open_question_thread()
+
+    opened = lab.board.threads[0].thread
+    assert (opened.id, opened.title, opened.opened_by) == ('t-1', 'The question', 'person')
+    assert (posted.post.id, posted.post.author, posted.post.kind) == ('p-1', 'person', 'message')
+    assert (posted.post.text, posted.post.body) == ('Does it hold?', '')
+
+
+async def test_a_long_question_keeps_its_first_line_as_the_headline_and_all_of_it_as_the_body(
+    record_file: RecordFile,
+) -> None:
+    question = f'{"Why " * 100}?\nUse the GPU.'
+    lab = Lab.create(record_file, question)
+
+    post = (await lab.open_question_thread()).post
+
+    assert len(post.text) == MAX_HEADLINE
+    assert post.text.endswith('…')
+    assert post.body == question

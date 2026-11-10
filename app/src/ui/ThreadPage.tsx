@@ -92,7 +92,8 @@ export function PostItem(props: {
   const agent = props.agents.find((view) => view.agent.id === post.author)?.agent;
   const target = props.thread.posts.find((item) => item.post.id === post.reply_to)?.post;
   const chip = standingChip(post, standing);
-  const kindClass = post.kind === 'message' || post.kind === 'ruled_out' ? 'msg' : post.kind;
+  const plain = post.kind === 'message' || post.kind === 'plan' || post.kind === 'ruled_out';
+  const kindClass = plain ? 'msg' : post.kind;
   const canRerun =
     post.kind === 'result' &&
     post.evidence.length > 0 &&
