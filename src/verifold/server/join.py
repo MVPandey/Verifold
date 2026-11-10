@@ -29,6 +29,7 @@ from verifold.protocol.threads import Title
 from verifold.server.errors import ServerError, UnknownAgent
 from verifold.server.member import Member
 from verifold.society.errors import SocietyError
+from verifold.society.rules import waiting_reruns
 
 type Headers = Mapping[str, str] | None
 type Resolve = Callable[[Headers], Member]
@@ -204,11 +205,17 @@ def join_server(resolve: Resolve) -> MCPServer:
 
         Verifold starts a checker from another model family. It gets the claim and the files at the version that the
         post cites, but not the thread, and it posts one check. When the check holds, the post stands as held up.
+        The check comes to you as a post. When a blind rerun of the post runs already, your request joins it, and
+        `joins` names who asked first. When the checker fails, no check comes, and you can ask again. A post gets two
+        blind reruns and four checkers at most.
         """
         with _told_to_agent():
             member = resolve(ctx.headers)
             requested = await member.rerun(post)
-            return RerunResult(post=requested.post, news=member.news())
+            # The first request that still waits for the post's checker is this one, or the one that it joins.
+            first = next(iter(waiting_reruns(member.lab.board, requested.post)), requested)
+            joins = first.by if first.seq < requested.seq else None
+            return RerunResult(post=requested.post, joins=joins, news=member.news())
 
     @server.tool()
     async def wait(ctx: Context, timeout_seconds: Annotated[int, Field(ge=0, le=3_600)] = 45) -> Update:

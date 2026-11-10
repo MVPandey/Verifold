@@ -205,6 +205,46 @@ async def test_a_failed_turn_gives_the_agent_its_news_again(
     assert [entry.post.text for entry in (await member.wait(timeout=0)).posts] == ['Which layer?']
 
 
+async def test_an_agent_with_one_job_gets_one_turn_for_it(served: ServedBoard, tmp_path: Path, log: Path) -> None:
+    loop = loop_for(served, tmp_path)
+    loop._done = lambda _: False
+
+    async with asyncio.timeout(30):
+        await loop.run()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
+    assert len(served.lab.board.turns) == 1
+
+
+async def test_an_agent_with_one_job_that_the_time_limit_stopped_goes_on_when_the_lab_gets_more_time(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_SLOW', '1')
+    lab = served.lab
+    loop = loop_for(served, tmp_path)
+    loop._done = lambda _: False
+    running = asyncio.create_task(loop.run())
+    try:
+        await until(lambda: bool(calls(log, 'prompt')))
+        await lab.set_time_left(timedelta(0))
+        await lab.run_out_of_time()
+        await until(lambda: bool(lab.board.turns))
+        await asyncio.sleep(0.1)
+        # The stop was not the agent's choice, so its one turn is not used up.
+        assert not running.done()
+
+        await lab.set_time_left(timedelta(hours=1))
+        await until(lambda: len(calls(log, 'prompt')) == 2)
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+    assert calls(log, 'prompt')[1]['text'] == more_time_message(
+        lab.board.ends_at, lab.board.settings.jobs.at_time_limit
+    )
+
+
 async def test_a_failing_harness_is_restarted_with_its_session_and_stops_after_three_failures(
     served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
