@@ -17,10 +17,12 @@ from verifold.protocol.events import (
     ThreadOpened,
     TimeRanOut,
     TimeSet,
+    TurnEnded,
     WatchSet,
 )
 from verifold.protocol.posts import Post
 from verifold.protocol.threads import Thread
+from verifold.protocol.usage import Usage
 from verifold.society.board import Board
 from verifold.society.fold import fold
 
@@ -73,6 +75,11 @@ class RecordBuilder:
     def rerun(self, by: str, post_id: str) -> 'RecordBuilder':
         seq, at = self._stamp()
         self.events.append(RerunRequested(seq=seq, at=at, by=by, post=post_id))
+        return self
+
+    def turn(self, agent_id: str, error: str | None = None) -> 'RecordBuilder':
+        seq, at = self._stamp()
+        self.events.append(TurnEnded(seq=seq, at=at, agent=agent_id, seconds=0, usage=Usage(), error=error))
         return self
 
     def time_set(self, ends_at: datetime) -> 'RecordBuilder':

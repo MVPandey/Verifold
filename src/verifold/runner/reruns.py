@@ -21,7 +21,7 @@ from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.errors import SocietyError
-from verifold.society.rules import open_reruns
+from verifold.society.rules import waiting_reruns
 
 type Crew = tuple[tuple[HarnessEntry, SessionOptions], ...]
 """The lab's harnesses, each with the options that its agents use."""
@@ -50,8 +50,9 @@ class Reruns:
         """
         Start a checker for each post with an open request, now and as requests arrive.
 
-        One post has one checker at a time. A request that arrives while a rerun runs gets that rerun's check. When
-        a checker ends without a check, the next request for the post gets its own checker.
+        One post has one checker at a time. A request that arrives while a rerun runs gets that rerun's check. A
+        checker that fails answers none of its requests, and they start no other checker, here or after a restart.
+        A request that comes after the failure gets its own checker.
         """
         async with asyncio.TaskGroup() as group:
             tried: set[int] = set()
@@ -67,7 +68,7 @@ class Reruns:
                     if request.seq in tried or request.post in running:
                         continue
                     tried.add(request.seq)
-                    if request in open_reruns(board, request.post):
+                    if request in waiting_reruns(board, request.post):
                         task = group.create_task(self._contained(request))
                         task.add_done_callback(lambda _: ended.set())
                         running[request.post] = task

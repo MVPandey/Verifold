@@ -5,9 +5,10 @@ import pytest
 from builders import until
 
 from verifold.protocol.agents import Agent, ModelSpec
-from verifold.protocol.events import RerunRequested
+from verifold.protocol.events import RerunRequested, TurnSummary
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import FileEvidence
+from verifold.protocol.usage import Usage
 from verifold.runner.reruns import Reruns
 from verifold.server.join import Members
 from verifold.server.lab import Lab
@@ -23,6 +24,12 @@ async def unused(*_: object) -> None:
 
 def a_rerun_loop(lab: Lab, tmp_path: Path) -> Reruns:
     return Reruns(lab, Members(), tmp_path, (), unused)
+
+
+async def a_failed_checker(lab: Lab, checker: str, post: str) -> None:
+    """Record a blind checker that joined for `post` and failed, as one whose harness crashed."""
+    await lab.join(Agent(id=checker, name=checker, harness='fake', model=ModelSpec(family='openai'), checks=post))
+    await lab.end_turn(TurnSummary(agent=checker, seconds=0, usage=Usage(), error='It crashed.'))
 
 
 async def test_requests_for_one_post_share_one_checker_and_the_next_request_follows_a_checker_without_a_check(
@@ -88,3 +95,54 @@ async def test_one_blind_check_answers_every_request_before_it(
         await until(lambda: started == ['bo', 'ada'], timeout=5)
     finally:
         running.cancel()
+
+
+async def test_a_checker_that_fails_starts_no_other_checker_until_a_member_asks_again(
+    lab: Lab, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started: list[str] = []
+
+    async def check(_: Reruns, request: RerunRequested) -> None:
+        started.append(request.by)
+        await a_failed_checker(lab, f'checker-{request.seq}', request.post)
+
+    monkeypatch.setattr(Reruns, '_check', check)
+    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', EVIDENCE)
+    await lab.request_rerun('bo', 'p-2')
+    await lab.request_rerun('person', 'p-2')
+    running = asyncio.create_task(a_rerun_loop(lab, tmp_path).run())
+    try:
+        await until(lambda: started == ['bo'])
+        await asyncio.sleep(0.1)
+        # The person's request joined the rerun that failed, so it starts no checker of its own.
+        assert started == ['bo']
+
+        await lab.request_rerun('person', 'p-2')
+        await until(lambda: started == ['bo', 'person'], timeout=5)
+    finally:
+        running.cancel()
+
+
+async def test_a_new_loop_starts_checkers_only_for_the_requests_that_still_wait(
+    lab: Lab, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started: list[str] = []
+
+    async def check(_: Reruns, request: RerunRequested) -> None:
+        started.append(request.post)
+
+    monkeypatch.setattr(Reruns, '_check', check)
+    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', EVIDENCE)
+    await lab.post(PostRequest(kind='result', text='9.1x.', thread='t-1'), 'ada', EVIDENCE)
+    # Before the restart, the checker of p-2 failed, and the request for p-3 had no checker yet.
+    await lab.request_rerun('bo', 'p-2')
+    await a_failed_checker(lab, 'dee', 'p-2')
+    await lab.request_rerun('person', 'p-3')
+    running = asyncio.create_task(a_rerun_loop(lab, tmp_path).run())
+    try:
+        await until(lambda: bool(started))
+        await asyncio.sleep(0.1)
+    finally:
+        running.cancel()
+
+    assert started == ['p-3']

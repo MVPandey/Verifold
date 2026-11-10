@@ -1,11 +1,9 @@
 import pytest
 from builders import RecordBuilder, lab
 
-from verifold.protocol.events import TurnEnded
 from verifold.protocol.posts import Check, FileEvidence, Message, Objection, Result
-from verifold.protocol.usage import Usage
 from verifold.society.errors import RejectedEvent
-from verifold.society.rules import MAX_RERUNS, blind_checks, open_reruns, waiting_reruns
+from verifold.society.rules import MAX_CHECKERS, MAX_RERUNS, blind_checks, open_reruns, waiting_reruns
 from verifold.society.standing import standing
 
 EVIDENCE = (FileEvidence(path='bench.json', commit='c' * 40),)
@@ -121,17 +119,19 @@ def test_one_checker_is_one_blind_rerun_however_many_checks_it_posts() -> None:
 def test_a_failed_checker_frees_the_requests_before_it() -> None:
     record = lab().post(RESULT).rerun('bo', 'p-1').join('dee', family='openai', checks='p-1')
     waiting = [entry.by for entry in waiting_reruns(record.board(), 'p-1')]
-    record.events.append(
-        TurnEnded(
-            seq=len(record.events) + 1,
-            at=record.at(len(record.events) + 1),
-            agent='dee',
-            seconds=0,
-            usage=Usage(),
-            error='The checker stopped without a check.',
-        )
-    )
+    record.turn('dee', error='The checker stopped without a check.')
 
     assert waiting == ['bo']
     assert waiting_reruns(record.board(), 'p-1') == ()
     assert [entry.by for entry in open_reruns(record.board(), 'p-1')] == ['bo']
+
+
+def test_a_post_gets_at_most_four_blind_checkers_however_they_end() -> None:
+    record = lab().post(RESULT)
+    for number in range(MAX_CHECKERS):
+        checker = f'checker-{number}'
+        record.rerun('bo', 'p-1').join(checker, family='openai', checks='p-1').turn(checker, error='It crashed.')
+
+    assert waiting_reruns(record.board(), 'p-1') == ()
+    with pytest.raises(RejectedEvent, match='got 4 blind checkers already'):
+        record.rerun('bo', 'p-1').board()

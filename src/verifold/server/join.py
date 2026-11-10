@@ -206,7 +206,8 @@ def join_server(resolve: Resolve) -> MCPServer:
         Verifold starts a checker from another model family. It gets the claim and the files at the version that the
         post cites, but not the thread, and it posts one check. When the check holds, the post stands as held up.
         The check comes to you as a post. When a blind rerun of the post runs already, your request joins it, and
-        `joins` names who asked first.
+        `joins` names who asked first. When the checker fails, no check comes, and you can ask again. A post gets two
+        blind reruns and four checkers at most.
         """
         with _told_to_agent():
             member = resolve(ctx.headers)
