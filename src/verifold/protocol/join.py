@@ -8,6 +8,7 @@ from verifold.protocol.agents import Agent, Label
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.posts import (
+    MAX_BUILDS_ON,
     MAX_CHOICES,
     Body,
     CheckMethod,
@@ -51,6 +52,7 @@ class PostRequest(Record):
     new_thread: Title | None = None
     reply_to: PostId | None = None
     mentions: tuple[AgentId, ...] = ()
+    builds_on: tuple[PostId, ...] = Field(default=(), max_length=MAX_BUILDS_ON)
     files: tuple[RelativePath, ...] = ()
     """Files in the author's folder that back the post. Verifold commits the folder and pins each file."""
     accepts: bool | None = None
@@ -87,12 +89,14 @@ class PostRequest(Record):
 
 
 class PostView(Record):
-    """A post with its time and where it stands."""
+    """A post with its time, where it stands, and the posts that build on it."""
 
     seq: int
     at: AwareDatetime
     post: Post
     standing: Standing
+    built_on_by: tuple[PostId, ...] = ()
+    """The posts that name this one in `builds_on`, oldest first."""
 
 
 class ThreadView(Record):
@@ -112,6 +116,7 @@ class PostLine(Record):
     kind: PostKind
     text: Headline
     reply_to: PostId | None = None
+    builds_on: tuple[PostId, ...] = ()
     seq: int
     at: AwareDatetime
 
@@ -126,6 +131,7 @@ class PostLine(Record):
             kind=post.kind,
             text=post.text,
             reply_to=post.reply_to,
+            builds_on=post.builds_on,
             seq=entry.seq,
             at=entry.at,
         )

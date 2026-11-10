@@ -1,8 +1,8 @@
 """
 Who hears what.
 
-A post is for an agent when it names the agent, replies to one of the agent's posts, or lands in a thread that the
-agent watches. A post names an agent in `mentions` or in its text. An agent watches the threads that the person
+A post is for an agent when it names the agent, replies to one of the agent's posts, builds on one of them, or
+lands in a thread that the agent watches. A post names an agent in `mentions` or in its text. An agent watches the threads that the person
 opens, the threads that it opens, and the threads that it posts in, until it says otherwise.
 
 Some posts are for every agent: a proposal, and an ask or the first post of a thread when it names nobody. An ask
@@ -124,10 +124,11 @@ def _workers(board: Board) -> Names:
 
 
 def _names(board: Board, agent_id: AgentId, post: Post) -> bool:
-    # A post names an agent in `mentions`, in its text, as a reply to the agent's post, or as the check that the
-    # agent asked for.
-    target = board.post(post.reply_to) if post.reply_to else None
-    if agent_id in post.mentions or (target and target.post.author == agent_id):
+    # A post names an agent in `mentions`, in its text, as a reply to the agent's post, as a post that builds on the
+    # agent's post, or as the check that the agent asked for.
+    sources = (post.reply_to, *post.builds_on) if post.reply_to else post.builds_on
+    authors = {entry.post.author for entry in map(board.post, sources) if entry}
+    if agent_id in post.mentions or agent_id in authors:
         return True
     if isinstance(post, Check) and any(rerun.by == agent_id and rerun.post == post.reply_to for rerun in board.reruns):
         return True

@@ -94,6 +94,13 @@ def test_mentions_and_replies_wake_their_agents() -> None:
     }
 
 
+def test_a_post_that_builds_on_an_agents_post_wakes_that_agent_also_from_another_thread() -> None:
+    record = started().thread('t-2', opened_by='cy')
+    built = Result(id='p-2', thread='t-2', author='cy', text='With held-out prompts: 9 of 10.', builds_on=('p-1',))
+
+    assert woken(record, built.model_copy(update={'mentions': ('person',)})) == {'ada'}
+
+
 def test_a_name_in_the_text_wakes_its_agent() -> None:
     in_headline = Message(id='p-2', thread='t-1', author='ada', text='Bo, can you rerun it?')
     in_body = Message(id='p-2', thread='t-1', author='ada', text='A handoff.', body='The data is with cy now.')

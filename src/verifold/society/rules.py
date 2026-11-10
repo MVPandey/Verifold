@@ -66,6 +66,9 @@ def check_post(board: Board, post: Post) -> None:
         _check_member(board, mention)
     if not board.thread(post.thread):
         raise RejectedEvent(f'Thread {post.thread} does not exist. Open a thread first.')
+    for built_on in post.builds_on:
+        if not board.post(built_on):
+            raise RejectedEvent(f'Post {built_on} does not exist, so no post can build on it.')
     if post.reply_to is None:
         return
     target = board.post(post.reply_to)

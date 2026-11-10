@@ -13,8 +13,14 @@ from verifold.society.standing import is_answered, standing
 
 
 def post_view(board: Board, entry: Posted) -> PostView:
-    """Return a post with its time and where it stands."""
-    return PostView(seq=entry.seq, at=entry.at, post=entry.post, standing=standing(board, entry.post.id))
+    """Return a post with its time, where it stands, and the posts that build on it."""
+    return PostView(
+        seq=entry.seq,
+        at=entry.at,
+        post=entry.post,
+        standing=standing(board, entry.post.id),
+        built_on_by=tuple(other.post.id for other in board.built_on(entry.post.id)),
+    )
 
 
 def thread_view(board: Board, agent_id: AgentId, thread_id: ThreadId) -> ThreadView:
