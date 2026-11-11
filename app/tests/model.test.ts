@@ -10,6 +10,7 @@ import {
   face,
   labTotal,
   members,
+  ownName,
   stateLine,
   workingLine,
 } from '../src/model/agents.ts';
@@ -42,6 +43,7 @@ import {
   withModel,
 } from '../src/model/setup.ts';
 import { clockLine, endLine, MAX_MINUTES, moreTime } from '../src/model/time.ts';
+import type { ActContext } from '../src/model/turns.ts';
 import {
   act,
   answerSoFar,
@@ -213,6 +215,10 @@ describe('agents', () => {
       ['Agent 1', 'Blind rerun', 'You', 'gone'],
     );
     assert.deepEqual(
+      ['agent-1', 'checker-7', 'person', 'gone'].map((id) => ownName(agents, id)),
+      ['Agent 1', 'Checker 7', 'You', 'gone'],
+    );
+    assert.deepEqual(
       ['agent-1', 'checker-7', 'person'].map((id) => called(agents, id)),
       ['Agent 1', 'the blind rerun', 'you'],
     );
@@ -260,51 +266,82 @@ describe('turns', () => {
   const target = result('p-1', { author: 'agent-2' });
 
   it('writes a turn as one line from the post and the post that it answers', () => {
-    const line = (kind: object, to: Post | null = target): string => act(reply(kind), to, name);
+    const context = { called: name, author: null, question: 't-1' };
+    const line = (kind: object, to: Post | null = target): string => act(reply(kind), to, context);
     assert.deepEqual(
       [
-        act(result('p-1'), null, name),
+        act(result('p-1'), null, context),
         line({ kind: 'result' }),
         line({ kind: 'proposal' }),
+        line({ kind: 'proposal', thread: 't-2', reply_to: null }),
         line({ kind: 'plan' }),
         line({ kind: 'ruled_out' }),
         line({ kind: 'objection' }),
-        line({ kind: 'objection' }, null),
         line({ kind: 'ask', choices: [] }),
         line({ kind: 'answer', accepts: true }, reply({ kind: 'objection', author: 'agent-3' })),
         line({ kind: 'answer', accepts: false }, reply({ kind: 'ask', author: 'person' })),
-        line({ kind: 'answer', accepts: true }, null),
-        line({ kind: 'answer', accepts: false }, null),
         line({ kind: 'check', method: 'rerun', outcome: 'holds' }),
         line({ kind: 'check', method: 'code_read', outcome: 'fails' }),
         line({ kind: 'check', method: 'ratings', outcome: 'holds' }),
-        line({ kind: 'check', method: 'rerun', outcome: 'fails' }, null),
-        line({ kind: 'check', method: 'code_read', outcome: 'holds' }, null),
-        line({ kind: 'check', method: 'ratings', outcome: 'holds' }, null),
         line({ kind: 'message' }),
-        line({ kind: 'message' }, null),
+        line({ kind: 'message', reply_to: null }, null),
       ],
       [
         'posted a result',
-        'followed up with a result',
-        'proposed an answer',
-        'posted a plan',
-        'ruled out a lead',
+        'posted a result in reply to agent-2’s result',
+        'proposed an answer in reply to agent-2’s result',
+        'made a proposal',
+        'posted a plan in reply to agent-2’s result',
+        'ruled out a lead in reply to agent-2’s result',
         'objected to agent-2’s result',
-        'objected',
-        'asked a question',
+        'asked a question in reply to agent-2’s result',
         'accepted agent-3’s objection',
         'answered you',
-        'accepted an objection',
-        'answered',
-        'reran agent-2’s result blind: it holds',
+        'reran agent-2’s result: it holds',
         'read the code of agent-2’s result: it fails',
         'rated agent-2’s result: it holds',
-        'reran it blind: it fails',
-        'read the code: it holds',
-        'rated it: it holds',
         'replied to agent-2',
         'added a note',
+      ],
+    );
+  });
+
+  it('says "blind" only for the rerun of the checker that Verifold started for that post', () => {
+    const rerun = reply({ kind: 'check', method: 'rerun', outcome: 'fails' });
+    const checker = (checks: string): object => ({
+      called: name,
+      author: { ...agentView('checker-7').agent, checks },
+      question: null,
+    });
+    const line = (context: object): string => act(rerun, target, context as ActContext);
+    assert.equal(line(checker('p-1')), 'reran agent-2’s result blind: it fails');
+    // A member reran it and saw the thread. A checker for another post is not blind to this one.
+    assert.equal(
+      line({ called: name, author: agentView('agent-3').agent, question: null }),
+      'reran agent-2’s result: it fails',
+    );
+    assert.equal(line(checker('p-5')), 'reran agent-2’s result: it fails');
+  });
+
+  it('names a post that the page does not have as "a post"', () => {
+    const context = { called: name, author: null, question: null };
+    const line = (kind: object): string => act(reply(kind), null, context);
+    assert.deepEqual(
+      [
+        line({ kind: 'objection' }),
+        line({ kind: 'answer', accepts: true }),
+        line({ kind: 'answer', accepts: false }),
+        line({ kind: 'check', method: 'rerun', outcome: 'fails' }),
+        line({ kind: 'message' }),
+        line({ kind: 'result' }),
+      ],
+      [
+        'objected to a post',
+        'accepted a post',
+        'answered a post',
+        'reran a post: it fails',
+        'replied to a post',
+        'posted a result in reply to a post',
       ],
     );
   });
@@ -325,7 +362,7 @@ describe('turns', () => {
     ];
     assert.deepEqual(
       kinds.map((kind) => tone(reply(kind))),
-      ['good', 'bad', 'bad', 'turn', 'quiet', 'claim', 'claim', 'answer', 'ask', 'plan', 'quiet'],
+      ['good', 'bad', 'bad', 'turn', 'quiet', 'claim', 'claim', 'answer', 'ask', 'quiet', 'quiet'],
     );
   });
 
@@ -334,11 +371,11 @@ describe('turns', () => {
     const lead = agentView('agent-1').agent;
     const visitor = agentView('agent-2').agent;
     const checker = { ...agentView('checker-7').agent, checks: 'p-1' };
-    assert.equal(standingIn(lead, thread, 't-1'), 'leads this thread');
-    assert.equal(standingIn(visitor, thread, 't-1'), 'visiting');
-    assert.equal(standingIn(lead, thread, 't-2'), null);
-    assert.equal(standingIn(null, thread, 't-1'), null);
-    assert.equal(standingIn(checker, thread, 't-2'), 'outside checker');
+    assert.equal(standingIn(lead, thread, 't-1', null), 'leads this thread');
+    assert.equal(standingIn(visitor, thread, 't-1', null), 'visiting');
+    assert.equal(standingIn(lead, thread, 't-2', null), null);
+    assert.equal(standingIn(null, thread, 't-1', null), null);
+    assert.equal(standingIn(checker, thread, 't-2', null), 'outside checker');
     assert.equal(standingIn(checker, thread, 't-1', 'anthropic'), 'outside checker');
     assert.equal(
       standingIn(checker, thread, 't-1', 'openai'),
@@ -346,11 +383,14 @@ describe('turns', () => {
     );
   });
 
-  it('finds the question’s thread only when the person opened the first thread', () => {
+  it('finds the question’s thread by the server’s rule: the first thread, the person, and the title', () => {
     const first = summary({ thread: { id: 't-1', title: 'The question', opened_by: 'person' } });
-    const other = summary({ thread: { id: 't-2', title: 'A', opened_by: 'person' } });
+    const other = summary({ thread: { id: 't-2', title: 'The question', opened_by: 'person' } });
+    const renamed = summary({ thread: { id: 't-1', title: 'Sort it', opened_by: 'person' } });
     assert.equal(questionThread([other, first]), first);
     assert.equal(questionThread([other, summary()]), null);
+    assert.equal(questionThread([renamed]), null);
+    assert.equal(questionThread([other]), null);
   });
 
   it('nests replies to two levels and folds runs of status notes in the question’s thread', () => {
@@ -404,6 +444,10 @@ describe('turns', () => {
     assert.equal(headClaim([postView(result('p-1'), 1, 'conceded')])?.post.id, 'p-1');
     assert.equal(answerSoFar([postView(proposal('p-1'), 1, 'conceded')]), null);
     assert.equal(headClaim([]), null);
+    // A ruled-out lead is not what a thread stands on.
+    const lead = postView(result('p-5', { kind: 'ruled_out' }), 5, 'checked');
+    assert.equal(headClaim([...posts, lead])?.post.id, 'p-2');
+    assert.equal(headClaim([lead]), null);
   });
 
   it('gives a closed card a status that the summary’s counts support', () => {

@@ -2,7 +2,7 @@ import { PERSON } from '../api/types.ts';
 import type { Agent, Post, PostView, Thread, ThreadSummary } from '../api/types.ts';
 
 /** What a post does to the post that it touches. The mark beside a turn takes its shape and color from this. */
-export type MarkTone = 'claim' | 'bad' | 'good' | 'turn' | 'answer' | 'ask' | 'plan' | 'quiet';
+export type MarkTone = 'claim' | 'bad' | 'good' | 'turn' | 'answer' | 'ask' | 'quiet';
 
 const NOUNS = {
   message: 'note',
@@ -17,6 +17,9 @@ const NOUNS = {
 } as const satisfies Record<Post['kind'], string>;
 
 const CLAIMS: ReadonlySet<Post['kind']> = new Set(['result', 'proposal', 'ruled_out']);
+
+/** The title of the thread that a lab opens with, as `QUESTION_TITLE` in the server's `protocol/threads.py`. */
+const QUESTION_TITLE = 'The question';
 
 /** Return whether a post states something that others can check: a result, a proposal, or a ruled-out lead. */
 export function isClaim(post: Post): boolean {
@@ -40,53 +43,69 @@ export function tone(post: Post): MarkTone {
     case 'ask':
       return 'ask';
     case 'plan':
-      return 'plan';
     case 'message':
       return 'quiet';
   }
+}
+
+/** What `act` needs besides the post and the post that it answers. */
+export interface ActContext {
+  /** Names an author inside a sentence. */
+  readonly called: (authorId: string) => string;
+  /** The post's author, or `null` for the person and for an author that the lab does not list. */
+  readonly author: Agent | null;
+  /** The ID of the question's thread, or `null` when the lab has none. */
+  readonly question: string | null;
 }
 
 /**
  * Return a turn as one line, such as "objected to Agent 1’s result".
  *
  * The line comes only from the post's kind, its check outcome and method, its `accepts`, and the post that it
- * replies to. `to` is that post, or `null` when the page does not have it. `called` names an author inside a
- * sentence.
+ * replies to. `to` is that post, or `null` when the page does not have it. Every kind names the post that it
+ * replies to, so a reply reads right where the indent stops. A rerun is "blind" only from the blind checker that
+ * Verifold started for that post. A proposal is an answer only in the question's thread.
  */
-export function act(post: Post, to: Post | null, called: (authorId: string) => string): string {
-  const them = to ? called(to.author) : null;
-  const theirs = to ? `${them}’s ${NOUNS[to.kind]}` : null;
+export function act(post: Post, to: Post | null, context: ActContext): string {
+  const them = to ? context.called(to.author) : 'a post';
+  const theirs = to ? `${them}’s ${NOUNS[to.kind]}` : 'a post';
+  const reply = post.reply_to === null ? '' : ` in reply to ${theirs}`;
   switch (post.kind) {
     case 'result':
-      return to ? 'followed up with a result' : 'posted a result';
+      return `posted a result${reply}`;
     case 'proposal':
-      return 'proposed an answer';
+      return `${post.thread === context.question ? 'proposed an answer' : 'made a proposal'}${reply}`;
     case 'plan':
-      return 'posted a plan';
+      return `posted a plan${reply}`;
     case 'ruled_out':
-      return 'ruled out a lead';
+      return `ruled out a lead${reply}`;
     case 'objection':
-      return theirs ? `objected to ${theirs}` : 'objected';
+      return `objected to ${theirs}`;
     case 'ask':
-      return 'asked a question';
+      return `asked a question${reply}`;
     case 'answer':
-      if (!to) return post.accepts ? 'accepted an objection' : 'answered';
       return post.accepts ? `accepted ${theirs}` : `answered ${them}`;
-    case 'check':
-      return `${checked(post.method, theirs)}: it ${post.outcome === 'holds' ? 'holds' : 'fails'}`;
+    case 'check': {
+      const blind = context.author?.checks != null && context.author.checks === post.reply_to;
+      return `${checked(post.method, theirs, blind)}: it ${post.outcome === 'holds' ? 'holds' : 'fails'}`;
+    }
     case 'message':
-      return them ? `replied to ${them}` : 'added a note';
+      return post.reply_to === null ? 'added a note' : `replied to ${them}`;
   }
 }
 
-function checked(method: 'rerun' | 'code_read' | 'ratings', theirs: string | null): string {
+function checked(
+  method: 'rerun' | 'code_read' | 'ratings',
+  theirs: string,
+  blind: boolean,
+): string {
   switch (method) {
     case 'rerun':
-      return theirs ? `reran ${theirs} blind` : 'reran it blind';
+      return `reran ${theirs}${blind ? ' blind' : ''}`;
     case 'code_read':
-      return theirs ? `read the code of ${theirs}` : 'read the code';
+      return `read the code of ${theirs}`;
     case 'ratings':
-      return theirs ? `rated ${theirs}` : 'rated it';
+      return `rated ${theirs}`;
   }
 }
 
@@ -100,7 +119,7 @@ export function standingIn(
   author: Agent | null,
   thread: Thread,
   question: string | null,
-  checkedFamily: string | null = null,
+  checkedFamily: string | null,
 ): string | null {
   if (author === null) return null;
   if (author.checks !== null) {
@@ -111,12 +130,14 @@ export function standingIn(
   return thread.opened_by === author.id ? 'leads this thread' : 'visiting';
 }
 
-/** Return the thread that holds the person's question: the lab's first thread, when the person opened it. */
+/**
+ * Return the thread that holds the person's question, by the server's rule (`question_thread` in
+ * `society/views.py`): the lab's first thread, when the person opened it with the question's title.
+ */
 export function questionThread(threads: readonly ThreadSummary[]): ThreadSummary | null {
-  return (
-    threads.find((summary) => summary.thread.id === 't-1' && summary.thread.opened_by === PERSON) ??
-    null
-  );
+  const first = threads.find((summary) => summary.thread.id === 't-1')?.thread;
+  const holds = first?.opened_by === PERSON && first.title === QUESTION_TITLE;
+  return holds ? (threads.find((summary) => summary.thread === first) ?? null) : null;
 }
 
 /** Return whether a post is a status note: an agent's plain message in the question's thread. */
@@ -158,9 +179,14 @@ export function rows(posts: readonly PostView[], question: string | null): reado
   return out;
 }
 
-/** Return the claim that a thread stands on: the newest one that is not Conceded, or else the newest one. */
+/**
+ * Return the result or proposal that a thread stands on: the newest one that is not Conceded, or else the newest
+ * one. A ruled-out lead is not something that a thread stands on.
+ */
 export function headClaim(posts: readonly PostView[]): PostView | null {
-  const claims = posts.filter((item) => isClaim(item.post)).reverse();
+  const claims = posts
+    .filter((item) => item.post.kind === 'result' || item.post.kind === 'proposal')
+    .reverse();
   return claims.find((item) => item.standing !== 'conceded') ?? claims[0] ?? null;
 }
 

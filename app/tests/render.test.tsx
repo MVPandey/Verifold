@@ -5,7 +5,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { Api } from '../src/api/client.ts';
 import type { HarnessOption, Post, SettingsView, ThreadView } from '../src/api/types.ts';
-import { LabPage } from '../src/ui/LabPage.tsx';
+import type { ThreadRead } from '../src/ui/hooks.ts';
+import { LabPage, Wall } from '../src/ui/LabPage.tsx';
 import { SettingsForm } from '../src/ui/SettingsPage.tsx';
 import { SetupPage } from '../src/ui/SetupPage.tsx';
 import { Turns } from '../src/ui/Thread.tsx';
@@ -114,7 +115,7 @@ describe('an opened thread', () => {
     assert.ok(html.includes('reran Agent 1’s result blind: it fails'));
     assert.ok(html.includes('<li id="p-2" class="f-turn d1">'));
     assert.ok(html.includes('<li id="p-3" class="f-turn d2">'));
-    assert.ok(html.includes('class="f-mark fm-bad fk-objection"'));
+    assert.ok(html.includes('class="f-mark fm-bad"'));
     assert.ok(html.includes('leads this thread'));
     assert.ok(html.includes('visiting'));
     assert.ok(html.includes('outside checker, other model family'));
@@ -219,6 +220,130 @@ describe('the lab page', () => {
     assert.ok(html.includes('role="img" aria-label="Agent 2"'));
     // A closed card never shows a post's text.
     assert.equal(html.includes('Reran it.'), false);
+  });
+
+  it('shows when each thread was last active, and names a checker that asks by its own name', () => {
+    const checker = agentView('checker-12');
+    const asking = { ...checker, agent: { ...checker.agent, name: 'Checker 12', checks: 'p-1' } };
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    const html = renderToStaticMarkup(
+      <LabPage
+        api={{} as Api}
+        data={{
+          ...data,
+          lab: { ...lab, agents: [...lab.agents, asking] },
+          needs: [postView(ask('p-9', 'checker-12'))],
+        }}
+        now={now}
+        open={null}
+        post={null}
+      />,
+    );
+    assert.ok(html.includes('<b>Checker 12 asks for permission</b>'));
+    assert.equal(html.split('<time dateTime="2026-11-06T14:09:00Z"').length - 1, 2);
+  });
+
+  const none: ThreadRead = { view: null, error: null };
+  const wall = (open: string, questionRead: ThreadRead, cardRead: ThreadRead): string => {
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    return renderToStaticMarkup(
+      <Wall
+        api={{} as Api}
+        data={data}
+        now={now}
+        open={open}
+        post={null}
+        questionRead={questionRead}
+        cardRead={cardRead}
+      />,
+    );
+  };
+  const thread = (id: string, opener: string, posts: readonly Post[]): ThreadRead => ({
+    view: {
+      thread: { id, title: id, opened_by: opener },
+      watching: false,
+      posts: posts.map((post, index) => postView({ ...post, thread: id }, index + 1)),
+    },
+    error: null,
+  });
+
+  it('opens a card in place, with who opened it and the standing of what it stands on', () => {
+    const posts = [
+      result('p-1', { kind: 'proposal' }),
+      // A ruled-out lead is newer, and the thread still stands on the proposal.
+      result('p-2', { kind: 'ruled_out', text: 'Dead end.' }),
+    ];
+    const html = wall('t-2', none, thread('t-2', 'agent-1', posts));
+    assert.ok(html.includes('<section id="card-t-2" class="f-card c-good open">'));
+    assert.ok(html.includes('<a href="#/" aria-expanded="true">Sorted input</a>'));
+    assert.ok(html.includes('<p class="f-by">Agent 1 opened it</p>'));
+    assert.ok(html.includes('<p class="f-head">sorted() is 12x faster</p>'));
+    // The proposal has no check, so the header says so. The summary's "Checked" is not beside the headline.
+    assert.ok(
+      html.includes(
+        '<div class="f-card-st"><span class="f-st fs-none">Not checked</span></div><p class="f-head">',
+      ),
+    );
+    assert.equal(html.includes('<span class="f-st fs-count-good">Checked</span>'), false);
+    assert.ok(html.includes('made a proposal'));
+    assert.ok(html.includes('<li id="p-2" class="f-turn claim d0">'));
+    // The other card stays closed, and the open one drops its mark for new posts.
+    assert.ok(html.includes('<section id="card-t-3" class="f-card c-bad">'));
+    assert.equal(html.split('<span class="f-new">New</span>').length - 1, 2);
+  });
+
+  it('says who opened a thread that the person opened, and waits for an open card’s posts', () => {
+    const mine = summary({ thread: { id: 't-4', title: 'Try numpy', opened_by: 'person' } });
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    const html = renderToStaticMarkup(
+      <Wall
+        api={{} as Api}
+        data={{ ...data, threads: [...threads, mine] }}
+        now={now}
+        open="t-4"
+        post={null}
+        questionRead={none}
+        cardRead={thread('t-4', 'person', [])}
+      />,
+    );
+    assert.ok(html.includes('<p class="f-by">You opened it</p>'));
+    // With no result or proposal to stand on, the open card keeps the summary's status.
+    assert.ok(html.includes('<span class="f-st fs-count-none">No result yet</span>'));
+    const loading = wall('t-3', none, none);
+    assert.ok(loading.includes('<p class="f-by">Agent 2 opened it</p>'));
+    assert.ok(loading.includes('<p class="f-wait" role="status">Loading the thread.</p>'));
+    const failed = wall('t-3', none, { view: null, error: 'No connection.' });
+    assert.ok(failed.includes('<p class="f-wait" role="status">No connection.</p>'));
+  });
+
+  it('says so when the link names a thread that the lab does not have', () => {
+    const html = wall('t-9', none, none);
+    assert.ok(html.includes('<p class="f-wait" role="alert">This lab has no thread t-9.</p>'));
+    assert.equal(html.includes('f-card c-good open'), false);
+    assert.equal(html.includes('Loading the thread.'), false);
+  });
+
+  it('opens the question’s thread under the seat, with the answer so far in full', () => {
+    const posts = [
+      result('p-1', { kind: 'message', author: 'person', text: 'Is sorted() faster?' }),
+      result('p-2', { kind: 'proposal', text: 'Yes, 12x.' }),
+    ];
+    const html = wall('t-1', thread('t-1', 'person', posts), none);
+    assert.ok(html.includes('<a class="f-label" href="#/" aria-expanded="true">'));
+    assert.ok(html.includes('<div class="f-answer on">'));
+    assert.ok(html.includes('<p>Yes, 12x.</p>'));
+    assert.ok(html.includes('<span class="f-st fs-none">Not checked</span>'));
+    assert.ok(
+      html.includes(
+        '<section id="card-t-1" class="f-card open f-answer-thread" aria-label="The question">',
+      ),
+    );
+    assert.ok(html.includes('proposed an answer'));
+    assert.ok(html.includes('aria-label="Message to everyone in this thread"'));
+    // Closed, the seat clamps the answer.
+    assert.ok(
+      wall('t-2', thread('t-1', 'person', posts), none).includes('<p class="clamp">Yes, 12x.</p>'),
+    );
   });
 
   it('marks only the threads with posts that the person has not seen', () => {

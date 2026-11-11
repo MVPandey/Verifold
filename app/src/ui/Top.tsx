@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
@@ -39,6 +39,23 @@ export function Top(props: {
   const { open, route } = props;
   const place = href(route);
   const current = (on: boolean): 'page' | undefined => (on ? 'page' : undefined);
+
+  // Escape closes an open panel, and so does a press anywhere outside it.
+  useEffect(() => {
+    const close = (event: KeyboardEvent | PointerEvent): void => {
+      if (event instanceof KeyboardEvent && event.key !== 'Escape') return;
+      for (const panel of document.querySelectorAll<HTMLDetailsElement>('.f-pop[open]')) {
+        const inside = event.target instanceof Node && panel.contains(event.target);
+        if (event instanceof KeyboardEvent || !inside) panel.open = false;
+      }
+    };
+    document.addEventListener('keydown', close);
+    document.addEventListener('pointerdown', close);
+    return () => {
+      document.removeEventListener('keydown', close);
+      document.removeEventListener('pointerdown', close);
+    };
+  }, []);
   return (
     <header className="f-top">
       <a className="f-brand" href={href({ page: 'lab' })}>

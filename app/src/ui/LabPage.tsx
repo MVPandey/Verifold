@@ -2,8 +2,9 @@ import { useEffect } from 'react';
 import type { ReactElement } from 'react';
 
 import type { AgentView, LabView, PostView, ThreadSummary } from '../api/types.ts';
-import { authorName, face } from '../model/agents.ts';
+import { authorName, face, ownName } from '../model/agents.ts';
 import type { Face } from '../model/agents.ts';
+import { clock } from '../model/format.ts';
 import { orderNeeds } from '../model/needs.ts';
 import { isPermission, personMessage, standingChip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
@@ -17,23 +18,26 @@ import { Turns } from './Thread.tsx';
 /** A question longer than this gets smaller type, so it does not fill the screen. */
 const LONG_QUESTION = 120;
 
+/** Where the page is: the thread whose card is open, and the post in it to scroll to. */
+interface Place {
+  readonly open: string | null;
+  readonly post: string | null;
+}
+
 /**
- * The lab as a wall: the question and the answer so far, the box that steers the lab, and one card for each
- * thread. `open` is the thread whose card is open, and `post` is the post in it to scroll to.
+ * The lab page. It reads the threads that the wall shows in full, records what the person has seen, and scrolls
+ * to the open card or post.
  */
-export function LabPage(
-  props: PageProps & { readonly open: string | null; readonly post: string | null },
-): ReactElement {
+export function LabPage(props: PageProps & Place): ReactElement {
   const { api, data, open, post } = props;
-  const { lab, threads, needs, version } = data;
-  const seen = readSeen(window.localStorage, lab.opened_at);
-  const question = questionThread(threads);
-  const questionId = question?.thread.id ?? null;
+  const { lab, threads, version } = data;
+  const questionId = questionThread(threads)?.thread.id ?? null;
+  // A link can name a thread that the lab does not have. Reading it would fail again at every load.
+  const known = threads.some((summary) => summary.thread.id === open);
   // The seat needs the question's thread at every load. An open card needs its own.
   const questionRead = useThread(api, questionId, version);
-  const cardRead = useThread(api, open === questionId ? null : open, version);
-  const openRead = open === questionId ? questionRead : cardRead;
-  const loaded = openRead.view?.thread.id === open ? openRead.view : null;
+  const cardRead = useThread(api, known && open !== questionId ? open : null, version);
+  const loaded = (open === questionId ? questionRead : cardRead).view;
   const last = loaded?.posts.at(-1)?.seq;
 
   useEffect(() => {
@@ -47,11 +51,35 @@ export function LabPage(
     if (open === null || !ready) return;
     const target =
       (post && document.getElementById(post)) || document.getElementById(`card-${open}`);
+    // A post inside a folded run of notes is not on the screen until the fold opens.
+    for (
+      let fold = target?.closest('details');
+      fold;
+      fold = fold.parentElement?.closest('details')
+    ) {
+      fold.open = true;
+    }
     target?.scrollIntoView({ block: post && target.id === post ? 'center' : 'start' });
   }, [open, post, ready]);
 
-  const send = async (text: string, thread: string | null): Promise<void> => {
-    const request = personMessage(text, thread ?? undefined);
+  return <Wall {...props} questionRead={questionRead} cardRead={cardRead} />;
+}
+
+/**
+ * The lab as a wall: the question and the answer so far, the box that steers the lab, and one card for each
+ * thread. `questionRead` is the question's thread, and `cardRead` is the thread of the open card.
+ */
+export function Wall(
+  props: PageProps & Place & { readonly questionRead: ThreadRead; readonly cardRead: ThreadRead },
+): ReactElement {
+  const { api, data, open, questionRead, cardRead } = props;
+  const { lab, threads, needs } = data;
+  const seen = readSeen(window.localStorage, lab.opened_at);
+  const question = questionThread(threads);
+  const questionId = question?.thread.id ?? null;
+
+  const send = async (text: string, thread?: string): Promise<void> => {
+    const request = personMessage(text, thread);
     if (request) await api.post(request);
     data.reload();
   };
@@ -64,7 +92,7 @@ export function LabPage(
         needs={needs}
         question={questionId}
         onRerun={(postId) => api.rerun(postId)}
-        onSend={(text) => send(text, read.view?.thread.id ?? null)}
+        onSend={(text) => send(text, read.view?.thread.id)}
       />
     ) : (
       <p className="f-wait" role="status">
@@ -132,7 +160,7 @@ export function LabPage(
                 ? 'Your message opens a new thread.'
                 : 'Nothing waits for you. Your message opens a new thread.'
             }
-            onSend={(text) => send(text, null)}
+            onSend={(text) => send(text)}
           />
         </div>
       </section>
@@ -150,7 +178,7 @@ export function LabPage(
       <div className="f-body">
         {missing ? (
           <p className="f-wait" role="alert">
-            {cardRead.error ?? 'This lab has no such thread.'}
+            This lab has no thread {open}.
           </p>
         ) : null}
         {cards.length > 0 ? (
@@ -162,9 +190,8 @@ export function LabPage(
                 agents={lab.agents}
                 fresh={hasNew(summary, seen)}
                 read={summary.thread.id === open ? cardRead : null}
-              >
-                {summary.thread.id === open ? turns(cardRead) : null}
-              </Card>
+                turns={turns}
+              />
             ))}
           </div>
         ) : (
@@ -191,12 +218,21 @@ function authors(posts: readonly PostView[], agents: readonly AgentView[]): read
   return faces.filter((one, index) => one.kind !== 'rerun' || index === rerun);
 }
 
-function Faces(props: { readonly faces: readonly Face[] }): ReactElement {
+/** A row of faces, and after them the time of the latest post when `last` gives it. */
+function Faces(props: {
+  readonly faces: readonly Face[];
+  readonly last?: string | null;
+}): ReactElement {
   return (
     <div className="f-faces">
       {props.faces.map((one, index) => (
         <FaceView key={index} face={one} alone ghost={index > 0} />
       ))}
+      {props.last ? (
+        <time dateTime={props.last} title="The latest post">
+          {clock(props.last)}
+        </time>
+      ) : null}
     </div>
   );
 }
@@ -212,7 +248,8 @@ function Need(props: {
 }): ReactElement | null {
   const first = orderNeeds(props.needs, props.lab)[0];
   if (first === undefined) return null;
-  const name = authorName(props.lab.agents, first.post.author);
+  // Two checkers can ask at once, so each keeps its own name here.
+  const name = ownName(props.lab.agents, first.post.author);
   const more = props.needs.length - 1;
   return (
     <a className="f-need" href={href({ page: 'needs' })}>
@@ -227,8 +264,9 @@ function Need(props: {
 }
 
 /**
- * One thread on the wall. Closed, it shows the title, a status, a mark for new posts, and the face of the latest
- * author. Open, it takes the full width and shows the result that the thread stands on, then `children`.
+ * One thread on the wall. Closed, it shows the title, a status, a mark for new posts, the face of the latest
+ * author, and the time of the latest post. Open, it takes the full width and shows who opened the thread, the
+ * result that it stands on, and its turns.
  */
 function Card(props: {
   readonly summary: ThreadSummary;
@@ -236,14 +274,17 @@ function Card(props: {
   readonly fresh: boolean;
   /** The thread's posts when the card is open, or `null` for a closed card. */
   readonly read: ThreadRead | null;
-  readonly children: ReactElement | null;
+  readonly turns: (read: ThreadRead) => ReactElement;
 }): ReactElement {
   const { summary, read } = props;
-  const { id, title } = summary.thread;
+  const { id, title, opened_by: opener } = summary.thread;
   const open = read !== null;
   const status = cardStatus(summary);
   const head = read?.view ? headClaim(read.view.posts) : null;
-  const chip = head ? standingChip(head.post, head.standing) : null;
+  // Beside a headline the status is that post's own standing. The summary's count stands alone.
+  const chip = head
+    ? (standingChip(head.post, head.standing) ?? { label: 'Not checked', tone: 'none' as const })
+    : null;
   const faces = read?.view
     ? authors(read.view.posts, props.agents)
     : summary.latest
@@ -263,6 +304,7 @@ function Card(props: {
           </h2>
           {props.fresh && !open ? <New /> : null}
         </div>
+        {open ? <p className="f-by">{authorName(props.agents, opener)} opened it</p> : null}
         <div className="f-card-st">
           {chip ? (
             <ChipView chip={chip} />
@@ -272,9 +314,9 @@ function Card(props: {
           {status.openAsks ? <span className="f-st fs-ask">{status.openAsks}</span> : null}
         </div>
         {head ? <p className="f-head">{head.post.text}</p> : null}
-        <Faces faces={faces} />
+        <Faces faces={faces} last={open ? null : summary.last_at} />
       </header>
-      {props.children}
+      {read ? props.turns(read) : null}
     </section>
   );
 }

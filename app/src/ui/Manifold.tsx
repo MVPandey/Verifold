@@ -3,9 +3,13 @@ import type { ReactElement } from 'react';
 
 type Point = readonly [number, number];
 
+/** Milliseconds between two frames. */
+const FRAME = 100;
+
 /**
  * The brand's folded surface, drawn as faint lines behind the top of the lab page. It moves slowly and carries no
- * information. When the system asks for reduced motion, it draws one frame and stops.
+ * information. It draws about ten frames a second while it is on screen. When the system asks for reduced
+ * motion, it draws one frame and stops.
  */
 export function Manifold(): ReactElement {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -13,7 +17,7 @@ export function Manifold(): ReactElement {
     const canvas = ref.current;
     const context = canvas?.getContext('2d');
     if (!canvas || !context) return;
-    let frame = 0;
+    let timer: ReturnType<typeof setInterval> | undefined;
     let width = 0;
     let height = 0;
     const size = (): void => {
@@ -56,18 +60,28 @@ export function Manifold(): ReactElement {
         line(64, (u) => point(u, i / 34, t), 0.08 + 0.16 * Math.sin((Math.PI * i) / 34));
       }
       for (let j = 0; j <= 22; j++) line(34, (v) => point(j / 22, v, t), 0.06);
-      if (!still) frame = requestAnimationFrame(draw);
+    };
+    const now = (): void => {
+      draw(performance.now());
     };
     const resize = (): void => {
       size();
-      // A still canvas has no next frame, so a new size draws it again.
-      if (still) draw(0);
+      now();
     };
+    // The surface drifts slowly, so about ten frames a second are enough, and none while it is off screen.
+    const watcher = new IntersectionObserver((entries) => {
+      clearInterval(timer);
+      timer = undefined;
+      if (!entries.at(-1)?.isIntersecting) return;
+      now();
+      if (!still) timer = setInterval(now, FRAME);
+    });
     size();
+    watcher.observe(canvas);
     window.addEventListener('resize', resize);
-    frame = requestAnimationFrame(draw);
     return () => {
-      cancelAnimationFrame(frame);
+      watcher.disconnect();
+      clearInterval(timer);
       window.removeEventListener('resize', resize);
     };
   }, []);

@@ -38,12 +38,19 @@ export function face(agents: readonly AgentView[], authorId: string): Face {
   return { kind: 'member', initials, color: position % 8, name };
 }
 
-/** Return the name of an author: the agent's name, "Blind rerun" for a blind checker, or "You" for the person. */
-export function authorName(agents: readonly AgentView[], authorId: string): string {
+/** Return an author's own name: the agent's name, such as "Checker 12" for a blind checker, or "You". */
+export function ownName(agents: readonly AgentView[], authorId: string): string {
   if (authorId === PERSON) return 'You';
-  const agent = agents.find((view) => view.agent.id === authorId)?.agent;
-  if (agent === undefined) return authorId;
-  return agent.checks === null ? agent.name : 'Blind rerun';
+  return agents.find((view) => view.agent.id === authorId)?.agent.name ?? authorId;
+}
+
+/**
+ * Return the name of an author in a thread: its own name, or "Blind rerun" for a blind checker, which has no
+ * name there.
+ */
+export function authorName(agents: readonly AgentView[], authorId: string): string {
+  const checker = agents.some((view) => view.agent.id === authorId && view.agent.checks !== null);
+  return checker ? 'Blind rerun' : ownName(agents, authorId);
 }
 
 /** Return how a sentence names an author, such as "objected to the blind rerun’s check". */

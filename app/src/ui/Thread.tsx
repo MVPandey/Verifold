@@ -87,9 +87,8 @@ export function Turn(
     const other = find(id);
     return other && other.post.author !== post.author ? other : undefined;
   };
-  const far = (ids: readonly string[]): readonly string[] => ids.filter((id) => !near(id));
   const elsewhere = post.builds_on.filter((id) => !find(id));
-  const onward = builtOnLabel(far(props.item.built_on_by));
+  const onward = builtOnLabel(props.item.built_on_by.filter((id) => !near(id)));
   const port = (word: string, other: PostView): ReactElement => (
     <a
       key={word + other.post.id}
@@ -102,7 +101,7 @@ export function Turn(
   return (
     <li id={post.id} className={`f-turn${claim ? ' claim' : ''} d${props.depth}`}>
       <FaceView face={who} />
-      <div className="f-turn-body">
+      <div>
         <p className="f-turn-line">
           <b className={`f-who ${who.kind === 'member' ? `m${who.color}` : who.kind}`}>
             {who.name}
@@ -116,7 +115,12 @@ export function Turn(
           <time dateTime={at}>{clock(at)}</time>
         </p>
         <p className="f-act">
-          <Mark post={post} /> {act(post, to, (id) => called(agents, id))}{' '}
+          <Mark post={post} />{' '}
+          {act(post, to, {
+            called: (id) => called(agents, id),
+            author: agent,
+            question: props.question,
+          })}{' '}
           {chip ? <ChipView chip={chip} /> : null}
         </p>
         {post.builds_on

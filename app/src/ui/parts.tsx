@@ -33,9 +33,8 @@ export function FaceView(props: {
 
 /** The mark for a turn's kind. The act line beside it says the same in words. */
 export function Mark(props: { readonly post: Post }): ReactElement {
-  return (
-    <span className={`f-mark fm-${tone(props.post)} fk-${props.post.kind}`} aria-hidden="true" />
-  );
+  const cross = props.post.kind === 'ruled_out' ? ' fk-ruled_out' : '';
+  return <span className={`f-mark fm-${tone(props.post)}${cross}`} aria-hidden="true" />;
 }
 
 /** A status, such as "Disputed". */
