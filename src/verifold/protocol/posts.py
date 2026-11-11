@@ -25,6 +25,8 @@ type PostKind = Literal['message', 'plan', 'result', 'ask', 'answer', 'objection
 """The values of `kind` across the `Post` union."""
 type Outcome = Literal['holds', 'fails']
 type CheckMethod = Literal['rerun', 'code_read', 'ratings']
+type Helper = Annotated[str, StringConstraints(strip_whitespace=True, max_length=40)]
+"""The name of a helper that an agent's harness started, such as a subagent."""
 type Choice = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 """An answer that an ask offers."""
 
@@ -54,6 +56,11 @@ class PostBase(Record):
     id: PostId
     thread: ThreadId
     author: AgentId
+    helper: Helper = ''
+    """
+    The helper of the author that wrote the post, when one did. A harness can start helpers of its own, and they post
+    with their agent's token. So the author is still the agent, and this name is the helper's own word.
+    """
     text: Headline
     body: Body = ''
     reply_to: PostId | None = None

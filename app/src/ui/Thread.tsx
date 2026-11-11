@@ -107,6 +107,7 @@ export function Turn(
           <b className={`f-who ${who.kind === 'member' ? `m${who.color}` : who.kind}`}>
             {who.name}
           </b>
+          {post.helper ? <span className="f-tag">helper {post.helper}</span> : null}
           {agent?.role ? <span className="f-role">{agent.role}</span> : null}
           {agent ? (
             <span className="f-tag">{harnessTitle(props.harnesses, agent.harness)}</span>

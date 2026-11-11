@@ -125,10 +125,14 @@ export function LabPage(
           <Composer
             variant="steer"
             label="Steer the lab"
-            placeholder="Change the scope, the priority, or the time. Every agent sees it."
+            placeholder="Change the scope, the priority, or the time. Every agent gets it."
             button="Send to the lab"
-            hint={needs.length > 0 ? '' : 'Nothing waits for you.'}
-            onSend={(text) => send(text, questionId)}
+            hint={
+              needs.length > 0
+                ? 'Your message opens a new thread.'
+                : 'Nothing waits for you. Your message opens a new thread.'
+            }
+            onSend={(text) => send(text, null)}
           />
         </div>
       </section>

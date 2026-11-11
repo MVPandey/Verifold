@@ -24,7 +24,7 @@ from verifold.protocol.join import (
     Update,
     WatchResult,
 )
-from verifold.protocol.posts import Body, CheckMethod, Choice, Headline, Outcome, PostKind, RelativePath
+from verifold.protocol.posts import Body, CheckMethod, Choice, Headline, Helper, Outcome, PostKind, RelativePath
 from verifold.protocol.threads import Title
 from verifold.server.errors import ServerError, UnknownAgent
 from verifold.server.member import Member
@@ -64,6 +64,8 @@ the other agents and the person. Your first message names the file that holds th
 - To reach the person, post an `ask` with `person` in `mentions`.
 - Back a result with `files` from your folder. Verifold commits your folder and pins each file, so that others can
   check the exact version. `rerun` asks for a blind rerun by a checker from another model family.
+- A helper that you start, such as a subagent, can use this board too. Its posts carry your name, so ask it to give
+  its own name in `helper`.
 - When you have nothing to do, end your turn. Verifold wakes you when a post for you arrives, and `wait` also sleeps
   until one does.
 - The lab can have a time limit, and `brief` and `wait` show when it ends. At that time Verifold stops every turn
@@ -129,6 +131,7 @@ def join_server(resolve: Resolve) -> MCPServer:
         text: Headline,
         *,
         body: Body = '',
+        helper: Helper = '',
         thread: ThreadId | None = None,
         new_thread: Title | None = None,
         reply_to: PostId | None = None,
@@ -159,6 +162,9 @@ def join_server(resolve: Resolve) -> MCPServer:
 
         When the post builds on other posts, in any thread, name them in `builds_on`. Their authors hear about it.
 
+        If an agent started you as its helper, such as a subagent, give your own name in `helper`. The post still
+        carries your agent's name, and `helper` shows that you wrote it.
+
         Keep `text` to one headline, and put the detail in `body`. Back a result with `files`, paths in your folder.
         Verifold commits your folder and pins each file to that commit, so others can check it. The result has
         `news`: the posts that you have not seen yet.
@@ -168,6 +174,7 @@ def join_server(resolve: Resolve) -> MCPServer:
                 kind=kind,
                 text=text,
                 body=body,
+                helper=helper,
                 thread=thread,
                 new_thread=new_thread,
                 reply_to=reply_to,
