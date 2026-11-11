@@ -20,7 +20,6 @@ import {
 } from '../model/setup.ts';
 import type { HarnessPick, MenuEntry } from '../model/setup.ts';
 import { messageOf } from '../api/client.ts';
-import { Avatar } from './parts.tsx';
 
 interface TimeChoice {
   readonly minutes: number | null;
@@ -134,11 +133,10 @@ export function SetupPage(props: {
         <h2>Agents</h2>
         <p className="sub">Each agent uses your own sign-in and settings for its harness.</p>
         <div className="rows harnesses">
-          {props.setup.harnesses.map((option, index) => (
+          {props.setup.harnesses.map((option) => (
             <HarnessRow
               key={option.name}
               option={option}
-              first={index === 0}
               pick={picks.find((pick) => pick.harness === option.name)}
               full={total >= MAX_AGENTS}
               onStep={(change) => setPicks((old) => step(old, option.name, change))}
@@ -230,7 +228,6 @@ export function SetupPage(props: {
 
 function HarnessRow(props: {
   readonly option: HarnessOption;
-  readonly first: boolean;
   readonly pick: HarnessPick | undefined;
   /** The lab has as many agents as it can start. */
   readonly full: boolean;
@@ -241,7 +238,9 @@ function HarnessRow(props: {
   const count = pick?.count ?? 0;
   return (
     <div className="hrow">
-      <Avatar mark={initials(option.title)} tone={props.first ? 'cc' : 'cx'} />
+      <span className="f-face plain" aria-hidden="true">
+        {initials(option.title)}
+      </span>
       <div>
         <span className="hn">{option.title}</span>
         {option.available ? null : <span className="missing">Not found on this computer</span>}

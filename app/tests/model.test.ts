@@ -1,15 +1,24 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { PostView } from '../src/api/types.ts';
+import type { Post, PostView, ThreadSummary } from '../src/api/types.ts';
 
-import { costLine, labTotal, mark, stateLine, tone } from '../src/model/agents.ts';
+import {
+  authorName,
+  called,
+  costLine,
+  face,
+  labTotal,
+  members,
+  ownName,
+  stateLine,
+  workingLine,
+} from '../src/model/agents.ts';
 import { duration, minutesBetween, money, tokens } from '../src/model/format.ts';
 import { orderNeeds, pauses } from '../src/model/needs.ts';
 import {
   builtOnLabel,
   isPermission,
-  kindLabel,
   personAnswer,
   personMessage,
   split,
@@ -33,7 +42,19 @@ import {
   step,
   withModel,
 } from '../src/model/setup.ts';
-import { endLine, MAX_MINUTES, moreTime, runStatus } from '../src/model/time.ts';
+import { clockLine, endLine, MAX_MINUTES, moreTime } from '../src/model/time.ts';
+import type { ActContext } from '../src/model/turns.ts';
+import {
+  act,
+  answerSoFar,
+  cardStatus,
+  headClaim,
+  isStatusNote,
+  questionThread,
+  rows,
+  standingIn,
+  tone,
+} from '../src/model/turns.ts';
 import {
   DEFAULTS,
   HARNESSES,
@@ -79,17 +100,21 @@ describe('format', () => {
 describe('route', () => {
   it('reads each page from the fragment, and anything else is the lab', () => {
     assert.deepEqual(
-      ['#/', '#/needs', '#/thread/t-12', '#/thread/x', '#token=abc', ''].map(parseRoute),
+      ['#/', '#/needs', '#/thread/t-12', '#/thread/t-3/p-40', '#/thread/x', '#token=abc', ''].map(
+        parseRoute,
+      ),
       [
         { page: 'lab' },
         { page: 'needs' },
-        { page: 'thread', id: 't-12' },
+        { page: 'thread', id: 't-12', post: null },
+        { page: 'thread', id: 't-3', post: 'p-40' },
         { page: 'lab' },
         { page: 'lab' },
         { page: 'lab' },
       ],
     );
-    assert.equal(href({ page: 'thread', id: 't-3' }), '#/thread/t-3');
+    assert.equal(href({ page: 'thread', id: 't-3', post: null }), '#/thread/t-3');
+    assert.equal(href({ page: 'thread', id: 't-3', post: 'p-40' }), '#/thread/t-3/p-40');
   });
 });
 
@@ -138,18 +163,7 @@ describe('posts', () => {
     assert.equal(personAnswer(asked, null, ''), null);
   });
 
-  it('names kinds and standings, and gives every result a chip', () => {
-    assert.equal(
-      kindLabel({
-        ...result('p-2'),
-        kind: 'check',
-        outcome: 'fails',
-        method: 'rerun',
-        reply_to: 'p-1',
-      }),
-      'Check by rerun',
-    );
-    assert.equal(kindLabel({ ...result('p-1'), kind: 'plan' }), 'Plan');
+  it('names standings, and gives every result a chip', () => {
     assert.deepEqual(standingChip(result('p-1'), 'open'), { label: 'Not checked', tone: 'none' });
     assert.deepEqual(standingChip(result('p-1'), 'held_up'), { label: 'Held up', tone: 'hold' });
     assert.equal(standingChip({ ...result('p-1'), kind: 'message' }, 'open'), null);
@@ -162,13 +176,67 @@ describe('posts', () => {
 });
 
 describe('agents', () => {
-  it('marks avatars with the agent number, C for checkers, and You for the person', () => {
-    assert.deepEqual(['agent-12', 'checker-7', 'person', 'zed'].map(mark), ['12', 'C', 'You', 'Z']);
-    const agents = [agentView('agent-1'), agentView('agent-2')];
+  it('gives each member two letters and a color from its position, and a blind rerun neither', () => {
+    const checker = agentView('checker-7');
+    const agents = [
+      agentView('agent-1'),
+      { ...checker, agent: { ...checker.agent, name: 'Checker 7', checks: 'p-1' } },
+      agentView('agent-2'),
+    ];
     assert.deepEqual(
-      ['agent-1', 'agent-2', 'person'].map((id) => tone(HARNESSES, agents, id)),
-      ['cc', 'cx', 'you'],
+      members(agents).map((view) => view.agent.id),
+      ['agent-1', 'agent-2'],
     );
+    assert.deepEqual(face(agents, 'agent-2'), {
+      kind: 'member',
+      initials: 'A2',
+      color: 1,
+      name: 'Agent 2',
+    });
+    assert.deepEqual(face(agents, 'checker-7'), {
+      kind: 'rerun',
+      initials: '',
+      color: null,
+      name: 'Blind rerun',
+    });
+    assert.deepEqual(face(agents, 'person'), {
+      kind: 'person',
+      initials: 'You',
+      color: null,
+      name: 'You',
+    });
+    const many = Array.from({ length: 10 }, (_, index) => agentView(`agent-${index + 1}`));
+    assert.deepEqual(
+      [face(many, 'agent-9').color, face(many, 'agent-10').initials, face(many, 'agent-10').color],
+      [0, '10', 1],
+    );
+    assert.deepEqual(
+      ['agent-1', 'checker-7', 'person', 'gone'].map((id) => authorName(agents, id)),
+      ['Agent 1', 'Blind rerun', 'You', 'gone'],
+    );
+    assert.deepEqual(
+      ['agent-1', 'checker-7', 'person', 'gone'].map((id) => ownName(agents, id)),
+      ['Agent 1', 'Checker 7', 'You', 'gone'],
+    );
+    assert.deepEqual(
+      ['agent-1', 'checker-7', 'person'].map((id) => called(agents, id)),
+      ['Agent 1', 'the blind rerun', 'you'],
+    );
+  });
+
+  it('counts the members and the blind reruns that work now', () => {
+    const working = { state: 'working', detail: '', at: null } as const;
+    const checker = agentView('checker-7', { activity: working });
+    const rerun = { ...checker, agent: { ...checker.agent, checks: 'p-1' } };
+    assert.equal(
+      workingLine([agentView('agent-1', { activity: working }), agentView('agent-2')]),
+      '1 of 2 members working',
+    );
+    assert.equal(
+      workingLine([agentView('agent-1'), rerun]),
+      '0 of 1 member working, 1 blind rerun',
+    );
+    assert.equal(workingLine([rerun, rerun]), '0 of 0 members working, 2 blind reruns');
   });
 
   it('says what an agent does and what it costs', () => {
@@ -189,6 +257,220 @@ describe('agents', () => {
     assert.equal(costLine(agentView('agent-3')), 'No turns yet');
     assert.equal(labTotal([priced, unpriced]), '$0.37 and 463k tokens');
     assert.equal(labTotal([priced]), '$0.37');
+  });
+});
+
+describe('turns', () => {
+  const name = (id: string): string => (id === 'person' ? 'you' : id);
+  const reply = (kind: object): Post => ({ ...result('p-9', { reply_to: 'p-1' }), ...kind });
+  const target = result('p-1', { author: 'agent-2' });
+
+  it('writes a turn as one line from the post and the post that it answers', () => {
+    const context = { called: name, author: null, question: 't-1' };
+    const line = (kind: object, to: Post | null = target): string => act(reply(kind), to, context);
+    assert.deepEqual(
+      [
+        act(result('p-1'), null, context),
+        line({ kind: 'result' }),
+        line({ kind: 'proposal' }),
+        line({ kind: 'proposal', thread: 't-2', reply_to: null }),
+        line({ kind: 'plan' }),
+        line({ kind: 'ruled_out' }),
+        line({ kind: 'objection' }),
+        line({ kind: 'ask', choices: [] }),
+        line({ kind: 'answer', accepts: true }, reply({ kind: 'objection', author: 'agent-3' })),
+        line({ kind: 'answer', accepts: false }, reply({ kind: 'ask', author: 'person' })),
+        line({ kind: 'check', method: 'rerun', outcome: 'holds' }),
+        line({ kind: 'check', method: 'code_read', outcome: 'fails' }),
+        line({ kind: 'check', method: 'ratings', outcome: 'holds' }),
+        line({ kind: 'message' }),
+        line({ kind: 'message', reply_to: null }, null),
+      ],
+      [
+        'posted a result',
+        'posted a result in reply to agent-2’s result',
+        'proposed an answer in reply to agent-2’s result',
+        'made a proposal',
+        'posted a plan in reply to agent-2’s result',
+        'ruled out a lead in reply to agent-2’s result',
+        'objected to agent-2’s result',
+        'asked a question in reply to agent-2’s result',
+        'accepted agent-3’s objection',
+        'answered you',
+        'reran agent-2’s result: it holds',
+        'read the code of agent-2’s result: it fails',
+        'rated agent-2’s result: it holds',
+        'replied to agent-2',
+        'added a note',
+      ],
+    );
+  });
+
+  it('says "blind" only for the rerun of the checker that Verifold started for that post', () => {
+    const rerun = reply({ kind: 'check', method: 'rerun', outcome: 'fails' });
+    const checker = (checks: string): object => ({
+      called: name,
+      author: { ...agentView('checker-7').agent, checks },
+      question: null,
+    });
+    const line = (context: object): string => act(rerun, target, context as ActContext);
+    assert.equal(line(checker('p-1')), 'reran agent-2’s result blind: it fails');
+    // A member reran it and saw the thread. A checker for another post is not blind to this one.
+    assert.equal(
+      line({ called: name, author: agentView('agent-3').agent, question: null }),
+      'reran agent-2’s result: it fails',
+    );
+    assert.equal(line(checker('p-5')), 'reran agent-2’s result: it fails');
+  });
+
+  it('names a post that the page does not have as "a post"', () => {
+    const context = { called: name, author: null, question: null };
+    const line = (kind: object): string => act(reply(kind), null, context);
+    assert.deepEqual(
+      [
+        line({ kind: 'objection' }),
+        line({ kind: 'answer', accepts: true }),
+        line({ kind: 'answer', accepts: false }),
+        line({ kind: 'check', method: 'rerun', outcome: 'fails' }),
+        line({ kind: 'message' }),
+        line({ kind: 'result' }),
+      ],
+      [
+        'objected to a post',
+        'accepted a post',
+        'answered a post',
+        'reran a post: it fails',
+        'replied to a post',
+        'posted a result in reply to a post',
+      ],
+    );
+  });
+
+  it('gives each kind of turn the tone of its mark', () => {
+    const kinds: readonly object[] = [
+      { kind: 'check', method: 'rerun', outcome: 'holds' },
+      { kind: 'check', method: 'rerun', outcome: 'fails' },
+      { kind: 'objection' },
+      { kind: 'answer', accepts: true },
+      { kind: 'answer', accepts: false },
+      { kind: 'result' },
+      { kind: 'ruled_out' },
+      { kind: 'proposal' },
+      { kind: 'ask', choices: [] },
+      { kind: 'plan' },
+      { kind: 'message' },
+    ];
+    assert.deepEqual(
+      kinds.map((kind) => tone(reply(kind))),
+      ['good', 'bad', 'bad', 'turn', 'quiet', 'claim', 'claim', 'answer', 'ask', 'quiet', 'quiet'],
+    );
+  });
+
+  it('says what an author is to a thread', () => {
+    const thread = { id: 't-2', title: 'A', opened_by: 'agent-1' };
+    const lead = agentView('agent-1').agent;
+    const visitor = agentView('agent-2').agent;
+    const checker = { ...agentView('checker-7').agent, checks: 'p-1' };
+    assert.equal(standingIn(lead, thread, 't-1', null), 'leads this thread');
+    assert.equal(standingIn(visitor, thread, 't-1', null), 'visiting');
+    assert.equal(standingIn(lead, thread, 't-2', null), null);
+    assert.equal(standingIn(null, thread, 't-1', null), null);
+    assert.equal(standingIn(checker, thread, 't-2', null), 'outside checker');
+    assert.equal(standingIn(checker, thread, 't-1', 'anthropic'), 'outside checker');
+    assert.equal(
+      standingIn(checker, thread, 't-1', 'openai'),
+      'outside checker, other model family',
+    );
+  });
+
+  it('finds the question’s thread by the server’s rule: the first thread, the person, and the title', () => {
+    const first = summary({ thread: { id: 't-1', title: 'The question', opened_by: 'person' } });
+    const other = summary({ thread: { id: 't-2', title: 'The question', opened_by: 'person' } });
+    const renamed = summary({ thread: { id: 't-1', title: 'Sort it', opened_by: 'person' } });
+    assert.equal(questionThread([other, first]), first);
+    assert.equal(questionThread([other, summary()]), null);
+    assert.equal(questionThread([renamed]), null);
+    assert.equal(questionThread([other]), null);
+  });
+
+  it('nests replies to two levels and folds runs of status notes in the question’s thread', () => {
+    const note = (id: string, changes: Partial<Post> = {}): PostView =>
+      postView(result(id, { kind: 'message', ...changes }));
+    const posts = [
+      note('p-1', { author: 'person' }),
+      note('p-2'),
+      note('p-3'),
+      postView(result('p-4')),
+      postView(result('p-5', { kind: 'objection', reply_to: 'p-4' })),
+      postView(reply({ id: 'p-6', kind: 'answer', accepts: true, reply_to: 'p-5' })),
+      note('p-7', { reply_to: 'p-6' }),
+      note('p-8'),
+      note('p-9', { reply_to: 'p-8' }),
+      note('p-10', { reply_to: 'p-99' }),
+    ];
+    const shape = (question: string | null): readonly string[] =>
+      rows(posts, question).map((row) =>
+        row.kind === 'turn'
+          ? `${row.item.post.id}:${row.depth}`
+          : row.items.map((item) => item.post.id).join('+'),
+      );
+    assert.deepEqual(shape('t-1'), [
+      'p-1:0',
+      'p-2+p-3',
+      'p-4:0',
+      'p-5:1',
+      'p-6:2',
+      'p-7:2',
+      'p-8:0',
+      'p-9:1',
+      'p-10',
+    ]);
+    assert.equal(shape(null).includes('p-2:0'), true);
+    assert.equal(isStatusNote(result('p-1', { kind: 'message' }), 't-1'), true);
+    assert.equal(isStatusNote(result('p-1', { kind: 'message', thread: 't-2' }), 't-1'), false);
+    assert.equal(isStatusNote(result('p-1'), 't-1'), false);
+  });
+
+  it('finds what a thread stands on, and the answer so far', () => {
+    const proposal = (id: string): Post => result(id, { kind: 'proposal' });
+    const posts = [
+      postView(result('p-1'), 1, 'checked'),
+      postView(proposal('p-2'), 2, 'disputed'),
+      postView(proposal('p-3'), 3, 'conceded'),
+      postView(result('p-4', { kind: 'message' }), 4),
+    ];
+    assert.equal(headClaim(posts)?.post.id, 'p-2');
+    assert.equal(answerSoFar(posts)?.post.id, 'p-2');
+    assert.equal(headClaim([postView(result('p-1'), 1, 'conceded')])?.post.id, 'p-1');
+    assert.equal(answerSoFar([postView(proposal('p-1'), 1, 'conceded')]), null);
+    assert.equal(headClaim([]), null);
+    // A ruled-out lead is not what a thread stands on.
+    const lead = postView(result('p-5', { kind: 'ruled_out' }), 5, 'checked');
+    assert.equal(headClaim([...posts, lead])?.post.id, 'p-2');
+    assert.equal(headClaim([lead]), null);
+  });
+
+  it('gives a closed card a status that the summary’s counts support', () => {
+    const status = (changes: Partial<ThreadSummary>): string => {
+      const { label, edge, openAsks } = cardStatus(summary(changes));
+      return `${label} / ${edge} / ${openAsks}`;
+    };
+    assert.deepEqual(
+      [
+        status({}),
+        status({ not_checked: 2 }),
+        status({ checked: 2 }),
+        status({ checked: 1, not_checked: 2, open_asks: 1 }),
+        status({ disputed: 1, checked: 3, open_asks: 2 }),
+      ],
+      [
+        'No result yet / none / null',
+        'Not checked / none / null',
+        'Checked / good / null',
+        '1 of 3 checked / good / Open ask',
+        '1 disputed / bad / 2 open asks',
+      ],
+    );
   });
 });
 
@@ -361,8 +643,9 @@ describe('time', () => {
   const now = new Date('2026-11-06T14:26:00Z');
 
   it('says how long the lab has run and when it ends', () => {
-    assert.equal(runStatus(labView(), now), 'Running, 26 min');
-    assert.equal(runStatus(labView({ out_of_time: true }), now), 'Out of time');
+    assert.equal(clockLine(labView(), now), 'Running, 26 min');
+    assert.equal(clockLine(labView({ out_of_time: true }), now), 'Out of time');
+    assert.equal(clockLine(labView({ ends_at: '2026-11-06T15:00:00Z' }), now), '26 min of 1 h');
     assert.equal(endLine(labView(), now), 'No time limit.');
     assert.match(endLine(labView({ ends_at: '2026-11-06T14:38:00Z' }), now), /, in 12 min\.$/);
   });

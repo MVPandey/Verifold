@@ -4,11 +4,12 @@ import { clock, duration, minutesBetween } from './format.ts';
 /** The longest time that the person can give a lab at once, as the server allows: one week. */
 export const MAX_MINUTES = 7 * 24 * 60;
 
-/** Return the lab's state for the header, such as "Running, 26 min" or "Out of time". */
-export function runStatus(lab: LabView, now: Date): string {
-  return lab.out_of_time
-    ? 'Out of time'
-    : `Running, ${duration(minutesBetween(lab.opened_at, now))}`;
+/** Return the lab's clock for the top bar, such as "26 min of 1 h", "Running, 26 min", or "Out of time". */
+export function clockLine(lab: LabView, now: Date): string {
+  if (lab.out_of_time) return 'Out of time';
+  const run = duration(minutesBetween(lab.opened_at, now));
+  if (lab.ends_at === null) return `Running, ${run}`;
+  return `${run} of ${duration(minutesBetween(lab.opened_at, new Date(lab.ends_at)))}`;
 }
 
 /** Return when the lab ends, in one sentence. */
