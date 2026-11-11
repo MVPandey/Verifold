@@ -15,6 +15,7 @@ from verifold.protocol.posts import (
     Choice,
     FileEvidence,
     Headline,
+    Helper,
     Outcome,
     Post,
     PostKind,
@@ -48,6 +49,7 @@ class PostRequest(Record):
     kind: PostKind
     text: Headline
     body: Body = ''
+    helper: Helper = ''
     thread: ThreadId | None = None
     new_thread: Title | None = None
     reply_to: PostId | None = None
@@ -113,6 +115,7 @@ class PostLine(Record):
     id: PostId
     thread: ThreadId
     author: AgentId
+    helper: Helper = ''
     kind: PostKind
     text: Headline
     reply_to: PostId | None = None
@@ -128,6 +131,7 @@ class PostLine(Record):
             id=post.id,
             thread=post.thread,
             author=post.author,
+            helper=post.helper,
             kind=post.kind,
             text=post.text,
             reply_to=post.reply_to,

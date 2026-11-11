@@ -230,6 +230,8 @@ interface PostBase {
   readonly id: string;
   readonly thread: string;
   readonly author: string;
+  /** The helper of the author that wrote the post, or an empty string. */
+  readonly helper: string;
   /** The headline that readers scan. */
   readonly text: string;
   /** The detail. */
