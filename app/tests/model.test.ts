@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { PostView } from '../src/api/types.ts';
+import type { Post, PostView, ThreadSummary } from '../src/api/types.ts';
 
 import { costLine, labTotal, mark, stateLine, tone } from '../src/model/agents.ts';
 import { duration, minutesBetween, money, tokens } from '../src/model/format.ts';
@@ -34,6 +34,17 @@ import {
   withModel,
 } from '../src/model/setup.ts';
 import { endLine, MAX_MINUTES, moreTime, runStatus } from '../src/model/time.ts';
+import {
+  act,
+  answerSoFar,
+  cardStatus,
+  headClaim,
+  isStatusNote,
+  questionThread,
+  rows,
+  standingIn,
+  tone as markTone,
+} from '../src/model/turns.ts';
 import {
   DEFAULTS,
   HARNESSES,
@@ -189,6 +200,182 @@ describe('agents', () => {
     assert.equal(costLine(agentView('agent-3')), 'No turns yet');
     assert.equal(labTotal([priced, unpriced]), '$0.37 and 463k tokens');
     assert.equal(labTotal([priced]), '$0.37');
+  });
+});
+
+describe('turns', () => {
+  const name = (id: string): string => (id === 'person' ? 'you' : id);
+  const reply = (kind: object): Post => ({ ...result('p-9', { reply_to: 'p-1' }), ...kind });
+  const target = result('p-1', { author: 'agent-2' });
+
+  it('writes a turn as one line from the post and the post that it answers', () => {
+    const line = (kind: object, to: Post | null = target): string => act(reply(kind), to, name);
+    assert.deepEqual(
+      [
+        act(result('p-1'), null, name),
+        line({ kind: 'result' }),
+        line({ kind: 'proposal' }),
+        line({ kind: 'plan' }),
+        line({ kind: 'ruled_out' }),
+        line({ kind: 'objection' }),
+        line({ kind: 'objection' }, null),
+        line({ kind: 'ask', choices: [] }),
+        line({ kind: 'answer', accepts: true }, reply({ kind: 'objection', author: 'agent-3' })),
+        line({ kind: 'answer', accepts: false }, reply({ kind: 'ask', author: 'person' })),
+        line({ kind: 'answer', accepts: true }, null),
+        line({ kind: 'answer', accepts: false }, null),
+        line({ kind: 'check', method: 'rerun', outcome: 'holds' }),
+        line({ kind: 'check', method: 'code_read', outcome: 'fails' }),
+        line({ kind: 'check', method: 'ratings', outcome: 'holds' }),
+        line({ kind: 'check', method: 'rerun', outcome: 'fails' }, null),
+        line({ kind: 'check', method: 'code_read', outcome: 'holds' }, null),
+        line({ kind: 'check', method: 'ratings', outcome: 'holds' }, null),
+        line({ kind: 'message' }),
+        line({ kind: 'message' }, null),
+      ],
+      [
+        'posted a result',
+        'followed up with a result',
+        'proposed an answer',
+        'posted a plan',
+        'ruled out a lead',
+        'objected to agent-2’s result',
+        'objected',
+        'asked a question',
+        'accepted agent-3’s objection',
+        'answered you',
+        'accepted an objection',
+        'answered',
+        'reran agent-2’s result blind: it holds',
+        'read the code of agent-2’s result: it fails',
+        'rated agent-2’s result: it holds',
+        'reran it blind: it fails',
+        'read the code: it holds',
+        'rated it: it holds',
+        'replied to agent-2',
+        'added a note',
+      ],
+    );
+  });
+
+  it('gives each kind of turn the tone of its mark', () => {
+    const kinds: readonly object[] = [
+      { kind: 'check', method: 'rerun', outcome: 'holds' },
+      { kind: 'check', method: 'rerun', outcome: 'fails' },
+      { kind: 'objection' },
+      { kind: 'answer', accepts: true },
+      { kind: 'answer', accepts: false },
+      { kind: 'result' },
+      { kind: 'ruled_out' },
+      { kind: 'proposal' },
+      { kind: 'ask', choices: [] },
+      { kind: 'plan' },
+      { kind: 'message' },
+    ];
+    assert.deepEqual(
+      kinds.map((kind) => markTone(reply(kind))),
+      ['good', 'bad', 'bad', 'turn', 'quiet', 'claim', 'claim', 'answer', 'ask', 'plan', 'quiet'],
+    );
+  });
+
+  it('says what an author is to a thread', () => {
+    const thread = { id: 't-2', title: 'A', opened_by: 'agent-1' };
+    const lead = agentView('agent-1').agent;
+    const visitor = agentView('agent-2').agent;
+    const checker = { ...agentView('checker-7').agent, checks: 'p-1' };
+    assert.equal(standingIn(lead, thread, 't-1'), 'leads this thread');
+    assert.equal(standingIn(visitor, thread, 't-1'), 'visiting');
+    assert.equal(standingIn(lead, thread, 't-2'), null);
+    assert.equal(standingIn(null, thread, 't-1'), null);
+    assert.equal(standingIn(checker, thread, 't-2'), 'outside checker');
+    assert.equal(standingIn(checker, thread, 't-1', 'anthropic'), 'outside checker');
+    assert.equal(
+      standingIn(checker, thread, 't-1', 'openai'),
+      'outside checker, other model family',
+    );
+  });
+
+  it('finds the question’s thread only when the person opened the first thread', () => {
+    const first = summary({ thread: { id: 't-1', title: 'The question', opened_by: 'person' } });
+    const other = summary({ thread: { id: 't-2', title: 'A', opened_by: 'person' } });
+    assert.equal(questionThread([other, first]), first);
+    assert.equal(questionThread([other, summary()]), null);
+  });
+
+  it('nests replies to two levels and folds runs of status notes in the question’s thread', () => {
+    const note = (id: string, changes: Partial<Post> = {}): PostView =>
+      postView(result(id, { kind: 'message', ...changes }));
+    const posts = [
+      note('p-1', { author: 'person' }),
+      note('p-2'),
+      note('p-3'),
+      postView(result('p-4')),
+      postView(result('p-5', { kind: 'objection', reply_to: 'p-4' })),
+      postView(reply({ id: 'p-6', kind: 'answer', accepts: true, reply_to: 'p-5' })),
+      note('p-7', { reply_to: 'p-6' }),
+      note('p-8'),
+      note('p-9', { reply_to: 'p-8' }),
+      note('p-10', { reply_to: 'p-99' }),
+    ];
+    const shape = (question: string | null): readonly string[] =>
+      rows(posts, question).map((row) =>
+        row.kind === 'turn'
+          ? `${row.item.post.id}:${row.depth}`
+          : row.items.map((item) => item.post.id).join('+'),
+      );
+    assert.deepEqual(shape('t-1'), [
+      'p-1:0',
+      'p-2+p-3',
+      'p-4:0',
+      'p-5:1',
+      'p-6:2',
+      'p-7:2',
+      'p-8:0',
+      'p-9:1',
+      'p-10',
+    ]);
+    assert.equal(shape(null).includes('p-2:0'), true);
+    assert.equal(isStatusNote(result('p-1', { kind: 'message' }), 't-1'), true);
+    assert.equal(isStatusNote(result('p-1', { kind: 'message', thread: 't-2' }), 't-1'), false);
+    assert.equal(isStatusNote(result('p-1'), 't-1'), false);
+  });
+
+  it('finds what a thread stands on, and the answer so far', () => {
+    const proposal = (id: string): Post => result(id, { kind: 'proposal' });
+    const posts = [
+      postView(result('p-1'), 1, 'checked'),
+      postView(proposal('p-2'), 2, 'disputed'),
+      postView(proposal('p-3'), 3, 'conceded'),
+      postView(result('p-4', { kind: 'message' }), 4),
+    ];
+    assert.equal(headClaim(posts)?.post.id, 'p-2');
+    assert.equal(answerSoFar(posts)?.post.id, 'p-2');
+    assert.equal(headClaim([postView(result('p-1'), 1, 'conceded')])?.post.id, 'p-1');
+    assert.equal(answerSoFar([postView(proposal('p-1'), 1, 'conceded')]), null);
+    assert.equal(headClaim([]), null);
+  });
+
+  it('gives a closed card a status that the summary’s counts support', () => {
+    const status = (changes: Partial<ThreadSummary>): string => {
+      const { label, edge, openAsks } = cardStatus(summary(changes));
+      return `${label} / ${edge} / ${openAsks}`;
+    };
+    assert.deepEqual(
+      [
+        status({}),
+        status({ not_checked: 2 }),
+        status({ checked: 2 }),
+        status({ checked: 1, not_checked: 2, open_asks: 1 }),
+        status({ disputed: 1, checked: 3, open_asks: 2 }),
+      ],
+      [
+        'No result yet / none / null',
+        'Not checked / none / null',
+        'Checked / good / null',
+        '1 of 3 checked / good / Open ask',
+        '1 disputed / bad / 2 open asks',
+      ],
+    );
   });
 });
 
