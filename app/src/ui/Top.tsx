@@ -37,6 +37,7 @@ export function Top(props: {
 }): ReactElement {
   const name = props.folder.split('/').filter(Boolean).pop() ?? props.folder;
   const { open, route } = props;
+  const place = href(route);
   const current = (on: boolean): 'page' | undefined => (on ? 'page' : undefined);
   return (
     <header className="f-top">
@@ -66,8 +67,9 @@ export function Top(props: {
       {open ? (
         <>
           <span className="grow" />
-          <Members lab={open.lab} harnesses={open.harnesses} now={open.now} />
-          <details className="f-pop f-time" name="top">
+          {/* A new key closes an open panel when the person goes to another page or thread. */}
+          <Members key={`who${place}`} lab={open.lab} harnesses={open.harnesses} now={open.now} />
+          <details key={place} className="f-pop f-time" name="top">
             <summary>{clockLine(open.lab, open.now)}</summary>
             <TimePanel lab={open.lab} now={open.now} api={open.api} onChange={open.onChange} />
           </details>
