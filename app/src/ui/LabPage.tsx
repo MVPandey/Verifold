@@ -1,268 +1,276 @@
-import { useState } from 'react';
+import { useEffect } from 'react';
 import type { ReactElement } from 'react';
 
-import type { AgentView, HarnessOption, LabView, PostView, ThreadSummary } from '../api/types.ts';
-import {
-  authorName,
-  costLine,
-  harnessTitle,
-  labTotal,
-  mark,
-  stateLine,
-  tone,
-} from '../model/agents.ts';
-import { clock } from '../model/format.ts';
+import type { AgentView, LabView, PostView, ThreadSummary } from '../api/types.ts';
+import { authorName, face } from '../model/agents.ts';
+import type { Face } from '../model/agents.ts';
 import { orderNeeds } from '../model/needs.ts';
-import { isPermission, personMessage } from '../model/posts.ts';
-import type { Chip } from '../model/posts.ts';
+import { isPermission, personMessage, standingChip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
-import { hasNew, readSeen } from '../model/seen.ts';
-import { stopLine } from '../model/settings.ts';
-import type { Seen } from '../model/seen.ts';
-import { endLine, moreTime } from '../model/time.ts';
-import { messageOf } from '../api/client.ts';
-import type { PageProps } from './hooks.ts';
-import { Avatar, ChipView, Composer } from './parts.tsx';
+import { hasNew, markSeen, readSeen } from '../model/seen.ts';
+import { answerSoFar, cardStatus, headClaim, questionThread } from '../model/turns.ts';
+import { useThread } from './hooks.ts';
+import type { PageProps, ThreadRead } from './hooks.ts';
+import { ChipView, Composer, FaceView } from './parts.tsx';
+import { Turns } from './Thread.tsx';
 
-/** The lab at a glance: what waits for the person, the threads, the agents, and the lab's time. */
-export function LabPage({ api, data, now }: PageProps): ReactElement {
-  const { lab, threads, needs } = data;
-  const harnesses = data.setup?.harnesses ?? [];
+/** A question longer than this gets smaller type, so it does not fill the screen. */
+const LONG_QUESTION = 120;
+
+/**
+ * The lab as a wall: the question and the answer so far, the box that steers the lab, and one card for each
+ * thread. `open` is the thread whose card is open, and `post` is the post in it to scroll to.
+ */
+export function LabPage(
+  props: PageProps & { readonly open: string | null; readonly post: string | null },
+): ReactElement {
+  const { api, data, open, post } = props;
+  const { lab, threads, needs, version } = data;
   const seen = readSeen(window.localStorage, lab.opened_at);
+  const question = questionThread(threads);
+  const questionId = question?.thread.id ?? null;
+  // The seat needs the question's thread at every load. An open card needs its own.
+  const questionRead = useThread(api, questionId, version);
+  const cardRead = useThread(api, open === questionId ? null : open, version);
+  const openRead = open === questionId ? questionRead : cardRead;
+  const loaded = openRead.view?.thread.id === open ? openRead.view : null;
+  const last = loaded?.posts.at(-1)?.seq;
 
-  const send = async (text: string): Promise<void> => {
-    const request = personMessage(text);
+  useEffect(() => {
+    if (open !== null && last !== undefined) {
+      markSeen(window.localStorage, lab.opened_at, open, last);
+    }
+  }, [open, last, lab.opened_at]);
+
+  const ready = loaded !== null;
+  useEffect(() => {
+    if (open === null || !ready) return;
+    const target =
+      (post && document.getElementById(post)) || document.getElementById(`card-${open}`);
+    target?.scrollIntoView({ block: post && target.id === post ? 'center' : 'start' });
+  }, [open, post, ready]);
+
+  const send = async (text: string, thread: string | null): Promise<void> => {
+    const request = personMessage(text, thread ?? undefined);
     if (request) await api.post(request);
     data.reload();
   };
+  const turns = (read: ThreadRead): ReactElement =>
+    read.view ? (
+      <Turns
+        view={read.view}
+        agents={lab.agents}
+        harnesses={data.setup?.harnesses ?? []}
+        needs={needs}
+        question={questionId}
+        onRerun={(postId) => api.rerun(postId)}
+        onSend={(text) => send(text, read.view?.thread.id ?? null)}
+      />
+    ) : (
+      <p className="f-wait" role="status">
+        {read.error ?? 'Loading the thread.'}
+      </p>
+    );
+  const cards = threads
+    .filter((summary) => summary !== question)
+    .sort((first, second) => number(first) - number(second));
+  const answer = questionRead.view ? answerSoFar(questionRead.view.posts) : null;
+  const chip = answer ? standingChip(answer.post, answer.standing) : null;
+  const answerOpen = question !== null && open === questionId;
+  const missing = open !== null && !threads.some((summary) => summary.thread.id === open);
 
   return (
-    <div className="cols lab">
-      <div className="maincol">
-        <h1 className="labq">{lab.question}</h1>
-        <p className="statusline">
-          {lab.posts} {lab.posts === 1 ? 'post' : 'posts'} · {lab.threads}{' '}
-          {lab.threads === 1 ? 'thread' : 'threads'} · Spent {labTotal(lab.agents)}
-        </p>
-        <NeedsBanner needs={needs} lab={lab} />
-        <section className="section">
-          <div className="sechead">
-            <h2>
-              Threads <span className="n">{threads.length}</span>
-            </h2>
-          </div>
-          {threads.length > 0 ? (
-            <div className="rows">
-              {threads.map((summary) => (
-                <ThreadRow
-                  key={summary.thread.id}
-                  summary={summary}
-                  agents={lab.agents}
-                  seen={seen}
-                />
-              ))}
+    <>
+      <section className="f-seat">
+        <div>
+          <h1 className={lab.question.length > LONG_QUESTION ? 'long' : undefined}>
+            {lab.question}
+          </h1>
+          {question ? (
+            <div className={`f-answer${answerOpen ? ' on' : ''}`}>
+              <div className="f-card-title">
+                <a
+                  className="f-label"
+                  href={href(
+                    answerOpen
+                      ? { page: 'lab' }
+                      : { page: 'thread', id: question.thread.id, post: null },
+                  )}
+                  aria-expanded={answerOpen}
+                >
+                  The answer so far
+                </a>
+                {hasNew(question, seen) && !answerOpen ? <New /> : null}
+              </div>
+              {answer ? (
+                <>
+                  <p className={answerOpen ? undefined : 'clamp'}>{answer.post.text}</p>
+                  <div className="f-card-st">
+                    <ChipView chip={chip ?? { label: 'Not checked', tone: 'none' }} />
+                  </div>
+                </>
+              ) : (
+                <p className="dim">
+                  {questionRead.view
+                    ? 'No answer proposed yet.'
+                    : (questionRead.error ?? 'Loading the answer.')}
+                </p>
+              )}
+              <Faces faces={authors(questionRead.view?.posts ?? [], lab.agents)} />
             </div>
-          ) : (
-            <p className="empty">No threads yet.</p>
-          )}
+          ) : null}
+        </div>
+        <div className="f-steer">
+          <Need needs={needs} lab={lab} />
+          <Composer
+            variant="steer"
+            label="Steer the lab"
+            placeholder="Change the scope, the priority, or the time. Every agent sees it."
+            button="Send to the lab"
+            hint={needs.length > 0 ? '' : 'Nothing waits for you.'}
+            onSend={(text) => send(text, questionId)}
+          />
+        </div>
+      </section>
+
+      {question && answerOpen ? (
+        <section
+          id={`card-${question.thread.id}`}
+          className="f-card open f-answer-thread"
+          aria-label={question.thread.title}
+        >
+          {turns(questionRead)}
         </section>
+      ) : null}
+
+      <div className="f-body">
+        {missing ? (
+          <p className="f-wait" role="alert">
+            {cardRead.error ?? 'This lab has no such thread.'}
+          </p>
+        ) : null}
+        {cards.length > 0 ? (
+          <div className="f-wall">
+            {cards.map((summary) => (
+              <Card
+                key={summary.thread.id}
+                summary={summary}
+                agents={lab.agents}
+                fresh={hasNew(summary, seen)}
+                read={summary.thread.id === open ? cardRead : null}
+              >
+                {summary.thread.id === open ? turns(cardRead) : null}
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <p className="empty">No threads yet.</p>
+        )}
       </div>
-      <aside className="agents">
-        <h2>
-          Agents <span className="n">{lab.agents.length}</span>
-        </h2>
-        <div className="rows">
-          {lab.agents.map((view) => (
-            <AgentRow
-              key={view.agent.id}
-              view={view}
-              agents={lab.agents}
-              harnesses={harnesses}
-              now={now}
-            />
-          ))}
-        </div>
-        <div className="total">
-          <span>Lab total</span>
-          <b>{labTotal(lab.agents)}</b>
-        </div>
-        <TimePanel lab={lab} now={now} api={api} onChange={data.reload} />
-      </aside>
-      <Composer
-        to="All agents"
-        placeholder="Tell the agents what to change or check"
-        hint="Your message opens a new thread, and every agent gets it."
-        onSend={send}
-      />
+    </>
+  );
+}
+
+function number(summary: ThreadSummary): number {
+  return Number(summary.thread.id.slice(2));
+}
+
+/**
+ * Return the faces of the authors of some posts, each once, with the latest author first. The API does not say
+ * who is in a thread now, so the page shows who posted last and, fainter, who posted before.
+ */
+function authors(posts: readonly PostView[], agents: readonly AgentView[]): readonly Face[] {
+  const ids = [...new Set(posts.map((item) => item.post.author).reverse())];
+  const faces = ids.map((id) => face(agents, id));
+  // Blind reruns share one face, because they have no name.
+  const rerun = faces.findIndex((one) => one.kind === 'rerun');
+  return faces.filter((one, index) => one.kind !== 'rerun' || index === rerun);
+}
+
+function Faces(props: { readonly faces: readonly Face[] }): ReactElement {
+  return (
+    <div className="f-faces">
+      {props.faces.map((one, index) => (
+        <FaceView key={index} face={one} alone ghost={index > 0} />
+      ))}
     </div>
   );
 }
 
-function NeedsBanner(props: {
+function New(): ReactElement {
+  return <span className="f-new">New</span>;
+}
+
+/** The ask that waits for the person, with the way to the Needs you page. */
+function Need(props: {
   readonly needs: readonly PostView[];
   readonly lab: LabView;
 }): ReactElement | null {
   const first = orderNeeds(props.needs, props.lab)[0];
   if (first === undefined) return null;
   const name = authorName(props.lab.agents, first.post.author);
-  const ask = isPermission(first.post)
-    ? `${name} asks for permission: ${first.post.text.replace(/^Permission needed:\s*/, '')}`
-    : `${name} asks you: ${first.post.text}`;
   const more = props.needs.length - 1;
   return (
-    <div className="needs">
-      <div className="txt">
-        <div className="lbl">{props.needs.length} WAIT FOR YOU</div>
-        <p>{ask}</p>
-        {more > 0 ? (
-          <p className="also">{more === 1 ? 'One more ask waits.' : `${more} more asks wait.`}</p>
-        ) : null}
-      </div>
-      <a className="btn need" href={href({ page: 'needs' })}>
-        Answer
-      </a>
-    </div>
-  );
-}
-
-function ThreadRow(props: {
-  readonly summary: ThreadSummary;
-  readonly agents: readonly AgentView[];
-  readonly seen: Seen;
-}): ReactElement {
-  const { summary } = props;
-  const latest = summary.latest;
-  const fresh = hasNew(summary, props.seen);
-  return (
-    <a className="trow" href={href({ page: 'thread', id: summary.thread.id })}>
-      {fresh ? <span className="newdot" title="New posts" /> : <span />}
-      <span className="tt">
-        {summary.thread.title}
-        {fresh ? <span className="sr"> (new posts)</span> : null}
-      </span>
-      <span className="last">
-        {latest ? (
-          <>
-            <b>{authorName(props.agents, latest.author)}:</b>
-            <span className="q">{latest.text}</span>
-          </>
-        ) : null}
-      </span>
-      <span className="meta">
-        <span className="counts-chips">
-          {threadChips(summary).map((chip) => (
-            <ChipView key={chip.label} chip={chip} />
-          ))}
-        </span>
-        <time dateTime={summary.last_at}>{clock(summary.last_at)}</time>
-      </span>
+    <a className="f-need" href={href({ page: 'needs' })}>
+      <b>{isPermission(first.post) ? `${name} asks for permission` : `${name} needs you`}</b>
+      <span>{first.post.text.replace(/^Permission needed:\s*/, '')}</span>
+      {more > 0 ? (
+        <small>{more === 1 ? 'One more ask waits.' : `${more} more asks wait.`}</small>
+      ) : null}
+      <em>Answer</em>
     </a>
   );
 }
 
-function threadChips(summary: ThreadSummary): readonly Chip[] {
-  const chips: readonly (Chip | null)[] = [
-    summary.disputed ? { label: `${summary.disputed} disputed`, tone: 'dis' } : null,
-    summary.checked ? { label: `${summary.checked} checked`, tone: 'ok' } : null,
-    summary.not_checked ? { label: `${summary.not_checked} not checked`, tone: 'none' } : null,
-    summary.open_asks
-      ? {
-          label: summary.open_asks === 1 ? 'Open ask' : `${summary.open_asks} open asks`,
-          tone: 'ask',
-        }
-      : null,
-  ];
-  return chips.filter((chip): chip is Chip => chip !== null);
-}
-
-function AgentRow(props: {
-  readonly view: AgentView;
+/**
+ * One thread on the wall. Closed, it shows the title, a status, a mark for new posts, and the face of the latest
+ * author. Open, it takes the full width and shows the result that the thread stands on, then `children`.
+ */
+function Card(props: {
+  readonly summary: ThreadSummary;
   readonly agents: readonly AgentView[];
-  readonly harnesses: readonly HarnessOption[];
-  readonly now: Date;
+  readonly fresh: boolean;
+  /** The thread's posts when the card is open, or `null` for a closed card. */
+  readonly read: ThreadRead | null;
+  readonly children: ReactElement | null;
 }): ReactElement {
-  const { agent, activity } = props.view;
-  const state = stateLine(activity, props.now);
+  const { summary, read } = props;
+  const { id, title } = summary.thread;
+  const open = read !== null;
+  const status = cardStatus(summary);
+  const head = read?.view ? headClaim(read.view.posts) : null;
+  const chip = head ? standingChip(head.post, head.standing) : null;
+  const faces = read?.view
+    ? authors(read.view.posts, props.agents)
+    : summary.latest
+      ? [face(props.agents, summary.latest.author)]
+      : [];
   return (
-    <div className="arow">
-      <Avatar mark={mark(agent.id)} tone={tone(props.harnesses, props.agents, agent.id)} />
-      <div className="nm">
-        {agent.name} <span className="hb">{harnessTitle(props.harnesses, agent.harness)}</span>
-      </div>
-      <div className="st">
-        <span className={`dot ${state.dot}${state.dot === 'live' ? ' pulse' : ''}`} />
-        <span>{state.text}</span>
-      </div>
-      <div className="cost">{costLine(props.view)}</div>
-    </div>
-  );
-}
-
-function TimePanel(props: {
-  readonly lab: LabView;
-  readonly now: Date;
-  readonly api: PageProps['api'];
-  readonly onChange: () => void;
-}): ReactElement {
-  const [confirming, setConfirming] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const { lab } = props;
-
-  const setTime = (minutes: number): void => {
-    setError(null);
-    props.api.setTime(minutes).then(
-      () => {
-        setConfirming(false);
-        props.onChange();
-      },
-      (failure: unknown) => {
-        setError(messageOf(failure));
-      },
-    );
-  };
-
-  return (
-    <div className="timebox">
-      <p>{endLine(lab, props.now)}</p>
-      <div className="timeacts">
-        {lab.ends_at !== null ? (
-          <>
-            <button
-              className="btn small"
-              type="button"
-              onClick={() => setTime(moreTime(lab, 30, new Date()))}
+    <section id={`card-${id}`} className={`f-card c-${status.edge}${open ? ' open' : ''}`}>
+      <header>
+        <div className="f-card-title">
+          <h2>
+            <a
+              href={href(open ? { page: 'lab' } : { page: 'thread', id, post: null })}
+              aria-expanded={open}
             >
-              30 more min
-            </button>
-            <button
-              className="btn small"
-              type="button"
-              onClick={() => setTime(moreTime(lab, 60, new Date()))}
-            >
-              1 more hour
-            </button>
-          </>
-        ) : null}
-        {lab.out_of_time ? null : confirming ? (
-          <button className="btn small danger" type="button" onClick={() => setTime(0)}>
-            Stop every agent now
-          </button>
-        ) : (
-          <button className="linkbtn" type="button" onClick={() => setConfirming(true)}>
-            Stop the lab
-          </button>
-        )}
-      </div>
-      {confirming && !lab.out_of_time ? (
-        <p className="quiet stopline">
-          {stopLine(lab.settings)} <a href={href({ page: 'settings' })}>Change this</a>
-        </p>
-      ) : null}
-      {error ? (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      ) : null}
-    </div>
+              {title}
+            </a>
+          </h2>
+          {props.fresh && !open ? <New /> : null}
+        </div>
+        <div className="f-card-st">
+          {chip ? (
+            <ChipView chip={chip} />
+          ) : (
+            <span className={`f-st fs-count-${status.edge}`}>{status.label}</span>
+          )}
+          {status.openAsks ? <span className="f-st fs-ask">{status.openAsks}</span> : null}
+        </div>
+        {head ? <p className="f-head">{head.post.text}</p> : null}
+        <Faces faces={faces} />
+      </header>
+      {props.children}
+    </section>
   );
 }

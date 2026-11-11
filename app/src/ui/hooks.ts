@@ -3,7 +3,8 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Api } from '../api/client.ts';
 import { watchChanges } from '../api/events.ts';
 import type { Change } from '../api/events.ts';
-import type { LabView } from '../api/types.ts';
+import { messageOf } from '../api/client.ts';
+import type { LabView, ThreadView } from '../api/types.ts';
 import { parseRoute } from '../model/route.ts';
 import type { Route } from '../model/route.ts';
 import { EMPTY, createLoader } from './loader.ts';
@@ -66,13 +67,52 @@ export function useLab(api: Api, token: string): LabData & { readonly reload: ()
   return { ...data, reload: loader.full };
 }
 
+/** A thread as the server has it, or the reason that the read failed. */
+export interface ThreadRead {
+  readonly view: ThreadView | null;
+  readonly error: string | null;
+}
+
+/** Return thread `id` and read it again at each full load of the lab. `null` reads nothing. */
+export function useThread(api: Api, id: string | null, version: number): ThreadRead {
+  const [read, setRead] = useState<(ThreadRead & { readonly id: string }) | null>(null);
+  useEffect(() => {
+    if (id === null) return;
+    let current = true;
+    api.thread(id).then(
+      (view) => {
+        if (current) setRead({ id, view, error: null });
+      },
+      (failure: unknown) => {
+        // A failed read keeps the thread that the page already shows.
+        if (current) {
+          setRead((old) => ({
+            id,
+            view: old?.id === id ? old.view : null,
+            error: messageOf(failure),
+          }));
+        }
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [api, id, version]);
+  return read?.id === id ? read : { view: null, error: null };
+}
+
 /** Return the page that the URL fragment names, and follow changes to it. */
 export function useRoute(): Route {
   const [route, setRoute] = useState(() => parseRoute(window.location.hash));
   useEffect(() => {
+    // An open thread is part of the lab page, so opening or closing one keeps the page where it is.
+    const place = (page: Route['page']): string => (page === 'thread' ? 'lab' : page);
+    let last = place(parseRoute(window.location.hash).page);
     const follow = (): void => {
-      setRoute(parseRoute(window.location.hash));
-      window.scrollTo(0, 0);
+      const next = parseRoute(window.location.hash);
+      setRoute(next);
+      if (place(next.page) !== last) window.scrollTo(0, 0);
+      last = place(next.page);
     };
     window.addEventListener('hashchange', follow);
     return () => {

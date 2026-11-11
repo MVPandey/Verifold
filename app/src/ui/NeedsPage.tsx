@@ -2,14 +2,14 @@ import { useId, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import type { AgentView, HarnessOption, PostView } from '../api/types.ts';
-import { authorName, harnessTitle, mark, tone } from '../model/agents.ts';
+import { authorName, face, harnessTitle } from '../model/agents.ts';
 import { duration, minutesBetween } from '../model/format.ts';
 import { orderNeeds, pauses } from '../model/needs.ts';
 import { isPermission, personAnswer } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { messageOf } from '../api/client.ts';
 import type { PageProps } from './hooks.ts';
-import { Avatar, Body } from './parts.tsx';
+import { Body, FaceView } from './parts.tsx';
 
 /** Everything that waits for the person's answer. Requests that pause an agent come first. */
 export function NeedsPage({ api, data, now }: PageProps): ReactElement {
@@ -73,14 +73,10 @@ function NeedCard(props: {
   return (
     <section className="nitem open" aria-label={`${name}: ${post.text}`}>
       <div className="nh">
-        <Avatar
-          size="sm"
-          mark={mark(post.author)}
-          tone={tone(props.harnesses, props.agents, post.author)}
-        />
+        <FaceView face={face(props.agents, post.author)} />
         <b>{name}</b>
         {agent ? (
-          <span className="hb">{harnessTitle(props.harnesses, agent.agent.harness)}</span>
+          <span className="f-tag">{harnessTitle(props.harnesses, agent.agent.harness)}</span>
         ) : null}
         <span className="kind k-ask">{permission ? 'Permission request' : 'Asks you'}</span>
         <span className="wait">Waiting {duration(minutesBetween(at, props.now))}</span>
@@ -136,7 +132,7 @@ function NeedCard(props: {
           >
             {sending ? 'Sending' : 'Send answer'}
           </button>
-          <a href={href({ page: 'thread', id: post.thread })}>See the thread</a>
+          <a href={href({ page: 'thread', id: post.thread, post: post.id })}>See the thread</a>
         </div>
         {error ? (
           <p className="error" role="alert">

@@ -13,6 +13,6 @@ Other files in the repository remain reserved unless they carry their own licens
 
 The MIT grant does not grant rights to Verifold trademarks. The brand symbol, `app/public/verifold-symbol.webp`, remains reserved. The built app in `src/verifold/web/`, and so the `verifold-ai` package, includes a copy of it as the app's icon.
 
-The Manrope font in `app/public/fonts/` keeps its SIL Open Font License, which is beside it in `OFL-Manrope.txt`. The built app has copies of both.
+The Bricolage Grotesque and Instrument Sans fonts in `app/public/fonts/` keep their SIL Open Font Licenses, which are beside them in `OFL-BricolageGrotesque.txt` and `OFL-InstrumentSans.txt`. The files are Latin subsets of the fonts. The built app has copies of the fonts and the licenses.
 
 Third-party components keep their own licenses. The built app bundles React and React DOM under their MIT licenses, and the build writes their license texts to `licenses.md` in the built app. The Python dependencies keep their own licenses.

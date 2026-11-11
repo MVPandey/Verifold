@@ -1,7 +1,7 @@
 import type { Post, PostRequest, Standing } from '../api/types.ts';
 
-/** The color of a chip, as the stylesheet names it. */
-export type ChipTone = 'ok' | 'hold' | 'dis' | 'con' | 'none' | 'ask';
+/** The look of a standing's chip, as the stylesheet names it. */
+export type ChipTone = 'ok' | 'hold' | 'dis' | 'con' | 'none';
 
 export interface Chip {
   readonly label: string;
@@ -10,29 +10,6 @@ export interface Chip {
 
 const HEADLINE_LIMIT = 300;
 const TITLE_LIMIT = 80;
-
-const KINDS = {
-  message: 'Message',
-  plan: 'Plan',
-  result: 'Result',
-  ask: 'Ask',
-  answer: 'Answer',
-  objection: 'Objection',
-  proposal: 'Proposal',
-  check: 'Check',
-  ruled_out: 'Ruled out',
-} as const satisfies Record<Post['kind'], string>;
-
-const METHODS = {
-  rerun: 'rerun',
-  code_read: 'reading the code',
-  ratings: 'ratings',
-} as const;
-
-/** Return the label of a post's kind, such as "Result" or "Check by rerun". */
-export function kindLabel(post: Post): string {
-  return post.kind === 'check' ? `Check by ${METHODS[post.method]}` : KINDS[post.kind];
-}
 
 /** Return the chip that says where a post stands, or `null` when there is nothing to say. Results always get one. */
 export function standingChip(post: Post, standing: Standing): Chip | null {

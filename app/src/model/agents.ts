@@ -2,9 +2,6 @@ import { PERSON } from '../api/types.ts';
 import type { AgentActivity, AgentView, HarnessOption } from '../api/types.ts';
 import { duration, minutesBetween, money, tokens } from './format.ts';
 
-/** The color of an agent's avatar. The first harness of the setup gets the accent color. */
-export type Tone = 'cc' | 'cx' | 'you';
-
 /** The dot before an agent's state. */
 export type Dot = 'live' | 'wait' | 'idle' | 'stop';
 
@@ -13,34 +10,52 @@ export interface StateLine {
   readonly dot: Dot;
 }
 
-/** Return the mark in an author's avatar: the agent's number, C for a checker, or "You" for the person. */
-export function mark(authorId: string): string {
-  if (authorId === PERSON) return 'You';
-  const number = /^agent-(\d+)$/.exec(authorId)?.[1];
-  if (number) return number;
-  return authorId.startsWith('checker-') ? 'C' : authorId.slice(0, 1).toUpperCase();
+/** An author's face: two letters and a color that stay the same on every screen. */
+export interface Face {
+  readonly kind: 'member' | 'person' | 'rerun';
+  readonly initials: string;
+  /** The member's place in the lab's palette. The stylesheet has eight colors and starts again after them. */
+  readonly color: number | null;
+  readonly name: string;
 }
 
-/** Return the name of an author: the agent's name, or "You" for the person. */
+/** Return the lab's members: its agents without the blind checkers. */
+export function members(agents: readonly AgentView[]): readonly AgentView[] {
+  return agents.filter((view) => view.agent.checks === null);
+}
+
+/**
+ * Return an author's face. A member's letters and color come from its position among the lab's members. A blind
+ * checker has no name and no color.
+ */
+export function face(agents: readonly AgentView[], authorId: string): Face {
+  if (authorId === PERSON) return { kind: 'person', initials: 'You', color: null, name: 'You' };
+  const position = members(agents).findIndex((view) => view.agent.id === authorId);
+  const name = authorName(agents, authorId);
+  if (position < 0) return { kind: 'rerun', initials: '', color: null, name };
+  const number = position + 1;
+  const initials = number < 10 ? `${name.slice(0, 1).toUpperCase()}${number}` : String(number);
+  return { kind: 'member', initials, color: position % 8, name };
+}
+
+/** Return the name of an author: the agent's name, "Blind rerun" for a blind checker, or "You" for the person. */
 export function authorName(agents: readonly AgentView[], authorId: string): string {
   if (authorId === PERSON) return 'You';
-  return agents.find((view) => view.agent.id === authorId)?.agent.name ?? authorId;
+  const agent = agents.find((view) => view.agent.id === authorId)?.agent;
+  if (agent === undefined) return authorId;
+  return agent.checks === null ? agent.name : 'Blind rerun';
+}
+
+/** Return how a sentence names an author, such as "objected to the blind rerun’s check". */
+export function called(agents: readonly AgentView[], authorId: string): string {
+  if (authorId === PERSON) return 'you';
+  const name = authorName(agents, authorId);
+  return name === 'Blind rerun' ? 'the blind rerun' : name;
 }
 
 /** Return the title of a harness, such as "Claude Code". */
 export function harnessTitle(harnesses: readonly HarnessOption[], name: string): string {
   return harnesses.find((option) => option.name === name)?.title ?? name;
-}
-
-/** Return the avatar color of an author. */
-export function tone(
-  harnesses: readonly HarnessOption[],
-  agents: readonly AgentView[],
-  authorId: string,
-): Tone {
-  if (authorId === PERSON) return 'you';
-  const harness = agents.find((view) => view.agent.id === authorId)?.agent.harness;
-  return harness !== undefined && harnesses[0]?.name === harness ? 'cc' : 'cx';
 }
 
 /** Return what an agent is doing, in one line, with how long it has done it. */
@@ -68,6 +83,16 @@ export function costLine(view: AgentView): string {
   if (view.cost_usd !== null) return `${money(view.cost_usd)} over ${turns}`;
   const { input_tokens: input, output_tokens: output } = view.usage;
   return `${tokens(input)} tokens in, ${tokens(output)} out over ${turns}. No price.`;
+}
+
+/** Return how many members work now, such as "3 of 4 members working, 2 blind reruns". */
+export function workingLine(agents: readonly AgentView[]): string {
+  const all = members(agents);
+  const busy = (view: AgentView): boolean => view.activity.state === 'working';
+  const reruns = agents.filter((view) => view.agent.checks !== null && busy(view)).length;
+  const line = `${all.filter(busy).length} of ${all.length} ${all.length === 1 ? 'member' : 'members'} working`;
+  if (reruns === 0) return line;
+  return `${line}, ${reruns} blind ${reruns === 1 ? 'rerun' : 'reruns'}`;
 }
 
 /** Return what the lab has cost so far, such as "$0.37 and 463k tokens" for harnesses with and without prices. */
