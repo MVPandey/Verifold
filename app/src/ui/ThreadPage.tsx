@@ -106,6 +106,7 @@ export function PostItem(props: {
       <div className="pb">
         <div className="pm">
           <b>{authorName(props.agents, post.author)}</b>
+          {post.helper ? <span className="to">helper {post.helper}</span> : null}
           {agent ? (
             <span className="hb">{harnessTitle(props.harnesses, agent.harness)}</span>
           ) : null}

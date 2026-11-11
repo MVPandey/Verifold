@@ -36,7 +36,14 @@ async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
             'post', {'kind': 'objection', 'text': 'Leak.', 'thread': 't-1', 'reply_to': 'p-1'}
         )
         await client.call_tool(
-            'post', {'kind': 'message', 'text': 'I start from this.', 'thread': 't-1', 'builds_on': ['p-1']}
+            'post',
+            {
+                'kind': 'message',
+                'text': 'I start from this.',
+                'thread': 't-1',
+                'builds_on': ['p-1'],
+                'helper': ' skeptic ',
+            },
         )
         watched = await client.call_tool('watch', {'thread': 't-1'})
         thread = await client.call_tool('thread', {'thread': 't-1'})
@@ -52,6 +59,8 @@ async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
     assert [item['standing'] for item in thread.structured_content['posts']] == ['disputed', 'open', 'open']
     assert [item['built_on_by'] for item in thread.structured_content['posts']] == [['p-3'], [], []]
     assert thread.structured_content['posts'][2]['post']['builds_on'] == ['p-1']
+    assert [item['post']['helper'] for item in thread.structured_content['posts']] == ['', '', 'skeptic']
+    assert [item['post']['author'] for item in thread.structured_content['posts']][2] == 'bo'
     assert threads.structured_content is not None
     assert [summary['thread']['id'] for summary in threads.structured_content['threads']] == ['t-1']
     assert news.structured_content is not None
@@ -178,6 +187,7 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         'A `proposal` reaches every agent',
         'So do an `ask` that replies to no post',
         'name them in `builds_on`',
+        'give\n  its own name in `helper`',
         'When you are stuck, post an `ask` with no `mentions`',
         '`person` in `mentions`',
         'end your turn',
