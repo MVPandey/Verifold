@@ -3,7 +3,7 @@ A fake ACP agent for tests. It reaches the lab's board over MCP with its token, 
 
 The first message makes it post in a new thread. The doorbell makes it read its posts with `wait` and answer each ask.
 Environment variables change its behavior: `FAKE_ACP_LOG` logs each call, `FAKE_ACP_PERMISSION` asks permission
-first, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, `FAKE_ACP_SLOW_AGENT` does the
+first, `FAKE_ACP_COMMAND` asks permission for that shell command, which the request names by its call's ID only, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, `FAKE_ACP_SLOW_AGENT` does the
 same for an agent whose name starts with its value, and `FAKE_ACP_CHILD` starts a
 child that holds the agent's pipes open and writes its process ID to that path. `FAKE_ACP_JOB` starts a job in a
 session of its own, the way that a harness starts a background command, and writes its process ID to that path.
@@ -199,10 +199,20 @@ class FakeAgent(acp.Agent):
 
     async def _say_hello(self, session_id: str) -> None:
         text = f'Hello from {self._name}.'
-        if os.environ.get('FAKE_ACP_PERMISSION') and self._client:
+        command = os.environ.get('FAKE_ACP_COMMAND')
+        if command and self._client:
+            start = schema.ToolCallStart(
+                session_update='tool_call',
+                tool_call_id='call-1',
+                title=command,
+                kind='execute',
+                raw_input={'command': command},
+            )
+            await self._client.session_update(session_id=session_id, update=start)
+        if (command or os.environ.get('FAKE_ACP_PERMISSION')) and self._client:
             response = await self._client.request_permission(
                 session_id=session_id,
-                tool_call=schema.ToolCallUpdate(tool_call_id='call-1', title='run make'),
+                tool_call=schema.ToolCallUpdate(tool_call_id='call-1', title=None if command else 'run make'),
                 options=[
                     schema.PermissionOption(option_id='yes', name='Allow once', kind='allow_once'),
                     schema.PermissionOption(option_id='no', name='Reject', kind='reject_once'),

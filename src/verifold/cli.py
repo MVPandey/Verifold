@@ -104,6 +104,7 @@ def _start(args: argparse.Namespace) -> StartRequest:
         agents=agents,
         auto_mode=everywhere.auto_mode and here.auto_mode and not args.ask_me,
         minutes=shorter if args.minutes is None else args.minutes,
+        allow=tuple(args.allow or ()),
     )
 
 
@@ -241,6 +242,12 @@ def _parser() -> argparse.ArgumentParser:
         '--ask-me',
         action='store_true',
         help="Keep each harness's own default mode. Permission requests then come to you on the board.",
+    )
+    run.add_argument(
+        '--allow',
+        action='append',
+        metavar='COMMAND',
+        help='Let every agent run commands that start with COMMAND, such as ./gpu, without a question to you. Give it once for each command. You can also give a grant on the board when an agent asks.',
     )
     commands.add_parser(
         'stop', help="Stop this folder's lab from another terminal: its server, its agents, and their processes."

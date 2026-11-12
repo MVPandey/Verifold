@@ -94,6 +94,13 @@ def test_run_starts_a_lab_with_the_given_agents(serves: list[StartRequest | None
     ]
 
 
+def test_run_takes_grants_for_every_agent(serves: list[StartRequest | None]) -> None:
+    main(['run', 'Does it hold?', '--agent', 'codex', '--allow', './gpu', '--allow', 'make test'])
+
+    assert serves[0] is not None
+    assert serves[0].allow == ('./gpu', 'make test')
+
+
 @pytest.fixture
 def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Run in a project folder of its own, with a home folder of its own, so that no real settings apply."""

@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, Field, StringConstraints
 
 from verifold.protocol.agents import Agent
+from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, CommitId, PostId, ThreadId
 from verifold.protocol.posts import Post
 from verifold.protocol.record import Record
@@ -122,6 +123,17 @@ class SettingsSet(EventBase):
     settings: Settings
 
 
+class PermissionGranted(EventBase):
+    """
+    The person lets every agent of the lab run the commands that start with `prefix`.
+
+    Verifold then answers a harness's permission request for such a command itself. No agent tool records a grant.
+    """
+
+    type: Literal['permission_granted'] = 'permission_granted'
+    prefix: Grant
+
+
 type Event = Annotated[
     LabOpened
     | AgentJoined
@@ -132,6 +144,7 @@ type Event = Annotated[
     | RerunRequested
     | TimeSet
     | TimeRanOut
-    | SettingsSet,
+    | SettingsSet
+    | PermissionGranted,
     Field(discriminator='type'),
 ]

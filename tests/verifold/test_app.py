@@ -192,6 +192,19 @@ async def test_a_resumed_lab_keeps_its_agents_and_the_persons_edits_to_its_norms
     assert sorted(call['agent'] for call in resumed) == ['agent-1', 'agent-2']
 
 
+async def test_a_lab_starts_with_the_persons_grants_and_a_granted_command_passes(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_COMMAND', './gpu python3 train.py')
+    start = StartRequest(question='Does it hold?', agents=(AgentChoice(harness='fake'),), allow=('./gpu',))
+
+    async with serving(project, start):
+        await until(lambda: len(posts(project)) == 1)
+
+    assert fold(record(project)).grants == ('./gpu',)
+    assert [posted.post.text for posted in posts(project)] == ['Permission: yes.']
+
+
 async def test_without_auto_mode_the_persons_default_mode_stays_and_minutes_set_the_end(
     project: Path, log: Path
 ) -> None:

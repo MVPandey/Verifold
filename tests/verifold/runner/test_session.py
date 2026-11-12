@@ -20,6 +20,7 @@ from verifold.runner.session import (
     Place,
     SessionHooks,
     SessionOptions,
+    _Client,
     _values,
     offer_of,
 )
@@ -290,3 +291,86 @@ async def test_a_chosen_mode_wins_over_auto_mode(served: ServedBoard, folder: Pl
         pass
 
     assert [call['mode'] for call in calls(log) if call['event'] == 'mode'] == ['ask']
+
+
+OPTIONS = [schema.PermissionOption(option_id='yes', name='Allow', kind='allow_once')]
+
+
+class Asked:
+    """A client, with the requests that its handler got."""
+
+    def __init__(self, *, names_mcp_server: bool = True) -> None:
+        self.requests: list[PermissionRequest] = []
+        self.client = _Client(SessionHooks(permissions=self._decide), names_mcp_server=names_mcp_server)
+
+    async def _decide(self, request: PermissionRequest) -> str | None:
+        self.requests.append(request)
+        return 'yes'
+
+    async def after(self, *updates: schema.ToolCallStart | schema.ToolCallProgress) -> PermissionRequest:
+        """Return the request that the handler gets when the harness asks about `call-1` after `updates`."""
+        for update in updates:
+            await self.client.session_update('s', update)
+        await self.client.request_permission('s', schema.ToolCallUpdate(tool_call_id='call-1'), OPTIONS)
+        return self.requests[-1]
+
+
+def started(title: str, given: object, kind: schema.ToolKind = 'execute') -> schema.ToolCallStart:
+    return schema.ToolCallStart(
+        session_update='tool_call', tool_call_id='call-1', title=title, kind=kind, raw_input=given
+    )
+
+
+def progress(**said: object) -> schema.ToolCallProgress:
+    return schema.ToolCallProgress.model_validate(
+        {'session_update': 'tool_call_update', 'tool_call_id': 'call-1'} | said
+    )
+
+
+async def test_a_request_that_names_only_its_call_gets_the_calls_command() -> None:
+    asked = Asked()
+
+    running = await asked.after(started('./gpu x', {'command': ' ./gpu x '}))
+    ended = await asked.after(progress(status='completed'))
+    unknown = await Asked().after()
+
+    assert (running.title, running.command, running.board) == ('./gpu x', './gpu x', False)
+    assert (ended.title, ended.command) == ('an action', None)
+    assert (unknown.title, unknown.command, unknown.board) == ('an action', None, False)
+
+
+async def test_a_call_gets_what_the_harness_adds_after_its_start() -> None:
+    request = await Asked().after(started('Terminal', None), progress(raw_input={'command': 'make test'}))
+
+    assert (request.title, request.command) == ('make test', 'make test')
+
+
+async def test_only_a_call_that_runs_a_command_has_one() -> None:
+    remote = await Asked().after(started('remote.exec', {'host': 'a', 'command': './gpu x'}, kind='other'))
+    listed = await Asked().after(started('sh', {'command': ['./gpu', 'x']}))
+
+    assert (remote.title, remote.command, listed.title, listed.command) == ('remote.exec', None, 'sh', None)
+
+
+async def test_a_call_to_the_labs_board_is_marked_where_the_harness_names_the_server() -> None:
+    board_call = started('mcp.verifold.post', {'server': 'verifold', 'tool': 'post', 'arguments': {}})
+
+    marked = await Asked().after(board_call)
+    unnamed = await Asked(names_mcp_server=False).after(board_call)
+    other = await Asked().after(started('mcp.files.read', {'server': 'files', 'tool': 'read'}))
+    no_tool = await Asked().after(started('odd', {'server': 'verifold'}))
+    shell = await Asked().after(started('sh', {'command': 'echo', 'server': 'verifold', 'tool': 'post'}))
+    odd = await Asked().after(started('odd', ['verifold']))
+
+    assert (marked.title, marked.board) == ('mcp.verifold.post', True)
+    assert [request.board for request in (unnamed, other, no_tool, shell, odd)] == [False] * 5
+
+
+async def test_the_requests_own_input_wins_over_the_calls() -> None:
+    asked = Asked()
+    await asked.client.session_update('s', started('make', {'command': 'make'}))
+    request = schema.ToolCallUpdate(tool_call_id='call-1', title='Run command', raw_input={'command': 'make test'})
+    response = await asked.client.request_permission('s', request, OPTIONS)
+
+    assert (asked.requests[0].title, asked.requests[0].command) == ('make test', 'make test')
+    assert isinstance(response.outcome, schema.AllowedOutcome)

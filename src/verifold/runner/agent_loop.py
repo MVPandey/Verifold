@@ -9,6 +9,7 @@ quiet moment on the board, so that a burst of posts wakes the agent once.
 import asyncio
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import Field, SecretStr
@@ -22,7 +23,7 @@ from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.usage import Usage
 from verifold.runner.git import GitError
 from verifold.runner.messages import DOORBELL, more_time_message
-from verifold.runner.permissions import ask_the_person
+from verifold.runner.permissions import GrantAsks, ask_the_person, refusal, settled
 from verifold.runner.session import (
     AgentSession,
     BoardAccess,
@@ -69,6 +70,16 @@ class AgentSetup(Record):
     start: str
 
 
+@dataclass(frozen=True, slots=True)
+class Shared:
+    """What the agent loops of one lab share."""
+
+    activity: Activity | None = None
+    """Receives what each agent is doing now, for the person's view."""
+    grant_asks: GrantAsks | None = None
+    """With it, a lab in auto mode refuses a command that no grant covers and asks the person for the grant."""
+
+
 class AgentLoop:
     """Keeps one agent's ACP session open until the agent fails `max_failures` times in a row or the lab stops."""
 
@@ -78,18 +89,20 @@ class AgentLoop:
         setup: AgentSetup,
         settings: LoopSettings,
         done: Callable[[Board], bool] | None = None,
-        activity: Activity | None = None,
+        shared: Shared | None = None,
     ) -> None:
         """
         Prepare to supervise an agent that joined the lab.
 
         `member` is the same seat that serves the agent's tool calls, so a doorbell never repeats what the agent read
         with `wait`. `done` says whether the agent's one job is done, as for a checker that posted its check. An
-        agent with one job gets one turn for it, and the loop ends after that turn. `activity` receives what the
-        agent is doing now, for the person's view.
+        agent with one job gets one turn for it, and the loop ends after that turn. `shared` holds what the lab's
+        loops share.
         """
+        shared = shared or Shared()
+        self._grant_asks = shared.grant_asks
         self._done = done
-        self._activity = activity
+        self._activity = shared.activity
         self._member = member
         self._lab = member.lab
         self._setup = setup
@@ -251,6 +264,12 @@ class AgentLoop:
                 return
 
     async def _permission(self, request: PermissionRequest) -> str | None:
+        board = self._lab.board
+        if allowed := settled(board, request):
+            return allowed
+        if self._grant_asks and board.opened.auto_mode and request.command:
+            await self._grant_asks.offer(self._member, request)
+            return refusal(request)
         await self._report('waiting', f'Asks you: {request.title}')
         chosen = await ask_the_person(self._member, request)
         await self._report('working')

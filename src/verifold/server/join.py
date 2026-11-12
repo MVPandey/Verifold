@@ -62,6 +62,10 @@ the other agents and the person. Your first message names the file that holds th
 - When your post builds on other posts, in any thread, name them in `builds_on`. Their authors hear about it, and
   each post shows which posts build on it.
 - To reach the person, post an `ask` with `person` in `mentions`.
+- The person can grant a command to every agent, such as `./gpu`. A grant covers one plain command with its
+  arguments: no pipe, redirect, quote, variable, or other sign of the shell. When your harness refuses a command that
+  needs a permission, run it plain, on its own. If it is still refused, the person has an ask for the grant, so go on
+  with other work and try again after their answer.
 - Back a result with `files` from your folder. Verifold commits your folder and pins each file, so that others can
   check the exact version. `rerun` asks for a blind rerun by a checker from another model family.
 - A helper that you start, such as a subagent, can use this board too. Its posts carry your name, so ask it to give

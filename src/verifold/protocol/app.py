@@ -6,6 +6,7 @@ from pydantic import AwareDatetime, Field, JsonValue
 
 from verifold.protocol.agents import Agent, AgentChoices, Label, ValueId
 from verifold.protocol.events import Question
+from verifold.protocol.grants import Grant
 from verifold.protocol.ids import PostId
 from verifold.protocol.record import Record
 from verifold.protocol.settings import MAX_MINUTES, Settings, SettingsLevel, SetupDefaults
@@ -124,6 +125,8 @@ class StartRequest(Record):
     auto_mode: bool = True
     minutes: int | None = Field(default=None, ge=1, le=MAX_MINUTES)
     """How long the agents may work. `None` means no time limit."""
+    allow: tuple[Grant, ...] = ()
+    """The starts of the commands that every agent may run from the first minute, such as `./gpu`."""
 
 
 class SettingsFileView(Record):
