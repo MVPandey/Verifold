@@ -317,7 +317,7 @@ async def test_in_auto_mode_a_command_without_a_grant_is_refused_at_once_and_the
         running.cancel()
 
     asks = [entry.post for entry in lab.board.posts if entry.post.kind == 'ask']
-    assert [ask.text for ask in asks] == ['Permission needed: ./gpu python3 train.py']
+    assert [ask.text for ask in asks] == ['Refused without a grant: ./gpu python3 train.py']
 
 
 @pytest.mark.usefixtures('log')

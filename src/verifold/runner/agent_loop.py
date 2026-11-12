@@ -96,8 +96,8 @@ class AgentLoop:
 
         `member` is the same seat that serves the agent's tool calls, so a doorbell never repeats what the agent read
         with `wait`. `done` says whether the agent's one job is done, as for a checker that posted its check. An
-        agent with one job gets one turn for it, and the loop ends after that turn. `activity` receives what the
-        agent is doing now, for the person's view.
+        agent with one job gets one turn for it, and the loop ends after that turn. `shared` holds what the lab's
+        loops share.
         """
         shared = shared or Shared()
         self._grant_asks = shared.grant_asks

@@ -30,6 +30,13 @@ class HarnessEntry(Record):
     """The model family of the harness's default models. Blind checks compare families."""
     auto_mode: str | None = None
     """The ID of the harness's own auto mode, set when the person allows auto mode for the lab's agents."""
+    names_mcp_server: bool = False
+    """
+    Whether the harness itself writes the MCP server's name into a tool call's input, as `server`, beside `tool`.
+
+    Verifold then knows a call to the lab's own board and allows it. Where the model writes the input, the name
+    proves nothing, so the default is off.
+    """
 
 
 NPX_PROJECT = Path.home() / '.verifold' / 'npx'
@@ -65,6 +72,7 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
                 # Not the mode `agent`: there the harness's own reviewer decides, and a refusal never reaches the
                 # person. In this mode each request comes to Verifold, which follows the person's grants.
                 auto_mode='workspace-write',
+                names_mcp_server=True,
             ),
         )
     }

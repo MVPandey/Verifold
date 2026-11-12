@@ -202,7 +202,11 @@ class FakeAgent(acp.Agent):
         command = os.environ.get('FAKE_ACP_COMMAND')
         if command and self._client:
             start = schema.ToolCallStart(
-                session_update='tool_call', tool_call_id='call-1', title=command, raw_input={'command': command}
+                session_update='tool_call',
+                tool_call_id='call-1',
+                title=command,
+                kind='execute',
+                raw_input={'command': command},
             )
             await self._client.session_update(session_id=session_id, update=start)
         if (command or os.environ.get('FAKE_ACP_PERMISSION')) and self._client:

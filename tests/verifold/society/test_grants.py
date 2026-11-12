@@ -3,8 +3,8 @@ import pytest
 from verifold.society.grants import grantable, granted
 
 
-@pytest.mark.parametrize('command', ['./gpu', '  ./gpu python3 train.py 0 ', 'make'])
-def test_a_grant_covers_its_command_with_any_arguments(command: str) -> None:
+@pytest.mark.parametrize('command', ['./gpu', '  ./gpu python3 train.py 0 ', 'make', './gpu --seed=1'])
+def test_a_grant_covers_its_command_with_any_plain_arguments(command: str) -> None:
     assert granted(('make', './gpu'), command)
 
 
@@ -17,9 +17,12 @@ def test_a_grant_covers_its_command_with_any_arguments(command: str) -> None:
         './gpu x | tail -1',
         './gpu x 2>&1',
         './gpu $(cat secrets)',
+        './gpu =(cat secrets)',
+        "./gpu *(e:'cat secrets':)",
+        './gpu x\rcat secrets',
     ],
 )
-def test_a_grant_covers_no_other_command_and_none_with_a_shell_operator(command: str) -> None:
+def test_a_grant_covers_no_other_command_and_none_that_is_not_plain(command: str) -> None:
     assert not granted(('make', './gpu'), command)
 
 
@@ -31,14 +34,13 @@ def test_nothing_is_granted_without_a_grant() -> None:
     ('command', 'prefix'),
     [
         ('./gpu python3 train.py 0', './gpu'),
-        ('./gpu x 2>&1 | tail -1', './gpu'),
-        ("'my tool' x", 'my tool'),
-        ('A=1 make', None),
-        ('"unclosed', None),
+        (' make ', 'make'),
+        ('./gpu x 2>&1 | tail -1', None),
+        ('cd x && make', None),
+        ("' ' x", None),
         ('', None),
-        ('x' * 201, None),
-        ('a|b c', None),
+        ('x' * 201 + ' y', None),
     ],
 )
-def test_a_grant_for_a_command_names_its_first_word(command: str, prefix: str | None) -> None:
+def test_a_grant_for_a_plain_command_names_its_first_word(command: str, prefix: str | None) -> None:
     assert grantable(command) == prefix

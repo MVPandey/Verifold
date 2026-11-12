@@ -90,17 +90,27 @@ async def test_the_whole_answer_decides_not_only_its_first_line(lab: Lab) -> Non
 
 
 COMMAND = PermissionRequest(title='./gpu python3 train.py', choices=CHOICES, command='./gpu python3 train.py')
+PIPED = COMMAND.model_copy(update={'command': './gpu python3 train.py | tail -1'})
+
+
+async def answered(lab: Lab, text: str, body: str = '') -> None:
+    """Answer the newest ask as the person."""
+    asked = next(entry.post for entry in reversed(lab.board.posts) if entry.post.kind == 'ask')
+    await lab.post(PostRequest(kind='answer', text=text, body=body, thread=asked.thread, reply_to=asked.id), 'person')
+
+
+def asks(lab: Lab) -> list[Ask]:
+    return [entry.post for entry in lab.board.posts if isinstance(entry.post, Ask)]
 
 
 async def test_verifold_allows_a_call_to_the_board_and_a_granted_command_once(lab: Lab) -> None:
     board_call = PermissionRequest(title='mcp.verifold.post', choices=CHOICES, board=True)
-    piped = COMMAND.model_copy(update={'command': './gpu python3 train.py | tail -1'})
     before = settled(lab.board, COMMAND)
     await lab.grant('./gpu')
 
     assert before is None
     assert (settled(lab.board, board_call), settled(lab.board, COMMAND)) == ('once', 'once')
-    assert settled(lab.board, piped) is None
+    assert settled(lab.board, PIPED) is None
     assert settled(lab.board, PermissionRequest(title='run make', choices=CHOICES)) is None
 
 
@@ -113,73 +123,124 @@ def test_a_refusal_picks_the_reject_answer_or_cancels() -> None:
 
 
 async def test_the_person_can_answer_a_command_with_a_grant_for_every_agent(lab: Lab) -> None:
-    bo = Member(lab, 'bo')
-    piped = COMMAND.model_copy(update={'command': './gpu python3 train.py | tail -1'})
+    asking = asyncio.create_task(ask_the_person(Member(lab, 'bo'), COMMAND))
+    await until(lambda: bool(asks(lab)))
+    await answered(lab, 'Allow `./gpu` for every agent')
 
-    asking = asyncio.create_task(ask_the_person(bo, piped))
-    await until(lambda: any(entry.post.kind == 'ask' for entry in lab.board.posts))
-    asked = lab.board.posts[-1].post
-    answer = PostRequest(kind='answer', text='Allow `./gpu` for every agent', thread=asked.thread, reply_to=asked.id)
-    await lab.post(answer, 'person')
-
-    assert isinstance(asked, Ask)
-    assert asked.choices == ('Allow once', 'Allow always', 'Reject', 'Allow `./gpu` for every agent')
-    # The person allowed this command too, although the grant doesn't cover its pipe.
+    assert asks(lab)[0].choices == ('Allow once', 'Allow always', 'Reject', 'Allow `./gpu` for every agent')
     assert await asking == 'once'
     assert lab.board.grants == ('./gpu',)
 
 
-async def test_a_plain_allow_gives_no_grant(lab: Lab) -> None:
+@pytest.mark.parametrize(
+    ('text', 'body', 'chosen'),
+    [
+        ('Allow once', '', 'once'),
+        ('Allow', 'gpu for every agent', 'once'),
+        ('Allow ./gpu for every agent? No, never.', '', 'no'),
+        ('yes', '', 'once'),
+    ],
+)
+async def test_only_the_grant_choice_gives_a_grant_when_the_harness_asks(
+    lab: Lab, text: str, body: str, chosen: str
+) -> None:
     asking = asyncio.create_task(ask_the_person(Member(lab, 'bo'), COMMAND))
-    await until(lambda: any(entry.post.kind == 'ask' for entry in lab.board.posts))
-    asked = lab.board.posts[-1].post
-    await lab.post(PostRequest(kind='answer', text='Allow once', thread=asked.thread, reply_to=asked.id), 'person')
+    await until(lambda: bool(asks(lab)))
+    await answered(lab, text, body)
 
-    assert await asking == 'once'
+    assert await asking == chosen
     assert lab.board.grants == ()
 
 
-async def test_after_a_refusal_the_person_gets_one_ask_for_the_grant_and_their_answer_gives_it(lab: Lab) -> None:
-    asks = GrantAsks(lab)
-    watching = asyncio.create_task(asks.run())
+@pytest.mark.parametrize(
+    'request_',
+    [
+        PIPED,
+        COMMAND.model_copy(update={'choices': CHOICES[1:]}),
+        COMMAND.model_copy(update={'command': f'/{"long/" * 16}python3 train.py'}),
+        PermissionRequest(title='run make', choices=CHOICES),
+    ],
+)
+async def test_a_request_that_no_grant_can_cover_offers_none(lab: Lab, request_: PermissionRequest) -> None:
+    grant_asks = GrantAsks(lab)
+    await grant_asks.offer(Member(lab, 'ada'), request_)
+    asking = asyncio.create_task(ask_the_person(Member(lab, 'bo'), request_))
+    await until(lambda: bool(asks(lab)))
+    await answered(lab, 'Reject')
+    await asking
+
+    assert [ask.choices for ask in asks(lab)] == [tuple(choice.name for choice in request_.choices)]
+
+
+async def test_agents_refused_at_the_same_moment_share_one_ask_and_the_answer_gives_the_grant(lab: Lab) -> None:
+    grant_asks = GrantAsks(lab)
+    watching = asyncio.create_task(grant_asks.run())
+    probe = COMMAND.model_copy(update={'command': './gpu python3 probe.py'})
     try:
-        await asks.offer(Member(lab, 'bo'), COMMAND)
-        await asks.offer(Member(lab, 'ada'), COMMAND.model_copy(update={'command': './gpu python3 probe.py'}))
-        asked = [entry.post for entry in lab.board.posts if entry.post.kind == 'ask']
-        answer = PostRequest(kind='answer', text=grant_choice('./gpu'), thread=asked[0].thread, reply_to=asked[0].id)
-        await lab.post(answer, 'person')
+        await asyncio.gather(grant_asks.offer(Member(lab, 'bo'), COMMAND), grant_asks.offer(Member(lab, 'ada'), probe))
+        await answered(lab, grant_choice('./gpu'))
         await until(lambda: lab.board.grants == ('./gpu',))
     finally:
         watching.cancel()
 
-    assert len(asked) == 1
-    assert isinstance(asked[0], Ask)
-    assert (asked[0].author, asked[0].mentions) == ('bo', ('person',))
-    assert asked[0].choices == ('Allow `./gpu` for every agent', 'No')
-    assert './gpu python3 train.py' in asked[0].body
+    (asked,) = asks(lab)
+    assert (asked.author, asked.mentions) == ('bo', ('person',))
+    assert asked.text == 'Refused without a grant: ./gpu python3 train.py'
+    assert asked.choices == ('Allow `./gpu` for every agent', 'No')
+    assert './gpu python3 train.py' in asked.body
 
 
-async def test_a_no_to_the_grant_gives_none_and_the_next_refusal_asks_again(lab: Lab) -> None:
-    asks = GrantAsks(lab)
+@pytest.mark.parametrize(
+    ('text', 'grants'),
+    [
+        ('yes, fine', ('./gpu',)),
+        ('Allow ./gpu for every agent', ('./gpu',)),
+        ('No', ()),
+        ('Allow ./gpu for every agent? No, never.', ()),
+        ('Let me think.', ()),
+    ],
+)
+async def test_the_persons_own_words_give_the_grant_only_when_they_say_yes(
+    lab: Lab, text: str, grants: tuple[str, ...]
+) -> None:
+    grant_asks = GrantAsks(lab)
     bo = Member(lab, 'bo')
-    watching = asyncio.create_task(asks.run())
+    watching = asyncio.create_task(grant_asks.run())
     try:
-        await asks.offer(bo, COMMAND)
-        asked = lab.board.posts[-1].post
-        await lab.post(PostRequest(kind='answer', text='No', thread=asked.thread, reply_to=asked.id), 'person')
-        await asyncio.sleep(0.1)
-        await asks.offer(bo, COMMAND)
+        await grant_asks.offer(bo, COMMAND)
+        await answered(lab, text)
+        # The answer is read once the next refusal can ask again.
+        await until(lambda: './gpu' not in grant_asks._open)
+        await grant_asks.offer(bo, COMMAND)
     finally:
         watching.cancel()
 
-    assert lab.board.grants == ()
-    assert [entry.post.kind for entry in lab.board.posts].count('ask') == 2
+    assert lab.board.grants == grants
+    assert len(asks(lab)) == 2
 
 
-async def test_a_command_that_no_grant_fits_gets_no_ask(lab: Lab) -> None:
-    asks = GrantAsks(lab)
+async def test_the_picked_choice_gives_the_grant_whatever_the_command_is_called(lab: Lab) -> None:
+    grant_asks = GrantAsks(lab)
+    watching = asyncio.create_task(grant_asks.run())
+    try:
+        await grant_asks.offer(Member(lab, 'bo'), COMMAND.model_copy(update={'command': './stop now'}))
+        await answered(lab, 'allow `./stop` for every agent')
+        await until(lambda: lab.board.grants == ('./stop',))
+    finally:
+        watching.cancel()
 
-    await asks.offer(Member(lab, 'bo'), COMMAND.model_copy(update={'command': 'A=1 make'}))
-    await asks.offer(Member(lab, 'bo'), COMMAND.model_copy(update={'choices': CHOICES[1:]}))
 
-    assert all(entry.post.kind != 'ask' for entry in lab.board.posts)
+async def test_an_ask_that_fails_frees_its_place(lab: Lab, monkeypatch: pytest.MonkeyPatch) -> None:
+    grant_asks = GrantAsks(lab)
+    bo = Member(lab, 'bo')
+
+    async def fail(_: PostRequest) -> None:
+        raise RuntimeError('The board is away.')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(bo, 'post', fail)
+        with pytest.raises(RuntimeError):
+            await grant_asks.offer(bo, COMMAND)
+    await grant_asks.offer(bo, COMMAND)
+
+    assert len(asks(lab)) == 1

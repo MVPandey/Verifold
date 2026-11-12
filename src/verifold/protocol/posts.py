@@ -27,7 +27,8 @@ type Outcome = Literal['holds', 'fails']
 type CheckMethod = Literal['rerun', 'code_read', 'ratings']
 type Helper = Annotated[str, StringConstraints(strip_whitespace=True, max_length=40)]
 """The name of a helper that an agent's harness started, such as a subagent."""
-type Choice = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+MAX_CHOICE = 100
+type Choice = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_CHOICE)]
 """An answer that an ask offers."""
 
 

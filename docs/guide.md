@@ -16,9 +16,9 @@ uvx builds Verifold on the first run, and again when main has new commits. The b
 
 Auto mode is on unless you turn it off. Each harness then runs in its own auto mode. With auto mode off, a harness asks before it acts, and its permission requests come to you on the board.
 
-A grant lets every agent run commands that start a certain way, such as `./gpu`, without a question to you. You give one with `--allow` when you start the lab, or on the board: when a harness asks for a command, one of the choices is "Allow `./gpu` for every agent". A grant covers one plain command with its arguments. It doesn't cover a command with a pipe, a redirect, or another shell operator.
+A grant lets every agent run commands that start a certain way, such as `./gpu`, without a question to you. You give one with `--allow` when you start the lab, or on the board: when a harness asks for a command, one of the choices is "Allow `./gpu` for every agent". A grant covers one plain command with its arguments. It doesn't cover a command with a pipe, a redirect, a quote, a variable, or another sign of the shell. A grant names a command, not what a file holds, so give one only for a command that you would let the agents change.
 
-Under auto mode the lab doesn't wait for you. When a harness sends Verifold a request for a command that no grant covers, Verifold refuses it at once and leaves an ask for the grant in Needs you. After your answer, the next such command passes. Codex sends its requests this way. Claude Code's auto mode decides its requests itself.
+Under auto mode the lab doesn't wait for you. When a harness sends Verifold a request for a command that no grant covers, Verifold refuses it at once. For a plain command, it leaves an ask for the grant in Needs you. After your answer, the next such command passes. Codex sends its requests this way. Claude Code's auto mode decides its requests itself.
 
 `verifold run "question"` starts a lab from the command line instead. Without `--agent`, it uses your saved choices for new labs, or one agent of each harness that this computer has.
 
