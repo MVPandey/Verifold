@@ -10,6 +10,7 @@ from verifold.protocol.events import (
     AgentJoined,
     Event,
     LabOpened,
+    PermissionGranted,
     Posted,
     RerunRequested,
     SettingsSet,
@@ -174,6 +175,10 @@ class Lab:
     async def set_settings(self, settings: Settings) -> None:
         """Record the person's settings for the lab. The lab follows the latest ones."""
         await self._commit(lambda _, seq, at: SettingsSet(seq=seq, at=at, settings=settings))
+
+    async def grant(self, prefix: str) -> None:
+        """Record that the person lets every agent run the commands that start with `prefix`."""
+        await self._commit(lambda _, seq, at: PermissionGranted(seq=seq, at=at, prefix=prefix))
 
     async def run_out_of_time(self) -> None:
         """

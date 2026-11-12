@@ -9,6 +9,7 @@ from verifold.protocol.events import (
     AgentJoined,
     Event,
     LabOpened,
+    PermissionGranted,
     Posted,
     RerunRequested,
     SettingsSet,
@@ -32,8 +33,8 @@ from verifold.society.rules import (
 )
 
 
-# One return per event type keeps the match flat.
-def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911
+# One case with one return per event type keeps the match flat.
+def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
     """
     Return the board after one more event.
 
@@ -72,6 +73,9 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911
             return replace(board, seq=event.seq, times=(*board.times, event))
         case SettingsSet(settings=settings):
             return replace(board, seq=event.seq, settings=settings)
+        case PermissionGranted(prefix=prefix):
+            grants = board.grants if prefix in board.grants else (*board.grants, prefix)
+            return replace(board, seq=event.seq, grants=grants)
         case _:
             assert_never(event)
 

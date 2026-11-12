@@ -37,7 +37,18 @@ class PermissionRequest(Record):
     """A harness asks to run an action that its permission settings do not allow on their own."""
 
     title: str
+    """What the person reads: the command, or else the harness's name for the action."""
     choices: tuple[PermissionChoice, ...]
+    command: str | None = None
+    """The shell command that the action runs, when the harness reports one."""
+    board: bool = False
+    """Whether the action is a call to the lab's board, which Verifold itself gave the harness."""
+
+
+BOARD_SERVER = 'verifold'
+"""The name under which a harness gets the lab's board as an MCP server."""
+
+_ENDED = frozenset({'completed', 'failed'})
 
 
 type McpServers = list[schema.HttpMcpServer | schema.SseMcpServer | schema.AcpMcpServer | schema.McpServerStdio]
@@ -107,16 +118,24 @@ class _Client(acp.Client):
     def __init__(self, hooks: SessionHooks) -> None:
         self._hooks = hooks
         self.cost: float | None = None
+        self._calls: dict[str, tuple[str | None, object]] = {}
+        """The title and the input of each tool call that runs now. A permission request can name its call by ID only."""
 
     @override
     async def request_permission(
         self, session_id: str, tool_call: schema.ToolCallUpdate, options: list[schema.PermissionOption], **_: object
     ) -> schema.RequestPermissionResponse:
+        started_title, started_input = self._calls.get(tool_call.tool_call_id, (None, None))
+        given = started_input if tool_call.raw_input is None else tool_call.raw_input
+        command = _field(given, 'command')
         request = PermissionRequest(
-            title=tool_call.title or 'an action',
+            title=command or tool_call.title or started_title or 'an action',
             choices=tuple(
                 PermissionChoice(id=option.option_id, name=option.name, kind=option.kind) for option in options
             ),
+            command=command,
+            # A shell command is never a call to the board, whatever its text says.
+            board=command is None and _field(given, 'server') == BOARD_SERVER,
         )
         chosen = await self._hooks.permissions(request)
         outcome = (
@@ -130,8 +149,12 @@ class _Client(acp.Client):
     async def session_update(self, session_id: str, update: object, **_: object) -> None:
         if isinstance(update, schema.UsageUpdate) and update.cost:
             self.cost = update.cost.amount
-        if isinstance(update, schema.ToolCallStart) and update.title:
-            await self._hooks.step(update.title)
+        if isinstance(update, schema.ToolCallStart):
+            self._calls[update.tool_call_id] = (update.title or None, update.raw_input)
+            if update.title:
+                await self._hooks.step(update.title)
+        if isinstance(update, schema.ToolCallProgress) and update.status in _ENDED:
+            self._calls.pop(update.tool_call_id, None)
 
     @override
     async def write_text_file(self, session_id: str, path: str, content: str, **_: object) -> None:
@@ -195,6 +218,12 @@ class _Client(acp.Client):
     @override
     def on_connect(self, conn: acp.Agent) -> None:
         """Keep nothing from the connection: Verifold calls the agent through `AgentSession`."""
+
+
+def _field(given: object, name: str) -> str | None:
+    # A harness reports a tool call's input as it likes. Verifold reads a field only when it is text.
+    value = given.get(name) if isinstance(given, dict) else None
+    return value.strip() or None if isinstance(value, str) else None
 
 
 def _unsupported(method: str) -> NoReturn:
@@ -349,7 +378,7 @@ async def _begin(
     servers: McpServers = [
         schema.HttpMcpServer(
             type='http',
-            name='verifold',
+            name=BOARD_SERVER,
             url=board.url,
             headers=[schema.HttpHeader(name='Authorization', value=f'Bearer {board.token.get_secret_value()}')],
         )

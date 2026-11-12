@@ -29,10 +29,11 @@ from verifold.protocol.events import TurnSummary
 from verifold.protocol.record import Record
 from verifold.protocol.settings import AtExit, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
-from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
+from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
 from verifold.runner.folders import LAB_FOLDER, agent_folder, tracked_lab_files
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
 from verifold.runner.messages import start_message
+from verifold.runner.permissions import GrantAsks
 from verifold.runner.reruns import Crew, Reruns
 from verifold.runner.session import Place, SessionOptions, offer_of
 from verifold.runner.snapshots import pin
@@ -138,6 +139,7 @@ class Host:
         self._settings: LoopSettings | None = None
         self._swept: Callable[[Sweep], None] = _ignore
         self._offers: dict[str, Offer] = {}
+        self._grant_asks: GrantAsks | None = None
         self._probing: set[str] = set()
 
     @property
@@ -278,6 +280,8 @@ class Host:
         settings = load_settings(self._project).lab_settings()
         lab = Lab.create(self._record, request.question, auto_mode=request.auto_mode, time_left=time_left)
         await lab.set_settings(settings)
+        for prefix in request.allow:
+            await lab.grant(prefix)
         await lab.open_question_thread()
         self._lab = lab
         chosen = [choice for choice in request.agents for _ in range(choice.count)]
@@ -301,16 +305,21 @@ class Host:
             norms.write_text(NORMS_TEMPLATE)
         group.create_task(keep_time(lab))
         group.create_task(keep_jobs(lab, self._project, self._swept))
+        self._grant_asks = GrantAsks(lab)
+        group.create_task(self._grant_asks.run())
         workers = tuple(
             entry.agent for entry in lab.board.agents if not entry.agent.checks and entry.agent.harness in self._catalog
         )
         for agent in workers:
             member, setup = await self._seat(lab, agent, start_message(lab.board, agent, norms))
             await self._activity.set(agent.id, 'starting')
-            group.create_task(AgentLoop(member, setup, settings, activity=self._activity).run())
+            group.create_task(AgentLoop(member, setup, settings, shared=self._shared()).run())
         crew = _crew(workers, self._catalog, auto_mode=lab.board.opened.auto_mode)
         if crew:
             group.create_task(Reruns(lab, self._members, self._project, crew, self._supervise).run())
+
+    def _shared(self) -> Shared:
+        return Shared(activity=self._activity, grant_asks=self._grant_asks)
 
     async def _seat(self, lab: Lab, agent: Agent, start: str) -> tuple[Member, AgentSetup]:
         folder = await agent_folder(self._project, agent.id)
@@ -333,7 +342,7 @@ class Host:
         limit = self._settings.turn_timeout
         try:
             async with asyncio.timeout(limit):
-                await AgentLoop(member, setup, self._settings, done, self._activity).run()
+                await AgentLoop(member, setup, self._settings, done, self._shared()).run()
         except TimeoutError:
             # A checker that runs too long stops, and the lab goes on. Its post stays unchecked, and the board says why.
             error = f'The check ran past {limit:g} seconds, so Verifold stopped the checker.'

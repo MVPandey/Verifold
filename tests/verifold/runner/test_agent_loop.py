@@ -15,9 +15,10 @@ from verifold.protocol.join import MAX_NEWS, PostRequest
 from verifold.protocol.settings import AtTimeLimit, JobSettings, Settings
 from verifold.protocol.usage import Usage
 from verifold.runner import agent_loop
-from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings
+from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
 from verifold.runner.git import git
 from verifold.runner.messages import DOORBELL, more_time_message
+from verifold.runner.permissions import GrantAsks
 from verifold.runner.session import AgentSession, TurnResult
 from verifold.server.activity import Activity
 
@@ -34,7 +35,13 @@ def calls(log: Path, event: str) -> list[dict[str, object]]:
     return [call for call in map(json.loads, lines) if call['event'] == event]
 
 
-def loop_for(served: ServedBoard, tmp_path: Path, activity: Activity | None = None, **settings: float) -> AgentLoop:
+def loop_for(
+    served: ServedBoard,
+    tmp_path: Path,
+    activity: Activity | None = None,
+    grant_asks: GrantAsks | None = None,
+    **settings: float,
+) -> AgentLoop:
     member, token = served.seat('bo')
     joined = served.lab.board.agent('bo')
     assert joined is not None
@@ -51,7 +58,12 @@ def loop_for(served: ServedBoard, tmp_path: Path, activity: Activity | None = No
     )
     # No quiet window by default, so a doorbell rings as soon as a post for the agent arrives.
     options = {'retry_after': 0.0, 'quiet': 0.0} | settings
-    return AgentLoop(member, setup, LoopSettings(mcp_url=served.url, **options), activity=activity)
+    return AgentLoop(
+        member,
+        setup,
+        LoopSettings(mcp_url=served.url, **options),
+        shared=Shared(activity=activity, grant_asks=grant_asks),
+    )
 
 
 def posts_by(served: ServedBoard, author: str) -> list[str]:
@@ -290,6 +302,38 @@ async def test_a_permission_request_waits_for_the_persons_answer_on_the_board(
         running.cancel()
 
     assert asked.text == 'Permission needed: run make'
+
+
+@pytest.mark.usefixtures('log')
+async def test_in_auto_mode_a_command_without_a_grant_is_refused_at_once_and_the_person_gets_an_ask(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_COMMAND', './gpu python3 train.py')
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path, grant_asks=GrantAsks(lab)).run())
+    try:
+        await until(lambda: 'Permission: no.' in posts_by(served, 'bo'))
+    finally:
+        running.cancel()
+
+    asks = [entry.post for entry in lab.board.posts if entry.post.kind == 'ask']
+    assert [ask.text for ask in asks] == ['Permission needed: ./gpu python3 train.py']
+
+
+@pytest.mark.usefixtures('log')
+async def test_a_granted_command_runs_without_a_question(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_COMMAND', './gpu python3 train.py')
+    lab = served.lab
+    await lab.grant('./gpu')
+    running = asyncio.create_task(loop_for(served, tmp_path, grant_asks=GrantAsks(lab)).run())
+    try:
+        await until(lambda: 'Permission: yes.' in posts_by(served, 'bo'))
+    finally:
+        running.cancel()
+
+    assert all(entry.post.kind != 'ask' for entry in lab.board.posts)
 
 
 @pytest.mark.usefixtures('log')

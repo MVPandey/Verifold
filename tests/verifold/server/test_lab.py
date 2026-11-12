@@ -170,3 +170,12 @@ async def test_a_member_can_ask_again_after_its_checker_failed(lab: Lab) -> None
     again = await lab.request_rerun('bo', 'p-2')
 
     assert (again.by, len(lab.board.reruns)) == ('bo', 2)
+
+
+async def test_a_grant_is_recorded_once_and_survives_a_reload(lab: Lab, record_file: RecordFile) -> None:
+    await lab.grant('./gpu')
+    await lab.grant('make')
+    await lab.grant('./gpu')
+
+    assert lab.board.grants == ('./gpu', 'make')
+    assert Lab.load(record_file).board.grants == ('./gpu', 'make')

@@ -20,6 +20,7 @@ from verifold.runner.session import (
     Place,
     SessionHooks,
     SessionOptions,
+    _Client,
     _values,
     offer_of,
 )
@@ -290,3 +291,70 @@ async def test_a_chosen_mode_wins_over_auto_mode(served: ServedBoard, folder: Pl
         pass
 
     assert [call['mode'] for call in calls(log) if call['event'] == 'mode'] == ['ask']
+
+
+OPTIONS = [schema.PermissionOption(option_id='yes', name='Allow', kind='allow_once')]
+
+
+async def requests_of(updates: list[schema.ToolCallStart | schema.ToolCallProgress]) -> list[PermissionRequest]:
+    """Return the requests that the handler gets when a harness asks about `call-1` after each of `updates`."""
+    requests: list[PermissionRequest] = []
+
+    async def decide(request: PermissionRequest) -> str | None:
+        requests.append(request)
+        return None
+
+    client = _Client(SessionHooks(permissions=decide))
+    for update in updates:
+        await client.session_update('s', update)
+        await client.request_permission('s', schema.ToolCallUpdate(tool_call_id='call-1'), OPTIONS)
+    return requests
+
+
+def started(title: str | None, raw_input: object) -> schema.ToolCallStart:
+    return schema.ToolCallStart(
+        session_update='tool_call', tool_call_id='call-1', title=title or '', raw_input=raw_input
+    )
+
+
+async def test_a_request_that_names_only_its_call_gets_the_calls_command() -> None:
+    ended = schema.ToolCallProgress(session_update='tool_call_update', tool_call_id='call-1', status='completed')
+
+    requests = await requests_of([started('./gpu x', {'command': ' ./gpu x '}), ended])
+
+    assert [(request.title, request.command, request.board) for request in requests] == [
+        ('./gpu x', './gpu x', False),
+        ('an action', None, False),
+    ]
+
+
+async def test_a_call_to_the_labs_board_is_marked_and_a_shell_command_never_is() -> None:
+    board_call = started('mcp.verifold.post', {'server': 'verifold', 'tool': 'post'})
+    other_server = started('mcp.files.read', {'server': 'files', 'tool': 'read'})
+    shell = started('sh', {'command': 'echo', 'server': 'verifold'})
+    odd = started(None, ['verifold'])
+
+    requests = await requests_of([board_call, other_server, shell, odd])
+
+    assert [(request.title, request.board) for request in requests] == [
+        ('mcp.verifold.post', True),
+        ('mcp.files.read', False),
+        ('echo', False),
+        ('an action', False),
+    ]
+
+
+async def test_the_requests_own_input_wins_over_the_calls() -> None:
+    seen: list[PermissionRequest] = []
+
+    async def decide(request: PermissionRequest) -> str | None:
+        seen.append(request)
+        return 'yes'
+
+    client = _Client(SessionHooks(permissions=decide))
+    await client.session_update('s', started('make', {'command': 'make'}))
+    asked = schema.ToolCallUpdate(tool_call_id='call-1', title='Run command', raw_input={'command': 'make test'})
+    response = await client.request_permission('s', asked, OPTIONS)
+
+    assert (seen[0].title, seen[0].command) == ('make test', 'make test')
+    assert isinstance(response.outcome, schema.AllowedOutcome)

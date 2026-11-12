@@ -62,7 +62,9 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
                 executable='codex',
                 command=_adapter('@agentclientprotocol/codex-acp@2.5.0'),
                 family='openai',
-                auto_mode='agent',
+                # Not the mode `agent`: there the harness's own reviewer decides, and a refusal never reaches the
+                # person. In this mode each request comes to Verifold, which follows the person's grants.
+                auto_mode='workspace-write',
             ),
         )
     }
