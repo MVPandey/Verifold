@@ -38,6 +38,8 @@ def test_nothing_is_granted_without_a_grant() -> None:
         ('./gpu x 2>&1 | tail -1', None),
         ('cd x && make', None),
         ("' ' x", None),
+        ('A=1 make', None),
+        ('PATH=. ls', None),
         ('', None),
         ('x' * 201 + ' y', None),
     ],

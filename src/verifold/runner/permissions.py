@@ -79,15 +79,19 @@ class GrantAsks:
         self._lab = lab
         self._open: dict[str, PostId | None] = {}
         """The ask for each grant that has no answer yet. `None` holds the place of an ask that is on its way."""
+        self._declined: set[str] = set()
+        """The grants that the person said no to. Verifold doesn't ask for them again."""
 
     async def offer(self, member: Member, request: PermissionRequest) -> None:
         """
-        Ask the person for the grant that would cover the request's command, unless such an ask is open.
+        Ask the person for the grant that would cover the request's command.
+
+        It asks nothing while such an ask is open, or after the person said no to that grant.
 
         A command that no grant can cover gets no ask: the board's instructions tell the agent to run it plain.
         """
         prefix = _offered(request)
-        if prefix is None or prefix in self._open:
+        if prefix is None or prefix in self._open or prefix in self._declined:
             return
         body = (
             f'Verifold refused this command, so that the lab does not wait:\n\n{(request.command or "")[:MAX_SHOWN]}'
@@ -115,10 +119,13 @@ class GrantAsks:
                 if ask_id and (answer := _persons_answer(board, ask_id)) is not None
             ]
             for prefix, answer in answered:
-                del self._open[prefix]
                 # The ask offers nothing but the grant, so a plain yes gives it.
                 if _gives(answer, prefix, any_yes=True):
                     await self._lab.grant(prefix)
+                elif _NEGATIVE.intersection(_words(answer)):
+                    self._declined.add(prefix)
+                # The place stays taken until the grant is on the board, so that no refusal asks in between.
+                del self._open[prefix]
             await self._lab.wait_for_change(board.seq)
 
 
@@ -155,7 +162,7 @@ def _gives(answer: str, prefix: str, *, any_yes: bool) -> bool:
     Return whether the person's answer gives the grant for `prefix`.
 
     The picked choice gives it. In the person's own words, a word such as "no" gives nothing, then the choice at the
-    start of the first line gives it, and with `any_yes` a word such as "yes" does too.
+    start of the first line gives it, and with `any_yes` an answer that starts with a word such as "yes" does too.
     """
     choice = grant_choice(prefix)
     headline = answer.split('\n', 1)[0].strip()
@@ -164,7 +171,7 @@ def _gives(answer: str, prefix: str, *, any_yes: bool) -> bool:
     words, name = _words(answer), _words(choice)
     if _NEGATIVE.intersection(words):
         return False
-    return _words(headline)[: len(name)] == name or (any_yes and bool(_POSITIVE.intersection(words)))
+    return _words(headline)[: len(name)] == name or (any_yes and words[:1] != () and words[0] in _POSITIVE)
 
 
 def choose(answer: str, choices: tuple[PermissionChoice, ...]) -> str | None:

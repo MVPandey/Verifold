@@ -191,17 +191,17 @@ async def test_agents_refused_at_the_same_moment_share_one_ask_and_the_answer_gi
 
 
 @pytest.mark.parametrize(
-    ('text', 'grants'),
+    ('text', 'grants', 'asked'),
     [
-        ('yes, fine', ('./gpu',)),
-        ('Allow ./gpu for every agent', ('./gpu',)),
-        ('No', ()),
-        ('Allow ./gpu for every agent? No, never.', ()),
-        ('Let me think.', ()),
+        ('yes, fine', ('./gpu',), 1),
+        ('Allow ./gpu for every agent', ('./gpu',), 1),
+        ('No', (), 1),
+        ('Allow ./gpu for every agent? No, never.', (), 1),
+        ('Let me go look at it first.', (), 2),
     ],
 )
-async def test_the_persons_own_words_give_the_grant_only_when_they_say_yes(
-    lab: Lab, text: str, grants: tuple[str, ...]
+async def test_a_yes_gives_the_grant_a_no_ends_the_asks_and_another_answer_lets_the_next_refusal_ask(
+    lab: Lab, text: str, grants: tuple[str, ...], asked: int
 ) -> None:
     grant_asks = GrantAsks(lab)
     bo = Member(lab, 'bo')
@@ -209,14 +209,15 @@ async def test_the_persons_own_words_give_the_grant_only_when_they_say_yes(
     try:
         await grant_asks.offer(bo, COMMAND)
         await answered(lab, text)
-        # The answer is read once the next refusal can ask again.
         await until(lambda: './gpu' not in grant_asks._open)
-        await grant_asks.offer(bo, COMMAND)
+        # A covered command is not refused, so only a command without its grant comes here again.
+        if not grants:
+            await grant_asks.offer(bo, COMMAND)
     finally:
         watching.cancel()
 
     assert lab.board.grants == grants
-    assert len(asks(lab)) == 2
+    assert len(asks(lab)) == asked
 
 
 async def test_the_picked_choice_gives_the_grant_whatever_the_command_is_called(lab: Lab) -> None:

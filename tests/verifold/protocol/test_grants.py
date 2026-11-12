@@ -10,7 +10,7 @@ def test_a_grant_is_the_start_of_one_plain_command() -> None:
     assert GRANT.validate_python('  ./gpu python3 ') == './gpu python3'
 
 
-@pytest.mark.parametrize('prefix', ['', '   ', './gpu; rm', 'a | b', '$(a)', "'my tool'", 'x' * 201])
+@pytest.mark.parametrize('prefix', ['', '   ', './gpu; rm', 'a | b', '$(a)', "'my tool'", 'A=1', 'x' * 201])
 def test_a_grant_is_not_empty_too_long_or_more_than_a_plain_command(prefix: str) -> None:
     with pytest.raises(ValidationError):
         GRANT.validate_python(prefix)
@@ -57,6 +57,8 @@ def test_a_plain_command_is_words_of_letters_digits_and_a_few_signs(command: str
         './gpu a?',
         './gpu =id',
         'A=1 ./gpu =x',
+        'A=1 make',
+        'LD_PRELOAD=./x.so ./gpu',
     ],
 )
 def test_a_sign_that_a_shell_acts_on_makes_a_command_not_plain(command: str) -> None:

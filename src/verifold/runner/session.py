@@ -131,7 +131,7 @@ class _Client(acp.Client):
         command = _field(call.given, 'command') if call.kind == 'execute' else None
         named = _field(call.given, 'server') == BOARD_SERVER and _field(call.given, 'tool') is not None
         request = PermissionRequest(
-            title=command or tool_call.title or call.title or 'an action',
+            title=command or call.title or 'an action',
             choices=tuple(
                 PermissionChoice(id=option.option_id, name=option.name, kind=option.kind) for option in options
             ),

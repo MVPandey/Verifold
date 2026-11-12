@@ -5,8 +5,9 @@ from typing import Annotated
 
 from pydantic import AfterValidator, StringConstraints
 
-_WORD = r'[A-Za-z0-9_./:,+@%-][A-Za-z0-9_./:,+@%=-]*'
-_PLAIN = re.compile(rf' *{_WORD}(?: +{_WORD})* *')
+_COMMAND = r'[A-Za-z0-9_./:,+@%-]+'
+_ARGUMENT = r'[A-Za-z0-9_./:,+@%-][A-Za-z0-9_./:,+@%=-]*'
+_PLAIN = re.compile(rf' *{_COMMAND}(?: +{_ARGUMENT})* *')
 
 
 def plain(command: str) -> bool:
@@ -14,14 +15,15 @@ def plain(command: str) -> bool:
     Return whether `command` is one plain command: words of letters, digits, and `_ . / : , + @ % - =`, with spaces.
 
     Every other character can make a shell do more than the command says, such as a pipe, a redirect, a quote, a
-    variable, a bracket, or a line break. A word doesn't start with `=`, which some shells expand.
+    variable, a bracket, or a line break. Only an argument holds `=`, and not at its start: a first word with `=`
+    sets a variable and names no command, and some shells expand a word that starts with `=`.
     """
     return _PLAIN.fullmatch(command) is not None
 
 
 def _one_plain_command(prefix: str) -> str:
     if not plain(prefix):
-        raise ValueError('A grant is the start of one plain command: letters, digits, spaces, and _ . / : , + @ % - =.')
+        raise ValueError('A grant is the start of one plain command: letters, digits, spaces, and _ . / : , + @ % -.')
     return prefix
 
 
