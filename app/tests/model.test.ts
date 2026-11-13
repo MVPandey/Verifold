@@ -25,6 +25,7 @@ import {
   standingChip,
   titleOf,
 } from '../src/model/posts.ts';
+import { crossed, crossedLine, crossLines } from '../src/model/crossings.ts';
 import { href, parseRoute } from '../src/model/route.ts';
 import { hasNew, markSeen, readSeen } from '../src/model/seen.ts';
 import { AT_EXIT, labelOf, stopLine, valueAt } from '../src/model/settings.ts';
@@ -740,5 +741,54 @@ describe('choices for new labs', () => {
       { value: '', label: 'Your auto mode answer' },
       { value: 'yolo', label: 'yolo' },
     ]);
+  });
+});
+
+describe('crossings', () => {
+  const agents = [agentView('agent-1'), agentView('agent-2'), agentView('agent-3')];
+  const link = (thread: string, posts: number, ...ids: string[]) => ({
+    thread,
+    agents: ids,
+    posts,
+  });
+  const threads = [
+    summary({ thread: { id: 't-2', title: 'Baseline', opened_by: 'agent-1' } }),
+    summary({ thread: { id: 't-3', title: 'Curves', opened_by: 'agent-2' } }),
+    summary({ thread: { id: 't-4', title: 'Reading', opened_by: 'agent-3' } }),
+    summary({
+      thread: { id: 't-5', title: 'Planes', opened_by: 'agent-1' },
+      builds_on: [
+        link('t-2', 1, 'agent-2'),
+        link('t-4', 3, 'agent-3', 'agent-2'),
+        link('t-3', 2, 'agent-2'),
+      ],
+    }),
+  ];
+
+  it('names the threads with the most crossings first, with their agents, and counts the rest', () => {
+    const planes = threads[3];
+    assert.ok(planes);
+    assert.deepEqual(crossLines(planes.builds_on, threads, agents), {
+      lines: [
+        { thread: 't-4', title: 'Reading', agents: 'Agent 3, Agent 2' },
+        { thread: 't-3', title: 'Curves', agents: 'Agent 2' },
+      ],
+      more: 1,
+    });
+    assert.deepEqual(crossLines([link('t-9', 1, 'agent-2')], threads, agents), {
+      lines: [],
+      more: 0,
+    });
+  });
+
+  it('counts the crossings of the whole lab, and says nothing when there are none', () => {
+    assert.equal(crossed(threads), 6);
+    assert.equal(crossedLine(threads), 'Ideas have crossed between agents’ threads 6 times.');
+    assert.equal(crossedLine(threads.slice(0, 3)), null);
+    const one = summary({ builds_on: [link('t-2', 1, 'agent-2')] });
+    assert.equal(
+      crossedLine([one]),
+      'One idea has crossed from one agent’s thread into another’s.',
+    );
   });
 });

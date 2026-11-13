@@ -1,9 +1,10 @@
 import { useEffect } from 'react';
 import type { ReactElement } from 'react';
 
-import type { AgentView, LabView, PostView, ThreadSummary } from '../api/types.ts';
+import type { AgentView, LabView, PostView, ThreadLink, ThreadSummary } from '../api/types.ts';
 import { authorName, face, ownName } from '../model/agents.ts';
 import type { Face } from '../model/agents.ts';
+import { crossedLine, crossLines } from '../model/crossings.ts';
 import { clock, duration, minutesBetween } from '../model/format.ts';
 import { orderNeeds } from '../model/needs.ts';
 import { isPermission, personMessage, standingChip } from '../model/posts.ts';
@@ -105,6 +106,7 @@ export function Wall(
   const answer = questionRead.view ? answerSoFar(questionRead.view.posts) : null;
   const chip = answer ? standingChip(answer.post, answer.standing) : null;
   const answerOpen = question !== null && open === questionId;
+  const crossing = crossedLine(threads);
   const missing = open !== null && !threads.some((summary) => summary.thread.id === open);
 
   return (
@@ -183,12 +185,14 @@ export function Wall(
             This lab has no thread {open}.
           </p>
         ) : null}
+        {crossing ? <p className="f-crossed">{crossing}</p> : null}
         {cards.length > 0 ? (
           <div className="f-wall">
             {cards.map((summary) => (
               <Card
                 key={summary.thread.id}
                 summary={summary}
+                threads={threads}
                 agents={lab.agents}
                 fresh={hasNew(summary, seen)}
                 read={summary.thread.id === open ? cardRead : null}
@@ -236,6 +240,29 @@ function Faces(props: {
         </time>
       ) : null}
     </div>
+  );
+}
+
+/** Where a thread's ideas come from, or where they go: the linked threads by title, each with its agents. */
+function Cross(props: {
+  readonly label: string;
+  readonly links: readonly ThreadLink[];
+  readonly threads: readonly ThreadSummary[];
+  readonly agents: readonly AgentView[];
+}): ReactElement | null {
+  const { lines, more } = crossLines(props.links, props.threads, props.agents);
+  if (lines.length === 0) return null;
+  return (
+    <p className="f-cross">
+      <b>{props.label}</b>
+      {lines.map((line) => (
+        <span key={line.thread}>
+          <a href={href({ page: 'thread', id: line.thread, post: null })}>{line.title}</a> (
+          {line.agents})
+        </span>
+      ))}
+      {more > 0 ? <span>and {more} more</span> : null}
+    </p>
   );
 }
 
@@ -310,11 +337,14 @@ function Need(props: {
 
 /**
  * One thread on the wall. Closed, it shows the title, a status, a mark for new posts, the face of the latest
- * author, and the time of the latest post. Open, it takes the full width and shows who opened the thread, the
+ * author, the time of the latest post, and the threads that it builds on and that build on it. Open, it takes
+ * the full width and shows who opened the thread, the
  * result that it stands on, and its turns.
  */
 function Card(props: {
   readonly summary: ThreadSummary;
+  /** Every thread of the lab, for the titles of the threads that this one is linked to. */
+  readonly threads: readonly ThreadSummary[];
   readonly agents: readonly AgentView[];
   readonly fresh: boolean;
   /** The thread's posts when the card is open, or `null` for a closed card. */
@@ -360,6 +390,8 @@ function Card(props: {
         </div>
         {head ? <p className="f-head">{head.post.text}</p> : null}
         <Faces faces={faces} last={open ? null : summary.last_at} />
+        <Cross label="Builds on" links={summary.builds_on} {...props} />
+        <Cross label="Built on by" links={summary.built_on_by} {...props} />
       </header>
       {read ? props.turns(read) : null}
     </section>

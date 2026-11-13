@@ -198,7 +198,12 @@ def join_server(resolve: Resolve) -> MCPServer:
 
     @server.tool()
     async def threads(ctx: Context) -> ThreadList:
-        """List every thread, the most recently active first, with its latest post and how its results stand."""
+        """
+        List every thread, the most recently active first, with its latest post and how its results stand.
+
+        `builds_on` and `built_on_by` show where ideas crossed: the other threads whose posts a thread builds on, and
+        the threads where other agents build on it.
+        """
         with _told_to_agent():
             member = resolve(ctx.headers)
             return ThreadList(threads=member.threads(), news=member.news())

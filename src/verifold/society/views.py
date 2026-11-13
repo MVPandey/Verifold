@@ -3,7 +3,17 @@
 from verifold.protocol.agents import Agent
 from verifold.protocol.events import Posted, ThreadOpened
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
-from verifold.protocol.join import MAX_NEWS, AgentLine, Brief, News, PostLine, PostView, ThreadSummary, ThreadView
+from verifold.protocol.join import (
+    MAX_NEWS,
+    AgentLine,
+    Brief,
+    News,
+    PostLine,
+    PostView,
+    ThreadLink,
+    ThreadSummary,
+    ThreadView,
+)
 from verifold.protocol.posts import Ask, Plan, Report, Result
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.society.attention import watches_thread
@@ -43,11 +53,45 @@ def thread_view(board: Board, agent_id: AgentId, thread_id: ThreadId) -> ThreadV
 
 def thread_summaries(board: Board, agent_id: AgentId) -> tuple[ThreadSummary, ...]:
     """Return one summary for each thread, the most recently active first."""
-    summaries = (_summary(board, agent_id, opened) for opened in board.threads)
+    crossed = crossings(board)
+    summaries = (_summary(board, agent_id, opened, crossed) for opened in board.threads)
     return tuple(sorted(summaries, key=lambda summary: summary.last_at, reverse=True))
 
 
-def _summary(board: Board, agent_id: AgentId, opened: ThreadOpened) -> ThreadSummary:
+type Crossing = tuple[Posted, Posted]
+"""A post, and a post by another agent in another thread that builds on it."""
+
+
+def crossings(board: Board) -> tuple[Crossing, ...]:
+    """
+    Return each time that an idea crossed between agents and threads, oldest first.
+
+    An idea crosses when a post names, in `builds_on`, a post that another agent wrote in another thread. A link
+    inside one thread, or between two posts of one agent, is the ordinary course of one line of work.
+    """
+    by_id = {entry.post.id: entry for entry in board.posts}
+    pairs = ((by_id.get(source), entry) for entry in board.posts for source in entry.post.builds_on)
+    return tuple(
+        (source, entry)
+        for source, entry in pairs
+        if source and source.post.thread != entry.post.thread and source.post.author != entry.post.author
+    )
+
+
+def _links(pairs: tuple[Crossing, ...]) -> tuple[ThreadLink, ...]:
+    # Group crossings by the thread of the first post of each pair, in the order that the threads first appear.
+    threads = tuple(dict.fromkeys(other.post.thread for other, _ in pairs))
+    return tuple(
+        ThreadLink(
+            thread=thread,
+            agents=tuple(dict.fromkeys(other.post.author for other, _ in pairs if other.post.thread == thread)),
+            posts=sum(other.post.thread == thread for other, _ in pairs),
+        )
+        for thread in threads
+    )
+
+
+def _summary(board: Board, agent_id: AgentId, opened: ThreadOpened, crossed: tuple[Crossing, ...]) -> ThreadSummary:
     entries = tuple(entry for entry in board.posts if entry.post.thread == opened.thread.id)
     results = tuple(standing(board, entry.post.id) for entry in entries if isinstance(entry.post, Result))
     latest = entries[-1] if entries else None
@@ -61,6 +105,10 @@ def _summary(board: Board, agent_id: AgentId, opened: ThreadOpened) -> ThreadSum
         checked=sum(state in {'checked', 'held_up'} for state in results),
         not_checked=results.count('open'),
         open_asks=sum(isinstance(entry.post, Ask) and not is_answered(board, entry.post.id) for entry in entries),
+        builds_on=_links(tuple((source, built) for source, built in crossed if built.post.thread == opened.thread.id)),
+        built_on_by=_links(
+            tuple((built, source) for source, built in crossed if source.post.thread == opened.thread.id)
+        ),
     )
 
 
