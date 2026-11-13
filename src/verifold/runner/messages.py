@@ -12,6 +12,9 @@ from verifold.society.views import question_thread
 DOORBELL = 'New posts for you on the lab board.'
 """The message that wakes an agent after it ended its turn. The agent reads the posts with its board tools."""
 
+JOBS_ENDED = 'The processes that you left running when your turn ended have ended.'
+"""The message that wakes an agent with one job, which ended its turn while its own processes still ran."""
+
 BOARD = (
     "The lab's shared board is the MCP server `verifold`. "
     'Its `brief` tool says how the board works and shows what is on it.'
