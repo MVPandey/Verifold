@@ -250,18 +250,17 @@ function Cross(props: {
   readonly threads: readonly ThreadSummary[];
   readonly agents: readonly AgentView[];
 }): ReactElement | null {
-  const { lines, more } = crossLines(props.links, props.threads, props.agents);
+  const lines = crossLines(props.links, props.threads, props.agents);
   if (lines.length === 0) return null;
   return (
     <p className="f-cross">
       <b>{props.label}</b>
-      {lines.map((line) => (
+      {lines.map((line, index) => (
         <span key={line.thread}>
           <a href={href({ page: 'thread', id: line.thread, post: null })}>{line.title}</a> (
-          {line.agents})
+          {line.agents}){index < lines.length - 1 ? ',' : ''}
         </span>
       ))}
-      {more > 0 ? <span>and {more} more</span> : null}
     </p>
   );
 }
@@ -390,8 +389,18 @@ function Card(props: {
         </div>
         {head ? <p className="f-head">{head.post.text}</p> : null}
         <Faces faces={faces} last={open ? null : summary.last_at} />
-        <Cross label="Builds on" links={summary.builds_on} {...props} />
-        <Cross label="Built on by" links={summary.built_on_by} {...props} />
+        <Cross
+          label="Builds on"
+          links={summary.builds_on_threads}
+          threads={props.threads}
+          agents={props.agents}
+        />
+        <Cross
+          label="Built on by"
+          links={summary.built_on_by_threads}
+          threads={props.threads}
+          agents={props.agents}
+        />
       </header>
       {read ? props.turns(read) : null}
     </section>

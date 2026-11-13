@@ -290,7 +290,7 @@ export interface ThreadLink {
   /** The agents on the other side, each once. */
   readonly agents: readonly string[];
   /** How many times a post names a post across the two threads. */
-  readonly posts: number;
+  readonly count: number;
 }
 
 export interface ThreadSummary {
@@ -303,10 +303,12 @@ export interface ThreadSummary {
   readonly checked: number;
   readonly not_checked: number;
   readonly open_asks: number;
-  /** The other threads whose posts, by other agents, the posts of this thread build on. */
-  readonly builds_on: readonly ThreadLink[];
-  /** The other threads where other agents build on the posts of this thread. */
-  readonly built_on_by: readonly ThreadLink[];
+  /** The other threads whose posts, by other agents, this thread builds on most. */
+  readonly builds_on_threads: readonly ThreadLink[];
+  /** The other threads where other agents build most on the posts of this thread. */
+  readonly built_on_by_threads: readonly ThreadLink[];
+  /** How many times a post of this thread builds on another agent's post in another thread. */
+  readonly crossed: number;
 }
 
 export interface PostRequest {

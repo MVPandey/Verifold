@@ -828,8 +828,6 @@ details[open] > summary .opened {
 }
 /* A card's links to other threads sit above the link that covers the card, so each one opens its own thread. */
 .f-cross {
-  position: relative;
-  z-index: 1;
   display: flex;
   flex-wrap: wrap;
   gap: 2px 8px;
@@ -840,7 +838,12 @@ details[open] > summary .opened {
 }
 .f-cross b {
   font-weight: 600;
-  color: var(--accent-ink);
+}
+.f-cross a {
+  position: relative;
+  z-index: 1;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .f-card.open .f-cross {
   order: 5;

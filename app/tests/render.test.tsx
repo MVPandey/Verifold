@@ -266,11 +266,12 @@ describe('the lab page', () => {
     const linked = [
       summary({
         thread: { id: 't-3', title: 'Merge sort', opened_by: 'agent-2' },
-        builds_on: [{ thread: 't-2', agents: ['agent-1'], posts: 2 }],
+        builds_on_threads: [{ thread: 't-2', agents: ['agent-1'], count: 2 }],
+        crossed: 2,
       }),
       summary({
         thread: { id: 't-2', title: 'Sorted input', opened_by: 'agent-1' },
-        built_on_by: [{ thread: 't-3', agents: ['agent-2'], posts: 2 }],
+        built_on_by_threads: [{ thread: 't-3', agents: ['agent-2'], count: 2 }],
       }),
     ];
     const html = renderToStaticMarkup(
@@ -282,7 +283,7 @@ describe('the lab page', () => {
         post={null}
       />,
     );
-    assert.ok(html.includes('Ideas have crossed between agents’ threads 2 times.'));
+    assert.ok(html.includes('2 posts build on another agent’s work in another thread.'));
     assert.ok(
       html.includes(
         '<b>Builds on</b><span><a href="#/thread/t-2">Sorted input</a> (Agent 1)</span>',

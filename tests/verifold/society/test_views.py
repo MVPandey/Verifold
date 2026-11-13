@@ -183,7 +183,9 @@ def test_a_summary_shows_where_ideas_crossed_between_agents_and_threads(record: 
     record.post(Result(id='p-1', thread='t-2', author='ada', text='Curves help.'))
     record.post(Message(id='p-2', thread='t-2', author='cy', text='A paper on curves.'))
     # Two posts of other agents in t-3 build on t-2. Ada's own post there and a link inside t-2 are no crossing.
-    record.post(Plan(id='p-3', thread='t-3', author='bo', text='Try curves.', builds_on=('p-1', 'p-2')))
+    # Naming a post twice counts once, and a link to the person's post is no crossing.
+    record.post(Message(id='p-9', thread='t-1', author='person', text='Look at curves.'))
+    record.post(Plan(id='p-3', thread='t-3', author='bo', text='Try curves.', builds_on=('p-1', 'p-2', 'p-1', 'p-9')))
     record.post(Result(id='p-4', thread='t-3', author='ada', text='Also here.', builds_on=('p-1',)))
     record.post(Message(id='p-5', thread='t-2', author='bo', text='Agreed.', builds_on=('p-1',)))
 
@@ -191,6 +193,7 @@ def test_a_summary_shows_where_ideas_crossed_between_agents_and_threads(record: 
     by_id = {summary.thread.id: summary for summary in thread_summaries(board, 'person')}
 
     assert [(source.post.id, built.post.id) for source, built in crossings(board)] == [('p-1', 'p-3'), ('p-2', 'p-3')]
-    assert by_id['t-3'].builds_on == (ThreadLink(thread='t-2', agents=('ada', 'cy'), posts=2),)
-    assert by_id['t-2'].built_on_by == (ThreadLink(thread='t-3', agents=('bo',), posts=2),)
-    assert (by_id['t-2'].builds_on, by_id['t-3'].built_on_by, by_id['t-1'].builds_on) == ((), (), ())
+    assert by_id['t-3'].builds_on_threads == (ThreadLink(thread='t-2', agents=('ada', 'cy'), count=2),)
+    assert by_id['t-2'].built_on_by_threads == (ThreadLink(thread='t-3', agents=('bo',), count=2),)
+    assert (by_id['t-2'].builds_on_threads, by_id['t-3'].built_on_by_threads, by_id['t-1'].crossed) == ((), (), 0)
+    assert (by_id['t-3'].crossed, by_id['t-2'].crossed) == (2, 0)

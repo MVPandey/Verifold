@@ -141,6 +141,10 @@ class PostLine(Record):
         )
 
 
+MAX_LINKS = 3
+"""The most links to other threads that a thread's summary names on each side."""
+
+
 class ThreadLink(Record):
     """Ideas that crossed between two threads: posts in one thread build on another agent's posts in the other."""
 
@@ -148,7 +152,7 @@ class ThreadLink(Record):
     """The other thread."""
     agents: tuple[AgentId, ...]
     """The agents on the other side: the authors of the posts there, each once."""
-    posts: int
+    count: int
     """How many times a post names a post across the two threads."""
 
 
@@ -168,10 +172,12 @@ class ThreadSummary(Record):
     checked: int = 0
     not_checked: int = 0
     open_asks: int = 0
-    builds_on: tuple[ThreadLink, ...] = ()
-    """The other threads whose posts, by other agents, the posts of this thread build on."""
-    built_on_by: tuple[ThreadLink, ...] = ()
-    """The other threads where other agents build on the posts of this thread."""
+    builds_on_threads: tuple[ThreadLink, ...] = ()
+    """The other threads whose posts, by other agents, this thread builds on most, at most `MAX_LINKS`."""
+    built_on_by_threads: tuple[ThreadLink, ...] = ()
+    """The other threads where other agents build most on the posts of this thread, at most `MAX_LINKS`."""
+    crossed: int = 0
+    """How many times a post of this thread builds on another agent's post in another thread."""
 
 
 class News(Record):
