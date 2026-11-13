@@ -826,6 +826,33 @@ details[open] > summary .opened {
   order: 3;
   margin-top: 12px;
 }
+/* A card's links to other threads sit above the link that covers the card, so each one opens its own thread. */
+.f-cross {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.f-cross b {
+  font-weight: 600;
+}
+.f-cross a {
+  position: relative;
+  z-index: 1;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.f-card.open .f-cross {
+  order: 5;
+}
+.f-crossed {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
 .f-head {
   margin: 6px 0 0;
   font: 500 24px/1.32 var(--head);

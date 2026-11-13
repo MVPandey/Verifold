@@ -283,6 +283,16 @@ export interface PostLine {
   readonly at: string;
 }
 
+/** Ideas that crossed between two threads: posts in one build on another agent's posts in the other. */
+export interface ThreadLink {
+  /** The other thread. */
+  readonly thread: string;
+  /** The agents on the other side, each once. */
+  readonly agents: readonly string[];
+  /** How many times a post names a post across the two threads. */
+  readonly count: number;
+}
+
 export interface ThreadSummary {
   readonly thread: Thread;
   readonly watching: boolean;
@@ -293,6 +303,12 @@ export interface ThreadSummary {
   readonly checked: number;
   readonly not_checked: number;
   readonly open_asks: number;
+  /** The other threads whose posts, by other agents, this thread builds on most. */
+  readonly builds_on_threads: readonly ThreadLink[];
+  /** The other threads where other agents build most on the posts of this thread. */
+  readonly built_on_by_threads: readonly ThreadLink[];
+  /** How many times a post of this thread builds on another agent's post in another thread. */
+  readonly crossed: number;
 }
 
 export interface PostRequest {

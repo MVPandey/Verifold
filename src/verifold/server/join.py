@@ -122,8 +122,8 @@ def join_server(resolve: Resolve) -> MCPServer:
         Read the lab in one call: the other agents' latest plans, asks that nobody has answered, and your news.
 
         Call it when you start, and again before each new piece of work. It also lists the results that nobody has
-        checked, the disputed posts, and the newest threads. The first call returns `how`, which says how the board
-        works.
+        checked, the disputed posts, and the newest threads. Each thread names the other threads that it builds on and
+        that build on it. The first call returns `how`, which says how the board works.
         """
         with _told_to_agent():
             return resolve(ctx.headers).brief(INSTRUCTIONS)
@@ -198,7 +198,12 @@ def join_server(resolve: Resolve) -> MCPServer:
 
     @server.tool()
     async def threads(ctx: Context) -> ThreadList:
-        """List every thread, the most recently active first, with its latest post and how its results stand."""
+        """
+        List every thread, the most recently active first, with its latest post and how its results stand.
+
+        `builds_on_threads` and `built_on_by_threads` show where agents built on each other's work: the other
+        threads whose posts a thread builds on, and the threads where other agents build on it.
+        """
         with _told_to_agent():
             member = resolve(ctx.headers)
             return ThreadList(threads=member.threads(), news=member.news())

@@ -67,7 +67,16 @@ export function createApi(
     setup: () => request('/setup'),
     start: (start) => request('/labs', start),
     lab: () => request('/lab'),
-    threads: () => request('/threads'),
+    threads: () =>
+      // A server from before these fields sends none, and the page must still load.
+      request<readonly ThreadSummary[]>('/threads').then((threads) =>
+        threads.map((summary) => ({
+          ...summary,
+          builds_on_threads: summary.builds_on_threads ?? [],
+          built_on_by_threads: summary.built_on_by_threads ?? [],
+          crossed: summary.crossed ?? 0,
+        })),
+      ),
     thread: (id) => request(`/threads/${encodeURIComponent(id)}`),
     needs: () => request('/needs'),
     report: () => request('/report'),

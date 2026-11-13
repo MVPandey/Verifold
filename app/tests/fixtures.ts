@@ -151,6 +151,9 @@ export function summary(changes: Partial<ThreadSummary> = {}): ThreadSummary {
     checked: 0,
     not_checked: 0,
     open_asks: 0,
+    builds_on_threads: [],
+    built_on_by_threads: [],
+    crossed: 0,
     ...changes,
   };
 }

@@ -261,6 +261,42 @@ describe('the lab page', () => {
     assert.ok(html.indexOf('f-report') < html.indexOf('f-wall'));
   });
 
+  it('names on each card the threads that it builds on and that build on it', () => {
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    const linked = [
+      summary({
+        thread: { id: 't-3', title: 'Merge sort', opened_by: 'agent-2' },
+        builds_on_threads: [{ thread: 't-2', agents: ['agent-1'], count: 2 }],
+        crossed: 2,
+      }),
+      summary({
+        thread: { id: 't-2', title: 'Sorted input', opened_by: 'agent-1' },
+        built_on_by_threads: [{ thread: 't-3', agents: ['agent-2'], count: 2 }],
+      }),
+    ];
+    const html = renderToStaticMarkup(
+      <LabPage
+        api={{} as Api}
+        data={{ ...data, threads: linked }}
+        now={now}
+        open={null}
+        post={null}
+      />,
+    );
+    assert.ok(html.includes('2 posts build on another agent’s work in another thread.'));
+    assert.ok(
+      html.includes(
+        '<b>Builds on</b><span><a href="#/thread/t-2">Sorted input</a> (Agent 1)</span>',
+      ),
+    );
+    assert.ok(
+      html.includes(
+        '<b>Built on by</b><span><a href="#/thread/t-3">Merge sort</a> (Agent 2)</span>',
+      ),
+    );
+    assert.equal(page('{}').includes('f-cross'), false);
+  });
+
   it('shows when each thread was last active, and names a checker that asks by its own name', () => {
     const checker = agentView('checker-12');
     const asking = { ...checker, agent: { ...checker.agent, name: 'Checker 12', checks: 'p-1' } };

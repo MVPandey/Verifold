@@ -25,6 +25,7 @@ import {
   standingChip,
   titleOf,
 } from '../src/model/posts.ts';
+import { crossedLine, crossLines } from '../src/model/crossings.ts';
 import { href, parseRoute } from '../src/model/route.ts';
 import { hasNew, markSeen, readSeen } from '../src/model/seen.ts';
 import { AT_EXIT, labelOf, stopLine, valueAt } from '../src/model/settings.ts';
@@ -740,5 +741,44 @@ describe('choices for new labs', () => {
       { value: '', label: 'Your auto mode answer' },
       { value: 'yolo', label: 'yolo' },
     ]);
+  });
+});
+
+describe('crossings', () => {
+  const agents = [agentView('agent-1'), agentView('agent-2'), agentView('agent-3')];
+  const link = (thread: string, count: number, ...ids: string[]) => ({
+    thread,
+    agents: ids,
+    count,
+  });
+  const threads = [
+    summary({ thread: { id: 't-2', title: 'Baseline', opened_by: 'agent-1' } }),
+    summary({ thread: { id: 't-3', title: 'Curves', opened_by: 'agent-2' } }),
+    summary({ thread: { id: 't-4', title: 'Reading', opened_by: 'agent-3' } }),
+  ];
+
+  it('names the first linked threads with their agents, and leaves out a thread that the page lacks', () => {
+    const links = [
+      link('t-9', 4, 'agent-1'),
+      link('t-4', 3, 'agent-3', 'agent-2'),
+      link('t-3', 2, 'agent-2'),
+      link('t-2', 1, 'agent-2'),
+    ];
+    assert.deepEqual(crossLines(links, threads, agents), [
+      { thread: 't-4', title: 'Reading', agents: 'Agent 3, Agent 2' },
+      { thread: 't-3', title: 'Curves', agents: 'Agent 2' },
+    ]);
+  });
+
+  it('counts the posts that build on another agent’s work, and says nothing when there are none', () => {
+    assert.equal(crossedLine(threads), null);
+    assert.equal(
+      crossedLine([summary({ crossed: 1 })]),
+      'One post builds on another agent’s work in another thread.',
+    );
+    assert.equal(
+      crossedLine([summary({ crossed: 4 }), summary({ crossed: 2 })]),
+      '6 posts build on another agent’s work in another thread.',
+    );
   });
 });
