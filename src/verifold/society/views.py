@@ -17,7 +17,7 @@ from verifold.protocol.join import (
     ThreadSummary,
     ThreadView,
 )
-from verifold.protocol.posts import Ask, Call, Plan, Report, Result, RuledOut
+from verifold.protocol.posts import Ask, Call, Check, Objection, Plan, Report, Result, RuledOut
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.society.attention import watches_thread
 from verifold.society.board import Board
@@ -103,18 +103,36 @@ def _links(pairs: tuple[Crossing, ...]) -> tuple[ThreadLink, ...]:
     return tuple(sorted(links, key=lambda link: link.count, reverse=True)[:MAX_LINKS])
 
 
-def _lines(board: Board) -> dict[AgentId, ThreadId]:
-    # Where each agent works now: the thread of its latest plan, result, or ruled-out lead outside the question's
-    # thread. Every agent plans in the question's thread, so a plan there moves nobody.
+def _lines(board: Board) -> dict[AgentId, ThreadId | None]:
+    """
+    Return where each agent of the lab works now, for every agent that has worked in a line.
+
+    An agent works in the thread of its latest plan or result outside the question's thread. Every agent plans in
+    the question's thread, so a plan there moves nobody. A ruled-out lead ends the agent's work in its thread, and
+    the agent then works nowhere until its next plan or result. A ruled-out lead that withdraws the agent's own
+    call ends no work.
+    """
     question = question_thread(board)
-    return {
-        entry.post.author: entry.post.thread
-        for entry in board.posts
-        if isinstance(entry.post, Plan | Result | RuledOut) and entry.post.thread != question
-    }
+    workers = {joined.agent.id for joined in board.agents if not joined.agent.checks}
+    lines: dict[AgentId, ThreadId | None] = {}
+    for entry in board.posts:
+        post = entry.post
+        if post.author not in workers or post.thread == question:
+            continue
+        if isinstance(post, Plan | Result):
+            lines[post.author] = post.thread
+        elif isinstance(post, RuledOut) and not _withdraws(board, post) and lines.get(post.author) == post.thread:
+            lines[post.author] = None
+    return lines
 
 
-def _team(board: Board, opened: ThreadOpened, lines: dict[AgentId, ThreadId]) -> tuple[AgentId, ...]:
+def _withdraws(board: Board, post: RuledOut) -> bool:
+    # Whether a ruled-out lead withdraws its author's own call.
+    target = board.post(post.reply_to) if post.reply_to else None
+    return bool(target and isinstance(target.post, Call) and target.post.author == post.author)
+
+
+def _team(board: Board, opened: ThreadOpened, lines: dict[AgentId, ThreadId | None]) -> tuple[AgentId, ...]:
     # The lab's agents that work in the thread now. The agent that opened the thread is in its team until it works
     # in another one, unless it opened the thread with a call, which says that the work needs somebody else. The
     # person and blind checkers are in no team, and the question's thread has none.
@@ -129,7 +147,11 @@ def _team(board: Board, opened: ThreadOpened, lines: dict[AgentId, ThreadId]) ->
 
 
 def _summary(
-    board: Board, agent_id: AgentId, opened: ThreadOpened, crossed: tuple[Crossing, ...], lines: dict[AgentId, ThreadId]
+    board: Board,
+    agent_id: AgentId,
+    opened: ThreadOpened,
+    crossed: tuple[Crossing, ...],
+    lines: dict[AgentId, ThreadId | None],
 ) -> ThreadSummary:
     entries = tuple(entry for entry in board.posts if entry.post.thread == opened.thread.id)
     results = tuple(standing(board, entry.post.id) for entry in entries if isinstance(entry.post, Result))
@@ -152,6 +174,23 @@ def _summary(
             tuple((built, source) for source, built in crossed if source.post.thread == opened.thread.id)
         ),
         crossed=len(incoming),
+    )
+
+
+def _built_on(board: Board, entry: Posted) -> bool:
+    """
+    Return whether work builds on a result already.
+
+    Another agent of the lab builds on it with any post but a report, a check, or an objection, which name a post
+    and build nothing. The result's own author builds on it with a later result, so only the newest result of an
+    author's chain still waits.
+    """
+    workers = {joined.agent.id for joined in board.agents if not joined.agent.checks}
+    return any(
+        isinstance(other.post, Result)
+        if other.post.author == entry.post.author
+        else other.post.author in workers and not isinstance(other.post, Report | Check | Objection)
+        for other in board.built_on(entry.post.id)
     )
 
 
@@ -204,8 +243,8 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         for entry, state in stands
         if isinstance(entry.post, Result)
         and entry.post.author != agent_id
-        and state != 'conceded'
-        and all(other.post.author == entry.post.author for other in board.built_on(entry.post.id))
+        and state not in {'conceded', 'disputed'}
+        and not _built_on(board, entry)
     )
     return Brief(
         you=agent_id,

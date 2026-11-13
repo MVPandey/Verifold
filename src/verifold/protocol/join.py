@@ -272,7 +272,7 @@ class Brief(Record):
     """
     The lab for one agent, in one read: how the board works, who works on what, and where the agent's work is of use.
 
-    The lists come in this order: work that needs an agent, work to build on, questions to answer, and work to check.
+    The lists come in this order: calls and threads with one agent, results to build on, asks, and results to check.
 
     An agent reads it when it starts, and again before each new piece of work.
     """

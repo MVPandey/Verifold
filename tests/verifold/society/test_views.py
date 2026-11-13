@@ -279,9 +279,53 @@ def test_a_brief_lists_where_an_agents_work_is_of_use_before_what_to_check(recor
 
     # Ada works alone in t-2. Bo has cy in t-3, and t-4 holds only a note, so nobody works there.
     assert [(line.id, line.team) for line in seen.one_agent_threads] == [('t-2', ('ada',))]
-    # Only its author built on p-1, and nobody built on p-4. Cy built on p-2.
-    assert [line.id for line in seen.not_built_on] == ['p-1', 'p-4']
+    # Ada went on from p-1 herself, so only the newest result of her chain waits. Cy built on p-2.
+    assert [line.id for line in seen.not_built_on] == ['p-4']
     assert brief(record.board(), 'ada', News(seq=0)).one_agent_threads == ()
     fields = list(type(seen).model_fields)
     assert fields.index('open_calls') < fields.index('one_agent_threads') < fields.index('not_built_on')
     assert fields.index('not_built_on') < fields.index('open_asks') < fields.index('not_checked')
+
+
+def test_a_report_a_check_and_the_person_build_nothing_and_a_disputed_result_is_not_work_to_build_on(
+    record: RecordBuilder,
+) -> None:
+    record.thread('t-2', opened_by='ada')
+    record.post(Result(id='p-1', thread='t-2', author='ada', text='Curves help.'))
+    record.post(Report(id='p-2', thread='t-1', author='bo', text='Curves help.', builds_on=('p-1',)))
+    record.post(Message(id='p-3', thread='t-1', author='person', text='Nice.', builds_on=('p-1',)))
+    record.post(
+        Check(
+            id='p-4',
+            thread='t-2',
+            author='bo',
+            text='Holds.',
+            reply_to='p-1',
+            outcome='holds',
+            method='code_read',
+            builds_on=('p-1',),
+        )
+    )
+    named = record.board()
+    record.post(Objection(id='p-5', thread='t-2', author='cy', text='Leak.', reply_to='p-1'))
+
+    assert [line.id for line in brief(named, 'cy', News(seq=0)).not_built_on] == ['p-1']
+    assert brief(record.board(), 'bo', News(seq=0)).not_built_on == ()
+
+
+def test_a_ruled_out_lead_ends_an_agents_work_in_a_thread_but_a_withdrawn_call_ends_none(
+    record: RecordBuilder,
+) -> None:
+    record.thread('t-2', opened_by='ada').thread('t-3', opened_by='ada')
+    record.post(Result(id='p-1', thread='t-2', author='ada', text='Curves help.'))
+    record.post(Call(id='p-2', thread='t-3', author='ada', text='Who tries planes?'))
+    record.post(RuledOut(id='p-3', thread='t-3', author='ada', text='No need.', reply_to='p-2'))
+    working = brief(record.board(), 'cy', News(seq=0))
+
+    record.post(RuledOut(id='p-4', thread='t-2', author='ada', text='Curves fail at scale.'))
+    ended = brief(record.board(), 'cy', News(seq=0))
+
+    # Withdrawing a call in t-3 leaves ada in t-2. Ruling out the lead in t-2 leaves her nowhere.
+    assert [line.id for line in working.one_agent_threads] == ['t-2']
+    assert ended.one_agent_threads == ()
+    assert {summary.thread.id: summary.team for summary in ended.threads} == {'t-1': (), 't-2': (), 't-3': ()}
