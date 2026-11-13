@@ -256,6 +256,53 @@ async def test_an_agent_with_one_job_wakes_when_the_processes_that_it_left_runni
     assert set(looks) == {'bo'}
 
 
+async def test_an_agent_with_one_job_does_not_wait_for_ever_for_a_process_that_never_ends(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    async def always(_agent: str) -> bool:
+        return True
+
+    activity = Activity()
+    loop = loop_for(served, tmp_path, activity, has_jobs=always, job_poll=0.01, job_wait=0.05)
+    loop._done = lambda _: False
+
+    async with asyncio.timeout(30):
+        await loop.run()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
+
+
+async def test_an_agent_with_one_job_hears_that_the_time_limit_stopped_its_processes(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    await lab.set_settings(Settings(jobs=JobSettings(at_time_limit=AtTimeLimit.STOP)))
+    stop = asyncio.Event()
+
+    async def until_stopped(_agent: str) -> bool:
+        return not stop.is_set()
+
+    loop = loop_for(served, tmp_path, has_jobs=until_stopped, job_poll=0.01)
+    loop._done = lambda _: False
+    running = asyncio.create_task(loop.run())
+    try:
+        await until(lambda: bool(lab.board.turns))
+        await lab.set_time_left(timedelta(0))
+        await lab.run_out_of_time()
+        stop.set()
+        await asyncio.sleep(0.1)
+        assert len(calls(log, 'prompt')) == 1
+
+        await lab.set_time_left(timedelta(hours=1))
+        await until(lambda: len(calls(log, 'prompt')) == 2)
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+    assert calls(log, 'prompt')[1]['text'] == more_time_message(lab.board.ends_at, AtTimeLimit.STOP)
+
+
 async def test_an_agent_with_one_job_that_the_time_limit_stopped_goes_on_when_the_lab_gets_more_time(
     served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

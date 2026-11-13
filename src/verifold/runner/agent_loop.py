@@ -55,6 +55,8 @@ class LoopSettings(Record):
     """The most seconds that a doorbell waits for the board to go quiet."""
     job_poll: float = Field(default=5, gt=0)
     """Seconds between two looks at the processes that an agent with one job left running."""
+    job_wait: float = Field(default=3_600, gt=0)
+    """The most seconds that the loop of an agent with one job waits for those processes before it ends."""
 
 
 class AgentSetup(Record):
@@ -101,7 +103,7 @@ class AgentLoop:
         `member` is the same seat that serves the agent's tool calls, so a doorbell never repeats what the agent read
         with `wait`. `done` says whether the agent's one job is done, as for a checker that posted its check. The
         loop of an agent with one job ends when the job is done. It also ends when the agent ends a turn without the
-        job and leaves no process running, because nothing else wakes that agent. `shared` holds what the lab's loops
+        job and leaves no process running, or one that runs past `job_wait`, because nothing else wakes that agent. `shared` holds what the lab's loops
         share.
         """
         shared = shared or Shared()
@@ -153,7 +155,12 @@ class AgentLoop:
                             # ends. One that left nothing running would wait for ever, so its loop ends.
                             if not await self._jobs_ended():
                                 return
-                            message = JOBS_ENDED
+                            await self._while_out_of_time()
+                            message = (
+                                more_time_message(self._lab.board.ends_at, AtTimeLimit.STOP)
+                                if self._jobs_stopped(self._lab.board)
+                                else JOBS_ENDED
+                            )
                         else:
                             message = await self._news()
             # Any failure of one harness restarts that harness. It must not stop the lab's other agents.
@@ -228,13 +235,29 @@ class AgentLoop:
         )
 
     async def _jobs_ended(self) -> bool:
-        # Wait until the processes that the agent left running end. Return False when it left none.
-        agent_id = self._setup.agent.id
-        if self._has_jobs is None or not await self._has_jobs(agent_id):
+        # Wait until the processes that the agent left running end. Return False when it left none, and when they
+        # still run after `job_wait` seconds, so a process that never ends does not hold the agent's place.
+        if self._has_jobs is None:
             return False
-        while await self._has_jobs(agent_id):
-            await asyncio.sleep(self._settings.job_poll)
-        return True
+        agent_id = self._setup.agent.id
+        waited = False
+        try:
+            async with asyncio.timeout(self._settings.job_wait):
+                while await self._has_jobs(agent_id):
+                    if not waited:
+                        await self._report('waiting', 'Waits for a process that it left running.')
+                        waited = True
+                    await asyncio.sleep(self._settings.job_poll)
+        except TimeoutError:
+            return False
+        return waited
+
+    def _jobs_stopped(self, board: Board) -> bool:
+        # Whether the time limit stopped the agent's processes after its last turn. The record shows a stop also
+        # when the lab got more time before this look.
+        return board.settings.jobs.at_time_limit is AtTimeLimit.STOP and any(
+            isinstance(entry, TimeRanOut) and entry.seq > self._turn_ended for entry in board.times
+        )
 
     async def _news(self) -> str:
         """
@@ -251,10 +274,7 @@ class AgentLoop:
         settled = False
         while True:
             board = self._lab.board
-            # The record shows a stop also when the lab got more time before this wait looked.
-            stopped = board.settings.jobs.at_time_limit is AtTimeLimit.STOP and any(
-                isinstance(entry, TimeRanOut) and entry.seq > self._turn_ended for entry in board.times
-            )
+            stopped = self._jobs_stopped(board)
             posts = bool(update(board, agent_id, max(self._notified, self._member.seen)).posts)
             # A post during a stop waits for the wake after more time, so the doorbell rings then.
             if stopped and not board.out_of_time:
