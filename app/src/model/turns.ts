@@ -15,6 +15,7 @@ const NOUNS = {
   check: 'check',
   ruled_out: 'ruled-out lead',
   report: 'report',
+  call: 'call',
 } as const satisfies Record<Post['kind'], string>;
 
 const CLAIMS: ReadonlySet<Post['kind']> = new Set(['result', 'proposal', 'ruled_out']);
@@ -42,6 +43,7 @@ export function tone(post: Post): MarkTone {
     case 'proposal':
       return 'answer';
     case 'ask':
+    case 'call':
       return 'ask';
     case 'plan':
     case 'message':
@@ -65,7 +67,7 @@ export interface ActContext {
  *
  * The line comes only from the post's kind, its check outcome and method, its `accepts`, and the post that it
  * replies to. `to` is that post, or `null` when the page does not have it. Every kind names the post that it
- * replies to, so a reply reads right where the indent stops. A rerun is "blind" only from the blind checker that
+ * replies to, so a reply reads right where the indent stops. A plan that replies to a call takes the call. A rerun is "blind" only from the blind checker that
  * Verifold started for that post. A proposal is an answer only in the question's thread.
  */
 export function act(post: Post, to: Post | null, context: ActContext): string {
@@ -78,7 +80,12 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
     case 'proposal':
       return `${post.thread === context.question ? 'proposed an answer' : 'made a proposal'}${reply}`;
     case 'plan':
-      return `posted a plan${reply}`;
+      // The caller's own plan takes nothing, as `takers` in the server's `society/standing.py` says.
+      return to?.kind === 'call' && to.author !== post.author
+        ? `took ${theirs}`
+        : `posted a plan${reply}`;
+    case 'call':
+      return `called for an agent${reply}`;
     case 'ruled_out':
       return `ruled out a lead${reply}`;
     case 'objection':
@@ -205,6 +212,8 @@ export interface CardStatus {
   readonly label: string;
   readonly edge: 'bad' | 'good' | 'none';
   readonly openAsks: string | null;
+  /** Says that the thread has work that no agent has taken, or `null`. */
+  readonly openCalls: string | null;
 }
 
 /**
@@ -216,10 +225,14 @@ export interface CardStatus {
 export function cardStatus(summary: ThreadSummary): CardStatus {
   const { disputed, checked, not_checked: open, open_asks: asks } = summary;
   const openAsks = asks === 0 ? null : asks === 1 ? 'Open ask' : `${asks} open asks`;
-  if (disputed > 0) return { label: `${disputed} disputed`, edge: 'bad', openAsks };
+  const calls = summary.open_calls;
+  const openCalls =
+    calls === 0 ? null : calls === 1 ? 'Needs an agent' : `${calls} calls need an agent`;
+  const rest = { openAsks, openCalls };
+  if (disputed > 0) return { label: `${disputed} disputed`, edge: 'bad', ...rest };
   if (checked > 0) {
     const label = open === 0 ? 'Checked' : `${checked} of ${checked + open} checked`;
-    return { label, edge: 'good', openAsks };
+    return { label, edge: 'good', ...rest };
   }
-  return { label: open > 0 ? 'Not checked' : 'No result yet', edge: 'none', openAsks };
+  return { label: open > 0 ? 'Not checked' : 'No result yet', edge: 'none', ...rest };
 }

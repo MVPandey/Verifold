@@ -172,6 +172,14 @@ class ThreadSummary(Record):
     checked: int = 0
     not_checked: int = 0
     open_asks: int = 0
+    open_calls: int = 0
+    """How many calls in the thread still need an agent: nobody took them, and their callers did not withdraw them."""
+    team: tuple[AgentId, ...] = ()
+    """
+    The agents that work in the thread now: each agent whose latest plan or result, outside the question's thread,
+    is here. The agent that opened the thread is in its team until it works in another thread, unless it opened the
+    thread with a call. The question's thread has no team.
+    """
     builds_on_threads: tuple[ThreadLink, ...] = ()
     """The other threads whose posts, by other agents, this thread builds on most, at most `MAX_LINKS`."""
     built_on_by_threads: tuple[ThreadLink, ...] = ()
@@ -262,6 +270,8 @@ class Brief(Record):
     """The other agents. Blind checkers are not among them."""
     open_asks: tuple[PostLine, ...] = ()
     """Asks from others that nobody has answered yet, newest last. Asks for the person alone are not among them."""
+    open_calls: tuple[PostLine, ...] = ()
+    """Calls from others that still need an agent, newest last. Take one with a plan that replies to it."""
     not_checked: tuple[PostLine, ...] = ()
     """Other agents' results that nobody has checked yet, newest last."""
     disputed: tuple[PostLine, ...] = ()

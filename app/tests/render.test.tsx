@@ -297,6 +297,32 @@ describe('the lab page', () => {
     assert.equal(page('{}').includes('f-cross'), false);
   });
 
+  it('shows a closed card’s team, and says when a thread has work that no agent has taken', () => {
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    const staffed = [
+      summary({
+        thread: { id: 't-3', title: 'Merge sort', opened_by: 'agent-2' },
+        team: ['agent-2', 'agent-1'],
+        open_calls: 1,
+      }),
+    ];
+    const html = renderToStaticMarkup(
+      <LabPage
+        api={{} as Api}
+        data={{ ...data, threads: staffed }}
+        now={now}
+        open={null}
+        post={null}
+      />,
+    );
+    assert.ok(html.includes('<span class="f-st fs-ask">Needs an agent</span>'));
+    assert.ok(html.includes('<div class="f-faces" role="group" aria-label="The team">'));
+    // Both members show at full strength: nobody in a team is a faint face.
+    const faces = html.slice(html.indexOf('aria-label="The team"'));
+    assert.ok(faces.includes('aria-label="Agent 2"') && faces.includes('aria-label="Agent 1"'));
+    assert.equal(faces.slice(0, faces.indexOf('<time')).includes('ghost'), false);
+  });
+
   it('shows when each thread was last active, and names a checker that asks by its own name', () => {
     const checker = agentView('checker-12');
     const asking = { ...checker, agent: { ...checker.agent, name: 'Checker 12', checks: 'p-1' } };

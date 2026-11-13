@@ -6,7 +6,7 @@ from builders import RecordBuilder, lab
 from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.events import AgentJoined
 from verifold.protocol.join import MAX_NEWS, News
-from verifold.protocol.posts import Ask, Check, FileEvidence, Message, Objection, Post, Proposal, Result
+from verifold.protocol.posts import Ask, Call, Check, FileEvidence, Message, Objection, Post, Proposal, Result
 from verifold.society.attention import news, update, wakes, watches_thread
 from verifold.society.errors import RejectedEvent
 
@@ -70,6 +70,18 @@ def test_an_ask_that_names_nobody_wakes_every_agent_so_a_stuck_agent_reaches_the
     assert woken(started().watch('ada', 't-1', watching=False), stuck.model_copy(update={'mentions': ('cy',)})) == {
         'cy'
     }
+
+
+def test_a_call_that_names_nobody_wakes_every_agent() -> None:
+    call = Call(id='p-2', thread='t-1', author='bo', text='Nobody builds the long shot. Who takes it?')
+
+    assert woken(started(), call) == {'ada', 'cy'}
+    # A call for more hands on the caller's own post still reaches every agent.
+    assert woken(started().watch('ada', 't-1', watching=False), call.model_copy(update={'reply_to': 'p-1'})) == {
+        'ada',
+        'cy',
+    }
+    assert woken(started().watch('ada', 't-1', watching=False), call.model_copy(update={'mentions': ('cy',)})) == {'cy'}
 
 
 def test_an_ask_to_the_person_or_in_reply_to_a_post_is_not_for_every_agent() -> None:
