@@ -203,6 +203,8 @@ class AgentLoop:
                 else f'The turn ran past {self._settings.turn_timeout:g} seconds and was cancelled.'
             )
             await self._record(started, Usage(), None, error)
+            if not out_of_time:
+                await self._report('idle')
             return out_of_time
         stopped = None if result.stop_reason == 'end_turn' else f'The harness stopped: {result.stop_reason}.'
         await self._record(started, result.usage, result.cost_usd, stopped)
@@ -293,7 +295,7 @@ class AgentLoop:
                 return DOORBELL
             # The lab went quiet after this agent's last turn. The agent hears it once, because its next turn ends later.
             if board.quiet and board.quiet.seq > self._turn_ended and not stopped and not board.out_of_time:
-                return quiet_message(board.quiet.seconds, board.ends_at)
+                return quiet_message(board.quiet, board.ends_at)
             await self._lab.wait_for_change(board.seq)
 
     async def _settle(self) -> None:

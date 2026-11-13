@@ -46,8 +46,20 @@ async def test_a_lab_in_which_every_agent_ended_its_turn_goes_quiet_once_until_a
         await asyncio.sleep(3 * AFTER)
         assert lab.board.quiet == first
 
-        await lab.post(PostRequest(kind='message', text='One more idea.', thread='t-1'), 'bo')
+        # One post from two agents is a wake that brought little, so the next wait is twice as long.
+        await lab.post(PostRequest(kind='message', text='Nothing more from me.', thread='t-1'), 'bo')
         await until(lambda: lab.board.quiet != first)
+        second = lab.board.quiet
+        assert second is not None
+        assert (second.seconds, lab.board.slow_spells) == (2 * AFTER, 1)
+
+        # A wake that brought a post from each agent sets the wait back.
+        await lab.post(PostRequest(kind='message', text='One more idea.', thread='t-1'), 'ada')
+        await lab.post(PostRequest(kind='message', text='I build on it.', thread='t-1'), 'bo')
+        await until(lambda: lab.board.quiet != second)
+        third = lab.board.quiet
+        assert third is not None
+        assert (third.seconds, lab.board.slow_spells) == (AFTER, 0)
 
 
 async def test_a_lab_does_not_go_quiet_while_an_agent_is_in_a_turn_or_waits_for_the_person(lab: Lab) -> None:
@@ -59,6 +71,10 @@ async def test_a_lab_does_not_go_quiet_while_an_agent_is_in_a_turn_or_waits_for_
         assert lab.board.quiet is None
 
         await activity.set('bo', 'waiting', 'Asks you: run a script')
+        await asyncio.sleep(3 * AFTER)
+        assert lab.board.quiet is None
+
+        await activity.set('bo', 'starting')
         await asyncio.sleep(3 * AFTER)
         assert lab.board.quiet is None
 

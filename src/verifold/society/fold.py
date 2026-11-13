@@ -75,7 +75,7 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
             return replace(board, seq=event.seq, times=(*board.times, event))
         case WentQuiet():
             check_quiet(board, event)
-            return replace(board, seq=event.seq, quiet=event)
+            return replace(board, seq=event.seq, quiet=event, slow_spells=board.next_slow_spells)
         case SettingsSet(settings=settings):
             return replace(board, seq=event.seq, settings=settings)
         case PermissionGranted(prefix=prefix):
