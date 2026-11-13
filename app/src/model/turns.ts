@@ -80,7 +80,10 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
     case 'proposal':
       return `${post.thread === context.question ? 'proposed an answer' : 'made a proposal'}${reply}`;
     case 'plan':
-      return to?.kind === 'call' ? `took ${theirs}` : `posted a plan${reply}`;
+      // The caller's own plan takes nothing, as `takers` in the server's `society/standing.py` says.
+      return to?.kind === 'call' && to.author !== post.author
+        ? `took ${theirs}`
+        : `posted a plan${reply}`;
     case 'call':
       return `called for an agent${reply}`;
     case 'ruled_out':

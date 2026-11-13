@@ -2,7 +2,7 @@
 
 from verifold.protocol.ids import AgentId, PostId
 from verifold.protocol.join import Standing
-from verifold.protocol.posts import Answer, Check, Objection, Plan
+from verifold.protocol.posts import Answer, Check, Objection, Plan, RuledOut
 from verifold.society.board import Board
 
 
@@ -41,15 +41,33 @@ def is_answered(board: Board, post_id: PostId, by: AgentId | None = None) -> boo
 
 
 def takers(board: Board, call_id: PostId) -> tuple[AgentId, ...]:
-    """Return the agents that took a call, each once, in the order that they took it. The caller is not one."""
+    """
+    Return the agents that took a call, each once, in the order that they took it.
+
+    An agent of the lab takes a call with a plan that replies to it. The caller's own plan takes nothing.
+    """
     call = board.post(call_id)
+    workers = {joined.agent.id for joined in board.agents if not joined.agent.checks}
     return tuple(
         dict.fromkeys(
             entry.post.author
             for entry in board.replies(call_id)
-            if isinstance(entry.post, Plan) and call and entry.post.author != call.post.author
+            if isinstance(entry.post, Plan)
+            and call
+            and entry.post.author != call.post.author
+            and entry.post.author in workers
         )
     )
+
+
+def is_open_call(board: Board, call_id: PostId) -> bool:
+    """Return whether a call still needs an agent: nobody took it, and the caller did not withdraw it."""
+    call = board.post(call_id)
+    withdrawn = any(
+        isinstance(entry.post, RuledOut) and call and entry.post.author == call.post.author
+        for entry in board.replies(call_id)
+    )
+    return not withdrawn and not takers(board, call_id)
 
 
 def _independent_rerun(board: Board, post_id: PostId, check: Check) -> bool:

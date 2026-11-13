@@ -75,6 +75,8 @@ export function createApi(
           builds_on_threads: summary.builds_on_threads ?? [],
           built_on_by_threads: summary.built_on_by_threads ?? [],
           crossed: summary.crossed ?? 0,
+          open_calls: summary.open_calls ?? 0,
+          team: summary.team ?? [],
         })),
       ),
     thread: (id) => request(`/threads/${encodeURIComponent(id)}`),

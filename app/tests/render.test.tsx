@@ -316,7 +316,7 @@ describe('the lab page', () => {
       />,
     );
     assert.ok(html.includes('<span class="f-st fs-ask">Needs an agent</span>'));
-    assert.ok(html.includes('<div class="f-faces" aria-label="The team">'));
+    assert.ok(html.includes('<div class="f-faces" role="group" aria-label="The team">'));
     // Both members show at full strength: nobody in a team is a faint face.
     const faces = html.slice(html.indexOf('aria-label="The team"'));
     assert.ok(faces.includes('aria-label="Agent 2"') && faces.includes('aria-label="Agent 1"'));

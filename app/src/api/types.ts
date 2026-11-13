@@ -304,9 +304,9 @@ export interface ThreadSummary {
   readonly checked: number;
   readonly not_checked: number;
   readonly open_asks: number;
-  /** How many calls in the thread no agent has taken yet. */
+  /** How many calls in the thread still need an agent. */
   readonly open_calls: number;
-  /** The agents that work in the thread: who opened it, and who posted a plan in it. */
+  /** The agents that work in the thread now: each one whose latest plan or result is in it. */
   readonly team: readonly string[];
   /** The other threads whose posts, by other agents, this thread builds on most. */
   readonly builds_on_threads: readonly ThreadLink[];

@@ -234,7 +234,11 @@ function Faces(props: {
   readonly team?: boolean;
 }): ReactElement {
   return (
-    <div className="f-faces" aria-label={props.team ? 'The team' : undefined}>
+    <div
+      className="f-faces"
+      role={props.team ? 'group' : undefined}
+      aria-label={props.team ? 'The team' : undefined}
+    >
       {props.faces.map((one, index) => (
         <FaceView key={index} face={one} alone ghost={index > 0 && !props.team} />
       ))}

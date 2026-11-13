@@ -2,10 +2,10 @@ import pytest
 from builders import RecordBuilder
 
 from verifold.protocol.join import MAX_NEWS, News, ThreadLink
-from verifold.protocol.posts import Answer, Ask, Call, Check, Message, Objection, Plan, Report, Result
+from verifold.protocol.posts import Answer, Ask, Call, Check, Message, Objection, Plan, Report, Result, RuledOut
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.society.errors import NotFound
-from verifold.society.standing import takers
+from verifold.society.standing import is_open_call, takers
 from verifold.society.views import (
     brief,
     crossings,
@@ -189,6 +189,8 @@ def test_a_summary_shows_where_ideas_crossed_between_agents_and_threads(record: 
     record.post(Plan(id='p-3', thread='t-3', author='bo', text='Try curves.', builds_on=('p-1', 'p-2', 'p-1', 'p-9')))
     record.post(Result(id='p-4', thread='t-3', author='ada', text='Also here.', builds_on=('p-1',)))
     record.post(Message(id='p-5', thread='t-2', author='bo', text='Agreed.', builds_on=('p-1',)))
+    # A report names its sources and builds nothing on them.
+    record.post(Report(id='p-6', thread='t-1', author='cy', text='Curves help.', builds_on=('p-1', 'p-3')))
 
     board = record.board()
     by_id = {summary.thread.id: summary for summary in thread_summaries(board, 'person')}
@@ -220,18 +222,46 @@ def test_a_call_stays_open_until_another_agent_takes_it_with_a_plan(record: Reco
     assert (summaries['t-2'].open_calls, thread_summaries(open_board, 'person')[0].open_calls) == (0, 1)
 
 
-def test_a_threads_team_is_who_opened_it_and_who_posted_a_plan_in_it() -> None:
-    record = RecordBuilder().join('ada').join('bo').join('cy')
+def test_a_threads_team_is_who_works_in_it_now() -> None:
+    record = RecordBuilder().join('ada').join('bo').join('cy').join('di')
     record.thread('t-1', opened_by='person', title=QUESTION_TITLE).thread('t-2', opened_by='ada')
-    record.thread('t-3', opened_by='person')
+    record.thread('t-3', opened_by='bo').thread('t-4', opened_by='person')
     record.post(Plan(id='p-1', thread='t-1', author='bo', text='I read first.'))
     record.post(Message(id='p-2', thread='t-2', author='bo', text='A note.'))
     record.post(Plan(id='p-3', thread='t-2', author='cy', text='I join.'))
-    record.post(Plan(id='p-4', thread='t-2', author='cy', text='Next step.'))
+    record.post(Result(id='p-4', thread='t-2', author='di', text='It holds.'))
+    before = {summary.thread.id: summary.team for summary in thread_summaries(record.board(), 'person')}
+
+    record.post(Plan(id='p-5', thread='t-3', author='cy', text='I move to the other line.'))
+    record.post(Plan(id='p-6', thread='t-3', author='ada', text='So do I.'))
+    after = {summary.thread.id: summary.team for summary in thread_summaries(record.board(), 'person')}
+
+    # A note joins no team, a plan in the question's thread moves nobody, and the person is in no team.
+    assert before == {'t-1': (), 't-2': ('ada', 'cy', 'di'), 't-3': ('bo',), 't-4': ()}
+    # An agent is in the team of the thread where it planned last, also the agent that opened another thread.
+    assert after == {'t-1': (), 't-2': ('di',), 't-3': ('ada', 'bo', 'cy'), 't-4': ()}
+
+
+def test_an_agent_that_opens_a_thread_with_a_call_is_not_in_its_team(record: RecordBuilder) -> None:
+    record.thread('t-2', opened_by='ada')
+    record.post(Call(id='p-1', thread='t-2', author='ada', text='Nobody builds the long shot.'))
+    record.post(Plan(id='p-2', thread='t-2', author='cy', text='I take it.', reply_to='p-1'))
 
     summaries = {summary.thread.id: summary for summary in thread_summaries(record.board(), 'person')}
 
-    # A note joins no team, and the question's thread, where every agent plans, has none. The person is in
-    # no team.
-    assert summaries['t-2'].team == ('ada', 'cy')
-    assert (summaries['t-1'].team, summaries['t-3'].team) == ((), ())
+    assert summaries['t-2'].team == ('cy',)
+
+
+def test_the_caller_withdraws_a_call_with_a_ruled_out_lead_and_the_person_takes_none(record: RecordBuilder) -> None:
+    record.thread('t-2', opened_by='ada')
+    record.post(Call(id='p-1', thread='t-2', author='ada', text='Who extends this?'))
+    record.post(Plan(id='p-2', thread='t-2', author='person', text='I will.', reply_to='p-1'))
+    record.post(RuledOut(id='p-3', thread='t-2', author='bo', text='Not worth it.', reply_to='p-1'))
+    still_open = record.board()
+
+    record.post(RuledOut(id='p-4', thread='t-2', author='ada', text='I did it myself.', reply_to='p-1'))
+    withdrawn = record.board()
+
+    assert (takers(still_open, 'p-1'), is_open_call(still_open, 'p-1')) == ((), True)
+    assert (is_open_call(withdrawn, 'p-1'), brief(withdrawn, 'cy', News(seq=0)).open_calls) == (False, ())
+    assert thread_summaries(withdrawn, 'person')[0].open_calls == 0

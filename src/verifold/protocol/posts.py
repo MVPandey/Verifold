@@ -148,8 +148,8 @@ class Call(PostBase):
     """
     Work that needs an agent: a line that nobody builds, a part to hand over, or more hands for a line.
 
-    It stays open until another agent takes it with a plan that replies to it. Whoever takes it joins the team of
-    the call's thread.
+    It stays open until another agent takes it with a plan that replies to it, or until the caller withdraws it
+    with a ruled-out lead that replies to it.
     """
 
     kind: Literal['call'] = 'call'

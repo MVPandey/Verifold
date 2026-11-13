@@ -76,6 +76,11 @@ def test_a_call_that_names_nobody_wakes_every_agent() -> None:
     call = Call(id='p-2', thread='t-1', author='bo', text='Nobody builds the long shot. Who takes it?')
 
     assert woken(started(), call) == {'ada', 'cy'}
+    # A call for more hands on the caller's own post still reaches every agent.
+    assert woken(started().watch('ada', 't-1', watching=False), call.model_copy(update={'reply_to': 'p-1'})) == {
+        'ada',
+        'cy',
+    }
     assert woken(started().watch('ada', 't-1', watching=False), call.model_copy(update={'mentions': ('cy',)})) == {'cy'}
 
 

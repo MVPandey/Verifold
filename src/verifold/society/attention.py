@@ -5,7 +5,7 @@ A post is for an agent when it names the agent, replies to one of the agent's po
 lands in a thread that the agent watches. A post names an agent in `mentions` or in its text. An agent watches the threads that the person
 opens, the threads that it opens, and the threads that it posts in, until it says otherwise.
 
-Some posts are for every agent: a proposal, and an ask or the first post of a thread when it names nobody. An ask
+Some posts are for every agent: a proposal, and an ask, a call, or the first post of a thread when it names nobody. An ask
 names nobody when its `mentions` are empty and it replies to no post, so an agent that is stuck reaches every agent
 that may know the missing piece. A check is also for the agent that asked for the rerun. The person's words reach the agents by default: a post from the person that names
 nobody wakes the thread's watchers, or every agent when nobody watches the thread. No post is for a blind checker,
@@ -137,11 +137,12 @@ def _names(board: Board, agent_id: AgentId, post: Post) -> bool:
 
 def _for_everyone(board: Board, entry: Posted) -> bool:
     # Only `mentions` keeps an ask, a call, or the first post of a thread from the other agents. A name in the text adds a
-    # reader and takes none away. An ask that replies to a post is for that post's author.
+    # reader and takes none away. An ask that replies to a post is for that post's author. A call that replies to a
+    # post, such as the caller's own result, still asks every agent for hands.
     post = entry.post
     if isinstance(post, Proposal):
         return True
-    open_ask = isinstance(post, Ask | Call) and not post.reply_to
+    open_ask = isinstance(post, Call) or (isinstance(post, Ask) and not post.reply_to)
     return not post.mentions and (open_ask or _opens_thread(board, entry))
 
 

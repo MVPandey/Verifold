@@ -15,12 +15,12 @@ from verifold.protocol.join import (
     ThreadSummary,
     ThreadView,
 )
-from verifold.protocol.posts import Ask, Call, Plan, Report, Result
+from verifold.protocol.posts import Ask, Call, Plan, Report, Result, RuledOut
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.society.attention import watches_thread
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
-from verifold.society.standing import is_answered, standing, takers
+from verifold.society.standing import is_answered, is_open_call, standing
 
 
 def post_view(board: Board, entry: Posted) -> PostView:
@@ -55,7 +55,8 @@ def thread_view(board: Board, agent_id: AgentId, thread_id: ThreadId) -> ThreadV
 def thread_summaries(board: Board, agent_id: AgentId) -> tuple[ThreadSummary, ...]:
     """Return one summary for each thread, the most recently active first."""
     crossed = crossings(board)
-    summaries = (_summary(board, agent_id, opened, crossed) for opened in board.threads)
+    lines = _lines(board)
+    summaries = (_summary(board, agent_id, opened, crossed, lines) for opened in board.threads)
     return tuple(sorted(summaries, key=lambda summary: summary.last_at, reverse=True))
 
 
@@ -69,10 +70,12 @@ def crossings(board: Board) -> tuple[Crossing, ...]:
 
     An idea crosses when a post names, in `builds_on`, a post that another agent wrote in another thread. A link
     inside one thread, or between two posts of one agent, is the ordinary course of one line of work. A link to or
-    from a post of the person is none either, because every line of work starts from the person's question.
+    from a post of the person is none either, because every line of work starts from the person's question. Nor is
+    a report's link, because a report names its sources and builds nothing on them.
     """
     by_id = {entry.post.id: entry for entry in board.posts}
-    pairs = ((by_id.get(source), entry) for entry in board.posts for source in dict.fromkeys(entry.post.builds_on))
+    built = (entry for entry in board.posts if not isinstance(entry.post, Report))
+    pairs = ((by_id.get(source), entry) for entry in built for source in dict.fromkeys(entry.post.builds_on))
     return tuple(
         (source, entry)
         for source, entry in pairs
@@ -98,18 +101,34 @@ def _links(pairs: tuple[Crossing, ...]) -> tuple[ThreadLink, ...]:
     return tuple(sorted(links, key=lambda link: link.count, reverse=True)[:MAX_LINKS])
 
 
-def _team(board: Board, opened: ThreadOpened, entries: tuple[Posted, ...]) -> tuple[AgentId, ...]:
-    # The lab's agents that opened the thread or posted a plan in it. A plan is also how an agent takes a call.
-    # Every agent plans in the question's thread, so that thread has no team. The person and blind checkers are in
-    # no team.
-    if opened.thread.id == question_thread(board):
+def _lines(board: Board) -> dict[AgentId, ThreadId]:
+    # Where each agent works now: the thread of its latest plan, result, or ruled-out lead outside the question's
+    # thread. Every agent plans in the question's thread, so a plan there moves nobody.
+    question = question_thread(board)
+    return {
+        entry.post.author: entry.post.thread
+        for entry in board.posts
+        if isinstance(entry.post, Plan | Result | RuledOut) and entry.post.thread != question
+    }
+
+
+def _team(board: Board, opened: ThreadOpened, lines: dict[AgentId, ThreadId]) -> tuple[AgentId, ...]:
+    # The lab's agents that work in the thread now. The agent that opened the thread is in its team until it works
+    # in another one, unless it opened the thread with a call, which says that the work needs somebody else. The
+    # person and blind checkers are in no team, and the question's thread has none.
+    thread = opened.thread
+    if thread.id == question_thread(board):
         return ()
-    workers = {joined.agent.id for joined in board.agents if not joined.agent.checks}
-    plans = (entry.post.author for entry in entries if isinstance(entry.post, Plan))
-    return tuple(agent for agent in dict.fromkeys((opened.thread.opened_by, *plans)) if agent in workers)
+    workers = tuple(joined.agent.id for joined in board.agents if not joined.agent.checks)
+    first = next((entry.post for entry in board.posts if entry.post.thread == thread.id), None)
+    called = isinstance(first, Call) and first.author == thread.opened_by
+    opener = () if called or thread.opened_by in lines else (thread.opened_by,)
+    return tuple(agent for agent in workers if agent in opener or lines.get(agent) == thread.id)
 
 
-def _summary(board: Board, agent_id: AgentId, opened: ThreadOpened, crossed: tuple[Crossing, ...]) -> ThreadSummary:
+def _summary(
+    board: Board, agent_id: AgentId, opened: ThreadOpened, crossed: tuple[Crossing, ...], lines: dict[AgentId, ThreadId]
+) -> ThreadSummary:
     entries = tuple(entry for entry in board.posts if entry.post.thread == opened.thread.id)
     results = tuple(standing(board, entry.post.id) for entry in entries if isinstance(entry.post, Result))
     latest = entries[-1] if entries else None
@@ -124,8 +143,8 @@ def _summary(board: Board, agent_id: AgentId, opened: ThreadOpened, crossed: tup
         checked=sum(state in {'checked', 'held_up'} for state in results),
         not_checked=results.count('open'),
         open_asks=sum(isinstance(entry.post, Ask) and not is_answered(board, entry.post.id) for entry in entries),
-        open_calls=sum(isinstance(entry.post, Call) and not takers(board, entry.post.id) for entry in entries),
-        team=_team(board, opened, entries),
+        open_calls=sum(isinstance(entry.post, Call) and is_open_call(board, entry.post.id) for entry in entries),
+        team=_team(board, opened, lines),
         builds_on_threads=_links(incoming),
         built_on_by_threads=_links(
             tuple((built, source) for source, built in crossed if source.post.thread == opened.thread.id)
@@ -166,7 +185,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
     open_calls = tuple(
         PostLine.of(entry)
         for entry in board.posts
-        if isinstance(entry.post, Call) and entry.post.author != agent_id and not takers(board, entry.post.id)
+        if isinstance(entry.post, Call) and entry.post.author != agent_id and is_open_call(board, entry.post.id)
     )
     summaries = thread_summaries(board, agent_id)
     return Brief(

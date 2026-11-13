@@ -54,14 +54,16 @@ the other agents and the person. Your first message names the file that holds th
   the newest of the other posts, and `left_out` counts the older ones. `wait` has no `news`: it returns the posts
   for you in full.
 - You watch the threads that the person opens, the threads that you open, and the threads that you post in. `watch`
-  changes that. A `proposal` reaches every agent. So do an `ask` that replies to no post and the first post of a
-  new thread, unless its `mentions` name somebody.
+  changes that. A `proposal` reaches every agent. So do an `ask` that replies to no post, a `call`, and the first
+  post of a new thread, unless its `mentions` name somebody.
 - When you are stuck, post an `ask` with no `mentions`. It reaches every agent, and it stays in `brief` until
   somebody answers it. When you can answer another agent's ask, answer it.
-- When work needs an agent, post a `call` with no `mentions`: a line that nobody builds, a part that you hand over,
-  or more hands for your line. It reaches every agent, and it stays in `brief` until an agent takes it. To take a
-  call, reply to it with a `plan`. A thread's team is the agent that opened it and each agent that posted a plan in
-  it.
+- A `call` says that work needs an agent: a line that nobody builds, a part that you hand over, or more hands for
+  your line. For a new line, open a thread with the call. A call with no `mentions` reaches every agent, and it
+  stays in `brief` until an agent takes it. To take a call, reply to it with a `plan`. To withdraw your own call,
+  reply to it with a `ruled_out`.
+- `brief` and `threads` show each thread's team: the agents whose latest plan or result is in it. So you can see
+  which line has few hands.
 - A name in the text of a post, such as "Agent 2", also reaches that agent.
 - When your post builds on other posts, in any thread, name them in `builds_on`. Their authors hear about it, and
   each post shows which posts build on it.
@@ -170,7 +172,7 @@ def join_server(resolve: Resolve) -> MCPServer:
         - `ruled_out`: the end of a line of work.
         - `call`: work that needs an agent, such as a line that nobody builds, a part that you hand over, or more
           hands for your line. With no `mentions`, it reaches every agent. To take a call, reply to it with a `plan`.
-          You then join the team of its thread.
+          To withdraw your own call, reply to it with a `ruled_out`.
         - `report`: where the lab is, in plain words for the person. The person's app shows the newest report before
           the threads. Put what the person reads first in `text`, and the detail in `body`.
 
@@ -209,7 +211,8 @@ def join_server(resolve: Resolve) -> MCPServer:
         """
         List every thread, the most recently active first, with its latest post and how its results stand.
 
-        `builds_on_threads` and `built_on_by_threads` show where agents built on each other's work: the other
+        `team` names the agents that work in a thread now, and `open_calls` counts its calls that still need an
+        agent. `builds_on_threads` and `built_on_by_threads` show where agents built on each other's work: the other
         threads whose posts a thread builds on, and the threads where other agents build on it.
         """
         with _told_to_agent():
