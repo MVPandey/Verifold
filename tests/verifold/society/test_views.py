@@ -162,6 +162,7 @@ def test_the_latest_report_is_the_newest_one_in_any_thread(record: RecordBuilder
     record.post(Report(id='p-1', thread='t-1', author='bo', text='Two designs are in training.'))
     record.post(Result(id='p-2', thread='t-1', author='ada', text='Loss 0.39.'))
     record.post(Report(id='p-3', thread='t-1', author='ada', text='The curved design leads.', body='Three seeds.'))
+    record.post(Report(id='p-4', thread='t-1', author='person', text='My own note.'))
 
     latest = latest_report(record.board())
 

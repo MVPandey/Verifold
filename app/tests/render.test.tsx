@@ -233,18 +233,27 @@ describe('the lab page', () => {
 
   it('shows the newest report above the cards, with its detail folded and a link to its thread', () => {
     Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
-    const report = postView({
-      ...result('p-30', { author: 'agent-2', thread: 't-3' }),
-      kind: 'report',
-      text: 'Merge sort is ahead on random input.',
-      body: 'Three runs agree.',
-    });
+    const report = postView(
+      {
+        ...result('p-30', { author: 'agent-2', thread: 't-3' }),
+        kind: 'report',
+        text: 'Merge sort is ahead on random input.',
+        body: 'Three runs agree.',
+      },
+      30,
+      'disputed',
+    );
     const html = renderToStaticMarkup(
       <LabPage api={{} as Api} data={{ ...data, report }} now={now} open={null} post={null} />,
     );
     assert.equal(page('{}').includes('Where the lab is'), false);
-    assert.ok(html.includes('<section class="f-report" aria-label="Where the lab is">'));
-    assert.ok(html.includes('Agent 2 reported at'));
+    assert.ok(html.includes('<section class="f-report" aria-labelledby="report-title">'));
+    assert.ok(html.includes('<h2 id="report-title">Where the lab is</h2>'));
+    // The fixture's posts are from 14:04, and the page's clock says 14:26.
+    assert.ok(html.includes('Agent 2 reported <time dateTime="2026-11-06T14:04:00Z" title='));
+    assert.ok(html.includes('>22 min ago</time>'));
+    // An agent objected to the report, so the card does not show it as plain fact.
+    assert.ok(html.includes('Disputed'));
     assert.ok(html.includes('<p class="f-report-text">Merge sort is ahead on random input.</p>'));
     assert.ok(html.includes('<a href="#/thread/t-3/p-30">See it in its thread</a>'));
     assert.ok(html.includes('<details class="f-detail">'));

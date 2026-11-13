@@ -136,6 +136,7 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
 
 
 def latest_report(board: Board) -> PostView | None:
-    """Return the newest report on the board, or `None` when no agent has posted one."""
-    entry = next((entry for entry in reversed(board.posts) if isinstance(entry.post, Report)), None)
+    """Return the newest report that an agent posted, or `None` when no agent has posted one."""
+    reports = (entry for entry in reversed(board.posts) if isinstance(entry.post, Report))
+    entry = next((entry for entry in reports if entry.post.author != PERSON), None)
     return post_view(board, entry) if entry else None

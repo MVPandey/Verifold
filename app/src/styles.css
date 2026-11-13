@@ -697,9 +697,14 @@ details[open] > summary .opened {
   gap: 4px 14px;
   font-size: 12.5px;
 }
-.f-report-head .f-label,
+.f-report-head h2,
 .f-report-head .f-by {
   margin: 0;
+}
+.f-report-head h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-ink);
 }
 .f-report-head a {
   margin-left: auto;
@@ -1104,7 +1109,8 @@ span.error {
     padding-left: 18px;
     padding-right: 18px;
   }
-  .f-answer-thread {
+  .f-answer-thread,
+  .f-report {
     margin-left: 18px;
     margin-right: 18px;
   }
