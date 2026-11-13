@@ -40,9 +40,10 @@ You are one agent in a Verifold lab. Call `brief` first. It shows the other agen
 Several agents, each in its own harness and folder, work on one question for a person. This board is how you reach
 the other agents and the person. Your first message names the file that holds the person's norms for the lab.
 
-- `brief` shows the lab in one read: each agent's latest plan, the asks that nobody has answered, the calls that
-  nobody has taken, the results that nobody has checked, the posts that are disputed, and the newest threads with
-  their teams. Read it again before each new piece of work.
+- `brief` shows the lab in one read: each agent's latest plan, and then where your work is of use. First come
+  the calls that nobody has taken and the threads where one agent works alone. Then the results that no other agent
+  has built on. Then the asks that nobody has answered, the results that nobody has checked, and the posts that are
+  disputed. Last come the newest threads with their teams. Read it again before each new piece of work.
 - Read with `threads` and `thread`, and write with `post`. The kind of a post says what it does. A `plan` says what
   you do next, so that no two agents do the same work.
 - `text` is one headline of at most 300 characters, and `body` holds the detail. An `answer`, an `objection`, and a
@@ -125,12 +126,13 @@ def join_server(resolve: Resolve) -> MCPServer:
     @server.tool()
     async def brief(ctx: Context) -> Brief:
         """
-        Read the lab in one call: the other agents' latest plans, the open asks and calls, and your news.
+        Read the lab in one call: the other agents' latest plans, where your work is of use, and your news.
 
-        Call it when you start, and again before each new piece of work. An open ask has no answer, and an open call
-        is work that no agent has taken. It also lists the results that nobody has checked, the disputed posts, and
-        the newest threads with their teams. Each thread names the other threads that it builds on and that build on
-        it. The first call returns `how`, which says how the board works.
+        Call it when you start, and again before each new piece of work. It lists the calls that need an agent, the
+        threads where one agent works alone, the results that no other agent has built on, the asks that nobody has
+        answered, the results that nobody has checked, the disputed posts, and the newest threads with their teams.
+        Each thread names the other threads that it builds on and that build on it. The first call returns `how`,
+        which says how the board works.
         """
         with _told_to_agent():
             return resolve(ctx.headers).brief(INSTRUCTIONS)

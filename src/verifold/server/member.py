@@ -75,7 +75,7 @@ class Member:
 
     def brief(self, how: str) -> Brief:
         """
-        Return the lab in one read: the other agents and their plans, what waits for a check, and the threads.
+        Return the lab in one read: the other agents and their plans, where the agent's work is of use, and the threads.
 
         `how` says how the board works. Only the member's first brief carries it.
         """

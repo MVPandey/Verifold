@@ -75,7 +75,7 @@ def test_the_lab_norms_ask_agents_to_plan_together_check_each_other_and_agree_on
         'Give each line of work its own thread',
         'Read the board before each new piece of work',
         'Post each result when you have it',
-        'Check the results of other agents',
+        'Check a result that others build on',
         "propose the lab's answer in the question's thread",
     ):
         assert norm in NORMS_TEMPLATE
@@ -85,7 +85,7 @@ def test_the_lab_norms_ask_agents_to_take_other_sides_say_when_they_are_stuck_an
     for norm in (
         'Look at the question from a side that no other plan covers',
         'Change sides when the work calls for it, or start a helper that takes one',
-        'Try a long shot beside the safe line',
+        'Open a line that nobody has, join one that is short of hands, or try a long shot',
         'Look for a result to build on, and for a problem that you can help with',
         'When you are stuck, post an ask that says what you tried',
         "post it in that agent's thread, also when it comes from another field",

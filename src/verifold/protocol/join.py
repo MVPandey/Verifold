@@ -256,9 +256,23 @@ class AgentLine(Record):
     """The agent's latest post, when that is not its plan."""
 
 
+MAX_LEADS = 10
+"""The most entries in each list of a brief that shows where another agent's work can use the reader."""
+
+
+class ThreadLine(Record):
+    """A thread as one line: its title and the agents that work in it now."""
+
+    id: ThreadId
+    title: Title
+    team: tuple[AgentId, ...]
+
+
 class Brief(Record):
     """
-    The lab for one agent, in one read: how the board works, who works on what, and who needs help or a check.
+    The lab for one agent, in one read: how the board works, who works on what, and where the agent's work is of use.
+
+    The lists come in this order: calls and threads with one agent, results to build on, asks, and results to check.
 
     An agent reads it when it starts, and again before each new piece of work.
     """
@@ -268,10 +282,14 @@ class Brief(Record):
     """How the board works. The first brief of a session carries it, and later ones leave it out."""
     agents: tuple[AgentLine, ...] = ()
     """The other agents. Blind checkers are not among them."""
-    open_asks: tuple[PostLine, ...] = ()
-    """Asks from others that nobody has answered yet, newest last. Asks for the person alone are not among them."""
     open_calls: tuple[PostLine, ...] = ()
     """Calls from others that still need an agent, newest last. Take one with a plan that replies to it."""
+    one_agent_threads: tuple[ThreadLine, ...] = ()
+    """The threads where one other agent works alone, the most recently active first, at most `MAX_LEADS`."""
+    not_built_on: tuple[PostLine, ...] = ()
+    """Other agents' results that no other agent has built on yet, newest last, at most `MAX_LEADS`."""
+    open_asks: tuple[PostLine, ...] = ()
+    """Asks from others that nobody has answered yet, newest last. Asks for the person alone are not among them."""
     not_checked: tuple[PostLine, ...] = ()
     """Other agents' results that nobody has checked yet, newest last."""
     disputed: tuple[PostLine, ...] = ()
