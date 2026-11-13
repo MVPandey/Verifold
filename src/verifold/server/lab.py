@@ -20,6 +20,7 @@ from verifold.protocol.events import (
     TurnEnded,
     TurnSummary,
     WatchSet,
+    WentQuiet,
 )
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import PostRequest
@@ -189,6 +190,16 @@ class Lab:
 
         """
         await self._commit(lambda _, seq, at: TimeRanOut(seq=seq, at=at))
+
+    async def go_quiet(self, seconds: float) -> None:
+        """
+        Record that the lab went quiet: for `seconds`, no agent was in a turn and the board got no event.
+
+        Raises:
+            RejectedEvent: The lab is out of time, or the record marks this quiet spell already.
+
+        """
+        await self._commit(lambda _, seq, at: WentQuiet(seq=seq, at=at, seconds=seconds))
 
     async def wait_for_change(self, after: int, timeout: float | None = None) -> None:
         """Return once the board has an event after `after`, or after `timeout` seconds when given."""
