@@ -265,3 +265,23 @@ def test_the_caller_withdraws_a_call_with_a_ruled_out_lead_and_the_person_takes_
     assert (takers(still_open, 'p-1'), is_open_call(still_open, 'p-1')) == ((), True)
     assert (is_open_call(withdrawn, 'p-1'), brief(withdrawn, 'cy', News(seq=0)).open_calls) == (False, ())
     assert thread_summaries(withdrawn, 'person')[0].open_calls == 0
+
+
+def test_a_brief_lists_where_an_agents_work_is_of_use_before_what_to_check(record: RecordBuilder) -> None:
+    record.thread('t-2', opened_by='ada').thread('t-3', opened_by='bo').thread('t-4', opened_by='cy')
+    record.post(Result(id='p-1', thread='t-2', author='ada', text='Curves help.'))
+    record.post(Result(id='p-2', thread='t-3', author='bo', text='Planes lose.'))
+    record.post(Plan(id='p-3', thread='t-3', author='cy', text='I join bo.', builds_on=('p-2',)))
+    record.post(Result(id='p-4', thread='t-2', author='ada', text='More seeds.', builds_on=('p-1',)))
+    record.post(Message(id='p-5', thread='t-4', author='cy', text='A note.'))
+
+    seen = brief(record.board(), 'cy', News(seq=0))
+
+    # Ada works alone in t-2. Bo has cy in t-3, and t-4 holds only a note, so nobody works there.
+    assert [(line.id, line.team) for line in seen.one_agent_threads] == [('t-2', ('ada',))]
+    # Only its author built on p-1, and nobody built on p-4. Cy built on p-2.
+    assert [line.id for line in seen.not_built_on] == ['p-1', 'p-4']
+    assert brief(record.board(), 'ada', News(seq=0)).one_agent_threads == ()
+    fields = list(type(seen).model_fields)
+    assert fields.index('open_calls') < fields.index('one_agent_threads') < fields.index('not_built_on')
+    assert fields.index('not_built_on') < fields.index('open_asks') < fields.index('not_checked')

@@ -4,6 +4,7 @@ from verifold.protocol.agents import Agent
 from verifold.protocol.events import Posted, ThreadOpened
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.join import (
+    MAX_LEADS,
     MAX_LINKS,
     MAX_NEWS,
     AgentLine,
@@ -11,6 +12,7 @@ from verifold.protocol.join import (
     News,
     PostLine,
     PostView,
+    ThreadLine,
     ThreadLink,
     ThreadSummary,
     ThreadView,
@@ -163,8 +165,10 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
     """
     Return the lab for one agent in one read.
 
-    It holds the other agents with their latest plans, the asks that nobody has answered, their results that nobody
-    has checked, the disputed posts, the newest threads, and the agent's `news`. `how` says how the board works.
+    It holds the other agents with their latest plans, and then where the agent's work is of use: the calls that
+    need an agent, the threads where one agent works alone, the results that nobody has built on, the asks that
+    nobody has answered, the results that nobody has checked, and the disputed posts. Then come the newest threads
+    and the agent's `news`. `how` says how the board works.
     """
     others = tuple(joined.agent for joined in board.agents if joined.agent.id != agent_id and not joined.agent.checks)
     stands = tuple((entry, standing(board, entry.post.id)) for entry in board.posts)
@@ -188,12 +192,29 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         if isinstance(entry.post, Call) and entry.post.author != agent_id and is_open_call(board, entry.post.id)
     )
     summaries = thread_summaries(board, agent_id)
+    # A thread counts when an agent's latest plan or result is in it, so a thread that holds only notes is no line.
+    busy = set(_lines(board).values())
+    alone = tuple(
+        ThreadLine(id=summary.thread.id, title=summary.thread.title, team=summary.team)
+        for summary in summaries
+        if len(summary.team) == 1 and agent_id not in summary.team and summary.thread.id in busy
+    )
+    not_built_on = tuple(
+        PostLine.of(entry)
+        for entry, state in stands
+        if isinstance(entry.post, Result)
+        and entry.post.author != agent_id
+        and state != 'conceded'
+        and all(other.post.author == entry.post.author for other in board.built_on(entry.post.id))
+    )
     return Brief(
         you=agent_id,
         how=how,
         agents=tuple(_agent_line(board, agent) for agent in others),
-        open_asks=open_asks[-MAX_NEWS:],
         open_calls=open_calls[-MAX_NEWS:],
+        one_agent_threads=alone[:MAX_LEADS],
+        not_built_on=not_built_on[-MAX_LEADS:],
+        open_asks=open_asks[-MAX_NEWS:],
         not_checked=not_checked[-MAX_NEWS:],
         disputed=disputed[-MAX_NEWS:],
         threads=summaries[:MAX_NEWS],
