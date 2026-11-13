@@ -31,7 +31,7 @@ from verifold.protocol.settings import AtExit, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
 from verifold.runner.folders import LAB_FOLDER, agent_folder, tracked_lab_files
-from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
+from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, running_jobs, sweep
 from verifold.runner.messages import start_message
 from verifold.runner.permissions import GrantAsks
 from verifold.runner.reruns import Crew, Reruns
@@ -319,7 +319,10 @@ class Host:
             group.create_task(Reruns(lab, self._members, self._project, crew, self._supervise).run())
 
     def _shared(self) -> Shared:
-        return Shared(activity=self._activity, grant_asks=self._grant_asks)
+        return Shared(activity=self._activity, grant_asks=self._grant_asks, has_jobs=self._has_jobs)
+
+    async def _has_jobs(self, agent: str) -> bool:
+        return bool(await asyncio.to_thread(running_jobs, self._project, agent))
 
     async def _seat(self, lab: Lab, agent: Agent, start: str) -> tuple[Member, AgentSetup]:
         folder = await agent_folder(self._project, agent.id)
