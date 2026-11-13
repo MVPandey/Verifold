@@ -2,8 +2,8 @@
 Supervises one agent.
 
 The agent's harness owns its work. Verifold keeps the agent's ACP session open, rings a doorbell when posts for the
-agent arrive after it ended its turn, and starts the harness again when its process fails. The doorbell waits for a
-quiet moment on the board, so that a burst of posts wakes the agent once.
+agent arrive after it ended its turn, tells the agent when the whole lab went quiet, and starts the harness again when
+its process fails. The doorbell waits for a quiet moment on the board, so that a burst of posts wakes the agent once.
 """
 
 import asyncio
@@ -22,7 +22,7 @@ from verifold.protocol.record import Record
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.usage import Usage
 from verifold.runner.git import GitError
-from verifold.runner.messages import DOORBELL, JOBS_ENDED, more_time_message
+from verifold.runner.messages import DOORBELL, JOBS_ENDED, more_time_message, quiet_message
 from verifold.runner.permissions import GrantAsks, ask_the_person, refusal, settled
 from verifold.runner.session import (
     AgentSession,
@@ -53,6 +53,8 @@ class LoopSettings(Record):
     """Seconds without a new event on the board before a doorbell rings, so that one doorbell covers a burst."""
     max_quiet: float = Field(default=45, ge=0)
     """The most seconds that a doorbell waits for the board to go quiet."""
+    lull: float = Field(default=180, ge=0)
+    """Seconds without a turn or an event before Verifold tells the agents that the lab is quiet. Zero: never."""
     job_poll: float = Field(default=5, gt=0)
     """Seconds between two looks at the processes that an agent with one job left running."""
     job_wait: float = Field(default=3_600, gt=0)
@@ -289,6 +291,9 @@ class AgentLoop:
                     continue
                 self._notified = board.seq
                 return DOORBELL
+            # The lab went quiet after this agent's last turn. The agent hears it once, because its next turn ends later.
+            if board.quiet and board.quiet.seq > self._turn_ended and not stopped and not board.out_of_time:
+                return quiet_message(board.quiet.seconds, board.ends_at)
             await self._lab.wait_for_change(board.seq)
 
     async def _settle(self) -> None:

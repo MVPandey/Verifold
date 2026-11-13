@@ -18,12 +18,14 @@ from verifold.protocol.events import (
     TimeSet,
     TurnEnded,
     WatchSet,
+    WentQuiet,
 )
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 from verifold.society.rules import (
     check_agent,
     check_post,
+    check_quiet,
     check_rerun,
     check_thread,
     check_time,
@@ -71,6 +73,9 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
         case TimeRanOut():
             check_time_out(board, event)
             return replace(board, seq=event.seq, times=(*board.times, event))
+        case WentQuiet():
+            check_quiet(board, event)
+            return replace(board, seq=event.seq, quiet=event)
         case SettingsSet(settings=settings):
             return replace(board, seq=event.seq, settings=settings)
         case PermissionGranted(prefix=prefix):

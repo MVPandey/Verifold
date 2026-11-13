@@ -1,4 +1,4 @@
-"""The messages that Verifold sends an agent: the start of its work, the doorbell, and more time."""
+"""The messages that Verifold sends an agent: the start of its work, the doorbell, a quiet lab, and more time."""
 
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,6 +14,16 @@ DOORBELL = 'New posts for you on the lab board.'
 
 JOBS_ENDED = 'The processes that you left running when your turn ended have ended.'
 """The message that wakes an agent with one job, which ended its turn while its own processes still ran."""
+
+
+def quiet_message(seconds: float, ends_at: datetime | None) -> str:
+    """Return the message that wakes an agent in a quiet lab: how long the lab was quiet, and when it ends."""
+    until = f' The lab ends at {_utc(ends_at)}, unless the person gives it more time.' if ends_at else ''
+    return (
+        f'The lab has been quiet for {seconds / 60:.3g} minutes: no agent is in a turn, and the board has no new '
+        f'post.{until}'
+    )
+
 
 BOARD = (
     "The lab's shared board is the MCP server `verifold`. "

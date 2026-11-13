@@ -13,6 +13,7 @@ from verifold.protocol.events import (
     TimeSet,
     TurnEnded,
     WatchSet,
+    WentQuiet,
 )
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.settings import Settings
@@ -35,6 +36,8 @@ class Board:
     turns: tuple[TurnEnded, ...] = ()
     reruns: tuple[RerunRequested, ...] = ()
     times: tuple[TimeSet | TimeRanOut, ...] = ()
+    quiet: WentQuiet | None = None
+    """The latest time that the lab went quiet, or `None`."""
     settings: Settings = field(default_factory=Settings)
     """The person's settings for the lab: the latest that the record holds, or the defaults."""
     grants: tuple[str, ...] = ()
@@ -50,6 +53,11 @@ class Board:
     def out_of_time(self) -> bool:
         """Whether the lab reached its end, and the person has not set a new end since."""
         return bool(self.times) and isinstance(self.times[-1], TimeRanOut)
+
+    @property
+    def in_quiet_spell(self) -> bool:
+        """Whether the lab went quiet, and the board got no post since. The record marks each quiet spell once."""
+        return self.quiet is not None and not (self.posts and self.posts[-1].seq > self.quiet.seq)
 
     # ponytail: lookups scan the tuples. Index them if a board grows past about 10,000 posts.
     def agent(self, agent_id: AgentId) -> AgentJoined | None:

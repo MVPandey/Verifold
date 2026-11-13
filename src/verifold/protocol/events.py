@@ -91,6 +91,18 @@ class TimeRanOut(EventBase):
     type: Literal['time_ran_out'] = 'time_ran_out'
 
 
+class WentQuiet(EventBase):
+    """
+    The lab went quiet with time left: for `seconds`, no agent was in a turn and the board got no event.
+
+    Verifold tells every agent that waits for posts. The record holds one such event for each quiet spell, and a new
+    post ends the spell.
+    """
+
+    type: Literal['went_quiet'] = 'went_quiet'
+    seconds: float = Field(gt=0)
+
+
 class TurnSummary(Record):
     """What one agent turn cost, how it ended, and the snapshot of the agent's folder after it."""
 
@@ -144,6 +156,7 @@ type Event = Annotated[
     | RerunRequested
     | TimeSet
     | TimeRanOut
+    | WentQuiet
     | SettingsSet
     | PermissionGranted,
     Field(discriminator='type'),

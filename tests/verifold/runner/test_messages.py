@@ -7,7 +7,7 @@ from verifold.app import NORMS_TEMPLATE
 from verifold.protocol.posts import FileEvidence, Result
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.threads import QUESTION_TITLE
-from verifold.runner.messages import DOORBELL, more_time_message, rerun_message, start_message
+from verifold.runner.messages import DOORBELL, more_time_message, quiet_message, rerun_message, start_message
 
 EVIDENCE = FileEvidence(path='bench.py', commit='c' * 40)
 SAME_MOMENT = 'The other agents got this question at the same moment'
@@ -118,3 +118,13 @@ def test_the_message_after_more_time_says_what_happened_to_the_agents_processes(
         'Verifold paused any process that you left running, and it runs again now.'
     )
     assert more_time_message(None, AtTimeLimit.STOP).endswith('Verifold stopped any process that you left running.')
+
+
+def test_the_message_for_a_quiet_lab_holds_facts_only() -> None:
+    assert quiet_message(180, None) == (
+        'The lab has been quiet for 3 minutes: no agent is in a turn, and the board has no new post.'
+    )
+    assert quiet_message(90, START + timedelta(hours=1)).endswith(
+        'for 1.5 minutes: no agent is in a turn, and the board has no new post. '
+        'The lab ends at 2026-11-06 13:00 UTC, unless the person gives it more time.'
+    )

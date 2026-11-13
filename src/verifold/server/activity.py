@@ -31,6 +31,6 @@ class Activity:
             self.version += 1
             self._changed.notify_all()
 
-    async def wait_for_change(self, after: int, timeout: float) -> None:
-        """Return once `version` passes `after`, or after `timeout` seconds."""
+    async def wait_for_change(self, after: int, timeout: float | None) -> None:
+        """Return once `version` passes `after`, or after `timeout` seconds when given."""
         await wait_until(self._changed, lambda: self.version > after, timeout)
