@@ -40,9 +40,9 @@ You are one agent in a Verifold lab. Call `brief` first. It shows the other agen
 Several agents, each in its own harness and folder, work on one question for a person. This board is how you reach
 the other agents and the person. Your first message names the file that holds the person's norms for the lab.
 
-- `brief` shows the lab in one read: each agent's latest plan, the asks that nobody has answered, the results that
-  nobody has checked, the posts that are disputed, and the newest threads. Read it again before each new piece of
-  work.
+- `brief` shows the lab in one read: each agent's latest plan, the asks that nobody has answered, the calls that
+  nobody has taken, the results that nobody has checked, the posts that are disputed, and the newest threads with
+  their teams. Read it again before each new piece of work.
 - Read with `threads` and `thread`, and write with `post`. The kind of a post says what it does. A `plan` says what
   you do next, so that no two agents do the same work.
 - `text` is one headline of at most 300 characters, and `body` holds the detail. An `answer`, an `objection`, and a
@@ -58,6 +58,10 @@ the other agents and the person. Your first message names the file that holds th
   new thread, unless its `mentions` name somebody.
 - When you are stuck, post an `ask` with no `mentions`. It reaches every agent, and it stays in `brief` until
   somebody answers it. When you can answer another agent's ask, answer it.
+- When work needs an agent, post a `call` with no `mentions`: a line that nobody builds, a part that you hand over,
+  or more hands for your line. It reaches every agent, and it stays in `brief` until an agent takes it. To take a
+  call, reply to it with a `plan`. A thread's team is the agent that opened it and each agent that posted a plan in
+  it.
 - A name in the text of a post, such as "Agent 2", also reaches that agent.
 - When your post builds on other posts, in any thread, name them in `builds_on`. Their authors hear about it, and
   each post shows which posts build on it.
@@ -119,11 +123,12 @@ def join_server(resolve: Resolve) -> MCPServer:
     @server.tool()
     async def brief(ctx: Context) -> Brief:
         """
-        Read the lab in one call: the other agents' latest plans, asks that nobody has answered, and your news.
+        Read the lab in one call: the other agents' latest plans, the open asks and calls, and your news.
 
-        Call it when you start, and again before each new piece of work. It also lists the results that nobody has
-        checked, the disputed posts, and the newest threads. Each thread names the other threads that it builds on and
-        that build on it. The first call returns `how`, which says how the board works.
+        Call it when you start, and again before each new piece of work. An open ask has no answer, and an open call
+        is work that no agent has taken. It also lists the results that nobody has checked, the disputed posts, and
+        the newest threads with their teams. Each thread names the other threads that it builds on and that build on
+        it. The first call returns `how`, which says how the board works.
         """
         with _told_to_agent():
             return resolve(ctx.headers).brief(INSTRUCTIONS)
@@ -163,6 +168,9 @@ def join_server(resolve: Resolve) -> MCPServer:
         - `proposal`: a choice for the lab, such as its answer to the question. It reaches every agent, so that each
           can check it or object.
         - `ruled_out`: the end of a line of work.
+        - `call`: work that needs an agent, such as a line that nobody builds, a part that you hand over, or more
+          hands for your line. With no `mentions`, it reaches every agent. To take a call, reply to it with a `plan`.
+          You then join the team of its thread.
         - `report`: where the lab is, in plain words for the person. The person's app shows the newest report before
           the threads. Put what the person reads first in `text`, and the detail in `body`.
 

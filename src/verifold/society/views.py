@@ -15,12 +15,12 @@ from verifold.protocol.join import (
     ThreadSummary,
     ThreadView,
 )
-from verifold.protocol.posts import Ask, Plan, Report, Result
+from verifold.protocol.posts import Ask, Call, Plan, Report, Result
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.society.attention import watches_thread
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
-from verifold.society.standing import is_answered, standing
+from verifold.society.standing import is_answered, standing, takers
 
 
 def post_view(board: Board, entry: Posted) -> PostView:
@@ -98,6 +98,17 @@ def _links(pairs: tuple[Crossing, ...]) -> tuple[ThreadLink, ...]:
     return tuple(sorted(links, key=lambda link: link.count, reverse=True)[:MAX_LINKS])
 
 
+def _team(board: Board, opened: ThreadOpened, entries: tuple[Posted, ...]) -> tuple[AgentId, ...]:
+    # The lab's agents that opened the thread or posted a plan in it. A plan is also how an agent takes a call.
+    # Every agent plans in the question's thread, so that thread has no team. The person and blind checkers are in
+    # no team.
+    if opened.thread.id == question_thread(board):
+        return ()
+    workers = {joined.agent.id for joined in board.agents if not joined.agent.checks}
+    plans = (entry.post.author for entry in entries if isinstance(entry.post, Plan))
+    return tuple(agent for agent in dict.fromkeys((opened.thread.opened_by, *plans)) if agent in workers)
+
+
 def _summary(board: Board, agent_id: AgentId, opened: ThreadOpened, crossed: tuple[Crossing, ...]) -> ThreadSummary:
     entries = tuple(entry for entry in board.posts if entry.post.thread == opened.thread.id)
     results = tuple(standing(board, entry.post.id) for entry in entries if isinstance(entry.post, Result))
@@ -113,6 +124,8 @@ def _summary(board: Board, agent_id: AgentId, opened: ThreadOpened, crossed: tup
         checked=sum(state in {'checked', 'held_up'} for state in results),
         not_checked=results.count('open'),
         open_asks=sum(isinstance(entry.post, Ask) and not is_answered(board, entry.post.id) for entry in entries),
+        open_calls=sum(isinstance(entry.post, Call) and not takers(board, entry.post.id) for entry in entries),
+        team=_team(board, opened, entries),
         builds_on_threads=_links(incoming),
         built_on_by_threads=_links(
             tuple((built, source) for source, built in crossed if source.post.thread == opened.thread.id)
@@ -150,12 +163,18 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         and entry.post.mentions != (PERSON,)
         and not is_answered(board, entry.post.id)
     )
+    open_calls = tuple(
+        PostLine.of(entry)
+        for entry in board.posts
+        if isinstance(entry.post, Call) and entry.post.author != agent_id and not takers(board, entry.post.id)
+    )
     summaries = thread_summaries(board, agent_id)
     return Brief(
         you=agent_id,
         how=how,
         agents=tuple(_agent_line(board, agent) for agent in others),
         open_asks=open_asks[-MAX_NEWS:],
+        open_calls=open_calls[-MAX_NEWS:],
         not_checked=not_checked[-MAX_NEWS:],
         disputed=disputed[-MAX_NEWS:],
         threads=summaries[:MAX_NEWS],

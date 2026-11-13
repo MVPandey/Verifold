@@ -14,7 +14,8 @@ export type PostKind =
   | 'proposal'
   | 'check'
   | 'ruled_out'
-  | 'report';
+  | 'report'
+  | 'call';
 export type Standing = 'open' | 'checked' | 'held_up' | 'disputed' | 'conceded';
 
 export interface ModelSpec {
@@ -247,7 +248,7 @@ interface PostBase {
 export type Post =
   | (PostBase & {
       readonly kind:
-        'message' | 'plan' | 'result' | 'objection' | 'proposal' | 'ruled_out' | 'report';
+        'message' | 'plan' | 'result' | 'objection' | 'proposal' | 'ruled_out' | 'report' | 'call';
     })
   | (PostBase & { readonly kind: 'ask'; readonly choices: readonly string[] })
   | (PostBase & { readonly kind: 'answer'; readonly accepts: boolean })
@@ -303,6 +304,10 @@ export interface ThreadSummary {
   readonly checked: number;
   readonly not_checked: number;
   readonly open_asks: number;
+  /** How many calls in the thread no agent has taken yet. */
+  readonly open_calls: number;
+  /** The agents that work in the thread: who opened it, and who posted a plan in it. */
+  readonly team: readonly string[];
   /** The other threads whose posts, by other agents, this thread builds on most. */
   readonly builds_on_threads: readonly ThreadLink[];
   /** The other threads where other agents build most on the posts of this thread. */

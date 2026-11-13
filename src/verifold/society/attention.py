@@ -21,7 +21,7 @@ from functools import lru_cache
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.join import MAX_NEWS, News, PostLine, Update
-from verifold.protocol.posts import Ask, Check, Post, Proposal
+from verifold.protocol.posts import Ask, Call, Check, Post, Proposal
 from verifold.society.board import Board
 
 type Names = tuple[tuple[AgentId, str], ...]
@@ -136,12 +136,12 @@ def _names(board: Board, agent_id: AgentId, post: Post) -> bool:
 
 
 def _for_everyone(board: Board, entry: Posted) -> bool:
-    # Only `mentions` keeps an ask or the first post of a thread from the other agents. A name in the text adds a
+    # Only `mentions` keeps an ask, a call, or the first post of a thread from the other agents. A name in the text adds a
     # reader and takes none away. An ask that replies to a post is for that post's author.
     post = entry.post
     if isinstance(post, Proposal):
         return True
-    open_ask = isinstance(post, Ask) and not post.reply_to
+    open_ask = isinstance(post, Ask | Call) and not post.reply_to
     return not post.mentions and (open_ask or _opens_thread(board, entry))
 
 

@@ -2,9 +2,10 @@ import pytest
 from builders import RecordBuilder
 
 from verifold.protocol.join import MAX_NEWS, News, ThreadLink
-from verifold.protocol.posts import Answer, Ask, Check, Message, Objection, Plan, Report, Result
+from verifold.protocol.posts import Answer, Ask, Call, Check, Message, Objection, Plan, Report, Result
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.society.errors import NotFound
+from verifold.society.standing import takers
 from verifold.society.views import (
     brief,
     crossings,
@@ -193,7 +194,50 @@ def test_a_summary_shows_where_ideas_crossed_between_agents_and_threads(record: 
     by_id = {summary.thread.id: summary for summary in thread_summaries(board, 'person')}
 
     assert [(source.post.id, built.post.id) for source, built in crossings(board)] == [('p-1', 'p-3'), ('p-2', 'p-3')]
+<<<<<<< HEAD
     assert by_id['t-3'].builds_on_threads == (ThreadLink(thread='t-2', agents=('ada', 'cy'), count=2),)
     assert by_id['t-2'].built_on_by_threads == (ThreadLink(thread='t-3', agents=('bo',), count=2),)
     assert (by_id['t-2'].builds_on_threads, by_id['t-3'].built_on_by_threads, by_id['t-1'].crossed) == ((), (), 0)
     assert (by_id['t-3'].crossed, by_id['t-2'].crossed) == (2, 0)
+=======
+    assert by_id['t-3'].builds_on == (ThreadLink(thread='t-2', agents=('ada', 'cy'), posts=2),)
+    assert by_id['t-2'].built_on_by == (ThreadLink(thread='t-3', agents=('bo',), posts=2),)
+    assert (by_id['t-2'].builds_on, by_id['t-3'].built_on_by, by_id['t-1'].builds_on) == ((), (), ())
+
+
+def test_a_call_stays_open_until_another_agent_takes_it_with_a_plan(record: RecordBuilder) -> None:
+    record.thread('t-2', opened_by='ada')
+    record.post(Call(id='p-1', thread='t-2', author='ada', text='Who builds the long shot?'))
+    record.post(Message(id='p-2', thread='t-2', author='bo', text='Sounds hard.', reply_to='p-1'))
+    record.post(Plan(id='p-3', thread='t-2', author='ada', text='I could.', reply_to='p-1'))
+    open_board = record.board()
+
+    record.post(Plan(id='p-4', thread='t-2', author='cy', text='I take it.', reply_to='p-1'))
+    taken = record.board()
+
+    # A note and the caller's own plan take nothing.
+    assert takers(open_board, 'p-1') == ()
+    assert [line.id for line in brief(open_board, 'bo', News(seq=0)).open_calls] == ['p-1']
+    assert brief(open_board, 'ada', News(seq=0)).open_calls == ()
+    assert takers(taken, 'p-1') == ('cy',)
+    assert brief(taken, 'bo', News(seq=0)).open_calls == ()
+    summaries = {summary.thread.id: summary for summary in thread_summaries(taken, 'person')}
+    assert (summaries['t-2'].open_calls, thread_summaries(open_board, 'person')[0].open_calls) == (0, 1)
+
+
+def test_a_threads_team_is_who_opened_it_and_who_posted_a_plan_in_it() -> None:
+    record = RecordBuilder().join('ada').join('bo').join('cy')
+    record.thread('t-1', opened_by='person', title=QUESTION_TITLE).thread('t-2', opened_by='ada')
+    record.thread('t-3', opened_by='person')
+    record.post(Plan(id='p-1', thread='t-1', author='bo', text='I read first.'))
+    record.post(Message(id='p-2', thread='t-2', author='bo', text='A note.'))
+    record.post(Plan(id='p-3', thread='t-2', author='cy', text='I join.'))
+    record.post(Plan(id='p-4', thread='t-2', author='cy', text='Next step.'))
+
+    summaries = {summary.thread.id: summary for summary in thread_summaries(record.board(), 'person')}
+
+    # A note joins no team, and the question's thread, where every agent plans, has none. The person is in
+    # no team.
+    assert summaries['t-2'].team == ('ada', 'cy')
+    assert (summaries['t-1'].team, summaries['t-3'].team) == ((), ())
+>>>>>>> c036eb9 (feat: a call offers work that another agent takes with a plan, and each thread lists its team)

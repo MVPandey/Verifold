@@ -4,7 +4,7 @@ The posts of the board.
 A post's `kind` says what it does in the society, and `builds_on` says which posts it started from, so the record
 shows how an idea moved from one agent's work into another's. A plan says what its author does next, an objection disputes its
 target, an answer can concede an objection, a check tests another agent's post, a proposal puts a choice to the
-lab, and a report tells the person where the lab is. A new kind is one more model in the `Post` union.
+lab, a report tells the person where the lab is, and a call offers work that another agent can take. A new kind is one more model in the `Post` union.
 """
 
 from pathlib import PurePosixPath
@@ -22,7 +22,7 @@ MAX_BUILDS_ON = 10
 type Headline = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_HEADLINE)]
 type Body = Annotated[str, StringConstraints(max_length=20_000)]
 type PostKind = Literal[
-    'message', 'plan', 'result', 'ask', 'answer', 'objection', 'proposal', 'check', 'ruled_out', 'report'
+    'message', 'plan', 'result', 'ask', 'answer', 'objection', 'proposal', 'check', 'ruled_out', 'report', 'call'
 ]
 """The values of `kind` across the `Post` union."""
 type Outcome = Literal['holds', 'fails']
@@ -144,7 +144,18 @@ class Report(PostBase):
     kind: Literal['report'] = 'report'
 
 
+class Call(PostBase):
+    """
+    Work that needs an agent: a line that nobody builds, a part to hand over, or more hands for a line.
+
+    It stays open until another agent takes it with a plan that replies to it. Whoever takes it joins the team of
+    the call's thread.
+    """
+
+    kind: Literal['call'] = 'call'
+
+
 type Post = Annotated[
-    Message | Plan | Result | Ask | Answer | Objection | Proposal | Check | RuledOut | Report,
+    Message | Plan | Result | Ask | Answer | Objection | Proposal | Check | RuledOut | Report | Call,
     Field(discriminator='kind'),
 ]

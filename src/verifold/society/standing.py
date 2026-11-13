@@ -2,7 +2,7 @@
 
 from verifold.protocol.ids import AgentId, PostId
 from verifold.protocol.join import Standing
-from verifold.protocol.posts import Answer, Check, Objection
+from verifold.protocol.posts import Answer, Check, Objection, Plan
 from verifold.society.board import Board
 
 
@@ -37,6 +37,18 @@ def is_answered(board: Board, post_id: PostId, by: AgentId | None = None) -> boo
     """Return whether an answer replies to a post: any answer, or with `by`, an answer from that author."""
     return any(
         isinstance(entry.post, Answer) and (by is None or entry.post.author == by) for entry in board.replies(post_id)
+    )
+
+
+def takers(board: Board, call_id: PostId) -> tuple[AgentId, ...]:
+    """Return the agents that took a call, each once, in the order that they took it. The caller is not one."""
+    call = board.post(call_id)
+    return tuple(
+        dict.fromkeys(
+            entry.post.author
+            for entry in board.replies(call_id)
+            if isinstance(entry.post, Plan) and call and entry.post.author != call.post.author
+        )
     )
 
 

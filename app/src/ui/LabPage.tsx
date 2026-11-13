@@ -224,15 +224,19 @@ function authors(posts: readonly PostView[], agents: readonly AgentView[]): read
   return faces.filter((one, index) => one.kind !== 'rerun' || index === rerun);
 }
 
-/** A row of faces, and after them the time of the latest post when `last` gives it. */
+/**
+ * A row of faces, and after them the time of the latest post when `last` gives it. The faces after the first are
+ * fainter, except in a team, where every member counts the same.
+ */
 function Faces(props: {
   readonly faces: readonly Face[];
   readonly last?: string | null;
+  readonly team?: boolean;
 }): ReactElement {
   return (
-    <div className="f-faces">
+    <div className="f-faces" aria-label={props.team ? 'The team' : undefined}>
       {props.faces.map((one, index) => (
-        <FaceView key={index} face={one} alone ghost={index > 0} />
+        <FaceView key={index} face={one} alone ghost={index > 0 && !props.team} />
       ))}
       {props.last ? (
         <time dateTime={props.last} title="The latest post">
@@ -335,8 +339,7 @@ function Need(props: {
 }
 
 /**
- * One thread on the wall. Closed, it shows the title, a status, a mark for new posts, the face of the latest
- * author, the time of the latest post, and the threads that it builds on and that build on it. Open, it takes
+ * One thread on the wall. Closed, it shows the title, a status, a mark for new posts, the faces of its team, the time of the latest post, and the threads that it builds on and that build on it. Open, it takes
  * the full width and shows who opened the thread, the
  * result that it stands on, and its turns.
  */
@@ -359,11 +362,15 @@ function Card(props: {
   const chip = head
     ? (standingChip(head.post, head.standing) ?? { label: 'Not checked', tone: 'none' as const })
     : null;
+  // A closed card shows the thread's team. A thread without one shows who posted last.
+  const team = !read?.view && summary.team.length > 0;
   const faces = read?.view
     ? authors(read.view.posts, props.agents)
-    : summary.latest
-      ? [face(props.agents, summary.latest.author)]
-      : [];
+    : team
+      ? summary.team.map((id) => face(props.agents, id))
+      : summary.latest
+        ? [face(props.agents, summary.latest.author)]
+        : [];
   return (
     <section id={`card-${id}`} className={`f-card c-${status.edge}${open ? ' open' : ''}`}>
       <header>
@@ -386,9 +393,10 @@ function Card(props: {
             <span className={`f-st fs-count-${status.edge}`}>{status.label}</span>
           )}
           {status.openAsks ? <span className="f-st fs-ask">{status.openAsks}</span> : null}
+          {status.openCalls ? <span className="f-st fs-ask">{status.openCalls}</span> : null}
         </div>
         {head ? <p className="f-head">{head.post.text}</p> : null}
-        <Faces faces={faces} last={open ? null : summary.last_at} />
+        <Faces faces={faces} last={open ? null : summary.last_at} team={team} />
         <Cross
           label="Builds on"
           links={summary.builds_on_threads}
