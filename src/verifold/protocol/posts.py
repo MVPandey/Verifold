@@ -3,8 +3,8 @@ The posts of the board.
 
 A post's `kind` says what it does in the society, and `builds_on` says which posts it started from, so the record
 shows how an idea moved from one agent's work into another's. A plan says what its author does next, an objection disputes its
-target, an answer can concede an objection, a check tests another agent's post, and a proposal puts a choice to the
-lab. A new kind is one more model in the `Post` union.
+target, an answer can concede an objection, a check tests another agent's post, a proposal puts a choice to the
+lab, and a report tells the person where the lab is. A new kind is one more model in the `Post` union.
 """
 
 from pathlib import PurePosixPath
@@ -21,7 +21,9 @@ MAX_BUILDS_ON = 10
 
 type Headline = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_HEADLINE)]
 type Body = Annotated[str, StringConstraints(max_length=20_000)]
-type PostKind = Literal['message', 'plan', 'result', 'ask', 'answer', 'objection', 'proposal', 'check', 'ruled_out']
+type PostKind = Literal[
+    'message', 'plan', 'result', 'ask', 'answer', 'objection', 'proposal', 'check', 'ruled_out', 'report'
+]
 """The values of `kind` across the `Post` union."""
 type Outcome = Literal['holds', 'fails']
 type CheckMethod = Literal['rerun', 'code_read', 'ratings']
@@ -132,7 +134,17 @@ class RuledOut(PostBase):
     kind: Literal['ruled_out'] = 'ruled_out'
 
 
+class Report(PostBase):
+    """
+    Where the lab is, in plain words for the person. The person's app shows the newest report before the threads.
+
+    `text` is what the person reads first, and `body` holds the detail that they can open.
+    """
+
+    kind: Literal['report'] = 'report'
+
+
 type Post = Annotated[
-    Message | Plan | Result | Ask | Answer | Objection | Proposal | Check | RuledOut,
+    Message | Plan | Result | Ask | Answer | Objection | Proposal | Check | RuledOut | Report,
     Field(discriminator='kind'),
 ]

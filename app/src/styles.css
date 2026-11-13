@@ -682,6 +682,47 @@ details[open] > summary .opened {
 }
 
 /* The wall and its cards */
+/* The newest report sits between the seat and the wall, as wide as the wall. */
+.f-report {
+  max-width: 1336px;
+  margin: 0 auto 22px;
+  padding: 16px 20px;
+  background: var(--card);
+  border: 1px solid var(--line);
+}
+.f-report-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  font-size: 12.5px;
+}
+.f-report-head h2,
+.f-report-head .f-by {
+  margin: 0;
+}
+.f-report-head h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-ink);
+}
+.f-report-head a {
+  margin-left: auto;
+  color: var(--muted);
+}
+.f-report-text {
+  margin: 8px 0 0;
+  font-size: 16px;
+  line-height: 1.5;
+  max-width: 78ch;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 1400px) {
+  .f-report {
+    margin-left: 32px;
+    margin-right: 32px;
+  }
+}
 .f-body {
   max-width: 1400px;
   margin: 0 auto;
@@ -1068,7 +1109,8 @@ span.error {
     padding-left: 18px;
     padding-right: 18px;
   }
-  .f-answer-thread {
+  .f-answer-thread,
+  .f-report {
     margin-left: 18px;
     margin-right: 18px;
   }

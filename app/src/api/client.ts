@@ -30,6 +30,8 @@ export interface Api {
   threads(): Promise<readonly ThreadSummary[]>;
   thread(id: string): Promise<ThreadView>;
   needs(): Promise<readonly PostView[]>;
+  /** The newest report that an agent wrote for the person, or `null` when the lab has none. */
+  report(): Promise<PostView | null>;
   post(request: PostRequest): Promise<PostView>;
   rerun(postId: string): Promise<void>;
   setTime(minutes: number): Promise<LabView>;
@@ -68,6 +70,7 @@ export function createApi(
     threads: () => request('/threads'),
     thread: (id) => request(`/threads/${encodeURIComponent(id)}`),
     needs: () => request('/needs'),
+    report: () => request('/report'),
     post: (post) => request('/posts', post),
     rerun: async (postId) => {
       await request('/reruns', { post: postId });

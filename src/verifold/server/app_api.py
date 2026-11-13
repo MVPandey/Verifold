@@ -37,7 +37,7 @@ from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
-from verifold.society.views import needs_person, thread_summaries, thread_view
+from verifold.society.views import latest_report, needs_person, thread_summaries, thread_view
 from verifold.store.errors import SettingsChanged, SettingsInvalid, SettingsUnwritable
 
 HEARTBEAT = 15.0
@@ -127,6 +127,10 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     @api.get('/threads/{thread_id}', dependencies=[authorized])
     async def thread(thread_id: ThreadId) -> ThreadView:
         return thread_view(current().board, PERSON, thread_id)
+
+    @api.get('/report', dependencies=[authorized])
+    async def report() -> PostView | None:
+        return latest_report(current().board)
 
     @api.get('/needs', dependencies=[authorized])
     async def needs() -> tuple[PostView, ...]:

@@ -2,10 +2,10 @@ import pytest
 from builders import RecordBuilder
 
 from verifold.protocol.join import MAX_NEWS, News
-from verifold.protocol.posts import Answer, Ask, Check, Message, Objection, Plan, Result
+from verifold.protocol.posts import Answer, Ask, Check, Message, Objection, Plan, Report, Result
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.society.errors import NotFound
-from verifold.society.views import brief, needs_person, question_thread, thread_summaries, thread_view
+from verifold.society.views import brief, latest_report, needs_person, question_thread, thread_summaries, thread_view
 
 
 def test_a_thread_view_shows_each_post_and_where_it_stands(record: RecordBuilder) -> None:
@@ -154,3 +154,17 @@ def test_the_question_thread_is_the_first_thread_when_the_person_opened_it_as_th
     assert question_thread(first_thread('person', 'Try the 5090s').board()) is None
     assert question_thread(first_thread('ada', QUESTION_TITLE).board()) is None
     assert question_thread(RecordBuilder().board()) is None
+
+
+def test_the_latest_report_is_the_newest_one_in_any_thread(record: RecordBuilder) -> None:
+    assert latest_report(record.board()) is None
+
+    record.post(Report(id='p-1', thread='t-1', author='bo', text='Two designs are in training.'))
+    record.post(Result(id='p-2', thread='t-1', author='ada', text='Loss 0.39.'))
+    record.post(Report(id='p-3', thread='t-1', author='ada', text='The curved design leads.', body='Three seeds.'))
+    record.post(Report(id='p-4', thread='t-1', author='person', text='My own note.'))
+
+    latest = latest_report(record.board())
+
+    assert latest is not None
+    assert (latest.post.id, latest.post.text, latest.post.body) == ('p-3', 'The curved design leads.', 'Three seeds.')

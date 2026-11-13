@@ -14,6 +14,7 @@ const NOUNS = {
   proposal: 'proposal',
   check: 'check',
   ruled_out: 'ruled-out lead',
+  report: 'report',
 } as const satisfies Record<Post['kind'], string>;
 
 const CLAIMS: ReadonlySet<Post['kind']> = new Set(['result', 'proposal', 'ruled_out']);
@@ -44,6 +45,7 @@ export function tone(post: Post): MarkTone {
       return 'ask';
     case 'plan':
     case 'message':
+    case 'report':
       return 'quiet';
   }
 }
@@ -89,6 +91,8 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
       const blind = context.author?.checks != null && context.author.checks === post.reply_to;
       return `${checked(post.method, theirs, blind)}: it ${post.outcome === 'holds' ? 'holds' : 'fails'}`;
     }
+    case 'report':
+      return `reported to you${reply}`;
     case 'message':
       return post.reply_to === null ? 'added a note' : `replied to ${them}`;
   }

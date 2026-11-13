@@ -4,7 +4,7 @@ import type { ReactElement } from 'react';
 import type { AgentView, LabView, PostView, ThreadSummary } from '../api/types.ts';
 import { authorName, face, ownName } from '../model/agents.ts';
 import type { Face } from '../model/agents.ts';
-import { clock } from '../model/format.ts';
+import { clock, duration, minutesBetween } from '../model/format.ts';
 import { orderNeeds } from '../model/needs.ts';
 import { isPermission, personMessage, standingChip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
@@ -12,7 +12,7 @@ import { hasNew, markSeen, readSeen } from '../model/seen.ts';
 import { answerSoFar, cardStatus, headClaim, questionThread } from '../model/turns.ts';
 import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
-import { ChipView, Composer, FaceView } from './parts.tsx';
+import { Body, ChipView, Composer, FaceView, Files } from './parts.tsx';
 import { Turns } from './Thread.tsx';
 
 /** A question longer than this gets smaller type, so it does not fill the screen. */
@@ -66,8 +66,8 @@ export function LabPage(props: PageProps & Place): ReactElement {
 }
 
 /**
- * The lab as a wall: the question and the answer so far, the box that steers the lab, and one card for each
- * thread. `questionRead` is the question's thread, and `cardRead` is the thread of the open card.
+ * The lab as a wall: the question and the answer so far, the box that steers the lab, the newest report, and one
+ * card for each thread. `questionRead` is the question's thread, and `cardRead` is the thread of the open card.
  */
 export function Wall(
   props: PageProps & Place & { readonly questionRead: ThreadRead; readonly cardRead: ThreadRead },
@@ -175,6 +175,8 @@ export function Wall(
         </section>
       ) : null}
 
+      {data.report ? <ReportCard report={data.report} agents={lab.agents} now={props.now} /> : null}
+
       <div className="f-body">
         {missing ? (
           <p className="f-wait" role="alert">
@@ -239,6 +241,49 @@ function Faces(props: {
 
 function New(): ReactElement {
   return <span className="f-new">New</span>;
+}
+
+/**
+ * The newest report that an agent wrote for the person: who wrote it and how long ago, where it stands when an
+ * agent disputes it, what it says, and its detail, folded. The link goes to the report in its thread, where the
+ * earlier reports are.
+ */
+function ReportCard(props: {
+  readonly report: PostView;
+  readonly agents: readonly AgentView[];
+  readonly now: Date;
+}): ReactElement {
+  const { post, at, standing } = props.report;
+  const chip = standingChip(post, standing);
+  const minutes = minutesBetween(at, props.now);
+  return (
+    <section className="f-report" aria-labelledby="report-title">
+      <div className="f-report-head">
+        <h2 id="report-title">Where the lab is</h2>
+        <span className="f-by">
+          {authorName(props.agents, post.author)} reported{' '}
+          <time dateTime={at} title={clock(at)}>
+            {minutes < 1 ? 'just now' : `${duration(minutes)} ago`}
+          </time>
+        </span>
+        {chip ? <ChipView chip={chip} /> : null}
+        <a href={href({ page: 'thread', id: post.thread, post: post.id })}>See it in its thread</a>
+      </div>
+      <p className="f-report-text">{post.text}</p>
+      {post.body || post.evidence.length > 0 ? (
+        <details className="f-detail">
+          <summary className="f-open">
+            <span className="closed">Read the detail</span>
+            <span className="opened">Hide the detail</span>
+          </summary>
+          <div className="f-words">
+            {post.body ? <Body text={post.body} /> : null}
+            <Files files={post.evidence} />
+          </div>
+        </details>
+      ) : null}
+    </section>
+  );
 }
 
 /** The ask that waits for the person, with the way to the Needs you page. */
