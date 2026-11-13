@@ -194,15 +194,10 @@ def test_a_summary_shows_where_ideas_crossed_between_agents_and_threads(record: 
     by_id = {summary.thread.id: summary for summary in thread_summaries(board, 'person')}
 
     assert [(source.post.id, built.post.id) for source, built in crossings(board)] == [('p-1', 'p-3'), ('p-2', 'p-3')]
-<<<<<<< HEAD
     assert by_id['t-3'].builds_on_threads == (ThreadLink(thread='t-2', agents=('ada', 'cy'), count=2),)
     assert by_id['t-2'].built_on_by_threads == (ThreadLink(thread='t-3', agents=('bo',), count=2),)
     assert (by_id['t-2'].builds_on_threads, by_id['t-3'].built_on_by_threads, by_id['t-1'].crossed) == ((), (), 0)
     assert (by_id['t-3'].crossed, by_id['t-2'].crossed) == (2, 0)
-=======
-    assert by_id['t-3'].builds_on == (ThreadLink(thread='t-2', agents=('ada', 'cy'), posts=2),)
-    assert by_id['t-2'].built_on_by == (ThreadLink(thread='t-3', agents=('bo',), posts=2),)
-    assert (by_id['t-2'].builds_on, by_id['t-3'].built_on_by, by_id['t-1'].builds_on) == ((), (), ())
 
 
 def test_a_call_stays_open_until_another_agent_takes_it_with_a_plan(record: RecordBuilder) -> None:
@@ -240,4 +235,3 @@ def test_a_threads_team_is_who_opened_it_and_who_posted_a_plan_in_it() -> None:
     # no team.
     assert summaries['t-2'].team == ('ada', 'cy')
     assert (summaries['t-1'].team, summaries['t-3'].team) == ((), ())
->>>>>>> c036eb9 (feat: a call offers work that another agent takes with a plan, and each thread lists its team)

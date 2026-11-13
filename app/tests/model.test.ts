@@ -287,6 +287,8 @@ describe('turns', () => {
         line({ kind: 'message' }),
         line({ kind: 'message', reply_to: null }, null),
         line({ kind: 'report', reply_to: null }, null),
+        line({ kind: 'call', reply_to: null }, null),
+        line({ kind: 'plan' }, reply({ kind: 'call', author: 'agent-3' })),
       ],
       [
         'posted a result',
@@ -305,6 +307,8 @@ describe('turns', () => {
         'replied to agent-2',
         'added a note',
         'reported to you',
+        'called for an agent',
+        'took agent-3’s call',
       ],
     );
   });
@@ -473,6 +477,10 @@ describe('turns', () => {
         '1 of 3 checked / good / Open ask',
         '1 disputed / bad / 2 open asks',
       ],
+    );
+    assert.deepEqual(
+      [0, 1, 3].map((calls) => cardStatus(summary({ open_calls: calls })).openCalls),
+      [null, 'Needs an agent', '3 calls need an agent'],
     );
   });
 });
