@@ -285,6 +285,7 @@ describe('turns', () => {
         line({ kind: 'check', method: 'ratings', outcome: 'holds' }),
         line({ kind: 'message' }),
         line({ kind: 'message', reply_to: null }, null),
+        line({ kind: 'report', reply_to: null }, null),
       ],
       [
         'posted a result',
@@ -302,6 +303,7 @@ describe('turns', () => {
         'rated agent-2’s result: it holds',
         'replied to agent-2',
         'added a note',
+        'reported to you',
       ],
     );
   });

@@ -8,6 +8,8 @@ export interface LabData {
   readonly lab: LabView | null;
   readonly threads: readonly ThreadSummary[];
   readonly needs: readonly PostView[];
+  /** The newest report for the person, or `null` when no agent has posted one. */
+  readonly report: PostView | null;
   /** Rises with each full load, so a page that reads more of the lab can read it again. */
   readonly version: number;
   readonly error: string | null;
@@ -18,6 +20,7 @@ export const EMPTY: LabData = {
   lab: null,
   threads: [],
   needs: [],
+  report: null,
   version: 0,
   error: null,
 };
@@ -30,7 +33,7 @@ export type Apply = (update: (old: LabData) => LabData) => void;
 
 /** Reads the lab from the server, and keeps the reads in order. */
 export interface Loader {
-  /** Read the whole lab: the setup, the lab view, the threads, and the asks to the person. */
+  /** Read the whole lab: the setup, the lab view, the threads, the asks to the person, and the newest report. */
   readonly full: () => void;
   /** Read only the lab view, which holds what each agent is doing. */
   readonly activity: () => void;
@@ -122,6 +125,11 @@ export function createLoader(api: Api, apply: Apply): Loader {
 async function readLab(api: Api): Promise<Omit<LabData, 'version'>> {
   const setup = await api.setup();
   if (setup.question === null) return { ...EMPTY, setup };
-  const [lab, threads, needs] = await Promise.all([api.lab(), api.threads(), api.needs()]);
-  return { setup, lab, threads, needs, error: null };
+  const [lab, threads, needs, report] = await Promise.all([
+    api.lab(),
+    api.threads(),
+    api.needs(),
+    api.report(),
+  ]);
+  return { setup, lab, threads, needs, report, error: null };
 }

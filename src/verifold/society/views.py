@@ -4,7 +4,7 @@ from verifold.protocol.agents import Agent
 from verifold.protocol.events import Posted, ThreadOpened
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.join import MAX_NEWS, AgentLine, Brief, News, PostLine, PostView, ThreadSummary, ThreadView
-from verifold.protocol.posts import Ask, Plan, Result
+from verifold.protocol.posts import Ask, Plan, Report, Result
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.society.attention import watches_thread
 from verifold.society.board import Board
@@ -133,3 +133,9 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
         and PERSON in entry.post.mentions
         and not is_answered(board, entry.post.id, by=PERSON)
     )
+
+
+def latest_report(board: Board) -> PostView | None:
+    """Return the newest report on the board, or `None` when no agent has posted one."""
+    entry = next((entry for entry in reversed(board.posts) if isinstance(entry.post, Report)), None)
+    return post_view(board, entry) if entry else None

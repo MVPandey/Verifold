@@ -193,7 +193,16 @@ describe('the lab page', () => {
     defaults_from: null,
   };
   const now = new Date('2026-11-06T14:26:00Z');
-  const data = { setup, lab, threads, needs, version: 1, error: null, reload: () => undefined };
+  const data = {
+    setup,
+    lab,
+    threads,
+    needs,
+    report: null,
+    version: 1,
+    error: null,
+    reload: () => undefined,
+  };
   const page = (seen: string): string => {
     // The page reads what the person has seen from the browser's storage.
     Object.assign(globalThis, { window: { localStorage: { getItem: () => seen } } });
@@ -220,6 +229,27 @@ describe('the lab page', () => {
     assert.ok(html.includes('role="img" aria-label="Agent 2"'));
     // A closed card never shows a post's text.
     assert.equal(html.includes('Reran it.'), false);
+  });
+
+  it('shows the newest report above the cards, with its detail folded and a link to its thread', () => {
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    const report = postView({
+      ...result('p-30', { author: 'agent-2', thread: 't-3' }),
+      kind: 'report',
+      text: 'Merge sort is ahead on random input.',
+      body: 'Three runs agree.',
+    });
+    const html = renderToStaticMarkup(
+      <LabPage api={{} as Api} data={{ ...data, report }} now={now} open={null} post={null} />,
+    );
+    assert.equal(page('{}').includes('Where the lab is'), false);
+    assert.ok(html.includes('<section class="f-report" aria-label="Where the lab is">'));
+    assert.ok(html.includes('Agent 2 reported at'));
+    assert.ok(html.includes('<p class="f-report-text">Merge sort is ahead on random input.</p>'));
+    assert.ok(html.includes('<a href="#/thread/t-3/p-30">See it in its thread</a>'));
+    assert.ok(html.includes('<details class="f-detail">'));
+    assert.ok(html.includes('Three runs agree.'));
+    assert.ok(html.indexOf('f-report') < html.indexOf('f-wall'));
   });
 
   it('shows when each thread was last active, and names a checker that asks by its own name', () => {

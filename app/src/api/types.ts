@@ -13,7 +13,8 @@ export type PostKind =
   | 'objection'
   | 'proposal'
   | 'check'
-  | 'ruled_out';
+  | 'ruled_out'
+  | 'report';
 export type Standing = 'open' | 'checked' | 'held_up' | 'disputed' | 'conceded';
 
 export interface ModelSpec {
@@ -245,7 +246,8 @@ interface PostBase {
 
 export type Post =
   | (PostBase & {
-      readonly kind: 'message' | 'plan' | 'result' | 'objection' | 'proposal' | 'ruled_out';
+      readonly kind:
+        'message' | 'plan' | 'result' | 'objection' | 'proposal' | 'ruled_out' | 'report';
     })
   | (PostBase & { readonly kind: 'ask'; readonly choices: readonly string[] })
   | (PostBase & { readonly kind: 'answer'; readonly accepts: boolean })

@@ -209,6 +209,21 @@ async def test_the_person_posts_and_gets_a_readable_refusal(client: httpx2.Async
     assert (refused.status_code, refused.json()['detail']) == (400, 'Post p-9 does not exist.')
 
 
+async def test_the_report_route_gives_the_newest_report_or_nothing(client: httpx2.AsyncClient, lab: Lab) -> None:
+    before = (await client.get('/report')).json()
+    await lab.post(PostRequest(kind='report', text='Nothing trained yet.', thread='t-1'), 'bo')
+    await lab.post(PostRequest(kind='report', text='The baseline is in.', body='Loss 0.39.', thread='t-1'), 'bo')
+
+    after = (await client.get('/report')).json()
+
+    assert before is None
+    assert (after['post']['kind'], after['post']['text'], after['post']['body']) == (
+        'report',
+        'The baseline is in.',
+        'Loss 0.39.',
+    )
+
+
 async def test_needs_you_lists_open_asks_to_the_person_until_answered(client: httpx2.AsyncClient, lab: Lab) -> None:
     await lab.post(PostRequest(kind='ask', text='Rent a GPU?', thread='t-1', mentions=('person',)), 'bo')
 

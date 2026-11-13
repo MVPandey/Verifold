@@ -163,6 +163,8 @@ def join_server(resolve: Resolve) -> MCPServer:
         - `proposal`: a choice for the lab, such as its answer to the question. It reaches every agent, so that each
           can check it or object.
         - `ruled_out`: the end of a line of work.
+        - `report`: where the lab is, in plain words for the person. The person's app shows the newest report before
+          the threads. Put what the person reads first in `text`, and the detail in `body`.
 
         When the post builds on other posts, in any thread, name them in `builds_on`. Their authors hear about it.
 

@@ -12,7 +12,7 @@ import { hasNew, markSeen, readSeen } from '../model/seen.ts';
 import { answerSoFar, cardStatus, headClaim, questionThread } from '../model/turns.ts';
 import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
-import { ChipView, Composer, FaceView } from './parts.tsx';
+import { Body, ChipView, Composer, FaceView } from './parts.tsx';
 import { Turns } from './Thread.tsx';
 
 /** A question longer than this gets smaller type, so it does not fill the screen. */
@@ -66,8 +66,8 @@ export function LabPage(props: PageProps & Place): ReactElement {
 }
 
 /**
- * The lab as a wall: the question and the answer so far, the box that steers the lab, and one card for each
- * thread. `questionRead` is the question's thread, and `cardRead` is the thread of the open card.
+ * The lab as a wall: the question and the answer so far, the box that steers the lab, the newest report, and one
+ * card for each thread. `questionRead` is the question's thread, and `cardRead` is the thread of the open card.
  */
 export function Wall(
   props: PageProps & Place & { readonly questionRead: ThreadRead; readonly cardRead: ThreadRead },
@@ -175,6 +175,8 @@ export function Wall(
         </section>
       ) : null}
 
+      {data.report ? <ReportCard report={data.report} agents={lab.agents} /> : null}
+
       <div className="f-body">
         {missing ? (
           <p className="f-wait" role="alert">
@@ -239,6 +241,40 @@ function Faces(props: {
 
 function New(): ReactElement {
   return <span className="f-new">New</span>;
+}
+
+/**
+ * The newest report that an agent wrote for the person: who wrote it and when, what it says, and its detail,
+ * folded. The link goes to the report in its thread, where the earlier reports are.
+ */
+function ReportCard(props: {
+  readonly report: PostView;
+  readonly agents: readonly AgentView[];
+}): ReactElement {
+  const { post, at } = props.report;
+  return (
+    <section className="f-report" aria-label="Where the lab is">
+      <div className="f-report-head">
+        <span className="f-label">Where the lab is</span>
+        <span className="f-by">
+          {authorName(props.agents, post.author)} reported at <time dateTime={at}>{clock(at)}</time>
+        </span>
+        <a href={href({ page: 'thread', id: post.thread, post: post.id })}>See it in its thread</a>
+      </div>
+      <p className="f-report-text">{post.text}</p>
+      {post.body ? (
+        <details className="f-detail">
+          <summary className="f-open">
+            <span className="closed">Read the detail</span>
+            <span className="opened">Hide the detail</span>
+          </summary>
+          <div className="f-words">
+            <Body text={post.body} />
+          </div>
+        </details>
+      ) : null}
+    </section>
+  );
 }
 
 /** The ask that waits for the person, with the way to the Needs you page. */
