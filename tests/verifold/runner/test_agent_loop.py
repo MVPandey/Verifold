@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from datetime import timedelta
 from pathlib import Path
@@ -17,7 +17,7 @@ from verifold.protocol.usage import Usage
 from verifold.runner import agent_loop
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
 from verifold.runner.git import git
-from verifold.runner.messages import DOORBELL, more_time_message
+from verifold.runner.messages import DOORBELL, JOBS_ENDED, more_time_message
 from verifold.runner.permissions import GrantAsks
 from verifold.runner.session import AgentSession, TurnResult
 from verifold.server.activity import Activity
@@ -35,11 +35,16 @@ def calls(log: Path, event: str) -> list[dict[str, object]]:
     return [call for call in map(json.loads, lines) if call['event'] == event]
 
 
+async def no_jobs(_agent: str) -> bool:
+    return False
+
+
 def loop_for(
     served: ServedBoard,
     tmp_path: Path,
     activity: Activity | None = None,
     grant_asks: GrantAsks | None = None,
+    has_jobs: Callable[[str], Awaitable[bool]] | None = None,
     **settings: float,
 ) -> AgentLoop:
     member, token = served.seat('bo')
@@ -62,7 +67,7 @@ def loop_for(
         member,
         setup,
         LoopSettings(mcp_url=served.url, **options),
-        shared=Shared(activity=activity, grant_asks=grant_asks),
+        shared=Shared(activity=activity, grant_asks=grant_asks, has_jobs=has_jobs),
     )
 
 
@@ -217,8 +222,10 @@ async def test_a_failed_turn_gives_the_agent_its_news_again(
     assert [entry.post.text for entry in (await member.wait(timeout=0)).posts] == ['Which layer?']
 
 
-async def test_an_agent_with_one_job_gets_one_turn_for_it(served: ServedBoard, tmp_path: Path, log: Path) -> None:
-    loop = loop_for(served, tmp_path)
+async def test_an_agent_with_one_job_that_left_nothing_running_gets_one_turn_for_it(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    loop = loop_for(served, tmp_path, has_jobs=no_jobs)
     loop._done = lambda _: False
 
     async with asyncio.timeout(30):
@@ -226,6 +233,27 @@ async def test_an_agent_with_one_job_gets_one_turn_for_it(served: ServedBoard, t
 
     assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
     assert len(served.lab.board.turns) == 1
+
+
+async def test_an_agent_with_one_job_wakes_when_the_processes_that_it_left_running_end(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    looks: list[str] = []
+
+    async def has_jobs(agent: str) -> bool:
+        # The agent's process runs for the first three looks of the first turn, and no process runs after that.
+        looks.append(agent)
+        return len(looks) <= 3
+
+    loop = loop_for(served, tmp_path, has_jobs=has_jobs, job_poll=0.01)
+    loop._done = lambda _: False
+
+    async with asyncio.timeout(30):
+        await loop.run()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', JOBS_ENDED]
+    assert len(served.lab.board.turns) == 2
+    assert set(looks) == {'bo'}
 
 
 async def test_an_agent_with_one_job_that_the_time_limit_stopped_goes_on_when_the_lab_gets_more_time(

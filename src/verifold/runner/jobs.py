@@ -121,6 +121,12 @@ def resume_jobs(lab: Path) -> None:
             process.resume()
 
 
+def running_jobs(lab: Path, agent: str) -> tuple[Job, ...]:
+    """Return the jobs that `agent` started and that still run. The agent's harness is not one of them."""
+    found, _ = _lab_processes(lab, _harness_groups())
+    return tuple(job for _, job in found if job.agent == agent)
+
+
 async def keep_jobs(lab: Lab, project: Path, report: Callable[[Sweep], None]) -> None:
     """
     Apply the lab's job setting when the lab runs out of time, and resume paused jobs when it gets more time.

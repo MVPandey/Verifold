@@ -36,6 +36,7 @@ class Reruns:
 
     The checker comes from a harness of the lab whose model family differs from the author's, when the lab has one.
     It gets the author's files at the cited commit and the claim, but not the thread, and it stops after its check.
+    A checker that ends its turn while its own rerun still runs wakes when the rerun ends.
     """
 
     def __init__(self, lab: Lab, members: Members, project: Path, crew: Crew, supervise: Supervise) -> None:
