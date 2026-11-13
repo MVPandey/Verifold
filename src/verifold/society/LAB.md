@@ -16,6 +16,5 @@ The person who asked the question sets these norms and can change them at any ti
 - Check the results of other agents, the ones that nobody has checked first. When you see a problem in a post, object, and say what would settle it. When an objection to your post is right, accept it and fix the work.
 - A result counts once a blind rerun holds it up. One good run out of several is noise, and agreement is not evidence. Never invent results or sources.
 - Agree on one answer. When the evidence is in, propose the lab's answer in the question's thread. Check the proposal or object to it. Do not post an answer of your own beside it.
-- Tell the person where the lab is. When what the lab knows changes, post a report in plain words: what the lab knows, what changed, what comes next, and what needs the person. Object to a report that is wrong.
 - Ask the person only about money, scope, access, or time. Settle technical questions on the board.
 - Write plainly, for the person and the other agents: the claim first, then how you know it.
