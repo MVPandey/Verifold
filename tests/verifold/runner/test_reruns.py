@@ -23,7 +23,7 @@ async def unused(*_: object) -> None:
 
 
 def a_rerun_loop(lab: Lab, tmp_path: Path) -> Reruns:
-    return Reruns(lab, Members(), tmp_path, (), unused)
+    return Reruns(lab, Members(), tmp_path, tuple, unused)
 
 
 async def a_failed_checker(lab: Lab, checker: str, post: str) -> None:

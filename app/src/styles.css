@@ -436,6 +436,21 @@ details[open] > summary .opened {
   color: var(--ink2);
   overflow-wrap: anywhere;
 }
+.f-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+.f-add label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .f-members .f-own {
   margin-top: 4px;
   font-size: 14.5px;

@@ -238,6 +238,25 @@ async def test_a_question_for_a_folder_with_a_lab_is_refused(project: Path) -> N
         await serve(project, TWO_AGENTS, catalog=CATALOG)
 
 
+async def test_the_person_adds_an_agent_to_a_lab_that_runs_and_it_starts_like_the_others(
+    project: Path, log: Path
+) -> None:
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),))
+
+    async with serving(project, start, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
+        added = await client.post('/agents', json={'harness': 'fake', 'count': 1})
+        await until(lambda: len({e.agent for e in record(project) if isinstance(e, TurnEnded)}) == 2, timeout=60)
+        unknown = await client.post('/agents', json={'harness': 'nope'})
+        too_many = await client.post('/agents', json={'harness': 'fake', 'count': 19})
+
+    assert [view['agent']['id'] for view in added.json()['agents']] == ['agent-1', 'agent-2']
+    starts = [call['text'] for call in calls(log) if call['event'] == 'prompt' and call['agent'] == 'agent-2']
+    assert 'The lab is under way, and these agents work in it: Agent 1 (agent-1, fake).' in starts[0]
+    assert (unknown.status_code, too_many.status_code) == (400, 400)
+    assert 'at most 20 agents' in too_many.json()['detail']
+
+
 @pytest.mark.usefixtures('log')
 async def test_the_app_reads_a_file_that_backs_a_post_and_the_lab_folder_gets_the_writing_guide(
     project: Path, monkeypatch: pytest.MonkeyPatch

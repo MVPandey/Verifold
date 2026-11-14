@@ -1,4 +1,5 @@
 import type {
+  AgentChoice,
   AnswerView,
   FileText,
   LabView,
@@ -41,6 +42,8 @@ export interface Api {
   post(request: PostRequest): Promise<PostView>;
   rerun(postId: string): Promise<void>;
   setTime(minutes: number): Promise<LabView>;
+  /** Add agents of one harness to the lab that runs. */
+  addAgents(choice: AgentChoice): Promise<LabView>;
   settings(): Promise<SettingsView>;
   changeSetting(change: SettingsChange): Promise<SettingsView>;
 }
@@ -114,6 +117,7 @@ export function createApi(
       await request('/reruns', { post: postId });
     },
     setTime: (minutes) => request('/time', { minutes }),
+    addAgents: (choice) => request('/agents', choice),
     settings: () => request('/settings'),
     changeSetting: (change) => request('/settings', change),
   };

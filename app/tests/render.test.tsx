@@ -588,6 +588,9 @@ describe('the lab page', () => {
     assert.ok(html.includes('$0.50 over 2 turns'));
     assert.ok(html.includes('3 posts in 1 thread'));
     assert.ok(html.includes('Lab total <b>$0.50</b>'));
+    // The person can add an agent of a harness that this computer has.
+    assert.ok(html.includes('Add an agent'));
+    assert.ok(html.includes('<button type="button">Add</button>'));
     assert.ok(html.includes('26 min of 1 h'));
     assert.ok(html.includes('30 more min'));
     assert.ok(html.includes('Stop the lab'));

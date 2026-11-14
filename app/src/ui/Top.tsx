@@ -89,6 +89,8 @@ export function Top(props: {
           {/* A new key closes an open panel when the person goes to another page or thread. */}
           <Members
             key={`who${place}`}
+            api={open.api}
+            onChange={open.onChange}
             lab={open.lab}
             threads={open.threads}
             harnesses={open.harnesses}
@@ -109,6 +111,8 @@ export function Top(props: {
  * what each does now, and what each has cost.
  */
 function Members(props: {
+  readonly api: Api;
+  readonly onChange: () => void;
   readonly lab: LabView;
   readonly threads: readonly ThreadSummary[];
   readonly harnesses: readonly HarnessOption[];
@@ -185,8 +189,66 @@ function Members(props: {
             Lab total <b>{labTotal(lab.agents)}</b>
           </span>
         </p>
+        <AddAgent api={props.api} harnesses={props.harnesses} onChange={props.onChange} />
       </div>
     </details>
+  );
+}
+
+/**
+ * The way to add one agent to the lab that runs. The agent uses the harness's own defaults, reads the board, and
+ * chooses its work as the others do.
+ */
+function AddAgent(props: {
+  readonly api: Api;
+  readonly harnesses: readonly HarnessOption[];
+  readonly onChange: () => void;
+}): ReactElement | null {
+  const ready = props.harnesses.filter((harness) => harness.available);
+  const [harness, setHarness] = useState(ready[0]?.name ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (ready.length === 0) return null;
+  const add = (): void => {
+    setBusy(true);
+    setError(null);
+    props.api.addAgents({ harness, count: 1 }).then(
+      () => {
+        setBusy(false);
+        props.onChange();
+      },
+      (failure: unknown) => {
+        setBusy(false);
+        setError(messageOf(failure));
+      },
+    );
+  };
+  return (
+    <div className="f-add">
+      <label>
+        Add an agent
+        <select
+          value={harness}
+          onChange={(event) => {
+            setHarness(event.target.value);
+          }}
+        >
+          {ready.map((option) => (
+            <option key={option.name} value={option.name}>
+              {option.title}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button type="button" onClick={add} disabled={busy}>
+        {busy ? 'Adding' : 'Add'}
+      </button>
+      {error ? (
+        <span className="error" role="alert">
+          {error}
+        </span>
+      ) : null}
+    </div>
   );
 }
 

@@ -53,9 +53,13 @@ def start_message(board: Board, agent: Agent, norms: Path, writing: Path | None 
         for entry in board.agents
         if entry.agent.id != agent.id and not entry.agent.checks
     )
-    others = (
-        f'The other agents got this question at the same moment: {peers}.' if peers else 'No other agent works here.'
+    # An agent that the person adds to a lab that runs joins work that is under way.
+    lead = (
+        'The lab is under way, and these agents work in it'
+        if board.turns
+        else 'The other agents got this question at the same moment'
     )
+    others = f'{lead}: {peers}.' if peers else 'No other agent works here.'
     lines = [
         board.opened.question,
         '',

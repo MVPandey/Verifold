@@ -8,6 +8,7 @@ import pytest
 from conftest import agent
 from pydantic import SecretStr
 
+from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import (
     HarnessOption,
     SettingsChange,
@@ -39,6 +40,7 @@ class Host:
     def __init__(self, lab: Lab | None) -> None:
         self.lab = lab
         self.started: list[StartRequest] = []
+        self.added: list[AgentChoice] = []
 
     def setup(self) -> SetupView:
         harnesses = (HarnessOption(name='fake', title='Fake', family='test', available=True),)
@@ -69,6 +71,11 @@ class Host:
         if change.value == 'full':
             raise SettingsUnwritable("Can't write .verifold/settings.json: No space left on device")
         return self.settings()
+
+    async def add_agents(self, choice: AgentChoice) -> None:
+        if choice.harness != 'fake':
+            raise SetupRejected('Unknown harness nope.')
+        self.added.append(choice)
 
     async def file_text(self, post_id: str, path: str) -> FileText:
         if path != 'answer.md':
@@ -324,3 +331,14 @@ async def test_the_answer_route_gives_the_labs_answer_and_a_file_route_gives_a_f
     assert (after['answer']['post']['text'], after['builds_on']) == ('Yes, it holds.', [])
     assert file.json()['text'] == '# The answer'
     assert (missing.status_code, missing.json()['detail']) == (404, 'Post p-1 names no file other.md.')
+
+
+async def test_the_person_adds_an_agent_to_the_lab_that_runs(lab: Lab, activity: Activity) -> None:
+    host = Host(lab)
+    async with client_of(host, activity) as client:
+        added = await client.post('/agents', json={'harness': 'fake', 'count': 2})
+        refused = await client.post('/agents', json={'harness': 'nope'})
+
+    assert added.status_code == 200
+    assert [(choice.harness, choice.count) for choice in host.added] == [('fake', 2)]
+    assert (refused.status_code, refused.json()['detail']) == (400, 'Unknown harness nope.')
