@@ -125,3 +125,16 @@ def test_the_start_message_names_the_file_that_says_how_the_lab_writes_its_answe
     message = start_message(board, board.agents[0].agent, Path('LAB.md'), Path('/lab/.verifold/WRITING.md'))
 
     assert message.splitlines()[-1] == '/lab/.verifold/WRITING.md says how the lab writes its answer for the person.'
+
+
+def test_an_agent_that_joins_a_lab_under_way_reads_that_and_agents_that_start_together_read_the_same() -> None:
+    record = lab().turn('ada')
+    board = record.board()
+    bo = board.agents[1].agent
+
+    joined = start_message(board, bo, Path('LAB.md'), under_way=True)
+    together = start_message(board, bo, Path('LAB.md'))
+
+    assert 'The lab is under way, and these agents work in it: Ada (ada, fake), Cy (cy, fake).' in joined
+    # A turn that ended while the lab's first agents were seated changes nothing for the ones seated after it.
+    assert 'The other agents got this question at the same moment: Ada (ada, fake), Cy (cy, fake).' in together

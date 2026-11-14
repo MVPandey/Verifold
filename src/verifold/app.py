@@ -149,6 +149,7 @@ class Host:
         self._offers: dict[str, Offer] = {}
         self._grant_asks: GrantAsks | None = None
         self._probing: set[str] = set()
+        self._adding = asyncio.Lock()
 
     @property
     def lab(self) -> Lab | None:
@@ -346,8 +347,10 @@ class Host:
         group.create_task(keep_jobs(lab, self._project, self._swept))
         self._grant_asks = GrantAsks(lab)
         group.create_task(self._grant_asks.run())
+        # A lab that is served again is under way for all of its agents. A new lab is so for none of them.
+        under_way = bool(lab.board.turns)
         for agent in self._workers(lab):
-            await self._run_agent(lab, agent)
+            await self._run_agent(lab, agent, under_way=under_way)
         group.create_task(Reruns(lab, self._members, self._project, partial(self._crew, lab), self._supervise).run())
 
     def _workers(self, lab: Lab) -> tuple[Agent, ...]:
@@ -359,13 +362,14 @@ class Host:
     def _crew(self, lab: Lab) -> Crew:
         return _crew(self._workers(lab), self._catalog, auto_mode=lab.board.opened.auto_mode)
 
-    async def _run_agent(self, lab: Lab, agent: Agent) -> None:
+    async def _run_agent(self, lab: Lab, agent: Agent, *, under_way: bool) -> None:
         group, settings = self._group, self._settings
         if group is None or settings is None:
             raise SetupRejected('Attach the host to the server before a lab starts.')
         norms = self._project / LAB_FOLDER / 'LAB.md'
         writing = self._project / LAB_FOLDER / 'WRITING.md'
-        member, setup = await self._seat(lab, agent, start_message(lab.board, agent, norms, writing))
+        start = start_message(lab.board, agent, norms, writing, under_way=under_way)
+        member, setup = await self._seat(lab, agent, start)
         await self._activity.set(agent.id, 'starting')
         group.create_task(AgentLoop(member, setup, settings, shared=self._shared()).run())
 
@@ -381,17 +385,28 @@ class Host:
         lab = self._lab
         if lab is None:
             raise NoLab('This folder has no lab yet. Start one from the setup screen.')
-        if choice.harness not in self._catalog:
+        entry = self._catalog.get(choice.harness)
+        if entry is None:
             raise SetupRejected(f'Unknown harness {choice.harness}. Choose from: {", ".join(self._catalog)}.')
-        members = sum(not entry.agent.checks for entry in lab.board.agents)
-        if members + choice.count > MAX_AGENTS:
-            raise SetupRejected(f'A lab has at most {MAX_AGENTS} agents, and this one has {members}.')
-        for _ in range(choice.count):
-            number = 1 + sum(not entry.agent.checks for entry in lab.board.agents)
-            while lab.board.agent(f'agent-{number}'):
-                number += 1
-            joined = await lab.join(_agent(number, self._catalog[choice.harness], choice))
-            await self._run_agent(lab, joined.agent)
+        if not available(entry):
+            raise SetupRejected(f'This computer does not have {entry.title}, so an agent of it cannot start.')
+        # One add at a time, so that two requests cannot pass the limit together.
+        async with self._adding:
+            members = sum(not joined.agent.checks for joined in lab.board.agents)
+            if members + choice.count > MAX_AGENTS:
+                raise SetupRejected(f'A lab has at most {MAX_AGENTS} agents, and this one has {members}.')
+            for _ in range(choice.count):
+                number = 1 + sum(not joined.agent.checks for joined in lab.board.agents)
+                while lab.board.agent(f'agent-{number}'):
+                    number += 1
+                agent = _agent(number, entry, choice)
+                # The folder comes first. An agent that the record holds and that has no folder could never start.
+                try:
+                    await agent_folder(self._project, agent.id)
+                except (GitError, OSError) as error:
+                    raise SetupRejected(f"Can't make the folder of {agent.name}: {error}") from error
+                await lab.join(agent)
+                await self._run_agent(lab, agent, under_way=True)
 
     def _shared(self) -> Shared:
         return Shared(activity=self._activity, grant_asks=self._grant_asks, has_jobs=self._has_jobs)

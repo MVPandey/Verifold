@@ -254,6 +254,8 @@ async def test_the_person_adds_an_agent_to_a_lab_that_runs_and_it_starts_like_th
     starts = [call['text'] for call in calls(log) if call['event'] == 'prompt' and call['agent'] == 'agent-2']
     assert 'The lab is under way, and these agents work in it: Agent 1 (agent-1, fake).' in starts[0]
     assert (unknown.status_code, too_many.status_code) == (400, 400)
+    # A refused add leaves no agent on the record.
+    assert len([event for event in record(project) if isinstance(event, AgentJoined)]) == 2
     assert 'at most 20 agents' in too_many.json()['detail']
 
 
