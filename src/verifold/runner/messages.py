@@ -16,6 +16,11 @@ JOBS_ENDED = 'The processes that you left running when your turn ended have ende
 """The message that wakes an agent with one job, which ended its turn while its own processes still ran."""
 
 
+def cut_short_message(reason: str) -> str:
+    """Return the message that resumes an agent whose turn Verifold or its harness ended, with the reason."""
+    return f'Your last turn did not end by your choice. {reason}'
+
+
 BOARD = (
     "The lab's shared board is the MCP server `verifold`. "
     'Its `brief` tool says how the board works and shows what is on it.'

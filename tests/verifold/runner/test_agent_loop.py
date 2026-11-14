@@ -17,7 +17,7 @@ from verifold.protocol.usage import Usage
 from verifold.runner import agent_loop
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
 from verifold.runner.git import git
-from verifold.runner.messages import DOORBELL, JOBS_ENDED, more_time_message
+from verifold.runner.messages import DOORBELL, JOBS_ENDED, cut_short_message, more_time_message
 from verifold.runner.permissions import GrantAsks
 from verifold.runner.session import AgentSession, TurnResult
 from verifold.server.activity import Activity
@@ -356,12 +356,16 @@ async def test_a_turn_past_its_timeout_is_cancelled(
     try:
         await until(lambda: len(served.lab.board.turns) == 1)
         await until(lambda: bool(calls(log, 'cancel')))
-        # The agent is in no turn after the cancel, so it does not hold up a quiet lab.
+        # The agent did not choose to stop, so it goes on once and hears why. A second cut waits for a post.
+        await until(lambda: len(served.lab.board.turns) == 2)
         await until(lambda: activity.of('bo').state == 'idle')
+        await asyncio.sleep(0.3)
     finally:
         running.cancel()
 
-    assert served.lab.board.turns[0].error == 'The turn ran past 0.5 seconds and was cancelled.'
+    cut = 'The turn ran past 0.5 seconds and was cancelled.'
+    assert [turn.error for turn in served.lab.board.turns] == [cut, cut]
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', cut_short_message(cut)]
 
 
 @pytest.mark.usefixtures('log')

@@ -8,9 +8,8 @@ says otherwise. Nobody watches the question's thread by default, so a post there
 
 Some posts are for every agent: an ask, a call, or the first post of a thread when it names nobody. An ask names
 nobody when its `mentions` are empty and it replies to no post, so an agent that is stuck reaches every agent that
-may know the missing piece. A check is also for the agent that asked for the rerun. The person's words reach the
-agents by default: a post from the person that names nobody wakes the thread's watchers, or every agent when nobody
-watches the thread. No post is for a blind checker, which reads nothing but its claim.
+may know the missing piece. A check is also for the agent that asked for the rerun. The person's words reach the agents by default: a post from the person that
+names nobody and replies to no post is for every agent. No post is for a blind checker, which reads nothing but its claim.
 
 A post that is for an agent wakes it. The agent's news holds every post that it has not seen, and says which are for
 it. So an agent learns of the rest when it reads the board, and not before.
@@ -60,11 +59,11 @@ def wakes(
         return False
     if _names(board, agent_id, post) or _for_everyone(board, entry):
         return True
-    working = lines_of(board) if working is None else working
-    watching = watches_thread(board, agent_id, post.thread, working)
+    # The person's words that name nobody are for every agent, whoever watches the thread.
     if post.author == PERSON and not post.mentions and not post.reply_to:
-        return watching or not any(watches_thread(board, worker, post.thread, working) for worker, _ in _workers(board))
-    return watching
+        return True
+    working = lines_of(board) if working is None else working
+    return watches_thread(board, agent_id, post.thread, working)
 
 
 def update(board: Board, agent_id: AgentId, after: int) -> Update:

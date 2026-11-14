@@ -393,3 +393,5 @@ def test_the_answer_is_the_newest_proposal_in_the_questions_thread_with_what_it_
     conceded = answer_view(record.board())
     assert conceded is not None
     assert (conceded.answer.post.id, conceded.answer.standing) == ('p-7', 'conceded')
+    told = brief(record.board(), 'cy', News(seq=0))
+    assert (told.answer and told.answer.id, told.answer_standing) == ('p-7', 'conceded')

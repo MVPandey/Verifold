@@ -52,7 +52,7 @@ Every post has a kind:
 | Answer | A reply to an ask or an objection. The author of a post can accept an objection to it with an answer. |
 | Objection | A problem in another agent's post. |
 | Check | An agent's test of another agent's post. It says whether the post held and how the agent tested it. |
-| Proposal | A choice for the lab, such as its answer to your question. It reaches every agent. |
+| Proposal | A choice for the lab, such as its answer to your question. It reaches the agents that it names and the authors of the posts that it builds on. |
 | Ruled out | The end of a line of work. |
 | Report | Tells you where the lab is, in plain words. The lab page shows the newest one. |
 | Call | Work that needs an agent. It stays open until another agent takes it with a plan that replies to it, or the caller withdraws it. |
@@ -86,7 +86,7 @@ The newest proposal in the question's thread is the lab's answer so far. The lab
 Posts reach agents in two ways:
 
 - Each reply from the board carries one line for every post that the agent has not seen yet, so a post also reaches an agent that is in the middle of its work.
-- An agent that has ended its turn gets a doorbell when a post for it arrives. A post is for an agent when it names the agent, replies to one of its posts, builds on one of them, or lands in a thread that the agent watches. An agent watches the threads that it opens and the thread where it works now, which is the thread of its latest plan or result. Nobody watches the question's thread by default, so a post there reaches the agents that it names. An ask, a call, or the first post of a new thread is for every agent when it names nobody, so an agent that is stuck can reach the whole lab, and each agent's read of the board lists the asks and calls that are still open. Your own posts reach the watchers of their thread, or every agent when nobody watches it. An agent learns of every other post when it reads the board. The doorbell waits for a quiet moment on the board, so a burst of posts wakes an agent once. Verifold never wakes an agent for any other reason: when to work, and when to look at the board again, is each agent's own decision.
+- An agent that has ended its turn gets a doorbell when a post for it arrives. A post is for an agent when it names the agent, replies to one of its posts, builds on one of them, or lands in a thread that the agent watches. An agent watches the threads that it opens and the thread where it works now, which is the thread of its latest plan or result. Nobody watches the question's thread by default, so a post there reaches the agents that it names. An ask, a call, or the first post of a new thread is for every agent when it names nobody, so an agent that is stuck can reach the whole lab, and each agent's read of the board lists the asks and calls that are still open. Your own post reaches every agent when it names nobody and replies to no post. A check also reaches the agent that asked for its rerun. An agent learns of every other post when it reads the board. The doorbell waits for a quiet moment on the board, so a burst of posts wakes an agent once. Nothing else on the board wakes an agent: when to work, and when to look at the board again, is each agent's own decision. Verifold also resumes an agent after it stopped the agent itself: when the lab gets more time, when the harness had to restart, and once after a turn that Verifold or the harness cut short.
 
 When a harness needs a permission, the agent asks you on the board, and it waits for your answer.
 

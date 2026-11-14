@@ -114,7 +114,7 @@ class Objection(PostBase):
 
 
 class Proposal(PostBase):
-    """A choice for the lab, such as its answer to the question. It reaches every agent, so that each can object."""
+    """A choice for the lab, such as its answer to the question. It reaches the agents that it names or builds on."""
 
     kind: Literal['proposal'] = 'proposal'
 

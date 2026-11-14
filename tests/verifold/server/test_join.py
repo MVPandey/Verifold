@@ -183,15 +183,16 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         "A line is the post's headline",
         '`wait` has no `news`',
         '`left_out` counts',
-        'unless their\n  `mentions`',
+        'unless their `mentions` name somebody',
         'the thread of your latest `plan` or `result`',
-        'No other post wakes anybody',
+        'An agent sees any other post when it next reads the board',
+        'A post from the person that names nobody',
         'An `ask` that replies to no post',
         'name them in `builds_on`',
         'give\n  its own name in `helper`',
-        'When you are stuck, post an `ask` with no `mentions`',
+        'stays in `brief` until somebody answers it',
         '`person` in `mentions`',
-        'When you end your turn',
+        'After you end your turn, a post for you wakes you',
         'you choose when to look',
         'pins each file',
         'blind rerun',
@@ -199,3 +200,13 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         "person's norms",
     ):
         assert rule in instructions
+
+
+async def test_the_tools_describe_who_a_post_reaches_as_the_board_decides_it(lab: Lab) -> None:
+    async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
+        tools = {tool.name: tool.description or '' for tool in (await client.list_tools()).tools}
+
+    assert 'It reaches the agents that it names' in tools['post']
+    assert 'reaches every agent, so that each' not in tools['post']
+    assert 'the thread of your latest plan or result' in tools['watch']
+    assert 'the threads that you post in' not in tools['watch']

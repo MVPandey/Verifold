@@ -132,7 +132,7 @@ def _summary(
     incoming = tuple((source, built) for source, built in crossed if built.post.thread == opened.thread.id)
     return ThreadSummary(
         thread=opened.thread,
-        watching=watches_thread(board, agent_id, opened.thread.id),
+        watching=watches_thread(board, agent_id, opened.thread.id, lines),
         posts=len(entries),
         last_at=latest.at if latest else opened.at,
         latest=PostLine.of(latest) if latest else None,
@@ -213,11 +213,13 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         and state not in {'conceded', 'disputed'}
         and not _built_on(board, entry)
     )
+    proposed = answer(board)
     return Brief(
         you=agent_id,
         how=how,
         agents=tuple(_agent_line(board, agent) for agent in others),
-        answer=PostLine.of(proposed) if (proposed := answer(board)) else None,
+        answer=PostLine.of(proposed) if proposed else None,
+        answer_standing=standing(board, proposed.post.id) if proposed else None,
         open_calls=open_calls[-MAX_NEWS:],
         one_agent_threads=alone[:MAX_LEADS],
         not_built_on=not_built_on[-MAX_LEADS:],

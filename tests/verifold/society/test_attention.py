@@ -214,14 +214,16 @@ def test_a_check_wakes_the_author_and_the_agent_that_asked_for_the_rerun() -> No
     assert woken(record, check) == {'ada', 'bo'}
 
 
-def test_the_persons_words_reach_watchers_or_everyone() -> None:
-    to_watchers = Message(id='p-2', thread='t-1', author='person', text='Try the 5090s.')
+def test_the_persons_words_that_name_nobody_reach_every_agent() -> None:
+    to_all = Message(id='p-2', thread='t-1', author='person', text='Try the 5090s.')
     own_thread = lab().thread('t-2', opened_by='person')
     own_thread.post(Message(id='p-1', thread='t-2', author='person', text='A new direction.'))
 
-    assert woken(started(), to_watchers) == {'ada'}
-    assert woken(started().watch('ada', 't-1', watching=False), to_watchers) == {'ada', 'bo', 'cy'}
-    assert woken(started(), to_watchers.model_copy(update={'mentions': ('bo',)})) == {'bo', 'ada'}
+    assert woken(started(), to_all) == {'ada', 'bo', 'cy'}
+    # A later watch by one agent takes the post from no other agent.
+    assert woken(started().watch('cy', 't-1'), to_all) == {'ada', 'bo', 'cy'}
+    assert woken(started(), to_all.model_copy(update={'mentions': ('bo',)})) == {'bo', 'ada'}
+    assert woken(started(), to_all.model_copy(update={'reply_to': 'p-1'})) == {'ada'}
     # Nobody watches the person's thread by default, so an agent's note there wakes nobody.
     assert woken(own_thread, Message(id='p-2', thread='t-2', author='bo', text='On it.')) == set()
 
