@@ -251,7 +251,7 @@ async def test_the_app_reads_a_file_that_backs_a_post_and_the_lab_folder_gets_th
         file = await client.get(f'/posts/{result.id}/file', params={'path': 'result.txt'})
         missing = await client.get(f'/posts/{result.id}/file', params={'path': '../secret.txt'})
 
-    assert (file.json()['path'], file.json()['text']) == ('result.txt', '11.8')
+    assert (file.json()['path'], file.json()['text']) == ('result.txt', '11.8\n')
     assert missing.status_code == 404
     assert (project / '.verifold' / 'WRITING.md').read_text() == WRITING_TEMPLATE
 

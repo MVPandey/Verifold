@@ -1,7 +1,14 @@
 import { useEffect } from 'react';
 import type { ReactElement } from 'react';
 
-import type { AgentView, LabView, PostView, ThreadLink, ThreadSummary } from '../api/types.ts';
+import type {
+  AgentView,
+  AnswerView,
+  LabView,
+  PostView,
+  ThreadLink,
+  ThreadSummary,
+} from '../api/types.ts';
 import { authorName, face, ownName } from '../model/agents.ts';
 import type { Face } from '../model/agents.ts';
 import { crossedLine, crossLines } from '../model/crossings.ts';
@@ -10,7 +17,7 @@ import { orderNeeds } from '../model/needs.ts';
 import { isPermission, personMessage, standingChip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { hasNew, markSeen, readSeen } from '../model/seen.ts';
-import { answerSoFar, cardStatus, headClaim, notRerun, questionThread } from '../model/turns.ts';
+import { answerSoFar, cardStatus, headClaim, questionThread } from '../model/turns.ts';
 import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
 import { Body, ChipView, Composer, FaceView, Files } from './parts.tsx';
@@ -140,7 +147,7 @@ export function Wall(
                   </div>
                   <Files post={answer.post.id} files={answer.post.evidence} />
                   {data.answer?.answer.post.id === answer.post.id ? (
-                    <Under posts={data.answer.builds_on} open={answerOpen} />
+                    <Under view={data.answer} open={answerOpen} />
                   ) : null}
                 </>
               ) : (
@@ -325,26 +332,23 @@ function ReportCard(props: {
 }
 
 /**
- * What the lab's answer builds on: how many posts, and how many of the results among them no blind rerun holds
- * up. With `open`, each post follows with where it stands.
+ * What the lab's answer builds on: how many posts, and how many of the results with files among them no blind
+ * checker has rerun. With `open`, each post follows with where it stands.
  */
-function Under(props: {
-  readonly posts: readonly PostView[];
-  readonly open: boolean;
-}): ReactElement | null {
-  if (props.posts.length === 0) return null;
-  const waits = notRerun(props.posts).length;
+function Under(props: { readonly view: AnswerView; readonly open: boolean }): ReactElement | null {
+  const { builds_on: posts, results, no_blind_rerun: waits } = props.view;
+  if (posts.length === 0) return null;
   return (
     <div className="f-under">
       <p>
-        Builds on {props.posts.length === 1 ? '1 post' : `${props.posts.length} posts`}.{' '}
-        {waits === 0
-          ? 'No result among them waits for a blind rerun.'
-          : `${waits === 1 ? '1 result has' : `${waits} results have`} no blind rerun.`}
+        Builds on {posts.length === 1 ? '1 post' : `${posts.length} posts`}.
+        {results > 0
+          ? ` ${waits.length} of ${results} ${results === 1 ? 'result' : 'results'} with files ${waits.length === 1 ? 'has' : 'have'} no blind rerun.`
+          : null}
       </p>
       {props.open ? (
         <ul>
-          {props.posts.map((item) => (
+          {posts.map((item) => (
             <li key={item.post.id}>
               <ChipView
                 chip={
@@ -354,6 +358,7 @@ function Under(props: {
               <a href={href({ page: 'thread', id: item.post.thread, post: item.post.id })}>
                 {item.post.text}
               </a>
+              {waits.includes(item.post.id) ? <span className="dim"> · no blind rerun</span> : null}
             </li>
           ))}
         </ul>

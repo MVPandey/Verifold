@@ -273,7 +273,7 @@ class AnswerLine(Record):
 
     answer: PostLine
     no_blind_rerun: tuple[PostLine, ...] = ()
-    """The results that the answer builds on, and that no blind rerun holds up yet. `rerun` asks for one."""
+    """The results with files that the answer builds on, and that no blind checker has rerun. `rerun` asks for one."""
 
 
 class AnswerView(Record):
@@ -281,6 +281,10 @@ class AnswerView(Record):
 
     answer: PostView
     builds_on: tuple[PostView, ...] = ()
+    results: int = 0
+    """How many of `builds_on` are results with files, which a blind checker can rerun."""
+    no_blind_rerun: tuple[PostId, ...] = ()
+    """The results among them that no blind checker has rerun."""
 
 
 class FileText(Record):

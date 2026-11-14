@@ -475,13 +475,28 @@ describe('the lab page', () => {
         postView(result('p-8', { thread: 't-2', text: 'Not rerun.', evidence: [file] }), 8),
         postView(result('p-9', { thread: 't-2', text: 'A reading.' }), 9),
       ],
+      results: 2,
+      no_blind_rerun: ['p-8'],
     };
     const closed = wall('t-2', thread('t-1', 'person', posts), none, answer);
     assert.ok(closed.includes('href="#/file/p-2/answer.md"'));
-    assert.ok(closed.includes('Builds on 3 posts. 1 result has no blind rerun.'));
+    assert.ok(closed.includes('Builds on 3 posts. 1 of 2 results with files has no blind rerun.'));
     assert.ok(!closed.includes('Not rerun.'));
     const open = wall('t-1', thread('t-1', 'person', posts), none, answer);
-    assert.ok(open.includes('<a href="#/thread/t-2/p-8">Not rerun.</a>'));
+    assert.ok(
+      open.includes(
+        '<a href="#/thread/t-2/p-8">Not rerun.</a><span class="dim"> · no blind rerun</span>',
+      ),
+    );
+    // Nothing under the answer can be rerun, so the page says nothing about reruns.
+    const reading = {
+      ...answer,
+      builds_on: answer.builds_on.slice(2),
+      results: 0,
+      no_blind_rerun: [],
+    };
+    const plain = wall('t-2', thread('t-1', 'person', posts), none, reading);
+    assert.ok(plain.includes('Builds on 1 post.') && !plain.includes('blind rerun'));
     // An answer from before the newest proposal says nothing about this one.
     const stale = { ...answer, answer: postView({ ...proposal, id: 'p-1' }, 1) };
     assert.ok(!wall('t-1', thread('t-1', 'person', posts), none, stale).includes('Builds on'));
@@ -493,39 +508,46 @@ describe('the lab page', () => {
         text={[
           '# The answer',
           '',
-          'No use **today**. See [the paper](https://arxiv.org/abs/2408.08292) and `run.py`.',
+          'No use **today**. See [the paper](https://arxiv.org/abs/2408.08292) and `answer_v3.md`.',
           '',
           '1. First',
+          '   - under it',
           '2. Second',
+          '',
+          'Results:',
           '',
           '| Method | Score |',
           '| --- | --- |',
           '| DQI | 0.51 |',
           '',
-          '```',
-          'x = 1',
-          '```',
-          '',
-          '<img src=x onerror=alert(1)> [bad](javascript:alert(1)) ![pic](https://x.test/a.png)',
+          '<b>raw</b> [bad](javascript:alert(1)) ![pic](https://x.test/a.png)',
         ].join('\n')}
       />,
     );
-    assert.ok(html.includes('<h2>The answer</h2>'));
+    assert.ok(html.includes('<h1>The answer</h1>'));
     assert.ok(html.includes('<strong>today</strong>'));
     assert.ok(
       html.includes(
         '<a href="https://arxiv.org/abs/2408.08292" target="_blank" rel="noreferrer noopener">the paper</a>',
       ),
     );
-    assert.ok(html.includes('<ol><li class="md-d0">First</li><li class="md-d0">Second</li></ol>'));
-    assert.ok(html.includes('<th>Method</th><th>Score</th>'));
-    assert.ok(html.includes('<td>DQI</td><td>0.51</td>'));
-    assert.ok(html.includes('<pre><code>x = 1</code></pre>'));
-    // An image becomes a link to it, and a link to a script becomes its words.
-    assert.ok(
-      html.includes('&lt;img src=x onerror=alert(1)&gt; bad !<a href="https://x.test/a.png"'),
+    assert.ok(html.includes('<code>answer_v3.md</code>'));
+    assert.match(
+      html,
+      /<ol>\s*<li>First\s*<ul>\s*<li>under it<\/li>\s*<\/ul>\s*<\/li>\s*<li>Second<\/li>/,
     );
-    assert.ok(!html.includes('<img') && !html.includes('javascript:'));
+    assert.ok(html.includes('<div class="md-table"><table>'));
+    assert.ok(html.includes('<td>DQI</td>'));
+    // HTML in the file is not markup, a link that is no web page keeps only its words, and so does an image.
+    assert.ok(html.includes('<span>bad</span> <span>pic</span>'));
+    assert.ok(!html.includes('<b>') && !html.includes('<img') && !html.includes('javascript:'));
+  });
+
+  it('reads a file with very long odd lines in well under two seconds', () => {
+    const long = (mark: string): string => mark.repeat(20_000);
+    const started = Date.now();
+    renderToStaticMarkup(<Markdown text={`# a${long(' ')}b\n${long('[')}\n|${long(' ')}x`} />);
+    assert.ok(Date.now() - started < 2_000);
   });
 
   it('marks only the threads with posts that the person has not seen', () => {

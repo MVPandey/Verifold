@@ -375,5 +375,15 @@ def test_the_answer_is_the_newest_proposal_in_the_questions_thread_that_its_auth
         ('p-2', 'open'),
         ('p-3', 'open'),
     ]
+    assert (view.results, view.no_blind_rerun) == (2, ('p-2',))
     assert line is not None
     assert (line.answer.id, [post.id for post in line.no_blind_rerun]) == ('p-6', ['p-2'])
+
+    # A blind rerun that fails, or one from the author's own family, is still a blind rerun.
+    record.join('eve', family='anthropic', checks='p-2')
+    record.post(
+        Check(id='p-10', thread='t-2', author='eve', text='No.', reply_to='p-2', outcome='fails', method='rerun')
+    )
+    after = brief(record.board(), 'ada', News(seq=0)).answer
+    assert after is not None
+    assert after.no_blind_rerun == ()

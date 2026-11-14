@@ -13,9 +13,9 @@ class GitError(RunnerError):
     """A Git command failed. The message holds Git's own error output."""
 
 
-async def git(*args: str, cwd: Path, env: Mapping[str, str] | None = None) -> str:
+async def git(*args: str, cwd: Path, env: Mapping[str, str] | None = None, strip: bool = True) -> str:
     """
-    Run `git` with `args` in `cwd`, and return its stripped standard output.
+    Run `git` with `args` in `cwd`, and return its standard output, stripped unless `strip` is false.
 
     `env` adds variables to the clean environment, such as a temporary `GIT_INDEX_FILE`.
 
@@ -35,7 +35,8 @@ async def git(*args: str, cwd: Path, env: Mapping[str, str] | None = None) -> st
     output, errors = await process.communicate()
     if process.returncode:
         raise GitError(f'git {" ".join(args)} failed: {errors.decode(errors="replace").strip()}')
-    return output.decode().strip()
+    text = output.decode()
+    return text.strip() if strip else text
 
 
 async def commit_of(folder: Path, ref: str) -> str | None:

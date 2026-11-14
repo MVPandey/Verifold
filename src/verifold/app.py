@@ -77,11 +77,11 @@ SERVER_STOP_GRACE = 30.0
 """Seconds that `stop_lab` gives a server to stop its agents and exit, before it kills the server."""
 
 NORMS_TEMPLATE = files('verifold.society').joinpath('LAB.md').read_text()
+"""The norms that a new lab starts with. The person edits the copy in the lab's folder."""
 WRITING_TEMPLATE = files('verifold.society').joinpath('WRITING.md').read_text()
 """How the lab writes its answer for the person. A lab folder gets a copy, which the person can change."""
 MAX_FILE_BYTES = 1_000_000
 """The largest file that the app shows as text."""
-"""The norms that a new lab starts with. The person edits the copy in the lab's folder."""
 
 
 class ServeOptions(Record):
@@ -234,7 +234,7 @@ class Host:
             size = int(await git('cat-file', '-s', blob, cwd=folder))
             if size > MAX_FILE_BYTES:
                 raise NotFound(f'{path} is larger than {MAX_FILE_BYTES:,} bytes, so the app does not show it.')
-            text = await git('show', blob, cwd=folder)
+            text = await git('show', blob, cwd=folder, strip=False)
         except UnicodeDecodeError as error:
             raise NotFound(f'{path} is not a text file.') from error
         except (GitError, OSError, ValueError) as error:

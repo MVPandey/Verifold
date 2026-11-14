@@ -271,6 +271,10 @@ export interface PostView {
 export interface AnswerView {
   readonly answer: PostView;
   readonly builds_on: readonly PostView[];
+  /** How many of `builds_on` are results with files, which a blind checker can rerun. */
+  readonly results: number;
+  /** The results among them that no blind checker has rerun. */
+  readonly no_blind_rerun: readonly string[];
 }
 
 /** The text of one file that backs a post, at the commit that the post pins. */

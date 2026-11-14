@@ -39,7 +39,7 @@ export function FilePage(props: {
     <article className="file-page">
       <header>
         <a href={href({ page: 'lab' })}>Back to the lab</a>
-        <h1>{path}</h1>
+        <p className="file-name">{path}</p>
         {shown?.file ? (
           <span className="dim" title={shown.file.commit}>
             from {post}, at <code>{shown.file.commit.slice(0, 7)}</code>

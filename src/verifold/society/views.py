@@ -24,6 +24,7 @@ from verifold.protocol.threads import QUESTION_TITLE
 from verifold.society.attention import watches_thread
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
+from verifold.society.rules import blind_checks
 from verifold.society.standing import is_answered, is_open_call, standing
 
 
@@ -313,25 +314,37 @@ def answer_view(board: Board) -> AnswerView | None:
     entry = answer(board)
     if entry is None:
         return None
-    under = (board.post(post_id) for post_id in entry.post.builds_on)
-    return AnswerView(answer=post_view(board, entry), builds_on=tuple(post_view(board, post) for post in under if post))
+    under = tuple(post for post_id in entry.post.builds_on if (post := board.post(post_id)))
+    results = tuple(post for post in under if _can_rerun(post))
+    return AnswerView(
+        answer=post_view(board, entry),
+        builds_on=tuple(post_view(board, post) for post in under),
+        results=len(results),
+        no_blind_rerun=tuple(post.post.id for post in _not_rerun(board, results)),
+    )
 
 
 def _answer_line(board: Board) -> AnswerLine | None:
     entry = answer(board)
     if entry is None:
         return None
-    under = (board.post(post_id) for post_id in entry.post.builds_on)
-    # A blind rerun needs files, and a conceded result holds nothing up.
-    waits = tuple(
-        PostLine.of(post)
-        for post in under
-        if post
-        and isinstance(post.post, Result)
-        and post.post.evidence
-        and standing(board, post.post.id) not in {'held_up', 'conceded'}
+    under = tuple(post for post_id in entry.post.builds_on if (post := board.post(post_id)))
+    waits = _not_rerun(board, tuple(post for post in under if _can_rerun(post)))
+    return AnswerLine(answer=PostLine.of(entry), no_blind_rerun=tuple(PostLine.of(post) for post in waits))
+
+
+def _can_rerun(entry: Posted) -> bool:
+    # A blind rerun needs files to run.
+    return isinstance(entry.post, Result) and bool(entry.post.evidence)
+
+
+def _not_rerun(board: Board, results: tuple[Posted, ...]) -> tuple[Posted, ...]:
+    # The results that no blind checker has checked, whatever the check said, and that their author still holds.
+    return tuple(
+        entry
+        for entry in results
+        if not blind_checks(board, entry.post.id) and standing(board, entry.post.id) != 'conceded'
     )
-    return AnswerLine(answer=PostLine.of(entry), no_blind_rerun=waits)
 
 
 def latest_report(board: Board) -> PostView | None:
