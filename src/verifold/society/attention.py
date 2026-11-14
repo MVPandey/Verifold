@@ -2,17 +2,17 @@
 Who hears what.
 
 A post is for an agent when it names the agent, replies to one of the agent's posts, builds on one of them, or
-lands in a thread that the agent watches. A post names an agent in `mentions` or in its text. An agent watches the threads that the person
-opens, the threads that it opens, and the threads that it posts in, until it says otherwise.
+lands in a thread that the agent watches. A post names an agent in `mentions` or in its text. An agent watches the
+threads that it opens and the thread where it works now, which is the thread of its latest plan or result, until it
+says otherwise. Nobody watches the question's thread by default, so a post there is for the agents that it names.
 
-Some posts are for every agent: a proposal, and an ask, a call, or the first post of a thread when it names nobody. An ask
-names nobody when its `mentions` are empty and it replies to no post, so an agent that is stuck reaches every agent
-that may know the missing piece. A check is also for the agent that asked for the rerun. The person's words reach the agents by default: a post from the person that names
-nobody wakes the thread's watchers, or every agent when nobody watches the thread. No post is for a blind checker,
-which reads nothing but its claim.
+Some posts are for every agent: an ask, a call, or the first post of a thread when it names nobody. An ask names
+nobody when its `mentions` are empty and it replies to no post, so an agent that is stuck reaches every agent that
+may know the missing piece. A check is also for the agent that asked for the rerun. The person's words reach the agents by default: a post from the person that
+names nobody and replies to no post is for every agent. No post is for a blind checker, which reads nothing but its claim.
 
 A post that is for an agent wakes it. The agent's news holds every post that it has not seen, and says which are for
-it.
+it. So an agent learns of the rest when it reads the board, and not before.
 """
 
 import re
@@ -21,15 +21,22 @@ from functools import lru_cache
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.join import MAX_NEWS, News, PostLine, Update
-from verifold.protocol.posts import Ask, Call, Check, Post, Proposal
+from verifold.protocol.posts import Ask, Call, Check, Post
 from verifold.society.board import Board
+from verifold.society.lines import lines_of
 
 type Names = tuple[tuple[AgentId, str], ...]
 """The ID and the display name of each agent that a post can name."""
 
 
-def watches_thread(board: Board, agent_id: AgentId, thread_id: ThreadId) -> bool:
-    """Return whether an agent watches a thread now."""
+def watches_thread(
+    board: Board, agent_id: AgentId, thread_id: ThreadId, working: dict[AgentId, ThreadId | None] | None = None
+) -> bool:
+    """
+    Return whether an agent watches a thread now.
+
+    `working` is where each agent works, from `lines_of`. A caller that asks about many posts passes it once.
+    """
     latest = next(
         (watch for watch in reversed(board.watches) if watch.agent == agent_id and watch.thread == thread_id), None
     )
@@ -38,12 +45,13 @@ def watches_thread(board: Board, agent_id: AgentId, thread_id: ThreadId) -> bool
     opened = board.thread(thread_id)
     if opened is None:
         return False
-    return opened.thread.opened_by in {agent_id, PERSON} or any(
-        entry.post.thread == thread_id and entry.post.author == agent_id for entry in board.posts
-    )
+    working = lines_of(board) if working is None else working
+    return opened.thread.opened_by == agent_id or working.get(agent_id) == thread_id
 
 
-def wakes(board: Board, agent_id: AgentId, entry: Posted) -> bool:
+def wakes(
+    board: Board, agent_id: AgentId, entry: Posted, working: dict[AgentId, ThreadId | None] | None = None
+) -> bool:
     """Return whether a post is for an agent, so that it wakes the agent. No post is for a blind checker."""
     post = entry.post
     reader = board.agent(agent_id)
@@ -51,10 +59,11 @@ def wakes(board: Board, agent_id: AgentId, entry: Posted) -> bool:
         return False
     if _names(board, agent_id, post) or _for_everyone(board, entry):
         return True
-    watching = watches_thread(board, agent_id, post.thread)
+    # The person's words that name nobody are for every agent, whoever watches the thread.
     if post.author == PERSON and not post.mentions and not post.reply_to:
-        return watching or not any(watches_thread(board, worker, post.thread) for worker, _ in _workers(board))
-    return watching
+        return True
+    working = lines_of(board) if working is None else working
+    return watches_thread(board, agent_id, post.thread, working)
 
 
 def update(board: Board, agent_id: AgentId, after: int) -> Update:
@@ -102,8 +111,9 @@ def news(board: Board, agent_id: AgentId, after: int) -> News:
 
 def _unseen(board: Board, agent_id: AgentId, after: int) -> tuple[tuple[Posted, ...], tuple[Posted, ...]]:
     # The posts by others after `after`: first the ones for the agent, then the rest.
+    working = lines_of(board)
     marked = tuple(
-        (wakes(board, agent_id, entry), entry)
+        (wakes(board, agent_id, entry, working), entry)
         for entry in board.posts
         if entry.seq > after and entry.post.author != agent_id
     )
@@ -140,8 +150,6 @@ def _for_everyone(board: Board, entry: Posted) -> bool:
     # reader and takes none away. An ask that replies to a post is for that post's author. A call that replies to a
     # post, such as the caller's own result, still asks every agent for hands.
     post = entry.post
-    if isinstance(post, Proposal):
-        return True
     open_ask = isinstance(post, Call) or (isinstance(post, Ask) and not post.reply_to)
     return not post.mentions and (open_ask or _opens_thread(board, entry))
 

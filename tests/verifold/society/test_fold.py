@@ -1,7 +1,7 @@
 import pytest
 from builders import START, RecordBuilder
 
-from verifold.protocol.events import LabOpened, TurnEnded
+from verifold.protocol.events import LabOpened, TurnEnded, WentQuiet
 from verifold.protocol.posts import Message, Result
 from verifold.protocol.usage import Usage
 from verifold.society.errors import RejectedEvent
@@ -58,3 +58,13 @@ def test_a_turn_belongs_to_an_agent_in_the_lab(record: RecordBuilder) -> None:
     with pytest.raises(RejectedEvent, match='zed is not an agent'):
         apply(board, turn)
     assert apply(board, turn.model_copy(update={'agent': 'ada'})).turns[-1].agent == 'ada'
+
+
+def test_a_record_from_before_holds_a_quiet_mark_that_changes_nothing(record: RecordBuilder) -> None:
+    before = record.board()
+    mark = WentQuiet(seq=before.seq + 1, at=START, seconds=180)
+
+    after = fold([*record.events, mark])
+
+    assert after.seq == before.seq + 1
+    assert (after.posts, after.agents, after.threads) == (before.posts, before.agents, before.threads)

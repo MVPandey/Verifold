@@ -268,14 +268,6 @@ class ThreadLine(Record):
     team: tuple[AgentId, ...]
 
 
-class AnswerLine(Record):
-    """The lab's answer so far as one line, with the results under it that no blind rerun holds up."""
-
-    answer: PostLine
-    no_blind_rerun: tuple[PostLine, ...] = ()
-    """The results with files that the answer builds on, and that no blind checker has rerun. `rerun` asks for one."""
-
-
 class AnswerView(Record):
     """The lab's answer so far for the person: the proposal, and each post that it builds on with where it stands."""
 
@@ -309,10 +301,12 @@ class Brief(Record):
     """How the board works. The first brief of a session carries it, and later ones leave it out."""
     agents: tuple[AgentLine, ...] = ()
     """The other agents. Blind checkers are not among them."""
-    answer: AnswerLine | None = None
-    """The lab's answer so far: the newest proposal in the question's thread that its author did not concede."""
+    answer: PostLine | None = None
+    """The lab's answer so far: the newest proposal in the question's thread."""
+    answer_standing: Standing | None = None
+    """Where the answer stands, such as `disputed` or `conceded`. `None` when the lab has no answer."""
     open_calls: tuple[PostLine, ...] = ()
-    """Calls from others that still need an agent, newest last. Take one with a plan that replies to it."""
+    """Calls from others that still need an agent, newest last. A plan that replies to a call takes it."""
     one_agent_threads: tuple[ThreadLine, ...] = ()
     """The threads where one other agent works alone, the most recently active first, at most `MAX_LEADS`."""
     not_built_on: tuple[PostLine, ...] = ()

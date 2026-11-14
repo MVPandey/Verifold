@@ -53,8 +53,8 @@ export function titleOf(headline: string): string {
 /**
  * Return the post that sends the person's text to the agents, or `null` for empty text.
  *
- * In a thread the post goes to the thread. Without one, it opens a new thread. Every agent watches a thread that
- * the person opens, so the post wakes every agent.
+ * In a thread the post goes to the thread. Without one, it opens a new thread. A post from the person that names
+ * nobody is for every agent.
  */
 export function personMessage(text: string, thread?: string): PostRequest | null {
   const { headline, body } = split(text);

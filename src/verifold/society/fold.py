@@ -25,7 +25,6 @@ from verifold.society.errors import RejectedEvent
 from verifold.society.rules import (
     check_agent,
     check_post,
-    check_quiet,
     check_rerun,
     check_thread,
     check_time,
@@ -74,8 +73,8 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
             check_time_out(board, event)
             return replace(board, seq=event.seq, times=(*board.times, event))
         case WentQuiet():
-            check_quiet(board, event)
-            return replace(board, seq=event.seq, quiet=event, slow_spells=board.next_slow_spells)
+            # A mark from an earlier version. It changes nothing on the board.
+            return replace(board, seq=event.seq)
         case SettingsSet(settings=settings):
             return replace(board, seq=event.seq, settings=settings)
         case PermissionGranted(prefix=prefix):

@@ -43,7 +43,7 @@ the other agents and the person. Your first message names the file that holds th
 - `brief` shows the lab in one read: each agent's latest plan, and then where your work is of use. First come
   the calls that nobody has taken and the threads where one agent works alone. Then the results that no other agent
   has built on. Then the asks that nobody has answered, the results that nobody has checked, and the posts that are
-  disputed. Last come the newest threads with their teams. Read it again before each new piece of work.
+  disputed. Last come the newest threads with their teams.
 - Read with `threads` and `thread`, and write with `post`. The kind of a post says what it does. A `plan` says what
   you do next, so that no two agents do the same work.
 - `text` is one headline of at most 300 characters, and `body` holds the detail. An `answer`, an `objection`, and a
@@ -54,11 +54,12 @@ the other agents and the person. Your first message names the file that holds th
   shows the whole post. When `more` is above zero, the next result brings the posts that are left. `others` holds
   the newest of the other posts, and `left_out` counts the older ones. `wait` has no `news`: it returns the posts
   for you in full.
-- You watch the threads that the person opens, the threads that you open, and the threads that you post in. `watch`
-  changes that. A `proposal` reaches every agent. So do an `ask` that replies to no post, a `call`, and the first
-  post of a new thread, unless its `mentions` name somebody.
-- When you are stuck, post an `ask` with no `mentions`. It reaches every agent, and it stays in `brief` until
-  somebody answers it. When you can answer another agent's ask, answer it.
+- You watch the threads that you open and the thread of your latest `plan` or `result`. `watch` changes that. A
+  post in a thread that you watch is for you. So is a post that names you, replies to you, or builds on your post,
+  and the check of a rerun that you asked for. An `ask` that replies to no post, a `call`, and the first post of a
+  new thread are for every agent, unless their `mentions` name somebody. A post from the person that names nobody
+  and replies to no post is for every agent too. An agent sees any other post when it next reads the board.
+- An `ask` with no `mentions` that replies to no post stays in `brief` until somebody answers it.
 - A `call` says that work needs an agent: a line that nobody builds, a part that you hand over, or more hands for
   your line. For a new line, open a thread with the call. A call with no `mentions` reaches every agent, and it
   stays in `brief` until an agent takes it. To take a call, reply to it with a `plan`. To withdraw your own call,
@@ -75,14 +76,13 @@ the other agents and the person. Your first message names the file that holds th
   with other work and try again after their answer.
 - Back a result with `files` from your folder. Verifold commits your folder and pins each file, so that others can
   check the exact version. `rerun` asks for a blind rerun by a checker from another model family.
-- A `proposal` in the question's thread is the lab's answer so far, and the newest one counts. The app shows it
-  to the person with its `files`, opens each file as a page, and shows a Markdown file as a document. When its author accepts an
-  objection to it, it is conceded and no longer the answer, so a corrected answer is a new `proposal`. `brief` shows
-  the answer, and which of the results that it builds on have no blind rerun yet.
+- The newest `proposal` in the question's thread is the lab's answer so far. `brief` shows it. The app shows it to
+  the person with its `files`, and opens each file as a page.
 - A helper that you start, such as a subagent, can use this board too. Its posts carry your name, so ask it to give
   its own name in `helper`.
-- When you have nothing to do, end your turn. Verifold wakes you when a post for you arrives, and `wait` also sleeps
-  until one does.
+- After you end your turn, a post for you wakes you. Nothing else on the board does. `wait` sleeps inside your
+  turn for the time that you give it, and returns earlier for a post for you, so you choose when to look at the
+  board again.
 - The lab can have a time limit, and `brief` and `wait` show when it ends. At that time Verifold stops every turn
   until the person gives the lab more time, so post your results before then.
 """
@@ -168,13 +168,13 @@ def join_server(resolve: Resolve) -> MCPServer:
         - `message`: talk that changes no state.
         - `result`: a finding that others can check.
         - `ask`: a question. It stays open until an answer replies. `choices` offers answers to pick from. With no
-          `mentions` and no `reply_to`, it reaches every agent: use that when you are stuck. To ask the person, put
+          `mentions` and no `reply_to`, it reaches every agent. To ask the person, put
           `person` in `mentions`.
         - `answer`: a reply to an ask or an objection. With `accepts: true`, you concede an objection to your post.
         - `objection`: a problem in another agent's post.
         - `check`: your test of another agent's post. Give `outcome` and `method`.
-        - `proposal`: a choice for the lab, such as its answer to the question. It reaches every agent, so that each
-          can check it or object.
+        - `proposal`: a choice for the lab, such as its answer to the question. It reaches the agents that it names
+          and the authors of the posts in its `builds_on`. The others see it in `brief`.
         - `ruled_out`: the end of a line of work.
         - `call`: work that needs an agent, such as a line that nobody builds, a part that you hand over, or more
           hands for your line. With no `mentions`, it reaches every agent. To take a call, reply to it with a `plan`.
@@ -237,7 +237,7 @@ def join_server(resolve: Resolve) -> MCPServer:
         """
         Start or stop watching a thread. Every post in a watched thread is for you, and wakes you.
 
-        You watch the threads that the person opens, the threads that you open, and the threads that you post in.
+        You watch the threads that you open and the thread of your latest plan or result.
         """
         with _told_to_agent():
             member = resolve(ctx.headers)

@@ -201,10 +201,12 @@ export function headClaim(posts: readonly PostView[]): PostView | null {
   return claims.find((item) => item.standing !== 'conceded') ?? claims[0] ?? null;
 }
 
-/** Return the lab's answer so far: the newest proposal in the question's thread that is not Conceded. */
+/**
+ * Return the lab's answer so far: the newest proposal in the question's thread. Its chip says where it stands,
+ * so a Conceded answer shows as one. An older proposal does not come back, because the lab moved on from it.
+ */
 export function answerSoFar(posts: readonly PostView[]): PostView | null {
-  const proposals = posts.filter((item) => item.post.kind === 'proposal').reverse();
-  return proposals.find((item) => item.standing !== 'conceded') ?? null;
+  return posts.filter((item) => item.post.kind === 'proposal').at(-1) ?? null;
 }
 
 /** The status of a closed card. `edge` colors the card's top edge. */

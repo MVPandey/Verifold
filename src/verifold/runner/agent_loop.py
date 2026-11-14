@@ -2,8 +2,7 @@
 Supervises one agent.
 
 The agent's harness owns its work. Verifold keeps the agent's ACP session open, rings a doorbell when posts for the
-agent arrive after it ended its turn, tells the agent when the whole lab went quiet, and starts the harness again when
-its process fails. The doorbell waits for a quiet moment on the board, so that a burst of posts wakes the agent once.
+agent arrive after it ended its turn, and starts the harness again when its process fails. The doorbell waits for a quiet moment on the board, so that a burst of posts wakes the agent once.
 """
 
 import asyncio
@@ -22,7 +21,7 @@ from verifold.protocol.record import Record
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.usage import Usage
 from verifold.runner.git import GitError
-from verifold.runner.messages import DOORBELL, JOBS_ENDED, more_time_message, quiet_message
+from verifold.runner.messages import DOORBELL, JOBS_ENDED, cut_short_message, more_time_message
 from verifold.runner.permissions import GrantAsks, ask_the_person, refusal, settled
 from verifold.runner.session import (
     AgentSession,
@@ -53,8 +52,6 @@ class LoopSettings(Record):
     """Seconds without a new event on the board before a doorbell rings, so that one doorbell covers a burst."""
     max_quiet: float = Field(default=45, ge=0)
     """The most seconds that a doorbell waits for the board to go quiet."""
-    lull: float = Field(default=90, ge=0)
-    """Seconds without a turn or an event before Verifold tells the agents that the lab is quiet. Zero: never."""
     job_poll: float = Field(default=5, gt=0)
     """Seconds between two looks at the processes that an agent with one job left running."""
     job_wait: float = Field(default=3_600, gt=0)
@@ -122,6 +119,8 @@ class AgentLoop:
         """What the agent had seen when its turn started. A failed turn takes the agent back to it."""
         self._turn_ended = self._lab.board.seq
         """The board's sequence number when the agent's last turn ended. A stop after it concerns the agent's jobs."""
+        self._cut_short = ''
+        """Why the agent's last turn ended without the agent's choice, or empty when the agent ended it."""
 
     async def run(self) -> None:
         """Run the agent until it fails too often, or until the caller cancels the loop."""
@@ -135,7 +134,7 @@ class AgentLoop:
         hooks = SessionHooks(permissions=self._permission, step=self._step)
         board = BoardAccess(url=self._settings.mcp_url, token=setup.token)
         resume: str | None = None
-        message, failures = setup.start, 0
+        message, failures, resumed = setup.start, 0, False
         while True:
             try:
                 options = setup.options.model_copy(update={'resume': resume})
@@ -163,7 +162,12 @@ class AgentLoop:
                                 if self._jobs_stopped(self._lab.board)
                                 else JOBS_ENDED
                             )
+                        elif self._cut_short and not resumed:
+                            # The agent did not choose to stop, so no post may be on its way. It goes on once. A
+                            # second cut in a row waits for a post, so a turn that always fails does not repeat.
+                            message, resumed = cut_short_message(self._cut_short), True
                         else:
+                            resumed = False
                             message = await self._news()
             # Any failure of one harness restarts that harness. It must not stop the lab's other agents.
             except Exception as error:
@@ -203,10 +207,12 @@ class AgentLoop:
                 else f'The turn ran past {self._settings.turn_timeout:g} seconds and was cancelled.'
             )
             await self._record(started, Usage(), None, error)
+            self._cut_short = '' if out_of_time else error
             if not out_of_time:
                 await self._report('idle')
             return out_of_time
         stopped = None if result.stop_reason == 'end_turn' else f'The harness stopped: {result.stop_reason}.'
+        self._cut_short = stopped or ''
         await self._record(started, result.usage, result.cost_usd, stopped)
         await self._report('idle')
         return False
@@ -293,9 +299,6 @@ class AgentLoop:
                     continue
                 self._notified = board.seq
                 return DOORBELL
-            # The lab went quiet after this agent's last turn. The agent hears it once, because its next turn ends later.
-            if board.quiet and board.quiet.seq > self._turn_ended and not stopped and not board.out_of_time:
-                return quiet_message(board.quiet, board.ends_at)
             await self._lab.wait_for_change(board.seq)
 
     async def _settle(self) -> None:

@@ -17,7 +17,7 @@ from verifold.protocol.usage import Usage
 from verifold.runner import agent_loop
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
 from verifold.runner.git import git
-from verifold.runner.messages import DOORBELL, JOBS_ENDED, more_time_message, quiet_message
+from verifold.runner.messages import DOORBELL, JOBS_ENDED, cut_short_message, more_time_message
 from verifold.runner.permissions import GrantAsks
 from verifold.runner.session import AgentSession, TurnResult
 from verifold.server.activity import Activity
@@ -197,46 +197,6 @@ async def test_a_doorbell_does_not_wait_longer_than_the_limit_for_a_board_that_s
     assert calls(log, 'prompt')[1]['text'] == DOORBELL
 
 
-async def test_an_agent_hears_once_that_the_lab_went_quiet_after_its_turn(
-    served: ServedBoard, tmp_path: Path, log: Path
-) -> None:
-    lab = served.lab
-    running = asyncio.create_task(loop_for(served, tmp_path).run())
-    try:
-        await until(lambda: len(lab.board.turns) == 1)
-        await lab.go_quiet(180)
-        await until(lambda: len(lab.board.turns) == 2)
-        # The old mark wakes the agent no second time: the next message is the doorbell for this ask.
-        await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'person')
-        await until(lambda: len(lab.board.turns) == 3)
-    finally:
-        running.cancel()
-
-    quiet = lab.board.quiet
-    assert quiet is not None
-    assert [call['text'] for call in calls(log, 'prompt')] == [
-        'Start.',
-        quiet_message(quiet, lab.board.ends_at),
-        DOORBELL,
-    ]
-
-
-async def test_a_mark_from_before_the_agent_started_does_not_wake_it(
-    served: ServedBoard, tmp_path: Path, log: Path
-) -> None:
-    lab = served.lab
-    await lab.go_quiet(180)
-    running = asyncio.create_task(loop_for(served, tmp_path).run())
-    try:
-        await until(lambda: len(lab.board.turns) == 1)
-        await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'person')
-        await until(lambda: len(lab.board.turns) == 2)
-    finally:
-        running.cancel()
-
-    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL]
-
-
 async def test_a_failed_turn_gives_the_agent_its_news_again(
     served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -396,12 +356,16 @@ async def test_a_turn_past_its_timeout_is_cancelled(
     try:
         await until(lambda: len(served.lab.board.turns) == 1)
         await until(lambda: bool(calls(log, 'cancel')))
-        # The agent is in no turn after the cancel, so it does not hold up a quiet lab.
+        # The agent did not choose to stop, so it goes on once and hears why. A second cut waits for a post.
+        await until(lambda: len(served.lab.board.turns) == 2)
         await until(lambda: activity.of('bo').state == 'idle')
+        await asyncio.sleep(0.3)
     finally:
         running.cancel()
 
-    assert served.lab.board.turns[0].error == 'The turn ran past 0.5 seconds and was cancelled.'
+    cut = 'The turn ran past 0.5 seconds and was cancelled.'
+    assert [turn.error for turn in served.lab.board.turns] == [cut, cut]
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', cut_short_message(cut)]
 
 
 @pytest.mark.usefixtures('log')
