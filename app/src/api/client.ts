@@ -76,6 +76,9 @@ export function createApi(
       // A server from before these fields sends none, and the page must still load.
       request<LabView>('/lab').then((lab) => ({
         ...lab,
+        state: lab.state ?? 'open',
+        close: lab.close ?? null,
+        close_agreed: lab.close_agreed ?? 0,
         agents: lab.agents.map((view) => ({
           ...view,
           role: view.role ?? '',

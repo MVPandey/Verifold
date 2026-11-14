@@ -29,7 +29,7 @@ from verifold.protocol.app import (
 )
 from verifold.protocol.events import RerunRequested
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
-from verifold.protocol.join import AnswerView, FileText, PostRequest, PostView, ThreadSummary, ThreadView
+from verifold.protocol.join import AnswerView, FileText, PostLine, PostRequest, PostView, ThreadSummary, ThreadView
 from verifold.protocol.usage import Usage
 from verifold.server.activity import Activity
 from verifold.server.errors import LabExists, NoLab, ServerError
@@ -37,6 +37,7 @@ from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
+from verifold.society.lifecycle import agreed, closing, lab_state
 from verifold.society.lines import lines_of
 from verifold.society.views import answer_view, latest_report, needs_person, thread_summaries, thread_view
 from verifold.store.errors import SettingsChanged, SettingsInvalid, SettingsUnwritable
@@ -181,7 +182,11 @@ def _authorize(person_token: SecretStr) -> Callable[[Request, str | None], None]
 
 def _lab_view(board: Board, activity: Activity) -> LabView:
     working = lines_of(board)
+    done = closing(board)
     return LabView(
+        state=lab_state(board),
+        close=PostLine.of(done) if done else None,
+        close_agreed=len(agreed(board, done)) if done else 0,
         question=board.opened.question,
         opened_at=board.opened.at,
         seq=board.seq,

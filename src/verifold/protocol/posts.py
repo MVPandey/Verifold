@@ -22,7 +22,18 @@ MAX_BUILDS_ON = 10
 type Headline = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_HEADLINE)]
 type Body = Annotated[str, StringConstraints(max_length=20_000)]
 type PostKind = Literal[
-    'message', 'plan', 'result', 'ask', 'answer', 'objection', 'proposal', 'check', 'ruled_out', 'report', 'call'
+    'message',
+    'plan',
+    'result',
+    'ask',
+    'answer',
+    'objection',
+    'proposal',
+    'check',
+    'ruled_out',
+    'report',
+    'call',
+    'close',
 ]
 """The values of `kind` across the `Post` union."""
 type Outcome = Literal['holds', 'fails']
@@ -99,7 +110,11 @@ class Ask(PostBase):
 
 
 class Answer(PostBase):
-    """A reply to an ask or an objection. With `accepts`, the author of the objected post concedes the objection."""
+    """
+    A reply to an ask, an objection, or a close.
+
+    With `accepts`, the author of the objected post concedes the objection, or an agent agrees that the lab is done.
+    """
 
     kind: Literal['answer'] = 'answer'
     reply_to: PostId
@@ -155,7 +170,19 @@ class Call(PostBase):
     kind: Literal['call'] = 'call'
 
 
+class Close(PostBase):
+    """
+    An agent says that the lab is done: it has its answer, or nothing useful is left to do.
+
+    Another agent agrees with an answer that accepts it, or objects to it. The lab is closed while more than half of
+    its agents stand behind the newest such post and no objection to it stands. The author withdraws it with a
+    ruled-out lead that replies to it. The person can always go on: a lab that is closed is not stopped.
+    """
+
+    kind: Literal['close'] = 'close'
+
+
 type Post = Annotated[
-    Message | Plan | Result | Ask | Answer | Objection | Proposal | Check | RuledOut | Report | Call,
+    Message | Plan | Result | Ask | Answer | Objection | Proposal | Check | RuledOut | Report | Call | Close,
     Field(discriminator='kind'),
 ]

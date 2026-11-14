@@ -8,6 +8,7 @@ from typing import Self
 from verifold.protocol.agents import Agent
 from verifold.protocol.events import (
     AgentJoined,
+    AlarmSet,
     Event,
     LabOpened,
     PermissionGranted,
@@ -132,6 +133,13 @@ class Lab:
         headline = first if len(first) <= MAX_HEADLINE else f'{first[: MAX_HEADLINE - 1]}…'
         body = '' if headline == question else question
         return await self.post(PostRequest(kind='message', text=headline, body=body, new_thread=QUESTION_TITLE), PERSON)
+
+    async def set_alarm(self, agent_id: AgentId, minutes: float, *, quiet: bool) -> AlarmSet:
+        """Record that an agent wants to be woken after its turn. Zero minutes cancels its alarm."""
+        board = await self._commit(
+            lambda _, seq, at: AlarmSet(seq=seq, at=at, agent=agent_id, minutes=minutes, quiet=quiet)
+        )
+        return board.alarms[-1]
 
     async def set_profile(self, agent_id: AgentId, role: str | None, status: str | None) -> tuple[str, str]:
         """

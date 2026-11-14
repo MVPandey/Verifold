@@ -2,7 +2,9 @@
 Supervises one agent.
 
 The agent's harness owns its work. Verifold keeps the agent's ACP session open, rings a doorbell when posts for the
-agent arrive after it ended its turn, and starts the harness again when its process fails. The doorbell waits for a quiet moment on the board, so that a burst of posts wakes the agent once.
+agent arrive after it ended its turn, rings the alarm that the agent set for itself, and starts the harness again
+when its process fails. The doorbell waits for a quiet moment on the board, so that a burst of posts wakes the agent
+once.
 """
 
 import asyncio
@@ -21,7 +23,7 @@ from verifold.protocol.record import Record
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.usage import Usage
 from verifold.runner.git import GitError
-from verifold.runner.messages import DOORBELL, JOBS_ENDED, cut_short_message, more_time_message
+from verifold.runner.messages import DOORBELL, JOBS_ENDED, alarm_message, cut_short_message, more_time_message
 from verifold.runner.permissions import GrantAsks, ask_the_person, refusal, settled
 from verifold.runner.session import (
     AgentSession,
@@ -36,6 +38,7 @@ from verifold.server.activity import Activity
 from verifold.server.member import Member
 from verifold.society.attention import update
 from verifold.society.board import Board
+from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
 
 
 class LoopSettings(Record):
@@ -299,7 +302,14 @@ class AgentLoop:
                     continue
                 self._notified = board.seq
                 return DOORBELL
-            await self._lab.wait_for_change(board.seq)
+            # The agent's own alarm. It does not ring in a lab that is out of time or closed.
+            alarm = pending_alarm(board, agent_id)
+            left = None
+            if alarm and not stopped and not board.out_of_time and lab_state(board) != 'closed':
+                left = (rings_at(board, alarm) - self._lab.now()).total_seconds()
+                if left <= 0:
+                    return alarm_message(alarm)
+            await self._lab.wait_for_change(board.seq, left)
 
     async def _settle(self) -> None:
         # Wait until the board has no new event for `quiet` seconds, and for `max_quiet` seconds at most.

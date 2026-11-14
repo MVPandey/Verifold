@@ -50,7 +50,7 @@ async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
         threads = await client.call_tool('threads', {})
         news = await client.call_tool('wait', {'timeout_seconds': 0})
 
-    assert tools == {'brief', 'post', 'threads', 'thread', 'watch', 'profile', 'rerun', 'wait'}
+    assert tools == {'brief', 'post', 'threads', 'thread', 'watch', 'alarm', 'profile', 'rerun', 'wait'}
     assert posted.structured_content is not None
     assert posted.structured_content['post']['id'] == 'p-2'
     assert watched.structured_content is not None
@@ -231,6 +231,8 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         'pins each file',
         'blind rerun',
         'time limit',
+        '`alarm` wakes you after your turn',
+        'A `close` says that the lab is done',
         "person's norms",
     ):
         assert rule in instructions
@@ -244,3 +246,20 @@ async def test_the_tools_describe_who_a_post_reaches_as_the_board_decides_it(lab
     assert 'reaches every agent, so that each' not in tools['post']
     assert 'the thread of your latest plan or result' in tools['watch']
     assert 'the threads that you post in' not in tools['watch']
+
+
+async def test_an_agent_sets_and_cancels_its_own_alarm(lab: Lab) -> None:
+    async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
+        set_ = await client.call_tool('alarm', {'minutes': 20, 'quiet': True})
+        cancelled = await client.call_tool('alarm', {'minutes': 0})
+        too_long = await client.call_tool('alarm', {'minutes': 24 * 60 + 1})
+
+    assert set_.structured_content is not None
+    assert (set_.structured_content['quiet'], set_.structured_content['rings_at'] is not None) == (True, True)
+    assert cancelled.structured_content is not None
+    assert cancelled.structured_content['rings_at'] is None
+    assert too_long.is_error
+    assert [(alarm.agent, alarm.minutes, alarm.quiet) for alarm in lab.board.alarms] == [
+        ('bo', 20, True),
+        ('bo', 0, False),
+    ]

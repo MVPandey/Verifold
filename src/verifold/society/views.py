@@ -22,6 +22,7 @@ from verifold.protocol.posts import Ask, Call, Check, Objection, Plan, Proposal,
 from verifold.society.attention import watches_thread
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
+from verifold.society.lifecycle import agreed, closing, lab_state
 from verifold.society.lines import lines_of, question_thread
 from verifold.society.rules import blind_checks
 from verifold.society.standing import is_answered, is_open_call, standing
@@ -215,12 +216,16 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         and not _built_on(board, entry)
     )
     proposed = answer(board)
+    done = closing(board)
     return Brief(
         you=agent_id,
         how=how,
         agents=tuple(_agent_line(board, agent, working) for agent in others),
         answer=PostLine.of(proposed) if proposed else None,
         answer_standing=standing(board, proposed.post.id) if proposed else None,
+        state=lab_state(board),
+        close=PostLine.of(done) if done else None,
+        close_agreed=agreed(board, done) if done else (),
         open_calls=open_calls[-MAX_NEWS:],
         one_agent_threads=alone[:MAX_LEADS],
         not_built_on=not_built_on[-MAX_LEADS:],

@@ -24,6 +24,9 @@ from verifold.protocol.posts import (
 from verifold.protocol.record import Record
 from verifold.protocol.threads import Thread, Title
 
+type LabState = Literal['open', 'closing', 'closed']
+"""Whether the lab's agents say that it is done. `closing`: one said so. `closed`: more than half stand behind it."""
+
 type Standing = Literal['open', 'checked', 'held_up', 'disputed', 'conceded']
 """Where a post stands after the objections, checks, and answers to it."""
 
@@ -293,6 +296,14 @@ class FileText(Record):
     text: str
 
 
+class AlarmResult(Record):
+    """What the `alarm` tool returns: when the alarm rings, or `None` when the agent has none."""
+
+    rings_at: AwareDatetime | None = None
+    quiet: bool = False
+    news: News | None = None
+
+
 class ProfileResult(Record):
     """What an agent's role and status are after it set them."""
 
@@ -319,6 +330,12 @@ class Brief(Record):
     """The lab's answer so far: the newest proposal in the question's thread."""
     answer_standing: Standing | None = None
     """Where the answer stands, such as `disputed` or `conceded`. `None` when the lab has no answer."""
+    state: LabState = 'open'
+    """Whether the lab's agents say that it is done."""
+    close: PostLine | None = None
+    """The post that says that the lab is done, while it stands."""
+    close_agreed: tuple[AgentId, ...] = ()
+    """The agents that agreed with it. Its author is not among them."""
     open_calls: tuple[PostLine, ...] = ()
     """Calls from others that still need an agent, newest last. A plan that replies to a call takes it."""
     one_agent_threads: tuple[ThreadLine, ...] = ()

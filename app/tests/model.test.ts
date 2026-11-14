@@ -48,6 +48,7 @@ import type { ActContext } from '../src/model/turns.ts';
 import {
   act,
   answerSoFar,
+  doneLine,
   cardStatus,
   headClaim,
   isStatusNote,
@@ -313,6 +314,27 @@ describe('turns', () => {
         'called for an agent',
         'took agent-3’s call',
       ],
+    );
+  });
+
+  it('says when an agent calls the lab done, who agrees, and how many stand behind it', () => {
+    const close = result('p-1', { kind: 'close' });
+    const agree = result('p-2', {
+      kind: 'answer',
+      reply_to: 'p-1',
+      accepts: true,
+    });
+    const context = { called: () => 'Agent 1', author: null, question: 't-1' };
+    assert.equal(act(close, null, context), 'said that the lab is done');
+    assert.equal(act(agree, close, context), 'agreed that the lab is done');
+    assert.equal(doneLine({ state: 'open', close_agreed: 0 }, 3), null);
+    assert.equal(
+      doneLine({ state: 'closing', close_agreed: 0 }, 3),
+      'An agent says that the lab is done (1 of 3 agents so far).',
+    );
+    assert.equal(
+      doneLine({ state: 'closed', close_agreed: 1 }, 3),
+      'The agents say that the lab is done (2 of 3 agents). You can still steer it.',
     );
   });
 
