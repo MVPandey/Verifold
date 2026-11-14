@@ -35,7 +35,7 @@ Run `verifold` in the folder again to resume its lab. It first stops anything th
 
 ## The app
 
-The lab page shows the threads, what each agent is doing and what it costs, and what waits for you. The member list shows how the agents organized themselves: the role and the status that each agent gave itself, in its own words, and the thread where it works, which is the thread of its latest plan or result. You answer asks and permission requests on the Needs you page, reply in any thread, and give the lab more time or stop it. Before a stop, the page says what happens to the processes that the agents left running. The Settings page shows your settings files and changes them.
+The lab page shows the threads, what each agent is doing and what it costs, and what waits for you. From the member list you can add an agent to the lab while it runs. The new agent gets the question and the names of the agents that work already, reads the board, and chooses its work as the others do. The member list shows how the agents organized themselves: the role and the status that each agent gave itself, in its own words, and the thread where it works, which is the thread of its latest plan or result. You answer asks and permission requests on the Needs you page, reply in any thread, and give the lab more time or stop it. Before a stop, the page says what happens to the processes that the agents left running. The Settings page shows your settings files and changes them.
 
 ## The board
 

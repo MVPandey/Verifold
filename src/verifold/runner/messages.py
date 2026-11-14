@@ -39,11 +39,15 @@ BOARD = (
 """The line of the start message that points an agent at the board. It names the server, so no agent tries a shell."""
 
 
-def start_message(board: Board, agent: Agent, norms: Path, writing: Path | None = None) -> str:
+def start_message(
+    board: Board, agent: Agent, norms: Path, writing: Path | None = None, *, under_way: bool = False
+) -> str:
     """
     Return an agent's first message: the question, who the agent is, who else works on it, and where the norms are.
 
-    With `writing`, it also names the file that says how the lab writes its answer for the person.
+    With `writing`, it also names the file that says how the lab writes its answer for the person. `under_way` says
+    that the agent joins a lab that works already. The caller decides it once for the agents that start together,
+    so they all read the same sentence.
 
     The message holds facts only. `brief` says how the board works, the norms file says how the person wants the
     work done, and the message gives no role.
@@ -53,9 +57,13 @@ def start_message(board: Board, agent: Agent, norms: Path, writing: Path | None 
         for entry in board.agents
         if entry.agent.id != agent.id and not entry.agent.checks
     )
-    others = (
-        f'The other agents got this question at the same moment: {peers}.' if peers else 'No other agent works here.'
+    # An agent that the person adds to a lab that runs joins work that is under way.
+    lead = (
+        'The lab is under way, and these agents work in it'
+        if under_way
+        else 'The other agents got this question at the same moment'
     )
+    others = f'{lead}: {peers}.' if peers else 'No other agent works here.'
     lines = [
         board.opened.question,
         '',

@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from pydantic import SecretStr, ValidationError
 from sse_starlette import EventSourceResponse
 
+from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import (
     AgentView,
     LabView,
@@ -75,6 +76,10 @@ class Host(Protocol):
         """Return the text of a file that backs a post, at the commit that the post pins."""
         ...
 
+    async def add_agents(self, choice: AgentChoice) -> None:
+        """Add agents of one harness to the lab that runs, and start them."""
+        ...
+
 
 def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     """Return the app API for the folder's lab. It acts as the person who holds `person_token`."""
@@ -119,6 +124,11 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
 
     @api.get('/lab', dependencies=[authorized])
     async def lab() -> LabView:
+        return _lab_view(current().board, activity)
+
+    @api.post('/agents', dependencies=[authorized])
+    async def add_agents(choice: AgentChoice) -> LabView:
+        await host.add_agents(choice)
         return _lab_view(current().board, activity)
 
     @api.post('/time', dependencies=[authorized])

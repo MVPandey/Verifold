@@ -39,8 +39,14 @@ class Reruns:
     A checker that ends its turn while its own rerun still runs wakes when the rerun ends.
     """
 
-    def __init__(self, lab: Lab, members: Members, project: Path, crew: Crew, supervise: Supervise) -> None:
-        """Prepare to answer the lab's rerun requests with checkers from `crew`, run by `supervise`."""
+    def __init__(
+        self, lab: Lab, members: Members, project: Path, crew: Callable[[], Crew], supervise: Supervise
+    ) -> None:
+        """
+        Prepare to answer the lab's rerun requests with checkers from `crew`, run by `supervise`.
+
+        `crew` gives the harnesses of the lab's agents now, so an agent that joins later counts.
+        """
         self._lab = lab
         self._members = members
         self._project = project
@@ -103,9 +109,12 @@ class Reruns:
         author = board.agent(target.post.author) if target else None
         if target is None or author is None or not target.post.evidence:
             return
+        crew = self._crew()
+        if not crew:
+            return
         harness, options = next(
-            ((entry, options) for entry, options in self._crew if entry.family != author.agent.model.family),
-            self._crew[0],
+            ((entry, options) for entry, options in crew if entry.family != author.agent.model.family),
+            crew[0],
         )
         checker_id = _checker_id(request)
         joined = board.agent(checker_id)
