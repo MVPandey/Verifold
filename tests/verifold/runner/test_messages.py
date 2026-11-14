@@ -130,3 +130,10 @@ def test_the_message_for_a_quiet_lab_holds_facts_only() -> None:
     assert quiet_message(quiet, START + timedelta(hours=1)).endswith(
         ' The lab ends at 2026-11-06 13:00 UTC, unless the person gives it more time.'
     )
+
+
+def test_the_start_message_names_the_file_that_says_how_the_lab_writes_its_answer() -> None:
+    board = lab().board()
+    message = start_message(board, board.agents[0].agent, Path('LAB.md'), Path('/lab/.verifold/WRITING.md'))
+
+    assert message.splitlines()[-1] == '/lab/.verifold/WRITING.md says how the lab writes its answer for the person.'

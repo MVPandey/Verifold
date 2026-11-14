@@ -5,6 +5,7 @@ from typing import override
 
 import httpx2
 import pytest
+from conftest import agent
 from pydantic import SecretStr
 
 from verifold.protocol.app import (
@@ -16,7 +17,7 @@ from verifold.protocol.app import (
     StartRequest,
 )
 from verifold.protocol.events import TurnSummary
-from verifold.protocol.join import PostRequest
+from verifold.protocol.join import FileText, PostRequest
 from verifold.protocol.posts import FileEvidence
 from verifold.protocol.settings import Settings
 from verifold.protocol.usage import Usage
@@ -24,7 +25,9 @@ from verifold.server.activity import Activity
 from verifold.server.app_api import _changes, app_api
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.server.lab import Lab
+from verifold.society.errors import NotFound
 from verifold.store.errors import SettingsChanged, SettingsInvalid, SettingsUnwritable
+from verifold.store.record_file import RecordFile
 
 TOKEN = 'person-secret'
 START = {'question': 'Is it faster?', 'agents': [{'harness': 'fake', 'count': 2}]}
@@ -66,6 +69,11 @@ class Host:
         if change.value == 'full':
             raise SettingsUnwritable("Can't write .verifold/settings.json: No space left on device")
         return self.settings()
+
+    async def file_text(self, post_id: str, path: str) -> FileText:
+        if path != 'answer.md':
+            raise NotFound(f'Post {post_id} names no file {path}.')
+        return FileText(path=path, commit='c' * 40, text='# The answer')
 
 
 @pytest.fixture
@@ -286,3 +294,23 @@ async def test_the_person_sets_how_long_the_agents_may_still_work(client: httpx2
     assert more['out_of_time'] is False
     assert lab.board.ends_at == lab.board.times[-1].at + timedelta(minutes=30)
     assert refused.status_code == 422
+
+
+async def test_the_answer_route_gives_the_labs_answer_and_a_file_route_gives_a_files_text(
+    record_file: RecordFile, activity: Activity
+) -> None:
+    lab = Lab.create(record_file, 'Does it hold?')
+    await lab.open_question_thread()
+    await lab.join(agent('bo'))
+    async with client_of(Host(lab), activity) as client:
+        before = (await client.get('/answer')).json()
+        await lab.post(PostRequest(kind='proposal', text='Yes, it holds.', thread='t-1'), 'bo')
+
+        after = (await client.get('/answer')).json()
+        file = await client.get('/posts/p-1/file', params={'path': 'answer.md'})
+        missing = await client.get('/posts/p-1/file', params={'path': 'other.md'})
+
+    assert before is None
+    assert (after['answer']['post']['text'], after['builds_on']) == ('Yes, it holds.', [])
+    assert file.json()['text'] == '# The answer'
+    assert (missing.status_code, missing.json()['detail']) == (404, 'Post p-1 names no file other.md.')

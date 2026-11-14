@@ -8,6 +8,8 @@ from verifold.protocol.join import (
     MAX_LINKS,
     MAX_NEWS,
     AgentLine,
+    AnswerLine,
+    AnswerView,
     Brief,
     News,
     PostLine,
@@ -17,7 +19,7 @@ from verifold.protocol.join import (
     ThreadSummary,
     ThreadView,
 )
-from verifold.protocol.posts import Ask, Call, Check, Objection, Plan, Report, Result, RuledOut
+from verifold.protocol.posts import Ask, Call, Check, Objection, Plan, Proposal, Report, Result, RuledOut
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.society.attention import watches_thread
 from verifold.society.board import Board
@@ -250,6 +252,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         you=agent_id,
         how=how,
         agents=tuple(_agent_line(board, agent) for agent in others),
+        answer=_answer_line(board),
         open_calls=open_calls[-MAX_NEWS:],
         one_agent_threads=alone[:MAX_LEADS],
         not_built_on=not_built_on[-MAX_LEADS:],
@@ -288,6 +291,47 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
         and PERSON in entry.post.mentions
         and not is_answered(board, entry.post.id, by=PERSON)
     )
+
+
+def answer(board: Board) -> Posted | None:
+    """Return the lab's answer so far: the newest proposal in the question's thread that is not conceded."""
+    thread = question_thread(board)
+    return next(
+        (
+            entry
+            for entry in reversed(board.posts)
+            if isinstance(entry.post, Proposal)
+            and entry.post.thread == thread
+            and standing(board, entry.post.id) != 'conceded'
+        ),
+        None,
+    )
+
+
+def answer_view(board: Board) -> AnswerView | None:
+    """Return the lab's answer so far with the posts that it builds on, or `None` when no agent proposed one."""
+    entry = answer(board)
+    if entry is None:
+        return None
+    under = (board.post(post_id) for post_id in entry.post.builds_on)
+    return AnswerView(answer=post_view(board, entry), builds_on=tuple(post_view(board, post) for post in under if post))
+
+
+def _answer_line(board: Board) -> AnswerLine | None:
+    entry = answer(board)
+    if entry is None:
+        return None
+    under = (board.post(post_id) for post_id in entry.post.builds_on)
+    # A blind rerun needs files, and a conceded result holds nothing up.
+    waits = tuple(
+        PostLine.of(post)
+        for post in under
+        if post
+        and isinstance(post.post, Result)
+        and post.post.evidence
+        and standing(board, post.post.id) not in {'held_up', 'conceded'}
+    )
+    return AnswerLine(answer=PostLine.of(entry), no_blind_rerun=waits)
 
 
 def latest_report(board: Board) -> PostView | None:

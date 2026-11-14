@@ -2,11 +2,25 @@ import pytest
 from builders import RecordBuilder
 
 from verifold.protocol.join import MAX_NEWS, News, ThreadLink
-from verifold.protocol.posts import Answer, Ask, Call, Check, Message, Objection, Plan, Report, Result, RuledOut
+from verifold.protocol.posts import (
+    Answer,
+    Ask,
+    Call,
+    Check,
+    FileEvidence,
+    Message,
+    Objection,
+    Plan,
+    Proposal,
+    Report,
+    Result,
+    RuledOut,
+)
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.society.errors import NotFound
 from verifold.society.standing import is_open_call, takers
 from verifold.society.views import (
+    answer_view,
     brief,
     crossings,
     latest_report,
@@ -329,3 +343,37 @@ def test_a_ruled_out_lead_ends_an_agents_work_in_a_thread_but_a_withdrawn_call_e
     assert [line.id for line in working.one_agent_threads] == ['t-2']
     assert ended.one_agent_threads == ()
     assert {summary.thread.id: summary.team for summary in ended.threads} == {'t-1': (), 't-2': (), 't-3': ()}
+
+
+def test_the_answer_is_the_newest_proposal_in_the_questions_thread_that_its_author_did_not_concede() -> None:
+    record = RecordBuilder().join('ada').join('bo').join('cy', family='openai')
+    record.thread('t-1', opened_by='person', title=QUESTION_TITLE).thread('t-2', opened_by='ada')
+    file = (FileEvidence(path='run.json', commit='c' * 40),)
+    record.post(Result(id='p-1', thread='t-2', author='ada', text='Held up.', evidence=file))
+    record.post(Result(id='p-2', thread='t-2', author='ada', text='Not rerun.', evidence=file))
+    record.post(Result(id='p-3', thread='t-2', author='ada', text='A reading, with no files.'))
+    record.join('dee', family='openai', checks='p-1')
+    record.post(
+        Check(id='p-4', thread='t-2', author='dee', text='So.', reply_to='p-1', outcome='holds', method='rerun')
+    )
+    assert answer_view(record.board()) is None
+    assert brief(record.board(), 'bo', News(seq=0)).answer is None
+
+    record.post(Proposal(id='p-5', thread='t-2', author='bo', text='A proposal for this line only.'))
+    record.post(Proposal(id='p-6', thread='t-1', author='bo', text='Yes.', builds_on=('p-1', 'p-2', 'p-3')))
+    record.post(Proposal(id='p-7', thread='t-1', author='cy', text='No.'))
+    record.post(Objection(id='p-8', thread='t-1', author='ada', text='p-2 says yes.', reply_to='p-7'))
+    record.post(Answer(id='p-9', thread='t-1', author='cy', text='Right.', reply_to='p-8', accepts=True))
+
+    view = answer_view(record.board())
+    line = brief(record.board(), 'ada', News(seq=0)).answer
+
+    assert view is not None
+    assert view.answer.post.id == 'p-6'
+    assert [(under.post.id, under.standing) for under in view.builds_on] == [
+        ('p-1', 'held_up'),
+        ('p-2', 'open'),
+        ('p-3', 'open'),
+    ]
+    assert line is not None
+    assert (line.answer.id, [post.id for post in line.no_blind_rerun]) == ('p-6', ['p-2'])
