@@ -650,6 +650,20 @@ details[open] > summary .opened {
   opacity: 0.55;
   cursor: not-allowed;
 }
+.f-done {
+  display: block;
+  margin-bottom: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: inherit;
+  text-decoration: none;
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+.f-done:hover {
+  border-color: var(--accent-ink);
+}
 .f-need {
   display: grid;
   gap: 4px;

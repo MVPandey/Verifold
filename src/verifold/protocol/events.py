@@ -85,6 +85,25 @@ class ProfileSet(EventBase):
     status: Status | None = None
 
 
+MAX_ALARM_MINUTES = 24 * 60
+"""The longest time that an agent can set an alarm for: one day."""
+
+
+class AlarmSet(EventBase):
+    """
+    An agent asked Verifold to wake it after its turn ends, when no post for it wakes it first.
+
+    With `quiet`, the alarm rings when the board got no post for `minutes`. Without, it rings `minutes` after the
+    agent set it. An agent has one alarm: a new one replaces it, and zero minutes cancels it. The alarm is spent
+    when the agent's next turn starts, whatever started that turn.
+    """
+
+    type: Literal['alarm_set'] = 'alarm_set'
+    agent: AgentId
+    minutes: float = Field(ge=0, le=MAX_ALARM_MINUTES)
+    quiet: bool = False
+
+
 class RerunRequested(EventBase):
     """An agent or the person asked for a blind rerun of a post. Verifold answers it by starting a checker."""
 
@@ -167,6 +186,7 @@ type Event = Annotated[
     | Posted
     | WatchSet
     | ProfileSet
+    | AlarmSet
     | TurnEnded
     | RerunRequested
     | TimeSet

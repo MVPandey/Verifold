@@ -7,12 +7,22 @@ here.
 """
 
 from verifold.protocol.agents import Agent
-from verifold.protocol.events import Posted, ProfileSet, RerunRequested, TimeRanOut, TimeSet, TurnEnded, WatchSet
+from verifold.protocol.events import (
+    AlarmSet,
+    Posted,
+    ProfileSet,
+    RerunRequested,
+    TimeRanOut,
+    TimeSet,
+    TurnEnded,
+    WatchSet,
+)
 from verifold.protocol.ids import PERSON, AgentId, PostId
-from verifold.protocol.posts import Answer, Check, Objection, Post
+from verifold.protocol.posts import Answer, Check, Close, Objection, Post
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
+from verifold.society.standing import closing
 
 MAX_RERUNS = 2
 """The most blind reruns that one post can have. Each one ends with a blind checker's check."""
@@ -69,6 +79,8 @@ def check_post(board: Board, post: Post) -> None:
     for built_on in post.builds_on:
         if not board.post(built_on):
             raise RejectedEvent(f'Post {built_on} does not exist, so no post can build on it.')
+    if isinstance(post, Close):
+        _check_close(board, post)
     if post.reply_to is None:
         return
     target = board.post(post.reply_to)
@@ -95,6 +107,21 @@ def check_watch(board: Board, watch: WatchSet) -> None:
         raise RejectedEvent(f'{watch.agent} is not an agent in this lab.')
     if not board.thread(watch.thread):
         raise RejectedEvent(f'Thread {watch.thread} does not exist.')
+
+
+def check_alarm(board: Board, alarm: AlarmSet) -> None:
+    """
+    Check that an agent can set an alarm.
+
+    Raises:
+        RejectedEvent: The agent is not in the lab, or is a blind checker.
+
+    """
+    joined = board.agent(alarm.agent)
+    if not joined:
+        raise RejectedEvent(f'{alarm.agent} is not an agent in this lab.')
+    if joined.agent.checks:
+        raise RejectedEvent('A blind checker posts one check and sets no alarm.')
 
 
 def check_profile(board: Board, profile: ProfileSet) -> None:
@@ -226,9 +253,24 @@ def _check_member(board: Board, author: AgentId) -> None:
         raise RejectedEvent(f'{author} is not an agent in this lab.')
 
 
+def _check_close(board: Board, close: Close) -> None:
+    if close.author == PERSON:
+        raise RejectedEvent("A close is the agents' word that the lab is done. You can stop the lab at any time.")
+    standing_close = closing(board)
+    if standing_close and standing_close.post.author != close.author:
+        raise RejectedEvent(
+            f'{standing_close.post.author} says in {standing_close.post.id} that the lab is done. Agree with an '
+            f'answer to it that has `accepts: true`, or object to it.'
+        )
+
+
 def _check_concession(board: Board, answer: Answer, target: Post) -> None:
+    if isinstance(target, Close):
+        if target.author == answer.author:
+            raise RejectedEvent(f'Post {target.id} is your own. Another agent agrees with it.')
+        return
     objected = board.post(target.reply_to) if isinstance(target, Objection) else None
     if objected is None:
-        raise RejectedEvent('Only an answer to an objection can accept it.')
+        raise RejectedEvent('Only an answer to an objection or to a close can accept it.')
     if objected.post.author != answer.author:
         raise RejectedEvent(f'Only {objected.post.author}, who wrote {objected.post.id}, can accept this objection.')

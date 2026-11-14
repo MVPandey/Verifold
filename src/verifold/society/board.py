@@ -5,6 +5,7 @@ from datetime import datetime
 
 from verifold.protocol.events import (
     AgentJoined,
+    AlarmSet,
     LabOpened,
     Posted,
     ProfileSet,
@@ -33,6 +34,8 @@ class Board:
     threads: tuple[ThreadOpened, ...] = ()
     posts: tuple[Posted, ...] = ()
     watches: tuple[WatchSet, ...] = ()
+    alarms: tuple[AlarmSet, ...] = ()
+    """The alarms that agents set, oldest first."""
     profiles: tuple[ProfileSet, ...] = ()
     """What each agent said about itself, oldest first."""
     turns: tuple[TurnEnded, ...] = ()

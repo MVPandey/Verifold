@@ -2,7 +2,9 @@
 Supervises one agent.
 
 The agent's harness owns its work. Verifold keeps the agent's ACP session open, rings a doorbell when posts for the
-agent arrive after it ended its turn, and starts the harness again when its process fails. The doorbell waits for a quiet moment on the board, so that a burst of posts wakes the agent once.
+agent arrive after it ended its turn, rings the alarm that the agent set for itself, and starts the harness again
+when its process fails. The doorbell waits for a quiet moment on the board, so that a burst of posts wakes the agent
+once.
 """
 
 import asyncio
@@ -21,7 +23,7 @@ from verifold.protocol.record import Record
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.usage import Usage
 from verifold.runner.git import GitError
-from verifold.runner.messages import DOORBELL, JOBS_ENDED, cut_short_message, more_time_message
+from verifold.runner.messages import DOORBELL, JOBS_ENDED, alarm_message, cut_short_message, more_time_message
 from verifold.runner.permissions import GrantAsks, ask_the_person, refusal, settled
 from verifold.runner.session import (
     AgentSession,
@@ -36,6 +38,7 @@ from verifold.server.activity import Activity
 from verifold.server.member import Member
 from verifold.society.attention import update
 from verifold.society.board import Board
+from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
 
 
 class LoopSettings(Record):
@@ -119,6 +122,8 @@ class AgentLoop:
         """What the agent had seen when its turn started. A failed turn takes the agent back to it."""
         self._turn_ended = self._lab.board.seq
         """The board's sequence number when the agent's last turn ended. A stop after it concerns the agent's jobs."""
+        self._turn_started = self._lab.board.seq
+        """The board's sequence number when the agent's last turn started. An alarm from before it is spent."""
         self._cut_short = ''
         """Why the agent's last turn ended without the agent's choice, or empty when the agent ended it."""
 
@@ -188,6 +193,7 @@ class AgentLoop:
 
     async def _send(self, session: AgentSession, message: str) -> bool:
         # Return whether the turn stopped because the lab ran out of time.
+        self._turn_started = self._lab.board.seq
         await self._report('working')
         started = time.monotonic()
         self._seen_at_turn = self._member.seen
@@ -299,7 +305,16 @@ class AgentLoop:
                     continue
                 self._notified = board.seq
                 return DOORBELL
-            await self._lab.wait_for_change(board.seq)
+            # The agent's own alarm. It does not ring in a lab that is out of time or closed.
+            alarm = pending_alarm(board, agent_id)
+            left = None
+            # An alarm from before this run of Verifold is spent too: the turn that held it never ended.
+            fresh = alarm is not None and alarm.seq > self._turn_started
+            if alarm and fresh and not stopped and not board.out_of_time and lab_state(board) != 'closed':
+                left = (rings_at(board, alarm) - self._lab.now()).total_seconds()
+                if left <= 0:
+                    return alarm_message(alarm)
+            await self._lab.wait_for_change(board.seq, left)
 
     async def _settle(self) -> None:
         # Wait until the board has no new event for `quiet` seconds, and for `max_quiet` seconds at most.

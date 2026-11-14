@@ -199,6 +199,12 @@ async def test_the_lab_view_shows_each_agents_activity_and_cost(
     # Ada opened the lab's thread with a result, so that is where she works.
     assert (ada['role'], ada['status'], ada['thread']) == ('theory', 'Deriving the bound.', 't-1')
     assert (bo['role'], bo['status'], bo['thread']) == ('', '', None)
+    assert (view['state'], view['close'], view['close_agreed']) == ('open', None, 0)
+
+    await lab.post(PostRequest(kind='close', text='The answer stands.', thread='t-1'), 'ada')
+    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-2', accepts=True), 'bo')
+    done = (await client.get('/lab')).json()
+    assert (done['state'], done['close']['id'], done['close_agreed']) == ('closed', 'p-2', 1)
 
 
 async def test_threads_and_a_thread_read_as_the_person(client: httpx2.AsyncClient) -> None:

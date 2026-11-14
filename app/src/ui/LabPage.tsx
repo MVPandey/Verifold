@@ -9,7 +9,7 @@ import type {
   ThreadLink,
   ThreadSummary,
 } from '../api/types.ts';
-import { authorName, face, ownName } from '../model/agents.ts';
+import { authorName, face, members, ownName } from '../model/agents.ts';
 import type { Face } from '../model/agents.ts';
 import { crossedLine, crossLines } from '../model/crossings.ts';
 import { clock, duration, minutesBetween } from '../model/format.ts';
@@ -17,7 +17,7 @@ import { orderNeeds } from '../model/needs.ts';
 import { isPermission, personMessage, standingChip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { hasNew, markSeen, readSeen } from '../model/seen.ts';
-import { answerSoFar, cardStatus, headClaim, questionThread } from '../model/turns.ts';
+import { answerSoFar, cardStatus, doneLine, headClaim, questionThread } from '../model/turns.ts';
 import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
 import { Body, ChipView, Composer, FaceView, Files } from './parts.tsx';
@@ -114,6 +114,7 @@ export function Wall(
   const chip = answer ? standingChip(answer.post, answer.standing) : null;
   const answerOpen = question !== null && open === questionId;
   const crossing = crossedLine(threads);
+  const done = doneLine(lab, members(lab.agents).length);
   const missing = open !== null && !threads.some((summary) => summary.thread.id === open);
 
   return (
@@ -163,6 +164,14 @@ export function Wall(
         </div>
         <div className="f-steer">
           <Need needs={needs} lab={lab} />
+          {done && lab.close ? (
+            <a
+              className="f-done"
+              href={href({ page: 'thread', id: lab.close.thread, post: lab.close.id })}
+            >
+              {done}
+            </a>
+          ) : null}
           <Composer
             variant="steer"
             label="Steer the lab"

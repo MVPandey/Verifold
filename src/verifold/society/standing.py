@@ -1,8 +1,9 @@
 """Where posts stand after the objections, checks, and answers to them."""
 
-from verifold.protocol.ids import AgentId, PostId
+from verifold.protocol.events import Posted
+from verifold.protocol.ids import PERSON, AgentId, PostId
 from verifold.protocol.join import Standing
-from verifold.protocol.posts import Answer, Check, Objection, Plan, RuledOut
+from verifold.protocol.posts import Answer, Check, Close, Objection, Plan, RuledOut
 from verifold.society.board import Board
 
 
@@ -91,4 +92,42 @@ def _conceded(board: Board, objection: Objection) -> bool:
 def _overruled(objection_seq: int, objection: Objection, checks: tuple[tuple[int, Check], ...]) -> bool:
     return any(
         seq > objection_seq and check.outcome == 'holds' and check.author != objection.author for seq, check in checks
+    )
+
+
+def closing(board: Board) -> Posted | None:
+    """
+    Return the post that says that the lab is done, when one stands: the newest close.
+
+    It stands until an objection to it stands, its author concedes one, its author withdraws it with a ruled-out
+    lead that replies to it, or the person posts to the lab after it. An older close does not come back.
+    """
+    entry = next((entry for entry in reversed(board.posts) if isinstance(entry.post, Close)), None)
+    if entry is None or standing(board, entry.post.id) in {'disputed', 'conceded'}:
+        return None
+    withdrawn = any(
+        isinstance(reply.post, RuledOut) and reply.post.author == entry.post.author
+        for reply in board.replies(entry.post.id)
+    )
+    # The person's new words to the lab open it again: the agents have something to do.
+    steered = any(
+        later.post.author == PERSON and later.post.reply_to is None and later.seq > entry.seq for later in board.posts
+    )
+    return None if withdrawn or steered else entry
+
+
+def agreed(board: Board, close: Posted) -> tuple[AgentId, ...]:
+    """Return the agents of the lab that agreed with a close, each once, in the order that they agreed."""
+    workers = {joined.agent.id for joined in board.agents if not joined.agent.checks}
+    return tuple(
+        dict.fromkeys(
+            reply.post.author
+            for reply in board.replies(close.post.id)
+            if isinstance(reply.post, Answer)
+            and reply.post.accepts
+            # An agent takes its agreement back when it concedes an objection to it.
+            and standing(board, reply.post.id) not in {'conceded', 'disputed'}
+            and reply.post.author in workers
+            and reply.post.author != close.post.author
+        )
     )

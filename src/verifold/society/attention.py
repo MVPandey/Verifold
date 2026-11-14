@@ -6,7 +6,7 @@ lands in a thread that the agent watches. A post names an agent in `mentions` or
 threads that it opens and the thread where it works now, which is the thread of its latest plan or result, until it
 says otherwise. Nobody watches the question's thread by default, so a post there is for the agents that it names.
 
-Some posts are for every agent: an ask, a call, or the first post of a thread when it names nobody. An ask names
+Some posts are for every agent: a close, and an ask, a call, or the first post of a thread when it names nobody. An ask names
 nobody when its `mentions` are empty and it replies to no post, so an agent that is stuck reaches every agent that
 may know the missing piece. A check is also for the agent that asked for the rerun. The person's words reach the agents by default: a post from the person that
 names nobody and replies to no post is for every agent. No post is for a blind checker, which reads nothing but its claim.
@@ -21,7 +21,7 @@ from functools import lru_cache
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.join import MAX_NEWS, News, PostLine, Update
-from verifold.protocol.posts import Ask, Call, Check, Post
+from verifold.protocol.posts import Ask, Call, Check, Close, Post
 from verifold.society.board import Board
 from verifold.society.lines import lines_of
 
@@ -150,6 +150,9 @@ def _for_everyone(board: Board, entry: Posted) -> bool:
     # reader and takes none away. An ask that replies to a post is for that post's author. A call that replies to a
     # post, such as the caller's own result, still asks every agent for hands.
     post = entry.post
+    # Whether the lab is done concerns every agent, whatever the post names.
+    if isinstance(post, Close):
+        return True
     open_ask = isinstance(post, Call) or (isinstance(post, Ask) and not post.reply_to)
     return not post.mentions and (open_ask or _opens_thread(board, entry))
 

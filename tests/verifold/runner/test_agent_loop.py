@@ -17,7 +17,7 @@ from verifold.protocol.usage import Usage
 from verifold.runner import agent_loop
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
 from verifold.runner.git import git
-from verifold.runner.messages import DOORBELL, JOBS_ENDED, cut_short_message, more_time_message
+from verifold.runner.messages import DOORBELL, JOBS_ENDED, alarm_message, cut_short_message, more_time_message
 from verifold.runner.permissions import GrantAsks
 from verifold.runner.session import AgentSession, TurnResult
 from verifold.server.activity import Activity
@@ -195,6 +195,51 @@ async def test_a_doorbell_does_not_wait_longer_than_the_limit_for_a_board_that_s
         running.cancel()
 
     assert calls(log, 'prompt')[1]['text'] == DOORBELL
+
+
+async def test_the_alarm_that_an_agent_set_in_its_turn_rings_once_after_the_turn(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    # An alarm from before this run of Verifold is spent: the turn that held it never ended.
+    stale = await lab.set_alarm('bo', 0.03, quiet=False)
+    # Every turn of this agent runs until Verifold cuts it short, so the test can set an alarm inside a turn.
+    monkeypatch.setenv('FAKE_ACP_SLOW', '1')
+    activity = Activity()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity, turn_timeout=1.0).run())
+    try:
+        # The first turn is cut, and the agent goes on once. The alarm is set in that second turn.
+        await until(lambda: len(lab.board.turns) == 1)
+        await until(lambda: activity.of('bo').state == 'working')
+        set_ = await lab.set_alarm('bo', 0.02, quiet=False)
+        await until(lambda: len(calls(log, 'prompt')) >= 3)
+    finally:
+        running.cancel()
+
+    cut = cut_short_message('The turn ran past 1 seconds and was cancelled.')
+    prompts = [call['text'] for call in calls(log, 'prompt')]
+    assert prompts[:3] == ['Start.', cut, alarm_message(set_)]
+    assert alarm_message(stale) not in prompts
+
+
+async def test_an_alarm_does_not_ring_in_a_lab_that_its_agents_closed(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    await lab.post(PostRequest(kind='close', text='The answer stands.', thread='t-1'), 'ada')
+    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-2', accepts=True), 'bo')
+    activity = Activity()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
+    try:
+        await until(lambda: activity.of('bo').state == 'working')
+        await lab.set_alarm('bo', 0.02, quiet=False)
+        await until(lambda: len(lab.board.turns) == 1)
+        await asyncio.sleep(3)
+    finally:
+        running.cancel()
+
+    assert lab.board.alarms[-1].seq < lab.board.turns[0].seq
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
 
 
 async def test_a_failed_turn_gives_the_agent_its_news_again(

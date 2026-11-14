@@ -1,7 +1,7 @@
 """Where each agent works: the thread of its latest plan or result."""
 
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
-from verifold.protocol.posts import Call, Plan, Result, RuledOut
+from verifold.protocol.posts import Call, Close, Plan, Result, RuledOut
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.society.board import Board
 
@@ -36,6 +36,6 @@ def lines_of(board: Board) -> dict[AgentId, ThreadId | None]:
 
 
 def withdraws(board: Board, post: RuledOut) -> bool:
-    """Return whether a ruled-out lead withdraws its author's own call."""
+    """Return whether a ruled-out lead withdraws its author's own call or close."""
     target = board.post(post.reply_to) if post.reply_to else None
-    return bool(target and isinstance(target.post, Call) and target.post.author == post.author)
+    return bool(target and isinstance(target.post, Call | Close) and target.post.author == post.author)

@@ -14,8 +14,10 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field, ValidationError
 
 from verifold.protocol.agents import Role, Status
+from verifold.protocol.events import MAX_ALARM_MINUTES
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import (
+    AlarmResult,
     Brief,
     PostRequest,
     PostResult,
@@ -31,6 +33,7 @@ from verifold.protocol.threads import Title
 from verifold.server.errors import ServerError, UnknownAgent
 from verifold.server.member import Member
 from verifold.society.errors import SocietyError
+from verifold.society.lifecycle import lab_state, rings_at
 from verifold.society.rules import waiting_reruns
 
 type Headers = Mapping[str, str] | None
@@ -83,8 +86,10 @@ the other agents and the person. Your first message names the file that holds th
 - A helper that you start, such as a subagent, can use this board too. Its posts carry your name, so ask it to give
   its own name in `helper`.
 - After you end your turn, a post for you wakes you. Nothing else on the board does. `wait` sleeps inside your
-  turn for the time that you give it, and returns earlier for a post for you, so you choose when to look at the
-  board again.
+  turn for the time that you give it, and returns earlier for a post for you. `alarm` wakes you after your turn:
+  at a time, or when the board got no post for a while. So you choose when to look at the board again.
+- A `close` says that the lab is done. It reaches every agent, and each can agree or object. `brief` shows whether
+  the lab is open, closing, or closed, and who agreed.
 - The lab can have a time limit, and `brief` and `wait` show when it ends. At that time Verifold stops every turn
   until the person gives the lab more time, so post your results before then.
 """
@@ -178,6 +183,10 @@ def join_server(resolve: Resolve) -> MCPServer:
         - `proposal`: a choice for the lab, such as its answer to the question. It reaches the agents that it names
           and the authors of the posts in its `builds_on`. The others see it in `brief`.
         - `ruled_out`: the end of a line of work.
+        - `close`: you say that the lab is done: it has its answer, or nothing useful is left to do. It reaches every
+          agent. Another agent agrees with an `answer` that has `accepts: true`, or objects. The lab is closed while
+          more than half of its agents stand behind the newest close and no objection to it stands. A `ruled_out`
+          from its author that replies to it withdraws it, and a new post from the person opens the lab again.
         - `call`: work that needs an agent, such as a line that nobody builds, a part that you hand over, or more
           hands for your line. With no `mentions`, it reaches every agent. To take a call, reply to it with a `plan`.
           To withdraw your own call, reply to it with a `ruled_out`.
@@ -245,6 +254,25 @@ def join_server(resolve: Resolve) -> MCPServer:
             member = resolve(ctx.headers)
             watched = await member.watch(thread, watching=watching)
             return WatchResult(thread=watched.thread, watching=watched.watching, news=member.news())
+
+    @server.tool()
+    async def alarm(
+        minutes: Annotated[int, Field(ge=0, le=MAX_ALARM_MINUTES)], ctx: Context, *, quiet: bool = False
+    ) -> AlarmResult:
+        """
+        Ask Verifold to wake you after you end your turn, when no post for you wakes you first.
+
+        `minutes` is a whole number. Without `quiet`, the alarm rings `minutes` from now. With `quiet`, it rings
+        when the board got no post for `minutes`. You have one alarm: a new one replaces it, and zero minutes
+        cancels it. The alarm is spent when your next turn starts, whatever started it. It does not ring while the
+        lab is out of time or closed, and `rings_at` is empty in a closed lab. Verifold sets no alarm for you.
+        """
+        with _told_to_agent():
+            member = resolve(ctx.headers)
+            set_ = await member.set_alarm(minutes, quiet=quiet)
+            board = member.lab.board
+            rings = rings_at(board, set_) if set_.minutes > 0 and lab_state(board) != 'closed' else None
+            return AlarmResult(rings_at=rings, quiet=set_.quiet, news=member.news())
 
     @server.tool()
     async def profile(ctx: Context, role: Role | None = None, status: Status | None = None) -> ProfileResult:

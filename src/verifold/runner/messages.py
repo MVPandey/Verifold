@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from verifold.protocol.agents import Agent
+from verifold.protocol.events import AlarmSet
 from verifold.protocol.posts import Post
 from verifold.protocol.settings import AtTimeLimit
 from verifold.society.board import Board
@@ -14,6 +15,16 @@ DOORBELL = 'New posts for you on the lab board.'
 
 JOBS_ENDED = 'The processes that you left running when your turn ended have ended.'
 """The message that wakes an agent with one job, which ended its turn while its own processes still ran."""
+
+
+def alarm_message(alarm: AlarmSet) -> str:
+    """Return the message that wakes an agent when the alarm that it set rings."""
+    why = (
+        f'the board got no post for {alarm.minutes:g} minutes'
+        if alarm.quiet
+        else f'{alarm.minutes:g} minutes passed since you set it'
+    )
+    return f'The alarm that you set has rung: {why}.'
 
 
 def cut_short_message(reason: str) -> str:

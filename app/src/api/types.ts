@@ -15,7 +15,8 @@ export type PostKind =
   | 'check'
   | 'ruled_out'
   | 'report'
-  | 'call';
+  | 'call'
+  | 'close';
 export type Standing = 'open' | 'checked' | 'held_up' | 'disputed' | 'conceded';
 
 export interface ModelSpec {
@@ -77,6 +78,12 @@ export interface LabView {
   readonly needs_you: number;
   readonly ends_at: string | null;
   readonly out_of_time: boolean;
+  /** Whether the lab's agents say that it is done. A closed lab is not stopped. */
+  readonly state: 'open' | 'closing' | 'closed';
+  /** The post that says that the lab is done, while it stands. */
+  readonly close: { readonly id: string; readonly thread: string; readonly author: string } | null;
+  /** How many other agents agreed with it. */
+  readonly close_agreed: number;
   /** The settings that the lab follows. */
   readonly settings: Settings;
 }
@@ -254,7 +261,15 @@ interface PostBase {
 export type Post =
   | (PostBase & {
       readonly kind:
-        'message' | 'plan' | 'result' | 'objection' | 'proposal' | 'ruled_out' | 'report' | 'call';
+        | 'message'
+        | 'plan'
+        | 'result'
+        | 'objection'
+        | 'proposal'
+        | 'ruled_out'
+        | 'report'
+        | 'call'
+        | 'close';
     })
   | (PostBase & { readonly kind: 'ask'; readonly choices: readonly string[] })
   | (PostBase & { readonly kind: 'answer'; readonly accepts: boolean })

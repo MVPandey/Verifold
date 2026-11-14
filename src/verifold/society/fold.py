@@ -7,6 +7,7 @@ from typing import assert_never
 
 from verifold.protocol.events import (
     AgentJoined,
+    AlarmSet,
     Event,
     LabOpened,
     PermissionGranted,
@@ -25,6 +26,7 @@ from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 from verifold.society.rules import (
     check_agent,
+    check_alarm,
     check_post,
     check_profile,
     check_rerun,
@@ -62,6 +64,9 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
         case WatchSet():
             check_watch(board, event)
             return replace(board, seq=event.seq, watches=(*board.watches, event))
+        case AlarmSet():
+            check_alarm(board, event)
+            return replace(board, seq=event.seq, alarms=(*board.alarms, event))
         case ProfileSet():
             check_profile(board, event)
             return replace(board, seq=event.seq, profiles=(*board.profiles, event))

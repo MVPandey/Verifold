@@ -8,6 +8,7 @@ from verifold.protocol.agents import Agent, AgentChoices, Label, ValueId
 from verifold.protocol.events import Question
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import PostId, ThreadId
+from verifold.protocol.join import LabState, PostLine
 from verifold.protocol.record import Record
 from verifold.protocol.settings import MAX_MINUTES, Settings, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
@@ -57,6 +58,12 @@ class LabView(Record):
     """When the agents stop. `None` means no time limit."""
     out_of_time: bool = False
     """The lab reached its end. Its agents wait until the person gives it more time."""
+    state: LabState = 'open'
+    """Whether the lab's agents say that it is done. A closed lab is not stopped: the person can go on."""
+    close: PostLine | None = None
+    """The post that says that the lab is done, while it stands."""
+    close_agreed: int = 0
+    """How many other agents agreed with it."""
     settings: Settings = Settings()
     """The settings that the lab follows, such as what happens to the agents' processes when the person stops it."""
 
