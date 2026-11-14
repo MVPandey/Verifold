@@ -42,6 +42,8 @@ function slowServer(): {
     threads: () => answer('threads', []),
     needs: () => answer('needs', []),
     report: () => answer('report', null),
+    answer: () => answer('answer', null),
+    file: () => Promise.reject(new Error('unused')),
     start: () => Promise.reject(new Error('unused')),
     thread: () => Promise.reject(new Error('unused')),
     post: () => Promise.reject(new Error('unused')),
@@ -88,7 +90,7 @@ describe('the loader', () => {
     server.answerLab(stopped);
     await settle();
 
-    assert.deepEqual(server.calls, ['setup', 'lab', 'threads', 'needs', 'report', 'lab']);
+    assert.deepEqual(server.calls, ['setup', 'lab', 'threads', 'needs', 'report', 'answer', 'lab']);
     assert.equal(state.data().lab?.question, 'stopped');
   });
 
@@ -108,7 +110,15 @@ describe('the loader', () => {
     server.answerLab(working);
     await settle();
 
-    assert.deepEqual(server.calls, ['setup', 'setup', 'lab', 'threads', 'needs', 'report']);
+    assert.deepEqual(server.calls, [
+      'setup',
+      'setup',
+      'lab',
+      'threads',
+      'needs',
+      'report',
+      'answer',
+    ]);
     assert.equal(loader.stale(), false);
     assert.equal(state.data().error, null);
   });

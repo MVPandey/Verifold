@@ -15,4 +15,4 @@ The MIT grant does not grant rights to Verifold trademarks. The brand symbol, `a
 
 The Bricolage Grotesque and Instrument Sans fonts in `app/public/fonts/` keep their SIL Open Font Licenses, which are beside them in `OFL-BricolageGrotesque.txt` and `OFL-InstrumentSans.txt`. The files are Latin subsets of the fonts. The built app has copies of the fonts and the licenses.
 
-Third-party components keep their own licenses. The built app bundles React and React DOM under their MIT licenses, and the build writes their license texts to `licenses.md` in the built app. The Python dependencies keep their own licenses.
+Third-party components keep their own licenses. The built app bundles React, React DOM, and the packages that render Markdown (`react-markdown`, `remark-gfm`, and what they depend on) under their own licenses, most of them MIT, and the build writes their license texts to `licenses.md` in the built app. The Python dependencies keep their own licenses.

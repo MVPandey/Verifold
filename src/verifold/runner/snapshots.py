@@ -56,12 +56,14 @@ async def pin(folder: Path, agent_id: AgentId, paths: tuple[str, ...]) -> tuple[
         EvidenceRejected: A path is not a file in the folder, or Git ignores it.
 
     """
+    # Git names a file by its plain path, so `out/./a.md` is pinned as `out/a.md`.
+    paths = tuple(str(PurePosixPath(path)) for path in paths)
     missing = [path for path in paths if not (folder / PurePosixPath(path)).is_file()]
     if missing:
         raise EvidenceRejected(f'These files are not in your folder: {", ".join(missing)}.')
     commit = await snapshot(folder, agent_id)
     tracked = set((await git('ls-tree', '-r', '--name-only', commit, cwd=folder)).splitlines())
-    ignored = [path for path in paths if str(PurePosixPath(path)) not in tracked]
+    ignored = [path for path in paths if path not in tracked]
     if ignored:
         raise EvidenceRejected(f'Git ignores these files, so they cannot be evidence: {", ".join(ignored)}.')
     return tuple(FileEvidence(path=path, commit=commit) for path in paths)

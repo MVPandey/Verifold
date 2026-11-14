@@ -268,6 +268,33 @@ class ThreadLine(Record):
     team: tuple[AgentId, ...]
 
 
+class AnswerLine(Record):
+    """The lab's answer so far as one line, with the results under it that no blind rerun holds up."""
+
+    answer: PostLine
+    no_blind_rerun: tuple[PostLine, ...] = ()
+    """The results with files that the answer builds on, and that no blind checker has rerun. `rerun` asks for one."""
+
+
+class AnswerView(Record):
+    """The lab's answer so far for the person: the proposal, and each post that it builds on with where it stands."""
+
+    answer: PostView
+    builds_on: tuple[PostView, ...] = ()
+    results: int = 0
+    """How many of `builds_on` are results with files, which a blind checker can rerun."""
+    no_blind_rerun: tuple[PostId, ...] = ()
+    """The results among them that no blind checker has rerun."""
+
+
+class FileText(Record):
+    """The text of one file that backs a post, at the commit that the post pins."""
+
+    path: str
+    commit: str
+    text: str
+
+
 class Brief(Record):
     """
     The lab for one agent, in one read: how the board works, who works on what, and where the agent's work is of use.
@@ -282,6 +309,8 @@ class Brief(Record):
     """How the board works. The first brief of a session carries it, and later ones leave it out."""
     agents: tuple[AgentLine, ...] = ()
     """The other agents. Blind checkers are not among them."""
+    answer: AnswerLine | None = None
+    """The lab's answer so far: the newest proposal in the question's thread that its author did not concede."""
     open_calls: tuple[PostLine, ...] = ()
     """Calls from others that still need an agent, newest last. Take one with a plan that replies to it."""
     one_agent_threads: tuple[ThreadLine, ...] = ()

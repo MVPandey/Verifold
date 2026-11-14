@@ -33,9 +33,11 @@ BOARD = (
 """The line of the start message that points an agent at the board. It names the server, so no agent tries a shell."""
 
 
-def start_message(board: Board, agent: Agent, norms: Path) -> str:
+def start_message(board: Board, agent: Agent, norms: Path, writing: Path | None = None) -> str:
     """
     Return an agent's first message: the question, who the agent is, who else works on it, and where the norms are.
+
+    With `writing`, it also names the file that says how the lab writes its answer for the person.
 
     The message holds facts only. `brief` says how the board works, the norms file says how the person wants the
     work done, and the message gives no role.
@@ -57,6 +59,8 @@ def start_message(board: Board, agent: Agent, norms: Path) -> str:
     if thread := question_thread(board):
         lines.append(f'Thread {thread} on the board holds this question, and every agent watches it.')
     lines.append(f"{norms} holds the lab's norms, which the person sets.")
+    if writing:
+        lines.append(f'{writing} says how the lab writes its answer for the person.')
     if board.ends_at:
         lines.append(f'The lab ends at {_utc(board.ends_at)}, unless the person gives it more time.')
     return '\n'.join(lines)

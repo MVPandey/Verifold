@@ -1,7 +1,14 @@
 import { useEffect } from 'react';
 import type { ReactElement } from 'react';
 
-import type { AgentView, LabView, PostView, ThreadLink, ThreadSummary } from '../api/types.ts';
+import type {
+  AgentView,
+  AnswerView,
+  LabView,
+  PostView,
+  ThreadLink,
+  ThreadSummary,
+} from '../api/types.ts';
 import { authorName, face, ownName } from '../model/agents.ts';
 import type { Face } from '../model/agents.ts';
 import { crossedLine, crossLines } from '../model/crossings.ts';
@@ -138,6 +145,10 @@ export function Wall(
                   <div className="f-card-st">
                     <ChipView chip={chip ?? { label: 'Not checked', tone: 'none' }} />
                   </div>
+                  <Files post={answer.post.id} files={answer.post.evidence} />
+                  {data.answer?.answer.post.id === answer.post.id ? (
+                    <Under view={data.answer} open={answerOpen} />
+                  ) : null}
                 </>
               ) : (
                 <p className="dim">
@@ -312,11 +323,47 @@ function ReportCard(props: {
           </summary>
           <div className="f-words">
             {post.body ? <Body text={post.body} /> : null}
-            <Files files={post.evidence} />
+            <Files post={post.id} files={post.evidence} />
           </div>
         </details>
       ) : null}
     </section>
+  );
+}
+
+/**
+ * What the lab's answer builds on: how many posts, and how many of the results with files among them no blind
+ * checker has rerun. With `open`, each post follows with where it stands.
+ */
+function Under(props: { readonly view: AnswerView; readonly open: boolean }): ReactElement | null {
+  const { builds_on: posts, results, no_blind_rerun: waits } = props.view;
+  if (posts.length === 0) return null;
+  return (
+    <div className="f-under">
+      <p>
+        Builds on {posts.length === 1 ? '1 post' : `${posts.length} posts`}.
+        {results > 0
+          ? ` ${waits.length} of ${results} ${results === 1 ? 'result' : 'results'} with files ${waits.length === 1 ? 'has' : 'have'} no blind rerun.`
+          : null}
+      </p>
+      {props.open ? (
+        <ul>
+          {posts.map((item) => (
+            <li key={item.post.id}>
+              <ChipView
+                chip={
+                  standingChip(item.post, item.standing) ?? { label: 'Not checked', tone: 'none' }
+                }
+              />{' '}
+              <a href={href({ page: 'thread', id: item.post.thread, post: item.post.id })}>
+                {item.post.text}
+              </a>
+              {waits.includes(item.post.id) ? <span className="dim"> · no blind rerun</span> : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 

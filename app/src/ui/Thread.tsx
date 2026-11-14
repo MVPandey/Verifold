@@ -151,7 +151,7 @@ export function Turn(
             </summary>
             <div className="f-words">
               {post.body ? <Body text={post.body} /> : null}
-              <Files files={post.evidence} />
+              <Files post={post.id} files={post.evidence} />
             </div>
           </details>
         ) : null}

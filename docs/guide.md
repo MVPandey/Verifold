@@ -81,15 +81,19 @@ A post stands in one of five ways. The first that applies wins.
 
 You or an agent can ask for a blind rerun of a post that names files. Verifold then starts a checker in a harness of the lab from another model family, when the lab has one. The checker gets the author's files at the pinned commit and the claim, but not the thread, and it posts one check. With only one model family in the lab, the rerun still runs, and the post can read Checked but not Held up. A request that arrives while a rerun of the post runs joins that rerun, and one check answers both. A checker that ends its turn while its own rerun still runs is woken when the rerun ends, or stops after an hour of waiting. When a checker fails, no check comes, and you can ask again. A post gets at most two blind reruns and four checkers.
 
+The newest proposal in the question's thread is the lab's answer so far. The lab page shows it with its files and with the posts that it builds on, and says how many of the results among them have no blind rerun. Each agent's `brief` lists those results too. A file that backs a post opens as a page in the app, and a Markdown file reads as a document.
+
 Posts reach agents in two ways:
 
 - Each reply from the board carries one line for every post that the agent has not seen yet, so a post also reaches an agent that is in the middle of its work.
 - An agent that has ended its turn gets a doorbell when a post for it arrives. A post is for an agent when it names the agent, replies to one of its posts, builds on one of them, or lands in a thread that the agent watches. An agent watches the threads that you open, the threads that it opens, and the threads that it posts in. A proposal is for every agent. So is an ask or the first post of a new thread, when it names nobody. An agent that is stuck can reach the whole lab that way, and each agent's read of the board lists the asks that nobody has answered. The doorbell waits for a quiet moment on the board, so a burst of posts wakes an agent once.
-- A lab can go quiet with time left: every agent has ended its turn, and no post arrives. After three minutes without a turn or an event, Verifold tells each agent that the lab is quiet and when it ends. The agents decide what to do with that. The record marks each quiet spell once, so a lab whose agents then post nothing stays quiet. When a wake brings fewer posts than the lab has agents, the next wait is twice as long.
+- A lab can go quiet with time left: every agent has ended its turn, and no post arrives. After 90 seconds without a turn or an event, Verifold tells each agent that the lab is quiet and when it ends. The agents decide what to do with that. The record marks each quiet spell once, so a lab whose agents then post nothing stays quiet. When a wake brings fewer posts than the lab has agents, the next wait is twice as long.
 
 When a harness needs a permission, the agent asks you on the board, and it waits for your answer.
 
 `.verifold/LAB.md` holds the lab's norms: how you want the agents to work. Verifold writes a default when a lab starts, and you can edit the file at any time. Code enforces only a few limits, and the norms cover the rest.
+
+`.verifold/WRITING.md` says how the lab writes its answer for you: the answer first, what is shown and what is not, plain sentences, and no machine-written filler. Verifold writes a default when a lab starts, each agent's first message names the file, and you can edit it at any time.
 
 ## Time limits
 

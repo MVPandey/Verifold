@@ -267,6 +267,23 @@ export interface PostView {
   readonly built_on_by: readonly string[];
 }
 
+/** The lab's answer so far, and each post that it builds on with where it stands. */
+export interface AnswerView {
+  readonly answer: PostView;
+  readonly builds_on: readonly PostView[];
+  /** How many of `builds_on` are results with files, which a blind checker can rerun. */
+  readonly results: number;
+  /** The results among them that no blind checker has rerun. */
+  readonly no_blind_rerun: readonly string[];
+}
+
+/** The text of one file that backs a post, at the commit that the post pins. */
+export interface FileText {
+  readonly path: string;
+  readonly commit: string;
+  readonly text: string;
+}
+
 export interface ThreadView {
   readonly thread: Thread;
   readonly watching: boolean;

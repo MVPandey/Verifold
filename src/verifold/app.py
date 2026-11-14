@@ -26,11 +26,14 @@ from verifold.protocol.app import (
     StartRequest,
 )
 from verifold.protocol.events import TurnSummary
+from verifold.protocol.ids import PostId
+from verifold.protocol.join import FileText
 from verifold.protocol.record import Record
 from verifold.protocol.settings import AtExit, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
-from verifold.runner.folders import LAB_FOLDER, agent_folder, tracked_lab_files
+from verifold.runner.folders import LAB_FOLDER, agent_folder, agents_folder, tracked_lab_files
+from verifold.runner.git import GitError, git
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, running_jobs, sweep
 from verifold.runner.messages import start_message
 from verifold.runner.permissions import GrantAsks
@@ -39,7 +42,7 @@ from verifold.runner.session import Place, SessionOptions, offer_of
 from verifold.runner.snapshots import pin
 from verifold.server.activity import Activity
 from verifold.server.app_api import app_api, new_person_token
-from verifold.server.errors import LabExists, SetupRejected
+from verifold.server.errors import LabExists, NoLab, SetupRejected
 from verifold.server.join import Members, join_server
 from verifold.server.lab import Lab
 from verifold.server.member import Member
@@ -47,6 +50,7 @@ from verifold.server.quiet import notice_quiet
 from verifold.server.timekeeper import keep_time
 from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.board import Board
+from verifold.society.errors import NotFound
 from verifold.store.errors import SettingsInvalid
 from verifold.store.record_file import RecordFile
 from verifold.store.server_file import running_server, server_file
@@ -74,6 +78,10 @@ SERVER_STOP_GRACE = 30.0
 
 NORMS_TEMPLATE = files('verifold.society').joinpath('LAB.md').read_text()
 """The norms that a new lab starts with. The person edits the copy in the lab's folder."""
+WRITING_TEMPLATE = files('verifold.society').joinpath('WRITING.md').read_text()
+"""How the lab writes its answer for the person. A lab folder gets a copy, which the person can change."""
+MAX_FILE_BYTES = 1_000_000
+"""The largest file that the app shows as text."""
 
 
 class ServeOptions(Record):
@@ -205,6 +213,34 @@ class Host:
             lab=self._lab.board.settings if self._lab else None,
         )
 
+    async def file_text(self, post_id: PostId, path: str) -> FileText:
+        """
+        Return the text of a file that backs a post, at the commit that the post pins.
+
+        Raises:
+            NoLab: The folder has no lab.
+            NotFound: The post does not name the file, the file is gone, it is too large, or it is not text.
+
+        """
+        if self._lab is None:
+            raise NoLab('This folder has no lab yet. Start one from the setup screen.')
+        entry = self._lab.board.post(post_id)
+        file = next((item for item in entry.post.evidence if item.path == path), None) if entry else None
+        if entry is None or file is None:
+            raise NotFound(f'Post {post_id} names no file {path}.')
+        folder = agents_folder(self._project) / entry.post.author
+        blob = f'{file.commit}:{file.path}'
+        try:
+            size = int(await git('cat-file', '-s', blob, cwd=folder))
+            if size > MAX_FILE_BYTES:
+                raise NotFound(f'{path} is larger than {MAX_FILE_BYTES:,} bytes, so the app does not show it.')
+            text = await git('show', blob, cwd=folder, strip=False)
+        except UnicodeDecodeError as error:
+            raise NotFound(f'{path} is not a text file.') from error
+        except (GitError, OSError, ValueError) as error:
+            raise NotFound(f'{path} is not in the folder of {entry.post.author} at {file.commit[:8]}.') from error
+        return FileText(path=file.path, commit=file.commit, text=text)
+
     async def change_settings(self, change: SettingsChange) -> SettingsView:
         """
         Change one setting in one of the person's settings files, and apply it to the folder's lab.
@@ -304,6 +340,9 @@ class Host:
         norms = self._project / LAB_FOLDER / 'LAB.md'
         if not norms.exists():
             norms.write_text(NORMS_TEMPLATE)
+        writing = self._project / LAB_FOLDER / 'WRITING.md'
+        if not writing.exists():
+            writing.write_text(WRITING_TEMPLATE)
         group.create_task(keep_time(lab))
         if settings.lull:
             group.create_task(notice_quiet(lab, self._activity, settings.lull))
@@ -314,7 +353,7 @@ class Host:
             entry.agent for entry in lab.board.agents if not entry.agent.checks and entry.agent.harness in self._catalog
         )
         for agent in workers:
-            member, setup = await self._seat(lab, agent, start_message(lab.board, agent, norms))
+            member, setup = await self._seat(lab, agent, start_message(lab.board, agent, norms, writing))
             await self._activity.set(agent.id, 'starting')
             group.create_task(AgentLoop(member, setup, settings, shared=self._shared()).run())
         crew = _crew(workers, self._catalog, auto_mode=lab.board.opened.auto_mode)

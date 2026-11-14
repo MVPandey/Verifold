@@ -17,7 +17,7 @@ from builders import SLEEP, alive, start_orphan, until
 from fakes import FAKE_HARNESS
 from pydantic import TypeAdapter
 
-from verifold.app import ServeHooks, ServeOptions, WebServer, serve
+from verifold.app import WRITING_TEMPLATE, ServeHooks, ServeOptions, WebServer, serve
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import StartRequest
@@ -236,6 +236,24 @@ async def test_a_question_for_a_folder_with_a_lab_is_refused(project: Path) -> N
 
     with pytest.raises(LabExists, match='Run `verifold` here to resume it'):
         await serve(project, TWO_AGENTS, catalog=CATALOG)
+
+
+@pytest.mark.usefixtures('log')
+async def test_the_app_reads_a_file_that_backs_a_post_and_the_lab_folder_gets_the_writing_guide(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),))
+
+    async with serving(project, start, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: any(entry.post.kind == 'result' for entry in posts(project)), timeout=60)
+        result = next(entry.post for entry in posts(project) if entry.post.kind == 'result')
+        file = await client.get(f'/posts/{result.id}/file', params={'path': 'result.txt'})
+        missing = await client.get(f'/posts/{result.id}/file', params={'path': '../secret.txt'})
+
+    assert (file.json()['path'], file.json()['text']) == ('result.txt', '11.8\n')
+    assert missing.status_code == 404
+    assert (project / '.verifold' / 'WRITING.md').read_text() == WRITING_TEMPLATE
 
 
 @pytest.mark.usefixtures('log')

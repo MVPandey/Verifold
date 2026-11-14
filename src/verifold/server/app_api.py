@@ -28,8 +28,8 @@ from verifold.protocol.app import (
     TimeRequest,
 )
 from verifold.protocol.events import RerunRequested
-from verifold.protocol.ids import PERSON, ThreadId
-from verifold.protocol.join import PostRequest, PostView, ThreadSummary, ThreadView
+from verifold.protocol.ids import PERSON, PostId, ThreadId
+from verifold.protocol.join import AnswerView, FileText, PostRequest, PostView, ThreadSummary, ThreadView
 from verifold.protocol.usage import Usage
 from verifold.server.activity import Activity
 from verifold.server.errors import LabExists, NoLab, ServerError
@@ -37,7 +37,7 @@ from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
-from verifold.society.views import latest_report, needs_person, thread_summaries, thread_view
+from verifold.society.views import answer_view, latest_report, needs_person, thread_summaries, thread_view
 from verifold.store.errors import SettingsChanged, SettingsInvalid, SettingsUnwritable
 
 HEARTBEAT = 15.0
@@ -66,6 +66,10 @@ class Host(Protocol):
 
     async def change_settings(self, change: SettingsChange) -> SettingsView:
         """Change one setting, and apply the change to the folder's lab."""
+        ...
+
+    async def file_text(self, post_id: PostId, path: str) -> FileText:
+        """Return the text of a file that backs a post, at the commit that the post pins."""
         ...
 
 
@@ -131,6 +135,14 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     @api.get('/report', dependencies=[authorized])
     async def report() -> PostView | None:
         return latest_report(current().board)
+
+    @api.get('/answer', dependencies=[authorized])
+    async def answer() -> AnswerView | None:
+        return answer_view(current().board)
+
+    @api.get('/posts/{post_id}/file', dependencies=[authorized])
+    async def file(post_id: PostId, path: str) -> FileText:
+        return await host.file_text(post_id, path)
 
     @api.get('/needs', dependencies=[authorized])
     async def needs() -> tuple[PostView, ...]:

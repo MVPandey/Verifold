@@ -2,6 +2,7 @@ import type { ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
 import { useLab, useNow, useRoute } from './hooks.ts';
+import { FilePage } from './FilePage.tsx';
 import { LabPage } from './LabPage.tsx';
 import { Manifold } from './Manifold.tsx';
 import { NeedsPage } from './NeedsPage.tsx';
@@ -67,6 +68,8 @@ export function App(props: { readonly api: Api; readonly token: string }): React
       <main className={onWall ? 'wall' : 'page'}>
         {route.page === 'needs' ? (
           <NeedsPage {...shared} />
+        ) : route.page === 'file' ? (
+          <FilePage api={props.api} post={route.post} path={route.path} />
         ) : route.page === 'settings' ? (
           <SettingsPage
             api={props.api}

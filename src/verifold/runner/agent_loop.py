@@ -53,7 +53,7 @@ class LoopSettings(Record):
     """Seconds without a new event on the board before a doorbell rings, so that one doorbell covers a burst."""
     max_quiet: float = Field(default=45, ge=0)
     """The most seconds that a doorbell waits for the board to go quiet."""
-    lull: float = Field(default=180, ge=0)
+    lull: float = Field(default=90, ge=0)
     """Seconds without a turn or an event before Verifold tells the agents that the lab is quiet. Zero: never."""
     job_poll: float = Field(default=5, gt=0)
     """Seconds between two looks at the processes that an agent with one job left running."""

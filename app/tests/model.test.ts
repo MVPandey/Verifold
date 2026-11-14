@@ -116,6 +116,9 @@ describe('route', () => {
     );
     assert.equal(href({ page: 'thread', id: 't-3', post: null }), '#/thread/t-3');
     assert.equal(href({ page: 'thread', id: 't-3', post: 'p-40' }), '#/thread/t-3/p-40');
+    const file = { page: 'file', post: 'p-7', path: 'out/final answer.md' } as const;
+    assert.equal(href(file), '#/file/p-7/out%2Ffinal%20answer.md');
+    assert.deepEqual(parseRoute(href(file)), file);
   });
 });
 

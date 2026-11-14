@@ -8,6 +8,8 @@ from verifold.protocol.join import (
     MAX_LINKS,
     MAX_NEWS,
     AgentLine,
+    AnswerLine,
+    AnswerView,
     Brief,
     News,
     PostLine,
@@ -17,11 +19,12 @@ from verifold.protocol.join import (
     ThreadSummary,
     ThreadView,
 )
-from verifold.protocol.posts import Ask, Call, Check, Objection, Plan, Report, Result, RuledOut
+from verifold.protocol.posts import Ask, Call, Check, Objection, Plan, Proposal, Report, Result, RuledOut
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.society.attention import watches_thread
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
+from verifold.society.rules import blind_checks
 from verifold.society.standing import is_answered, is_open_call, standing
 
 
@@ -250,6 +253,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         you=agent_id,
         how=how,
         agents=tuple(_agent_line(board, agent) for agent in others),
+        answer=_answer_line(board),
         open_calls=open_calls[-MAX_NEWS:],
         one_agent_threads=alone[:MAX_LEADS],
         not_built_on=not_built_on[-MAX_LEADS:],
@@ -287,6 +291,59 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
         if isinstance(entry.post, Ask)
         and PERSON in entry.post.mentions
         and not is_answered(board, entry.post.id, by=PERSON)
+    )
+
+
+def answer(board: Board) -> Posted | None:
+    """Return the lab's answer so far: the newest proposal in the question's thread that is not conceded."""
+    thread = question_thread(board)
+    return next(
+        (
+            entry
+            for entry in reversed(board.posts)
+            if isinstance(entry.post, Proposal)
+            and entry.post.thread == thread
+            and standing(board, entry.post.id) != 'conceded'
+        ),
+        None,
+    )
+
+
+def answer_view(board: Board) -> AnswerView | None:
+    """Return the lab's answer so far with the posts that it builds on, or `None` when no agent proposed one."""
+    entry = answer(board)
+    if entry is None:
+        return None
+    under = tuple(post for post_id in entry.post.builds_on if (post := board.post(post_id)))
+    results = tuple(post for post in under if _can_rerun(post))
+    return AnswerView(
+        answer=post_view(board, entry),
+        builds_on=tuple(post_view(board, post) for post in under),
+        results=len(results),
+        no_blind_rerun=tuple(post.post.id for post in _not_rerun(board, results)),
+    )
+
+
+def _answer_line(board: Board) -> AnswerLine | None:
+    entry = answer(board)
+    if entry is None:
+        return None
+    under = tuple(post for post_id in entry.post.builds_on if (post := board.post(post_id)))
+    waits = _not_rerun(board, tuple(post for post in under if _can_rerun(post)))
+    return AnswerLine(answer=PostLine.of(entry), no_blind_rerun=tuple(PostLine.of(post) for post in waits))
+
+
+def _can_rerun(entry: Posted) -> bool:
+    # A blind rerun needs files to run.
+    return isinstance(entry.post, Result) and bool(entry.post.evidence)
+
+
+def _not_rerun(board: Board, results: tuple[Posted, ...]) -> tuple[Posted, ...]:
+    # The results that no blind checker has checked, whatever the check said, and that their author still holds.
+    return tuple(
+        entry
+        for entry in results
+        if not blind_checks(board, entry.post.id) and standing(board, entry.post.id) != 'conceded'
     )
 
 

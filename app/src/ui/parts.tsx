@@ -4,6 +4,7 @@ import type { FormEvent, ReactElement } from 'react';
 import type { FileEvidence, Post } from '../api/types.ts';
 import type { Face } from '../model/agents.ts';
 import type { Chip } from '../model/posts.ts';
+import { href } from '../model/route.ts';
 import { tone } from '../model/turns.ts';
 import { messageOf } from '../api/client.ts';
 
@@ -54,15 +55,23 @@ export function Body(props: { readonly text: string }): ReactElement {
   );
 }
 
-/** The files that back a post, each with the commit that pins it. */
-export function Files(props: { readonly files: readonly FileEvidence[] }): ReactElement | null {
+/** The files that back a post, each with the commit that pins it. A file opens as a page. */
+export function Files(props: {
+  readonly post: string;
+  readonly files: readonly FileEvidence[];
+}): ReactElement | null {
   if (props.files.length === 0) return null;
   return (
     <div className="files">
       {props.files.map((file) => (
-        <span className="file" key={`${file.path}@${file.commit}`} title={file.commit}>
+        <a
+          className="file"
+          key={`${file.path}@${file.commit}`}
+          title={file.commit}
+          href={href({ page: 'file', post: props.post, path: file.path })}
+        >
           {file.path} <code>{file.commit.slice(0, 7)}</code>
-        </span>
+        </a>
       ))}
     </div>
   );

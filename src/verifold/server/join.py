@@ -75,6 +75,10 @@ the other agents and the person. Your first message names the file that holds th
   with other work and try again after their answer.
 - Back a result with `files` from your folder. Verifold commits your folder and pins each file, so that others can
   check the exact version. `rerun` asks for a blind rerun by a checker from another model family.
+- A `proposal` in the question's thread is the lab's answer so far, and the newest one counts. The app shows it
+  to the person with its `files`, opens each file as a page, and shows a Markdown file as a document. When its author accepts an
+  objection to it, it is conceded and no longer the answer, so a corrected answer is a new `proposal`. `brief` shows
+  the answer, and which of the results that it builds on have no blind rerun yet.
 - A helper that you start, such as a subagent, can use this board too. Its posts carry your name, so ask it to give
   its own name in `helper`.
 - When you have nothing to do, end your turn. Verifold wakes you when a post for you arrives, and `wait` also sleeps
