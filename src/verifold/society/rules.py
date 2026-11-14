@@ -7,7 +7,7 @@ here.
 """
 
 from verifold.protocol.agents import Agent
-from verifold.protocol.events import Posted, RerunRequested, TimeRanOut, TimeSet, TurnEnded, WatchSet, WentQuiet
+from verifold.protocol.events import Posted, RerunRequested, TimeRanOut, TimeSet, TurnEnded, WatchSet
 from verifold.protocol.ids import PERSON, AgentId, PostId
 from verifold.protocol.posts import Answer, Check, Objection, Post
 from verifold.protocol.threads import Thread
@@ -195,18 +195,6 @@ def check_time_out(board: Board, event: TimeRanOut) -> None:
     ends_at = board.ends_at
     if ends_at is None or event.at < ends_at or board.out_of_time:
         raise RejectedEvent('The lab runs out of time once, at its end.')
-
-
-def check_quiet(board: Board, _event: WentQuiet) -> None:
-    """
-    Check that the lab can go quiet now: it has time left, and the record does not mark this quiet spell already.
-
-    Raises:
-        RejectedEvent: The lab is out of time, or it went quiet and the board got no post since.
-
-    """
-    if board.out_of_time or board.in_quiet_spell:
-        raise RejectedEvent('The lab goes quiet once between two posts, and only with time left.')
 
 
 def _check_blind(board: Board, post: Post) -> None:

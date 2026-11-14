@@ -6,7 +6,7 @@ from builders import RecordBuilder, lab
 from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.events import AgentJoined
 from verifold.protocol.join import MAX_NEWS, News
-from verifold.protocol.posts import Ask, Call, Check, FileEvidence, Message, Objection, Post, Proposal, Result
+from verifold.protocol.posts import Ask, Call, Check, FileEvidence, Message, Objection, Plan, Post, Proposal, Result
 from verifold.society.attention import news, update, wakes, watches_thread
 from verifold.society.errors import RejectedEvent
 
@@ -24,15 +24,22 @@ def woken(record: RecordBuilder, post: Post) -> set[str]:
     return {joined.agent.id for joined in board.agents if wakes(board, joined.agent.id, entry)}
 
 
-def test_an_agent_watches_the_threads_that_it_opens_or_posts_in_and_the_persons_threads() -> None:
-    record = started().thread('t-2', opened_by='person')
-    board = record.post(Message(id='p-2', thread='t-1', author='bo', text='Reading it.')).board()
+def test_an_agent_watches_the_threads_that_it_opens_and_the_thread_where_it_works_now() -> None:
+    record = started().thread('t-2', opened_by='person').thread('t-3', opened_by='cy')
+    record.post(Message(id='p-2', thread='t-1', author='bo', text='Reading it.'))
+    board = record.post(Plan(id='p-3', thread='t-3', author='bo', text='I take the large models.')).board()
 
     assert watches_thread(board, 'ada', 't-1')
-    assert watches_thread(board, 'bo', 't-1')
-    assert not watches_thread(board, 'cy', 't-1')
-    assert all(watches_thread(board, agent, 't-2') for agent in ('ada', 'bo', 'cy'))
+    # A note in a thread is no work in it, and nobody watches a thread of the person by default.
+    assert not watches_thread(board, 'bo', 't-1')
+    assert not any(watches_thread(board, agent, 't-2') for agent in ('ada', 'bo', 'cy'))
+    assert watches_thread(board, 'bo', 't-3')
     assert not watches_thread(board, 'ada', 't-9')
+
+    # An agent that moves its work to another thread stops watching the one that it left.
+    moved = record.post(Plan(id='p-4', thread='t-1', author='bo', text='I join the small models.')).board()
+    assert not watches_thread(moved, 'bo', 't-3')
+    assert watches_thread(moved, 'bo', 't-1')
 
 
 def test_watches_change_with_watch_events(record: RecordBuilder) -> None:
@@ -92,11 +99,11 @@ def test_an_ask_to_the_person_or_in_reply_to_a_post_is_not_for_every_agent() -> 
     assert woken(started(), ask.model_copy(update={'text': 'Which seed?', 'reply_to': 'p-1'})) == {'ada'}
 
 
-def test_a_proposal_wakes_every_agent() -> None:
-    assert woken(started(), Proposal(id='p-2', thread='t-1', author='bo', text='The answer: it holds.')) == {
-        'ada',
-        'cy',
-    }
+def test_a_proposal_wakes_the_agents_that_it_names_and_the_watchers_of_its_thread() -> None:
+    proposal = Proposal(id='p-2', thread='t-1', author='bo', text='The answer: it holds.')
+
+    assert woken(started(), proposal) == {'ada'}
+    assert woken(started(), proposal.model_copy(update={'mentions': ('cy',)})) == {'ada', 'cy'}
 
 
 def test_mentions_and_replies_wake_their_agents() -> None:
@@ -215,7 +222,8 @@ def test_the_persons_words_reach_watchers_or_everyone() -> None:
     assert woken(started(), to_watchers) == {'ada'}
     assert woken(started().watch('ada', 't-1', watching=False), to_watchers) == {'ada', 'bo', 'cy'}
     assert woken(started(), to_watchers.model_copy(update={'mentions': ('bo',)})) == {'bo', 'ada'}
-    assert woken(own_thread, Message(id='p-2', thread='t-2', author='bo', text='On it.')) == {'ada', 'cy'}
+    # Nobody watches the person's thread by default, so an agent's note there wakes nobody.
+    assert woken(own_thread, Message(id='p-2', thread='t-2', author='bo', text='On it.')) == set()
 
 
 def test_an_update_holds_the_agents_posts_and_lists_the_rest(record: RecordBuilder) -> None:

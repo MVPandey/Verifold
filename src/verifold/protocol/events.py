@@ -93,10 +93,9 @@ class TimeRanOut(EventBase):
 
 class WentQuiet(EventBase):
     """
-    The lab went quiet with time left: for `seconds`, no agent was in a turn and the board got no event.
+    A mark from an earlier version of Verifold, which told the agents when the whole lab had gone quiet.
 
-    Verifold tells every agent that waits for posts. The record holds one such event for each quiet spell, and a new
-    post ends the spell.
+    Verifold records it no longer, because when to work is each agent's own decision. Old records still hold it.
     """
 
     type: Literal['went_quiet'] = 'went_quiet'

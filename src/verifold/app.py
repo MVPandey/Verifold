@@ -46,7 +46,6 @@ from verifold.server.errors import LabExists, NoLab, SetupRejected
 from verifold.server.join import Members, join_server
 from verifold.server.lab import Lab
 from verifold.server.member import Member
-from verifold.server.quiet import notice_quiet
 from verifold.server.timekeeper import keep_time
 from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.board import Board
@@ -344,8 +343,6 @@ class Host:
         if not writing.exists():
             writing.write_text(WRITING_TEMPLATE)
         group.create_task(keep_time(lab))
-        if settings.lull:
-            group.create_task(notice_quiet(lab, self._activity, settings.lull))
         group.create_task(keep_jobs(lab, self._project, self._swept))
         self._grant_asks = GrantAsks(lab)
         group.create_task(self._grant_asks.run())

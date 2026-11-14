@@ -4,11 +4,10 @@ from pathlib import Path
 from builders import START, RecordBuilder, lab
 
 from verifold.app import NORMS_TEMPLATE
-from verifold.protocol.events import WentQuiet
 from verifold.protocol.posts import FileEvidence, Result
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.threads import QUESTION_TITLE
-from verifold.runner.messages import DOORBELL, more_time_message, quiet_message, rerun_message, start_message
+from verifold.runner.messages import DOORBELL, more_time_message, rerun_message, start_message
 
 EVIDENCE = FileEvidence(path='bench.py', commit='c' * 40)
 SAME_MOMENT = 'The other agents got this question at the same moment'
@@ -119,17 +118,6 @@ def test_the_message_after_more_time_says_what_happened_to_the_agents_processes(
         'Verifold paused any process that you left running, and it runs again now.'
     )
     assert more_time_message(None, AtTimeLimit.STOP).endswith('Verifold stopped any process that you left running.')
-
-
-def test_the_message_for_a_quiet_lab_holds_facts_only() -> None:
-    quiet = WentQuiet(seq=9, at=START, seconds=180)
-    assert quiet_message(quiet, None) == (
-        'The lab went quiet at 2026-11-06 12:00 UTC: for 3 minutes before that, no agent was in a turn and the board '
-        'got no post.'
-    )
-    assert quiet_message(quiet, START + timedelta(hours=1)).endswith(
-        ' The lab ends at 2026-11-06 13:00 UTC, unless the person gives it more time.'
-    )
 
 
 def test_the_start_message_names_the_file_that_says_how_the_lab_writes_its_answer() -> None:

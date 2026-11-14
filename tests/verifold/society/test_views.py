@@ -38,8 +38,9 @@ def test_a_thread_view_shows_each_post_and_where_it_stands(record: RecordBuilder
     view = thread_view(record.board(), 'bo', 't-1')
 
     assert [(item.post.id, item.standing) for item in view.posts] == [('p-1', 'disputed'), ('p-2', 'open')]
-    assert view.watching
-    assert not thread_view(record.board(), 'cy', 't-1').watching
+    # An objection is no work in the thread, so its author does not watch it. The agent that opened it does.
+    assert not view.watching
+    assert thread_view(record.board(), 'ada', 't-1').watching
 
 
 def test_a_post_view_lists_the_posts_that_build_on_it_from_any_thread(record: RecordBuilder) -> None:
@@ -345,7 +346,7 @@ def test_a_ruled_out_lead_ends_an_agents_work_in_a_thread_but_a_withdrawn_call_e
     assert {summary.thread.id: summary.team for summary in ended.threads} == {'t-1': (), 't-2': (), 't-3': ()}
 
 
-def test_the_answer_is_the_newest_proposal_in_the_questions_thread_that_its_author_did_not_concede() -> None:
+def test_the_answer_is_the_newest_proposal_in_the_questions_thread_with_what_it_builds_on() -> None:
     record = RecordBuilder().join('ada').join('bo').join('cy', family='openai')
     record.thread('t-1', opened_by='person', title=QUESTION_TITLE).thread('t-2', opened_by='ada')
     file = (FileEvidence(path='run.json', commit='c' * 40),)
@@ -359,17 +360,15 @@ def test_the_answer_is_the_newest_proposal_in_the_questions_thread_that_its_auth
     assert answer_view(record.board()) is None
     assert brief(record.board(), 'bo', News(seq=0)).answer is None
 
-    record.post(Proposal(id='p-5', thread='t-2', author='bo', text='A proposal for this line only.'))
-    record.post(Proposal(id='p-6', thread='t-1', author='bo', text='Yes.', builds_on=('p-1', 'p-2', 'p-3')))
-    record.post(Proposal(id='p-7', thread='t-1', author='cy', text='No.'))
-    record.post(Objection(id='p-8', thread='t-1', author='ada', text='p-2 says yes.', reply_to='p-7'))
-    record.post(Answer(id='p-9', thread='t-1', author='cy', text='Right.', reply_to='p-8', accepts=True))
+    record.post(Proposal(id='p-5', thread='t-1', author='cy', text='No.'))
+    record.post(Proposal(id='p-6', thread='t-2', author='bo', text='A proposal for this line only.'))
+    record.post(Proposal(id='p-7', thread='t-1', author='bo', text='Yes.', builds_on=('p-1', 'p-2', 'p-3')))
 
     view = answer_view(record.board())
     line = brief(record.board(), 'ada', News(seq=0)).answer
 
     assert view is not None
-    assert view.answer.post.id == 'p-6'
+    assert view.answer.post.id == 'p-7'
     assert [(under.post.id, under.standing) for under in view.builds_on] == [
         ('p-1', 'held_up'),
         ('p-2', 'open'),
@@ -377,13 +376,20 @@ def test_the_answer_is_the_newest_proposal_in_the_questions_thread_that_its_auth
     ]
     assert (view.results, view.no_blind_rerun) == (2, ('p-2',))
     assert line is not None
-    assert (line.answer.id, [post.id for post in line.no_blind_rerun]) == ('p-6', ['p-2'])
+    assert line.id == 'p-7'
 
     # A blind rerun that fails, or one from the author's own family, is still a blind rerun.
     record.join('eve', family='anthropic', checks='p-2')
     record.post(
-        Check(id='p-10', thread='t-2', author='eve', text='No.', reply_to='p-2', outcome='fails', method='rerun')
+        Check(id='p-8', thread='t-2', author='eve', text='No.', reply_to='p-2', outcome='fails', method='rerun')
     )
-    after = brief(record.board(), 'ada', News(seq=0)).answer
+    after = answer_view(record.board())
     assert after is not None
     assert after.no_blind_rerun == ()
+
+    # The newest proposal stays the answer when its author concedes it. Where it stands says so.
+    record.post(Objection(id='p-9', thread='t-1', author='ada', text='p-2 failed.', reply_to='p-7'))
+    record.post(Answer(id='p-10', thread='t-1', author='bo', text='Right.', reply_to='p-9', accepts=True))
+    conceded = answer_view(record.board())
+    assert conceded is not None
+    assert (conceded.answer.post.id, conceded.answer.standing) == ('p-7', 'conceded')

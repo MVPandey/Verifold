@@ -8,7 +8,6 @@ from verifold.protocol.join import (
     MAX_LINKS,
     MAX_NEWS,
     AgentLine,
-    AnswerLine,
     AnswerView,
     Brief,
     News,
@@ -19,11 +18,11 @@ from verifold.protocol.join import (
     ThreadSummary,
     ThreadView,
 )
-from verifold.protocol.posts import Ask, Call, Check, Objection, Plan, Proposal, Report, Result, RuledOut
-from verifold.protocol.threads import QUESTION_TITLE
+from verifold.protocol.posts import Ask, Call, Check, Objection, Plan, Proposal, Report, Result
 from verifold.society.attention import watches_thread
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
+from verifold.society.lines import lines_of, question_thread
 from verifold.society.rules import blind_checks
 from verifold.society.standing import is_answered, is_open_call, standing
 
@@ -60,7 +59,7 @@ def thread_view(board: Board, agent_id: AgentId, thread_id: ThreadId) -> ThreadV
 def thread_summaries(board: Board, agent_id: AgentId) -> tuple[ThreadSummary, ...]:
     """Return one summary for each thread, the most recently active first."""
     crossed = crossings(board)
-    lines = _lines(board)
+    lines = lines_of(board)
     summaries = (_summary(board, agent_id, opened, crossed, lines) for opened in board.threads)
     return tuple(sorted(summaries, key=lambda summary: summary.last_at, reverse=True))
 
@@ -104,35 +103,6 @@ def _links(pairs: tuple[Crossing, ...]) -> tuple[ThreadLink, ...]:
         for thread in threads
     )
     return tuple(sorted(links, key=lambda link: link.count, reverse=True)[:MAX_LINKS])
-
-
-def _lines(board: Board) -> dict[AgentId, ThreadId | None]:
-    """
-    Return where each agent of the lab works now, for every agent that has worked in a line.
-
-    An agent works in the thread of its latest plan or result outside the question's thread. Every agent plans in
-    the question's thread, so a plan there moves nobody. A ruled-out lead ends the agent's work in its thread, and
-    the agent then works nowhere until its next plan or result. A ruled-out lead that withdraws the agent's own
-    call ends no work.
-    """
-    question = question_thread(board)
-    workers = {joined.agent.id for joined in board.agents if not joined.agent.checks}
-    lines: dict[AgentId, ThreadId | None] = {}
-    for entry in board.posts:
-        post = entry.post
-        if post.author not in workers or post.thread == question:
-            continue
-        if isinstance(post, Plan | Result):
-            lines[post.author] = post.thread
-        elif isinstance(post, RuledOut) and not _withdraws(board, post) and lines.get(post.author) == post.thread:
-            lines[post.author] = None
-    return lines
-
-
-def _withdraws(board: Board, post: RuledOut) -> bool:
-    # Whether a ruled-out lead withdraws its author's own call.
-    target = board.post(post.reply_to) if post.reply_to else None
-    return bool(target and isinstance(target.post, Call) and target.post.author == post.author)
 
 
 def _team(board: Board, opened: ThreadOpened, lines: dict[AgentId, ThreadId | None]) -> tuple[AgentId, ...]:
@@ -197,12 +167,6 @@ def _built_on(board: Board, entry: Posted) -> bool:
     )
 
 
-def question_thread(board: Board) -> ThreadId | None:
-    """Return the thread that a lab opens with, which holds the person's question, or `None` for an older lab."""
-    first = board.threads[0].thread if board.threads else None
-    return first.id if first and first.opened_by == PERSON and first.title == QUESTION_TITLE else None
-
-
 def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
     """
     Return the lab for one agent in one read.
@@ -235,7 +199,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
     )
     summaries = thread_summaries(board, agent_id)
     # A thread counts when an agent's latest plan or result is in it, so a thread that holds only notes is no line.
-    busy = set(_lines(board).values())
+    busy = set(lines_of(board).values())
     alone = tuple(
         ThreadLine(id=summary.thread.id, title=summary.thread.title, team=summary.team)
         for summary in summaries
@@ -253,7 +217,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         you=agent_id,
         how=how,
         agents=tuple(_agent_line(board, agent) for agent in others),
-        answer=_answer_line(board),
+        answer=PostLine.of(proposed) if (proposed := answer(board)) else None,
         open_calls=open_calls[-MAX_NEWS:],
         one_agent_threads=alone[:MAX_LEADS],
         not_built_on=not_built_on[-MAX_LEADS:],
@@ -295,16 +259,15 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
 
 
 def answer(board: Board) -> Posted | None:
-    """Return the lab's answer so far: the newest proposal in the question's thread that is not conceded."""
+    """
+    Return the lab's answer so far: the newest proposal in the question's thread.
+
+    Where it stands says whether an agent disputes it or its author conceded it. An older proposal does not come
+    back as the answer, because the lab moved on from it.
+    """
     thread = question_thread(board)
     return next(
-        (
-            entry
-            for entry in reversed(board.posts)
-            if isinstance(entry.post, Proposal)
-            and entry.post.thread == thread
-            and standing(board, entry.post.id) != 'conceded'
-        ),
+        (entry for entry in reversed(board.posts) if isinstance(entry.post, Proposal) and entry.post.thread == thread),
         None,
     )
 
@@ -322,15 +285,6 @@ def answer_view(board: Board) -> AnswerView | None:
         results=len(results),
         no_blind_rerun=tuple(post.post.id for post in _not_rerun(board, results)),
     )
-
-
-def _answer_line(board: Board) -> AnswerLine | None:
-    entry = answer(board)
-    if entry is None:
-        return None
-    under = tuple(post for post_id in entry.post.builds_on if (post := board.post(post_id)))
-    waits = _not_rerun(board, tuple(post for post in under if _can_rerun(post)))
-    return AnswerLine(answer=PostLine.of(entry), no_blind_rerun=tuple(PostLine.of(post) for post in waits))
 
 
 def _can_rerun(entry: Posted) -> bool:

@@ -450,9 +450,11 @@ describe('turns', () => {
       postView(result('p-4', { kind: 'message' }), 4),
     ];
     assert.equal(headClaim(posts)?.post.id, 'p-2');
-    assert.equal(answerSoFar(posts)?.post.id, 'p-2');
+    // The newest proposal is the answer, also when its author conceded it.
+    assert.equal(answerSoFar(posts)?.post.id, 'p-3');
     assert.equal(headClaim([postView(result('p-1'), 1, 'conceded')])?.post.id, 'p-1');
-    assert.equal(answerSoFar([postView(proposal('p-1'), 1, 'conceded')]), null);
+    assert.equal(answerSoFar([postView(proposal('p-1'), 1, 'conceded')])?.post.id, 'p-1');
+    assert.equal(answerSoFar([]), null);
     assert.equal(headClaim([]), null);
     // A ruled-out lead is not what a thread stands on.
     const lead = postView(result('p-5', { kind: 'ruled_out' }), 5, 'checked');
