@@ -122,6 +122,8 @@ class AgentLoop:
         """What the agent had seen when its turn started. A failed turn takes the agent back to it."""
         self._turn_ended = self._lab.board.seq
         """The board's sequence number when the agent's last turn ended. A stop after it concerns the agent's jobs."""
+        self._turn_started = self._lab.board.seq
+        """The board's sequence number when the agent's last turn started. An alarm from before it is spent."""
         self._cut_short = ''
         """Why the agent's last turn ended without the agent's choice, or empty when the agent ended it."""
 
@@ -191,6 +193,7 @@ class AgentLoop:
 
     async def _send(self, session: AgentSession, message: str) -> bool:
         # Return whether the turn stopped because the lab ran out of time.
+        self._turn_started = self._lab.board.seq
         await self._report('working')
         started = time.monotonic()
         self._seen_at_turn = self._member.seen
@@ -305,7 +308,9 @@ class AgentLoop:
             # The agent's own alarm. It does not ring in a lab that is out of time or closed.
             alarm = pending_alarm(board, agent_id)
             left = None
-            if alarm and not stopped and not board.out_of_time and lab_state(board) != 'closed':
+            # An alarm from before this run of Verifold is spent too: the turn that held it never ended.
+            fresh = alarm is not None and alarm.seq > self._turn_started
+            if alarm and fresh and not stopped and not board.out_of_time and lab_state(board) != 'closed':
                 left = (rings_at(board, alarm) - self._lab.now()).total_seconds()
                 if left <= 0:
                     return alarm_message(alarm)

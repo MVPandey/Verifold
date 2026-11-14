@@ -22,6 +22,7 @@ from verifold.protocol.posts import Answer, Check, Close, Objection, Post
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
+from verifold.society.standing import closing
 
 MAX_RERUNS = 2
 """The most blind reruns that one post can have. Each one ends with a blind checker's check."""
@@ -78,6 +79,8 @@ def check_post(board: Board, post: Post) -> None:
     for built_on in post.builds_on:
         if not board.post(built_on):
             raise RejectedEvent(f'Post {built_on} does not exist, so no post can build on it.')
+    if isinstance(post, Close):
+        _check_close(board, post)
     if post.reply_to is None:
         return
     target = board.post(post.reply_to)
@@ -248,6 +251,17 @@ def _check_blind(board: Board, post: Post) -> None:
 def _check_member(board: Board, author: AgentId) -> None:
     if author != PERSON and not board.agent(author):
         raise RejectedEvent(f'{author} is not an agent in this lab.')
+
+
+def _check_close(board: Board, close: Close) -> None:
+    if close.author == PERSON:
+        raise RejectedEvent("A close is the agents' word that the lab is done. You can stop the lab at any time.")
+    standing_close = closing(board)
+    if standing_close and standing_close.post.author != close.author:
+        raise RejectedEvent(
+            f'{standing_close.post.author} says in {standing_close.post.id} that the lab is done. Agree with an '
+            f'answer to it that has `accepts: true`, or object to it.'
+        )
 
 
 def _check_concession(board: Board, answer: Answer, target: Post) -> None:

@@ -18,14 +18,14 @@ from verifold.protocol.join import (
     ThreadSummary,
     ThreadView,
 )
-from verifold.protocol.posts import Ask, Call, Check, Objection, Plan, Proposal, Report, Result
+from verifold.protocol.posts import Ask, Call, Check, Close, Objection, Plan, Proposal, Report, Result
 from verifold.society.attention import watches_thread
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
-from verifold.society.lifecycle import agreed, closing, lab_state
+from verifold.society.lifecycle import lab_state
 from verifold.society.lines import lines_of, question_thread
 from verifold.society.rules import blind_checks
-from verifold.society.standing import is_answered, is_open_call, standing
+from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing
 
 
 def post_view(board: Board, entry: Posted) -> PostView:
@@ -79,7 +79,7 @@ def crossings(board: Board) -> tuple[Crossing, ...]:
     a report's link, because a report names its sources and builds nothing on them.
     """
     by_id = {entry.post.id: entry for entry in board.posts}
-    built = (entry for entry in board.posts if not isinstance(entry.post, Report))
+    built = (entry for entry in board.posts if not isinstance(entry.post, Report | Close))
     pairs = ((by_id.get(source), entry) for entry in built for source in dict.fromkeys(entry.post.builds_on))
     return tuple(
         (source, entry)
@@ -163,7 +163,7 @@ def _built_on(board: Board, entry: Posted) -> bool:
     return any(
         isinstance(other.post, Result)
         if other.post.author == entry.post.author
-        else other.post.author in workers and not isinstance(other.post, Report | Check | Objection)
+        else other.post.author in workers and not isinstance(other.post, Report | Check | Objection | Close)
         for other in board.built_on(entry.post.id)
     )
 

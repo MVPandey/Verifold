@@ -37,8 +37,9 @@ from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
-from verifold.society.lifecycle import agreed, closing, lab_state
+from verifold.society.lifecycle import lab_state
 from verifold.society.lines import lines_of
+from verifold.society.standing import agreed, closing
 from verifold.society.views import answer_view, latest_report, needs_person, thread_summaries, thread_view
 from verifold.store.errors import SettingsChanged, SettingsInvalid, SettingsUnwritable
 

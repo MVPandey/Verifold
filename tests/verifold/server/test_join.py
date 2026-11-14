@@ -263,3 +263,13 @@ async def test_an_agent_sets_and_cancels_its_own_alarm(lab: Lab) -> None:
         ('bo', 20, True),
         ('bo', 0, False),
     ]
+
+
+async def test_an_alarm_in_a_closed_lab_says_that_it_does_not_ring(lab: Lab) -> None:
+    await lab.post(PostRequest(kind='close', text='Done.', thread='t-1'), 'ada')
+    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-2', accepts=True), 'bo')
+    async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
+        set_ = await client.call_tool('alarm', {'minutes': 10})
+
+    assert set_.structured_content is not None
+    assert set_.structured_content['rings_at'] is None
