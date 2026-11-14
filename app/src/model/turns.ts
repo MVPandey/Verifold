@@ -236,3 +236,17 @@ export function cardStatus(summary: ThreadSummary): CardStatus {
   }
   return { label: open > 0 ? 'Not checked' : 'No result yet', edge: 'none', ...rest };
 }
+
+/**
+ * Return the results among `posts` that a blind rerun can hold up and none has: a result with files that is
+ * neither Held up nor Conceded.
+ */
+export function notRerun(posts: readonly PostView[]): readonly PostView[] {
+  return posts.filter(
+    (item) =>
+      item.post.kind === 'result' &&
+      item.post.evidence.length > 0 &&
+      item.standing !== 'held_up' &&
+      item.standing !== 'conceded',
+  );
+}

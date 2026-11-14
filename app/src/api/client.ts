@@ -1,4 +1,6 @@
 import type {
+  AnswerView,
+  FileText,
   LabView,
   PostRequest,
   PostView,
@@ -32,6 +34,10 @@ export interface Api {
   needs(): Promise<readonly PostView[]>;
   /** The newest report that an agent wrote for the person, or `null` when the lab has none. */
   report(): Promise<PostView | null>;
+  /** The lab's answer so far with what it builds on, or `null` when no agent has proposed one. */
+  answer(): Promise<AnswerView | null>;
+  /** The text of a file that backs a post. */
+  file(postId: string, path: string): Promise<FileText>;
   post(request: PostRequest): Promise<PostView>;
   rerun(postId: string): Promise<void>;
   setTime(minutes: number): Promise<LabView>;
@@ -82,6 +88,14 @@ export function createApi(
     thread: (id) => request(`/threads/${encodeURIComponent(id)}`),
     needs: () => request('/needs'),
     report: () => request('/report'),
+    // A server from before this route has none, and the page must still load.
+    answer: () =>
+      request<AnswerView | null>('/answer').catch((failure: unknown) => {
+        if (failure instanceof ApiError && failure.status === 404) return null;
+        throw failure;
+      }),
+    file: (postId, path) =>
+      request(`/posts/${encodeURIComponent(postId)}/file?path=${encodeURIComponent(path)}`),
     post: (post) => request('/posts', post),
     rerun: async (postId) => {
       await request('/reruns', { post: postId });

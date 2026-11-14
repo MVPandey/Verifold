@@ -10,7 +10,7 @@ import { orderNeeds } from '../model/needs.ts';
 import { isPermission, personMessage, standingChip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { hasNew, markSeen, readSeen } from '../model/seen.ts';
-import { answerSoFar, cardStatus, headClaim, questionThread } from '../model/turns.ts';
+import { answerSoFar, cardStatus, headClaim, notRerun, questionThread } from '../model/turns.ts';
 import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
 import { Body, ChipView, Composer, FaceView, Files } from './parts.tsx';
@@ -138,6 +138,10 @@ export function Wall(
                   <div className="f-card-st">
                     <ChipView chip={chip ?? { label: 'Not checked', tone: 'none' }} />
                   </div>
+                  <Files post={answer.post.id} files={answer.post.evidence} />
+                  {data.answer?.answer.post.id === answer.post.id ? (
+                    <Under posts={data.answer.builds_on} open={answerOpen} />
+                  ) : null}
                 </>
               ) : (
                 <p className="dim">
@@ -312,11 +316,49 @@ function ReportCard(props: {
           </summary>
           <div className="f-words">
             {post.body ? <Body text={post.body} /> : null}
-            <Files files={post.evidence} />
+            <Files post={post.id} files={post.evidence} />
           </div>
         </details>
       ) : null}
     </section>
+  );
+}
+
+/**
+ * What the lab's answer builds on: how many posts, and how many of the results among them no blind rerun holds
+ * up. With `open`, each post follows with where it stands.
+ */
+function Under(props: {
+  readonly posts: readonly PostView[];
+  readonly open: boolean;
+}): ReactElement | null {
+  if (props.posts.length === 0) return null;
+  const waits = notRerun(props.posts).length;
+  return (
+    <div className="f-under">
+      <p>
+        Builds on {props.posts.length === 1 ? '1 post' : `${props.posts.length} posts`}.{' '}
+        {waits === 0
+          ? 'No result among them waits for a blind rerun.'
+          : `${waits === 1 ? '1 result has' : `${waits} results have`} no blind rerun.`}
+      </p>
+      {props.open ? (
+        <ul>
+          {props.posts.map((item) => (
+            <li key={item.post.id}>
+              <ChipView
+                chip={
+                  standingChip(item.post, item.standing) ?? { label: 'Not checked', tone: 'none' }
+                }
+              />{' '}
+              <a href={href({ page: 'thread', id: item.post.thread, post: item.post.id })}>
+                {item.post.text}
+              </a>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 

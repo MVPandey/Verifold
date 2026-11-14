@@ -4,9 +4,16 @@ import { describe, it } from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { Api } from '../src/api/client.ts';
-import type { HarnessOption, Post, SettingsView, ThreadView } from '../src/api/types.ts';
+import type {
+  AnswerView,
+  HarnessOption,
+  Post,
+  SettingsView,
+  ThreadView,
+} from '../src/api/types.ts';
 import type { ThreadRead } from '../src/ui/hooks.ts';
 import { LabPage, Wall } from '../src/ui/LabPage.tsx';
+import { Markdown } from '../src/ui/Markdown.tsx';
 import { SettingsForm } from '../src/ui/SettingsPage.tsx';
 import { SetupPage } from '../src/ui/SetupPage.tsx';
 import { Turns } from '../src/ui/Thread.tsx';
@@ -199,6 +206,7 @@ describe('the lab page', () => {
     threads,
     needs,
     report: null,
+    answer: null,
     version: 1,
     error: null,
     reload: () => undefined,
@@ -345,12 +353,17 @@ describe('the lab page', () => {
   });
 
   const none: ThreadRead = { view: null, error: null };
-  const wall = (open: string, questionRead: ThreadRead, cardRead: ThreadRead): string => {
+  const wall = (
+    open: string,
+    questionRead: ThreadRead,
+    cardRead: ThreadRead,
+    answer: AnswerView | null = null,
+  ): string => {
     Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
     return renderToStaticMarkup(
       <Wall
         api={{} as Api}
-        data={data}
+        data={{ ...data, answer }}
         now={now}
         open={open}
         post={null}
@@ -445,6 +458,74 @@ describe('the lab page', () => {
     assert.ok(
       wall('t-2', thread('t-1', 'person', posts), none).includes('<p class="clamp">Yes, 12x.</p>'),
     );
+  });
+
+  it('links the answer’s files, and says which results under it have no blind rerun', () => {
+    const file = { type: 'file' as const, path: 'answer.md', commit: 'c'.repeat(40) };
+    const proposal = result('p-2', { kind: 'proposal', text: 'Yes, 12x.', evidence: [file] });
+    const posts = [result('p-1', { kind: 'message', author: 'person', text: 'Faster?' }), proposal];
+    const answer: AnswerView = {
+      answer: postView({ ...proposal, thread: 't-1' }, 2),
+      builds_on: [
+        postView(
+          result('p-7', { thread: 't-2', text: 'Rerun blind.', evidence: [file] }),
+          7,
+          'held_up',
+        ),
+        postView(result('p-8', { thread: 't-2', text: 'Not rerun.', evidence: [file] }), 8),
+        postView(result('p-9', { thread: 't-2', text: 'A reading.' }), 9),
+      ],
+    };
+    const closed = wall('t-2', thread('t-1', 'person', posts), none, answer);
+    assert.ok(closed.includes('href="#/file/p-2/answer.md"'));
+    assert.ok(closed.includes('Builds on 3 posts. 1 result has no blind rerun.'));
+    assert.ok(!closed.includes('Not rerun.'));
+    const open = wall('t-1', thread('t-1', 'person', posts), none, answer);
+    assert.ok(open.includes('<a href="#/thread/t-2/p-8">Not rerun.</a>'));
+    // An answer from before the newest proposal says nothing about this one.
+    const stale = { ...answer, answer: postView({ ...proposal, id: 'p-1' }, 1) };
+    assert.ok(!wall('t-1', thread('t-1', 'person', posts), none, stale).includes('Builds on'));
+  });
+
+  it('shows a Markdown file as a page of text, with no image, HTML, or script link', () => {
+    const html = renderToStaticMarkup(
+      <Markdown
+        text={[
+          '# The answer',
+          '',
+          'No use **today**. See [the paper](https://arxiv.org/abs/2408.08292) and `run.py`.',
+          '',
+          '1. First',
+          '2. Second',
+          '',
+          '| Method | Score |',
+          '| --- | --- |',
+          '| DQI | 0.51 |',
+          '',
+          '```',
+          'x = 1',
+          '```',
+          '',
+          '<img src=x onerror=alert(1)> [bad](javascript:alert(1)) ![pic](https://x.test/a.png)',
+        ].join('\n')}
+      />,
+    );
+    assert.ok(html.includes('<h2>The answer</h2>'));
+    assert.ok(html.includes('<strong>today</strong>'));
+    assert.ok(
+      html.includes(
+        '<a href="https://arxiv.org/abs/2408.08292" target="_blank" rel="noreferrer noopener">the paper</a>',
+      ),
+    );
+    assert.ok(html.includes('<ol><li class="md-d0">First</li><li class="md-d0">Second</li></ol>'));
+    assert.ok(html.includes('<th>Method</th><th>Score</th>'));
+    assert.ok(html.includes('<td>DQI</td><td>0.51</td>'));
+    assert.ok(html.includes('<pre><code>x = 1</code></pre>'));
+    // An image becomes a link to it, and a link to a script becomes its words.
+    assert.ok(
+      html.includes('&lt;img src=x onerror=alert(1)&gt; bad !<a href="https://x.test/a.png"'),
+    );
+    assert.ok(!html.includes('<img') && !html.includes('javascript:'));
   });
 
   it('marks only the threads with posts that the person has not seen', () => {

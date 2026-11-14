@@ -267,6 +267,19 @@ export interface PostView {
   readonly built_on_by: readonly string[];
 }
 
+/** The lab's answer so far, and each post that it builds on with where it stands. */
+export interface AnswerView {
+  readonly answer: PostView;
+  readonly builds_on: readonly PostView[];
+}
+
+/** The text of one file that backs a post, at the commit that the post pins. */
+export interface FileText {
+  readonly path: string;
+  readonly commit: string;
+  readonly text: string;
+}
+
 export interface ThreadView {
   readonly thread: Thread;
   readonly watching: boolean;
