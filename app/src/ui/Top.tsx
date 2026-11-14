@@ -190,7 +190,10 @@ function Members(props: {
   );
 }
 
-/** The thread where a member works now, as a link, or nothing when it works in none or the page lacks the thread. */
+/**
+ * The thread where a member works, as a link: the thread of its latest plan or result. It shows nothing when the
+ * member works in none or the page lacks the thread. The state line above says whether a turn runs now.
+ */
 function Where(props: {
   readonly view: AgentView;
   readonly threads: readonly ThreadSummary[];
@@ -200,8 +203,7 @@ function Where(props: {
   if (!thread) return null;
   return (
     <p className="f-where">
-      {view.activity.state === 'working' ? 'Working in' : 'Last worked in'}{' '}
-      <a href={href({ page: 'thread', id: thread.id, post: null })}>{thread.title}</a>
+      Works in <a href={href({ page: 'thread', id: thread.id, post: null })}>{thread.title}</a>
     </p>
   );
 }

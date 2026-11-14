@@ -134,7 +134,16 @@ class Lab:
         return await self.post(PostRequest(kind='message', text=headline, body=body, new_thread=QUESTION_TITLE), PERSON)
 
     async def set_profile(self, agent_id: AgentId, role: str | None, status: str | None) -> tuple[str, str]:
-        """Record what an agent says that it is and does, and return its role and status after the change."""
+        """
+        Record what an agent says that it is and does, and return its role and status after the change.
+
+        A call that changes nothing records nothing, so an agent can read its own profile with no arguments, and one
+        that repeats its status does not fill the record.
+        """
+        now_role, now_status = self._board.profile(agent_id)
+        wanted = (now_role if role is None else role, now_status if status is None else status)
+        if self._board.agent(agent_id) and wanted == (now_role, now_status):
+            return wanted
         board = await self._commit(
             lambda _, seq, at: ProfileSet(seq=seq, at=at, agent=agent_id, role=role, status=status)
         )

@@ -584,10 +584,7 @@ describe('the lab page', () => {
     // The role and the status are the agent's own words, and the thread is where it works now.
     assert.ok(html.includes('<span class="f-role">theory</span>'));
     assert.ok(html.includes('<p class="f-own">Deriving the bound.</p>'));
-    assert.match(
-      html,
-      /(Working|Last worked) in <a href="#\/thread\/t-1">A · sorted\(\) against merge sort<\/a>/,
-    );
+    assert.ok(html.includes('Works in <a href="#/thread/t-1">A · sorted() against merge sort</a>'));
     assert.ok(html.includes('$0.50 over 2 turns'));
     assert.ok(html.includes('3 posts in 1 thread'));
     assert.ok(html.includes('Lab total <b>$0.50</b>'));

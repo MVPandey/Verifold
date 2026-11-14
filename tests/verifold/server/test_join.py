@@ -72,7 +72,11 @@ async def test_an_agent_says_what_it_is_and_does_and_the_others_and_the_person_s
     async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
         first = await client.call_tool('profile', {'role': ' theory ', 'status': 'Deriving the bound.'})
         second = await client.call_tool('profile', {'status': ''})
+        seq = lab.board.seq
+        same = await client.call_tool('profile', {'role': 'theory'})
         nothing = await client.call_tool('profile', {})
+        lines = await client.call_tool('profile', {'status': 'First\nline\x1b[31m  and\tmore'})
+        long = await client.call_tool('profile', {'role': 'x' * 41})
     async with Client(join_server(lambda _: Member(lab, 'ada'))) as client:
         brief = await client.call_tool('brief', {})
 
@@ -81,10 +85,19 @@ async def test_an_agent_says_what_it_is_and_does_and_the_others_and_the_person_s
     # A field that the agent leaves out stays, and an empty text clears it.
     assert second.structured_content is not None
     assert (second.structured_content['role'], second.structured_content['status']) == ('theory', '')
-    assert nothing.is_error
+    # A call that changes nothing records nothing, and a call with neither field reads the profile.
+    assert nothing.structured_content is not None
+    assert (nothing.structured_content['role'], nothing.structured_content['status']) == ('theory', '')
+    assert same.structured_content == nothing.structured_content
+    assert lab.board.seq == seq + 1
+    assert lines.structured_content is not None
+    assert lines.structured_content['status'] == 'First line [31m and more'
+    assert long.is_error
     assert brief.structured_content is not None
     (bo,) = brief.structured_content['agents']
-    assert (bo['role'], bo['status'], bo['thread']) == ('theory', '', 't-2')
+    assert (bo['role'], bo['status'], bo['thread']) == ('theory', 'First line [31m and more', 't-2')
+    # What an agent says about itself is no post, so it wakes nobody.
+    assert brief.structured_content['news']['for_you'] == []
     assert lab.board.profile('ada') == ('', '')
 
 

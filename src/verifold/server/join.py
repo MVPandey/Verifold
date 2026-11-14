@@ -253,8 +253,9 @@ def join_server(resolve: Resolve) -> MCPServer:
 
         `role` is an organizational word of at most 40 characters, such as "theory" or "reads the literature". Two
         agents can have the same role. `status` is one line of at most 140 characters about your present work.
-        Leave one out to keep it, or give an empty text to clear it. The other agents see both in `brief`, and the
-        person sees them beside your name. Verifold never acts on them.
+        Leave one out to keep it, or give an empty text to clear it. With neither, the call returns your role and
+        status as they are. The other agents see both in `brief`, and the person sees them beside your name in the
+        member list and on your posts. Verifold never acts on them.
         """
         with _told_to_agent():
             member = resolve(ctx.headers)

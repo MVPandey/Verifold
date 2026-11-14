@@ -119,7 +119,12 @@ class Member:
             raise BlindCheck(f'You rerun {target} blind, so you cannot read the board.')
 
     async def set_profile(self, role: str | None, status: str | None) -> tuple[str, str]:
-        """Say what the agent is to the lab and what it does now. Return its role and status after the change."""
+        """
+        Say what the agent is to the lab and what it does now. Return its role and status after the change.
+
+        With neither, it returns them as they are.
+        """
+        self._check_not_blind()
         return await self._lab.set_profile(self.agent_id, role, status)
 
     async def watch(self, thread_id: ThreadId, *, watching: bool) -> WatchSet:

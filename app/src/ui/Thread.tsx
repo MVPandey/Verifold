@@ -70,7 +70,8 @@ export function Turn(
   const { post, standing, at } = props.item;
   const find = (id: string | null): PostView | undefined =>
     view.posts.find((item) => item.post.id === id);
-  const agent = agents.find((entry) => entry.agent.id === post.author)?.agent ?? null;
+  const member = agents.find((entry) => entry.agent.id === post.author) ?? null;
+  const agent = member?.agent ?? null;
   const to = find(post.reply_to)?.post ?? null;
   const toFamily = agents.find((entry) => entry.agent.id === to?.author)?.agent.model.family;
   const tag = standingIn(agent, view.thread, props.question, toFamily ?? null);
@@ -107,7 +108,7 @@ export function Turn(
             {who.name}
           </b>
           {post.helper ? <span className="f-tag">helper {post.helper}</span> : null}
-          {agent?.role ? <span className="f-role">{agent.role}</span> : null}
+          {member?.role ? <span className="f-role">{member.role}</span> : null}
           {agent ? (
             <span className="f-tag">{harnessTitle(props.harnesses, agent.harness)}</span>
           ) : null}
