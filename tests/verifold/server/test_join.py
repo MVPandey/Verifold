@@ -50,7 +50,7 @@ async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
         threads = await client.call_tool('threads', {})
         news = await client.call_tool('wait', {'timeout_seconds': 0})
 
-    assert tools == {'brief', 'post', 'threads', 'thread', 'watch', 'rerun', 'wait'}
+    assert tools == {'brief', 'post', 'threads', 'thread', 'watch', 'profile', 'rerun', 'wait'}
     assert posted.structured_content is not None
     assert posted.structured_content['post']['id'] == 'p-2'
     assert watched.structured_content is not None
@@ -65,6 +65,40 @@ async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
     assert [summary['thread']['id'] for summary in threads.structured_content['threads']] == ['t-1']
     assert news.structured_content is not None
     assert news.structured_content['posts'] == []
+
+
+async def test_an_agent_says_what_it_is_and_does_and_the_others_and_the_person_see_it(lab: Lab) -> None:
+    await lab.post(PostRequest(kind='plan', text='I take the large models.', new_thread='Large models'), 'bo')
+    async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
+        first = await client.call_tool('profile', {'role': ' theory ', 'status': 'Deriving the bound.'})
+        second = await client.call_tool('profile', {'status': ''})
+        seq = lab.board.seq
+        same = await client.call_tool('profile', {'role': 'theory'})
+        nothing = await client.call_tool('profile', {})
+        lines = await client.call_tool('profile', {'status': 'First\nline\x1b[31m  and\tmore'})
+        long = await client.call_tool('profile', {'role': 'x' * 41})
+    async with Client(join_server(lambda _: Member(lab, 'ada'))) as client:
+        brief = await client.call_tool('brief', {})
+
+    assert first.structured_content is not None
+    assert (first.structured_content['role'], first.structured_content['status']) == ('theory', 'Deriving the bound.')
+    # A field that the agent leaves out stays, and an empty text clears it.
+    assert second.structured_content is not None
+    assert (second.structured_content['role'], second.structured_content['status']) == ('theory', '')
+    # A call that changes nothing records nothing, and a call with neither field reads the profile.
+    assert nothing.structured_content is not None
+    assert (nothing.structured_content['role'], nothing.structured_content['status']) == ('theory', '')
+    assert same.structured_content == nothing.structured_content
+    assert lab.board.seq == seq + 1
+    assert lines.structured_content is not None
+    assert lines.structured_content['status'] == 'First line [31m and more'
+    assert long.is_error
+    assert brief.structured_content is not None
+    (bo,) = brief.structured_content['agents']
+    assert (bo['role'], bo['status'], bo['thread']) == ('theory', 'First line [31m and more', 't-2')
+    # What an agent says about itself is no post, so it wakes nobody.
+    assert brief.structured_content['news']['for_you'] == []
+    assert lab.board.profile('ada') == ('', '')
 
 
 async def test_every_tool_result_carries_the_posts_that_the_agent_has_not_seen(lab: Lab) -> None:

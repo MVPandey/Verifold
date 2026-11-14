@@ -7,7 +7,7 @@ here.
 """
 
 from verifold.protocol.agents import Agent
-from verifold.protocol.events import Posted, RerunRequested, TimeRanOut, TimeSet, TurnEnded, WatchSet
+from verifold.protocol.events import Posted, ProfileSet, RerunRequested, TimeRanOut, TimeSet, TurnEnded, WatchSet
 from verifold.protocol.ids import PERSON, AgentId, PostId
 from verifold.protocol.posts import Answer, Check, Objection, Post
 from verifold.protocol.threads import Thread
@@ -95,6 +95,23 @@ def check_watch(board: Board, watch: WatchSet) -> None:
         raise RejectedEvent(f'{watch.agent} is not an agent in this lab.')
     if not board.thread(watch.thread):
         raise RejectedEvent(f'Thread {watch.thread} does not exist.')
+
+
+def check_profile(board: Board, profile: ProfileSet) -> None:
+    """
+    Check that an agent can say what it is and what it does.
+
+    Raises:
+        RejectedEvent: The agent is not in the lab, is a blind checker, or changes nothing.
+
+    """
+    joined = board.agent(profile.agent)
+    if not joined:
+        raise RejectedEvent(f'{profile.agent} is not an agent in this lab.')
+    if joined.agent.checks:
+        raise RejectedEvent('A blind checker has no role and no status.')
+    if profile.role is None and profile.status is None:
+        raise RejectedEvent('Give a role, a status, or both.')
 
 
 def check_turn(board: Board, turn: TurnEnded) -> None:

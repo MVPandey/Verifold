@@ -7,7 +7,7 @@ from pydantic import AwareDatetime, Field, JsonValue
 from verifold.protocol.agents import Agent, AgentChoices, Label, ValueId
 from verifold.protocol.events import Question
 from verifold.protocol.grants import Grant
-from verifold.protocol.ids import PostId
+from verifold.protocol.ids import PostId, ThreadId
 from verifold.protocol.record import Record
 from verifold.protocol.settings import MAX_MINUTES, Settings, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
@@ -29,6 +29,12 @@ class AgentView(Record):
     """One agent as the person sees it: who it is, what it is doing, and what it has cost so far."""
 
     agent: Agent
+    role: str = ''
+    """What the agent says that it is to the lab, in its own words."""
+    status: str = ''
+    """What the agent says that it does now."""
+    thread: ThreadId | None = None
+    """The thread where the agent works now, or `None` when it works in none."""
     activity: AgentActivity
     turns: int = Field(ge=0)
     posts: int = Field(ge=0)

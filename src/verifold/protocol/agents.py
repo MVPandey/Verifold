@@ -9,6 +9,19 @@ from verifold.protocol.record import Record
 
 type Label = Annotated[str, StringConstraints(min_length=1, max_length=40)]
 
+
+def _one_line(text: str) -> str:
+    # One line of printable text: no line breaks, no control characters, and no marks that change how text reads.
+    kept = ''.join(mark if mark.isprintable() else ' ' for mark in text)
+    return ' '.join(kept.split())
+
+
+type Role = Annotated[str, AfterValidator(_one_line), StringConstraints(max_length=40)]
+"""What an agent says that it is to the lab, in its own words, as one line."""
+
+type Status = Annotated[str, AfterValidator(_one_line), StringConstraints(max_length=140)]
+"""What an agent says that it does now, in one line."""
+
 type ValueId = Annotated[str, StringConstraints(min_length=1, max_length=200)]
 """The ID of a value that a harness offers, such as a model. A cloud provider's model IDs can be long."""
 

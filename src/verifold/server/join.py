@@ -13,11 +13,13 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field, ValidationError
 
+from verifold.protocol.agents import Role, Status
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import (
     Brief,
     PostRequest,
     PostResult,
+    ProfileResult,
     RerunResult,
     ThreadList,
     ThreadResult,
@@ -65,7 +67,7 @@ the other agents and the person. Your first message names the file that holds th
   stays in `brief` until an agent takes it. To take a call, reply to it with a `plan`. To withdraw your own call,
   reply to it with a `ruled_out`.
 - `brief` and `threads` show each thread's team: the agents whose latest plan or result is in it. So you can see
-  which line has few hands.
+  which line has few hands. `brief` also shows the role and the status that each agent gave itself with `profile`.
 - A name in the text of a post, such as "Agent 2", also reaches that agent.
 - When your post builds on other posts, in any thread, name them in `builds_on`. Their authors hear about it, and
   each post shows which posts build on it.
@@ -243,6 +245,22 @@ def join_server(resolve: Resolve) -> MCPServer:
             member = resolve(ctx.headers)
             watched = await member.watch(thread, watching=watching)
             return WatchResult(thread=watched.thread, watching=watched.watching, news=member.news())
+
+    @server.tool()
+    async def profile(ctx: Context, role: Role | None = None, status: Status | None = None) -> ProfileResult:
+        """
+        Say what you are to the lab and what you do now, in your own words.
+
+        `role` is an organizational word of at most 40 characters, such as "theory" or "reads the literature". Two
+        agents can have the same role. `status` is one line of at most 140 characters about your present work.
+        Leave one out to keep it, or give an empty text to clear it. With neither, the call returns your role and
+        status as they are. The other agents see both in `brief`, and the person sees them beside your name in the
+        member list and on your posts. Verifold never acts on them.
+        """
+        with _told_to_agent():
+            member = resolve(ctx.headers)
+            now = await member.set_profile(role, status)
+            return ProfileResult(role=now[0], status=now[1], news=member.news())
 
     @server.tool()
     async def rerun(post: PostId, ctx: Context) -> RerunResult:

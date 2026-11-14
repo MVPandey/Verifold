@@ -1,7 +1,7 @@
 import pytest
-from builders import START, RecordBuilder
+from builders import START, RecordBuilder, lab
 
-from verifold.protocol.events import LabOpened, TurnEnded, WentQuiet
+from verifold.protocol.events import LabOpened, ProfileSet, TurnEnded, WentQuiet
 from verifold.protocol.posts import Message, Result
 from verifold.protocol.usage import Usage
 from verifold.society.errors import RejectedEvent
@@ -68,3 +68,13 @@ def test_a_record_from_before_holds_a_quiet_mark_that_changes_nothing(record: Re
 
     assert after.seq == before.seq + 1
     assert (after.posts, after.agents, after.threads) == (before.posts, before.agents, before.threads)
+
+
+def test_a_blind_checker_has_no_role_and_an_unknown_agent_cannot_set_one() -> None:
+    record = lab().post(Result(id='p-1', thread='t-1', author='ada', text='Holds.')).join('dee', checks='p-1')
+    profile = ProfileSet(seq=99, at=START, agent='dee', role='checker')
+
+    with pytest.raises(RejectedEvent, match='blind checker has no role'):
+        apply(record.board(), profile.model_copy(update={'seq': record.board().seq + 1}))
+    with pytest.raises(RejectedEvent, match='zed is not an agent'):
+        apply(record.board(), profile.model_copy(update={'seq': record.board().seq + 1, 'agent': 'zed'}))

@@ -53,6 +53,7 @@ export function App(props: { readonly api: Api; readonly token: string }): React
         route={route}
         open={{
           lab: data.lab,
+          threads: data.threads,
           harnesses: data.setup.harnesses,
           needs: data.needs.length,
           now,

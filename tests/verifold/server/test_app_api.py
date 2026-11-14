@@ -178,6 +178,7 @@ async def test_the_lab_view_shows_each_agents_activity_and_cost(
     client: httpx2.AsyncClient, lab: Lab, activity: Activity
 ) -> None:
     await activity.set('ada', 'working', 'Run pytest')
+    await lab.set_profile('ada', 'theory', 'Deriving the bound.')
     usage = Usage(input_tokens=100, cached_input_tokens=60, output_tokens=7)
     await lab.end_turn(TurnSummary(agent='ada', seconds=3, usage=usage, cost_usd=0.25))
     await lab.end_turn(TurnSummary(agent='ada', seconds=2, usage=usage, cost_usd=0.5))
@@ -195,6 +196,9 @@ async def test_the_lab_view_shows_each_agents_activity_and_cost(
     assert ada['usage'] == {'input_tokens': 200, 'cached_input_tokens': 120, 'output_tokens': 14}
     assert ada['cost_usd'] == pytest.approx(0.75)
     assert (bo['activity']['state'], bo['cost_usd']) == ('starting', None)
+    # Ada opened the lab's thread with a result, so that is where she works.
+    assert (ada['role'], ada['status'], ada['thread']) == ('theory', 'Deriving the bound.', 't-1')
+    assert (bo['role'], bo['status'], bo['thread']) == ('', '', None)
 
 
 async def test_threads_and_a_thread_read_as_the_person(client: httpx2.AsyncClient) -> None:

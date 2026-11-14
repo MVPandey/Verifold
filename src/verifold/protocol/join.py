@@ -251,6 +251,12 @@ class AgentLine(Record):
     id: AgentId
     name: Label
     harness: Label
+    role: str = ''
+    """What the agent says that it is to the lab, in its own words."""
+    status: str = ''
+    """What the agent says that it does now."""
+    thread: ThreadId | None = None
+    """The thread where the agent works now: the thread of its latest plan or result outside the question's thread."""
     plan: PostLine | None = None
     latest: PostLine | None = None
     """The agent's latest post, when that is not its plan."""
@@ -285,6 +291,14 @@ class FileText(Record):
     path: str
     commit: str
     text: str
+
+
+class ProfileResult(Record):
+    """What an agent's role and status are after it set them."""
+
+    role: str
+    status: str
+    news: News | None = None
 
 
 class Brief(Record):

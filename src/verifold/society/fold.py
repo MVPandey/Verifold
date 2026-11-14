@@ -11,6 +11,7 @@ from verifold.protocol.events import (
     LabOpened,
     PermissionGranted,
     Posted,
+    ProfileSet,
     RerunRequested,
     SettingsSet,
     ThreadOpened,
@@ -25,6 +26,7 @@ from verifold.society.errors import RejectedEvent
 from verifold.society.rules import (
     check_agent,
     check_post,
+    check_profile,
     check_rerun,
     check_thread,
     check_time,
@@ -60,6 +62,9 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
         case WatchSet():
             check_watch(board, event)
             return replace(board, seq=event.seq, watches=(*board.watches, event))
+        case ProfileSet():
+            check_profile(board, event)
+            return replace(board, seq=event.seq, profiles=(*board.profiles, event))
         case TurnEnded():
             check_turn(board, event)
             return replace(board, seq=event.seq, turns=(*board.turns, event))

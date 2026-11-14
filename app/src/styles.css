@@ -436,6 +436,12 @@ details[open] > summary .opened {
   color: var(--ink2);
   overflow-wrap: anywhere;
 }
+.f-members .f-own {
+  margin-top: 4px;
+  font-size: 14.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
 .f-members .f-where {
   margin-top: 3px;
   font-size: 12.5px;
