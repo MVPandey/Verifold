@@ -3,7 +3,7 @@ import type { ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
 import { messageOf } from '../api/client.ts';
-import type { AgentView, HarnessOption, LabView } from '../api/types.ts';
+import type { AgentView, HarnessOption, LabView, ThreadSummary } from '../api/types.ts';
 import {
   costLine,
   face,
@@ -22,6 +22,8 @@ import { FaceView } from './parts.tsx';
 /** What the top bar shows for a started lab. */
 export interface TopLab {
   readonly lab: LabView;
+  /** The lab's threads, so that the member list can name the thread where each member works. */
+  readonly threads: readonly ThreadSummary[];
   readonly harnesses: readonly HarnessOption[];
   readonly needs: number;
   readonly now: Date;
@@ -85,7 +87,13 @@ export function Top(props: {
         <>
           <span className="grow" />
           {/* A new key closes an open panel when the person goes to another page or thread. */}
-          <Members key={`who${place}`} lab={open.lab} harnesses={open.harnesses} now={open.now} />
+          <Members
+            key={`who${place}`}
+            lab={open.lab}
+            threads={open.threads}
+            harnesses={open.harnesses}
+            now={open.now}
+          />
           <details key={place} className="f-pop f-time" name="top">
             <summary>{clockLine(open.lab, open.now)}</summary>
             <TimePanel lab={open.lab} now={open.now} api={open.api} onChange={open.onChange} />
@@ -96,9 +104,13 @@ export function Top(props: {
   );
 }
 
-/** The member list: who is in the lab, what each does now, and what each has cost. */
+/**
+ * The member list: who is in the lab, the role and the status that each gave itself, the thread where each works,
+ * what each does now, and what each has cost.
+ */
 function Members(props: {
   readonly lab: LabView;
+  readonly threads: readonly ThreadSummary[];
   readonly harnesses: readonly HarnessOption[];
   readonly now: Date;
 }): ReactElement {
@@ -113,12 +125,14 @@ function Members(props: {
       <>
         <p>
           <b>{view.agent.name}</b>
-          {view.agent.role ? <span className="f-role">{view.agent.role}</span> : null}
+          {view.role ? <span className="f-role">{view.role}</span> : null}
           <span className="f-tag">{harnessTitle(props.harnesses, view.agent.harness)}</span>
         </p>
+        {view.status ? <p className="f-own">{view.status}</p> : null}
         <p className="f-status">
           <span className={`dot ${state.dot}`} /> {state.text}
         </p>
+        <Where view={view} threads={props.threads} />
         <p className="f-where">{costLine(view)}</p>
       </>
     );
@@ -173,6 +187,22 @@ function Members(props: {
         </p>
       </div>
     </details>
+  );
+}
+
+/** The thread where a member works now, as a link, or nothing when it works in none or the page lacks the thread. */
+function Where(props: {
+  readonly view: AgentView;
+  readonly threads: readonly ThreadSummary[];
+}): ReactElement | null {
+  const { view } = props;
+  const thread = props.threads.find((summary) => summary.thread.id === view.thread)?.thread;
+  if (!thread) return null;
+  return (
+    <p className="f-where">
+      {view.activity.state === 'working' ? 'Working in' : 'Last worked in'}{' '}
+      <a href={href({ page: 'thread', id: thread.id, post: null })}>{thread.title}</a>
+    </p>
   );
 }
 

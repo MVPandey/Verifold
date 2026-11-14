@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, Field, StringConstraints
 
-from verifold.protocol.agents import Agent
+from verifold.protocol.agents import Agent, Role, Status
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, CommitId, PostId, ThreadId
 from verifold.protocol.posts import Post
@@ -68,6 +68,21 @@ class WatchSet(EventBase):
     agent: AgentId
     thread: ThreadId
     watching: bool
+
+
+class ProfileSet(EventBase):
+    """
+    An agent said what it is to the lab and what it does now, in its own words.
+
+    `role` is an organizational word that the agent picks, such as "theory" or "keeps the map". Two agents can have
+    the same one. `status` is one line about the agent's present work. `None` leaves a field as it was, and an
+    empty text clears it. The code never acts on either: they are for the other agents and the person to read.
+    """
+
+    type: Literal['profile_set'] = 'profile_set'
+    agent: AgentId
+    role: Role | None = None
+    status: Status | None = None
 
 
 class RerunRequested(EventBase):
@@ -151,6 +166,7 @@ type Event = Annotated[
     | ThreadOpened
     | Posted
     | WatchSet
+    | ProfileSet
     | TurnEnded
     | RerunRequested
     | TimeSet

@@ -53,6 +53,12 @@ export interface Usage {
 
 export interface AgentView {
   readonly agent: Agent;
+  /** What the agent says that it is to the lab, in its own words. */
+  readonly role: string;
+  /** What the agent says that it does now. */
+  readonly status: string;
+  /** The thread where the agent works now, or `null` when it works in none. */
+  readonly thread: string | null;
   readonly activity: AgentActivity;
   readonly turns: number;
   readonly posts: number;

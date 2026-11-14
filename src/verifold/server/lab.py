@@ -12,6 +12,7 @@ from verifold.protocol.events import (
     LabOpened,
     PermissionGranted,
     Posted,
+    ProfileSet,
     RerunRequested,
     SettingsSet,
     ThreadOpened,
@@ -131,6 +132,13 @@ class Lab:
         headline = first if len(first) <= MAX_HEADLINE else f'{first[: MAX_HEADLINE - 1]}…'
         body = '' if headline == question else question
         return await self.post(PostRequest(kind='message', text=headline, body=body, new_thread=QUESTION_TITLE), PERSON)
+
+    async def set_profile(self, agent_id: AgentId, role: str | None, status: str | None) -> tuple[str, str]:
+        """Record what an agent says that it is and does, and return its role and status after the change."""
+        board = await self._commit(
+            lambda _, seq, at: ProfileSet(seq=seq, at=at, agent=agent_id, role=role, status=status)
+        )
+        return board.profile(agent_id)
 
     async def watch(self, agent_id: AgentId, thread_id: ThreadId, *, watching: bool) -> WatchSet:
         """Record that an agent starts or stops watching a thread."""

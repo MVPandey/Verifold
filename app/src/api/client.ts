@@ -72,7 +72,17 @@ export function createApi(
   return {
     setup: () => request('/setup'),
     start: (start) => request('/labs', start),
-    lab: () => request('/lab'),
+    lab: () =>
+      // A server from before these fields sends none, and the page must still load.
+      request<LabView>('/lab').then((lab) => ({
+        ...lab,
+        agents: lab.agents.map((view) => ({
+          ...view,
+          role: view.role ?? '',
+          status: view.status ?? '',
+          thread: view.thread ?? null,
+        })),
+      })),
     threads: () =>
       // A server from before these fields sends none, and the page must still load.
       request<readonly ThreadSummary[]>('/threads').then((threads) =>

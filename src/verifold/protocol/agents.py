@@ -9,6 +9,12 @@ from verifold.protocol.record import Record
 
 type Label = Annotated[str, StringConstraints(min_length=1, max_length=40)]
 
+type Role = Annotated[str, StringConstraints(strip_whitespace=True, max_length=40)]
+"""What an agent says that it is to the lab, in its own words."""
+
+type Status = Annotated[str, StringConstraints(strip_whitespace=True, max_length=140)]
+"""What an agent says that it does now, in one line."""
+
 type ValueId = Annotated[str, StringConstraints(min_length=1, max_length=200)]
 """The ID of a value that a harness offers, such as a model. A cloud provider's model IDs can be long."""
 

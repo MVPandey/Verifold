@@ -28,7 +28,7 @@ from verifold.protocol.app import (
     TimeRequest,
 )
 from verifold.protocol.events import RerunRequested
-from verifold.protocol.ids import PERSON, PostId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import AnswerView, FileText, PostRequest, PostView, ThreadSummary, ThreadView
 from verifold.protocol.usage import Usage
 from verifold.server.activity import Activity
@@ -37,6 +37,7 @@ from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
+from verifold.society.lines import lines_of
 from verifold.society.views import answer_view, latest_report, needs_person, thread_summaries, thread_view
 from verifold.store.errors import SettingsChanged, SettingsInvalid, SettingsUnwritable
 
@@ -179,11 +180,12 @@ def _authorize(person_token: SecretStr) -> Callable[[Request, str | None], None]
 
 
 def _lab_view(board: Board, activity: Activity) -> LabView:
+    working = lines_of(board)
     return LabView(
         question=board.opened.question,
         opened_at=board.opened.at,
         seq=board.seq,
-        agents=tuple(_agent_view(board, activity, entry.agent.id) for entry in board.agents),
+        agents=tuple(_agent_view(board, activity, entry.agent.id, working) for entry in board.agents),
         threads=len(board.threads),
         posts=len(board.posts),
         needs_you=len(needs_person(board)),
@@ -193,14 +195,18 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
     )
 
 
-def _agent_view(board: Board, activity: Activity, agent_id: str) -> AgentView:
+def _agent_view(board: Board, activity: Activity, agent_id: str, working: dict[AgentId, ThreadId | None]) -> AgentView:
     joined = board.agent(agent_id)
     if joined is None:
         raise NotFound(f'No agent has the ID {agent_id}.')
     turns = tuple(turn for turn in board.turns if turn.agent == agent_id)
     costs = tuple(turn.cost_usd for turn in turns if turn.cost_usd is not None)
+    role, status = board.profile(agent_id)
     return AgentView(
         agent=joined.agent,
+        role=role,
+        status=status,
+        thread=working.get(agent_id),
         activity=activity.of(agent_id),
         turns=len(turns),
         posts=sum(entry.post.author == agent_id for entry in board.posts),

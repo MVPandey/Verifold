@@ -199,7 +199,8 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
     )
     summaries = thread_summaries(board, agent_id)
     # A thread counts when an agent's latest plan or result is in it, so a thread that holds only notes is no line.
-    busy = set(lines_of(board).values())
+    working = lines_of(board)
+    busy = set(working.values())
     alone = tuple(
         ThreadLine(id=summary.thread.id, title=summary.thread.title, team=summary.team)
         for summary in summaries
@@ -217,7 +218,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
     return Brief(
         you=agent_id,
         how=how,
-        agents=tuple(_agent_line(board, agent) for agent in others),
+        agents=tuple(_agent_line(board, agent, working) for agent in others),
         answer=PostLine.of(proposed) if proposed else None,
         answer_standing=standing(board, proposed.post.id) if proposed else None,
         open_calls=open_calls[-MAX_NEWS:],
@@ -233,13 +234,17 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
     )
 
 
-def _agent_line(board: Board, agent: Agent) -> AgentLine:
+def _agent_line(board: Board, agent: Agent, working: dict[AgentId, ThreadId | None]) -> AgentLine:
     posts = tuple(entry for entry in board.posts if entry.post.author == agent.id)
     plan = next((entry for entry in reversed(posts) if isinstance(entry.post, Plan)), None)
+    role, status = board.profile(agent.id)
     return AgentLine(
         id=agent.id,
         name=agent.name,
         harness=agent.harness,
+        role=role,
+        status=status,
+        thread=working.get(agent.id),
         plan=PostLine.of(plan) if plan else None,
         latest=PostLine.of(posts[-1]) if posts and posts[-1] is not plan else None,
     )

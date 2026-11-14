@@ -7,6 +7,7 @@ from verifold.protocol.events import (
     AgentJoined,
     LabOpened,
     Posted,
+    ProfileSet,
     RerunRequested,
     ThreadOpened,
     TimeRanOut,
@@ -32,6 +33,8 @@ class Board:
     threads: tuple[ThreadOpened, ...] = ()
     posts: tuple[Posted, ...] = ()
     watches: tuple[WatchSet, ...] = ()
+    profiles: tuple[ProfileSet, ...] = ()
+    """What each agent said about itself, oldest first."""
     turns: tuple[TurnEnded, ...] = ()
     reruns: tuple[RerunRequested, ...] = ()
     times: tuple[TimeSet | TimeRanOut, ...] = ()
@@ -55,6 +58,13 @@ class Board:
     def agent(self, agent_id: AgentId) -> AgentJoined | None:
         """Return the entry of a joined agent, or `None`."""
         return next((entry for entry in self.agents if entry.agent.id == agent_id), None)
+
+    def profile(self, agent_id: AgentId) -> tuple[str, str]:
+        """Return the role and the status that an agent gave itself last. Each is empty when it gave none."""
+        mine = tuple(entry for entry in self.profiles if entry.agent == agent_id)
+        role = next((entry.role for entry in reversed(mine) if entry.role is not None), '')
+        status = next((entry.status for entry in reversed(mine) if entry.status is not None), '')
+        return role, status
 
     def thread(self, thread_id: ThreadId) -> ThreadOpened | None:
         """Return the entry of a thread, or `None`."""
