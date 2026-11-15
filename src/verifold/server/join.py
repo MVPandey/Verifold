@@ -76,6 +76,7 @@ from verifold.society.errors import SocietyError
 from verifold.society.lifecycle import alarm_line
 from verifold.society.reruns import wanted_reruns
 from verifold.society.votes import vote_of
+from verifold.store.errors import RecordChanged
 
 type Headers = Mapping[str, str] | None
 type Resolve = Callable[[Headers], Member]
@@ -1067,8 +1068,9 @@ def _thread_of_reply(member: Member, reply_to: PostId) -> ThreadId | None:
 
 @contextmanager
 def _told_to_agent() -> Generator[None]:
-    # Only a ToolError's message reaches the agent, so a broken rule goes back as one.
+    # Only a ToolError's message reaches the agent, so a broken rule goes back as one. So does the fact that
+    # another program changed the record and Verifold stops.
     try:
         yield
-    except (SocietyError, ServerError, ValidationError) as error:
+    except (SocietyError, ServerError, RecordChanged, ValidationError) as error:
         raise ToolError(str(error)) from error

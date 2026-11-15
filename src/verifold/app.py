@@ -61,7 +61,7 @@ from verifold.server.activity import Activity
 from verifold.server.app_api import app_api, new_person_token
 from verifold.server.errors import LabExists, NoLab, SetupRejected
 from verifold.server.join import Members, join_server, token_digest
-from verifold.server.lab import Build, Lab
+from verifold.server.lab import Build, Lab, Stops
 from verifold.server.member import Member
 from verifold.server.timekeeper import keep_time
 from verifold.server.web import WEB_FOLDER, web_app
@@ -72,7 +72,14 @@ from verifold.society.labels import NOT_LISTED, label
 from verifold.society.lines import question_thread
 from verifold.society.standing import closing
 from verifold.society.turns import before
-from verifold.store.errors import GuestsInvalid, NormsChanged, NormsUnreadable, SettingsInvalid, StoreError
+from verifold.store.errors import (
+    GuestsInvalid,
+    NormsChanged,
+    NormsUnreadable,
+    RecordChanged,
+    SettingsInvalid,
+    StoreError,
+)
 from verifold.store.guests_file import GUESTS_FILE, Guests, drop_guest, keep_guest, read_guests
 from verifold.store.norms_file import (
     DEFAULTS,
@@ -201,6 +208,7 @@ class Host:
         self._group: asyncio.TaskGroup | None = None
         self._settings: LoopSettings | None = None
         self._swept: Callable[[Sweep], None] = _ignore
+        self._stops: Stops = _ignore
         self._offers: dict[str, Offer] = {}
         self._refusals: Refusals | None = None
         self._probing: set[str] = set()
@@ -226,16 +234,19 @@ class Host:
         swept: Callable[[Sweep], None],
         *,
         desktop: bool = True,
+        stops: Stops = _ignore,
     ) -> None:
         """
         Run the lab's agents in `group`, with `settings`, from now on. `swept` gets what each pause or stop did.
 
-        Without `desktop`, the host opens no folder in the file manager and only says where the folder is.
+        Without `desktop`, the host opens no folder in the file manager and only says where the folder is. `stops`
+        stops the server when a write of a lab that starts here finds that another program changed the record.
         """
         self._desktop = desktop
         self._group = group
         self._settings = settings
         self._swept = swept
+        self._stops = stops
 
     async def probe(self) -> None:
         """
@@ -546,7 +557,9 @@ class Host:
         if request.reviewer_seats is not None:
             seats = None if request.reviewer_seats == 'size' else request.reviewer_seats
             settings = settings.model_copy(update={'reviewers': settings.reviewers.model_copy(update={'seats': seats})})
-        lab = Lab.create(self._record, request.question, auto_mode=request.auto_mode, time_left=time_left)
+        lab = Lab.create(
+            self._record, request.question, auto_mode=request.auto_mode, time_left=time_left, stops=self._stops
+        )
         await lab.set_settings(settings)
         for prefix in request.allow:
             await lab.grant(prefix)
@@ -592,17 +605,17 @@ class Host:
         )
         return agent
 
-    async def resume(self) -> None:
+    async def resume(self, lab: Lab) -> None:
         """
-        Serve the lab that the folder's record holds, and start its agents again.
+        Serve `lab`, the lab that the folder's record holds, and start its agents again.
 
         Each agent goes on from its turns in the record: its harness loads its conversation when it can, and its
         seat starts at what the agent had seen. An agent that Verifold stopped, because its harness failed too
         often, stays stopped until the person starts it again.
         """
-        self._lab = Lab.load(self._record)
+        self._lab = lab
         if recorded_settings(self._record.read()) is None:
-            await self._lab.set_settings(load_settings(self._project).lab_settings())
+            await lab.set_settings(load_settings(self._project).lab_settings())
         await self._launch()
 
     async def _launch(self) -> None:
@@ -1008,11 +1021,16 @@ async def serve(
     When it starts and when it stops, the server sweeps the processes that carry the lab's mark: first the ones that an
     earlier run left, and at the end the ones that the agents started.
 
+    A write that finds that another program changed the record stops the server in the way that a cancel does, and
+    the error comes in an exception group.
+
     Raises:
         LabExists: `start` is given, and the folder has a lab already.
         SetupRejected: `start` names a harness that Verifold does not know, which comes in an exception group, or
             the project's repository tracks lab files.
         RecordLocked: Another process serves this folder already.
+        CorruptRecord: The folder's record does not add up to a lab.
+        RecordChanged: Another program changed the record while the server ran. It comes in an exception group.
 
     """
     options, hooks = options or ServeOptions(), hooks or ServeHooks()
@@ -1026,9 +1044,11 @@ async def serve(
     NPX_PROJECT.mkdir(parents=True, exist_ok=True)
     with RecordFile(project / LAB_FOLDER / 'record.jsonl') as record, server_file(project / LAB_FOLDER / SERVER_FILE):
         events = record.read()
-        resuming = bool(events)
-        if resuming and start:
+        if events and start:
             raise LabExists('This folder has a lab already. Run `verifold` here to resume it.')
+        changed, stop = _first_change()
+        # A record that does not add up to a lab ends the command here, before the server takes a port.
+        resumed = Lab.load(record, stops=stop) if events else None
         # The files give this computer's harnesses at every start. A lab follows the settings in its record, so the
         # files' other settings matter only for a lab that starts now.
         files = load_settings(project)
@@ -1059,15 +1079,17 @@ async def serve(
                 max_quiet=options.max_quiet,
             )
             async with asyncio.TaskGroup() as group:
-                host.attach(group, settings, hooks.swept, desktop=options.desktop)
-                if resuming:
-                    await host.resume()
+                host.attach(group, settings, hooks.swept, desktop=options.desktop, stops=stop)
+                if resumed:
+                    await host.resume(resumed)
                 elif start:
                     await host.start(start)
                 else:
                     group.create_task(host.probe())
                 hooks.ready(f'http://127.0.0.1:{port}/#token={person_token.get_secret_value()}')
-                await asyncio.Event().wait()
+                # This waits until the caller cancels the server, or until a write finds the record changed. That
+                # error ends the task group as a cancel does: the agents' harnesses stop, and the cleanup follows.
+                raise await changed
         finally:
             # The task group has stopped the agents' harnesses. Their processes stop next, and the web server last, also
             # when the hook fails. A read of Git objects that still runs ends now, so that its thread holds nothing.
@@ -1078,6 +1100,18 @@ async def serve(
             finally:
                 server.should_exit = True
                 await _closed(serving)
+
+
+def _first_change() -> tuple[asyncio.Future[RecordChanged], Stops]:
+    # Return a future for the error of the first write that finds the record changed, and what gives it that error.
+    changed: asyncio.Future[RecordChanged] = asyncio.get_running_loop().create_future()
+
+    def stop(error: RecordChanged) -> None:
+        # The record raises the error again for each later write. Only the first one stops the server.
+        if not changed.done():
+            changed.set_result(error)
+
+    return changed, stop
 
 
 def stop_lab(project: Path) -> LabStop:

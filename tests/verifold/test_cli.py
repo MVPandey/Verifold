@@ -7,14 +7,16 @@ import signal
 import subprocess
 import sys
 from collections.abc import Iterator
+from contextlib import suppress
 from functools import partial
 from importlib.metadata import version
 from pathlib import Path
 from typing import override
 
+import httpx2
 import psutil
 import pytest
-from builders import IGNORES_SIGTERM, SLEEP, alive, until
+from builders import IGNORES_SIGTERM, SLEEP, alive, lab, until
 from fakes import FAKE_HARNESS
 
 from verifold import DISTRIBUTION
@@ -487,6 +489,79 @@ def test_an_unknown_error_in_a_group_is_raised(monkeypatch: pytest.MonkeyPatch) 
 
     with pytest.raises(ExceptionGroup):
         main([])
+
+
+@pytest.mark.usefixtures('project')
+def test_a_record_with_one_number_for_two_events_exits_with_one_line_that_names_the_event(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    events = lab().events
+    path = Path.cwd() / '.verifold' / 'record.jsonl'
+    with RecordFile(path) as record:
+        record.append(*events, events[-1])
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(['--no-browser'])
+
+    assert exit_info.value.code == (
+        f'verifold: The record {path} does not add up to a lab at line 6: Event 5 does not follow event 5.'
+    )
+    assert 'Traceback' not in capsys.readouterr().err
+
+
+@pytest.mark.usefixtures('project')
+def test_a_record_that_another_program_replaces_stops_the_lab_with_one_line_and_keeps_what_was_written(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    path = Path.cwd() / '.verifold' / 'record.jsonl'
+    kept = path.with_name('record.kept.jsonl')
+    start = StartRequest(question='Does it hold?', agents=(AgentChoice(harness='fake'),))
+    seen: dict[str, bytes] = {}
+
+    async def save_the_record_and_post(link: asyncio.Future[str]) -> None:
+        base, _, token = (await link).partition('/#token=')
+        # After the end of the fake agent's first turn, the server writes nothing by itself.
+        await until(lambda: b'"turn_ended"' in path.read_bytes(), timeout=60)
+        seen['written'] = path.read_bytes()
+        # Another program saves the record with its first line only, and renames its file over it.
+        saved = path.with_name('saved')
+        saved.write_bytes(seen['written'].splitlines(keepends=True)[0])
+        saved.replace(path)
+        async with httpx2.AsyncClient(base_url=f'{base}/api', headers={'Authorization': f'Bearer {token}'}) as app:
+            failed = await app.post('/posts', json={'kind': 'message', 'text': 'Still there?', 'thread': 't-1'})
+        seen['answer'] = failed.content
+
+    async def serve_a_lab(folder: Path, _: None, options: ServeOptions, hooks: ServeHooks) -> None:
+        link: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+
+        def ready(url: str) -> None:
+            hooks.ready(url)
+            link.set_result(url)
+
+        acting = asyncio.create_task(save_the_record_and_post(link))
+        try:
+            async with asyncio.timeout(60):
+                fake = ServeHooks(ready=ready, swept=hooks.swept)
+                await serve(folder, start, options=options, catalog={'fake': FAKE_HARNESS}, hooks=fake)
+        finally:
+            if not link.done():
+                # The server failed before it was ready, so the other program has nothing to wait for.
+                acting.cancel()
+            with suppress(asyncio.CancelledError):
+                await acting
+
+    monkeypatch.setattr('verifold.cli.serve', serve_a_lab)
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(['--no-browser'])
+
+    why = f'Another program replaced or removed the record {path}, so Verifold stops. What Verifold wrote is in {kept}.'
+    printed = capfd.readouterr()
+    # A text as the exit code is what the command prints, in one line, and it makes the exit status 1.
+    assert exit_info.value.code == f'verifold: {why}'
+    assert json.loads(seen['answer']) == {'detail': why}
+    assert kept.read_bytes() == seen['written']
+    assert 'Traceback' not in printed.out + printed.err + caplog.text
 
 
 @pytest.fixture

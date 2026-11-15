@@ -1,5 +1,8 @@
 import asyncio
+import errno
 from datetime import UTC, timedelta
+from pathlib import Path
+from typing import IO
 
 import pytest
 from builders import START
@@ -15,6 +18,8 @@ from verifold.society.attention import wakes
 from verifold.society.errors import RejectedEvent
 from verifold.society.standing import standing
 from verifold.society.views import answer_view
+from verifold.store import record_file as record_file_module
+from verifold.store.errors import CorruptRecord, RecordChanged
 from verifold.store.record_file import RecordFile
 
 
@@ -336,3 +341,97 @@ async def test_a_proposal_from_an_agent_that_had_not_seen_the_revision_answers_t
     assert [getattr(entry.post, 'question_seen', None) for entry in lab.board.posts] == [None, None, 0, 1]
     assert read.post.id == 'p-4'
     assert Lab.load(record_file).board == lab.board
+
+
+def said(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """Return what the lab itself logged. Another library's warning is not its word."""
+    return [entry.getMessage() for entry in caplog.records if entry.name == 'verifold.server.lab']
+
+
+async def test_the_lab_says_what_the_record_moved_out_of_its_file_and_goes_on(
+    lab: Lab, record_file: RecordFile, caplog: pytest.LogCaptureFixture
+) -> None:
+    with record_file.path.open('ab') as other:
+        other.write(b'not an event\n')
+    await lab.post(message('Still here.'), 'bo')
+    with record_file.path.open('ab') as other:
+        other.write(b'\n')
+    await lab.post(message('And here.'), 'bo')
+
+    assert said(caplog) == [
+        f'Verifold moved {size} that another program added to the end of the record to {record_file.foreign}.'
+        for size in ('13 bytes', '1 byte')
+    ]
+    assert record_file.foreign.read_bytes() == b'not an event\n\n'
+    assert Lab.load(record_file).board == lab.board
+
+
+async def test_the_lab_says_what_the_record_moved_also_when_its_own_write_then_fails(
+    lab: Lab, record_file: RecordFile, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board, sync, synced = lab.board, record_file_module._sync, []
+
+    def full_disk_after_the_move(file: IO[bytes]) -> None:
+        # The side file comes first, and then the record.
+        synced.append(file)
+        if len(synced) > 1:
+            raise OSError(errno.ENOSPC, 'No space left on device')
+        sync(file)
+
+    with record_file.path.open('ab') as other:
+        other.write(b'not an event\n')
+    monkeypatch.setattr(record_file_module, '_sync', full_disk_after_the_move)
+
+    with pytest.raises(OSError, match='No space'):
+        await lab.post(message('Still here.'), 'bo')
+
+    assert said(caplog) == [
+        f'Verifold moved 13 bytes that another program added to the end of the record to {record_file.foreign}.'
+    ]
+    assert lab.board == Lab.load(record_file).board == board
+    assert record_file.foreign.read_bytes() == b'not an event\n'
+
+
+async def test_a_write_that_finds_the_record_changed_tells_what_stops_the_server_and_its_caller(
+    record_file: RecordFile,
+) -> None:
+    heard: list[RecordChanged] = []
+    lab = Lab.create(record_file, 'Does it hold?', stops=heard.append)
+    await lab.join(Agent(id='ada', name='Ada', harness='fake', model=ModelSpec(family='anthropic')))
+    board = lab.board
+    record_file.path.unlink()
+
+    with pytest.raises(RecordChanged, match='replaced or removed the record') as refused:
+        await lab.open_question_thread()
+
+    assert heard == [refused.value]
+    assert lab.board == board
+    assert len(record_file.path.with_name('record.kept.jsonl').read_bytes().splitlines()) == board.seq == 2
+
+
+def test_a_new_lab_tells_what_stops_the_server_when_its_first_write_finds_the_record_changed(
+    record_file: RecordFile,
+) -> None:
+    heard: list[RecordChanged] = []
+    record_file.path.unlink()
+
+    with pytest.raises(RecordChanged, match='replaced or removed the record'):
+        Lab.create(record_file, 'Does it hold?', stops=heard.append)
+
+    assert [str(error) for error in heard] == [
+        f'Another program replaced or removed the record {record_file.path}, so Verifold stops.'
+    ]
+
+
+def test_a_record_that_does_not_add_up_to_a_lab_names_the_line_of_the_first_event_that_does_not_fit(
+    tmp_path: Path,
+) -> None:
+    events = record_lab().events
+    with RecordFile(tmp_path / 'twice.jsonl') as twice, RecordFile(tmp_path / 'headless.jsonl') as headless:
+        twice.append(*events, events[-1])
+        headless.append(*events[1:])
+
+        with pytest.raises(CorruptRecord, match=r'twice\.jsonl .* at line 6: Event 5 does not follow event 5\.$'):
+            Lab.load(twice)
+        with pytest.raises(CorruptRecord, match=r'headless\.jsonl .* at line 1: A record starts with lab_opened'):
+            Lab.load(headless)

@@ -1,6 +1,7 @@
 """The service that owns one lab: its record, its board, and the callers that wait for new events."""
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Final, Self, assert_never
@@ -79,7 +80,10 @@ from verifold.society.reruns import open_take, open_to, wanted_reruns
 from verifold.society.reviewers import check_review, seats_line
 from verifold.society.standing import closing
 from verifold.society.votes import proposal, vote_of
+from verifold.store.errors import CorruptRecord, RecordChanged
 from verifold.store.record_file import RecordFile
+
+logger = logging.getLogger(__name__)
 
 type Clock = Callable[[], datetime]
 type Build = Callable[[Board, int, datetime], Event]
@@ -91,9 +95,20 @@ that asked for the seat: a role of the seat is recorded as given by it.
 """
 
 
+type Stops = Callable[[RecordChanged], None]
+"""
+Stops the server: it gets the error when a write finds that another program changed the record. The caller of the
+write gets the same error.
+"""
+
+
 def utc_now() -> datetime:
     """Return the current time in UTC."""
     return datetime.now(UTC)
+
+
+def _stops_nothing(_: RecordChanged) -> None:
+    """Leave the stop to the caller of the write, which gets the error."""
 
 
 class Lab:
@@ -104,26 +119,37 @@ class Lab:
     wakes the callers that wait for new events. An event that breaks a rule never reaches the record.
     """
 
-    def __init__(self, record: RecordFile, events: tuple[Event, ...], clock: Clock = utc_now) -> None:
-        """
-        Serve an open record, given the events that it holds.
-
-        Raises:
-            RejectedEvent: The events do not add up to a board.
-
-        """
+    def __init__(self, record: RecordFile, board: Board, clock: Clock = utc_now, stops: Stops = _stops_nothing) -> None:
+        """Serve an open record, given the board that its events add up to."""
         self._record = record
         self._clock = clock
-        self._board = fold(events)
+        self._board = board
+        self._stops = stops
         self._changed = asyncio.Condition()
 
     @classmethod
-    def load(cls, record: RecordFile, clock: Clock = utc_now) -> Self:
-        """Serve a record that holds a lab already."""
-        return cls(record, record.read(), clock)
+    def load(cls, record: RecordFile, clock: Clock = utc_now, stops: Stops = _stops_nothing) -> Self:
+        """
+        Serve a record that holds a lab already. `stops` hears when a write finds the record changed.
+
+        Raises:
+            CorruptRecord: The record's events do not add up to a board. The message gives the line of the first
+                event that does not fit.
+
+        """
+        events = record.read()
+        line = 1
+        try:
+            board = fold(events[:1])
+            for event in events[1:]:
+                line += 1
+                board = apply(board, event)
+        except RejectedEvent as error:
+            raise CorruptRecord(f'The record {record.path} does not add up to a lab at line {line}: {error}') from error
+        return cls(record, board, clock, stops)
 
     @classmethod
-    def create(
+    def create(  # noqa: PLR0913
         cls,
         record: RecordFile,
         question: str,
@@ -131,12 +157,16 @@ class Lab:
         auto_mode: bool = True,
         time_left: timedelta | None = None,
         clock: Clock = utc_now,
+        stops: Stops = _stops_nothing,
     ) -> Self:
         """
         Open a new lab on `question` in an empty record. With `time_left`, the lab ends that long after it opens.
 
+        `stops` hears when a write finds the record changed.
+
         Raises:
             LabExists: The record holds a lab already.
+            RecordChanged: Another program changed the record since the server opened it.
 
         """
         if record.read():
@@ -144,8 +174,9 @@ class Lab:
         at = clock()
         ends_at = at + time_left if time_left is not None else None
         opened = LabOpened(seq=1, at=at, question=question, auto_mode=auto_mode, ends_at=ends_at)
-        record.append(opened)
-        return cls(record, (opened,), clock)
+        lab = cls(record, fold((opened,)), clock, stops)
+        lab._write(opened)
+        return lab
 
     @property
     def board(self) -> Board:
@@ -887,10 +918,27 @@ class Lab:
                 event = build(board, board.seq + 1, at)
                 board = apply(board, event)
                 events.append(event)
-            self._record.append(*events)
+            self._write(*events)
             self._board = board
             self._changed.notify_all()
             return board
+
+    def _write(self, *events: Event) -> None:
+        # Every write to the record goes through here. The terminal says what the record moved out of its file,
+        # also when the write then fails. A record that another program changed stops the server.
+        before = self._record.moved
+        try:
+            self._record.append(*events)
+        except RecordChanged as error:
+            self._stops(error)
+            raise
+        finally:
+            if moved := self._record.moved - before:
+                logger.warning(
+                    'Verifold moved %s that another program added to the end of the record to %s.',
+                    '1 byte' if moved == 1 else f'{moved} bytes',
+                    self._record.foreign,
+                )
 
 
 REVISED: Final = 'The person revised the question: '
