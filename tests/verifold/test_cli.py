@@ -14,7 +14,7 @@ from typing import override
 
 import psutil
 import pytest
-from builders import IGNORES_SIGTERM, SLEEP, alive, until
+from builders import IGNORES_SIGTERM, SLEEP, alive, lab, until
 from fakes import FAKE_HARNESS
 
 from verifold import DISTRIBUTION
@@ -487,6 +487,24 @@ def test_an_unknown_error_in_a_group_is_raised(monkeypatch: pytest.MonkeyPatch) 
 
     with pytest.raises(ExceptionGroup):
         main([])
+
+
+@pytest.mark.usefixtures('project')
+def test_a_record_with_one_number_for_two_events_exits_with_one_line_that_names_the_event(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    events = lab().events
+    path = Path.cwd() / '.verifold' / 'record.jsonl'
+    with RecordFile(path) as record:
+        record.append(*events, events[-1])
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(['--no-browser'])
+
+    assert exit_info.value.code == (
+        f'verifold: The record {path} does not add up to a lab at line 6: Event 5 does not follow event 5.'
+    )
+    assert 'Traceback' not in capsys.readouterr().err
 
 
 @pytest.fixture

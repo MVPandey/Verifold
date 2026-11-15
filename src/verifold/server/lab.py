@@ -1,6 +1,7 @@
 """The service that owns one lab: its record, its board, and the callers that wait for new events."""
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Final, Self, assert_never
@@ -79,7 +80,10 @@ from verifold.society.reruns import open_take, open_to, wanted_reruns
 from verifold.society.reviewers import check_review, seats_line
 from verifold.society.standing import closing
 from verifold.society.votes import proposal, vote_of
+from verifold.store.errors import CorruptRecord
 from verifold.store.record_file import RecordFile
+
+logger = logging.getLogger(__name__)
 
 type Clock = Callable[[], datetime]
 type Build = Callable[[Board, int, datetime], Event]
@@ -104,23 +108,33 @@ class Lab:
     wakes the callers that wait for new events. An event that breaks a rule never reaches the record.
     """
 
-    def __init__(self, record: RecordFile, events: tuple[Event, ...], clock: Clock = utc_now) -> None:
-        """
-        Serve an open record, given the events that it holds.
-
-        Raises:
-            RejectedEvent: The events do not add up to a board.
-
-        """
+    def __init__(self, record: RecordFile, board: Board, clock: Clock = utc_now) -> None:
+        """Serve an open record, given the board that its events add up to."""
         self._record = record
         self._clock = clock
-        self._board = fold(events)
+        self._board = board
         self._changed = asyncio.Condition()
 
     @classmethod
     def load(cls, record: RecordFile, clock: Clock = utc_now) -> Self:
-        """Serve a record that holds a lab already."""
-        return cls(record, record.read(), clock)
+        """
+        Serve a record that holds a lab already.
+
+        Raises:
+            CorruptRecord: The record's events do not add up to a board. The message gives the line of the first
+                event that does not fit.
+
+        """
+        events = record.read()
+        line = 1
+        try:
+            board = fold(events[:1])
+            for event in events[1:]:
+                line += 1
+                board = apply(board, event)
+        except RejectedEvent as error:
+            raise CorruptRecord(f'The record {record.path} does not add up to a lab at line {line}: {error}') from error
+        return cls(record, board, clock)
 
     @classmethod
     def create(
@@ -144,8 +158,8 @@ class Lab:
         at = clock()
         ends_at = at + time_left if time_left is not None else None
         opened = LabOpened(seq=1, at=at, question=question, auto_mode=auto_mode, ends_at=ends_at)
-        record.append(opened)
-        return cls(record, (opened,), clock)
+        _write(record, opened)
+        return cls(record, fold((opened,)), clock)
 
     @property
     def board(self) -> Board:
@@ -887,10 +901,22 @@ class Lab:
                 event = build(board, board.seq + 1, at)
                 board = apply(board, event)
                 events.append(event)
-            self._record.append(*events)
+            _write(self._record, *events)
             self._board = board
             self._changed.notify_all()
             return board
+
+
+def _write(record: RecordFile, *events: Event) -> None:
+    # Only the server writes the record. When another program added to it, the person reads here where that went.
+    moved = record.append(*events)
+    if moved:
+        logger.warning(
+            'Another program added %d bytes to the record. Verifold moved them to %s, and the record holds only what '
+            'Verifold wrote.',
+            moved,
+            record.foreign,
+        )
 
 
 REVISED: Final = 'The person revised the question: '

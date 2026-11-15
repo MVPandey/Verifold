@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, timedelta
+from pathlib import Path
 
 import pytest
 from builders import START
@@ -15,6 +16,7 @@ from verifold.society.attention import wakes
 from verifold.society.errors import RejectedEvent
 from verifold.society.standing import standing
 from verifold.society.views import answer_view
+from verifold.store.errors import CorruptRecord
 from verifold.store.record_file import RecordFile
 
 
@@ -336,3 +338,33 @@ async def test_a_proposal_from_an_agent_that_had_not_seen_the_revision_answers_t
     assert [getattr(entry.post, 'question_seen', None) for entry in lab.board.posts] == [None, None, 0, 1]
     assert read.post.id == 'p-4'
     assert Lab.load(record_file).board == lab.board
+
+
+async def test_the_lab_says_where_the_bytes_of_another_program_went_and_goes_on(
+    lab: Lab, record_file: RecordFile, caplog: pytest.LogCaptureFixture
+) -> None:
+    with record_file.path.open('ab') as other:
+        other.write(b'not an event\n')
+
+    await lab.post(message('Still here.'), 'bo')
+
+    where = f'Verifold moved them to {record_file.foreign}'
+    assert [entry.getMessage() for entry in caplog.records] == [
+        f'Another program added 13 bytes to the record. {where}, and the record holds only what Verifold wrote.'
+    ]
+    assert record_file.foreign.read_bytes() == b'not an event\n'
+    assert Lab.load(record_file).board == lab.board
+
+
+def test_a_record_that_does_not_add_up_to_a_lab_names_the_line_of_the_first_event_that_does_not_fit(
+    tmp_path: Path,
+) -> None:
+    events = record_lab().events
+    with RecordFile(tmp_path / 'twice.jsonl') as twice, RecordFile(tmp_path / 'headless.jsonl') as headless:
+        twice.append(*events, events[-1])
+        headless.append(*events[1:])
+
+        with pytest.raises(CorruptRecord, match=r'twice\.jsonl .* at line 6: Event 5 does not follow event 5\.$'):
+            Lab.load(twice)
+        with pytest.raises(CorruptRecord, match=r'headless\.jsonl .* at line 1: A record starts with lab_opened'):
+            Lab.load(headless)
