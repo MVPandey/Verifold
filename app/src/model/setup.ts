@@ -169,13 +169,17 @@ export function startRequest(
   };
 }
 
-/** Return the person's choices on the setup screen as the choices that new labs start with. */
+/**
+ * Return the person's choices on the setup screen as the choices that new labs start with. They hold no power of
+ * the coordinator: the person switches a power on for one lab, and no saved choice does it for the next.
+ */
 export function setupChoices(
   seats: readonly Seat[],
   autoMode: boolean,
   minutes: number | null,
 ): SetupChoices {
-  return { agents: chosenAgents(seats), auto_mode: autoMode, minutes };
+  const saved = seats.map((seat) => ({ ...seat, powers: [] }));
+  return { agents: chosenAgents(saved), auto_mode: autoMode, minutes };
 }
 
 function chosenAgents(seats: readonly Seat[]): readonly AgentChoice[] {

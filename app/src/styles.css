@@ -2218,6 +2218,24 @@ body.with-panel {
   border-left: 1px solid var(--line2);
   color: var(--ink);
 }
+/* The seat styles every button and text area in it. The panel is in the seat, so it sets its own back first. */
+.f-steer .k-panel button {
+  flex: initial;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+}
+.f-steer .k-panel button.linkbtn {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.f-steer .k-panel button.as-toggle {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+}
 .k-panel > header {
   display: grid;
   grid-template-columns: auto 1fr auto;
@@ -2232,7 +2250,8 @@ body.with-panel {
 }
 .k-panel nav {
   display: flex;
-  gap: 18px;
+  flex-wrap: wrap;
+  gap: 0 18px;
   padding: 0 18px;
   border-bottom: 1px solid var(--line);
 }
@@ -2325,8 +2344,8 @@ body.with-panel {
 }
 .k-buttons button,
 .k-amount button,
-.f-steer .k-buttons button,
-.f-steer .k-amount button {
+.f-steer .k-panel .k-buttons button,
+.f-steer .k-panel .k-amount button {
   padding: 7px 12px;
   background: none;
   border: 1px solid var(--line2);
@@ -2339,7 +2358,7 @@ body.with-panel {
   border-color: var(--ink2);
 }
 .k-buttons button.go,
-.f-steer .k-buttons button.go {
+.f-steer .k-panel .k-buttons button.go {
   background: var(--hl);
   border-color: var(--hl);
   color: var(--hl-ink);
@@ -2366,7 +2385,7 @@ body.with-panel {
   border-top: 0;
 }
 .k-write textarea,
-.f-steer .k-write textarea {
+.f-steer .k-panel .k-write textarea {
   display: block;
   width: 100%;
   min-height: 0;
@@ -2389,7 +2408,8 @@ body.with-panel {
   font-size: 13px;
   color: var(--muted);
 }
-.k-write button {
+.k-write button,
+.f-steer .k-panel .k-write button {
   flex: none;
   padding: 8px 18px;
   background: var(--accent);
@@ -2440,7 +2460,7 @@ body.with-panel {
 .k-powers li .k-since {
   color: var(--ink2);
 }
-.f-steer .k-switch {
+.f-steer .k-panel button.k-switch {
   display: inline-flex;
   gap: 8px;
   align-items: center;
@@ -2466,7 +2486,7 @@ body.with-panel {
   background: var(--muted);
   transition: transform 0.12s;
 }
-.f-steer .k-switch[aria-checked='true'] {
+.f-steer .k-panel button.k-switch[aria-checked='true'] {
   color: var(--ink);
 }
 .k-switch[aria-checked='true'] i {

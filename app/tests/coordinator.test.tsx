@@ -31,7 +31,7 @@ import {
   undoLabel,
   yesLabel,
 } from '../src/model/coordinator.ts';
-import { newSeat, seatChoice } from '../src/model/setup.ts';
+import { newSeat, seatChoice, setupChoices, startRequest } from '../src/model/setup.ts';
 import { act } from '../src/model/turns.ts';
 import { CoordinatorSeat, ForYou, OpenedForYou, Panel } from '../src/ui/Coordinator.tsx';
 import type { PageProps } from '../src/ui/hooks.ts';
@@ -299,6 +299,10 @@ describe('the coordinator’s moves in words', () => {
     assert.equal('powers' in seatChoice(seat), false);
     assert.deepEqual(seatChoice({ ...seat, coordinator: true }).powers, ['time', 'agents']);
     assert.equal('powers' in seatChoice({ ...newSeat('codex'), coordinator: true }), false);
+    // A lab starts with the powers that the person ticked, and the saved choices for new labs hold none.
+    const led = [{ ...seat, coordinator: true }];
+    assert.deepEqual(startRequest('Q?', led, true, null).agents[0]?.powers, ['time', 'agents']);
+    assert.equal('powers' in (setupChoices(led, true, null).agents[0] ?? {}), false);
   });
 });
 
