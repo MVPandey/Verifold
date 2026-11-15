@@ -2518,6 +2518,15 @@ a.file:hover {
 .f-card.open .o-card-need {
   order: 5;
 }
+.o-wanted {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.f-card.open .o-wanted {
+  order: 5;
+}
 .f-card .f-faces {
   row-gap: 8px;
 }

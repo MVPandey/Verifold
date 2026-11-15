@@ -3,17 +3,17 @@ from datetime import UTC, timedelta
 
 import pytest
 from builders import START
+from builders import lab as record_lab
 
 from verifold.protocol.agents import Agent, ModelSpec
-from verifold.protocol.events import TurnSummary
 from verifold.protocol.join import PostRequest
-from verifold.protocol.posts import MAX_HEADLINE, FileEvidence
-from verifold.protocol.usage import Usage
+from verifold.protocol.posts import MAX_HEADLINE, Check, FileEvidence, Result
 from verifold.server.errors import LabExists
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.attention import wakes
 from verifold.society.errors import RejectedEvent
+from verifold.society.standing import standing
 from verifold.society.views import answer_view
 from verifold.store.record_file import RecordFile
 
@@ -175,23 +175,66 @@ async def test_a_member_cannot_ask_twice_for_a_rerun_while_its_request_is_open(l
 
     await lab.request_rerun('bo', 'p-2')
     await lab.request_rerun('person', 'p-2')
-    with pytest.raises(RejectedEvent, match='You asked for a blind rerun of p-2 already'):
+    with pytest.raises(RejectedEvent, match='You asked for an independent rerun of p-2 already'):
         await lab.request_rerun('bo', 'p-2')
 
     assert ([entry.by for entry in lab.board.reruns], lab.board.seq) == (['bo', 'person'], before + 2)
 
 
-async def test_a_member_can_ask_again_after_its_checker_failed(lab: Lab) -> None:
-    evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
-    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
-    await lab.request_rerun('bo', 'p-2')
-    await lab.join(Agent(id='dee', name='Dee', harness='fake', model=ModelSpec(family='openai'), checks='p-2'))
-    stopped = TurnSummary(agent='dee', seconds=0, usage=Usage(), error='It stopped.', rerun_failed=True)
-    await lab.end_turn(stopped)
+def an_old_record(record_file: RecordFile) -> Lab:
+    """
+    Load a lab from before agents took reruns.
 
-    again = await lab.request_rerun('bo', 'p-2')
+    Verifold started the checker dee of another family for bo's request, and its check of ada's result p-1 holds.
+    It started the checker eve for cy's request for ada's result p-3, and eve stopped without a check.
+    """
+    files = (FileEvidence(path='bench.json', commit='c' * 40),)
+    record = record_lab().post(Result(id='p-1', thread='t-1', author='ada', text='11.8x.', evidence=files))
+    record.rerun('bo', 'p-1').join('dee', family='openai', checks='p-1', name='Checker 7')
+    record.post(
+        Check(id='p-2', thread='t-1', author='dee', text='Holds.', reply_to='p-1', outcome='holds', method='rerun')
+    )
+    record.post(Result(id='p-3', thread='t-1', author='ada', text='12.1x.', evidence=files))
+    record.rerun('cy', 'p-3').join('eve', family='openai', checks='p-3', name='Checker 12')
+    record.turn('eve', error='The checker stopped without a check.', rerun_failed=True)
+    record_file.append(*record.events)
+    return Lab.load(record_file)
 
-    assert (again.by, len(lab.board.reruns)) == ('bo', 2)
+
+async def test_an_old_record_with_checkers_loads_and_its_posts_stand_as_they_did(record_file: RecordFile) -> None:
+    lab = an_old_record(record_file)
+    board = lab.board
+
+    # The checkers are in the record with their old names, and the check holds the post up as before.
+    assert [entry.agent.name for entry in board.agents if entry.agent.checks] == ['Checker 7', 'Checker 12']
+    assert (standing(board, 'p-1'), standing(board, 'p-3')) == ('held_up', 'open')
+    checked = Member(lab, 'ada').thread('t-1').posts[1]
+    assert (checked.post.author, checked.by and checked.by.name) == ('dee', 'Checker 7')
+    # A checker is no agent of the lab: it holds no seat, and no agent reads it as a peer.
+    assert [line.id for line in Member(lab, 'ada').brief('').agents] == ['bo', 'cy']
+    # Nothing is wanted: one request has its check, and the other ended with its checker.
+    assert Member(lab, 'ada').brief('').reruns_wanted == ()
+
+
+async def test_a_lab_from_an_old_record_goes_on_with_reruns_that_agents_take(record_file: RecordFile) -> None:
+    lab = an_old_record(record_file)
+    await lab.set_reviewer('cy', 'cy', reviewer=True)
+
+    # A member can ask again after its checker failed, and now an agent of the lab takes the rerun.
+    again = await lab.request_rerun('cy', 'p-3')
+    taken = await lab.take_rerun('cy', 'p-3')
+
+    assert (again.by, taken.agent, taken.commit) == ('cy', 'cy', 'c' * 40)
+    assert [line.post for line in Member(lab, 'ada').brief('').reruns_wanted] == ['p-3']
+
+
+async def test_no_agent_joins_as_the_checker_of_one_post(lab: Lab) -> None:
+    checker = Agent(id='dee', name='Dee', harness='fake', model=ModelSpec(family='openai'), checks='p-1')
+
+    with pytest.raises(RejectedEvent, match='No agent joins a lab as the checker of one post'):
+        await lab.join(checker)
+
+    assert lab.board.agent('dee') is None
 
 
 async def test_a_grant_is_recorded_once_and_survives_a_reload(lab: Lab, record_file: RecordFile) -> None:

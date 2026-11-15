@@ -52,8 +52,8 @@ class AddSeat(Record):
     """
     The seat of the one agent that a move adds: its harness, its model, its effort, and whether it is on call.
 
-    The seat holds nothing else. It states no model family, because the family decides whether a blind rerun
-    counts as one by another family. It names no mode of the harness, and it is not the coordinator's seat, has no
+    The seat holds nothing else. It states no model family, because the family decides whether an independent
+    rerun counts as one by another model. It names no mode of the harness, and it is not the coordinator's seat, has no
     power, and is no reviewer seat. Those stay with the person.
     """
 

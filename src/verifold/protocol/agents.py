@@ -111,7 +111,7 @@ class ModelSpec(Record):
     """
     The model behind an agent.
 
-    Blind checks compare `family`: a check counts as independent only when its model comes from another family.
+    An independent rerun compares `family`: it counts as one by another model only when the two families differ.
     """
 
     family: Label
@@ -159,7 +159,10 @@ class Agent(Record):
     """
     recruited_by: AgentId | None = None
     checks: PostId | None = None
-    """For a blind checker that Verifold starts: the post that it reruns. It posts one check and reads nothing else."""
+    """
+    In a record from before agents took reruns: the post that a checker reran blind. Verifold started such a
+    checker for a rerun request, and it posted one check and read nothing else. No agent joins with it now.
+    """
 
 
 GUEST = 'guest'
@@ -167,8 +170,8 @@ GUEST = 'guest'
 
 UNKNOWN_FAMILY = 'unknown'
 """
-The model family of an invited agent when the person stated none. Verifold does not know its model, so no check of
-its work is independent.
+The model family of an invited agent when the person stated none. Verifold does not know its model, so no rerun of
+its work, and no rerun by it, counts as one by another model.
 """
 
 MAX_AGENTS = 20

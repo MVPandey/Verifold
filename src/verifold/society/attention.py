@@ -11,8 +11,11 @@ says otherwise. Nobody watches the question's thread by default, so a post there
 Some posts are for every agent: a close, and an ask, a call, or the first post of a thread when it names nobody. An ask names
 nobody when its `mentions` are empty and it replies to no post, so an agent that is stuck reaches every agent that
 may know the missing piece. A check is also for the agent that asked for the rerun. The person's words reach the agents by default: a post from the person that
-names nobody and replies to no post is for every agent. No post is for a blind checker, which reads nothing but its claim.
-No post is for an agent that left the lab.
+names nobody and replies to no post is for every agent. No post is for an agent that left the lab.
+
+A request for an independent rerun is no post. It reaches the agents that can take it, as a call that names nobody
+reaches every agent: the holders of the reviewer seats, or every agent in a lab without such seats, but not the
+post's author, not the agent that asked, and not an agent on call.
 
 An on-call agent hears less. No post for every agent is for it, and neither are the person's words that name nobody.
 A plain mention is not for it either: a plan, a message, a result, or another post that addresses nobody can name
@@ -55,6 +58,7 @@ from verifold.society.board import Board
 from verifold.society.identity import post_line, post_view
 from verifold.society.lifecycle import alarm_line, no_alarm_line
 from verifold.society.lines import lines_of
+from verifold.society.reruns import reruns_for
 
 type Names = tuple[tuple[AgentId, str], ...]
 """The ID and the display name of each agent that a post can name."""
@@ -94,7 +98,7 @@ def wakes(
     """
     Return whether a post is for an agent, so that it wakes the agent.
 
-    No post is for a blind checker, and none is for an agent that left the lab.
+    No post is for an agent that left the lab, and none is for a checker of a record from before agents took reruns.
     """
     post = entry.post
     reader = board.agent(agent_id)
@@ -147,6 +151,7 @@ def update(board: Board, agent_id: AgentId, after: int, now: datetime | None = N
         left=departures(board, agent_id, after, reach),
         profile=profile_notes(board, agent_id, after, reach),
         renamed=renames(board, agent_id, after, reach),
+        reruns=reruns_for(board, agent_id, after, reach),
         alarm=alarm_line(board, agent_id),
         no_alarm=no_alarm_line(board, agent_id, now),
         ends_at=board.ends_at,
@@ -171,6 +176,7 @@ def news(board: Board, agent_id: AgentId, after: int) -> News:
         left=departures(board, agent_id, after, reach),
         profile=profile_notes(board, agent_id, after, reach),
         renamed=renames(board, agent_id, after, reach),
+        reruns=reruns_for(board, agent_id, after, reach),
         alarm=alarm_line(board, agent_id),
     )
 
@@ -202,7 +208,7 @@ def renames(board: Board, agent_id: AgentId, after: int, reach: int) -> tuple[Re
     Return the other agents whose name changed after event `after`, up to event `reach`, each once.
 
     A line has the agent's name at `reach` and the name that it had at `after`. An agent that chose a name and
-    took it back in between has none, and neither has a blind checker or an agent that left.
+    took it back in between has none, and neither has an agent that left.
     """
     changed = dict.fromkeys(
         (

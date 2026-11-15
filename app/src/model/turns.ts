@@ -1,5 +1,5 @@
 import { PERSON } from '../api/types.ts';
-import type { Agent, Post, PostView, Thread, ThreadSummary } from '../api/types.ts';
+import type { Agent, AgentView, Post, PostView, Thread, ThreadSummary } from '../api/types.ts';
 
 /** What a post does to the post that it touches. The mark beside a turn takes its shape and color from this. */
 export type MarkTone = 'claim' | 'bad' | 'good' | 'turn' | 'answer' | 'ask' | 'quiet';
@@ -70,8 +70,10 @@ export interface ActContext {
  *
  * The line comes only from the post's kind, its check outcome and method, its `accepts`, and the post that it
  * replies to. `to` is that post, or `null` when the page does not have it. Every kind names the post that it
- * replies to, so a reply reads right where the indent stops. A plan that replies to a call takes the call. A rerun is "blind" only from the blind checker that
- * Verifold started for that post. A proposal is a proposed answer for the lab in any thread.
+ * replies to, so a reply reads right where the indent stops. A plan that replies to a call takes the call. A
+ * rerun is "from a clean copy" when it is the check of its author's take: the author took the rerun and so was
+ * given the clean copy of the post's pinned files. It is "blind" only from the checker that Verifold started for that post, in a lab from before
+ * agents took reruns. A proposal is a proposed answer for the lab in any thread.
  */
 export function act(post: Post, to: Post | null, context: ActContext): string {
   const them = to ? context.called(to.author) : 'a post';
@@ -110,7 +112,8 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
       return post.accepts ? `accepted ${theirs}` : `answered ${them}`;
     case 'check': {
       const blind = context.author?.checks != null && context.author.checks === post.reply_to;
-      return `${checked(post.method, theirs, blind)}: it ${post.outcome === 'holds' ? 'holds' : 'fails'}`;
+      const how = blind ? ' blind' : post.take != null ? ' from a clean copy' : '';
+      return `${checked(post.method, theirs, how)}: it ${post.outcome === 'holds' ? 'holds' : 'fails'}`;
     }
     case 'report':
       return `reported to you${reply}`;
@@ -119,14 +122,34 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
   }
 }
 
-function checked(
-  method: 'rerun' | 'code_read' | 'ratings',
-  theirs: string,
-  blind: boolean,
-): string {
+/**
+ * Return how many agents posted the check of an independent rerun of a post: a check from a clean copy, or the
+ * check of a checker that Verifold started for the post, in a lab from before agents took reruns.
+ */
+export function rerunChecks(
+  posts: readonly PostView[],
+  agents: readonly AgentView[],
+  postId: string,
+): number {
+  const checkers = new Set(
+    agents.filter((view) => view.agent.checks === postId).map((view) => view.agent.id),
+  );
+  const authors = posts
+    .map((item) => item.post)
+    .filter(
+      (post) =>
+        post.kind === 'check' &&
+        post.reply_to === postId &&
+        (post.take != null || checkers.has(post.author)),
+    )
+    .map((post) => post.author);
+  return new Set(authors).size;
+}
+
+function checked(method: 'rerun' | 'code_read' | 'ratings', theirs: string, how: string): string {
   switch (method) {
     case 'rerun':
-      return `reran ${theirs}${blind ? ' blind' : ''}`;
+      return `reran ${theirs}${how}`;
     case 'code_read':
       return `read the code of ${theirs}`;
     case 'ratings':
@@ -135,8 +158,9 @@ function checked(
 }
 
 /**
- * Return what an author is to a thread: its lead, a visitor, or an outside checker. `null` for the person, for an
- * author that the lab does not list, and in the question's thread, which belongs to nobody.
+ * Return what an author is to a thread: its lead, a visitor, or an outside checker of a lab from before agents
+ * took reruns. `null` for the person, for an author that the lab does not list, and in the question's thread,
+ * which belongs to nobody.
  *
  * `checkedFamily` is the model family of the author whose post a checker answers, when the page has it.
  */

@@ -16,7 +16,6 @@ from builders import START, RecordBuilder
 from mcp import Client
 
 from verifold.app import NORMS_CHANGED, NORMS_TEMPLATE
-from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.events import AlarmSet
 from verifold.protocol.posts import Answer, Close, FileEvidence, Result
 from verifold.protocol.settings import AtTimeLimit
@@ -27,8 +26,8 @@ from verifold.runner.messages import (
     DOORBELL,
     HARNESS_FAILED,
     IN_TURN,
-    JOBS_ENDED,
     OUT_OF_TIME,
+    RERUN_WANTED,
     RESTARTED,
     STARTED_AGAIN,
     alarm_message,
@@ -36,7 +35,6 @@ from verifold.runner.messages import (
     cut_short_message,
     invitation,
     more_time_message,
-    rerun_message,
     start_message,
 )
 from verifold.server.join import INSTRUCTIONS, join_server
@@ -106,7 +104,6 @@ CLAIM = Result(
     text='The sort is 11.8x faster.',
     evidence=(FileEvidence(path='bench.py', commit='c' * 40),),
 )
-CHECKER = Agent(id='checker-7', name='Checker 7', harness='fake', model=ModelSpec(family='openai'), checks='p-4')
 FOLDER = Path('/lab/.verifold/agents/agent-1')
 NORMS = Path('/lab/.verifold/LAB.md')
 
@@ -137,7 +134,7 @@ def messages() -> dict[str, str]:
     return {
         'doorbell': DOORBELL,
         'departure': DEPARTURE,
-        'jobs ended': JOBS_ENDED,
+        'rerun wanted': RERUN_WANTED,
         'alarm': alarm_message(alarm),
         'timed alarm': alarm_message(alarm.model_copy(update={'quiet': False})),
         **{f'late alarm {late}': alarm_message(alarm, late) for late in (IN_TURN, OUT_OF_TIME, CLOSED)},
@@ -153,7 +150,6 @@ def messages() -> dict[str, str]:
         },
         'invitation': invitation(start, 'http://127.0.0.1:8123/mcp', 'the-token', FOLDER),
         **{f'more time {jobs}': more_time_message(START, jobs) for jobs in AtTimeLimit},
-        'rerun': rerun_message(CLAIM, CHECKER, FOLDER),
         **{f'norms changed {name}': text.format(path=NORMS) for name, text in NORMS_CHANGED.items()},
         'no alarm': no_alarm_line(board, 'ada', START),
         'no alarm, a close stands': no_alarm_line(closing.board(), 'bo'),
@@ -230,7 +226,7 @@ async def test_no_tool_of_the_board_describes_itself_or_its_result_with_an_order
     async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
         tools = (await client.list_tools()).tools
 
-    assert len(tools) == 11
+    assert len(tools) == 12
     for tool in tools:
         assert tool.description, tool.name
         assert orders(tool.description) == [], tool.name

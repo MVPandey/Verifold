@@ -83,13 +83,12 @@ def test_a_check_and_a_rerun_request_on_another_agents_post_take_a_reviewer_seat
         assert [may_review(after, 'bo', target) for target in ('p-1', 'p-3')] == [False, post.author == 'bo']
 
 
-def test_a_lab_without_reviewer_seats_and_a_blind_checker_are_not_limited() -> None:
+def test_a_lab_without_reviewer_seats_limits_nobody() -> None:
     two = RecordBuilder().join('ada').join('bo').thread('t-1', opened_by='ada').post(RESULT)
 
     assert (seats(two.board()), may_review(two.board(), 'bo', 'p-1')) == (0, True)
     record = lab().post(RESULT)
     assert may_review(record.copy().reviewer_seats(0).board(), 'bo', 'p-1')
-    assert may_review(record.copy().join('checker-1', checks='p-1').board(), 'checker-1', 'p-1')
 
 
 def test_a_lab_without_reviewer_seats_says_so_to_an_agent_that_asks_for_one() -> None:

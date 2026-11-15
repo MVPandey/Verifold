@@ -1,14 +1,15 @@
 import { useState } from 'react';
 import type { ReactElement } from 'react';
 
-import type { AgentView, PostView, ThreadView } from '../api/types.ts';
+import type { AgentView, PostView, RerunLine, ThreadView } from '../api/types.ts';
 import { PERSON } from '../api/types.ts';
 import { author, authorName, called } from '../model/agents.ts';
 import { clock } from '../model/format.ts';
 import { builtOnLabel, standingChip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { sideReplyHint } from '../model/side.ts';
-import { act, isClaim, rows, standingIn } from '../model/turns.ts';
+import { MAX_RERUNS, wantedLine } from '../model/status.ts';
+import { act, isClaim, rerunChecks, rows, standingIn } from '../model/turns.ts';
 import { messageOf } from '../api/client.ts';
 import { ForYou } from './Coordinator.tsx';
 import { Detail } from './Markdown.tsx';
@@ -25,6 +26,11 @@ interface Around {
   readonly question: string | null;
   /** Whether the lab's agents say that it is done, so that a side thread's reply box says what a reply does. */
   readonly done?: boolean;
+  /** The reruns that are wanted in the lab. */
+  readonly reruns: readonly RerunLine[];
+  /** How many reviewer seats the lab has, for what a wanted rerun says about who can take it. */
+  readonly seats: number;
+  readonly now: Date;
   readonly onRerun: (postId: string) => Promise<void>;
 }
 
@@ -91,11 +97,17 @@ export function Turn(
   const { by } = props.item;
   const chip = standingChip(post, standing);
   const claim = isClaim(post);
+  const wanted = props.reruns.filter((line) => line.post === post.id);
+  const waits = wantedLine(wanted, { agents, reviewer_seats: props.seats }, props.now);
+  // The person can always ask, once: a request of theirs that is still open shows in the line above the button.
+  // A post that has the checks of all the reruns that one post gets takes no other request.
   const canRerun =
     post.kind === 'result' &&
     post.evidence.length > 0 &&
     standing !== 'held_up' &&
-    post.author !== PERSON;
+    post.author !== PERSON &&
+    !wanted.some((line) => line.asked_by.includes(PERSON)) &&
+    rerunChecks(view.posts, agents, post.id) < MAX_RERUNS;
   // A post in this thread by another author gets a link. The page does not have the posts of other threads.
   const near = (id: string): PostView | undefined => {
     const other = find(id);
@@ -174,6 +186,7 @@ export function Turn(
         ) : (
           <Detail post={post.id} body={post.body} files={post.evidence} />
         )}
+        {waits ? <p className="note o-wanted">{waits}</p> : null}
         {canRerun ? <RerunButton postId={post.id} onRerun={props.onRerun} /> : null}
       </div>
     </li>
@@ -189,7 +202,8 @@ function RerunButton(props: {
   if (state === 'asked') {
     return (
       <p className="note">
-        A checker from another model family gets the files, not the thread, and reruns it.
+        You asked for an independent rerun. An agent of the lab that can check this post can take
+        it.
       </p>
     );
   }
@@ -210,7 +224,7 @@ function RerunButton(props: {
           );
         }}
       >
-        Ask for a blind rerun
+        Ask for an independent rerun
       </button>
       {error ? (
         <span className="error" role="alert">

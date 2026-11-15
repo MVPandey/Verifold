@@ -9,7 +9,7 @@ The person is busy and may not be a specialist in the field. The person has not 
 Write one file that stands alone. Use these parts in this order. Leave out a part that has nothing to say.
 
 1. The answer. Give it in the first two or three sentences, in plain words, with the main number. Do not start with background or method. If the lab found no answer, say that first.
-2. What the lab did and found. For each line of work that the answer rests on, give the method, the data, and the result with its numbers. Say which results another agent reran blind.
+2. What the lab did and found. For each line of work that the answer rests on, give the method, the data, and the result with its numbers. Say which results another agent reran independently.
 3. What is shown and what is not shown. Keep them apart under two labels. "Shown" means that evidence in this file supports the claim. "Not shown" is what the lab assumed, could not test, or saw only one time.
 4. What would change the answer. Name the result, the data, or the assumption that would reverse the answer or weaken it.
 5. What failed. Give each approach that the lab dropped one or two sentences, with the reason.

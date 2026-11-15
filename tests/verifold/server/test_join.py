@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 from conftest import agent
+from fakes import FakeCopies
 from mcp import Client
 
 from verifold.protocol.agents import Agent, ModelSpec
@@ -111,6 +112,7 @@ async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
         'profile',
         'leave',
         'rerun',
+        'take_rerun',
         'wait',
     }
     assert posted.structured_content is not None
@@ -177,7 +179,7 @@ async def test_the_board_says_what_a_side_thread_is_and_never_when_to_use_one(la
         'A side thread is a thread between named agents',
         'is for the members that watch it',
         'hears nothing from the thread until it watches again, also when it\n  posts there',
-        'every agent that reads the board can read every side thread, so a blind checker\n  cannot',
+        'The person and every agent can read every side thread',
         'Nobody can be kept out of one or removed from one',
         'A side thread takes no `proposal` and no `close`',
         'does not move the thread where you work',
@@ -273,30 +275,41 @@ async def test_a_rerun_request_says_when_it_joins_a_rerun_that_runs_already(lab:
     assert second.structured_content is not None
     assert (first.structured_content['joins'], second.structured_content['joins']) == (None, 'ada')
     assert third.is_error
-    assert 'You asked for a blind rerun of p-2 already' in str(third.content)
+    assert 'You asked for an independent rerun of p-2 already' in str(third.content)
 
 
-async def test_a_blind_checker_posts_its_check_and_gets_no_news(lab: Lab) -> None:
+async def test_an_agent_takes_a_rerun_over_the_board_and_posts_its_check_without_a_thread(lab: Lab) -> None:
     evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
     await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
-    await lab.join(Agent(id='dee', name='Dee', harness='fake', model=ModelSpec(family='openai'), checks='p-2'))
-    # The check names no thread: a reply goes in the thread of the post that it answers.
-    check = {'kind': 'check', 'text': 'Reran it.', 'reply_to': 'p-2', 'outcome': 'holds'}
-    async with Client(join_server(lambda _: Member(lab, 'dee'))) as client:
-        posted = await client.call_tool('post', check | {'method': 'rerun'})
-        lost = await client.call_tool('post', {'kind': 'message', 'text': 'Where?', 'reply_to': 'p-99'})
-        other = await client.call_tool('post', {'kind': 'message', 'text': 'Where?', 'reply_to': 'p-1'})
-        refused = await client.call_tool('brief', {})
 
+    async def pin(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+        return tuple(FileEvidence(path=path, commit='d' * 40) for path in paths)
+
+    copies = FakeCopies()
+    bo = Member(lab, 'bo', pin=pin, copies=copies)
+    await lab.request_rerun('ada', 'p-2')
+    # The check names no thread: a reply goes in the thread of the post that it answers.
+    check = {'kind': 'check', 'text': 'Reran it.', 'reply_to': 'p-2', 'outcome': 'holds', 'method': 'rerun'}
+    async with Client(join_server(lambda _: bo)) as client:
+        taken = await client.call_tool('take_rerun', {'post': 'p-2'})
+        posted = await client.call_tool('post', check | {'files': ['rerun.json']})
+        own = await client.call_tool('take_rerun', {'post': 'p-1'})
+
+    assert taken.structured_content is not None
     assert posted.structured_content is not None
-    assert [entry.post.thread for entry in lab.board.posts if entry.post.author == 'dee'] == ['t-1']
-    assert lost.is_error
-    assert 'Give thread' in str(lost.content)
-    # A post that exists and one that does not look the same to a blind checker.
-    assert str(other.content) == str(lost.content)
-    assert (posted.structured_content['standing'], posted.structured_content['news']) == ('open', None)
-    assert refused.is_error
-    assert 'rerun p-2 blind' in str(refused.content)
+    assert (taken.structured_content['folder'], taken.structured_content['files']) == (
+        str(copies.folder / 'p-2'),
+        ['bench.json'],
+    )
+    # The rerun that the agent took is no news for it.
+    assert taken.structured_content['news']['reruns'] == []
+    assert (posted.structured_content['post']['thread'], posted.structured_content['post']['take']) == (
+        't-1',
+        lab.board.takes[0].seq,
+    )
+    assert posted.structured_content['post']['evidence'] == [{'type': 'file', 'path': 'rerun.json', 'commit': 'd' * 40}]
+    assert own.is_error
+    assert 'No rerun of post p-1 is wanted now' in str(own.content)
 
 
 async def test_a_broken_rule_comes_back_to_the_agent_as_a_readable_error(lab: Lab) -> None:
@@ -367,7 +380,7 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         '`person` in `mentions`',
         'When Verifold started you: after you end your turn, a post for you wakes you',
         'When you joined with an invitation, you run by yourself',
-        '`post` and `rerun` refuse you too',
+        '`post`, `rerun`, and `take_rerun` refuse you too',
         'a permission that your harness asks for goes to the person on the board',
         'The ask shows the whole command or input, and every agent can read it',
         'it waits for the answer until your turn ends, or it gets a refusal at once and the answer applies when you ask for the same again within an hour',
@@ -376,7 +389,8 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         'The person can change the norms while the lab runs',
         'When no alarm waits, `no_alarm` in `brief` and in `wait` says what starts your next turn as the lab stands',
         'pins each file',
-        'blind rerun',
+        'An independent rerun is a rerun of a post from a clean copy of its files by another agent than its author',
+        'Verifold starts no agent for it',
         'time limit',
         '`alarm` wakes you when you are not in a turn',
         'Your alarm stays until it rings',
@@ -495,21 +509,14 @@ async def test_an_agent_leaves_with_a_reason_and_the_board_then_refuses_its_ever
     assert (brief.structured_content['agents'], 'An agent can leave the lab' in INSTRUCTIONS) == ([], True)
 
 
-async def test_a_removal_ends_an_open_wait_and_a_blind_checker_cannot_leave(lab: Lab) -> None:
-    evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
-    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
-    await lab.join(Agent(id='dee', name='Dee', harness='fake', model=ModelSpec(family='openai'), checks='p-2'))
+async def test_a_removal_ends_an_open_wait(lab: Lab) -> None:
     waiting = asyncio.create_task(Member(lab, 'bo').wait(30))
     await asyncio.sleep(0)
 
     await lab.leave('bo', 'person')
-    async with Client(join_server(lambda _: Member(lab, 'dee'))) as client:
-        checker = await client.call_tool('leave', {})
 
     with pytest.raises(HasLeft, match='The person removed you from this lab'):
         await waiting
-    assert checker.is_error
-    assert 'A blind checker is gone after its one check' in str(checker.content)
     assert [entry.agent for entry in lab.board.left] == ['bo']
 
 

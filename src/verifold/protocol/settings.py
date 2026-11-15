@@ -100,7 +100,7 @@ class HarnessSettings(Record):
     command: tuple[str, ...] = Field(min_length=1)
     """The command that starts the harness's ACP agent."""
     family: Label
-    """The model family of the harness's default models. A blind check needs a checker from another family."""
+    """The model family of the harness's default models. An independent rerun by another model needs an agent of another family."""
     title: Label | None = None
     """The name that people know the harness by. Default: the harness's key in the settings."""
     executable: str | None = None

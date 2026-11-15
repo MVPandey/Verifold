@@ -10,7 +10,7 @@ from builders import IGNORES_SIGTERM, SLEEP
 
 from verifold.runner import jobs
 from verifold.runner.environment import harness_environment
-from verifold.runner.jobs import COMMAND_LENGTH, pause_jobs, running_jobs, sweep
+from verifold.runner.jobs import COMMAND_LENGTH, pause_jobs, sweep
 
 
 @pytest.fixture
@@ -226,22 +226,3 @@ def test_a_harness_that_starts_while_a_pause_looks_at_the_processes_is_not_pause
     assert psutil.Process(harness.pid).status() != psutil.STATUS_STOPPED
     assert sweep(lab, spare_harnesses=True).stopped == ()
     assert harness.poll() is None
-
-
-def test_the_running_jobs_of_an_agent_are_its_own_and_never_its_harness(
-    lab: Path, started: list[subprocess.Popen[bytes]], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    job = marked(started, lab)
-    other = subprocess.Popen(
-        [sys.executable, '-c', SLEEP], env=harness_environment(lab, 'agent-2'), start_new_session=True
-    )
-    started.append(other)
-    # The test's processes are its children, as harnesses are the server's. So they count as harnesses first.
-    assert running_jobs(lab, 'agent-1') == ()
-
-    monkeypatch.setattr(jobs, '_harness_groups', frozenset[int])
-
-    assert [found.pid for found in running_jobs(lab, 'agent-1')] == [job.pid]
-    job.kill()
-    job.wait()
-    assert running_jobs(lab, 'agent-1') == ()

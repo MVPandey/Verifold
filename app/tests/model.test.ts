@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { AgentView, Post, PostView, ThreadSummary, Wait } from '../src/api/types.ts';
+import type {
+  AgentView,
+  Post,
+  PostView,
+  RerunLine,
+  ThreadSummary,
+  Wait,
+} from '../src/api/types.ts';
 
 import {
   authorName,
@@ -16,6 +23,7 @@ import {
   ownName,
   present,
   stateLine,
+  earlierReruns,
 } from '../src/model/agents.ts';
 import { clock, dayClock, duration, minutesBetween, money, tokens } from '../src/model/format.ts';
 import { MAX_CHARS, MAX_LINES, linkHost, plainOnly } from '../src/model/markdown.ts';
@@ -59,6 +67,7 @@ import {
   turnLine,
   waitGroups,
   waitsLine,
+  wantedLine,
   whereLine,
 } from '../src/model/status.ts';
 import { wrapFocus } from '../src/model/focus.ts';
@@ -88,6 +97,7 @@ import {
 import { clockLine, endLine, MAX_MINUTES, moreTime } from '../src/model/time.ts';
 import type { ActContext } from '../src/model/turns.ts';
 import {
+  rerunChecks,
   act,
   doneLine,
   cardStatus,
@@ -345,8 +355,8 @@ describe('agents', () => {
     );
   });
 
-  it('counts the members and the blind reruns that are in a turn, and says so when none is', () => {
-    const checker = agentView('checker-7', { need: 'working', in_turn: true });
+  it('counts the members that are in a turn, and says so when none is', () => {
+    const checker = agentView('checker-7');
     const rerun = { ...checker, agent: { ...checker.agent, checks: 'p-1' } };
     assert.deepEqual(
       turnLine([agentView('agent-1', { need: 'working', in_turn: true }), agentView('agent-2')]),
@@ -388,11 +398,98 @@ describe('agents', () => {
     );
     // A status alone counts nobody: the count follows the live turn.
     assert.equal(turnLine([agentView('agent-1', { need: 'working' })]).live, false);
+    // The checker of a lab from before agents took reruns is no member, and the line counts no process for it.
     assert.deepEqual(turnLine([agentView('agent-1'), rerun]), {
-      text: 'No agent in a turn, 1 in the lab, 1 blind rerun',
-      live: true,
+      text: 'No agent in a turn, 1 in the lab',
+      live: false,
     });
-    assert.equal(turnLine([rerun, rerun]).text, 'No agent in a turn, 0 in the lab, 2 blind reruns');
+  });
+
+  it('says how long a wanted rerun has waited, who took it, and who can take it', () => {
+    const now = new Date('2026-11-06T14:26:00Z');
+    const agents = [
+      agentView('agent-2', { agent: { ...agentView('agent-2').agent, name: 'Tessel' } }),
+    ];
+    const lab = { agents, reviewer_seats: 1 };
+    const wanted = (asked_at: string, changes: Partial<RerunLine> = {}): RerunLine => ({
+      post: 'p-1',
+      thread: 't-1',
+      asked_by: ['agent-1'],
+      asked_at,
+      taken_by: [],
+      open_to: 'reviewer',
+      ...changes,
+    });
+    const one = '2026-11-06T14:14:00Z';
+    assert.equal(wantedLine([], lab, now), null);
+    assert.equal(
+      wantedLine([wanted(one)], lab, now),
+      'A rerun is wanted, asked 12 min ago. No agent has taken it. An agent in a reviewer seat can take it.',
+    );
+    // No agent in a reviewer seat can take it, so any other agent can. A lab without seats gives no reason.
+    assert.equal(
+      wantedLine([wanted(one, { open_to: 'any' })], lab, now),
+      'A rerun is wanted, asked 12 min ago. No agent has taken it. Any agent but the author can take it, because no agent in a reviewer seat can.',
+    );
+    assert.equal(
+      wantedLine([wanted(one, { open_to: 'any' })], { agents, reviewer_seats: 0 }, now),
+      'A rerun is wanted, asked 12 min ago. No agent has taken it. Any agent but the author can take it.',
+    );
+    assert.equal(
+      wantedLine([wanted(one, { open_to: 'none' })], lab, now),
+      'A rerun is wanted, asked 12 min ago. No agent has taken it. No agent of this lab can take it.',
+    );
+    assert.equal(
+      wantedLine(
+        [wanted('2026-11-06T14:25:40Z', { taken_by: ['agent-2', 'agent-3'], open_to: 'none' })],
+        lab,
+        now,
+      ),
+      'A rerun is wanted, asked just now. Taken by Tessel, agent-3.',
+    );
+    // A thread with several wanted reruns has one line, from the one that has waited longest.
+    const two = [wanted('2026-11-06T12:26:00Z'), wanted('2026-11-06T14:20:00Z', { post: 'p-4' })];
+    assert.equal(
+      wantedLine(two, lab, now),
+      '2 reruns are wanted, the first asked 2 h ago. No agent has taken one.',
+    );
+    assert.equal(
+      wantedLine(
+        [
+          wanted('2026-11-06T12:26:00Z', { taken_by: ['agent-2'] }),
+          wanted('2026-11-06T14:20:00Z', { post: 'p-4', open_to: 'none' }),
+        ],
+        lab,
+        now,
+      ),
+      '2 reruns are wanted, the first asked 2 h ago. Agents have taken 1 of them. No agent of this lab can take 1 of them.',
+    );
+  });
+
+  it('counts the agents that posted the check of an independent rerun, and the cost of the checkers of before', () => {
+    const checker = agentView('checker-7', { cost_usd: 0.12, turns: 1 });
+    const old = { ...checker, agent: { ...checker.agent, checks: 'p-1' } };
+    const agents = [agentView('agent-1', { cost_usd: 0.5, turns: 2 }), old];
+    const check = (id: string, author: string, extra: object = {}): PostView =>
+      postView({
+        ...result(id, { author, reply_to: 'p-1' }),
+        kind: 'check',
+        method: 'rerun',
+        outcome: 'holds',
+        ...extra,
+      });
+    const posts = [
+      postView(result('p-1')),
+      check('p-2', 'checker-7'),
+      check('p-3', 'agent-2'),
+      check('p-4', 'agent-3', { take: 9 }),
+      check('p-5', 'agent-3', { take: 9 }),
+    ];
+    // A plain rerun is none, and two checks of one agent are one rerun.
+    assert.equal(rerunChecks(posts, agents, 'p-1'), 2);
+    assert.equal(rerunChecks(posts, agents, 'p-9'), 0);
+    assert.equal(earlierReruns(agents), 'Earlier blind reruns: $0.12. The lab total holds it.');
+    assert.equal(earlierReruns([agentView('agent-1')]), null);
   });
 
   it('says what wakes a member that is in no turn', () => {
@@ -616,6 +713,14 @@ describe('turns', () => {
       'reran agent-2’s result: it fails',
     );
     assert.equal(line(checker('p-5')), 'reran agent-2’s result: it fails');
+    // A member that took the rerun ran it in the clean copy that Verifold made for that take.
+    assert.equal(
+      act({ ...rerun, take: 12 } as Post, target, {
+        called: name,
+        author: agentView('agent-3').agent,
+      }),
+      'reran agent-2’s result from a clean copy: it fails',
+    );
   });
 
   it('names a post that the page does not have as "a post"', () => {

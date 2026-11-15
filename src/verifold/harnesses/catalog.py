@@ -27,7 +27,7 @@ class HarnessEntry(Record):
     """The harness's own command. It must be on the PATH."""
     command: tuple[str, ...] = Field(min_length=1)
     family: Label
-    """The model family of the harness's default models. Blind checks compare families."""
+    """The model family of the harness's default models. An independent rerun compares families."""
     auto_mode: str | None = None
     """The ID of the harness's own auto mode, set when the person allows auto mode for the lab's agents."""
     auto_mode_before: str | None = None

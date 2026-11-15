@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -16,7 +17,7 @@ import httpx2
 import psutil
 import pytest
 import uvicorn
-from builders import SLEEP, alive, start_orphan, until
+from builders import SLEEP, RecordBuilder, alive, start_orphan, until
 from fakes import FAKE_HARNESS
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
@@ -30,7 +31,6 @@ from verifold.app import (
     ServeOptions,
     WebServer,
     _agent,
-    _crew,
     _options,
     serve,
 )
@@ -50,6 +50,7 @@ from verifold.protocol.events import (
     TurnStarted,
     TurnSummary,
 )
+from verifold.protocol.posts import Check, FileEvidence, Result
 from verifold.protocol.settings import AtExit, AtTimeLimit
 from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentSetup
@@ -526,7 +527,7 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
     assert 'The lab is under way, and these agents work in it: Fake · default (agent-1, fake).' in invited['text']
     assert f"{project / '.verifold' / 'LAB.md'} holds the lab's norms" in invited['text']
     assert folder == project / '.verifold' / 'agents' / 'agent-2'
-    assert 'So a token or MCP settings in this folder reach those commits and each blind checker.' in invited['text']
+    assert 'So a token or MCP settings in this folder reach those commits and each such agent.' in invited['text']
     assert brief.structured_content is not None
     assert brief.structured_content['you'] == 'agent-2'
     assert (before, listening, after) == ('invited', True, 'here')
@@ -755,45 +756,125 @@ async def test_the_app_reads_a_file_that_backs_a_post_and_the_lab_folder_gets_th
     assert (project / '.verifold' / 'WRITING.md').read_text() == WRITING_TEMPLATE
 
 
-@pytest.mark.usefixtures('log')
-async def test_a_rerun_request_starts_a_blind_checker_from_another_family(
+async def test_an_agent_of_another_family_takes_a_wanted_rerun_in_a_clean_copy_and_verifold_starts_nothing(
     project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
+    monkeypatch.setenv('FAKE_ACP_NO_RERUN', '1')
     catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
-    # The other harness's worker asks before it acts. Its checker must still follow the auto mode answer.
-    start = StartRequest(
-        question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other', mode='ask'))
-    )
+    # Two agents make a lab without reviewer seats, so the agent of the other harness can take the rerun.
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other')))
 
-    async with serving(project, start, catalog):
+    async with serving(project, start, catalog, options=FAST) as client:
+        # The person asks when both agents rest, so the request is news for the agent that can take it.
+        await until(lambda: any(entry.post.kind == 'result' for entry in posts(project)), timeout=60)
+        await until(lambda: at_rest(project, ('agent-1', 'agent-2')))
+        claim = next(entry.post.id for entry in posts(project) if entry.post.kind == 'result')
+        asked = await client.post('/reruns', json={'post': claim})
+        assert asked.status_code == 200
         await until(lambda: any(entry.post.kind == 'check' for entry in posts(project)), timeout=60)
+        check = next(entry.post for entry in posts(project) if entry.post.kind == 'check')
+        file = await client.get(f'/posts/{check.id}/file', params={'path': 'rerun.txt'})
+        lab = LabView.model_validate((await client.get('/lab')).json())
 
     board = fold(record(project))
     result = next(entry.post for entry in board.posts if entry.post.kind == 'result')
-    checker = next(entry.agent for entry in board.agents if entry.agent.checks)
-    assert (checker.checks, checker.harness, checker.model.family, checker.recruited_by) == (
-        result.id,
-        'other',
-        'other',
-        'agent-1',
+    # The request started no agent and no harness: the lab has the two seats that the person chose.
+    assert [entry.agent.id for entry in board.agents] == ['agent-1', 'agent-2']
+    assert {call['agent'] for call in calls(log) if call['event'] == 'new_session'} == {'agent-1', 'agent-2'}
+    assert [(entry.by, entry.post) for entry in board.reruns] == [('person', result.id)]
+    assert [(entry.agent, entry.post) for entry in board.takes] == [('agent-2', result.id)]
+    # The clean copy is an export in Verifold's own folder, with the claim's pinned file, and Verifold put nothing
+    # for the rerun into the taker's folder. The check's file is the taker's own, pinned from its own folder.
+    (copy,) = (path for path in (project / '.verifold' / 'reruns' / result.id).iterdir() if path.is_dir())
+    assert (copy / 'result.txt').read_text() == '11.8\n'
+    # The record keeps the digest of the manifest that the taker got, and the manifest's file has that digest.
+    listed = (copy.parent / f'{copy.name}.manifest').read_bytes()
+    assert board.takes[0].manifest == hashlib.sha256(listed).hexdigest()
+    assert listed.decode() == f'{hashlib.sha256(b"11.8\n").hexdigest()}  result.txt\n'
+    assert not (project / '.verifold' / 'agents' / 'agent-2' / '.verifold').exists()
+    assert (project / '.verifold' / 'agents' / 'agent-2' / 'rerun.txt').read_text() == '11.8'
+    assert (check.author, check.text, check.model_dump()['take']) == (
+        'agent-2',
+        'Reran it from a clean copy: 11.8.',
+        board.takes[0].seq,
     )
+    assert [item.path for item in check.evidence] == ['rerun.txt']
+    assert (file.status_code, file.json()['text']) == (200, '11.8')
+    # Another model family reran it, so the post is held up, and no rerun is wanted any more.
     assert standing(board, result.id) == 'held_up'
-    check = next(entry.post for entry in board.posts if entry.post.kind == 'check')
-    assert check.text == 'Reran it blind: 11.8.'
-    assert check.evidence[0].path == 'rerun.txt'
-    modes = [(call['agent'], call['mode']) for call in calls(log) if call['event'] == 'mode']
-    assert ('agent-2', 'ask') in modes
-    assert [mode for agent, mode in modes if agent == checker.id] == ['auto']
-    assert checker.mode is None
-    # Verifold gives the checker no role. Its message holds facts and names the file with the person's norms.
-    assert checker.role == ''
-    (message,) = prompts_of(log, checker.id)
-    assert message.startswith(f'You are {checker.name} ({checker.id}), a blind checker in a Verifold lab.')
-    assert f'Your folder is {project / ".verifold" / "agents" / checker.id}.' in message
-    assert 'records that its author ran the files of the claim itself' in message
-    # The claim's author can write the norms file, so the checker's message does not name it.
-    assert 'LAB.md' not in message
+    assert lab.reruns_wanted == ()
+
+
+async def test_a_rerun_that_no_agent_takes_stays_wanted_and_the_person_can_ask_too(
+    project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),))
+
+    async with serving(project, start, {'fake': FAKE_HARNESS}, options=FAST) as client:
+        await until(lambda: any(isinstance(event, RerunRequested) for event in record(project)), timeout=60)
+        result = next(event.post for event in record(project) if isinstance(event, RerunRequested))
+        again = await client.post('/reruns', json={'post': result})
+        await until(lambda: at_rest(project, ('agent-1',)))
+        # Nothing more happens for a rerun that nobody takes.
+        await asyncio.sleep(0.3)
+        lab = LabView.model_validate((await client.get('/lab')).json())
+
+    events = record(project)
+    assert again.status_code == 200
+    assert [event.agent.id for event in events if isinstance(event, AgentJoined)] == ['agent-1']
+    assert {call['agent'] for call in calls(log) if call['event'] == 'new_session'} == {'agent-1'}
+    assert not any(isinstance(event, Posted) and event.post.kind == 'check' for event in events)
+    (wanted,) = lab.reruns_wanted
+    asked = next(event.at for event in events if isinstance(event, RerunRequested))
+    assert (wanted.post, wanted.asked_by, wanted.asked_at, wanted.taken_by) == (
+        result,
+        ('agent-1', 'person'),
+        asked,
+        (),
+    )
+
+
+async def test_a_lab_from_before_agents_took_reruns_shows_its_checkers_and_starts_none(
+    project: Path, log: Path
+) -> None:
+    files = (FileEvidence(path='bench.json', commit='c' * 40),)
+    old = RecordBuilder().join('agent-1', family='test').join('agent-2', family='test')
+    old.thread('t-1', opened_by='agent-1')
+    old.post(Result(id='p-1', thread='t-1', author='agent-1', text='11.8x.', evidence=files))
+    old.rerun('agent-2', 'p-1').join('checker-7', family='other', checks='p-1', name='Checker 7')
+    old.post(
+        Check(
+            id='p-2', thread='t-1', author='checker-7', text='Holds.', reply_to='p-1', outcome='holds', method='rerun'
+        )
+    )
+    # A request that its checker never answered was open when that version of Verifold stopped.
+    old.post(Result(id='p-3', thread='t-1', author='agent-1', text='12.1x.', evidence=files)).rerun('agent-2', 'p-3')
+    path = project / '.verifold' / 'record.jsonl'
+    path.parent.mkdir()
+    path.write_text(''.join(f'{event.model_dump_json()}\n' for event in old.events))
+
+    async with serving(project, catalog={'fake': FAKE_HARNESS}, options=FAST) as client:
+        await until(lambda: at_rest(project, ('agent-1', 'agent-2')))
+        lab = LabView.model_validate((await client.get('/lab')).json())
+        thread = (await client.get('/threads/t-1')).json()
+
+    # The checker and its check show as they were, and the post stands as it stood.
+    checker = next(view for view in lab.agents if view.agent.id == 'checker-7')
+    assert (checker.agent.name, checker.agent.checks, checker.activity.state) == ('Checker 7', 'p-1', 'idle')
+    assert [(item['post']['author'], item['standing']) for item in thread['posts'][:2]] == [
+        ('agent-1', 'held_up'),
+        ('checker-7', 'open'),
+    ]
+    # Verifold started the two seats and no checker, also for the request that was still open.
+    assert {call['agent'] for call in calls(log) if call['event'] == 'new_session'} == {'agent-1', 'agent-2'}
+    assert [event.agent.id for event in record(project) if isinstance(event, AgentJoined)] == [
+        'agent-1',
+        'agent-2',
+        'checker-7',
+    ]
+    assert [(line.post, line.asked_by, line.taken_by) for line in lab.reruns_wanted] == [('p-3', ('agent-2',), ())]
 
 
 ONE_AGENT = StartRequest(question='Does it hold?', agents=(AgentChoice(harness='fake'),))
@@ -898,135 +979,6 @@ async def test_a_lab_keeps_the_norms_file_that_it_has_and_the_page_shows_what_th
     assert 'is a link' in (saved.files[1].error or '')
     # The lab started through no link: nothing is at the place that the link names.
     assert not (project / 'elsewhere.md').exists()
-
-
-async def test_a_checker_that_runs_too_long_stops_and_the_lab_goes_on(
-    project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
-    monkeypatch.setenv('FAKE_ACP_SLOW_AGENT', 'checker')
-    catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
-    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other')))
-
-    def stopped_checker() -> TurnEnded | None:
-        stops = (
-            event
-            for event in record(project)
-            if isinstance(event, TurnEnded) and event.error and 'Verifold stopped the checker' in event.error
-        )
-        return next(stops, None)
-
-    async with serving(project, start, catalog, options=ServeOptions(turn_timeout=3)) as client:
-        await until(lambda: stopped_checker() is not None, timeout=60)
-        lab = await client.get('/lab')
-
-    summary = stopped_checker()
-    assert summary is not None
-    assert summary.agent.startswith('checker-')
-    assert summary.error == 'The check ran past 3 seconds, so Verifold stopped the checker.'
-    assert summary.rerun_failed
-    assert lab.status_code == 200
-    assert not any(entry.post.kind == 'check' for entry in posts(project))
-
-
-async def test_a_checker_that_runs_too_long_after_its_check_leaves_a_rerun_that_did_not_fail(
-    project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
-    monkeypatch.setenv('FAKE_ACP_SLOW_AFTER_CHECK', '1')
-    catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
-    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other')))
-
-    def stops() -> list[TurnEnded]:
-        return [
-            event
-            for event in record(project)
-            if isinstance(event, TurnEnded) and event.error and 'Verifold stopped the checker' in event.error
-        ]
-
-    async with serving(project, start, catalog, options=ServeOptions(turn_timeout=3)):
-        await until(lambda: bool(stops()), timeout=60)
-
-    assert [stop.rerun_failed for stop in stops()] == [False]
-    assert [entry.post.kind for entry in posts(project) if entry.post.author.startswith('checker-')] == ['check']
-
-
-async def test_two_requests_for_a_rerun_of_one_post_start_one_checker(
-    project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
-    # The checker's turn takes a minute, so its check cannot answer the first request before the second one comes.
-    monkeypatch.setenv('FAKE_ACP_SLOW_AGENT', 'checker')
-    catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
-    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other')))
-
-    def requests() -> list[RerunRequested]:
-        return [event for event in record(project) if isinstance(event, RerunRequested)]
-
-    def checkers() -> list[str]:
-        return [event.agent.id for event in record(project) if isinstance(event, AgentJoined) and event.agent.checks]
-
-    async with serving(project, start, catalog) as client:
-        await until(lambda: len(requests()) == 1, timeout=60)
-        again = await client.post('/reruns', json={'post': requests()[0].post})
-        await until(lambda: len(checkers()) == 1, timeout=60)
-        await asyncio.sleep(1.5)
-
-    assert again.status_code == 200
-    assert [request.by for request in requests()] == ['agent-1', 'person']
-    assert len(checkers()) == 1
-
-
-async def test_a_checker_that_stops_without_a_check_says_so_and_the_person_can_ask_again(
-    project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
-    monkeypatch.setenv('FAKE_ACP_NO_CHECK', '1')
-    catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
-    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other')))
-
-    def stopped() -> list[str]:
-        return [
-            event.agent
-            for event in record(project)
-            if isinstance(event, TurnEnded)
-            and event.rerun_failed
-            and event.error == 'The checker stopped without a check.'
-        ]
-
-    async with serving(project, start, catalog) as client:
-        await until(lambda: len(stopped()) == 1, timeout=60)
-        result = next(event.post for event in record(project) if isinstance(event, RerunRequested))
-        again = await client.post('/reruns', json={'post': result})
-        await until(lambda: len(stopped()) == 2, timeout=60)
-
-    assert again.status_code == 200
-    assert len(set(stopped())) == 2
-
-
-async def test_a_rerun_that_fails_to_prepare_its_checker_shows_why_and_the_lab_goes_on(
-    project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
-
-    async def broken(*_: object) -> Path:
-        raise GitError('git worktree add failed: no space left on device')
-
-    monkeypatch.setattr('verifold.runner.reruns.checker_folder', broken)
-    catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
-    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other')))
-
-    def failed() -> list[TurnEnded]:
-        return [event for event in record(project) if isinstance(event, TurnEnded) and event.error]
-
-    async with serving(project, start, catalog) as client:
-        await until(lambda: bool(failed()), timeout=60)
-        lab = await client.get('/lab')
-
-    assert [(event.agent.startswith('checker-'), event.error, event.rerun_failed) for event in failed()] == [
-        (True, 'GitError: git worktree add failed: no space left on device', True)
-    ]
-    assert lab.status_code == 200
 
 
 async def test_a_job_that_an_agent_starts_in_a_session_of_its_own_stops_with_the_lab(
@@ -1822,32 +1774,6 @@ async def test_a_lab_that_is_served_again_asks_the_harnesses_when_the_person_ope
     assert again['probing'] is False
     # The probe runs in the project folder, which the fake agent takes for its name.
     assert len([call for call in calls(log) if call['agent'] == project.name and call['event'] == 'new_session']) == 1
-
-
-def test_a_checker_comes_from_each_harness_and_family_that_a_seat_states() -> None:
-    def seat(number: int, family: str, model: str | None = None) -> Agent:
-        return Agent(
-            id=f'agent-{number}', name=f'Agent {number}', harness='fake', model=ModelSpec(family=family, name=model)
-        )
-
-    crew = _crew(
-        (seat(1, 'test', 'small'), seat(2, 'test'), seat(3, 'other', 'small-model')),
-        {'fake': FAKE_HARNESS},
-        auto_mode=True,
-    )
-
-    assert [(entry.name, entry.family, options.model) for entry, options in crew] == [
-        ('fake', 'test', 'small'),
-        ('fake', 'other', 'small-model'),
-    ]
-    # A family is the same whatever its capitals. An on-call seat gives its model only when no other seat has its family.
-    spared = _crew(
-        (seat(1, 'test', 'strong'), seat(2, ' Test ', 'small'), seat(3, 'other', 'strong')),
-        {'fake': FAKE_HARNESS},
-        auto_mode=True,
-        on_call=frozenset({'agent-1', 'agent-3'}),
-    )
-    assert [(entry.family, options.model) for entry, options in spared] == [(' Test ', 'small'), ('other', 'strong')]
 
 
 @pytest.mark.usefixtures('log')
