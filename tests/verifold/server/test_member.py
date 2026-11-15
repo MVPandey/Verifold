@@ -184,40 +184,55 @@ async def test_an_agent_takes_a_rerun_and_gets_the_claim_and_a_clean_copy(lab: L
     assert (again.folder, len(lab.board.takes)) == (taken.folder, 1)
 
 
-async def test_the_check_of_a_rerun_that_an_agent_took_gets_its_files_from_the_clean_copy(lab: Lab) -> None:
+async def test_the_first_rerun_check_with_files_after_a_take_is_the_check_of_that_take(lab: Lab) -> None:
+    pinned: list[tuple[str, ...]] = []
+
     async def pin(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
-        return tuple(FileEvidence(path=path, commit='a' * 40) for path in paths)
+        pinned.append(paths)
+        return tuple(FileEvidence(path=path, commit=f'{len(pinned):x}' * 40) for path in paths)
 
     await a_claim(lab)
     await Member(lab, 'ada').rerun('p-2')
     await lab.join(agent('cy').model_copy(update={'model': ModelSpec(family='openai')}))
     # With three agents the lab has one reviewer seat, which a check and a take need.
     await lab.set_reviewer('cy', 'cy', reviewer=True)
-    copies = FakeCopies()
-    cy = Member(lab, 'cy', pin=pin, copies=copies)
+    cy = Member(lab, 'cy', pin=pin, copies=FakeCopies())
 
-    # Before the take, a rerun's files come from the agent's own folder, and the check answers no request.
+    # Before the take, a rerun is a check like any other, and it answers no request.
     plain = await cy.post(rerun_check())
-    assert (plain.post.evidence[0].commit, copies.pinned, plain.post.model_dump()['take']) == ('a' * 40, [], None)
+    assert plain.post.model_dump()['take'] is None
     assert standing(lab.board, 'p-2') == 'checked'
 
     await cy.take_rerun('p-2')
-    # A check by another method, and a post of another kind, still pin from the agent's own folder.
+    # A check by another method, and a rerun without files, are not the check of the take.
     read = await cy.post(rerun_check(method='code_read'))
-    assert read.post.evidence[0].commit == 'a' * 40
+    bare = await cy.post(rerun_check(files=()))
+    assert (read.post.model_dump()['take'], bare.post.model_dump()['take']) == (None, None)
     checked = await cy.post(rerun_check())
 
-    assert copies.pinned == [('p-2', ('rerun.json',))]
-    assert [(file.path, file.commit) for file in checked.post.evidence] == [('rerun.json', 'd' * 40)]
+    # Every file came from the agent's own folder by the pin that every post uses, each with its own commit.
+    assert pinned == [('rerun.json',)] * 3
+    assert [(file.path, file.commit) for file in checked.post.evidence] == [('rerun.json', '3' * 40)]
     assert checked.post.model_dump()['take'] == lab.board.takes[0].seq
     # The check answers the request, and it comes from another model family, so the post is held up.
     assert Member(lab, 'ada').brief('').reruns_wanted == ()
     assert standing(lab.board, 'p-2') == 'held_up'
+    # One take is one such check. A later rerun of the same agent is a plain check again, and the files of the
+    # take's check stay pinned as they were.
+    again = await cy.post(rerun_check())
+    assert again.post.model_dump()['take'] is None
+    assert [entry.post.evidence[0].commit for entry in lab.board.posts if entry.post.id == checked.post.id] == [
+        '3' * 40
+    ]
 
 
 async def test_who_can_take_a_rerun(lab: Lab) -> None:
     await a_claim(lab)
-    ada, bo = Member(lab, 'ada', copies=FakeCopies()), Member(lab, 'bo', copies=FakeCopies())
+
+    async def pin(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+        return tuple(FileEvidence(path=path, commit='a' * 40) for path in paths)
+
+    ada, bo = Member(lab, 'ada', copies=FakeCopies()), Member(lab, 'bo', pin=pin, copies=FakeCopies())
 
     with pytest.raises(RejectedEvent, match='No rerun of post p-2 is wanted now'):
         await bo.take_rerun('p-2')
@@ -241,14 +256,13 @@ async def test_who_can_take_a_rerun(lab: Lab) -> None:
     await cy.take_rerun('p-2')
     assert [(line.open_to, line.taken_by) for line in bo.brief('').reruns_wanted] == [('any', ('cy',))]
     assert (await bo.take_rerun('p-2')).post == 'p-2'
-    # The check of that rerun needs no seat of its own. Any other check of bo's still does.
+    # The one check of that rerun needs no seat of its own. Any other check of bo's does, also a later rerun.
+    with pytest.raises(RejectedEvent, match=r'A check on another agent.s post takes a reviewer seat'):
+        await bo.post(rerun_check(files=(), method='code_read'))
     checked = await bo.post(rerun_check())
     assert checked.post.model_dump()['take'] == lab.board.takes[1].seq
     with pytest.raises(RejectedEvent, match=r'A check on another agent.s post takes a reviewer seat'):
-        await bo.post(rerun_check(files=(), method='code_read'))
-    # A seat that makes no clean copies pins no file from one.
-    with pytest.raises(EvidenceRejected, match='cannot pin files'):
-        await Member(lab, 'cy').post(rerun_check())
+        await bo.post(rerun_check())
 
 
 async def test_a_clean_copy_that_fails_records_no_take_and_the_agent_can_take_the_rerun_afterwards(lab: Lab) -> None:
@@ -268,23 +282,17 @@ async def test_a_clean_copy_that_fails_records_no_take_and_the_agent_can_take_th
     assert len(lab.board.takes) == 1
 
 
-async def test_the_copy_goes_after_its_check_and_take_rerun_makes_it_again(lab: Lab) -> None:
+async def test_a_second_take_of_the_same_post_gives_the_same_copy_and_records_nothing(lab: Lab) -> None:
     await a_claim(lab)
     await Member(lab, 'ada').rerun('p-2')
     copies = FakeCopies()
     bo = Member(lab, 'bo', copies=copies)
-    await bo.take_rerun('p-2')
-    # A check without files, and one by another method, leave the copy where it is.
-    await bo.post(rerun_check(files=()))
-    assert copies.removed == []
-
-    await bo.post(rerun_check())
-
-    assert (copies.pinned, copies.removed) == ([('p-2', ('rerun.json',))], ['p-2'])
-    # The take stays, so the agent gets the copy again with no new event.
+    first = await bo.take_rerun('p-2')
     seq = lab.board.seq
-    await bo.take_rerun('p-2')
-    assert (copies.made, lab.board.seq) == ([('p-2', 'ada'), ('p-2', 'ada')], seq)
+
+    again = await bo.take_rerun('p-2')
+
+    assert (again.folder, lab.board.seq) == (first.folder, seq)
 
 
 async def test_a_request_ends_the_wait_of_an_agent_that_can_take_it(lab: Lab) -> None:

@@ -2,7 +2,7 @@
 A fake ACP agent for tests. It reaches the lab's board over MCP with its token, the way a real harness does.
 
 The first message makes it post in a new thread. The doorbell makes it read its posts with `wait` and answer each ask.
-It also takes each rerun that this news holds, reruns it in the clean copy, and posts the check with a file of that copy.
+It also takes each rerun that this news holds, reads the clean copy, and posts the check with a file of its own folder.
 Environment variables change its behavior: `FAKE_ACP_LOG` logs each call, `FAKE_ACP_PERMISSION` asks permission
 first, `FAKE_ACP_COMMAND` asks permission for that shell command, which the request names by its call's ID only, `FAKE_ACP_ABORT` makes the only "no" to that request an answer that stops the turn, `FAKE_ACP_QUESTION` asks its user which branch to take, as a form, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, and `FAKE_ACP_CHILD` starts a
 child that holds the agent's pipes open and writes its process ID to that path. `FAKE_ACP_JOB` starts a job in a
@@ -274,13 +274,12 @@ class FakeAgent(acp.Agent):
                 'reply_to': post.id,
             }
             await self._call('post', request)
-        # The agent takes each rerun that its news holds, reruns it in the clean copy, and posts the check with
-        # a file of that copy.
+        # The agent takes each rerun that its news holds, reads the clean copy, reruns in its own folder, and
+        # posts the check with a file of its own.
         for wanted in news.reruns:
             taken = RerunTake.model_validate(await self._call('take_rerun', {'post': wanted.post}))
-            copy = Path(taken.folder)
-            claimed = (copy / taken.files[0]).read_text().strip()
-            (copy / 'rerun.txt').write_text(claimed)
+            claimed = (Path(taken.folder) / taken.files[0]).read_text().strip()
+            (Path.cwd() / 'rerun.txt').write_text(claimed)
             check: dict[str, object] = {
                 'kind': 'check',
                 'text': f'Reran it from a clean copy: {claimed}.',

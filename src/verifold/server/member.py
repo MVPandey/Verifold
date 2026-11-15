@@ -3,7 +3,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Protocol
 
 from verifold.protocol.agents import GUEST, Picture
 from verifold.protocol.events import AgentLeft, AlarmSet, Posted, RerunRequested, WatchSet
@@ -26,26 +25,15 @@ from verifold.server.lab import Adds, Lab
 from verifold.society.attention import news, update
 from verifold.society.errors import RejectedEvent
 from verifold.society.identity import post_view
+from verifold.society.reruns import open_take
 from verifold.society.views import brief, profile_result, side_lines, thread_summaries, thread_view, work_threads
 
 type Pin = Callable[[tuple[str, ...]], Awaitable[tuple[FileEvidence, ...]]]
 """Commits an agent's folder and returns each named file pinned to that commit."""
 
 
-class CleanCopies(Protocol):
-    """The clean copies in which one agent reruns the posts that it took, inside its own folder."""
-
-    async def make(self, claim: Posted) -> Path:
-        """Return the clean copy for the agent's rerun of a post: the post's files at the commit that it pins."""
-        ...
-
-    async def pin(self, post_id: PostId, paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
-        """Commit the clean copy of a rerun, and return each named file of it pinned to that commit."""
-        ...
-
-    async def remove(self, post_id: PostId) -> None:
-        """Remove the clean copy of a rerun. The files that a check pinned from it stay readable."""
-        ...
+type CleanCopy = Callable[[Posted], Awaitable[Path]]
+"""Returns the clean copy of the files that a post pins, in a folder of Verifold's own, and makes it when it is not there."""
 
 
 class Member:
@@ -63,7 +51,7 @@ class Member:
         pin: Pin | None = None,
         seen: int | None = None,
         *,
-        copies: CleanCopies | None = None,
+        copies: CleanCopy | None = None,
         adds: Adds | None = None,
         seat_ok: Callable[[AddSeat], None] | None = None,
     ) -> None:
@@ -71,7 +59,8 @@ class Member:
         Seat an agent that has joined the lab. It has read everything up to now, or up to event `seen` when given.
 
         `pin` commits the agent's folder and pins the files that a post names. Without it, posts cannot name files.
-        `copies` makes the clean copies for the reruns that the agent takes. Without it, the agent takes none.
+        `copies` gives the clean copy of a post's files for a rerun that the agent takes. Without it, the agent
+        takes none.
         `adds` starts an agent for the coordinator's move that adds one. Without it, the lab refuses such a move
         while the coordinator's power over agents is on, and the request waits for the person otherwise.
         `seat_ok` refuses a seat whose harness this computer does not have, when the coordinator asks for it.
@@ -131,8 +120,8 @@ class Member:
         """
         Post as the agent, with its files pinned as evidence, and return the post as it stands.
 
-        A check with the method `rerun` of a post whose rerun the agent took gets its files from the clean copy of
-        that take, and the post records the take.
+        The agent's first check with the method `rerun` and with files, of a post whose rerun it took, is the check
+        of that take, and the post records the take. Its files are pinned from the agent's folder, as any post's.
 
         Raises:
             EvidenceRejected: The post names files, and this member cannot pin them or they are not in the folder.
@@ -142,14 +131,10 @@ class Member:
         self._check_in_time()
         board = self._lab.board
         evidence: tuple[FileEvidence, ...] = ()
-        # The files of a rerun that the agent took are paths in the clean copy of that take.
+        # A rerun with files, of a post whose rerun the agent took, is the check of that take.
         reruns = request.kind == 'check' and request.method == 'rerun' and request.files
-        taken = board.take(self.agent_id, request.reply_to) if reruns and request.reply_to else None
-        if taken:
-            if self._copies is None:
-                raise EvidenceRejected('This lab cannot pin files for you.')
-            evidence = await self._copies.pin(taken.post, request.files)
-        elif request.files:
+        taken = open_take(board, self.agent_id, request.reply_to) if reruns and request.reply_to else None
+        if request.files:
             if self._pin is None:
                 raise EvidenceRejected('This lab cannot pin files for you.')
             evidence = await self._pin(request.files)
@@ -157,9 +142,6 @@ class Member:
         # earlier version can post just after a revision, and its answer is then to that earlier version.
         seen = sum(self._seen >= told.seq for revision in board.revisions if (told := board.post(revision.post)))
         posted = await self._lab.post(request, self.agent_id, evidence, seen, take=taken.seq if taken else None)
-        if taken and self._copies:
-            # The check holds its files in Verifold's own directory, so the copy in the agent's folder goes.
-            await self._copies.remove(taken.post)
         return post_view(self._lab.board, posted)
 
     async def request(self, move: Move, text: str, body: str = '') -> PostView:
@@ -238,8 +220,8 @@ class Member:
         """
         Take the rerun of a post that somebody asked for, and return the claim with the clean copy of its files.
 
-        Verifold makes the copy inside the agent's own folder, and records the take when the copy is there. So a
-        copy that fails records nothing. A second call returns the copy again, and makes it again when it is gone.
+        The copy is in a folder of Verifold's own, and the take is recorded when the copy is there. So a copy that
+        fails records nothing. A second call returns the same copy.
 
         Raises:
             RejectedEvent: The agent cannot take the rerun: the post does not exist or is its own, no rerun of it
@@ -256,7 +238,7 @@ class Member:
             raise NoCleanCopy('This lab cannot make a clean copy for you.')
         if self._lab.board.take(self.agent_id, post_id) is None:
             self._lab.check_take(self.agent_id, post_id)
-        folder = await self._copies.make(claim)
+        folder = await self._copies(claim)
         taken = await self._lab.take_rerun(self.agent_id, post_id)
         return RerunTake(
             post=post_id,

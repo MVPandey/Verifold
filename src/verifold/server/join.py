@@ -218,12 +218,13 @@ a close stands or such a post went out in the minute before.
   reruns in `reruns_wanted`, with who asked, which agents took each one, and in `open_to` who can take it now: an
   agent in a reviewer seat, or any agent that did not write the post when no agent in a reviewer seat can take
   it, or no agent of the lab. `reruns` in the news has a rerun once, when it becomes wanted, for each agent that
-  can take it and is not on call. `take_rerun` takes one: Verifold makes the clean copy inside the taker's
-  folder, as plain files of the pinned commit and nothing else, and returns its path with the claim. A `check` of
-  that post from the taker, with the method `rerun`, takes its `files` from the clean copy. A post stands as
-  `held_up` when such a check holds and comes from another model family than the post. That records who reran
-  the post and which files Verifold pinned from the copy. It does not prove how the files were made. A wanted
-  rerun stays open until such a check replies to the post. Verifold starts no agent for it.
+  can take it and is not on call. `take_rerun` takes one and returns the claim with the path of the clean copy: a folder
+  of Verifold's own, outside every agent's folder, with the plain files of the pinned commit and nothing else. The
+  taker's first `check` of that post after it, with the method `rerun` and with `files` of its own folder, is the
+  check of the take. A post stands as `held_up` when such a check holds and comes from another model family than
+  the post. That records that the checker took the rerun, so it was given the clean copy, and posted a check with
+  files of its own. It does not prove how the files were made. A wanted rerun stays open until such a check
+  replies to the post. Verifold starts no agent for it.
 - A `proposal` proposes an answer for the lab. `brief` has the newest proposal in `answer`. The app shows that one
   to the person as the answer so far, with its `files`, and opens each file as a page.
 - The person can revise the question: `brief` has the current text in `question` and one line for each of the newest
@@ -315,9 +316,9 @@ Kinds:
 - `objection`: a problem in another agent's post.
 - `check`: its author's test of another agent's post. It needs `outcome` and `method`. With the method `rerun`,
   it records that its author ran the files of the post itself and compared the outcome with the claim. It takes
-  a reviewer seat in a lab that has reviewer seats. When its author took the rerun of the post with `take_rerun`,
-  `files` on a check with the method `rerun` names paths in the clean copy of that take, and the check answers
-  the requests for that rerun.
+  a reviewer seat in a lab that has reviewer seats. The first check with the method `rerun` and with `files`,
+  from an agent that took the rerun of the post with `take_rerun`, is the check of that take: it answers the
+  requests for that rerun, and it needs no seat.
 - `proposal`: a proposed answer for the lab. `brief` has the newest one in `answer`, and the app shows that one to
   the person as the answer so far. It reaches the agents that it names and the authors of the posts in its
   `builds_on`. The others see it in `brief`.
@@ -463,7 +464,8 @@ An independent rerun is a rerun from a clean copy of the post's files by another
 starts nothing, and Verifold starts no agent for it. A rerun that becomes wanted reaches, once, the agents that can
 take it with `take_rerun` and are not on call. Those are the holders of the reviewer seats. When no holder can take
 it, they are every agent that did not write the post: the lab has no seats, nobody holds one, or each holder wrote
-the post or took the rerun already. `brief` lists the rerun in `reruns_wanted`, with who can take it now in
+the post, took the rerun already, is on call, or was stopped by Verifold. A rerun that opens to every agent in
+this way reaches those agents once then. `brief` lists the rerun in `reruns_wanted`, with who can take it now in
 `open_to`, until the check of such a rerun replies to the post, and nothing else ends it. That check comes to you
 as a post. When it holds and comes from another model family than the post, the post stands as held up.
 
@@ -474,33 +476,31 @@ the check of an independent rerun of it.
 """
 
 TAKE_RERUN_TOOL = """\
-Takes the rerun of another agent's post that somebody asked for. Returns the claim and a clean copy of its files.
+Takes the rerun of another agent's post that somebody asked for. Returns the claim and where its clean copy is.
 
-`folder` is the clean copy, which Verifold makes inside your own folder: plain files, exactly the ones of the
-commit that the post pins. It has no Git repository and nothing from after that commit, and a link in the author's
-files is a plain file there. The snapshots of your own folder leave it out. The result has the post's `text` and
-`body`, and `files` has the files that back the post, as paths in `folder`. Nothing limits how the taker runs the
-files there: itself, or with a helper of its harness. The board records the take when the copy is there, so a copy
-that fails records nothing.
+`folder` is the clean copy: plain files, exactly the ones of the commit that the post pins, as Git stores them. It
+is a folder of Verifold's own, outside every agent's folder, and every agent that takes this rerun gets the same
+one. It has no Git repository and nothing from after that commit, a link in the author's files is a plain file
+there, and nobody writes its files. Verifold writes nothing into your folder for a rerun. The result has the
+post's `text` and `body`, and `files` has the files that back the post, as paths in `folder`. Nothing limits how
+the taker reruns: in its own folder, itself or with a helper of its harness. The board records the take when the
+copy is there, so a copy that fails records nothing.
 
-A `check` from you that replies to the post, with the method `rerun`, takes its `files` as paths in `folder`. Each
-is a plain file inside the folder, and no link. Verifold pins them from the clean copy into a place of its own,
-and the check answers every request for that rerun. Verifold then removes the folder, and a second call of
-`take_rerun` makes it again from the pinned commit. A check without `files` records no rerun from the clean copy
-and answers no request. Verifold uses only the folder that it made: it follows no link at that place, and it makes
-the copy again when another folder stands there.
+Your first `check` after the take that replies to the post, with the method `rerun` and with `files`, is the check
+of the take. Its `files` are paths in your own folder, pinned as the files of any post are, and the check answers
+every request for that rerun. It needs no reviewer seat of its own. A check without `files` is not the check of
+the take and answers no request, and neither is a later check of yours on that post.
 
-The post stands as held up when such a check holds and comes from another model than the post. The two seats then
-have different model families. For two seats of one harness, the models that the harness reported for the turn of
-the post and for the turn of the check differ too, when the record has both. Held up records that another agent
-on another model took the rerun and posted a check that holds, with files that Verifold pinned from the copy. It
-does not prove how the taker made those files.
+The post stands as held up when the check of a take holds and comes from another model than the post. The two
+seats then have different model families. For two seats of one harness, the models that the harness reported for
+the turn of the post and for the turn of the check differ too, when the record has both. Held up records that
+another agent on another model took the rerun, so it was given the clean copy of the post's pinned files, and
+posted a check that holds with files of its own folder. It does not prove how that agent made those files.
 
 `brief` lists the wanted reruns in `reruns_wanted`, and a take needs one of them. The author of a post cannot take
 its rerun. `open_to` there says who can take it: `reviewer` is an agent in a reviewer seat, `any` is any agent
 that did not write the post, because no agent in a reviewer seat can take it, and `none` is no agent of the lab.
-The check of a rerun that its author took needs no reviewer seat of its own. Several agents can take one rerun. An
-agent takes a post once, and a second call returns the same folder.
+Several agents can take one rerun. An agent takes a post once, and a second call returns the same folder.
 """
 
 WAIT_TOOL = """\

@@ -556,7 +556,7 @@ class RerunResult(Record):
 
 class RerunTake(Record):
     """
-    What the `take_rerun` tool returns: the claim, and the clean copy of its files that Verifold made for the agent.
+    What the `take_rerun` tool returns: the claim, and where the clean copy of its files is.
 
     The claim is the post as its author wrote it. A post has no field of its own for command lines, so the ones
     that its author named are in `text` and `body`.
@@ -573,9 +573,8 @@ class RerunTake(Record):
     """The commit that the post pins those files to. `folder` holds the author's files at this commit."""
     folder: str
     """
-    The clean copy, a folder of plain files inside the agent's own folder: the author's files at `commit`, and
-    nothing else. A `check` of the agent that replies to `post`, with the method `rerun`, takes its `files` as
-    paths in this folder. Verifold removes the folder after that check.
+    The clean copy: a folder of Verifold's own, outside every agent's folder, with the author's files at `commit`
+    as plain files that nobody writes, and nothing else. Every agent that takes this rerun gets the same folder.
     """
     news: News | None = None
 

@@ -115,7 +115,7 @@ def test_several_agents_can_take_one_rerun_and_a_taker_that_left_shows_no_longer
     assert gone.taken_by == ('bo',)
 
 
-def test_only_verifold_marks_a_check_as_one_from_a_clean_copy() -> None:
+def test_only_verifold_marks_a_check_as_the_one_check_of_a_take() -> None:
     # The mark names the author's own take of the same post, on a rerun with files.
     for check in (
         rerun_check('cy', take=3),
@@ -123,8 +123,11 @@ def test_only_verifold_marks_a_check_as_one_from_a_clean_copy() -> None:
         rerun_check('cy', method='code_read', take=9),
         rerun_check('cy', take=9).model_copy(update={'evidence': ()}),
     ):
-        with pytest.raises(RejectedEvent, match='is not the take with which'):
+        with pytest.raises(RejectedEvent, match='is not a take of'):
             wanted().take('cy', 'p-1').post(check).board()
+    # One take has one such check.
+    with pytest.raises(RejectedEvent, match='is not a take of cy for p-1 that has no check yet'):
+        taken_by('cy').post(rerun_check('cy', take=9).model_copy(update={'id': 'p-3'})).board()
 
 
 @pytest.mark.parametrize(
@@ -218,6 +221,10 @@ def test_a_rerun_is_for_the_reviewer_seats_and_for_any_agent_when_no_holder_can_
     assert state(seated('bo').leave('bo')) == ('any', [False, False, True])
     # The only holder took it already, so it is open to the others while that take has no check.
     assert state(seated('bo').take('bo', 'p-1')) == ('any', [False, False, True])
+    # A holder that is on call, or that Verifold stopped after its harness failed too often, cannot take it now.
+    assert state(seated('bo').on_call('bo')) == ('any', [False, True, True])
+    assert state(seated('bo').turn('bo', error='It crashed.', stopped=True)) == ('any', [False, True, True])
+    assert state(seated('bo').turn('bo', error='It crashed.', stopped=True).start('bo', seen=0))[0] == 'reviewer'
     # No agent of the lab can take it: every other agent took it or left, or the author is alone.
     assert state(wanted().take('bo', 'p-1').leave('cy')) == ('none', [False, False, False])
     alone = RecordBuilder().join('ada').thread('t-1', opened_by='ada').post(RESULT).rerun('ada', 'p-1')
@@ -263,6 +270,37 @@ def test_an_agent_that_gets_a_reviewer_seat_hears_once_of_the_reruns_that_are_wa
     assert news(record.reviewer('cy', 'person', reviewer=False).board(), 'cy', seat).reruns == ()
 
 
+def test_a_rerun_that_opens_to_any_agent_is_news_once_for_the_agents_that_can_now_take_it() -> None:
+    def opened(change: str) -> bool:
+        record = lab().reviewer_seats(1).reviewer('bo', 'person').post(RESULT).rerun('ada', 'p-1')
+        read = len(record.events)
+        # The request was for the reviewer seat, so it was no news for cy.
+        assert news(record.board(), 'cy', 0).reruns == ()
+        if change == 'took':
+            record.take('bo', 'p-1')
+        elif change == 'left':
+            record.leave('bo')
+        elif change == 'on call':
+            record.on_call('bo')
+        elif change == 'stopped':
+            record.turn('bo', error='It crashed.', stopped=True)
+        elif change == 'no seat':
+            record.reviewer('bo', 'person', reviewer=False)
+        elif change == 'no seats':
+            record.reviewer_seats(0)
+        else:
+            record.post(Message(id='p-2', thread='t-1', author='bo', text='Later.'))
+        after = len(record.events)
+        heard = [line.open_to for line in news(record.board(), 'cy', read).reruns]
+        # The change is news once: an agent that read it hears nothing more.
+        assert news(record.board(), 'cy', after).reruns == ()
+        assert update(record.board(), 'cy', read).reruns == news(record.board(), 'cy', read).reruns
+        return heard == ['any']
+
+    assert [opened(change) for change in ('took', 'left', 'on call', 'stopped', 'no seat', 'no seats')] == [True] * 6
+    assert not opened('a post')
+
+
 def test_a_rerun_that_nobody_takes_stays_wanted_and_nothing_else_happens() -> None:
     record = wanted()
     events = len(record.events)
@@ -287,9 +325,9 @@ def test_a_post_takes_requests_until_two_agents_posted_the_check_of_an_independe
 
 def test_one_agent_is_one_rerun_however_many_checks_it_posts() -> None:
     record = taken_by('cy').rerun('ada', 'p-1')
-    record.post(rerun_check('cy', take=9).model_copy(update={'id': 'p-3'}))
+    record.post(rerun_check('cy').model_copy(update={'id': 'p-3'}))
 
-    # The second check of the same agent answers no new request.
+    # The agent's later check is a plain check, and it answers no new request.
     assert [entry.post.id for entry in rerun_checks(record.board(), 'p-1')] == ['p-2']
     assert [entry.by for entry in wanted_reruns(record.board(), 'p-1')] == ['ada']
 

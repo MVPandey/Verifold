@@ -1,18 +1,23 @@
 import asyncio
+import hashlib
+import os
 import stat
+import zlib
 from pathlib import Path
 
 import pytest
 from builders import START
 
 from verifold.protocol.events import Posted
-from verifold.protocol.posts import Check, FileEvidence, Result
+from verifold.protocol.posts import FileEvidence, Result
 from verifold.runner import reruns
 from verifold.runner.folders import agent_folder
 from verifold.runner.git import git
-from verifold.runner.reruns import Reruns, evidence_repository, own_folder
+from verifold.runner.reruns import clean_copy
 from verifold.runner.snapshots import pin, snapshot
 from verifold.server.errors import EvidenceRejected, NoCleanCopy
+
+FILES = {'notes.txt': 'How I got there.', 'result.txt': '11.8'}
 
 
 async def committed(path: Path) -> Path:
@@ -38,313 +43,250 @@ async def a_claim(project: Path, post_id: str = 'p-4') -> Posted:
 
 
 def everything(folder: Path) -> dict[str, str]:
-    """Return every file under a folder with its text, so that a test can see that nothing there changed."""
-    return {str(path.relative_to(folder)): path.read_text() for path in sorted(folder.rglob('*')) if path.is_file()}
+    """Return every file and link under a folder with its text or target, to see that nothing there changed."""
+    found: dict[str, str] = {}
+    for path in sorted(folder.rglob('*')):
+        name = str(path.relative_to(folder))
+        if path.is_symlink():
+            found[name] = f'-> {path.readlink()}'
+        elif path.is_file():
+            found[name] = path.read_bytes().decode(errors='replace')
+        elif not path.is_dir():
+            found[name] = 'special'
+    return found
 
 
 @pytest.mark.parametrize('with_commits', [True, False])
-async def test_a_clean_copy_is_plain_files_of_the_pinned_commit_in_the_takers_own_folder(
+async def test_a_clean_copy_is_an_export_of_the_pinned_commit_in_verifolds_own_folder(
     tmp_path: Path, *, with_commits: bool
 ) -> None:
     project = await committed(tmp_path / 'project') if with_commits else tmp_path / 'project'
     claim = await a_claim(project)
-    taker = await agent_folder(project, 'bo')
-    (taker / 'mine.txt').write_text("The taker's own work.")
+    agents = project / '.verifold' / 'agents'
+    await agent_folder(project, 'bo')
+    before = everything(agents)
 
-    copy = await Reruns(project, 'bo').make(claim)
+    copy = await clean_copy(project, claim)
 
-    # The copy holds exactly what the author's snapshot held at the pinned commit: no later file, and no Git.
-    assert copy == taker.resolve() / '.verifold' / 'reruns' / 'p-4'
-    expected = {'notes.txt': 'How I got there.', 'result.txt': '11.8'}
-    assert everything(copy) == expected | ({'data.csv': 'x,y\n1,2\n'} if with_commits else {})
-    assert not (copy / '.git').exists()
-    # Verifold's own Git directory for the take is outside every agent's folder, and only the person reads it.
-    own = own_folder(project, 'bo', 'p-4')
-    assert own == project.resolve() / '.verifold' / 'reruns' / 'bo' / 'p-4'
-    assert (own / 'git' / 'HEAD').is_file()
-    assert stat.S_IMODE(own.stat().st_mode) == 0o700
-    assert stat.S_IMODE((project / '.verifold' / 'reruns').stat().st_mode) == 0o700
-    # The taker's own snapshot leaves the copy out.
-    mine = await snapshot(taker, 'bo')
-    assert 'reruns' not in await git('ls-tree', '-r', '--name-only', mine, cwd=taker)
-    # A later call returns the same folder as the agent left it.
-    (copy / 'rerun.txt').write_text('11.8')
-    assert await Reruns(project, 'bo').make(claim) == copy
-    assert (copy / 'rerun.txt').exists()
+    # The copy is in Verifold's own folder, under the post and the pinned commit, and in no agent's folder.
+    commit = claim.post.evidence[0].commit
+    assert copy == project.resolve() / '.verifold' / 'reruns' / 'p-4' / commit[:12]
+    # It holds exactly what the author's snapshot held at the pinned commit: no later file, and no Git.
+    assert everything(copy) == FILES | ({'data.csv': 'x,y\n1,2\n'} if with_commits else {})
+    # Nobody writes its files, and only this user opens the folders that hold it.
+    assert stat.S_IMODE((copy / 'result.txt').stat().st_mode) == 0o444
+    assert [stat.S_IMODE(folder.stat().st_mode) for folder in (copy.parent, copy.parent.parent)] == [0o700, 0o700]
+    # Making it changed nothing in any agent's folder.
+    assert everything(agents) == before
+    # A later call returns the same folder, also for another taker.
+    assert await clean_copy(project, claim) == copy
 
 
-async def test_a_check_pins_files_of_the_clean_copy_into_verifolds_own_directory_and_the_copy_can_go(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / 'project'
-    claim = await a_claim(project)
-    taker = await agent_folder(project, 'bo')
-    made = Reruns(project, 'bo')
-    copy = await made.make(claim)
-    (copy / 'rerun.txt').write_text('11.8')
-    (taker / 'rerun.txt').write_text('A file of the same name in the folder of the agent itself.')
-
-    evidence = await made.pin('p-4', ('rerun.txt',))
-
-    commit = evidence[0].commit
-    check = Check(
-        id='p-5', thread='t-1', author='bo', text='Holds.', reply_to='p-4', outcome='holds', method='rerun', take=9
-    )
-    folder, repository = evidence_repository(project, check)
-    assert await git(*repository, 'show', f'{commit}:rerun.txt', cwd=folder) == '11.8'
-    # The commit holds the copy and nothing of the agent's own folder, and the agent's repository has no ref for it.
-    assert (await git(*repository, 'ls-tree', '-r', '--name-only', commit, cwd=folder)).split() == [
-        'notes.txt',
-        'rerun.txt',
-        'result.txt',
-    ]
-    assert 'rerun' not in await git('for-each-ref', cwd=taker)
-    # The files of any other post are read in its author's folder, as before.
-    assert evidence_repository(project, claim.post) == (project / '.verifold' / 'agents' / 'ada', ())
-
-    await made.remove('p-4')
-    assert not copy.exists()
-    assert await git(*repository, 'show', f'{commit}:rerun.txt', cwd=folder) == '11.8'
-    with pytest.raises(EvidenceRejected, match=r'The clean copy of post p-4 that Verifold made is gone\. `take_rerun`'):
-        await made.pin('p-4', ('rerun.txt',))
-    # The copy can be made again from the pinned commit, and another agent can rerun the check's own files.
-    assert everything(await made.make(claim)) == {'notes.txt': 'How I got there.', 'result.txt': '11.8'}
-    await agent_folder(project, 'cy')
-    again = await Reruns(project, 'cy').make(
-        Posted(seq=10, at=START, post=check.model_copy(update={'evidence': evidence}))
-    )
-    assert everything(again)['rerun.txt'] == '11.8'
-
-
-async def test_a_check_names_plain_files_of_the_clean_copy_only(tmp_path: Path) -> None:
-    project = tmp_path / 'project'
-    claim = await a_claim(project)
-    taker = await agent_folder(project, 'bo')
-    made = Reruns(project, 'bo')
-    secret = tmp_path / 'secret.env'
-    secret.write_text('TOKEN=1')
-
-    with pytest.raises(EvidenceRejected, match='that Verifold made is gone'):
-        await made.pin('p-4', ('rerun.txt',))
-
-    copy = await made.make(claim)
-    (taker / 'mine.txt').write_text('Not in the copy.')
-    (copy / 'link.env').symlink_to(secret)
-    (copy / 'out').symlink_to(tmp_path)
-    for path in ('mine.txt', '../../../mine.txt', 'link.env', 'out/secret.env'):
-        with pytest.raises(EvidenceRejected, match='These are not plain files in the clean copy'):
-            await made.pin('p-4', (path,))
-
-
-async def test_a_link_planted_where_a_copy_goes_is_removed_as_a_link_and_nothing_outside_is_touched(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / 'project'
-    claim = await a_claim(project)
-    taker = await agent_folder(project, 'bo')
-    outside = tmp_path / 'outside'
-    outside.mkdir()
-    await git('init', '--quiet', cwd=outside)
-    (outside / 'secret.env').write_text('TOKEN=1')
-    before = everything(outside)
-    slot = taker / '.verifold' / 'reruns'
-    slot.mkdir(parents=True)
-    (slot / 'p-4').symlink_to(outside)
-    made = Reruns(project, 'bo')
-
-    # Before a take, the link is no copy, so nothing is pinned through it.
-    with pytest.raises(EvidenceRejected, match='that Verifold made is gone'):
-        await made.pin('p-4', ('secret.env',))
-    copy = await made.make(claim)
-
-    assert not copy.is_symlink()
-    assert everything(copy) == {'notes.txt': 'How I got there.', 'result.txt': '11.8'}
-    # The agent swaps the copy for a link again. Verifold pins and removes nothing through it.
-    (copy / 'rerun.txt').write_text('11.8')
-    copy.rename(slot / 'kept')
-    (slot / 'p-4').symlink_to(outside)
-    with pytest.raises(EvidenceRejected, match='that Verifold made is gone'):
-        await made.pin('p-4', ('secret.env',))
-    await made.remove('p-4')
-    assert (slot / 'p-4').is_symlink()
-    assert everything(outside) == before
-    assert await git('for-each-ref', cwd=outside) == ''
-    # A folder that the agent planted in the copy's place is no copy either: the next take makes the copy again.
-    (slot / 'p-4').unlink()
-    (slot / 'p-4').mkdir()
-    (slot / 'p-4' / 'result.txt').write_text('99.9')
-    assert everything(await made.make(claim)) == {'notes.txt': 'How I got there.', 'result.txt': '11.8'}
-
-
-@pytest.mark.parametrize('link', ['.verifold', '.verifold/reruns'])
-async def test_a_link_on_the_way_to_the_copies_stops_the_copy_and_nothing_behind_it_changes(
-    tmp_path: Path, link: str
-) -> None:
-    project = tmp_path / 'project'
-    claim = await a_claim(project)
-    taker = await agent_folder(project, 'bo')
-    elsewhere = tmp_path / 'elsewhere'
-    (elsewhere / 'reruns' / 'p-4').mkdir(parents=True)
-    (elsewhere / 'p-4').mkdir()
-    for precious in (elsewhere / 'reruns' / 'p-4' / 'precious', elsewhere / 'p-4' / 'precious'):
-        precious.write_text('x')
-    before = everything(elsewhere)
-    (taker / link).parent.mkdir(exist_ok=True)
-    (taker / link).symlink_to(elsewhere)
-    made = Reruns(project, 'bo')
-
-    with pytest.raises(NoCleanCopy, match='is a link or a file, so Verifold makes no copy behind it'):
-        await made.make(claim)
-    with pytest.raises(EvidenceRejected, match='that Verifold made is gone'):
-        await made.pin('p-4', ('precious',))
-    await made.remove('p-4')
-
-    assert everything(elsewhere) == before
-
-
-async def test_a_copy_that_fails_leaves_nothing_in_the_takers_folder_and_never_makes_the_authors_folder(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project = tmp_path / 'project'
-    claim = await a_claim(project)
-    taker = await agent_folder(project, 'bo')
-    made = Reruns(project, 'bo')
-
-    # A commit that no snapshot of the author holds.
-    lost = claim.model_copy(
-        update={'post': claim.post.model_copy(update={'evidence': (FileEvidence(path='result.txt', commit='f' * 40),)})}
-    )
-    with pytest.raises(NoCleanCopy, match='Verifold could not make the clean copy of post p-4'):
-        await made.make(lost)
-    # A snapshot above the limit.
-    monkeypatch.setattr(reruns, 'MAX_COPY_FILES', 1)
-    with pytest.raises(NoCleanCopy, match=r'has 2 files and 20 bytes\. Verifold copies at most 1 files'):
-        await made.make(claim)
-    monkeypatch.undo()
-    # An author whose folder is gone, or is a link.
-    gone = claim.model_copy(update={'post': claim.post.model_copy(update={'author': 'zed'})})
-    with pytest.raises(NoCleanCopy, match='is not a folder on this computer'):
-        await made.make(gone)
-    (project / '.verifold' / 'agents' / 'zed').symlink_to(tmp_path)
-    with pytest.raises(NoCleanCopy, match='is a link to another place'):
-        await made.make(gone)
-    with pytest.raises(NoCleanCopy, match='pins no file'):
-        await made.make(claim.model_copy(update={'post': claim.post.model_copy(update={'evidence': ()})}))
-
-    assert not (taker / '.verifold' / 'reruns' / 'p-4').exists()
-    assert not any(own_folder(project, 'bo', 'p-4').glob('copy-*'))
-    # The copy still works afterwards.
-    assert everything(await made.make(claim)) == {'notes.txt': 'How I got there.', 'result.txt': '11.8'}
-
-
-async def test_takes_at_the_same_time_share_no_folder(tmp_path: Path) -> None:
-    project = tmp_path / 'project'
-    claim = await a_claim(project)
-    for agent in ('bo', 'cy'):
-        await agent_folder(project, agent)
-    bo, cy = Reruns(project, 'bo'), Reruns(project, 'cy')
-
-    copies = await asyncio.gather(bo.make(claim), cy.make(claim), bo.make(claim), cy.make(claim))
-
-    assert copies[0] == copies[2] != copies[1] == copies[3]
-    for copy in copies:
-        assert everything(copy) == {'notes.txt': 'How I got there.', 'result.txt': '11.8'}
-    assert not any(own_folder(project, 'bo', 'p-4').glob('copy-*'))
-
-
-async def test_git_runs_no_hook_and_no_filter_that_a_copy_or_its_author_names(tmp_path: Path) -> None:
+async def test_the_copy_holds_the_bytes_that_git_stores_and_a_link_as_a_plain_file(tmp_path: Path) -> None:
     project = tmp_path / 'project'
     project.mkdir()
     author = await agent_folder(project, 'ada')
-    ran = tmp_path / 'ran'
-    # The author's tree names a filter, and holds a link.
-    (author / '.gitattributes').write_text('* filter=evil\n')
-    (author / 'result.txt').write_text('11.8')
+    # The author's tree asks Git to convert line ends, to expand an ID, and to run a filter. It holds a link, a
+    # program, and a folder.
+    (author / '.gitattributes').write_text('* text eol=crlf ident filter=evil\n')
+    (author / 'lines.txt').write_bytes(b'one\ntwo\n$Id$\n')
     (author / 'link').symlink_to('/etc/hosts')
-    claim = await a_claim(project)
-    await agent_folder(project, 'bo')
-    made = Reruns(project, 'bo')
+    (author / 'run.sh').write_text('#!/bin/sh\n')
+    (author / 'run.sh').chmod(0o755)
+    (author / 'out').mkdir()
+    (author / 'out' / 'a.json').write_text('{}')
+    pinned = await pin(author, 'ada', ('lines.txt',))
+    claim = Posted(seq=7, at=START, post=Result(id='p-4', thread='t-1', author='ada', text='So.', evidence=pinned))
 
-    copy = await made.make(claim)
+    copy = await clean_copy(project, claim)
 
-    # A link in the tree is a plain file in the copy, with the link's target as its text.
+    assert (copy / 'lines.txt').read_bytes() == b'one\ntwo\n$Id$\n'
     assert not (copy / 'link').is_symlink()
     assert (copy / 'link').read_text() == '/etc/hosts'
-    # The taker plants a repository, hooks, a config with a filter and a watcher, and attributes that name them.
-    hooks = copy / '.git' / 'hooks'
-    hooks.mkdir(parents=True)
-    for hook in ('reference-transaction', 'pre-commit', 'post-index-change'):
-        (hooks / hook).write_text(f'#!/bin/sh\ntouch {ran}\n')
-        (hooks / hook).chmod(0o755)
-    (copy / '.git' / 'config').write_text(
-        f'[core]\n\tfsmonitor = touch {ran}\n[filter "evil"]\n\tclean = touch {ran}; cat\n\tsmudge = touch {ran}; cat\n'
-    )
-    (copy / '.gitattributes').write_text('* filter=evil\n')
-    (copy / 'rerun.txt').write_text('11.8')
-
-    evidence = await made.pin('p-4', ('rerun.txt',))
-
-    assert not ran.exists()
-    folder, repository = evidence_repository(
-        project,
-        Check(id='p-5', thread='t-1', author='bo', text='So.', reply_to='p-4', outcome='holds', method='rerun', take=9),
-    )
-    assert await git(*repository, 'show', f'{evidence[0].commit}:rerun.txt', cwd=folder) == '11.8'
-    assert not ran.exists()
+    assert stat.S_IMODE((copy / 'run.sh').stat().st_mode) == 0o555
+    assert (copy / 'out' / 'a.json').read_text() == '{}'
 
 
-async def test_a_pin_that_git_cannot_make_is_an_error_that_the_agent_reads(tmp_path: Path) -> None:
-    project = tmp_path / 'project'
-    project.mkdir()
-    author = await agent_folder(project, 'ada')
-    (author / '.gitignore').write_text('*.log\n')
-    claim = await a_claim(project)
-    taker = await agent_folder(project, 'bo')
-    made = Reruns(project, 'bo')
-    copy = await made.make(claim)
-    (copy / 'run.log').write_text('ignored')
-
-    with pytest.raises(EvidenceRejected, match=r'Git ignores these files, so they cannot be evidence: run\.log'):
-        await made.pin('p-4', ('run.log',))
-    # Verifold's own directory is broken, as after a disk error.
-    (own_folder(project, 'bo', 'p-4') / 'git' / 'HEAD').unlink()
-    with pytest.raises(EvidenceRejected, match='Verifold could not commit the clean copy of post p-4'):
-        await made.pin('p-4', ('result.txt',))
-    # The agent's own folder has the same rule: a folder that is no repository pins nothing, with a reason.
-    plain = tmp_path / 'plain'
-    plain.mkdir()
-    (plain / 'a.txt').write_text('a')
-    with pytest.raises(EvidenceRejected, match='Verifold could not commit your folder, so it pinned no file'):
-        await pin(plain, 'bo', ('a.txt',))
-    # A taker whose whole folder became a link has no copy.
-    kept = tmp_path / 'kept'
-    taker.rename(kept)
-    taker.symlink_to(kept)
-    with pytest.raises(EvidenceRejected, match='that Verifold made is gone'):
-        await made.pin('p-4', ('result.txt',))
-    await made.remove('p-4')
-    assert (kept / '.verifold' / 'reruns' / 'p-4' / 'result.txt').exists()
-
-
-async def test_a_planted_ignore_file_is_replaced_and_a_commit_outside_the_snapshots_is_refused(tmp_path: Path) -> None:
+async def test_taking_a_rerun_writes_nothing_and_runs_nothing_in_any_agents_folder(tmp_path: Path) -> None:
     project = tmp_path / 'project'
     claim = await a_claim(project)
     author = project / '.verifold' / 'agents' / 'ada'
     taker = await agent_folder(project, 'bo')
-    outside = tmp_path / 'outside.txt'
-    outside.write_text('keep')
-    slot = taker / '.verifold' / 'reruns'
-    slot.mkdir(parents=True)
-    (slot / '.gitignore').symlink_to(outside)
-
-    await Reruns(project, 'bo').make(claim)
-
-    assert (outside.read_text(), (slot / '.gitignore').read_text()) == ('keep', '*\n')
-    # A commit of the author's repository that is in no snapshot of Verifold's.
-    tree = await git('write-tree', cwd=author)
-    stray = await git(
-        '-c', 'user.name=A', '-c', 'user.email=a@example.com', 'commit-tree', tree, '-m', 'Stray', cwd=author
+    ran = tmp_path / 'ran'
+    outside = tmp_path / 'outside'
+    (outside / 'p-4').mkdir(parents=True)
+    (outside / 'p-4' / 'precious').write_text('x')
+    (outside / 'file').write_text('keep')
+    # The author's repository names a command wherever Git's configuration can: a file watcher, hooks, a filter,
+    # a pager, an editor, and a remote for objects that it lacks, over a transport that runs a command.
+    hooks = author / '.git' / 'hooks'
+    hooks.mkdir(exist_ok=True)
+    for hook in ('reference-transaction', 'post-index-change', 'pre-auto-gc', 'post-checkout'):
+        (hooks / hook).write_text(f'#!/bin/sh\ntouch {ran}-hook\n')
+        (hooks / hook).chmod(0o755)
+    config = author / '.git' / 'config'
+    config.write_text(
+        config.read_text()
+        + f'[core]\n\tfsmonitor = touch {ran}-fsmonitor\n\tsshCommand = touch {ran}-ssh; false\n'
+        + f'\tpager = touch {ran}-pager\n\teditor = touch {ran}-editor\n\talternateRefsCommand = touch {ran}-alt\n'
+        + f'[filter "evil"]\n\tclean = touch {ran}-clean; cat\n\tsmudge = touch {ran}-smudge; cat\n'
+        + '[extensions]\n\tpartialClone = evil\n'
+        + f'[remote "evil"]\n\turl = ext::sh -c "touch {ran}-ext"\n\tpromisor = true\n\tpartialclonefilter = blob:none\n'
+        + '[protocol "ext"]\n\tallow = always\n'
     )
-    other = claim.post.model_copy(update={'id': 'p-6', 'evidence': (FileEvidence(path='result.txt', commit=stray),)})
-    with pytest.raises(NoCleanCopy, match='No snapshot of ada holds the commit'):
-        await Reruns(project, 'bo').make(claim.model_copy(update={'post': other}))
+    # The taker's folder holds what took Verifold outside before: links, a pipe, and a hard link where the
+    # copies were, and a repository with hooks of its own.
+    theirs = taker / '.verifold'
+    theirs.mkdir()
+    (theirs / 'reruns').symlink_to(outside)
+    os.mkfifo(theirs / 'pipe')
+    os.link(outside / 'file', theirs / 'hard')
+    (taker / '.git' / 'hooks').mkdir(exist_ok=True)
+    (taker / '.git' / 'hooks' / 'reference-transaction').write_text(f'#!/bin/sh\ntouch {ran}-taker\n')
+    (taker / '.git' / 'hooks' / 'reference-transaction').chmod(0o755)
+    agents = project / '.verifold' / 'agents'
+    before, beyond = everything(agents), everything(outside)
+
+    copy = await clean_copy(project, claim)
+
+    assert everything(copy) == FILES
+    assert copy.is_relative_to(project.resolve() / '.verifold' / 'reruns')
+    # Nothing in any agent's folder and nothing outside the lab changed, and no command of a repository ran.
+    assert everything(agents) == before
+    assert everything(outside) == beyond
+    assert sorted(path.name for path in tmp_path.glob('ran*')) == []
+
+
+async def test_a_commit_that_the_repository_lacks_is_refused_and_nothing_is_fetched(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    claim = await a_claim(project)
+    author = project / '.verifold' / 'agents' / 'ada'
+    ran = tmp_path / 'ran'
+    config = author / '.git' / 'config'
+    config.write_text(
+        config.read_text()
+        + '[extensions]\n\tpartialClone = evil\n'
+        + f'[remote "evil"]\n\turl = ssh://localhost/x\n\tpromisor = true\n[core]\n\tsshCommand = touch {ran}; false\n'
+    )
+    lost = claim.post.model_copy(update={'evidence': (FileEvidence(path='result.txt', commit='deadbeef' * 5),)})
+
+    with pytest.raises(NoCleanCopy, match='No repository of the lab has the commit deadbeef'):
+        await clean_copy(project, claim.model_copy(update={'post': lost}))
+
+    assert not ran.exists()
+    assert list((project / '.verifold' / 'reruns' / 'p-4').iterdir()) == []
+
+
+async def test_a_copy_that_fails_leaves_nothing_and_never_makes_or_follows_the_authors_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / 'project'
+    claim = await a_claim(project)
+    agents = project / '.verifold' / 'agents'
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+
+    # A snapshot above the limit.
+    monkeypatch.setattr(reruns, 'MAX_COPY_FILES', 1)
+    with pytest.raises(NoCleanCopy, match=r'has 2 files and 20 bytes\. Verifold copies at most 1 files'):
+        await clean_copy(project, claim)
+    monkeypatch.undo()
+    # An author with no folder, with a folder that is a link, and with a `.git` that points elsewhere.
+    with pytest.raises(NoCleanCopy, match='pins no file'):
+        await clean_copy(project, claim.model_copy(update={'post': claim.post.model_copy(update={'evidence': ()})}))
+    gone = claim.model_copy(update={'post': claim.post.model_copy(update={'author': 'zed'})})
+    with pytest.raises(NoCleanCopy, match='No repository of the lab has the commit'):
+        await clean_copy(project, gone)
+    assert not (agents / 'zed').exists()
+    (agents / 'ada').rename(elsewhere / 'ada')
+    (agents / 'ada').symlink_to(elsewhere / 'ada')
+    with pytest.raises(NoCleanCopy, match='No repository of the lab has the commit'):
+        await clean_copy(project, claim)
+    (agents / 'ada').unlink()
+    (agents / 'ada').mkdir()
+    (agents / 'ada' / '.git').write_text(f'gitdir: {elsewhere / "ada" / ".git"}\n')
+    with pytest.raises(NoCleanCopy, match='No repository of the lab has the commit'):
+        await clean_copy(project, claim)
+
+    assert list((project / '.verifold' / 'reruns' / 'p-4').iterdir()) == []
+    # The lab's own folder for the copies must be a real folder too.
+    (project / '.verifold' / 'reruns' / 'p-9').symlink_to(elsewhere)
+    with pytest.raises(NoCleanCopy, match='is not a folder of yours'):
+        await clean_copy(project, claim.model_copy(update={'post': claim.post.model_copy(update={'id': 'p-9'})}))
+    assert sorted(path.name for path in elsewhere.iterdir()) == ['ada']
+    # So must the lab's folder itself.
+    (project / '.verifold').rename(tmp_path / 'lab')
+    (project / '.verifold').symlink_to(tmp_path / 'lab')
+    with pytest.raises(NoCleanCopy, match='is not a folder of yours'):
+        await clean_copy(project, claim)
+
+
+@pytest.mark.parametrize('name', ['.git', '.GIT', '..', '.'])
+async def test_a_tree_with_a_name_that_is_not_safe_to_write_is_refused(tmp_path: Path, name: str) -> None:
+    project = tmp_path / 'project'
+    project.mkdir()
+    author = await agent_folder(project, 'ada')
+    outside = everything(tmp_path / 'project' / '.verifold' / 'agents')
+    # A tree that Git itself never makes from a folder, written as an object by hand: a folder with this name.
+    blob = await git('hash-object', '-w', '--stdin', cwd=author)
+    inner = _tree_object(author, [('100644', 'config', blob)])
+    top = _tree_object(author, [('40000', name, inner), ('100644', 'result.txt', blob)])
+    commit = await git('-c', 'user.name=A', '-c', 'user.email=a@example.com', 'commit-tree', top, '-m', 'x', cwd=author)
+    post = Result(
+        id='p-4', thread='t-1', author='ada', text='So.', evidence=(FileEvidence(path='result.txt', commit=commit),)
+    )
+
+    with pytest.raises(NoCleanCopy, match='an entry that Verifold does not write'):
+        await clean_copy(project, Posted(seq=7, at=START, post=post))
+
+    assert list((project / '.verifold' / 'reruns' / 'p-4').iterdir()) == []
+    assert {
+        path: text for path, text in everything(project / '.verifold' / 'agents').items() if '/objects/' not in path
+    } == {path: text for path, text in outside.items() if '/objects/' not in path}
+
+
+def _tree_object(repository: Path, entries: list[tuple[str, str, str]]) -> str:
+    """Write a tree object into a repository as it is given, without Git's own checks of names."""
+    body = b''.join(f'{mode} {name}'.encode() + b'\0' + bytes.fromhex(blob) for mode, name, blob in entries)
+    store = b'tree ' + str(len(body)).encode() + b'\0' + body
+    name = hashlib.sha1(store).hexdigest()
+    path = repository / '.git' / 'objects' / name[:2] / name[2:]
+    path.parent.mkdir(exist_ok=True)
+    path.write_bytes(zlib.compress(store))
+    return name
+
+
+async def test_takes_at_the_same_time_make_one_copy_and_leave_no_other_folder(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    claim = await a_claim(project)
+
+    copies = await asyncio.gather(*(clean_copy(project, claim) for _ in range(6)))
+
+    assert len(set(copies)) == 1
+    assert everything(copies[0]) == FILES
+    assert [path.name for path in copies[0].parent.iterdir()] == [copies[0].name]
+
+
+async def test_a_pin_that_git_cannot_make_is_an_error_that_the_agent_reads(tmp_path: Path) -> None:
+    plain = tmp_path / 'plain'
+    plain.mkdir()
+    (plain / 'a.txt').write_text('a')
+
+    with pytest.raises(EvidenceRejected, match='Verifold could not commit your folder, so it pinned no file'):
+        await pin(plain, 'bo', ('a.txt',))
+
+
+async def test_a_second_check_of_one_agent_keeps_the_files_of_its_first_check_readable(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    project.mkdir()
+    taker = await agent_folder(project, 'bo')
+    (taker / 'rerun.txt').write_text('11.8')
+    first = await pin(taker, 'bo', ('rerun.txt',))
+    (taker / 'rerun.txt').write_text('11.9')
+
+    second = await pin(taker, 'bo', ('rerun.txt',))
+
+    # Both checks are pinned by the pin that every post uses, onto one chain of snapshots in the agent's folder.
+    assert await git('show', f'{first[0].commit}:rerun.txt', cwd=taker) == '11.8'
+    assert await git('show', f'{second[0].commit}:rerun.txt', cwd=taker) == '11.9'
+    assert await git('rev-list', '--count', second[0].commit, cwd=taker) == '2'

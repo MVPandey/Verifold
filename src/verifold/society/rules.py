@@ -35,7 +35,7 @@ from verifold.society.board import Board
 from verifold.society.coordinator import check_marked_thread, check_marks, check_removal, check_reviser
 from verifold.society.errors import RejectedEvent
 from verifold.society.lifecycle import lab_state
-from verifold.society.reruns import MAX_RERUNS, rerun_checks, wanted_reruns
+from verifold.society.reruns import MAX_RERUNS, open_take, rerun_checks, wanted_reruns
 from verifold.society.reviewers import free_seats, seats, seats_line
 from verifold.society.standing import closing
 
@@ -456,11 +456,12 @@ def _check_for_lab(board: Board, post: Post) -> None:
 
 
 def _check_from_take(board: Board, check: Check) -> None:
-    # Only Verifold marks a check as one from a clean copy. The mark names the author's own take of the same post.
-    taken = board.take(check.author, check.reply_to)
+    # Only Verifold marks a check as the check of a take. The mark names the author's own take of the same post,
+    # and one take has one such check.
+    taken = open_take(board, check.author, check.reply_to)
     if check.method != 'rerun' or taken is None or taken.seq != check.take or not check.evidence:
         raise RejectedEvent(
-            f'Event {check.take} is not the take with which {check.author} took the rerun of {check.reply_to}, or '
+            f'Event {check.take} is not a take of {check.author} for {check.reply_to} that has no check yet, or '
             'the check is no rerun with files.'
         )
 

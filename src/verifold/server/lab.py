@@ -267,8 +267,8 @@ class Lab:
         `question_seen` is how many revisions of the question the author had been shown, which a proposal keeps.
         `mark` marks an ask that carries a request of the author's harness, or the answer with which Verifold ends
         such a request. Only the runner gives it. A post from an agent's tool or from the person has none.
-        `take` is the event with which the author took the rerun that a check answers, when `evidence` comes from
-        the clean copy of that take. Only the author's seat gives it.
+        `take` is the event with which the author took the rerun that a check answers. Only the author's seat
+        gives it.
 
         Raises:
             RejectedEvent: The post breaks a rule of the record.
@@ -923,7 +923,7 @@ def _add_post(  # noqa: PLR0913
             post = post.model_copy(update={'to_lab': True})
         # An older record holds checks from before the reviewer seats, so this rule is here and not in the record's
         # rules.
-        # The check of a rerun that its author took needs no seat of its own: the take was open to the author.
+        # The one check of a rerun that its author took needs no seat of its own: the take was open to the author.
         if isinstance(post, Check) and post.take is None and board.post(post.reply_to):
             check_review(board, author, post.reply_to, 'A check on')
         return Posted(seq=seq, at=at, post=post)

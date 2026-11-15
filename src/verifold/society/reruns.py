@@ -3,19 +3,24 @@ The independent reruns of a lab: which are wanted, who took them, and which chec
 
 An independent rerun is a rerun from a clean copy of a post's files by another agent than the post's author. An
 agent or the person asks for one, and the request starts nothing. An agent in a reviewer seat takes it, or any
-other agent when no agent in a reviewer seat can, and Verifold makes the clean copy for that agent. The agent's check with the method `rerun`, whose files come from that
-copy, answers every request that came before it.
+other agent when no agent in a reviewer seat can. Verifold gives the taker the clean copy, which is an export of
+the pinned files in a folder of Verifold's own. The taker's first check with the method `rerun` and with files
+after that is the check of the take, and it answers every request that came before it.
 
 A record from before agents took reruns holds checkers that Verifold started for each request. Such a checker read
 nothing but its claim and posted one check, and that check answers the requests before it in the same way.
 """
 
-from verifold.protocol.events import Posted, RerunRequested
+from dataclasses import replace
+
+from verifold.protocol.events import Posted, RerunRequested, RerunTaken
 from verifold.protocol.ids import AgentId, PostId
 from verifold.protocol.join import RerunLine, RerunOpenTo
 from verifold.protocol.posts import Check
+from verifold.protocol.settings import ReviewerSettings
 from verifold.society.board import Board
 from verifold.society.reviewers import seats
+from verifold.society.turns import before
 
 MAX_RERUNS = 2
 """
@@ -28,8 +33,8 @@ def rerun_checks(board: Board, post_id: PostId) -> tuple[Posted, ...]:
     """
     Return the first check of each independent rerun of a post, oldest first. One agent is one rerun.
 
-    A check is one when its files come from the clean copy that Verifold made for its author's take. The check of a
-    checker that Verifold started, in a record from before agents took reruns, is one too.
+    A check is one when it is the check of its author's take, which the record marks. The check of a checker that
+    Verifold started, in a record from before agents took reruns, is one too.
     """
     checkers = _checkers(board, post_id)
     first: dict[AgentId, Posted] = {}
@@ -73,13 +78,54 @@ def open_to(board: Board, post_id: PostId) -> RerunOpenTo:
 
     The rerun is for the holders of the reviewer seats. The seats limit who reviews, and they do not make a rerun
     impossible. So when no holder can take it, any agent of the lab that did not write the post can: the lab has
-    no seats, nobody holds one, or every holder wrote the post or took the rerun already. `none` means that no
-    agent of the lab can take it at all, as in a lab of one agent.
+    no seats, nobody holds one, or every holder wrote the post, took the rerun already, is on call, or was stopped
+    by Verifold after its harness failed too often. `none` means that no agent of the lab can take it at all, as
+    in a lab of one agent.
     """
     free = _free(board, post_id)
-    if seats(board) > 0 and any(board.reviewer(agent) for agent in free):
+    able = (
+        agent
+        for agent in free
+        if board.reviewer(agent) and not board.on_call(agent) and not before(board, agent).stopped
+    )
+    if seats(board) > 0 and any(able):
         return 'reviewer'
     return 'any' if free else 'none'
+
+
+def open_take(board: Board, agent_id: AgentId, post_id: PostId) -> RerunTaken | None:
+    """
+    Return an agent's take of the rerun of a post while the take has no check yet, or `None`.
+
+    The agent's next check of the post with the method `rerun` and with files is the check of that take. One take
+    is one such check: a later check of the same agent is a check like any other.
+    """
+    taken = board.take(agent_id, post_id)
+    checked = any(
+        isinstance(entry.post, Check) and entry.post.author == agent_id and entry.post.take is not None
+        for entry in board.replies(post_id)
+    )
+    return None if checked else taken
+
+
+def _earlier(board: Board, seq: int) -> Board:
+    # The board as it was after event `seq`, as far as who can take a rerun goes: the agents, the seats, who left,
+    # who is on call, the takes, the turns, and the posts.
+    number = next((seats for at, seats in reversed(board.seat_numbers) if at <= seq), None)
+    settings = board.settings.model_copy(update={'reviewers': ReviewerSettings(seats=number)})
+    return replace(
+        board,
+        seq=seq,
+        agents=tuple(entry for entry in board.agents if entry.seq <= seq),
+        reviewers=tuple(entry for entry in board.reviewers if entry.seq <= seq),
+        on_calls=tuple(entry for entry in board.on_calls if entry.seq <= seq),
+        left=tuple(entry for entry in board.left if entry.seq <= seq),
+        posts=tuple(entry for entry in board.posts if entry.seq <= seq),
+        takes=tuple(entry for entry in board.takes if entry.seq <= seq),
+        starts=tuple(entry for entry in board.starts if entry.seq <= seq),
+        turns=tuple(entry for entry in board.turns if entry.seq <= seq),
+        settings=settings,
+    )
 
 
 def rerun_line(board: Board, post_id: PostId) -> RerunLine | None:
@@ -128,23 +174,40 @@ def reruns_for(board: Board, agent_id: AgentId, after: int, reach: int) -> tuple
     """
     Return the reruns that are news for an agent from event `after` to event `reach`, among those that it can take.
 
-    A post that becomes wanted is news once, with its first request: a later request for the same rerun joins it
-    and reaches nobody. A request reaches the agents that can take it, as a call that names nobody reaches every
-    agent, so it does not reach an agent whose seat is on call, and not the agent that asked. An agent that got a
-    reviewer seat in that time hears of every rerun that is wanted and that it can take. An agent reads every
-    wanted rerun in its brief.
+    A rerun is news once for an agent, when the agent can first take it:
+
+    - The post becomes wanted, with its first request. A later request for the same rerun joins it and reaches
+      nobody.
+    - The agent gets a reviewer seat while reruns are wanted.
+    - A rerun that was for the reviewer seats opens to any agent, as when its only holder took it or left.
+
+    A request reaches the agents that can take it, as a call that names nobody reaches every agent, so it does not
+    reach an agent whose seat is on call, and not the agent that asked. An agent reads every wanted rerun in its
+    brief.
     """
     if board.on_call(agent_id):
         return ()
-    seated = any(after < entry.seq <= reach and entry.agent == agent_id and entry.reviewer for entry in board.reviewers)
-    lines = (
+    mine = tuple(
         line
         for line in reruns_wanted(board)
-        if (seated or after < wanted_reruns(board, line.post)[0].seq <= reach)
-        and agent_id not in line.asked_by[:1]
-        and can_take(board, agent_id, line.post)
+        if agent_id not in line.asked_by[:1] and can_take(board, agent_id, line.post)
     )
-    return tuple(lines)
+    if not mine:
+        return ()
+    seated = any(after < entry.seq <= reach and entry.agent == agent_id and entry.reviewer for entry in board.reviewers)
+    was: Board | None = None
+
+    def opened(line: RerunLine) -> bool:
+        # Whether the rerun was for the reviewer seats at `after` and is open to any agent now.
+        nonlocal was
+        if line.open_to != 'any':
+            return False
+        was = was or _earlier(board, after)
+        return open_to(was, line.post) == 'reviewer'
+
+    return tuple(
+        line for line in mine if seated or after < wanted_reruns(board, line.post)[0].seq <= reach or opened(line)
+    )
 
 
 def _checkers(board: Board, post_id: PostId) -> set[AgentId]:

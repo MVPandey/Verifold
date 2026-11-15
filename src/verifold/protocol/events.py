@@ -277,8 +277,9 @@ class RerunTaken(EventBase):
     """
     An agent took the rerun of another agent's post that somebody asked for.
 
-    Verifold made a clean copy of the post's files for the agent, in the agent's own folder: plain files, exactly
-    the ones of `commit`. The agent's check of the post with the method `rerun` gets its files from that copy.
+    Verifold gave the agent the clean copy of the post's files: plain files, exactly the ones of `commit`, in a
+    folder of Verifold's own that no agent's folder holds. The agent's next check of the post with the method
+    `rerun` and with files is the check of this take.
     """
 
     type: Literal['rerun_taken'] = 'rerun_taken'

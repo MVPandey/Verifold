@@ -273,9 +273,11 @@ class Check(PostBase):
     method: CheckMethod
     take: int | None = Field(default=None, ge=1)
     """
-    The event with which the author took the rerun of the post, when the check has the method `rerun` and its files
-    come from the clean copy that Verifold made for that take. Verifold sets it, and no agent can. `None` for any
-    other check.
+    The event with which the author took the rerun of the post, when this is the check of that take: the author's
+    first check of the post with the method `rerun` and with files after the take. It records that the author was
+    given the clean copy of the post's pinned files before it posted the check. The files are the author's own,
+    from its own folder, and the mark does not prove how they were made. Verifold sets it, and no agent can. `None`
+    for any other check.
     """
 
 

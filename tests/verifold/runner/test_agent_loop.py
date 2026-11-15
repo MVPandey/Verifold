@@ -1218,10 +1218,17 @@ async def test_a_rerun_that_the_agent_can_take_wakes_it_and_it_takes_the_rerun_i
     lab = served.lab
     evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
     await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
-    # The clean copy that the fake agent reruns in.
+    # The clean copy that the fake agent reads, and the pin of the files that it posts from its own folder.
     served.copies = FakeCopies(folder=tmp_path / 'copies')
     (tmp_path / 'copies' / 'p-2').mkdir(parents=True)
     (tmp_path / 'copies' / 'p-2' / 'bench.json').write_text('11.8')
+    pinned: list[tuple[str, ...]] = []
+
+    async def pin(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+        pinned.append(paths)
+        return tuple(FileEvidence(path=path, commit='d' * 40) for path in paths)
+
+    served.pin = pin
     running = asyncio.create_task(loop_for(served, tmp_path).run())
     try:
         await until(lambda: len(lab.board.turns) == 1)
@@ -1242,7 +1249,8 @@ async def test_a_rerun_that_the_agent_can_take_wakes_it_and_it_takes_the_rerun_i
         'p-2',
         ['rerun.txt'],
     )
-    assert served.copies.pinned == [('p-2', ('rerun.txt',))]
+    assert (pinned, (tmp_path / 'bo' / 'rerun.txt').read_text()) == ([('rerun.txt',)], '11.8')
+    assert lab.board.posts[-1].post.model_dump()['take'] == lab.board.takes[0].seq
 
 
 async def stop(running: asyncio.Task[None]) -> None:

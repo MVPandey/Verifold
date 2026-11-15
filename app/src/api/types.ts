@@ -628,8 +628,9 @@ export type Post =
       readonly outcome: 'holds' | 'fails';
       readonly method: 'rerun' | 'code_read' | 'ratings';
       /**
-       * The event with which the author took the rerun of the post, when the check's files come from the clean
-       * copy that Verifold made for that take. Verifold sets it, and no agent can.
+       * The event with which the author took the rerun of the post, when this is the check of that take. The
+       * author was given the clean copy of the post's pinned files, and the check's files are its own. Verifold
+       * sets it, and no agent can.
        */
       readonly take?: number | null;
     });

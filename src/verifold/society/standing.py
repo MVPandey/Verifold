@@ -16,8 +16,8 @@ def standing(board: Board, post_id: PostId) -> Standing:
     - `disputed`: a check of the post failed, or an objection stands. A later check that holds overrules an
       objection, unless the objector wrote that check.
     - `held_up`: an independent rerun by another model held. That is a check with the method `rerun` that holds,
-      from another agent, with files from the clean copy that Verifold made when that agent took the rerun, and
-      from another model than the post's. `another_model` says when the models differ. In a record from before
+      from another agent that took the rerun and so was given the clean copy of the post's pinned files, and
+      from another model than the post's. It does not say how the checker made the files of its check. `another_model` says when the models differ. In a record from before
       agents took reruns, it is the check of a checker that Verifold started from another model family.
     - `checked`: another agent's check holds.
     - `open`: none of the above.
@@ -102,7 +102,7 @@ def _independent_rerun(board: Board, post_id: PostId, seq: int, check: Check) ->
         # A checker that Verifold started, in a record from before agents took reruns. It read nothing but its
         # claim, and the families of the two seats decide, as they did then.
         return _other_family(author.agent, checker.agent)
-    # Any other check counts when its files come from the clean copy of its author's take.
+    # Any other check counts when it is the check of its author's take.
     return check.take is not None and another_model(board, target, seq, check.author)
 
 

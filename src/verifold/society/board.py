@@ -71,6 +71,8 @@ class Board:
     times: tuple[TimeSet | TimeRanOut, ...] = ()
     settings: Settings = field(default_factory=Settings)
     """The person's settings for the lab: the latest that the record holds, or the defaults."""
+    seat_numbers: tuple[tuple[int, int | None], ...] = ()
+    """Each number of reviewer seats that the person's settings held, with the event that set it, oldest first."""
     grants: tuple[str, ...] = ()
     """The starts of the commands that the person lets every agent run."""
     power_sets: tuple[PowerSet, ...] = ()

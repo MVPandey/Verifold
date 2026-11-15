@@ -281,8 +281,12 @@ async def test_a_rerun_request_says_when_it_joins_a_rerun_that_runs_already(lab:
 async def test_an_agent_takes_a_rerun_over_the_board_and_posts_its_check_without_a_thread(lab: Lab) -> None:
     evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
     await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
+
+    async def pin(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+        return tuple(FileEvidence(path=path, commit='d' * 40) for path in paths)
+
     copies = FakeCopies()
-    bo = Member(lab, 'bo', copies=copies)
+    bo = Member(lab, 'bo', pin=pin, copies=copies)
     await lab.request_rerun('ada', 'p-2')
     # The check names no thread: a reply goes in the thread of the post that it answers.
     check = {'kind': 'check', 'text': 'Reran it.', 'reply_to': 'p-2', 'outcome': 'holds', 'method': 'rerun'}

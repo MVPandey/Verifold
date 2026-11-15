@@ -1,272 +1,259 @@
 """
-The clean copies in which an agent reruns the posts that it took, and the files that Verifold pins from them.
+The clean copy of the files that a post pins, for the agents that take its rerun.
 
-A clean copy is plain files inside the taker's own folder: the tree of the commit that the post pins, and nothing
-else. It has no Git repository, so no later work of the author and no object store reaches the taker.
+For a rerun, Verifold writes nothing, deletes nothing, and runs no Git command inside any agent's folder. An agent
+can change its own folder at any moment, so no check of a path there holds until the path is used.
 
-The taker can write its own folder, so Verifold trusts nothing there. It keeps a Git directory of its own for each
-take in `.verifold/reruns/<agent>/<post>/`, outside every agent's folder, and every Git command for a copy names
-that directory. Git then reads no configuration, no hook, and no filter from a place that the taker writes.
-Verifold follows no link on the way to a copy, and it uses only a copy that it made itself: a marker beside its Git
-directory holds the commit and the folder's identity on the file system.
+The clean copy is an export in a folder of Verifold's own, `.verifold/reruns/<post>/<commit>/` in the project. It
+holds exactly the tree of the commit that the post pins, as the bytes that Git stores: no line ends are converted,
+and a link is a plain file with the link's target as its text. Nobody writes the files, and every agent that takes
+the rerun of the post gets the same folder. An agent reruns in its own folder, by its own means.
+
+Git reads the commit from a repository of the lab by the commit's ID, with the repository named by `--git-dir`
+and the working directory in Verifold's own folder. Git fetches nothing that is missing, runs no hook, no file
+watcher, and no command for a transport, and reads no configuration of the person or the system.
 """
 
 import asyncio
 import os
 import shutil
+import stat
+import subprocess
 import tempfile
-from pathlib import Path, PurePosixPath
+from dataclasses import dataclass
+from pathlib import Path
+from threading import Thread
+from typing import IO
 
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import AgentId, CommitId, PostId
-from verifold.protocol.posts import Check, FileEvidence, Post
-from verifold.runner.errors import NoAgentFolder
-from verifold.runner.folders import LAB_FOLDER, agents_folder, real_folder
-from verifold.runner.git import GitError, git
-from verifold.server.errors import EvidenceRejected, NoCleanCopy
+from verifold.runner.environment import clean_environment
+from verifold.runner.folders import LAB_FOLDER, agents_folder
+from verifold.runner.git import GitError
+from verifold.server.errors import NoCleanCopy
 
 RERUNS = 'reruns'
-"""The name of the folder for reruns: Verifold's own in the lab's folder, and the copies' in a taker's folder."""
-
-REF = 'refs/verifold/rerun'
-"""The ref in a take's Git directory that holds the commits of the taker's check."""
+"""The folder in the lab's folder that holds the clean copies. It is Verifold's own, and no agent's folder holds it."""
 
 MAX_COPY_FILES = 50_000
 MAX_COPY_BYTES = 2 * 1024**3
-"""The most files and bytes of a snapshot that Verifold copies for a rerun."""
+"""The most files and bytes of a snapshot that Verifold exports for a rerun."""
 
-_SAFE = ('-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false')
-"""Options for every Git command on a copy: no hook runs, and no program watches the files."""
+GIT_OPTIONS = (
+    '-c',
+    'core.hooksPath=/dev/null',
+    '-c',
+    'core.fsmonitor=false',
+    '-c',
+    'core.sshCommand=false',
+    '-c',
+    'protocol.allow=never',
+    '-c',
+    'protocol.file.allow=always',
+)
+"""Options of every Git command for a rerun: no hook, no file watcher, and no transport that runs a command."""
 
-_NO_CONFIG = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_ATTR_NOSYSTEM': '1'}
-"""
-Git reads no configuration but the one of the repository that a command names. For a copy that is Verifold's own
-directory, so no filter has a command, and a `.gitattributes` file in a copy can name none.
-"""
-
-_AUTHOR = {
-    'GIT_AUTHOR_NAME': 'Verifold',
-    'GIT_AUTHOR_EMAIL': 'verifold@localhost',
-    'GIT_COMMITTER_NAME': 'Verifold',
-    'GIT_COMMITTER_EMAIL': 'verifold@localhost',
+GIT_ENVIRONMENT = {
+    'GIT_NO_LAZY_FETCH': '1',
+    'GIT_CONFIG_GLOBAL': os.devnull,
+    'GIT_CONFIG_NOSYSTEM': '1',
+    'GIT_ATTR_NOSYSTEM': '1',
+    'GIT_TERMINAL_PROMPT': '0',
 }
+"""Git fetches no object that a repository lacks, and reads no configuration of the person or the system."""
+
+_FILE_MODES = {b'100644': 0o444, b'100755': 0o555, b'120000': 0o444}
+"""The mode of an exported file for each mode of a tree's entry. A link is exported as a plain file."""
+
+_CHUNK = 1024 * 1024
 
 
-def own_folder(project: Path, agent_id: AgentId, post_id: PostId) -> Path:
-    """Return Verifold's own folder for an agent's rerun of a post, which is in no agent's folder."""
-    return project.resolve() / LAB_FOLDER / RERUNS / agent_id / post_id
+@dataclass(frozen=True, slots=True)
+class _Entry:
+    """One file of the pinned commit's tree."""
+
+    path: str
+    blob: bytes
+    size: int
+    mode: int
 
 
-def evidence_repository(project: Path, post: Post) -> tuple[Path, tuple[str, ...]]:
+async def clean_copy(project: Path, claim: Posted) -> Path:
     """
-    Return where Git reads the files that a post pins: the folder to run in, and the options that name the repository.
+    Return the clean copy of the files that a post pins, and make it when it is not there.
 
-    The files of a check from a clean copy are in Verifold's own Git directory for that take. The files of any other
-    post are in the repository of its author's folder.
+    The work on files runs in a thread, so a large snapshot does not hold up the server.
+
+    Raises:
+        NoCleanCopy: The post pins no file, no repository of the lab has the pinned commit, the snapshot is too
+            large or has a name that is not safe to write, or the copy could not be written.
+
     """
-    if isinstance(post, Check) and post.take is not None:
-        own = own_folder(project, post.author, post.reply_to)
-        return own, (*_SAFE, f'--git-dir={own / "git"}')
-    return agents_folder(project) / post.author, ()
-
-
-class Reruns:
-    """
-    Makes the clean copies for the reruns that one agent takes, inside that agent's own folder.
-
-    Verifold starts nothing here. It copies the files of a post at the pinned commit, and how the agent runs them
-    is the agent's business.
-    """
-
-    def __init__(self, project: Path, agent_id: AgentId) -> None:
-        """Prepare the clean copies of one agent of the lab in `project`."""
-        self._project = project
-        self._agent_id = agent_id
-        self._busy = asyncio.Lock()
-        """Held while a copy is made, pinned, or removed, so that two calls of one agent never share a folder."""
-
-    async def make(self, claim: Posted) -> Path:
-        """
-        Return the clean copy for the agent's rerun of a post, and make it when Verifold's own copy is not there.
-
-        A folder or a link that Verifold did not make is not used: Verifold removes it, a link as a link, and makes
-        the copy again from the pinned commit.
-
-        Raises:
-            NoCleanCopy: The post pins no file, a folder on the way is missing or a link, the snapshot is too
-                large, or Git could not make the copy. Nothing of a failed copy stays in the agent's folder.
-
-        """
-        post = claim.post
-        if not post.evidence:
-            raise NoCleanCopy(f'Post {post.id} pins no file, so it has no clean copy.')
-        async with self._busy:
-            try:
-                return await self._make(post, post.evidence[0].commit)
-            except (GitError, OSError, NoAgentFolder) as error:
-                raise NoCleanCopy(f'Verifold could not make the clean copy of post {post.id}: {error}') from error
-
-    async def _make(self, post: Post, commit: CommitId) -> Path:
-        own = own_folder(self._project, self._agent_id, post.id)
-        copy = self._slot() / post.id
-        if _is_made(own, copy, commit):
-            return copy
-        await self._fetch(own, post, commit)
-        await _check_size(own, post.id, commit)
-        # The files appear in Verifold's own folder first, and the copy gets its place when it is whole.
-        fresh = Path(tempfile.mkdtemp(dir=own, prefix='copy-'))
-        index = own / f'{fresh.name}.index'
-        try:
-            export = {'GIT_INDEX_FILE': str(index)}
-            await _own(own, 'read-tree', commit, env=export)
-            # A link in the author's tree becomes a plain file with the link's target as its text.
-            await _own(own, '-c', 'core.symlinks=false', 'checkout-index', '--all', env=export, work_tree=fresh)
-            _clear(copy)
-            fresh.rename(copy)
-        finally:
-            index.unlink(missing_ok=True)
-            shutil.rmtree(fresh, ignore_errors=True)
-        made = copy.lstat()
-        (own / 'made').write_text(f'{commit} {made.st_dev} {made.st_ino}\n')
-        return copy
-
-    def _slot(self) -> Path:
-        # The folder in the agent's own folder that holds its copies, with no link on the way to it. Git leaves
-        # everything in it out of the agent's own snapshots.
-        slot = real_folder(self._project, self._agent_id)
-        for name in (LAB_FOLDER, RERUNS):
-            slot = slot / name
-            if not slot.is_symlink():
-                slot.mkdir(exist_ok=True)
-            if slot.is_symlink() or not slot.is_dir():
-                raise NoAgentFolder(f'{slot} is a link or a file, so Verifold makes no copy behind it.')
-        ignore = slot / '.gitignore'
-        if ignore.is_symlink():
-            ignore.unlink()
-        ignore.write_text('*\n')
-        return slot
-
-    async def _fetch(self, own: Path, post: Post, commit: CommitId) -> None:
-        # Bring the pinned commit into Verifold's own Git directory for this take.
-        (self._project.resolve() / LAB_FOLDER / RERUNS).mkdir(parents=True, exist_ok=True, mode=0o700)
-        own.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if not (own / 'git').exists():
-            await git(*_SAFE, 'init', '--quiet', '--bare', str(own / 'git'), cwd=own, env=_NO_CONFIG)
-        if isinstance(post, Check) and post.take is not None:
-            # The files of a check from a clean copy are in Verifold's own directory for that take.
-            source, ref = own_folder(self._project, post.author, post.reply_to) / 'git', REF
-        else:
-            # The author's folder is looked up as it is, and never made here.
-            source = real_folder(self._project, post.author)
-            listed = ('for-each-ref', '--contains', commit, '--format=%(refname)', 'refs/verifold')
-            refs = (await git(*_SAFE, *listed, cwd=source, env=_NO_CONFIG)).split()
-            if not refs:
-                raise GitError(f'No snapshot of {post.author} holds the commit {commit}.')
-            ref = refs[0]
-        await _own(own, 'fetch', '--quiet', str(source), ref)
-        await _own(own, 'cat-file', '-e', f'{commit}^{{commit}}')
-
-    async def pin(self, post_id: PostId, paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
-        """
-        Commit the clean copy of a rerun into Verifold's own Git directory, and return each named file pinned to it.
-
-        Raises:
-            EvidenceRejected: The copy that Verifold made is gone, a path is no plain file inside it, Git ignores
-                it, or Git could not commit the copy.
-
-        """
-        own = own_folder(self._project, self._agent_id, post_id)
-        async with self._busy:
-            copy = self._made(own, post_id)
-            if copy is None:
-                raise EvidenceRejected(
-                    f'The clean copy of post {post_id} that Verifold made is gone. `take_rerun` makes it again.'
-                )
-            paths = tuple(str(PurePosixPath(path)) for path in paths)
-            outside = [path for path in paths if not _plain_file(copy, path)]
-            if outside:
-                raise EvidenceRejected(f'These are not plain files in the clean copy: {", ".join(outside)}.')
-            try:
-                commit = await _commit(own, copy)
-                tracked = set((await _own(own, 'ls-tree', '-r', '--name-only', commit)).splitlines())
-            except (GitError, OSError) as error:
-                raise EvidenceRejected(
-                    f'Verifold could not commit the clean copy of post {post_id}: {error}'
-                ) from error
-        ignored = [path for path in paths if path not in tracked]
-        if ignored:
-            raise EvidenceRejected(f'Git ignores these files, so they cannot be evidence: {", ".join(ignored)}.')
-        return tuple(FileEvidence(path=path, commit=commit) for path in paths)
-
-    async def remove(self, post_id: PostId) -> None:
-        """Remove the clean copy of a rerun that Verifold made. The files that a check pinned stay in Verifold's own directory."""
-        own = own_folder(self._project, self._agent_id, post_id)
-        async with self._busy:
-            copy = self._made(own, post_id)
-            if copy is not None:
-                shutil.rmtree(copy, ignore_errors=True)
-                (own / 'made').unlink(missing_ok=True)
-
-    def _made(self, own: Path, post_id: PostId) -> Path | None:
-        # The copy for a post when it is the one that Verifold made, with no link on the way to it.
-        try:
-            folder = real_folder(self._project, self._agent_id)
-        except NoAgentFolder:
-            return None
-        slot = folder / LAB_FOLDER / RERUNS
-        real = not (folder / LAB_FOLDER).is_symlink() and not slot.is_symlink()
-        return slot / post_id if real and _is_made(own, slot / post_id) else None
-
-
-def _is_made(own: Path, copy: Path, commit: CommitId | None = None) -> bool:
-    # Whether the folder is the one that Verifold made for this take, and with `commit`, from that commit.
-    marker = own / 'made'
-    if copy.is_symlink() or not copy.is_dir() or not marker.is_file():
-        return False
-    was = marker.read_text().split()
-    now = copy.lstat()
-    return was[1:] == [str(now.st_dev), str(now.st_ino)] and commit in (None, was[0])
-
-
-def _clear(copy: Path) -> None:
-    # Remove what stands where the copy goes. A link is removed as a link, and nothing behind it is touched.
-    if copy.is_symlink() or copy.is_file():
-        copy.unlink()
-    elif copy.exists():
-        shutil.rmtree(copy)
-
-
-def _plain_file(copy: Path, path: str) -> bool:
-    # Whether the path is a file of the copy itself: no link, and no link on the way to it.
-    file = copy / PurePosixPath(path)
-    return file.is_file() and not file.is_symlink() and file.resolve().is_relative_to(copy.resolve())
-
-
-async def _own(own: Path, *args: str, env: dict[str, str] | None = None, work_tree: Path | None = None) -> str:
-    # Run Git on Verifold's own directory for a take. With `work_tree`, the files are the ones of the copy.
-    where = (f'--git-dir={own / "git"}', *((f'--work-tree={work_tree}',) if work_tree else ()))
-    return await git(*_SAFE, *where, *args, cwd=work_tree or own, env=_NO_CONFIG | (env or {}))
-
-
-async def _check_size(own: Path, post_id: PostId, commit: CommitId) -> None:
-    sizes = [line.split(maxsplit=4)[3] for line in (await _own(own, 'ls-tree', '-r', '-l', commit)).splitlines()]
-    total = sum(int(size) for size in sizes if size.isdigit())
-    if len(sizes) > MAX_COPY_FILES or total > MAX_COPY_BYTES:
-        raise GitError(
-            f'The snapshot that post {post_id} pins has {len(sizes):,} files and {total:,} bytes. Verifold copies '
-            f'at most {MAX_COPY_FILES:,} files and {MAX_COPY_BYTES:,} bytes for a rerun.'
-        )
-
-
-async def _commit(own: Path, copy: Path) -> CommitId:
-    # Commit the copy's files into Verifold's own directory, with an index of its own, and return the commit.
-    index = own / 'pin.index'
+    post = claim.post
+    if not post.evidence:
+        raise NoCleanCopy(f'Post {post.id} pins no file, so it has no clean copy.')
     try:
-        staged = {'GIT_INDEX_FILE': str(index)}
-        await _own(own, 'add', '--all', '.', env=staged, work_tree=copy)
-        tree = await _own(own, 'write-tree', env=staged)
+        return await asyncio.to_thread(_export, project.resolve(), post.id, post.author, post.evidence[0].commit)
+    except (GitError, OSError) as error:
+        raise NoCleanCopy(f'Verifold could not make the clean copy of post {post.id}: {error}') from error
+
+
+def _export(project: Path, post_id: PostId, author: AgentId, commit: CommitId) -> Path:
+    home = _own(project, post_id)
+    copy = home / commit[:12]
+    if _is_real(copy):
+        return copy
+    repository = _repository(project, author, commit, home)
+    entries = _tree(repository, commit, home)
+    total = sum(entry.size for entry in entries)
+    if len(entries) > MAX_COPY_FILES or total > MAX_COPY_BYTES:
+        raise GitError(
+            f'The snapshot that the post pins has {len(entries):,} files and {total:,} bytes. Verifold copies at '
+            f'most {MAX_COPY_FILES:,} files and {MAX_COPY_BYTES:,} bytes for a rerun.'
+        )
+    # The files appear in a folder beside the copy's place, and the copy gets its place when it is whole.
+    fresh = Path(tempfile.mkdtemp(dir=home, prefix='.making-'))
+    try:
+        _write(repository, entries, fresh, home)
+        fresh.chmod(0o755)
+        try:
+            fresh.rename(copy)
+        except OSError:
+            # Another take of the same post made the copy in the meantime.
+            if not _is_real(copy):
+                raise
     finally:
-        index.unlink(missing_ok=True)
-    commit = await _own(own, 'commit-tree', tree, '-m', f'Rerun in {copy.name}', env=_AUTHOR)
-    await _own(own, 'update-ref', REF, commit)
-    return commit
+        shutil.rmtree(fresh, ignore_errors=True)
+    return copy
+
+
+def _is_real(folder: Path) -> bool:
+    # Whether the path is a folder of this user's and no link.
+    try:
+        found = folder.lstat()
+    except OSError:
+        return False
+    return stat.S_ISDIR(found.st_mode) and found.st_uid == os.getuid()
+
+
+def _own(project: Path, post_id: PostId) -> Path:
+    # Verifold's own folder for the copies of one post. Each folder on the way is a real folder of this user's.
+    lab = project / LAB_FOLDER
+    if not _is_real(lab):
+        raise OSError(f'{lab} is not a folder of yours, so Verifold keeps no copy there.')
+    home = lab
+    for name in (RERUNS, post_id):
+        home = home / name
+        home.mkdir(mode=0o700, exist_ok=True)
+        if not _is_real(home):
+            raise OSError(f'{home} is not a folder of yours, so Verifold keeps no copy there.')
+    return home
+
+
+def _git(repository: Path | None, *args: str, cwd: Path) -> bytes:
+    # Run Git with the options for a rerun, on the repository that `--git-dir` names, and return its output.
+    where = (f'--git-dir={repository}',) if repository else ()
+    done = subprocess.run(
+        ['git', *GIT_OPTIONS, *where, *args],
+        cwd=cwd,
+        env=clean_environment() | GIT_ENVIRONMENT,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        check=False,
+    )
+    if done.returncode:
+        raise GitError(f'git {" ".join(args)} failed: {done.stderr.decode(errors="replace").strip()}')
+    return done.stdout
+
+
+def _repository(project: Path, author: AgentId, commit: CommitId, home: Path) -> Path:
+    """
+    Return the Git directory of the lab that has the pinned commit.
+
+    In a project with Git commits, every agent's folder is a worktree of the project, so the project's own Git
+    directory has the commit. In any other project, the author's folder is a repository of its own. Verifold names
+    that folder's `.git` only when it is a real folder, and follows no file or link that points elsewhere.
+    """
+    found: list[Path] = []
+    try:
+        common = _git(None, 'rev-parse', '--path-format=absolute', '--git-common-dir', cwd=project)
+        found.append(Path(common.decode().strip()))
+    except GitError:
+        pass
+    folder = agents_folder(project) / author
+    if _is_real(folder) and _is_real(folder / '.git'):
+        found.append(folder / '.git')
+    for repository in found:
+        try:
+            _git(repository, 'cat-file', '-e', f'{commit}^{{commit}}', cwd=home)
+        except GitError:
+            continue
+        return repository
+    raise GitError(f'No repository of the lab has the commit {commit}. Verifold fetches nothing that is missing.')
+
+
+def _tree(repository: Path, commit: CommitId, home: Path) -> tuple[_Entry, ...]:
+    # The files of the commit's tree. A submodule has no files here. Any other kind of entry is refused.
+    entries: list[_Entry] = []
+    for line in _git(repository, 'ls-tree', '-r', '-z', '-l', commit, cwd=home).split(b'\0'):
+        if not line:
+            continue
+        about, _, name = line.partition(b'\t')
+        mode, kind, blob, size = about.split()
+        if kind == b'commit':
+            continue
+        path = name.decode()
+        parts = path.split('/')
+        unsafe = any(part in ('', '.', '..') or part.casefold() == '.git' or '\\' in part for part in parts)
+        if kind != b'blob' or mode not in _FILE_MODES or unsafe:
+            raise GitError(f'The snapshot has an entry that Verifold does not write: {path!r}.')
+        entries.append(_Entry(path=path, blob=blob, size=int(size), mode=_FILE_MODES[mode]))
+    return tuple(entries)
+
+
+def _write(repository: Path, entries: tuple[_Entry, ...], folder: Path, home: Path) -> None:
+    # Write each file as the bytes that Git stores for it. One Git process gives all of them, in order.
+    command = ['git', *GIT_OPTIONS, f'--git-dir={repository}', 'cat-file', '--batch']
+    with subprocess.Popen(
+        command,
+        cwd=home,
+        env=clean_environment() | GIT_ENVIRONMENT,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    ) as process:
+        if process.stdin is None or process.stdout is None:
+            raise GitError('git cat-file gave no pipes.')
+        # The names go in from a thread of their own, so that a full pipe on either side blocks nothing.
+        feeder = Thread(target=_feed, args=(process.stdin, entries), daemon=True)
+        feeder.start()
+        try:
+            for entry in entries:
+                header = process.stdout.readline().split()
+                if len(header) != 3 or header[1] != b'blob' or int(header[2]) != entry.size:  # noqa: PLR2004
+                    raise GitError(f'The repository does not have {entry.path} as the snapshot names it.')
+                target = folder / entry.path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with target.open('xb') as file:
+                    left = entry.size
+                    while left:
+                        chunk = process.stdout.read(min(left, _CHUNK))
+                        if not chunk:
+                            raise GitError(f'Git ended before it gave all of {entry.path}.')
+                        file.write(chunk)
+                        left -= len(chunk)
+                process.stdout.read(1)
+                target.chmod(entry.mode)
+        finally:
+            process.kill()
+            feeder.join()
+
+
+def _feed(pipe: IO[bytes], entries: tuple[_Entry, ...]) -> None:
+    try:
+        for entry in entries:
+            pipe.write(entry.blob + b'\n')
+        pipe.close()
+    except OSError:
+        # The reader stopped and ended the process.
+        return

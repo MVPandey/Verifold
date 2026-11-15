@@ -71,8 +71,8 @@ export interface ActContext {
  * The line comes only from the post's kind, its check outcome and method, its `accepts`, and the post that it
  * replies to. `to` is that post, or `null` when the page does not have it. Every kind names the post that it
  * replies to, so a reply reads right where the indent stops. A plan that replies to a call takes the call. A
- * rerun is "from a clean copy" when its author took the rerun and its files come from the copy that Verifold made
- * for that take. It is "blind" only from the checker that Verifold started for that post, in a lab from before
+ * rerun is "from a clean copy" when it is the check of its author's take: the author took the rerun and so was
+ * given the clean copy of the post's pinned files. It is "blind" only from the checker that Verifold started for that post, in a lab from before
  * agents took reruns. A proposal is a proposed answer for the lab in any thread.
  */
 export function act(post: Post, to: Post | null, context: ActContext): string {
