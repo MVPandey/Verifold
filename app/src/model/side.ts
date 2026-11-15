@@ -50,9 +50,24 @@ export function sideLines(
   }));
 }
 
-/** Return the heading of the group of side threads, which says how many the lab has. */
-export function sideHeading(count: number): string {
-  return count === 1 ? '1 side thread' : `${count} side threads`;
+/** Return a small count in words, as a sentence writes it. */
+function inWords(count: number): string {
+  return count === 2 ? 'two' : count === 3 ? 'three' : String(count);
+}
+
+/**
+ * Return the line of the folded group of side threads: how many the lab has, and between how many agents each
+ * is, such as "6 side threads between two or three agents."
+ */
+export function sideHeading(side: readonly ThreadSummary[]): string {
+  const sizes = side.map((summary) => summary.members.length);
+  const least = Math.min(...sizes);
+  const most = Math.max(...sizes);
+  const between =
+    least === most
+      ? inWords(least)
+      : `${inWords(least)} ${most === least + 1 ? 'or' : 'to'} ${inWords(most)}`;
+  return `${side.length === 1 ? '1 side thread' : `${side.length} side threads`} between ${between} agents.`;
 }
 
 /** Return the line of an opened side thread: who it is between, and that it is open to all. */

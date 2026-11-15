@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, AwareDatetime, Field, StringConstraints
 
-from verifold.protocol.agents import Agent, Name, Role, Status, ValueId, one_line
+from verifold.protocol.agents import About, Agent, ChosenName, Name, Picture, Role, Status, ValueId, one_line
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, CommitId, PostId, ThreadId
 from verifold.protocol.posts import Post
@@ -58,6 +58,10 @@ class QuestionRevised(EventBase):
     post: PostId
 
 
+type Reason = Annotated[str, AfterValidator(one_line), StringConstraints(max_length=200)]
+"""A reason, as one line: why an agent left its lab, or why the coordinator flagged a profile. It can be empty."""
+
+
 class AgentJoined(EventBase):
     """An agent joined the lab."""
 
@@ -84,9 +88,10 @@ class OnCallSet(EventBase):
     The person put an agent's seat on call, or took it off.
 
     An on-call agent is a member of the lab. No post for every agent wakes it: not the first post of a thread, not
-    an ask or a call that names nobody, and not the person's post that names nobody. A post that names it, replies
-    to it, or builds on its post wakes it, and so does a post in a thread that it chose to watch. No agent tool
-    records this event.
+    an ask or a call that names nobody, and not the person's post that names nobody. A plain mention in a plan, a
+    message, a result, or another post that addresses nobody wakes it neither. An ask or a call that names it wakes
+    it, and so does a post that replies to it or builds on its post, the person's post that names it, and a post in
+    a thread that it chose to watch. No agent tool records this event.
     """
 
     type: Literal['on_call_set'] = 'on_call_set'
@@ -113,10 +118,6 @@ class CoordinatorSet(EventBase):
     """Who caused it: the person, or the agent itself."""
     open: bool = False
     """With no holder and from the person: whether an agent may take the seat by itself. It means nothing else."""
-
-
-type Reason = Annotated[str, AfterValidator(one_line), StringConstraints(max_length=200)]
-"""Why an agent left its lab, as one line. It can be empty."""
 
 
 class AgentLeft(EventBase):
@@ -159,17 +160,53 @@ class WatchSet(EventBase):
 
 class ProfileSet(EventBase):
     """
-    An agent said what it is to the lab and what it does now, in its own words.
+    A change to an agent's profile: what the agent is to the lab, in its own words, and what others set on it.
 
     `role` is an organizational word that the agent picks, such as "theory" or "keeps the map". Two agents can have
-    the same one. `status` is one line about the agent's present work. `None` leaves a field as it was, and an
-    empty text clears it. The code never acts on either: they are for the other agents and the person to read.
+    the same one. `status` is one line about the agent's present work. `name` is the name that the agent chose,
+    `about` says what lens it brings, and `picture` is its picture from parts. `None` leaves a field as it was, and
+    an empty text clears it. The code never acts on any of these texts: they are for the other agents and the
+    person to read.
+
+    `by` is who made the change when the agent did not: the person, or the lab's coordinator. The person can take
+    back the name, the about line, and the picture, and can give the seat a role. The coordinator can take back
+    another agent's name, rewrite its about line, flag its profile with a reason, and give it a role where the
+    person gave none. The record keeps every earlier text, and the agent can change its profile again afterwards.
     """
 
     type: Literal['profile_set'] = 'profile_set'
     agent: AgentId
     role: Role | None = None
     status: Status | None = None
+    name: ChosenName | None = None
+    """The name that the agent chose. An empty text takes it back, and the seat's label is the name again."""
+    about: About | None = None
+    picture: Picture | None = None
+    no_picture: bool = False
+    """Whether the change takes the agent's picture back, so that the agent has none."""
+    by: AgentId | None = None
+    """Who made the change, when the agent did not: `person`, or the agent that holds the coordinator seat."""
+    given_role: Role | None = None
+    """The role that `by` gives the agent's seat. An empty text takes it back."""
+    flag: Reason | None = None
+    """The coordinator's reason for a flag on the profile, as one line. An empty text takes the flag back."""
+
+
+class ReviewerSet(EventBase):
+    """
+    An agent holds a reviewer seat from now on, or holds one no longer.
+
+    A lab has a number of reviewer seats, which the person sets. An agent takes a free seat for itself and gives up
+    the seat that it holds, and the person can give a seat to any agent or take it. A check of another agent's
+    result and a request for a blind rerun take a reviewer seat, unless the agent's own work builds on the post or
+    replies to it, or the lab's answer builds on it.
+    """
+
+    type: Literal['reviewer_set'] = 'reviewer_set'
+    agent: AgentId
+    reviewer: bool
+    by: AgentId
+    """Who caused it: the person, or the agent itself."""
 
 
 MAX_ALARM_MINUTES = 24 * 60
@@ -331,6 +368,7 @@ type Event = Annotated[
     | Posted
     | WatchSet
     | ProfileSet
+    | ReviewerSet
     | AlarmSet
     | TurnStarted
     | TurnEnded

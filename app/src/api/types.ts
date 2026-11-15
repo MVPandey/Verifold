@@ -39,14 +39,87 @@ export interface ModelSpec {
   readonly effort: string | null;
 }
 
+/**
+ * The one status of an agent or a thread, in the order of who needs the person. The first that applies is the
+ * status: a permission request waits for the person, another ask to the person waits, the agent is in a turn, it
+ * waits for another agent, it waits for nobody, Verifold stopped it, or it left.
+ */
+export type Need = 'approval' | 'answer' | 'working' | 'waiting' | 'idle' | 'stopped' | 'left';
+
+export type Shape = 'square' | 'circle' | 'hex' | 'diamond' | 'arch' | 'triangle';
+export type PictureSymbol =
+  'wave' | 'dots' | 'arrow' | 'fork' | 'bars' | 'ring' | 'plus' | 'zigzag' | 'orbit' | 'slashes';
+
+/** An agent's picture: one shape of six, one color of eight as a hex string, and one symbol of ten. */
+export interface Picture {
+  readonly shape: Shape;
+  readonly color: string;
+  readonly symbol: PictureSymbol;
+}
+
+/** A seat that an agent holds. */
+export type SeatMark = 'coordinator' | 'reviewer' | 'on_call';
+
+/** A post by its ID and its thread, so that the app can link to it. */
+export interface PostRef {
+  readonly id: string;
+  readonly thread: string;
+}
+
+/** What became of an agent's posts, as lists of posts. It is no score and ranks nobody. */
+export interface Outcomes {
+  /** The agent's results that another agent built on. */
+  readonly built_on: readonly PostRef[];
+  /** The agent's results that a check holds up. */
+  readonly held: readonly PostRef[];
+  /** The agent's results that are disputed or conceded, and the leads that it ruled out. */
+  readonly refuted: readonly PostRef[];
+  /** The agent's asks that have no answer yet. */
+  readonly open_asks: readonly PostRef[];
+}
+
+/** One change that the person or a coordinator made to an agent's profile, with the text from before. */
+export interface ProfileEdit {
+  readonly at: string;
+  /** Who made the change: `person`, or the agent that held the coordinator seat. */
+  readonly by: string;
+  readonly part: 'name' | 'about' | 'picture' | 'role' | 'flag';
+  /** The text that the part held before the change. For a picture, its three parts in words. */
+  readonly before: string;
+  readonly after: string;
+}
+
+/** One thing that waits for the person: an approval or an answer, with who asks, what, and since when. */
+export interface Wait {
+  readonly kind: 'approval' | 'answer';
+  readonly agent: string;
+  /** What waits, in one line. For a request of a harness, the words are Verifold's own. */
+  readonly what: string;
+  readonly since: string;
+  readonly post: string;
+  readonly thread: string;
+}
+
+/** Who wrote a post, as facts. `null` stands for the person. */
+export interface Byline {
+  /** The author's name now. */
+  readonly name: string;
+  /** The label of the author's seat as it was when the post was written. Empty when it is the author's name. */
+  readonly seat: string;
+  /** The seats that the author holds now. */
+  readonly marks: readonly SeatMark[];
+  readonly role: string;
+}
+
 export interface Agent {
   readonly id: string;
+  /** The name that the agent chose, or else the label of its seat. */
   readonly name: string;
   readonly harness: string;
   readonly model: ModelSpec;
   readonly role: string;
   readonly brief: string;
-  /** The role that the person gave the agent's seat, or an empty string. */
+  /** The role that the person gave the agent's seat when it joined. The view's `given_role` is the one of now. */
   readonly given_role: string;
   /** The harness mode that the person chose. `null` follows the lab's auto mode choice. */
   readonly mode: string | null;
@@ -55,11 +128,20 @@ export interface Agent {
   readonly checks: string | null;
 }
 
+/**
+ * What an agent in the state `waiting` waits for. `person`: its harness waits for the person's answer inside a
+ * turn that runs. `time`: the lab is out of time. `process`: the agent ended its turn and waits for a process
+ * that it left running.
+ */
+export type WaitsFor = 'person' | 'time' | 'process';
+
 export interface AgentActivity {
   readonly state: AgentState;
   /** The latest step that the harness reported, such as a tool call's title. */
   readonly detail: string;
   readonly at: string | null;
+  /** With the state `waiting`: what the agent waits for. */
+  readonly waits_for?: WaitsFor | null;
 }
 
 export interface Usage {
@@ -88,6 +170,34 @@ export interface AlarmLine {
 
 export interface AgentView {
   readonly agent: Agent;
+  /** The label of the agent's seat, such as "Codex · gpt-6.1-sol 2". It is the agent's name until it chooses one. */
+  readonly seat: string;
+  /** The name that the agent chose, or an empty text while it chose none. */
+  readonly chosen_name: string;
+  /** What lens the agent brings, in its own words. */
+  readonly about: string;
+  /** Who wrote the about line: the agent itself, or the coordinator that rewrote it. `null` without one. */
+  readonly about_by: string | null;
+  /**
+   * Whether a turn of the agent runs now. A turn in which the harness waits for the person's answer runs. An
+   * agent that waits for more time or for its own process is in no turn.
+   */
+  readonly in_turn: boolean;
+  /** The picture that the agent chose, or `null`. */
+  readonly picture: Picture | null;
+  /** The role that somebody gave the agent's seat, or an empty string. */
+  readonly given_role: string;
+  /** Who gave it: `person`, or the agent that held the coordinator seat. `null` without a given role. */
+  readonly given_by: string | null;
+  /** Whether the agent holds a reviewer seat. */
+  readonly reviewer: boolean;
+  /** The reason of the coordinator's flag on the agent's profile, while one stands. */
+  readonly flag: string;
+  /** The changes that the person or a coordinator made to the agent's profile, oldest first. */
+  readonly edits: readonly ProfileEdit[];
+  /** The agent's one status. */
+  readonly need: Need;
+  readonly outcomes: Outcomes;
   /** What the agent says that it is to the lab, in its own words. */
   readonly role: string;
   /** Whether the person put the agent's seat on call, so that only a post for the agent itself wakes it. */
@@ -104,6 +214,8 @@ export interface AgentView {
   /** Whether Verifold stopped the agent because its harness failed too often. The person can start it again. */
   readonly stopped: boolean;
   readonly turns: number;
+  /** How many turns of the agent started. It is above `turns` while a turn runs. */
+  readonly turns_started: number;
   /** When the agent's last turn ended, or `null` when none ended. */
   readonly turn_ended_at: string | null;
   /** The alarm that waits for the agent, or `null`. */
@@ -139,6 +251,14 @@ export interface LabView {
   readonly threads: number;
   readonly posts: number;
   readonly needs_you: number;
+  /** What waits for the person: the approvals first, then the answers, and in each the one that waits longest first. */
+  readonly waits: readonly Wait[];
+  /** The one status of each thread, by the thread's ID. */
+  readonly thread_needs: Readonly<Record<string, Need>>;
+  /** How many reviewer seats the lab has. */
+  readonly reviewer_seats: number;
+  /** The number that the person set, or `null` while the number follows the size of the lab. */
+  readonly reviewer_seats_set: number | null;
   readonly ends_at: string | null;
   readonly out_of_time: boolean;
   /** Whether the lab's agents say that it is done. A closed lab is not stopped. */
@@ -171,10 +291,16 @@ export interface PermissionSettings {
   readonly while_you_decide: WhileYouDecide;
 }
 
+export interface ReviewerSettings {
+  /** The number of reviewer seats, from 0 to 20. `null` follows the size of the lab. */
+  readonly seats: number | null;
+}
+
 export interface Settings {
   readonly version: number;
   readonly jobs: JobSettings;
   readonly permissions: PermissionSettings;
+  readonly reviewers: ReviewerSettings;
 }
 
 /** Where a setting lives: in one project's file, which wins, or in the file for all projects. */
@@ -201,7 +327,11 @@ export interface SettingsView {
 
 /** The settings that the app changes. */
 export type SettingKey =
-  'jobs.at_time_limit' | 'jobs.at_exit' | 'permissions.while_you_decide' | 'setup';
+  | 'jobs.at_time_limit'
+  | 'jobs.at_exit'
+  | 'permissions.while_you_decide'
+  | 'reviewers.seats'
+  | 'setup';
 
 /**
  * The person changes one setting. A `null` value removes it, so the one for all projects, or Verifold's default,
@@ -210,7 +340,7 @@ export type SettingKey =
 export interface SettingsChange {
   readonly level: SettingsLevel;
   readonly key: SettingKey;
-  readonly value: string | SetupChoices | null;
+  readonly value: string | number | SetupChoices | null;
   readonly revisions: { readonly project: string; readonly all_projects: string };
 }
 
@@ -322,6 +452,18 @@ export interface InviteRequest {
 export interface SeatChange {
   readonly on_call?: boolean;
   readonly coordinator?: boolean;
+  /** Give the agent a reviewer seat, or take the seat that it holds. */
+  readonly reviewer?: boolean;
+}
+
+/** The person changes an agent's profile: takes back what the agent chose, or gives its seat a role. */
+export interface ProfileChange {
+  /** Take the agent's chosen name back, so that its seat's label is its name again. */
+  readonly reset_name?: boolean;
+  readonly reset_about?: boolean;
+  readonly reset_picture?: boolean;
+  /** The role that the person gives the seat, as one line of at most 40 characters. An empty text takes it back. */
+  readonly role?: string;
 }
 
 export interface StartRequest {
@@ -360,6 +502,8 @@ interface PostBase {
   /** The posts that this one builds on, in any thread. */
   readonly builds_on: readonly string[];
   readonly evidence: readonly FileEvidence[];
+  /** Whether the post is for the whole lab. Only the lab's coordinator and the person can mark a post so. */
+  readonly to_lab?: boolean;
 }
 
 export type Post =
@@ -439,6 +583,8 @@ export interface PostView {
   readonly seq: number;
   readonly at: string;
   readonly post: Post;
+  /** Who wrote the post. `null` for a post of the person. */
+  readonly by: Byline | null;
   readonly standing: Standing;
   /** The posts that build on this one, oldest first. */
   readonly built_on_by: readonly string[];
@@ -486,6 +632,8 @@ export interface PostLine {
   readonly reply_to: string | null;
   readonly seq: number;
   readonly at: string;
+  /** Who the author is. `null` for a post of the person. */
+  readonly by: Byline | null;
 }
 
 /** Ideas that crossed between two threads: posts in one build on another agent's posts in the other. */

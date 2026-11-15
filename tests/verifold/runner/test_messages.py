@@ -110,8 +110,10 @@ def test_a_lab_with_a_time_limit_tells_each_agent_when_it_ends_in_utc() -> None:
 def test_the_lab_norms_and_the_doorbell_are_short_and_plain() -> None:
     assert NORMS_TEMPLATE.startswith("# The lab's norms")
     assert '`' not in NORMS_TEMPLATE
-    # The limit was 2,800. It grew by 300 for the two norms that came out of Python and the norm on checks by rerun.
-    assert len(NORMS_TEMPLATE) < 3_100
+    # The limit was 2,800. It grew by 300 for the two norms that came out of Python and the norm on checks by rerun,
+    # by 1,200 for the norms on the goal, on obstacles, on a human's limits, on reviewer seats, on the
+    # coordinator's strategy, and on a name, and by 300 for the close, the open coordinator seat, and the helpers.
+    assert len(NORMS_TEMPLATE) < 4_600
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -122,24 +124,58 @@ def test_the_lab_norms_ask_agents_to_plan_together_check_each_other_and_agree_on
         'Give each line of work its own thread',
         'Read the board before each new piece of work',
         'Post each result when you have it',
-        'Check a result that others build on',
-        "propose the lab's answer. The newest proposal is the answer",
-        'Do not stop at the first result',
+        "propose the lab's answer. Another agent can propose a different one; the newest proposal is the answer that shows",
+        'Object to the proposal when you see a problem in it.',
         'Chain the work',
     ):
         assert norm in NORMS_TEMPLATE
 
 
+def test_the_lab_norms_hold_the_goal_the_obstacle_the_reviewer_seats_and_the_name() -> None:
+    for norm in (
+        'The question is a goal. Keep working toward it while the lab has time.',
+        'A result that says "this does not work" is a finding on the way, and the next attempt starts from it.',
+        'What stands in the way becomes the way.',
+        'name the obstacle and ask what would remove it. Two things that fail alone can work together.',
+        "Do not assume a human's limits.",
+        'Revisit what you ruled out as too slow or too much work.',
+        'Before you rule a method out, search what is published on it.',
+        "Exploring and testing is everyone's main work. Before you build on a result, look at it yourself",
+        'When the lab has reviewer seats, a check that the lab relies on comes from an agent in one.',
+        'Take a seat only when checking is the work you want; leave it free when you would rather build.',
+        "Ask for a blind rerun of your own result when the lab's answer rests on it",
+        'an agent in a reviewer seat can ask for one of any result',
+        'When the agents agree that nothing useful is left to try, one of them posts a close.',
+        'When no agent holds the seat and it is open, an agent that wants this work can take it.',
+        'A lead gets a champion and a forward test before it gets an audit.',
+        "When the lab has a coordinator, it owns the lab's strategy: which bets are open, which are missing, and what to try next.",
+        'It can ask one agent to take the strategy. Whoever has it looks across fields',
+        'looks across fields, chains results from different threads, and opens the next line when one closes',
+        'Choose a name, and say in one line the lens you bring.',
+    ):
+        assert norm in NORMS_TEMPLATE
+    # A live lab showed seven agents that opened with the same doubt, and rival answers are allowed.
+    for gone in (
+        'or a doubt',
+        'Do not post an answer of your own beside it',
+        'Do this before you check',
+        'Check the proposal',
+        'Agree on one answer',
+    ):
+        assert gone not in NORMS_TEMPLATE
+
+
 def test_the_lab_norms_ask_agents_to_take_other_sides_say_when_they_are_stuck_and_carry_ideas_across() -> None:
     for norm in (
         'Look at the question from a side that no other plan covers',
-        'Change sides when the work calls for it, or start a helper that takes one',
+        'Change sides when the work calls for it.',
         'Open a line that nobody has, join one that is short of hands, or try a long shot',
         'Look for a result to build on, and for a problem that you can help with',
         'When you are stuck, post an ask that says what you tried',
         "post it in that agent's thread, also when it comes from another field",
         'When you build on a post, name it',
-        'Use your own helpers and searches as you see fit',
+        "Use your harness's own helpers for work that can run beside yours, such as a literature search, a side experiment or a second look.",
+        "A helper posts with your token; have it give its own name in the post's helper field, or post what it finds",
     ):
         assert norm in NORMS_TEMPLATE
 
@@ -151,7 +187,7 @@ CHECKS = Path('/lab/.verifold/checks/checker-7')
 def test_the_lab_norms_hold_what_came_out_of_python_and_the_norm_on_blind_reruns() -> None:
     for norm in (
         "Post your results before the lab's time ends",
-        "Have it give its own name in the post's helper field",
+        "have it give its own name in the post's helper field",
         'When you check a result with a rerun, reproduce it yourself from its files, and do not trust the claim',
         'Post the check with the files of your own run',
     ):

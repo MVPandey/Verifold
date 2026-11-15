@@ -1,14 +1,16 @@
 import asyncio
+import time
 from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import override
 
 import httpx2
 import pytest
+from builders import RecordBuilder
 from conftest import agent
 from pydantic import SecretStr
 
-from verifold.protocol.agents import AgentChoice
+from verifold.protocol.agents import Agent, AgentChoice, ModelSpec, Picture
 from verifold.protocol.app import (
     FolderView,
     HarnessOption,
@@ -24,15 +26,18 @@ from verifold.protocol.app import (
     SetupView,
     StartRequest,
 )
-from verifold.protocol.events import TurnSummary
+from verifold.protocol.events import Posted, TurnSummary
 from verifold.protocol.join import FileText, PostRequest
-from verifold.protocol.posts import FileEvidence
+from verifold.protocol.posts import Ask, FileEvidence, Objection, PermissionShown, Result
 from verifold.protocol.settings import Settings
 from verifold.protocol.usage import Usage
+from verifold.server import status as status_module
 from verifold.server.activity import Activity
-from verifold.server.app_api import _changes, app_api
+from verifold.server.app_api import _changes, _lab_view, app_api
 from verifold.server.errors import LabExists, NoLab, SetupRejected
 from verifold.server.lab import Lab
+from verifold.society import board as board_module
+from verifold.society.board import Board
 from verifold.society.errors import NotFound
 from verifold.store.errors import (
     NormsChanged,
@@ -222,6 +227,7 @@ async def test_settings_pass_through_and_refusals_say_why(client: httpx2.AsyncCl
         'version': 1,
         'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'},
         'permissions': {'while_you_decide': 'auto'},
+        'reviewers': {'seats': None},
     }
     assert view['project']['path'] == '.verifold/settings.json'
     assert changed.status_code == 200
@@ -314,7 +320,11 @@ async def test_the_lab_view_shows_each_agents_activity_and_cost(
     )
     assert ada['usage'] == {'input_tokens': 200, 'cached_input_tokens': 120, 'output_tokens': 14}
     assert ada['cost_usd'] == pytest.approx(0.75)
-    assert (bo['activity']['state'], bo['cost_usd']) == ('starting', None)
+    # Nothing reported for bo, so no loop runs it: it shows as idle, not as starting.
+    assert (bo['activity']['state'], bo['need'], bo['in_turn'], bo['cost_usd']) == ('idle', 'idle', False, None)
+    await activity.set('bo', 'starting')
+    (started,) = [view for view in (await client.get('/lab')).json()['agents'] if view['agent']['id'] == 'bo']
+    assert (started['activity']['state'], started['need'], started['in_turn']) == ('starting', 'working', True)
     # Ada opened the lab's thread with a result, so that is where she works.
     assert (ada['role'], ada['status'], ada['thread']) == ('theory', 'Deriving the bound.', 't-1')
     assert (bo['role'], bo['status'], bo['thread']) == ('', '', None)
@@ -715,3 +725,231 @@ async def test_the_person_opens_the_agents_folder_and_only_an_agent_of_the_lab_n
     assert (unknown.status_code, unknown.json()['detail']) == (404, 'The lab has no agent with the ID zed.')
     # An agent's ID has no slash and no dot, and the request has no field for a path.
     assert (path.status_code, extra.status_code, refused.status_code) == (422, 422, 401)
+
+
+async def test_the_lab_view_holds_each_agents_identity_status_and_what_waits_for_the_person(
+    client: httpx2.AsyncClient, lab: Lab, activity: Activity
+) -> None:
+    await lab.join(Agent(id='agent-3', name='Sorrel', harness='guest', model=ModelSpec(family='unknown')))
+    await lab.set_profile('bo', role='builder', name='Tessel', about='I run a number twice.')
+    await lab.set_profile('bo', picture=Picture(shape='hex', color='#f08c3a', symbol='orbit'))
+    await lab.set_reviewer('bo', 'person', reviewer=True)
+    await lab.start_turn('ada', 'session-1', 0, model_name='Opus 5.5')
+    await activity.set('ada', 'working', 'Run pytest')
+    await activity.set('bo', 'idle')
+    await activity.invite('agent-3', 'invited')
+    await lab.post(
+        PostRequest(kind='ask', text='Permission needed', new_thread='Permission requests', mentions=('person',)),
+        'ada',
+        mark=PermissionShown(command='ls'),
+    )
+    await lab.post(PostRequest(kind='ask', text='May we read it?', thread='t-1', mentions=('person',)), 'bo')
+
+    view = (await client.get('/lab')).json()
+
+    ada, bo, guest = view['agents']
+    assert (ada['agent']['name'], ada['seat'], ada['picture'], ada['need'], ada['turns'], ada['turns_started']) == (
+        'Ada',
+        'Ada',
+        None,
+        'approval',
+        0,
+        1,
+    )
+    assert (bo['agent']['name'], bo['seat'], bo['about'], bo['reviewer'], bo['need']) == (
+        'Tessel',
+        'Bo',
+        'I run a number twice.',
+        True,
+        'answer',
+    )
+    assert bo['picture'] == {'shape': 'hex', 'color': '#f08c3a', 'symbol': 'orbit'}
+    assert (ada['chosen_name'], bo['chosen_name'], guest['chosen_name']) == ('', 'Tessel', '')
+    assert (guest['agent']['name'], guest['seat'], guest['need']) == (
+        'Sorrel',
+        'Own harness · model not reported',
+        'idle',
+    )
+    assert [(wait['kind'], wait['agent'], wait['what'], wait['post'], wait['thread']) for wait in view['waits']] == [
+        ('approval', 'ada', 'Asks to run a command', 'p-2', 't-2'),
+        ('answer', 'bo', 'May we read it?', 'p-3', 't-1'),
+    ]
+    assert (view['needs_you'], view['thread_needs']) == (2, {'t-1': 'approval', 't-2': 'approval'})
+    assert (view['reviewer_seats'], view['reviewer_seats_set']) == (0, None)
+    assert bo['outcomes'] == {'built_on': [], 'held': [], 'refuted': [], 'open_asks': [{'id': 'p-3', 'thread': 't-1'}]}
+    # A post in a thread shows who wrote it, with the seat's label when it is not the name.
+    posts = (await client.get('/threads/t-1')).json()['posts']
+    assert [post['by'] for post in posts] == [
+        {'name': 'Ada', 'seat': '', 'marks': [], 'role': ''},
+        {'name': 'Tessel', 'seat': 'Bo', 'marks': ['reviewer'], 'role': 'builder'},
+    ]
+
+
+async def test_the_person_takes_back_what_an_agent_chose_and_gives_its_seat_a_role(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    await lab.set_profile(
+        'bo', name='Tessel', about='A lens.', picture=Picture(shape='hex', color='#f08c3a', symbol='orbit')
+    )
+
+    role = await client.post('/agents/bo/profile', json={'role': 'driver'})
+    reset = await client.post(
+        '/agents/bo/profile', json={'reset_name': True, 'reset_about': True, 'reset_picture': True, 'role': 'scout'}
+    )
+    missing = await client.post('/agents/nobody/profile', json={'role': 'driver'})
+    long = await client.post('/agents/bo/profile', json={'role': 'x' * 41})
+
+    assert (role.status_code, reset.status_code, missing.status_code, long.status_code) == (200, 200, 404, 422)
+    (given,) = [view for view in role.json()['agents'] if view['agent']['id'] == 'bo']
+    assert (given['given_role'], given['given_by'], given['agent']['name']) == ('driver', 'person', 'Tessel')
+    (bo,) = [view for view in reset.json()['agents'] if view['agent']['id'] == 'bo']
+    assert (bo['agent']['name'], bo['about'], bo['picture'], bo['given_role']) == ('Bo', '', None, 'scout')
+    assert [(edit['by'], edit['part'], edit['before'], edit['after']) for edit in bo['edits']] == [
+        ('person', 'role', '', 'driver'),
+        ('person', 'name', 'Tessel', ''),
+        ('person', 'about', 'A lens.', ''),
+        ('person', 'picture', 'hex, #f08c3a, orbit', ''),
+        ('person', 'role', 'driver', 'scout'),
+    ]
+
+
+async def test_the_person_sets_the_number_of_reviewer_seats_of_the_lab(client: httpx2.AsyncClient, lab: Lab) -> None:
+    for name in ('cy', 'dee'):
+        await lab.join(Agent(id=name, name=name.title(), harness='fake', model=ModelSpec(family='anthropic')))
+    before = (await client.get('/lab')).json()
+    seq = lab.board.seq
+
+    three = await client.post('/reviewers', json={'seats': 3})
+    same = await client.post('/reviewers', json={'seats': 3})
+    after = lab.board.seq
+    back = await client.post('/reviewers', json={'seats': None})
+    many = await client.post('/reviewers', json={'seats': 21})
+
+    assert (before['reviewer_seats'], before['reviewer_seats_set']) == (1, None)
+    assert (three.json()['reviewer_seats'], three.json()['reviewer_seats_set'], after) == (3, 3, seq + 1)
+    assert (same.json()['reviewer_seats'], back.json()['reviewer_seats'], back.json()['reviewer_seats_set']) == (
+        3,
+        1,
+        None,
+    )
+    assert many.status_code == 422
+    # The other settings of the lab stay as they are.
+    assert lab.board.settings.jobs == Settings().jobs
+
+
+async def test_an_agent_that_waits_for_more_time_or_its_own_process_is_in_no_turn_and_one_that_asks_the_person_is(
+    client: httpx2.AsyncClient, lab: Lab, activity: Activity
+) -> None:
+    await lab.join(Agent(id='cy', name='Cy', harness='fake', model=ModelSpec(family='anthropic')))
+    await lab.set_time_left(timedelta(0))
+    await lab.run_out_of_time()
+    await activity.set('ada', 'waiting', 'The lab is out of time. The person can give it more.', 'time')
+    await activity.set('bo', 'waiting', 'Waits for a process that it left running.', 'process')
+    await activity.set('cy', 'waiting', 'Asks you: a permission', 'person')
+
+    view = (await client.get('/lab')).json()
+
+    # An out-of-time lab shows no agent as working, so the app shows that the lab is out of time.
+    assert view['out_of_time'] is True
+    assert [(agent['need'], agent['in_turn'], agent['activity']['waits_for']) for agent in view['agents']] == [
+        ('idle', False, 'time'),
+        ('idle', False, 'process'),
+        ('working', True, 'person'),
+    ]
+    # An approval inside a turn that runs is still a turn that runs.
+    ask = PostRequest(kind='ask', text='Permission needed', new_thread='Permission requests', mentions=('person',))
+    await lab.post(ask, 'cy', mark=PermissionShown(command='ls'))
+    (cy,) = [agent for agent in (await client.get('/lab')).json()['agents'] if agent['agent']['id'] == 'cy']
+    assert (cy['need'], cy['in_turn']) == ('approval', True)
+
+
+async def test_the_person_takes_back_the_name_of_an_agent_that_left_and_the_view_says_who_wrote_an_about_line(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    await lab.set_coordinator('ada', 'person')
+    await lab.set_profile('bo', name='Overlord', about='I rule.')
+    await lab.change_profile('bo', 'ada', about='Runs numbers twice.')
+    written = (await client.get('/lab')).json()['agents']
+    await lab.leave('bo', 'person')
+
+    reset = await client.post('/agents/bo/profile', json={'reset_name': True, 'reset_about': True})
+    role = await client.post('/agents/bo/profile', json={'role': 'driver'})
+
+    assert [(view['about'], view['about_by']) for view in written] == [('', None), ('Runs numbers twice.', 'ada')]
+    assert (reset.status_code, role.status_code) == (200, 400)
+    bo = reset.json()['agents'][1]
+    assert (bo['agent']['name'], bo['chosen_name'], bo['about'], bo['about_by'], bo['need']) == (
+        'Bo',
+        '',
+        '',
+        None,
+        'left',
+    )
+
+
+def long_record(events: int) -> Board:
+    """Return a board of fourteen agents with `events` events: results that build on each other, objections, and asks."""
+    record = RecordBuilder()
+    names = [f'agent-{number}' for number in range(1, 15)]
+    for name in names:
+        record.join(name)
+    record.thread('t-1', opened_by='agent-1')
+    results: list[str] = []
+    authors: dict[str, str] = {}
+    for number in range(1, events - 15):
+        author, post = names[number % 14], f'p-{number}'
+        if number % 3 == 0 and results:
+            target = results[(number * 2_654_435_761 >> 7) % len(results)]
+            other = names[(number + 1) % 14] if authors[target] == author else author
+            record.post(Objection(id=post, thread='t-1', author=other, text='No.', reply_to=target))
+        elif number % 3 == 1:
+            record.post(Result(id=post, thread='t-1', author=author, text='Holds.', builds_on=tuple(results[-2:])))
+            results.append(post)
+            authors[post] = author
+        else:
+            record.post(Ask(id=post, thread='t-1', author=author, text='Who?', mentions=(names[(number + 3) % 14],)))
+    board = record.board()
+    assert board.seq == events
+    return board
+
+
+def test_the_lab_view_of_a_long_record_does_work_that_grows_with_the_record_and_not_with_its_square(
+    activity: Activity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The view once scanned every post for each result, and asked where each result stands twice: 0.31 seconds for
+    # 3,000 events and 2.78 for 9,000. With the board's index it takes 0.02 and 0.11 seconds. A time on a shared
+    # machine says little, so the test counts the work: how often the view builds the index of a board's posts,
+    # and how often it asks where a post stands. Both counts grow with the record and not with its square.
+    built: list[int] = []
+    asked: list[str] = []
+    index, stands = board_module._index, status_module.standing
+
+    def counted_index(posts: tuple[Posted, ...]) -> object:
+        before = len(board_module._indexes), board_module._indexes[-1:] if board_module._indexes else None
+        found = index(posts)
+        if (len(board_module._indexes), board_module._indexes[-1:]) != before:
+            built.append(len(posts))
+        return found
+
+    def counted_standing(board: Board, post_id: str) -> str:
+        asked.append(post_id)
+        return stands(board, post_id)
+
+    monkeypatch.setattr(board_module, '_index', counted_index)
+    monkeypatch.setattr(status_module, 'standing', counted_standing)
+    counts = []
+    for events in (2_000, 6_000):
+        board = long_record(events)
+        built.clear()
+        asked.clear()
+        started = time.perf_counter()
+        view = _lab_view(board, activity)
+        taken = time.perf_counter() - started
+        results = sum(isinstance(entry.post, Result) for entry in board.posts)
+        assert sum(len(agent.outcomes.refuted) for agent in view.agents) > events // 40
+        # One index for the board, and one question for each result.
+        assert (built, len(asked)) == ([len(board.posts)], results)
+        counts.append(len(asked))
+        # A loose bound on the time too: the scan of every post for each result took seconds here.
+        assert taken < 3.0, f'The lab view of {events} events took {taken:.2f} seconds.'
+    assert counts[1] < 3.1 * counts[0]

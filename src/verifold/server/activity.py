@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Literal
 
-from verifold.protocol.app import AgentActivity, AgentState
+from verifold.protocol.app import AgentActivity, AgentState, WaitsFor
 from verifold.protocol.ids import AgentId
 from verifold.server.changes import wait_until
 from verifold.server.lab import utc_now
@@ -27,10 +27,23 @@ class Activity:
         """Return what an agent is doing now."""
         return self._by_agent.get(agent_id, AgentActivity())
 
-    async def set(self, agent_id: AgentId, state: AgentState, detail: str = '') -> None:
-        """Record what an agent is doing now."""
+    def shown(self, agent_id: AgentId) -> AgentActivity:
+        """
+        Return what the app shows that an agent is doing now.
+
+        An agent that nothing reported for is idle: no loop runs it. So `starting` shows only for an agent whose
+        harness Verifold starts now, and every part of the app reads the same state.
+        """
+        return self._by_agent.get(agent_id, AgentActivity(state='idle'))
+
+    async def set(
+        self, agent_id: AgentId, state: AgentState, detail: str = '', waits_for: WaitsFor | None = None
+    ) -> None:
+        """Record what an agent is doing now. `waits_for` says what an agent in the state `waiting` waits for."""
         async with self._changed:
-            self._by_agent[agent_id] = AgentActivity(state=state, detail=detail[:200], at=self._clock())
+            self._by_agent[agent_id] = AgentActivity(
+                state=state, detail=detail[:200], at=self._clock(), waits_for=waits_for
+            )
             self.version += 1
             self._changed.notify_all()
 

@@ -1,31 +1,33 @@
 import { useEffect, useId, useState } from 'react';
 import type { FormEvent, ReactElement } from 'react';
 
+import { PERSON } from '../api/types.ts';
 import type {
   AgentView,
   AnswerView,
   LabView,
+  Need,
   PostView,
   QuestionVersion,
   ThreadLink,
   ThreadSummary,
 } from '../api/types.ts';
-import { authorName, face, ownName } from '../model/agents.ts';
-import type { Face } from '../model/agents.ts';
+import { authorName, members } from '../model/agents.ts';
 import { crossedLine, crossLines } from '../model/crossings.ts';
 import { clock, dayClock, duration, minutesBetween } from '../model/format.ts';
-import { orderNeeds } from '../model/needs.ts';
-import { clip, isPermission, personMessage, standingChip } from '../model/posts.ts';
+import { clip, personMessage, standingChip } from '../model/posts.ts';
 import { isRevision, revisedLine } from '../model/question.ts';
 import { href } from '../model/route.ts';
 import { hasNew, markSeen, readSeen } from '../model/seen.ts';
+import { NEED_WORDS, WAITS_ID, quietBand, waitGroups } from '../model/status.ts';
 import { betweenLine, isSide, sideHeading, sideLines } from '../model/side.ts';
 import { messageOf } from '../api/client.ts';
 import { cardStatus, doneLine, headClaim, questionThread } from '../model/turns.ts';
 import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
 import { Detail, Words } from './Markdown.tsx';
-import { ChipView, Composer, FaceView, Files } from './parts.tsx';
+import { ChipView, Composer, Files } from './parts.tsx';
+import { Who } from './Picture.tsx';
 import { Turns } from './Thread.tsx';
 
 /** A question longer than this gets smaller type, so it does not fill the screen. */
@@ -80,8 +82,9 @@ export function LabPage(props: PageProps & Place): ReactElement {
 }
 
 /**
- * The lab as a wall: the question and the answer so far, the box that steers the lab, the newest report, and one
- * card for each thread. The side threads come after the cards as one folded group, one line each. `questionRead` is the question's thread, and `cardRead` is the thread of the open card.
+ * The lab as a wall: the question and the answer so far, what waits for the person, the box that steers the lab,
+ * the newest report, the band of a quiet lab, and one card for each thread. The cards stay in the order of their
+ * threads' numbers, so a status that changes moves no card. The side threads come after the cards as one folded group, one line each. `questionRead` is the question's thread, and `cardRead` is the thread of the open card.
  */
 export function Wall(
   props: PageProps & Place & { readonly questionRead: ThreadRead; readonly cardRead: ThreadRead },
@@ -102,7 +105,6 @@ export function Wall(
       <Turns
         view={read.view}
         agents={lab.agents}
-        harnesses={data.setup?.harnesses ?? []}
         needs={needs}
         question={questionId}
         done={lab.state !== 'open'}
@@ -164,12 +166,15 @@ export function Wall(
               ) : (
                 <p className="dim">No answer proposed yet.</p>
               )}
-              <Faces faces={authors(questionRead.view?.posts ?? [], lab.agents)} />
+              <Faces
+                ids={authors(questionRead.view?.posts ?? [], lab.agents)}
+                agents={lab.agents}
+              />
             </div>
           ) : null}
         </div>
         <div className="f-steer">
-          <Need needs={needs} lab={lab} />
+          <Waits lab={lab} now={props.now} />
           {done && lab.close ? (
             <a
               className="f-done"
@@ -184,7 +189,7 @@ export function Wall(
             placeholder="Change the scope, the priority, or the time. Every agent gets it."
             button="Send to the lab"
             hint={
-              needs.length > 0
+              lab.waits.length > 0
                 ? 'Your message opens a new thread.'
                 : 'Nothing waits for you. Your message opens a new thread.'
             }
@@ -211,6 +216,7 @@ export function Wall(
             This lab has no thread {open}.
           </p>
         ) : null}
+        <QuietBand lab={lab} now={props.now} />
         {crossing ? <p className="f-crossed">{crossing}</p> : null}
         {cards.length > 0 ? (
           <div className="f-wall">
@@ -220,6 +226,7 @@ export function Wall(
                 summary={summary}
                 threads={threads}
                 agents={lab.agents}
+                need={lab.thread_needs[summary.thread.id] ?? null}
                 fresh={hasNew(summary, seen)}
                 read={summary.thread.id === open ? cardRead : null}
                 turns={turns}
@@ -231,9 +238,13 @@ export function Wall(
         ) : null}
         {side.length > 0 ? (
           // A link into the group opens it. The person folds and unfolds it as they like otherwise.
-          <details className="f-side" open={side.some((summary) => summary.thread.id === open)}>
+          <details
+            className="f-side o-side"
+            open={side.some((summary) => summary.thread.id === open)}
+          >
             <summary>
-              {sideHeading(side.length)}
+              {sideHeading(side)} <u className="closed">Show</u>
+              <u className="opened">Hide</u>
               {side.some((summary) => summary.thread.id !== open && hasNew(summary, seen)) ? (
                 <New />
               ) : null}
@@ -248,6 +259,7 @@ export function Wall(
                       summary={summary}
                       threads={threads}
                       agents={lab.agents}
+                      need={lab.thread_needs[summary.thread.id] ?? null}
                       fresh={false}
                       read={cardRead}
                       turns={turns}
@@ -418,35 +430,42 @@ function number(summary: ThreadSummary): number {
 }
 
 /**
- * Return the faces of the authors of some posts, each once, with the latest author first. The API does not say
- * who is in a thread now, so the page shows who posted last and, fainter, who posted before.
+ * Return the authors of some posts, each once, with the latest author first. The API does not say who is in a
+ * thread now, so the page shows who posted last and, fainter, who posted before. Blind reruns share one place,
+ * because they have no name.
  */
-function authors(posts: readonly PostView[], agents: readonly AgentView[]): readonly Face[] {
+function authors(posts: readonly PostView[], agents: readonly AgentView[]): readonly string[] {
+  const known = new Set(members(agents).map((view) => view.agent.id));
   const ids = [...new Set(posts.map((item) => item.post.author).reverse())];
-  const faces = ids.map((id) => face(agents, id));
-  // Blind reruns share one face, because they have no name.
-  const rerun = faces.findIndex((one) => one.kind === 'rerun');
-  return faces.filter((one, index) => one.kind !== 'rerun' || index === rerun);
+  const rerun = ids.findIndex((id) => id !== PERSON && !known.has(id));
+  return ids.filter((id, index) => id === PERSON || known.has(id) || index === rerun);
 }
 
+/** The most pictures that a row shows. A count of the others follows them, such as "+2". */
+const MOST_PICTURES = 5;
+
 /**
- * A row of faces, and after them the time of the latest post when `last` gives it. The faces after the first are
- * fainter, except in a team, where every member counts the same.
+ * A row of pictures, and after them the time of the latest post when `last` gives it. The pictures after the
+ * first are fainter, except in a team, where every member counts the same. A press on a picture opens the
+ * member's profile.
  */
 function Faces(props: {
-  readonly faces: readonly Face[];
+  readonly ids: readonly string[];
+  readonly agents: readonly AgentView[];
   readonly last?: string | null;
   readonly team?: boolean;
 }): ReactElement {
+  const more = props.ids.length - MOST_PICTURES;
   return (
     <div
       className="f-faces"
       role={props.team ? 'group' : undefined}
       aria-label={props.team ? 'The team' : undefined}
     >
-      {props.faces.map((one, index) => (
-        <FaceView key={index} face={one} alone ghost={index > 0 && !props.team} />
+      {props.ids.slice(0, MOST_PICTURES).map((id, index) => (
+        <Who key={id} agents={props.agents} id={id} alone ghost={index > 0 && !props.team} />
       ))}
+      {more > 0 ? <span className="o-plus">+{more}</span> : null}
       {props.last ? (
         <time dateTime={props.last} title="The latest post">
           {clock(props.last)}
@@ -605,34 +624,67 @@ function Under(props: { readonly view: AnswerView; readonly open: boolean }): Re
   );
 }
 
-/** The ask that waits for the person, with the way to the Needs you page. */
-function Need(props: {
-  readonly needs: readonly PostView[];
-  readonly lab: LabView;
-}): ReactElement | null {
-  const first = orderNeeds(props.needs, props.lab)[0];
-  if (first === undefined) return null;
-  // Two checkers can ask at once, so each keeps its own name here.
-  const name = ownName(props.lab.agents, first.post.author);
-  const more = props.needs.length - 1;
+/**
+ * What waits for the person: the approvals first, then the answers, each with who asks, what, and how long it has
+ * waited. A row goes to the Needs you page, where the person answers.
+ */
+function Waits(props: { readonly lab: LabView; readonly now: Date }): ReactElement | null {
+  const groups = waitGroups(props.lab, props.now);
+  if (groups.length === 0) return null;
   return (
-    <a className="f-need" href={href({ page: 'needs' })}>
-      <b>{isPermission(first.post) ? `${name} asks for permission` : `${name} needs you`}</b>
-      <span>
-        {isPermission(first.post)
-          ? first.post.text.replace(/^Permission needed:\s*/, '')
-          : first.post.text}
-      </span>
-      {more > 0 ? (
-        <small>{more === 1 ? 'One more ask waits.' : `${more} more asks wait.`}</small>
-      ) : null}
-      <em>Answer</em>
-    </a>
+    <div className="o-waits" id={WAITS_ID}>
+      {groups.map((group) => (
+        <div key={group.kind}>
+          <p className="o-waits-head">{group.heading}</p>
+          {group.rows.map((row) => (
+            <a key={row.wait.post} className="o-wait" href={href({ page: 'needs' })}>
+              <span>
+                <b>{row.name}</b> {row.wait.what}
+              </span>
+              <time dateTime={row.wait.since}>{row.waited}</time>
+              <em>{group.word}</em>
+            </a>
+          ))}
+        </div>
+      ))}
+    </div>
   );
 }
 
 /**
- * One thread on the wall, or an opened side thread. Closed, it shows the title, a status, a mark for new posts, the faces of its team, the time of the latest post, and the threads that it builds on and that build on it. Open, it takes
+ * The band above the wall of a lab where no agent is in a turn: for how long, what waits for the person, which
+ * alarms are set, and the time left. It says what starts a turn, and it has no control that wakes agents.
+ */
+function QuietBand(props: { readonly lab: LabView; readonly now: Date }): ReactElement | null {
+  const quiet = quietBand(props.lab, props.now);
+  if (quiet === null) return null;
+  return (
+    <section className="o-quiet" aria-label={quiet.title}>
+      <div>
+        <h2>{quiet.title}</h2>
+        <p>{quiet.text}</p>
+      </div>
+      <dl>
+        <div className={quiet.waits > 0 ? 'hot' : undefined}>
+          <dt>Wait for you</dt>
+          <dd>{quiet.waits}</dd>
+        </div>
+        <div>
+          <dt>Alarms set</dt>
+          <dd>{quiet.alarms}</dd>
+          <span>{quiet.next}</span>
+        </div>
+        <div>
+          <dt>Time left</dt>
+          <dd>{quiet.left}</dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
+
+/**
+ * One thread on the wall, or an opened side thread. Closed, it shows the title, a status, a mark for new posts, the pictures of its team, the time of the latest post, the one status of the thread, and the threads that it builds on and that build on it. Open, it takes
  * the full width and shows who opened the thread, who a side thread is between, the
  * result that it stands on, and its turns.
  */
@@ -641,6 +693,8 @@ function Card(props: {
   /** Every thread of the lab, for the titles of the threads that this one is linked to. */
   readonly threads: readonly ThreadSummary[];
   readonly agents: readonly AgentView[];
+  /** The thread's one status, or `null` when the lab gives none. */
+  readonly need: Need | null;
   readonly fresh: boolean;
   /** The thread's posts when the card is open, or `null` for a closed card. */
   readonly read: ThreadRead | null;
@@ -657,12 +711,12 @@ function Card(props: {
     : null;
   // A closed card shows the thread's team. A thread without one shows who posted last.
   const team = !read?.view && summary.team.length > 0;
-  const faces = read?.view
+  const ids = read?.view
     ? authors(read.view.posts, props.agents)
     : team
-      ? summary.team.map((id) => face(props.agents, id))
+      ? summary.team
       : summary.latest
-        ? [face(props.agents, summary.latest.author)]
+        ? [summary.latest.author]
         : [];
   return (
     <section id={`card-${id}`} className={`f-card c-${status.edge}${open ? ' open' : ''}`}>
@@ -692,7 +746,12 @@ function Card(props: {
           {status.openCalls ? <span className="f-st fs-ask">{status.openCalls}</span> : null}
         </div>
         {head ? <p className="f-head">{head.post.text}</p> : null}
-        <Faces faces={faces} last={open ? null : summary.last_at} team={team} />
+        <Faces ids={ids} agents={props.agents} last={open ? null : summary.last_at} team={team} />
+        {props.need ? (
+          <div className="o-card-need">
+            <span className={`o-st o-${props.need}`}>{NEED_WORDS[props.need]}</span>
+          </div>
+        ) : null}
         <Cross
           label="Builds on"
           links={summary.builds_on_threads}

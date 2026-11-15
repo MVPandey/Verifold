@@ -4,7 +4,7 @@ from typing import Literal, Self
 
 from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
 
-from verifold.protocol.agents import Agent, Label, Name
+from verifold.protocol.agents import About, Agent, Label, Name, Picture, SeatMark
 from verifold.protocol.events import Note, Posted, Question
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.posts import (
@@ -69,6 +69,8 @@ class PostRequest(Record):
     choices: tuple[Choice, ...] = Field(default=(), max_length=MAX_CHOICES)
     choice: Choice | None = None
     """On an answer: the choice of the ask that the author picked. The person's app sends it for a press."""
+    to_lab: bool = False
+    """Whether the post is for the whole lab. Only the lab's coordinator and the person can mark a post so."""
 
     @model_validator(mode='after')
     def _one_thread(self) -> Self:
@@ -101,6 +103,7 @@ class PostRequest(Record):
         # only an ask takes `choices`.
         unused = {'thread', 'new_thread', 'between', 'files'} | (set() if self.accepts else {'accepts'})
         unused |= set() if self.choices else {'choices'}
+        unused |= set() if self.to_lab else {'to_lab'}
         fields = self.model_dump(exclude=unused, exclude_none=True)
         if self.kind == 'proposal' and question_seen is not None:
             fields['question_seen'] = question_seen
@@ -109,12 +112,38 @@ class PostRequest(Record):
         )
 
 
+MAX_SEAT = 28
+"""The most characters of a seat's label that a post's line shows. A longer label is cut, and `brief` has it whole."""
+
+
+class Byline(Record):
+    """
+    Who wrote a post, as facts: the author's name, its seat, the seats that it holds, and its role.
+
+    The code acts on none of the texts. A seat mark says which seat the record gives the agent.
+    """
+
+    name: str
+    """The author's name now: the name that it chose, or else the label of its seat."""
+    seat: str = ''
+    """
+    The label of the author's seat as it was when the post was written: its harness's title and its model's name.
+    Empty when that label is the author's name.
+    """
+    marks: tuple[SeatMark, ...] = ()
+    """The seats that the author holds now: `coordinator`, `reviewer`, and `on_call`."""
+    role: str = ''
+    """What the author says that it is to the lab, or else the role that somebody gave its seat."""
+
+
 class PostView(Record):
-    """A post with its time, where it stands, and the posts that build on it."""
+    """A post with its time, who wrote it, where it stands, and the posts that build on it."""
 
     seq: int
     at: AwareDatetime
     post: Post
+    by: Byline | None = None
+    """Who wrote the post. `None` for a post of the person."""
     standing: Standing
     built_on_by: tuple[PostId, ...] = ()
     """The posts that name this one in `builds_on`, oldest first."""
@@ -138,7 +167,7 @@ def line_text(text: str) -> str:
     """Return a headline as a post's line shows it: whole, or cut to `MAX_LINE` characters with a mark that says so."""
     if len(text) <= MAX_LINE:
         return text
-    return f'{text[:MAX_LINE]}… [cut: the headline has {len(text)} characters, and `thread` shows all of it]'
+    return f'{text[:MAX_LINE]}… [cut: {len(text)} characters, `thread` shows all of it]'
 
 
 class PostLine(Record):
@@ -152,6 +181,13 @@ class PostLine(Record):
     id: PostId
     thread: ThreadId
     author: AgentId
+    by: Byline | None = None
+    """
+    Who the author is, with its seat's label cut to `MAX_SEAT` characters. `None` for a post of the person. In
+    `brief`, the list of agents says who each agent is. So in the brief's lists of posts and in an agent's `plan`
+    and `latest`, `by` is `None` for an author that the list of agents holds, unless the label of its seat was
+    another when the post was written. The lines of `news` and of a thread's `latest` always have it.
+    """
     helper: Helper = ''
     kind: PostKind
     text: Headline
@@ -161,13 +197,14 @@ class PostLine(Record):
     at: AwareDatetime
 
     @classmethod
-    def of(cls, entry: Posted) -> Self:
-        """Return the line of a post on the board."""
+    def of(cls, entry: Posted, by: Byline | None = None) -> Self:
+        """Return the line of a post on the board, with who wrote it."""
         post = entry.post
         return cls(
             id=post.id,
             thread=post.thread,
             author=post.author,
+            by=by,
             helper=post.helper,
             kind=post.kind,
             text=line_text(post.text),
@@ -176,6 +213,14 @@ class PostLine(Record):
             seq=entry.seq,
             at=entry.at,
         )
+
+
+class PostEntry(Record):
+    """A post in a list of a brief: its line, or its ID alone when the brief holds its line already."""
+
+    id: PostId
+    line: PostLine | None = None
+    """The post's line. `None` when `news` or an earlier field of the same brief holds it."""
 
 
 MAX_LINKS = 3
@@ -256,6 +301,34 @@ class AlarmLine(Record):
     """
 
 
+class ProfileNote(Record):
+    """
+    A change that the person or the lab's coordinator made to an agent's profile.
+
+    The record keeps the earlier text, and the agent can change its profile again with `profile`.
+    """
+
+    by: AgentId
+    """Who made the change: `person`, or the agent that holds the coordinator seat."""
+    name_taken_back: bool = False
+    """Whether the change took the agent's chosen name back, so that its seat's label is its name again."""
+    about: About | None = None
+    """The about line after the change, when the change set it. An empty text means that it was taken back."""
+    picture_taken_back: bool = False
+    given_role: str | None = None
+    """The role that the change gave the agent's seat, when it gave one. An empty text takes the role back."""
+    flag: str | None = None
+    """The reason of a flag on the profile, when the change set one. An empty text takes the flag back."""
+
+
+class RenameLine(Record):
+    """An agent that has another name than before: the name that it has now, and the name that it had."""
+
+    id: AgentId
+    name: str
+    was: str
+
+
 class News(Record):
     """
     The posts that an agent has not seen yet, oldest first, with the agent's alarm.
@@ -278,6 +351,10 @@ class News(Record):
     """How many older posts `others` leaves out. `threads` and `thread` show them."""
     left: tuple[LeftLine, ...] = ()
     """The agents that left the lab since, among those that the agent wrote to: who caused it, and the reason."""
+    profile: tuple[ProfileNote, ...] = ()
+    """The changes that the person or the coordinator made to the agent's own profile since, oldest first."""
+    renamed: tuple[RenameLine, ...] = ()
+    """The other agents whose name changed since, each once, with its name now and the name that it had before."""
     alarm: AlarmLine | None = None
     """The alarm that waits for the agent. `None` means that no alarm waits."""
 
@@ -346,23 +423,46 @@ class RerunResult(Record):
     news: News | None = None
 
 
+MAX_FORMER_NAMES = 2
+"""The most former names in an agent's line: the newest ones. An `@` and an older name still reach the agent."""
+
+
 class AgentLine(Record):
-    """An agent of the lab at a glance: the plan that it posted last, and its latest post."""
+    """An agent of the lab at a glance: who it is, the seats that it holds, the plan that it posted last, and its latest post."""
 
     id: AgentId
     name: Name
+    """The agent's name: the name that it chose, or else the label of its seat."""
+    seat: str = ''
+    """
+    The label of the agent's seat: its harness's title and its model's name, such as "Codex · gpt-6.1-sol 2". For
+    an invited agent it says that the agent runs in its own harness. Empty when the label is the agent's name.
+    """
     harness: Label
+    former_names: tuple[str, ...] = ()
+    """The names that the agent chose before and has no longer, newest last, at most `MAX_FORMER_NAMES`."""
+    about: About = ''
+    """What lens the agent brings: its field and how it approaches a problem."""
+    about_by: AgentId | None = None
+    """Who wrote `about`: the agent itself, or the coordinator that rewrote it. `None` without an about line."""
     role: str = ''
     """What the agent says that it is to the lab, in its own words."""
     given_role: str = ''
-    """The role that the person gave the agent's seat. The agent's own `role` stands beside it and does not replace it."""
+    """The role that somebody gave the agent's seat. The agent's own `role` stands beside it and does not replace it."""
+    given_by: AgentId | None = None
+    """Who gave `given_role`: `person`, or the agent that held the coordinator seat. `None` without a given role."""
     on_call: bool = False
     """
-    Whether the person put the agent's seat on call. No post for every agent wakes an on-call agent. A post that
-    names it, replies to it, or builds on its post does, and so does a post in a thread that it chose to watch.
+    Whether the person put the agent's seat on call. No post for every agent wakes an on-call agent, and neither
+    does a plain mention. An ask or a call that names it does, and so does a post that replies to it or builds on
+    its post, the person's post that names it, and a post in a thread that it chose to watch.
     """
     coordinator: bool = False
     """Whether the agent holds the lab's coordinator seat."""
+    reviewer: bool = False
+    """Whether the agent holds a reviewer seat."""
+    flag: str = ''
+    """The reason of the coordinator's flag on the agent's profile, while one stands."""
     status: str = ''
     """What the agent says that it does now."""
     thread: ThreadId | None = None
@@ -450,14 +550,33 @@ class AlarmResult(Record):
 
 
 class ProfileResult(Record):
-    """What an agent's role and status are after it set them."""
+    """An agent's profile after a call of `profile`, with the lab's seats."""
 
+    agent: AgentId | None = None
+    """The agent whose profile this is. `None` in a record of a result from before the field."""
+    name: str = ''
+    """The agent's name now: the name that it chose, or else the label of its seat."""
+    seat: str = ''
+    """The label of the agent's seat: its harness's title and its model's name."""
+    about: str = ''
+    about_by: AgentId | None = None
+    """Who wrote `about`: the agent itself, or the coordinator that rewrote it."""
+    picture: Picture | None = None
     role: str
     status: str
     given_role: str = ''
-    """The role that the person gave the agent's seat, which the agent's own role does not replace."""
+    """The role that somebody gave the agent's seat, which the agent's own role does not replace."""
+    given_by: AgentId | None = None
+    """Who gave `given_role`: `person`, or the agent that held the coordinator seat."""
+    flag: str = ''
+    """The reason of the coordinator's flag on the profile, while one stands."""
     coordinator: AgentId | None = None
     """The agent that holds the lab's coordinator seat, or `None` when nobody does."""
+    reviewers: tuple[AgentId, ...] = ()
+    """The agents that hold a reviewer seat."""
+    reviewer_seats: int = 0
+    """How many reviewer seats the lab has. With zero, a check and a rerun request take no seat."""
+    reviewer_seats_free: int = 0
     news: News | None = None
 
 
@@ -466,7 +585,8 @@ class Brief(Record):
     The lab for one agent, in one read: how the board works, the lab's state and time, who works on what, and the posts.
 
     The fields say what is on the board. Their order ranks nothing: the lists of threads come first, and then the
-    lists of posts by the alphabet of their names.
+    lists of posts by the alphabet of their names. In those lists of posts, a post whose line the brief holds
+    already, in `news` or in an earlier field, is its ID alone.
     """
 
     you: AgentId
@@ -510,6 +630,12 @@ class Brief(Record):
     """The agent that holds the lab's coordinator seat, or `None` when nobody does."""
     coordinator_open: bool = True
     """Whether an agent may take the seat with `profile`: nobody holds it, and the person did not close it."""
+    reviewers: tuple[AgentId, ...] = ()
+    """The agents that hold a reviewer seat, the reader among them when it holds one."""
+    reviewer_seats: int = 0
+    """How many reviewer seats the lab has. With zero, a check and a rerun request take no seat."""
+    reviewer_seats_free: int = 0
+    """How many reviewer seats an agent can take with `profile`."""
     left: tuple[LeftLine, ...] = ()
     """The agents that left the lab or that the person removed, oldest first."""
     answer: PostLine | None = None
@@ -535,15 +661,15 @@ class Brief(Record):
     """
     more_quiet_threads: int = 0
     """How many quiet threads the list leaves out."""
-    disputed: tuple[PostLine, ...] = ()
+    disputed: tuple[PostEntry, ...] = ()
     """The posts that a failed check or a standing objection disputes, the agent's own among them, newest last."""
-    not_built_on: tuple[PostLine, ...] = ()
+    not_built_on: tuple[PostEntry, ...] = ()
     """Other agents' results that no other agent has built on yet, newest last, at most `MAX_LEADS`."""
-    not_checked: tuple[PostLine, ...] = ()
+    not_checked: tuple[PostEntry, ...] = ()
     """Other agents' results that nobody has checked yet, newest last."""
-    open_asks: tuple[PostLine, ...] = ()
+    open_asks: tuple[PostEntry, ...] = ()
     """Asks from others that nobody has answered yet, newest last. Asks for the person alone are not among them."""
-    open_calls: tuple[PostLine, ...] = ()
+    open_calls: tuple[PostEntry, ...] = ()
     """
     Calls from others that still need an agent, newest last. A plan that replies to a call takes it. A call in a
     side thread is here only for the thread's members, and so is an ask in `open_asks`.
@@ -560,7 +686,7 @@ class Update(Record):
     """
 
     seq: int
-    posts: tuple[Posted, ...] = ()
+    posts: tuple[PostView, ...] = ()
     more: int = 0
     """How many more posts for the agent wait. The next `wait` brings them."""
     others: tuple[PostLine, ...] = ()
@@ -570,6 +696,10 @@ class Update(Record):
     agents: tuple[Agent, ...] = ()
     left: tuple[LeftLine, ...] = ()
     """The agents that left the lab since, among those that the agent wrote to: who caused it, and the reason."""
+    profile: tuple[ProfileNote, ...] = ()
+    """The changes that the person or the coordinator made to the agent's own profile since, oldest first."""
+    renamed: tuple[RenameLine, ...] = ()
+    """The other agents whose name changed since, each once, with its name now and the name that it had before."""
     alarm: AlarmLine | None = None
     """The alarm that waits for the agent. `None` means that no alarm waits."""
     no_alarm: str = ''

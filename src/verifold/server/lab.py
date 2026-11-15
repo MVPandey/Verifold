@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Final, Self
 
-from verifold.protocol.agents import Agent, one_line
+from verifold.protocol.agents import Agent, Picture, one_line
 from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
@@ -20,6 +20,7 @@ from verifold.protocol.events import (
     ProfileSet,
     QuestionRevised,
     RerunRequested,
+    ReviewerSet,
     SettingsSet,
     ThreadOpened,
     TimeRanOut,
@@ -31,7 +32,16 @@ from verifold.protocol.events import (
 )
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import PostRequest
-from verifold.protocol.posts import MAX_HEADLINE, Answer, Ask, FileEvidence, Mark, PermissionShown, QuestionShown
+from verifold.protocol.posts import (
+    MAX_HEADLINE,
+    Answer,
+    Ask,
+    Check,
+    FileEvidence,
+    Mark,
+    PermissionShown,
+    QuestionShown,
+)
 from verifold.protocol.settings import Settings
 from verifold.protocol.threads import QUESTION_TITLE, Carries, Thread
 from verifold.server.changes import wait_until
@@ -41,6 +51,8 @@ from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
 from verifold.society.labels import awaits_model, is_numbered, label, plain
 from verifold.society.lines import question_thread
+from verifold.society.names import check_name
+from verifold.society.reviewers import check_review
 from verifold.society.rules import waiting_reruns
 from verifold.store.record_file import RecordFile
 
@@ -138,16 +150,17 @@ class Lab:
         if joined is None or not one_line(model):
             return joined.agent.name if joined else agent_id
         agent, base = joined.agent, plain(title, model)
-        if is_numbered(agent.name, base) or not awaits_model(agent.name, title, agent.model.name):
+        now = self._board.label(agent_id)
+        if is_numbered(now, base) or not awaits_model(now, title, agent.model.name):
             return agent.name
 
         def build(board: Board, seq: int, at: datetime) -> AgentNamed:
-            others = (entry.agent.name for entry in board.agents if entry.agent.id != agent_id)
-            former = (before for event, before in board.renames if event.agent != agent_id)
-            return AgentNamed(seq=seq, at=at, agent=agent_id, name=label(title, model, (*others, *former)))
+            taken = (text for other, text in board.names() if other != agent_id)
+            return AgentNamed(seq=seq, at=at, agent=agent_id, name=label(title, model, taken))
 
         board = await self._commit(build)
-        return board.renames[-1][0].name
+        named = board.agent(agent_id)
+        return named.agent.name if named else agent_id
 
     async def set_on_call(self, agent_id: AgentId, *, on_call: bool) -> None:
         """
@@ -278,21 +291,113 @@ class Lab:
         )
         return board.alarms[-1]
 
-    async def set_profile(self, agent_id: AgentId, role: str | None, status: str | None) -> tuple[str, str]:
+    async def set_profile(  # noqa: PLR0913
+        self,
+        agent_id: AgentId,
+        role: str | None = None,
+        status: str | None = None,
+        *,
+        name: str | None = None,
+        about: str | None = None,
+        picture: Picture | None = None,
+        coordinator: bool | None = None,
+        reviewer: bool | None = None,
+    ) -> tuple[str, str]:
         """
         Record what an agent says that it is and does, and return its role and status after the change.
 
-        A call that changes nothing records nothing, so an agent can read its own profile with no arguments, and one
-        that repeats its status does not fill the record.
+        With `coordinator` or `reviewer`, the agent takes that seat or gives it up in the same step. The record
+        takes the whole call or nothing: when the board refuses one part, such as a seat that is not free, no part
+        is recorded. A part that changes nothing records nothing, so an agent can read its own profile with no
+        arguments, and one that repeats its status does not fill the record.
+
+        Raises:
+            RejectedEvent: The name is taken, reserved, or the name of a harness or a model, or a seat is not free.
+
         """
-        now_role, now_status = self._board.profile(agent_id)
-        wanted = (now_role if role is None else role, now_status if status is None else status)
-        if self._board.agent(agent_id) and wanted == (now_role, now_status):
-            return wanted
-        board = await self._commit(
-            lambda _, seq, at: ProfileSet(seq=seq, at=at, agent=agent_id, role=role, status=status)
-        )
+        board = self._board
+        now_role, now_status = board.profile(agent_id)
+        fresh = {
+            'role': None if role == now_role else role,
+            'status': None if status == now_status else status,
+            'name': None if name == board.chosen_name(agent_id) else name,
+            'about': None if about == board.about(agent_id) else about,
+            'picture': None if picture == board.picture(agent_id) else picture,
+        }
+        builds: list[Build] = []
+
+        def profile(board: Board, seq: int, at: datetime) -> ProfileSet:
+            # The name's rules are here and not in the record's rules, so a record keeps every name that it holds.
+            if fresh['name'] and board.agent(agent_id):
+                check_name(board, agent_id, str(fresh['name']))
+            return ProfileSet.model_validate({'seq': seq, 'at': at, 'agent': agent_id} | fresh)
+
+        if not board.agent(agent_id) or any(value is not None for value in fresh.values()):
+            builds.append(profile)
+        holder = agent_id if coordinator else None
+        # An agent that gives up a seat that it does not hold gets the reason.
+        if coordinator is not None and not (coordinator and board.coordinator == agent_id):
+            builds.append(lambda _, seq, at: CoordinatorSet(seq=seq, at=at, agent=holder, by=agent_id))
+        if reviewer is not None and not (reviewer and board.reviewer(agent_id)):
+            builds.append(
+                lambda _, seq, at: ReviewerSet(seq=seq, at=at, agent=agent_id, reviewer=bool(reviewer), by=agent_id)
+            )
+        if builds:
+            board = await self._commit(*builds)
         return board.profile(agent_id)
+
+    async def change_profile(  # noqa: PLR0913
+        self,
+        agent_id: AgentId,
+        by: AgentId,
+        *,
+        reset_name: bool = False,
+        about: str | None = None,
+        reset_picture: bool = False,
+        given_role: str | None = None,
+        flag: str | None = None,
+    ) -> None:
+        """
+        Record a change that the person or the lab's coordinator makes to an agent's profile.
+
+        `by` is the person or the coordinator. The record keeps every earlier text, and the agent's next news says
+        what changed. A call that changes nothing records nothing.
+
+        Raises:
+            RejectedEvent: The change is not one that `by` can make.
+
+        """
+        board = self._board
+        standing_flag = board.flag(agent_id)
+        fresh = {
+            'name': '' if reset_name and board.chosen_name(agent_id) else None,
+            'about': None if about == board.about(agent_id) else about,
+            'no_picture': reset_picture and board.picture(agent_id) is not None,
+            'given_role': None if given_role == board.given_role(agent_id)[0] else given_role,
+            'flag': None if flag == (standing_flag.flag if standing_flag else '') else flag,
+        }
+        if board.agent(agent_id) and not any(value not in (None, False) for value in fresh.values()):
+            return
+        await self._commit(
+            lambda _, seq, at: ProfileSet.model_validate({'seq': seq, 'at': at, 'agent': agent_id, 'by': by} | fresh)
+        )
+
+    async def set_reviewer(self, agent_id: AgentId, by: AgentId, *, reviewer: bool) -> None:
+        """
+        Record that an agent holds a reviewer seat from now on, or holds one no longer.
+
+        `by` is the person, who can give a seat to any agent and take it, or the agent itself, which can take a
+        free seat and give up the seat that it holds. A change that leaves the seat as it is records nothing.
+
+        Raises:
+            RejectedEvent: The change breaks one of these rules.
+
+        """
+        same = self._board.agent(agent_id) and self._board.reviewer(agent_id) == reviewer
+        # An agent that gives up a seat that it does not hold gets the reason.
+        if same and (reviewer or by == PERSON) and by in (PERSON, agent_id):
+            return
+        await self._commit(lambda _, seq, at: ReviewerSet(seq=seq, at=at, agent=agent_id, reviewer=reviewer, by=by))
 
     async def watch(self, agent_id: AgentId, thread_id: ThreadId, *, watching: bool) -> WatchSet:
         """Record that an agent starts or stops watching a thread."""
@@ -314,6 +419,9 @@ class Lab:
             # A record from before this rule can hold such a pair, so the rule is here and not in the record's rules.
             if any(entry.by == by for entry in waiting_reruns(board, post_id)):
                 raise RejectedEvent(f'You asked for a blind rerun of {post_id} already. Its check will come to you.')
+            # An older record holds requests from before the reviewer seats, so this rule is here too.
+            if board.post(post_id):
+                check_review(board, by, post_id, 'A request for a blind rerun of')
             return RerunRequested(seq=seq, at=at, by=by, post=post_id)
 
         board = await self._commit(build)
@@ -445,6 +553,10 @@ def _add_post(
             post = post.model_copy(update={'ends_request': True})
         elif isinstance(post, Ask) and isinstance(mark, PermissionShown | QuestionShown):
             post = post.model_copy(update={'request': mark.type, 'shown': mark})
+        # An older record holds checks from before the reviewer seats, so this rule is here and not in the record's
+        # rules.
+        if isinstance(post, Check) and board.post(post.reply_to):
+            check_review(board, author, post.reply_to, 'A check on')
         return Posted(seq=seq, at=at, post=post)
 
     return build

@@ -12,6 +12,7 @@ from functools import partial
 from importlib.metadata import version
 from pathlib import Path
 from types import MappingProxyType
+from typing import Literal
 
 from pydantic import ValidationError
 
@@ -27,7 +28,7 @@ from verifold.runner.jobs import Job, Sweep
 from verifold.server.errors import ServerError, SetupRejected
 from verifold.store.errors import SettingsInvalid, StoreError
 from verifold.store.server_file import mark_opens, named_server, running_server
-from verifold.store.settings_file import read_settings_file, settings_of, settings_path
+from verifold.store.settings_file import SettingsValues, read_settings_file, settings_of, settings_path
 
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 """Ctrl+C, a plain `kill`, and a closed terminal. Each one stops the lab in the same way."""
@@ -95,7 +96,7 @@ def _start(args: argparse.Namespace) -> StartRequest:
     `verifold run` starts at once, without showing the saved choices, and a project's file can come from someone else.
     So a project's file can make the lab stricter, not looser: it can turn auto mode off and shorten the time limit,
     and each of its seats gives only a harness, a count, a model, and an effort. Its modes, roles, families,
-    coordinator, and on-call marks are not used, and the command says so. Under `--ask-me`, no saved agent gets a mode.
+    coordinator, and on-call marks are not used, and neither is its number of reviewer seats, and the command says so. Under `--ask-me`, no saved agent gets a mode.
 
     Raises:
         SetupRejected: No harness that Verifold knows is on this computer.
@@ -105,15 +106,12 @@ def _start(args: argparse.Namespace) -> StartRequest:
     values = {level: read_settings_file(settings_path(level, project), level)[0] for level in SettingsLevel}
     files = settings_of(values)
     everywhere, here = settings_of({SettingsLevel.ALL: values[SettingsLevel.ALL]}).setup, files.setup
+    # In the home folder, the project's file is the person's own file for all projects.
+    own = settings_path(SettingsLevel.PROJECT, project).resolve() == settings_path(SettingsLevel.ALL, project).resolve()
     if args.agent:
         agents = tuple(_agent(value) for value in args.agent)
     else:
         saved = values[SettingsLevel.PROJECT].get('setup')
-        # In the home folder, the project's file is the person's own file for all projects.
-        own = (
-            settings_path(SettingsLevel.PROJECT, project).resolve()
-            == settings_path(SettingsLevel.ALL, project).resolve()
-        )
         from_project = not own and isinstance(saved, dict) and 'agents' in saved
         agents = _saved_agents(here, catalog_with(files.harnesses), drop_modes=args.ask_me, from_project=from_project)
     shorter = min((minutes for minutes in (everywhere.minutes, here.minutes) if minutes is not None), default=None)
@@ -123,7 +121,27 @@ def _start(args: argparse.Namespace) -> StartRequest:
         auto_mode=everywhere.auto_mode and here.auto_mode and not args.ask_me,
         minutes=shorter if args.minutes is None else args.minutes,
         allow=tuple(args.allow or ()),
+        reviewer_seats=_reviewer_seats(values, own=own),
     )
+
+
+def _reviewer_seats(values: Mapping[SettingsLevel, SettingsValues], *, own: bool) -> int | Literal['size'] | None:
+    """
+    Return the number of reviewer seats that `verifold run` starts with, or `None` for what the files add up to.
+
+    `verifold run` does not use the number in a project's file, and says so. A higher number lets more agents
+    check, and zero turns the reviewer seats off, so no number from somebody else's file is the stricter one. The
+    lab then has the person's own number, or follows its size.
+    """
+    project = values[SettingsLevel.PROJECT].get('reviewers')
+    if own or not (isinstance(project, dict) and 'seats' in project):
+        return None
+    _say(
+        "Did not use the number of reviewer seats from this project's settings file: `verifold run` takes it only "
+        'from your settings for all projects.'
+    )
+    mine = settings_of({SettingsLevel.ALL: values[SettingsLevel.ALL]}).reviewers.seats
+    return 'size' if mine is None else mine
 
 
 def _saved_agents(

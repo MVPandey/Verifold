@@ -1,8 +1,8 @@
 import { useId, useState } from 'react';
 import type { ReactElement } from 'react';
 
-import type { AgentView, HarnessOption, PostView } from '../api/types.ts';
-import { face, harnessTitle, ownName } from '../model/agents.ts';
+import type { AgentView, PostView } from '../api/types.ts';
+import { author, ownName } from '../model/agents.ts';
 import { duration, minutesBetween } from '../model/format.ts';
 import { orderNeeds, pauses } from '../model/needs.ts';
 import { choiceGroups, harnessRequest, personAnswer } from '../model/posts.ts';
@@ -10,7 +10,8 @@ import { href } from '../model/route.ts';
 import { messageOf } from '../api/client.ts';
 import type { PageProps } from './hooks.ts';
 import { Words } from './Markdown.tsx';
-import { FaceView, HarnessAsk } from './parts.tsx';
+import { HarnessAsk } from './parts.tsx';
+import { Name, Who } from './Picture.tsx';
 
 /** Everything that waits for the person's answer. Requests that pause an agent come first. */
 export function NeedsPage({ api, data, now }: PageProps): ReactElement {
@@ -28,7 +29,6 @@ export function NeedsPage({ api, data, now }: PageProps): ReactElement {
           key={item.post.id}
           item={item}
           agents={data.lab.agents}
-          harnesses={data.setup?.harnesses ?? []}
           paused={pauses(item, data.lab)}
           now={now}
           onAnswer={async (choice, words) => {
@@ -45,7 +45,6 @@ export function NeedsPage({ api, data, now }: PageProps): ReactElement {
 function NeedCard(props: {
   readonly item: PostView;
   readonly agents: readonly AgentView[];
-  readonly harnesses: readonly HarnessOption[];
   readonly paused: boolean;
   readonly now: Date;
   readonly onAnswer: (choice: string | null, words: string) => Promise<void>;
@@ -58,7 +57,7 @@ function NeedCard(props: {
   const { post, at } = props.item;
   // Two checkers can ask at once, so each keeps its own name here.
   const name = ownName(props.agents, post.author);
-  const agent = props.agents.find((view) => view.agent.id === post.author);
+  const who = author(props.agents, post.author);
   const request = harnessRequest(post);
   const permission = request === 'permission';
   const choices = post.kind === 'ask' ? post.choices : [];
@@ -79,11 +78,8 @@ function NeedCard(props: {
   return (
     <section className="nitem open" aria-label={`${name}: ${post.text}`}>
       <div className="nh">
-        <FaceView face={face(props.agents, post.author)} />
-        <b>{name}</b>
-        {agent ? (
-          <span className="f-tag">{harnessTitle(props.harnesses, agent.agent.harness)}</span>
-        ) : null}
+        <Who agents={props.agents} id={post.author} dot={false} />
+        {who.kind === 'member' ? <Name view={who.view} /> : <b>{name}</b>}
         <span className="kind">
           {permission ? 'Permission request' : request ? 'Question from its harness' : 'Asks you'}
         </span>

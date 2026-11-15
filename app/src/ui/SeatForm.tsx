@@ -3,9 +3,11 @@ import type { ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
 import { messageOf } from '../api/client.ts';
-import type { AgentView, HarnessOption, Offer, SeatChange } from '../api/types.ts';
+import type { HarnessOption, LabView, Offer } from '../api/types.ts';
+import { MAX_REVIEWER_SEATS, seatsValue } from '../model/settings.ts';
 import { OTHER_MODEL, effortsOf, menuEntries, modeEntries, withModel } from '../model/setup.ts';
 import type { MenuEntry, Seat } from '../model/setup.ts';
+import { reviewerLine } from '../model/status.ts';
 
 /** The facts that the person can state about a seat. */
 export interface Facts {
@@ -246,28 +248,26 @@ export function CoordinatorSeat(props: {
   );
 }
 
-/** Return whether a member has neither run a turn nor posted, and runs none now: it never started or never came. */
-function notCome(view: AgentView): boolean {
-  const resting = ['idle', 'invited', 'void', 'stopped'].includes(view.activity.state);
-  return view.turns === 0 && view.posts === 0 && resting;
-}
-
 /**
- * What the member list says about a member's seat, and the person's two switches for it: on call, and the
- * coordinator's seat.
+ * How many reviewer seats the lab has and how many are free, and the person's way to set the number or to let it
+ * follow the lab's size again.
  */
-export function SeatControls(props: {
+export function ReviewerSeats(props: {
   readonly api: Api;
-  readonly view: AgentView;
+  readonly lab: LabView;
   readonly onChange: () => void;
 }): ReactElement {
-  const { view } = props;
+  const { lab } = props;
+  const [text, setText] = useState(String(lab.reviewer_seats));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const change = (seat: SeatChange): void => {
+  const id = useId();
+  const seats = seatsValue(text);
+  const valid = typeof seats === 'number';
+  const set = (value: number | null): void => {
     setBusy(true);
     setError(null);
-    props.api.changeSeat(view.agent.id, seat).then(
+    props.api.setReviewerSeats(value).then(
       () => {
         setBusy(false);
         props.onChange();
@@ -279,35 +279,49 @@ export function SeatControls(props: {
     );
   };
   return (
-    <>
-      {view.on_call ? <p className="f-where">On call. A post that names it wakes it.</p> : null}
-      {view.coordinator && notCome(view) ? (
-        <p className="f-where">Holds the coordinator seat and has not come yet.</p>
-      ) : null}
-      <p className="f-where">
+    <details className="f-each f-reviewers">
+      <summary>
+        {reviewerLine(lab)} <u>Change</u>
+      </summary>
+      <div className="f-add">
+        <label htmlFor={id}>Reviewer seats</label>
+        <input
+          id={id}
+          type="number"
+          min={0}
+          max={MAX_REVIEWER_SEATS}
+          value={text}
+          onChange={(event) => {
+            setText(event.target.value);
+          }}
+        />
         <button
-          className="linkbtn"
           type="button"
-          disabled={busy}
-          onClick={() => change({ on_call: !view.on_call })}
+          disabled={busy || !valid || seats === lab.reviewer_seats_set}
+          onClick={() => {
+            if (valid) set(seats);
+          }}
         >
-          {view.on_call ? 'Take off call' : 'Put on call'}
-        </button>{' '}
-        <button
-          className="linkbtn"
-          type="button"
-          disabled={busy}
-          onClick={() => change({ coordinator: !view.coordinator })}
-        >
-          {view.coordinator ? 'Remove as coordinator' : 'Make coordinator'}
+          Set
         </button>
+        {lab.reviewer_seats_set === null ? null : (
+          <button
+            className="linkbtn"
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              set(null);
+            }}
+          >
+            Follow the lab’s size
+          </button>
+        )}
         {error ? (
           <span className="error" role="alert">
-            {' '}
             {error}
           </span>
         ) : null}
-      </p>
-    </>
+      </div>
+    </details>
   );
 }

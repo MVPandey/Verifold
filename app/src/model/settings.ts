@@ -1,5 +1,24 @@
 import type { AtExit, AtTimeLimit, Settings, WhileYouDecide } from '../api/types.ts';
 
+/** The most reviewer seats that the person can give a lab, as the server allows. */
+export const MAX_REVIEWER_SEATS = 20;
+
+/** What the number of reviewer seats is while the person sets none. */
+export const SEATS_FOLLOW =
+  'one seat for every five agents, one with three or four, none with fewer';
+
+/**
+ * Return the number of reviewer seats that a field's text names, `null` for an empty field, which sets no number,
+ * or `undefined` for a text that is no whole number from 0 to 20.
+ */
+export function seatsValue(text: string): number | null | undefined {
+  const trimmed = text.trim();
+  if (trimmed === '') return null;
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const seats = Number(trimmed);
+  return seats <= MAX_REVIEWER_SEATS ? seats : undefined;
+}
+
 /** One answer to a setting: the value that it sends, and what the page says about it. */
 export interface Choice<T extends string> {
   readonly value: T;

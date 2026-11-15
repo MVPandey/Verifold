@@ -166,8 +166,3 @@ export function choiceGroups(
 export function harnessRequest(post: Post): 'permission' | 'question' | null {
   return post.kind === 'ask' ? (post.request ?? null) : null;
 }
-
-/** Return whether an ask is a harness's permission request. */
-export function isPermission(post: Post): boolean {
-  return harnessRequest(post) === 'permission';
-}

@@ -1,34 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
 import { messageOf } from '../api/client.ts';
-import { GUEST } from '../api/types.ts';
-import type {
-  Agent,
-  AgentView,
-  FolderView,
-  HarnessOption,
-  Invitation,
-  LabView,
-  ThreadSummary,
-} from '../api/types.ts';
-import {
-  costLine,
-  face,
-  harnessTitle,
-  labTotal,
-  listed,
-  memberLine,
-  workingLine,
-} from '../model/agents.ts';
+import type { AgentView, HarnessOption, Invitation, LabView, ThreadSummary } from '../api/types.ts';
+import { costLine, labTotal, leftLine, stateLine } from '../model/agents.ts';
 import { href } from '../model/route.ts';
 import type { Route } from '../model/route.ts';
 import { modelSummary, needsModel, newSeat, seatChoice } from '../model/setup.ts';
 import { stopLine } from '../model/settings.ts';
+import { WAITS_ID, needGroups, turnLine, waitsLine, whereLine } from '../model/status.ts';
 import { clockLine, endLine, moreTime } from '../model/time.ts';
-import { FaceView } from './parts.tsx';
-import { CoordinatorSeat, FactFields, SeatControls, SeatFields } from './SeatForm.tsx';
+import { MarksAndRoles, Name, Profiles, Who } from './Picture.tsx';
+import { InvitationText, OpenFolder, ShownProfile, StartAgain } from './Profile.tsx';
+import { CoordinatorSeat, FactFields, ReviewerSeats, SeatFields } from './SeatForm.tsx';
 import type { Facts } from './SeatForm.tsx';
 
 /** What the top bar shows for a started lab. */
@@ -57,10 +42,12 @@ export function Top(props: {
   const [invitation, setInvitation] = useState<Invitation | null>(null);
   const current = (on: boolean): 'page' | undefined => (on ? 'page' : undefined);
 
-  // Escape closes an open panel, and so does a press anywhere outside it.
+  // Escape closes an open panel, and so does a press anywhere outside it. While a profile is open, both belong
+  // to the profile, so the panel under it stays as it is.
   useEffect(() => {
     const close = (event: KeyboardEvent | PointerEvent): void => {
       if (event instanceof KeyboardEvent && event.key !== 'Escape') return;
+      if (document.querySelector('.i-over')) return;
       for (const panel of document.querySelectorAll<HTMLDetailsElement>('.f-pop[open]')) {
         const inside = event.target instanceof Node && panel.contains(event.target);
         if (event instanceof KeyboardEvent || !inside) panel.open = false;
@@ -73,6 +60,7 @@ export function Top(props: {
       document.removeEventListener('pointerdown', close);
     };
   }, []);
+  const waits = open ? waitsLine(open.lab.waits.length) : null;
   return (
     <header className="f-top">
       <a className="f-brand" href={href({ page: 'lab' })}>
@@ -104,6 +92,21 @@ export function Top(props: {
       {open ? (
         <>
           <span className="grow" />
+          {waits ? (
+            <a
+              className="o-count"
+              href={href({ page: 'lab' })}
+              onClick={(event) => {
+                // On the lab page the list is on the screen already, so the press goes to it and keeps the place.
+                const list = document.getElementById(WAITS_ID);
+                if (!list) return;
+                event.preventDefault();
+                list.scrollIntoView({ block: 'center' });
+              }}
+            >
+              {waits}
+            </a>
+          ) : null}
           {/* A new key closes an open panel when the person goes to another page or thread. */}
           <Members
             key={`who${place}`}
@@ -120,6 +123,15 @@ export function Top(props: {
             <summary>{clockLine(open.lab, open.now)}</summary>
             <TimePanel lab={open.lab} now={open.now} api={open.api} onChange={open.onChange} />
           </details>
+          <ShownProfile
+            lab={open.lab}
+            threads={open.threads}
+            now={open.now}
+            api={open.api}
+            invitation={invitation}
+            onInvitation={setInvitation}
+            onChange={open.onChange}
+          />
         </>
       ) : null}
     </header>
@@ -127,9 +139,9 @@ export function Top(props: {
 }
 
 /**
- * The member list: who is in the lab, the role that the person gave each and the role and the status that each gave
- * itself, who is the coordinator, who is on call, the thread where each works, what each does now, and what each
- * has cost.
+ * The member list, in the order of who needs the person: one group for each status, and the agents that left
+ * last. A row shows who the member is, the seats that it holds, its roles, its status in its own words, and what
+ * it does now. A press on a row opens the member's profile, where the person's actions are.
  */
 function Members(props: {
   readonly api: Api;
@@ -143,76 +155,60 @@ function Members(props: {
   readonly onInvitation: (invitation: Invitation | null) => void;
 }): ReactElement {
   const { lab } = props;
+  const { show } = useContext(Profiles);
   const reruns = lab.agents.filter((view) => view.agent.checks !== null);
   const first = reruns[0];
-  const busy = lab.agents.some((view) => view.activity.state === 'working');
-  const dot = lab.out_of_time ? 'stop' : busy ? 'live' : 'idle';
-  const row = (view: AgentView): ReactElement => {
-    const state = memberLine(view, lab.out_of_time || lab.state === 'closed', props.now);
-    return (
-      <>
-        <p>
-          <b>{view.agent.name}</b>
-          {view.coordinator ? <span className="f-role">Coordinator</span> : null}
-          {view.agent.given_role ? (
-            <span className="f-role">{view.agent.given_role} (given by you)</span>
-          ) : null}
-          {view.role && view.role !== view.agent.given_role ? (
-            <span className="f-role">{view.role}</span>
-          ) : null}
-          {/* A name that Verifold built starts with the harness's title already. */}
-          {view.agent.name.startsWith(harnessTitle(props.harnesses, view.agent.harness)) ? null : (
-            <span className="f-tag">{harnessTitle(props.harnesses, view.agent.harness)}</span>
-          )}
-        </p>
-        {view.status ? <p className="f-own">{view.status}</p> : null}
-        <p className="f-status">
-          <span className={`dot ${state.dot}`} /> {state.text}
-        </p>
-        <Where view={view} threads={props.threads} />
-        {view.agent.checks === null && !view.left ? (
-          <SeatControls api={props.api} view={view} onChange={props.onChange} />
-        ) : null}
-        <p className="f-where">{costLine(view)}</p>
-        {view.error && !view.left ? <Failure error={view.error} /> : null}
-        {view.agent.harness === GUEST && !view.left ? (
-          <InviteAgain
-            api={props.api}
-            agent={view.agent.id}
-            onInvited={props.onInvitation}
-            onChange={props.onChange}
-          />
-        ) : null}
-        {view.stopped && !view.left ? (
-          <StartAgain api={props.api} agent={view.agent.id} onChange={props.onChange} />
-        ) : null}
-        <OpenFolder api={props.api} agent={view.agent} />
-        {view.agent.checks === null && !view.left ? (
-          <RemoveAgent api={props.api} agent={view.agent} onChange={props.onChange} />
-        ) : null}
-      </>
-    );
-  };
+  const turns = turnLine(lab.agents);
+  const title = (view: AgentView): string | null =>
+    props.threads.find((summary) => summary.thread.id === view.thread)?.thread.title ?? null;
   return (
     <details className="f-pop f-members" name="top">
-      <summary className="f-live">
-        <span className={`dot ${dot}`} /> {workingLine(lab.agents)}
+      <summary className={`f-live${turns.live ? '' : ' still'}`}>
+        <span className={`dot ${turns.live ? 'live' : 'still'}`} /> {turns.text}
         <u>
           <span className="closed">Who</span>
           <span className="opened">Hide</span>
         </u>
       </summary>
       <div className="f-panel">
-        <ul>
-          {listed(lab.agents).map((view) => (
-            <li key={view.agent.id}>
-              <FaceView face={face(lab.agents, view.agent.id)} />
-              <div>{row(view)}</div>
-            </li>
-          ))}
+        <ul className="i-list">
+          {needGroups(lab.agents).map((group) => [
+            <li key={group.need} className={`o-group o-${group.need}`}>
+              {group.heading}
+            </li>,
+            ...group.rows.map((view) => (
+              <li
+                key={view.agent.id}
+                className="i-row"
+                onClick={() => {
+                  show(view.agent.id);
+                }}
+              >
+                <Who agents={lab.agents} id={view.agent.id} size={34} />
+                <div>
+                  <p>
+                    <Name view={view} />
+                  </p>
+                  <MarksAndRoles view={view} />
+                  {view.status && !view.left ? <p className="f-status">{view.status}</p> : null}
+                  <p className="f-where">{whereLine(view, lab, props.now, title(view))}</p>
+                  {view.stopped && !view.left ? (
+                    // A press on the button starts the agent, and does not open the profile.
+                    <div
+                      onClick={(event) => {
+                        event.stopPropagation();
+                      }}
+                    >
+                      <StartAgain api={props.api} agent={view.agent.id} onChange={props.onChange} />
+                    </div>
+                  ) : null}
+                </div>
+              </li>
+            )),
+          ])}
           {first ? (
-            <li>
-              <FaceView face={face(lab.agents, first.agent.id)} />
+            <li className="i-reruns">
+              <Who agents={lab.agents} id={first.agent.id} />
               <div>
                 <p>
                   <b>{reruns.length === 1 ? '1 blind rerun' : `${reruns.length} blind reruns`}</b>
@@ -224,7 +220,19 @@ function Members(props: {
                   <summary>What each did and cost</summary>
                   <ul>
                     {reruns.map((view) => (
-                      <li key={view.agent.id}>{row(view)}</li>
+                      <li key={view.agent.id}>
+                        <p>
+                          <b>{view.agent.name}</b>
+                        </p>
+                        <p className="f-where">
+                          {
+                            (view.left ? leftLine(view.left) : stateLine(view.activity, props.now))
+                              .text
+                          }
+                        </p>
+                        <p className="f-where">{costLine(view)}</p>
+                        <OpenFolder api={props.api} agent={view.agent} />
+                      </li>
                     ))}
                   </ul>
                 </details>
@@ -232,9 +240,16 @@ function Members(props: {
             </li>
           ) : null}
         </ul>
-        {lab.agents.some((view) => view.coordinator) ? null : (
-          <CoordinatorSeat api={props.api} open={lab.coordinator_open} onChange={props.onChange} />
-        )}
+        <div className="f-seats">
+          {lab.agents.some((view) => view.coordinator) ? null : (
+            <CoordinatorSeat
+              api={props.api}
+              open={lab.coordinator_open}
+              onChange={props.onChange}
+            />
+          )}
+          <ReviewerSeats api={props.api} lab={lab} onChange={props.onChange} />
+        </div>
         <p className="f-total">
           <span>
             {lab.posts} {lab.posts === 1 ? 'post' : 'posts'} in {lab.threads}{' '}
@@ -259,24 +274,6 @@ function Members(props: {
           />
         ) : null}
       </div>
-    </details>
-  );
-}
-
-/** The most characters of a harness's error that a member's row shows before the person opens it. */
-const FAILURE_SHOWN = 160;
-
-/**
- * Why a member's harness failed last, in the harness's own words, as text. A long error shows its start, and the
- * person opens it to read it whole.
- */
-function Failure(props: { readonly error: string }): ReactElement {
-  const line = props.error.replace(/\s+/g, ' ').trim();
-  if (line.length <= FAILURE_SHOWN) return <p className="f-where">Last failure: {line}</p>;
-  return (
-    <details className="f-each">
-      <summary>Last failure: {line.slice(0, FAILURE_SHOWN)}…</summary>
-      <pre className="f-failure">{props.error}</pre>
     </details>
   );
 }
@@ -445,287 +442,6 @@ function InviteAgent(props: {
         </span>
       ) : null}
     </div>
-  );
-}
-
-/**
- * The way to give an invited agent a new invitation: when the first one is lost, or when its token is no longer
- * private. The agent's earlier token then opens nothing.
- */
-function InviteAgain(props: {
-  readonly api: Api;
-  readonly agent: string;
-  readonly onInvited: (invitation: Invitation) => void;
-  readonly onChange: () => void;
-}): ReactElement {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const again = (): void => {
-    setBusy(true);
-    setError(null);
-    props.api.inviteAgain(props.agent).then(
-      (made) => {
-        setBusy(false);
-        props.onInvited(made);
-        props.onChange();
-      },
-      (failure: unknown) => {
-        setBusy(false);
-        setError(messageOf(failure));
-      },
-    );
-  };
-  return (
-    <p className="f-where">
-      <button
-        className="linkbtn"
-        type="button"
-        onClick={again}
-        disabled={busy}
-        title="Makes a new token. The old token stops working."
-      >
-        Invite again
-      </button>
-      {error ? (
-        <span className="error" role="alert">
-          {' '}
-          {error}
-        </span>
-      ) : null}
-    </p>
-  );
-}
-
-/**
- * The way to start an agent that Verifold stopped because its harness failed too often in a row. The agent keeps
- * its name, its folder, and its posts.
- */
-function StartAgain(props: {
-  readonly api: Api;
-  readonly agent: string;
-  readonly onChange: () => void;
-}): ReactElement {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const again = (): void => {
-    setBusy(true);
-    setError(null);
-    props.api.startAgain(props.agent).then(
-      () => {
-        setBusy(false);
-        props.onChange();
-      },
-      (failure: unknown) => {
-        setBusy(false);
-        setError(messageOf(failure));
-      },
-    );
-  };
-  return (
-    <p className="f-where">
-      Its harness failed too often, so Verifold stopped it.{' '}
-      <button className="linkbtn" type="button" onClick={again} disabled={busy}>
-        Start again
-      </button>
-      {error ? (
-        <span className="error" role="alert">
-          {' '}
-          {error}
-        </span>
-      ) : null}
-    </p>
-  );
-}
-
-/**
- * The way to the folder where an agent works, or without `agent`, to the folder that holds every agent's folder.
- * A browser cannot open a folder, so the server opens it in the file manager of its computer. The path shows
- * after the press, for the person to copy.
- */
-function OpenFolder(props: { readonly api: Api; readonly agent?: Agent }): ReactElement {
-  const [busy, setBusy] = useState(false);
-  const [folder, setFolder] = useState<FolderView | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const open = (): void => {
-    setBusy(true);
-    setError(null);
-    props.api.openFolder(props.agent?.id).then(
-      (view) => {
-        setBusy(false);
-        setFolder(view);
-      },
-      (failure: unknown) => {
-        setBusy(false);
-        setError(messageOf(failure));
-      },
-    );
-  };
-  return (
-    <p className="f-where f-folder">
-      <button
-        className="linkbtn"
-        type="button"
-        // Every row has this button, so its name says whose folder it opens.
-        aria-label={props.agent ? `Open the folder of ${props.agent.name}` : undefined}
-        onClick={open}
-        disabled={busy}
-      >
-        {props.agent ? 'Open folder' : 'Open the agents’ folder'}
-      </button>
-      <FolderLine folder={folder} />
-      {error ? (
-        <span className="error" role="alert">
-          {' '}
-          {error}
-        </span>
-      ) : null}
-    </p>
-  );
-}
-
-/**
- * Where a folder is, after the person asked to open it. When the server opened nothing, as on a computer without
- * a desktop or after `--no-browser`, the line says so, and the path is still there to copy. The line is in the
- * page before it has text, so that a screen reader announces the text when it comes.
- */
-export function FolderLine(props: { readonly folder: FolderView | null }): ReactElement {
-  return (
-    <span role="status">
-      {props.folder ? (
-        <>
-          {props.folder.opened ? 'Opened' : 'No file manager opened. The folder is'}{' '}
-          <code>{props.folder.path}</code>
-        </>
-      ) : null}
-    </span>
-  );
-}
-
-/**
- * The way to remove one agent from the lab. The first press asks, in the row itself, and the second removes. The
- * agent's posts stay, and the agent does not come back.
- */
-function RemoveAgent(props: {
-  readonly api: Api;
-  readonly agent: Agent;
-  readonly onChange: () => void;
-}): ReactElement {
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const remove = (): void => {
-    setBusy(true);
-    setError(null);
-    props.api.removeAgent(props.agent.id).then(
-      () => {
-        props.onChange();
-      },
-      (failure: unknown) => {
-        setBusy(false);
-        setError(messageOf(failure));
-      },
-    );
-  };
-  if (!confirming) {
-    return (
-      <p className="f-where">
-        <button
-          className="linkbtn"
-          type="button"
-          onClick={() => {
-            setConfirming(true);
-          }}
-        >
-          Remove
-        </button>
-      </p>
-    );
-  }
-  return (
-    <p className="f-where">
-      Remove {props.agent.name} from the lab? Its posts stay, and it cannot come back. Programs that
-      it started in the background run on until the lab stops.{' '}
-      <button className="btn small danger" type="button" onClick={remove} disabled={busy}>
-        {busy ? 'Removing' : 'Remove'}
-      </button>{' '}
-      <button
-        className="linkbtn"
-        type="button"
-        disabled={busy}
-        onClick={() => {
-          setConfirming(false);
-          setError(null);
-        }}
-      >
-        Keep
-      </button>
-      {error ? (
-        <span className="error" role="alert">
-          {' '}
-          {error}
-        </span>
-      ) : null}
-    </p>
-  );
-}
-
-/** An invitation, as text to copy. It holds the agent's token, and Verifold does not show it again. */
-export function InvitationText(props: {
-  readonly invitation: Invitation;
-  readonly onClose: () => void;
-}): ReactElement {
-  const { invitation } = props;
-  const [copied, setCopied] = useState<boolean | null>(null);
-  const copy = (): void => {
-    navigator.clipboard.writeText(invitation.text).then(
-      () => {
-        setCopied(true);
-      },
-      () => {
-        setCopied(false);
-      },
-    );
-  };
-  return (
-    <div className="f-invitation">
-      <p>
-        <b>Invitation for {invitation.name}</b>
-      </p>
-      <p className="f-where">
-        Give this text to the agent. It holds the agent’s token, and it shows only until you close
-        it. If you lose it, use Invite again.
-      </p>
-      <textarea readOnly rows={8} value={invitation.text} aria-label="Invitation text" />
-      <button type="button" onClick={copy}>
-        {copied ? 'Copied' : 'Copy'}
-      </button>
-      <button className="linkbtn" type="button" onClick={props.onClose}>
-        Close
-      </button>
-      {copied === false ? (
-        <span className="error" role="alert">
-          The browser did not copy the text. Select it and copy it yourself.
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * The thread where a member works, as a link: the thread of its latest plan or result. It shows nothing when the
- * member works in none or the page lacks the thread. The state line above says whether a turn runs now.
- */
-function Where(props: {
-  readonly view: AgentView;
-  readonly threads: readonly ThreadSummary[];
-}): ReactElement | null {
-  const { view } = props;
-  const thread = props.threads.find((summary) => summary.thread.id === view.thread)?.thread;
-  if (!thread) return null;
-  return (
-    <p className="f-where">
-      Works in <a href={href({ page: 'thread', id: thread.id, post: null })}>{thread.title}</a>
-    </p>
   );
 }
 

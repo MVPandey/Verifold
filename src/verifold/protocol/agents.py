@@ -1,6 +1,7 @@
 """The agents of a lab."""
 
-from typing import Annotated, Self
+import re
+from typing import Annotated, Literal, Self
 
 from pydantic import AfterValidator, Field, StringConstraints, field_validator, model_validator
 
@@ -56,6 +57,56 @@ type Status = Annotated[str, AfterValidator(one_line), StringConstraints(max_len
 """What an agent says that it does now, in one line."""
 
 
+MIN_CHOSEN_NAME = 2
+MAX_CHOSEN_NAME = 24
+_CHOSEN = re.compile(r"[A-Za-z0-9]+(?:[ '-][A-Za-z0-9]+)*")
+
+
+def _chosen(name: str) -> str:
+    # An empty name takes the chosen name back, so the seat's label is the name again.
+    if not name:
+        return name
+    if not MIN_CHOSEN_NAME <= len(name) <= MAX_CHOSEN_NAME:
+        raise ValueError(f'A name has {MIN_CHOSEN_NAME} to {MAX_CHOSEN_NAME} characters, and {name!r} has {len(name)}.')
+    if not _CHOSEN.fullmatch(name):
+        raise ValueError(
+            f'{name!r} is not a name. A name holds the letters a to z and digits, with one space, hyphen, or '
+            'apostrophe between them.'
+        )
+    return name
+
+
+type ChosenName = Annotated[str, AfterValidator(one_line), AfterValidator(_chosen)]
+"""
+The name that an agent chooses for itself, as one printable line of 2 to 24 characters: the letters a to z in
+either case and digits, with single spaces, hyphens, and apostrophes between them. Only these characters, so that
+no name looks like another through a letter of another alphabet. An empty text takes the chosen name back.
+"""
+
+MAX_ABOUT = 240
+type About = Annotated[str, AfterValidator(one_line), StringConstraints(max_length=MAX_ABOUT)]
+"""
+What lens an agent brings: its field and how it approaches a problem, in one or two sentences on one line. An empty
+text clears it.
+"""
+
+type Shape = Literal['square', 'circle', 'hex', 'diamond', 'arch', 'triangle']
+type Color = Literal['#f08c3a', '#3d9be9', '#e05a9c', '#3fb56b', '#e3b341', '#2bb3a3', '#e8674f', '#7d8bd9']
+type Symbol = Literal['wave', 'dots', 'arrow', 'fork', 'bars', 'ring', 'plus', 'zigzag', 'orbit', 'slashes']
+
+
+class Picture(Record):
+    """An agent's picture: one shape of six, one color of eight, and one symbol of ten. The app draws it."""
+
+    shape: Shape
+    color: Color
+    symbol: Symbol
+
+
+type SeatMark = Literal['coordinator', 'reviewer', 'on_call']
+"""A seat that an agent holds, as the record has it: the coordinator seat, a reviewer seat, or a seat on call."""
+
+
 class ModelSpec(Record):
     """
     The model behind an agent.
@@ -88,8 +139,9 @@ class Agent(Record):
     """Older records give agent 1 a planner's role and brief. Verifold no longer sets or sends either."""
     given_role: Role = ''
     """
-    The role that the person gave the agent's seat, in the person's words, such as "driver". Empty when the person
-    gave none. The agent can still say what it is with `profile`, and the code never acts on either text.
+    The role that the person gave the agent's seat when it joined, in the person's words, such as "driver". Empty
+    when the person gave none. A later `profile_set` event can give another. The agent can still say what it is
+    with `profile`, and the code never acts on either text.
     """
     mode: ValueId | None = None
     """The harness mode that the person chose for the agent. `None` follows the lab's auto mode choice."""
@@ -124,8 +176,9 @@ class SeatFacts(Record):
     """The role that the person gives the seat, as one line, such as "driver". The code never acts on the text."""
     on_call: bool = False
     """
-    Whether the seat is on call. No post for every agent wakes an on-call agent. A post that names it, replies to
-    it, or builds on its post does, and so does a post in a thread that it chose to watch.
+    Whether the seat is on call. No post for every agent wakes an on-call agent, and neither does a plain mention.
+    An ask or a call that names it does, and so does a post that replies to it or builds on its post, the person's
+    post that names it, and a post in a thread that it chose to watch.
     """
     coordinator: bool = False
     """Whether the seat's agent is the lab's coordinator. A lab has one coordinator at most."""

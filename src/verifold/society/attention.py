@@ -2,8 +2,9 @@
 Who hears what.
 
 A post is for an agent when it names the agent, replies to one of the agent's posts, builds on one of them, or
-lands in a thread that the agent watches. A post names an agent in `mentions`, or in its text with the agent's ID
-or its full name. An agent watches the
+lands in a thread that the agent watches. A post names an agent in `mentions`, or in its text with the agent's ID,
+the full label of its seat, or the name that it chose after an at sign, such as "@Tessel". A chosen name without
+the sign names nobody, because it can be a common word. An agent watches the
 threads that it opens and the thread where it works now, which is the thread of its latest plan or result, until it
 says otherwise. Nobody watches the question's thread by default, so a post there is for the agents that it names.
 
@@ -14,9 +15,15 @@ names nobody and replies to no post is for every agent. No post is for a blind c
 No post is for an agent that left the lab.
 
 An on-call agent hears less. No post for every agent is for it, and neither are the person's words that name nobody.
-It watches a thread only when it said so with `watch`, or as a member of a side thread. So a post is for it when
-the post names it, replies to it, builds on its post, or lands in such a thread. A close is for it once it has
-posted, because from then on it counts among the agents that decide whether the lab is done.
+A plain mention is not for it either: a plan, a message, a result, or another post that addresses nobody can name
+it, in `mentions` or in its text, and does not wake it. It watches a thread only when it said so with `watch`, or
+as a member of a side thread. So a post is for it when the post is an ask or a call that names it, replies to its
+post, builds on its post, is the check of a rerun that it asked for, is the person's post that names it, or lands
+in such a thread. A close is for it once it has posted, because from then on it counts among the agents that
+decide whether the lab is done.
+
+The lab's coordinator and the person can mark a post as one for the whole lab. It is then for every agent that is
+not on call, as the person's post that names nobody is.
 
 A side thread is a thread between named agents. Its members are those agents and every agent that posted in it or
 started to watch it since. A member watches it until it says otherwise, and then it hears nothing from the thread
@@ -36,9 +43,10 @@ from functools import lru_cache
 
 from verifold.protocol.events import AgentLeft, Posted
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
-from verifold.protocol.join import MAX_NEWS, LeftLine, News, PostLine, Update
+from verifold.protocol.join import MAX_NEWS, LeftLine, News, ProfileNote, RenameLine, Update
 from verifold.protocol.posts import Ask, Call, Check, Close, Post
 from verifold.society.board import Board
+from verifold.society.identity import post_line, post_view
 from verifold.society.lifecycle import alarm_line, no_alarm_line
 from verifold.society.lines import lines_of
 
@@ -84,12 +92,13 @@ def wakes(
     reader = board.agent(agent_id)
     if post.author == agent_id or (reader and reader.agent.checks) or board.gone(agent_id):
         return False
-    if _names(board, agent_id, post):
+    on_call = bool(reader) and board.on_call(agent_id)
+    if _tied(board, agent_id, post) or (_named(board, agent_id, post) and (not on_call or _addresses(post))):
         return True
     if board.is_side(post.thread):
         # A side thread is for the members that watch it. No post in it is for every agent, the person's neither.
         return watches_thread(board, agent_id, post.thread)
-    if reader and board.on_call(agent_id):
+    if reader and on_call:
         # No post for every agent is for an on-call agent, but a close is once the agent counts for it.
         if isinstance(post, Close) and board.counts(reader, before=entry.seq):
             return True
@@ -111,9 +120,9 @@ def update(board: Board, agent_id: AgentId, after: int, now: datetime | None = N
     shown, others, reach = _page(woken, rest, board.seq)
     return Update(
         seq=reach,
-        posts=shown,
+        posts=tuple(post_view(board, entry) for entry in shown),
         more=len(woken) - len(shown),
-        others=tuple(PostLine.of(entry) for entry in others[-MAX_NEWS:]),
+        others=tuple(post_line(board, entry) for entry in others[-MAX_NEWS:]),
         other_posts=len(others),
         threads=tuple(
             entry.thread for entry in board.threads if after < entry.seq <= reach and entry.thread.opened_by != agent_id
@@ -125,6 +134,8 @@ def update(board: Board, agent_id: AgentId, after: int, now: datetime | None = N
             if after < entry.seq <= reach and entry.agent.id != agent_id and board.here(entry)
         ),
         left=departures(board, agent_id, after, reach),
+        profile=profile_notes(board, agent_id, after, reach),
+        renamed=renames(board, agent_id, after, reach),
         alarm=alarm_line(board, agent_id),
         no_alarm=no_alarm_line(board, agent_id, now),
         ends_at=board.ends_at,
@@ -142,13 +153,71 @@ def news(board: Board, agent_id: AgentId, after: int) -> News:
     shown, others, reach = _page(woken, rest, board.seq)
     return News(
         seq=reach,
-        for_you=tuple(PostLine.of(entry) for entry in shown),
+        for_you=tuple(post_line(board, entry) for entry in shown),
         more=len(woken) - len(shown),
-        others=tuple(PostLine.of(entry) for entry in others[-MAX_NEWS:]),
+        others=tuple(post_line(board, entry) for entry in others[-MAX_NEWS:]),
         left_out=max(len(others) - MAX_NEWS, 0),
         left=departures(board, agent_id, after, reach),
+        profile=profile_notes(board, agent_id, after, reach),
+        renamed=renames(board, agent_id, after, reach),
         alarm=alarm_line(board, agent_id),
     )
+
+
+def profile_notes(board: Board, agent_id: AgentId, after: int, reach: int) -> tuple[ProfileNote, ...]:
+    """
+    Return the changes that others made to an agent's profile after event `after`, up to event `reach`.
+
+    The person and the lab's coordinator can make such a change. The oldest comes first.
+    Each note says who made the change and what the profile holds after it: a name or an about line that was
+    taken back, an about line that the coordinator wrote, a flag with its reason, or a role for the seat.
+    """
+    return tuple(
+        ProfileNote(
+            by=entry.by,
+            name_taken_back=entry.name == '',
+            about=entry.about,
+            picture_taken_back=entry.no_picture,
+            given_role=entry.given_role,
+            flag=entry.flag,
+        )
+        for entry in board.profiles
+        if after < entry.seq <= reach and entry.agent == agent_id and entry.by not in (None, agent_id)
+    )
+
+
+def renames(board: Board, agent_id: AgentId, after: int, reach: int) -> tuple[RenameLine, ...]:
+    """
+    Return the other agents whose name changed after event `after`, up to event `reach`, each once.
+
+    A line has the agent's name at `reach` and the name that it had at `after`. An agent that chose a name and
+    took it back in between has none, and neither has a blind checker or an agent that left.
+    """
+    changed = dict.fromkeys(
+        (
+            *(entry.agent for entry in board.profiles if after < entry.seq <= reach and entry.name is not None),
+            *(agent for seq, agent, _ in board.labels if after < seq <= reach),
+        )
+    )
+    lines = (
+        RenameLine(id=agent, name=_name_at(board, agent, reach), was=_name_at(board, agent, after))
+        for agent in changed
+        if agent != agent_id and (joined := board.agent(agent)) and joined.seq <= after and board.here(joined)
+    )
+    return tuple(line for line in lines if line.name != line.was)[-MAX_NEWS:]
+
+
+def _name_at(board: Board, agent_id: AgentId, seq: int) -> str:
+    # The agent's name after event `seq`: the name that it chose last by then, or else the label of its seat.
+    chosen = next(
+        (
+            entry.name
+            for entry in reversed(board.profiles)
+            if entry.agent == agent_id and entry.seq <= seq and entry.name is not None
+        ),
+        '',
+    )
+    return chosen or board.label(agent_id, before=seq + 1)
 
 
 def left_line(board: Board, left: AgentLeft) -> LeftLine:
@@ -179,14 +248,13 @@ def gone_named(board: Board, post: Post) -> tuple[LeftLine, ...]:
 
 
 def _wrote_to(board: Board, agent_id: AgentId, left: AgentLeft) -> bool:
-    name = left_line(board, left).name
     return any(
         entry.post.author == agent_id
         and entry.seq < left.seq
         and (
             left.agent in entry.post.mentions
             or bool((answered := board.post(entry.post.reply_to or '')) and answered.post.author == left.agent)
-            or left.agent in _in_text(f'{entry.post.text}\n{entry.post.body}', ((left.agent, name),))
+            or left.agent in _named_in(board, f'{entry.post.text}\n{entry.post.body}')
         )
         for entry in board.posts
     )
@@ -212,27 +280,38 @@ def _page(
     return shown, tuple(entry for entry in rest if entry.seq <= reach), reach
 
 
-def _workers(board: Board) -> Names:
-    # Each agent with its name, and with each name that it had before, so that an older post still names it.
+def _named_in(board: Board, text: str) -> frozenset[AgentId]:
+    # The agents that a text names: by an ID, by the label of a seat, or by a chosen name after an at sign.
     checkers = {joined.agent.id for joined in board.agents if joined.agent.checks}
-    now = tuple((joined.agent.id, joined.agent.name) for joined in board.agents)
-    former = tuple((event.agent, before) for event, before in board.renames)
-    return tuple(pair for pair in (*now, *former) if pair[0] not in checkers)
+    labels = tuple(dict.fromkeys((agent, label) for _, agent, label in board.labels if agent not in checkers))
+    return _in_text(text, labels, board.chosen_names())
 
 
-def _names(board: Board, agent_id: AgentId, post: Post) -> bool:
-    # A post names an agent in `mentions`, in its text, as a reply to the agent's post, as a post that builds on the
-    # agent's post, or as the check that the agent asked for.
+def _tied(board: Board, agent_id: AgentId, post: Post) -> bool:
+    # A post is tied to an agent's own work as a reply to the agent's post, as a post that builds on the agent's
+    # post, or as the check that the agent asked for.
     sources = (post.reply_to, *post.builds_on) if post.reply_to else post.builds_on
-    authors = {entry.post.author for entry in map(board.post, sources) if entry}
-    if agent_id in post.mentions or agent_id in authors:
+    if agent_id in {entry.post.author for entry in map(board.post, sources) if entry}:
         return True
-    if isinstance(post, Check) and any(rerun.by == agent_id and rerun.post == post.reply_to for rerun in board.reruns):
+    return isinstance(post, Check) and any(
+        rerun.by == agent_id and rerun.post == post.reply_to for rerun in board.reruns
+    )
+
+
+def _named(board: Board, agent_id: AgentId, post: Post) -> bool:
+    # A post names an agent in `mentions` or in its text.
+    if agent_id in post.mentions:
         return True
     # An ask that carries a harness's request shows a command or a tool's input. A name in that text names nobody.
     if isinstance(post, Ask) and post.request:
         return False
-    return agent_id in _in_text(f'{post.text}\n{post.body}', _workers(board))
+    return agent_id in _named_in(board, f'{post.text}\n{post.body}')
+
+
+def _addresses(post: Post) -> bool:
+    # The posts whose names wake an on-call agent: an ask or a call, which address the agents that they name, and
+    # the person's post.
+    return isinstance(post, Ask | Call) or post.author == PERSON
 
 
 def _for_everyone(board: Board, entry: Posted) -> bool:
@@ -241,32 +320,40 @@ def _for_everyone(board: Board, entry: Posted) -> bool:
     # post, such as the caller's own result, still asks every agent for hands.
     post = entry.post
     # Whether the lab is done concerns every agent, whatever the post names.
-    if isinstance(post, Close):
+    if isinstance(post, Close) or post.to_lab:
         return True
     open_ask = isinstance(post, Call) or (isinstance(post, Ask) and not post.reply_to)
     return not post.mentions and (open_ask or _opens_thread(board, entry))
 
 
 @lru_cache(maxsize=512)
-def _in_text(text: str, names: Names) -> frozenset[AgentId]:
+def _in_text(text: str, labels: Names, chosen: Names) -> frozenset[AgentId]:
     # Agents write a name or "agent-2" in their text more often than they fill `mentions`. Every reader asks
     # about the same post, so the scan of a long body runs once.
     # An ID matches whole and outside a path: "agent-3" is not in "agents/agent-3/out.json".
     found = {
         agent_id
-        for agent_id, _ in names
+        for agent_id, _ in labels
         if re.search(rf'(?<![\w/.-]){re.escape(agent_id)}(?![\w/-])', text, re.IGNORECASE)
     }
-    # A display name matches whole and with its capitals: "Agent 1" is not in "Agent 12" or "the agent 1 run". The
-    # longest name goes first and leaves the text, so "Codex · gpt-6 2" does not also name "Codex · gpt-6". A name
-    # does not end where its last word goes on, as "Codex · gpt-6" in "Codex · gpt-6.1-sol": a dot ends a name only
+    # A seat's label matches whole and with its capitals: "Agent 1" is not in "Agent 12" or "the agent 1 run". The
+    # longest label goes first and leaves the text, so "Codex · gpt-6 2" does not also name "Codex · gpt-6". A label
+    # does not end where its last word goes on, as "Codex · gpt-6" in "Codex · gpt-6.1-sol": a dot ends a label only
     # when no letter or digit follows it.
     rest = text
-    for agent_id, name in sorted(names, key=lambda pair: len(pair[1]), reverse=True):
-        whole = rf'(?<![\w-]){re.escape(name)}(?![\w-]|\.\w)'
+    for agent_id, label in sorted(labels, key=lambda pair: len(pair[1]), reverse=True):
+        whole = rf'(?<![\w-]){re.escape(label)}(?![\w-]|\.\w)'
         if re.search(whole, rest):
             found.add(agent_id)
             rest = re.sub(whole, ' ', rest)
+    # A chosen name can be a common word, such as "We" or "Plan", so it names its agent only after an at sign:
+    # "@Tessel". A name that the agent had before still does. Capitals do not matter here, because no two names
+    # differ by them.
+    for agent_id, name in sorted(chosen, key=lambda pair: len(pair[1]), reverse=True):
+        whole = rf'(?<![\w@])@{re.escape(name)}(?![\w-]|\.\w)'
+        if re.search(whole, rest, re.IGNORECASE):
+            found.add(agent_id)
+            rest = re.sub(whole, ' ', rest, flags=re.IGNORECASE)
     return frozenset(found)
 
 

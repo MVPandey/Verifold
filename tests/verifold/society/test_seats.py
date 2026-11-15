@@ -3,7 +3,19 @@ from builders import RecordBuilder, lab
 
 from verifold.protocol.events import TurnEnded, TurnStarted
 from verifold.protocol.join import News
-from verifold.protocol.posts import Answer, Ask, Call, Check, Close, FileEvidence, Message, Plan, Post, Result
+from verifold.protocol.posts import (
+    Answer,
+    Ask,
+    Call,
+    Check,
+    Close,
+    FileEvidence,
+    Message,
+    Plan,
+    Post,
+    Proposal,
+    Result,
+)
 from verifold.protocol.usage import Usage
 from verifold.society.attention import news, wakes, watches_thread
 from verifold.society.errors import RejectedEvent
@@ -12,6 +24,7 @@ from verifold.society.standing import standing
 from verifold.society.views import brief
 
 RESULT = Result(id='p-1', thread='t-1', author='ada', text='Beats random on 10 of 10 prompts.')
+EVIDENCE = FileEvidence(path='bench.py', commit='c' * 40)
 
 
 def woken(record: RecordBuilder, post: Post) -> set[str]:
@@ -29,7 +42,7 @@ def test_a_record_from_before_seats_has_nobody_on_call_and_no_coordinator_and_ke
 
     assert [joined.agent.name for joined in board.agents] == ['Ada', 'Bo', 'Cy']
     assert [joined.agent.given_role for joined in board.agents] == ['', '', '']
-    assert (board.coordinator, board.renames) == (None, ())
+    assert (board.coordinator, board.names()) == (None, (('ada', 'Ada'), ('bo', 'Bo'), ('cy', 'Cy')))
     assert not any(board.on_call(agent) for agent in ('ada', 'bo', 'cy'))
     # A turn from before Verifold kept the model has none.
     assert (
@@ -54,10 +67,12 @@ def test_no_post_for_every_agent_wakes_an_on_call_agent() -> None:
     assert woken(on_call().on_call('cy', on_call=False), ask) == {'ada', 'cy'}
 
 
-def test_an_on_call_agent_hears_a_post_that_names_it_replies_to_it_or_builds_on_its_post() -> None:
+def test_an_on_call_agent_hears_an_ask_or_a_call_that_names_it_and_a_reply_or_a_post_that_builds_on_its_post() -> None:
     named = Ask(id='p-2', thread='t-1', author='bo', text='A hard one.', mentions=('cy',))
-    in_text = Message(id='p-2', thread='t-1', author='bo', text='Cy, is the bound tight?')
+    in_text = Ask(id='p-2', thread='t-1', author='bo', text='Cy, is the bound tight?', reply_to='p-1')
+    called = Call(id='p-2', thread='t-1', author='bo', text='The tail needs Cy.')
     by_person = Message(id='p-2', thread='t-1', author='person', text='What do you think?', mentions=('cy',))
+    person_text = Message(id='p-2', thread='t-1', author='person', text='What does Cy think?', reply_to='p-1')
     said = Message(id='p-2', thread='t-1', author='cy', text='The bound is loose.')
     reply = Answer(id='p-3', thread='t-1', author='bo', text='How loose?', reply_to='p-2')
     built = Result(id='p-3', thread='t-1', author='bo', text='A tighter bound.', builds_on=('p-2',))
@@ -65,9 +80,79 @@ def test_an_on_call_agent_hears_a_post_that_names_it_replies_to_it_or_builds_on_
     # Ada opened the thread, so she hears every post in it.
     assert woken(on_call(), named) == {'ada', 'cy'}
     assert 'cy' in woken(on_call(), in_text)
+    assert 'cy' in woken(on_call(), called)
     assert woken(on_call(), by_person) == {'ada', 'cy'}
+    assert 'cy' in woken(on_call(), person_text)
     assert 'cy' in woken(on_call().post(said), reply)
     assert 'cy' in woken(on_call().post(said), built)
+    # The answer to its own ask is a reply to its post, and so is the person's answer to a tracked ask.
+    asked = Ask(id='p-2', thread='t-1', author='cy', text='May I?', mentions=('person',))
+    assert 'cy' in woken(
+        on_call().post(asked), Answer(id='p-3', thread='t-1', author='person', text='Yes.', reply_to='p-2')
+    )
+
+
+@pytest.mark.parametrize(
+    'post',
+    [
+        Plan(id='p-2', thread='t-1', author='bo', text='I take the tail.', mentions=('ada', 'cy')),
+        Message(id='p-2', thread='t-1', author='bo', text='Cy, is the bound tight?'),
+        Message(id='p-2', thread='t-1', author='bo', text='A note.', mentions=('cy',)),
+        Result(id='p-2', thread='t-1', author='bo', text='The bound of cy holds.', mentions=('cy',)),
+        Proposal(id='p-2', thread='t-1', author='bo', text='It holds, says Cy.', mentions=('cy',)),
+        Close(id='p-2', thread='t-1', author='bo', text='Done, Cy.', mentions=('cy',)),
+    ],
+)
+def test_a_plain_mention_in_a_post_that_addresses_nobody_does_not_wake_an_on_call_agent(post: Post) -> None:
+    # In the first real lab, one agent listed every agent in the mentions of its first plan.
+    assert 'cy' not in woken(on_call(), post)
+    # The same post wakes the agent once its seat is off call.
+    assert 'cy' in woken(on_call().on_call('cy', on_call=False), post)
+
+
+def test_a_plain_mention_in_a_side_thread_does_not_wake_an_on_call_agent_that_is_no_member() -> None:
+    side = on_call().thread('t-2', opened_by='bo', between=('bo', 'ada'))
+
+    assert woken(side.copy(), Message(id='p-2', thread='t-2', author='bo', text='Cy knows this.')) == {'ada'}
+    assert woken(side.copy(), Ask(id='p-2', thread='t-2', author='bo', text='Cy, do you know this?')) == {'ada', 'cy'}
+
+
+def test_the_check_of_a_rerun_that_an_on_call_agent_asked_for_is_for_it() -> None:
+    record = on_call().post(Result(id='p-2', thread='t-1', author='ada', text='Holds.', evidence=(EVIDENCE,)))
+    record.rerun('cy', 'p-2').join('checker-1', family='openai', checks='p-2')
+    check = Check(
+        id='p-3', thread='t-1', author='checker-1', text='Holds.', reply_to='p-2', outcome='holds', method='rerun'
+    )
+
+    assert 'cy' in woken(record, check)
+
+
+def test_a_post_that_the_coordinator_marks_for_the_whole_lab_reaches_every_agent_that_is_not_on_call() -> None:
+    record = on_call().coordinator('bo').thread('t-2', opened_by='ada')
+    plain = Message(id='p-2', thread='t-2', author='bo', text='Where we are.')
+    marked = plain.model_copy(update={'to_lab': True})
+
+    # T-2 is ada's thread, and cy is on call.
+    assert woken(record.copy(), plain) == {'ada'}
+    assert woken(record.copy().join('dee'), marked) == {'ada', 'dee'}
+    assert woken(record.copy().join('dee'), marked.model_copy(update={'author': 'person'})) == {'ada', 'bo', 'dee'}
+    # Only the coordinator and the person mark a post so, in a thread for the whole lab, with no addressee.
+    with pytest.raises(RejectedEvent, match="Only the lab's coordinator and the person"):
+        record.copy().post(marked.model_copy(update={'author': 'ada'})).board()
+    side = record.copy().thread('t-3', opened_by='bo', between=('bo', 'ada'))
+    for fields in ({'thread': 't-3'}, {'mentions': ('ada',)}, {'reply_to': 'p-1', 'thread': 't-1'}):
+        with pytest.raises(RejectedEvent, match='names nobody in `mentions`, and replies to no post'):
+            side.copy().post(marked.model_copy(update=fields)).board()
+
+
+def test_a_post_for_the_whole_lab_from_the_coordinator_does_not_open_a_closed_lab_again() -> None:
+    record = lab().coordinator('bo').post(Close(id='p-1', thread='t-1', author='ada', text='Done.'))
+    record.post(Answer(id='p-2', thread='t-1', author='cy', text='Yes.', reply_to='p-1', accepts=True))
+    marked = Message(id='p-3', thread='t-1', author='bo', text='One more thing.', to_lab=True)
+
+    assert lab_state(record.board()) == 'closed'
+    assert lab_state(record.copy().post(marked).board()) == 'closed'
+    assert lab_state(record.copy().post(marked.model_copy(update={'author': 'person'})).board()) == 'open'
 
 
 def test_an_on_call_agent_watches_a_thread_only_by_its_own_word_or_as_a_member_of_a_side_thread() -> None:
@@ -219,7 +304,7 @@ def test_an_agent_gets_the_name_of_its_model_once_known_and_a_post_reaches_it_un
     board = record.board()
 
     assert [joined.agent.name for joined in board.agents] == ['Codex · gpt-6 2', 'Codex · gpt-6']
-    assert [(event.name, before) for event, before in board.renames] == [('Codex · gpt-6 2', 'Codex · default model')]
+    assert [name for agent, name in board.names() if agent == 'agent-1'] == ['Codex · default model', 'Codex · gpt-6 2']
     # The post from before the new name is still for the agent.
     assert [line.id for line in news(board, 'agent-1', 0).for_you] == ['p-1', 'p-2']
     with pytest.raises(RejectedEvent, match='Another agent has or had the name Codex · GPT-6'):

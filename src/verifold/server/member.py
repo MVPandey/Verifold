@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from verifold.protocol.agents import GUEST
+from verifold.protocol.agents import GUEST, Picture
 from verifold.protocol.events import AgentLeft, AlarmSet, RerunRequested, WatchSet
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import (
@@ -20,7 +20,8 @@ from verifold.protocol.posts import FileEvidence
 from verifold.server.errors import BlindCheck, CannotWake, EvidenceRejected, HasLeft, OutOfTime, UnknownAgent
 from verifold.server.lab import Lab
 from verifold.society.attention import news, update
-from verifold.society.views import brief, post_view, side_lines, thread_summaries, thread_view, work_threads
+from verifold.society.identity import post_view
+from verifold.society.views import brief, profile_result, side_lines, thread_summaries, thread_view, work_threads
 
 type Pin = Callable[[tuple[str, ...]], Awaitable[tuple[FileEvidence, ...]]]
 """Commits an agent's folder and returns each named file pinned to that commit."""
@@ -204,31 +205,64 @@ class Member:
             )
         return await self._lab.set_alarm(self.agent_id, minutes, quiet=quiet)
 
-    async def set_profile(
-        self, role: str | None = None, status: str | None = None, *, coordinator: bool | None = None
+    async def set_profile(  # noqa: PLR0913
+        self,
+        role: str | None = None,
+        status: str | None = None,
+        *,
+        name: str | None = None,
+        about: str | None = None,
+        picture: Picture | None = None,
+        coordinator: bool | None = None,
+        reviewer: bool | None = None,
     ) -> ProfileResult:
         """
-        Say what the agent is to the lab and what it does now, and return its profile after the change.
+        Record the agent's own profile, and return it after the change.
 
-        With `coordinator`, the agent takes the lab's coordinator seat, or gives it up. With nothing, the call
-        returns the profile as it is.
+        With `coordinator`, the agent takes the lab's coordinator seat, or gives it up. With `reviewer`, it takes a
+        reviewer seat, or gives it up. The record takes the whole call or nothing. With nothing, the call returns
+        the profile as it is.
 
         Raises:
-            RejectedEvent: The agent takes a seat that another agent holds, or gives up a seat that it does not hold.
+            RejectedEvent: The agent takes a seat that is not free, gives up a seat that it does not hold, or
+                chooses a name that it cannot have.
 
         """
         self._check_not_blind()
-        if coordinator is not None:
-            await self._lab.set_coordinator(self.agent_id if coordinator else None, self.agent_id)
-        now_role, now_status = await self._lab.set_profile(self.agent_id, role, status)
-        board = self._lab.board
-        joined = board.agent(self.agent_id)
-        return ProfileResult(
-            role=now_role,
-            status=now_status,
-            given_role=joined.agent.given_role if joined else '',
-            coordinator=board.coordinator,
+        await self._lab.set_profile(
+            self.agent_id,
+            role,
+            status,
+            name=name,
+            about=about,
+            picture=picture,
+            coordinator=coordinator,
+            reviewer=reviewer,
         )
+        return profile_result(self._lab.board, self.agent_id)
+
+    async def change_profile(
+        self,
+        agent_id: AgentId,
+        *,
+        reset_name: bool = False,
+        about: str | None = None,
+        given_role: str | None = None,
+        flag: str | None = None,
+    ) -> ProfileResult:
+        """
+        Change another agent's profile as the lab's coordinator, and return that profile after the change.
+
+        Raises:
+            RejectedEvent: The agent that calls does not hold the coordinator seat, or the other agent is not in
+                the lab.
+
+        """
+        self._check_not_blind()
+        await self._lab.change_profile(
+            agent_id, self.agent_id, reset_name=reset_name, about=about, given_role=given_role, flag=flag
+        )
+        return profile_result(self._lab.board, agent_id)
 
     async def watch(self, thread_id: ThreadId, *, watching: bool) -> WatchSet:
         """Start or stop watching a thread."""

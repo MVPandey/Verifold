@@ -2,12 +2,12 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from heapq import merge
 
-from verifold.protocol.agents import GUEST
+from verifold.protocol.agents import GUEST, Picture
 from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
-    AgentNamed,
     AlarmSet,
     CoordinatorSet,
     LabOpened,
@@ -16,6 +16,7 @@ from verifold.protocol.events import (
     ProfileSet,
     QuestionRevised,
     RerunRequested,
+    ReviewerSet,
     ThreadOpened,
     TimeRanOut,
     TimeSet,
@@ -41,8 +42,10 @@ class Board:
     """The person's revisions of the question, oldest first."""
     agents: tuple[AgentJoined, ...] = ()
     """Each agent's entry, with the name that the agent has now."""
-    renames: tuple[tuple[AgentNamed, str], ...] = ()
-    """Each new name that an agent got, with the name that it had before, oldest first."""
+    labels: tuple[tuple[int, AgentId, str], ...] = ()
+    """Each label that a seat got, with the sequence number of the event that gave it, oldest first."""
+    reviewers: tuple[ReviewerSet, ...] = ()
+    """Each time that an agent took, got, gave up, or lost a reviewer seat, oldest first."""
     on_calls: tuple[OnCallSet, ...] = ()
     """Each time that the person put a seat on call or took it off, oldest first."""
     coordinators: tuple[CoordinatorSet, ...] = ()
@@ -82,7 +85,7 @@ class Board:
         """Whether the lab reached its end, and the person has not set a new end since."""
         return bool(self.times) and isinstance(self.times[-1], TimeRanOut)
 
-    # ponytail: lookups scan the tuples. Index them if a board grows past about 10,000 posts.
+    # ponytail: the lookups of agents and threads scan the tuples. The posts have an index.
     def agent(self, agent_id: AgentId) -> AgentJoined | None:
         """Return the entry of a joined agent, or `None`."""
         return next((entry for entry in self.agents if entry.agent.id == agent_id), None)
@@ -160,6 +163,105 @@ class Board:
         """Return whether an agent is in the lab now: it is known to be in it, and it has not left."""
         return self.came(joined) and not self.gone(joined.agent.id)
 
+    def label(self, agent_id: AgentId, before: int | None = None) -> str:
+        """
+        Return the label of an agent's seat.
+
+        It is the name that Verifold built from the harness's title and the model's name, or the name that the
+        person gave an invited agent.
+
+        With `before`, return the label that the seat had just before that event. An agent that joined later has
+        its first label.
+        """
+        mine = tuple((seq, text) for seq, agent, text in self.labels if agent == agent_id)
+        past = tuple(text for seq, text in mine if before is None or seq < before)
+        return past[-1] if past else mine[0][1] if mine else agent_id
+
+    def names(self) -> tuple[tuple[AgentId, str], ...]:
+        """
+        Return every name that an agent of the lab has or had, each with its agent, oldest first.
+
+        An agent's names are each label that its seat had and each name that it chose. A name stays its agent's
+        for ever, so a name in an older post means the same agent.
+        """
+        # Both lists are in the order of the record, so one merge keeps that order.
+        chosen = ((entry.seq, entry.agent, entry.name) for entry in self.profiles if entry.name)
+        return tuple(dict.fromkeys((agent, text) for _, agent, text in merge(self.labels, chosen)))
+
+    def chosen_names(self) -> tuple[tuple[AgentId, str], ...]:
+        """Return every name that an agent chose, now or before, each with its agent, oldest first."""
+        return tuple(dict.fromkeys((entry.agent, entry.name) for entry in self.profiles if entry.name))
+
+    def about_by(self, agent_id: AgentId) -> AgentId | None:
+        """Return who wrote an agent's about line: the agent itself or a coordinator. `None` when it has none."""
+        latest = next(
+            (entry for entry in reversed(self.profiles) if entry.agent == agent_id and entry.about is not None), None
+        )
+        return (latest.by or agent_id) if latest and latest.about else None
+
+    def chosen_name(self, agent_id: AgentId) -> str:
+        """Return the name that an agent chose and still has, or an empty text when its seat's label is its name."""
+        return next(
+            (entry.name for entry in reversed(self.profiles) if entry.agent == agent_id and entry.name is not None), ''
+        )
+
+    def about(self, agent_id: AgentId) -> str:
+        """Return an agent's about line as it is now. It is empty when the agent has none."""
+        return next(
+            (entry.about for entry in reversed(self.profiles) if entry.agent == agent_id and entry.about is not None),
+            '',
+        )
+
+    def picture(self, agent_id: AgentId) -> Picture | None:
+        """Return the picture that an agent chose and still has, or `None`."""
+        latest = next(
+            (
+                entry
+                for entry in reversed(self.profiles)
+                if entry.agent == agent_id and (entry.picture or entry.no_picture)
+            ),
+            None,
+        )
+        return latest.picture if latest and not latest.no_picture else None
+
+    def given_role(self, agent_id: AgentId) -> tuple[str, AgentId]:
+        """
+        Return the role that somebody gave an agent's seat, and who gave it: the person, or a coordinator.
+
+        The text is empty when nobody gave one. The role that the person gave the seat when the agent joined stands
+        until a later change.
+        """
+        given = next(
+            (entry for entry in reversed(self.profiles) if entry.agent == agent_id and entry.given_role is not None),
+            None,
+        )
+        if given and given.given_role is not None:
+            return given.given_role, given.by or PERSON
+        joined = self.agent(agent_id)
+        return (joined.agent.given_role if joined else ''), PERSON
+
+    def flag(self, agent_id: AgentId) -> ProfileSet | None:
+        """
+        Return the coordinator's flag on an agent's profile, or `None`.
+
+        A flag stands until the coordinator takes it back, or until the agent changes its name, its about line, or
+        its picture.
+        """
+        for entry in reversed(self.profiles):
+            if entry.agent != agent_id:
+                continue
+            if entry.flag is not None:
+                return entry if entry.flag else None
+            own = entry.by is None and (entry.name is not None or entry.about is not None or entry.picture is not None)
+            if own:
+                return None
+        return None
+
+    def reviewer(self, agent_id: AgentId) -> bool:
+        """Return whether an agent holds a reviewer seat. An agent that left the lab holds none."""
+        latest = next((entry for entry in reversed(self.reviewers) if entry.agent == agent_id), None)
+        return bool(latest and latest.reviewer and not self.gone(agent_id))
+
     def profile(self, agent_id: AgentId) -> tuple[str, str]:
         """Return the role and the status that an agent gave itself last. Each is empty when it gave none."""
         mine = tuple(entry for entry in self.profiles if entry.agent == agent_id)
@@ -210,12 +312,51 @@ class Board:
 
     def post(self, post_id: PostId) -> Posted | None:
         """Return the entry of a post, or `None`."""
+        # The fold asks this for every new post, and each of its boards has other posts, so no index pays here.
         return next((entry for entry in self.posts if entry.post.id == post_id), None)
 
     def replies(self, post_id: PostId) -> tuple[Posted, ...]:
         """Return the entries of the posts that reply to a post, oldest first."""
-        return tuple(entry for entry in self.posts if entry.post.reply_to == post_id)
+        return _index(self.posts).replies.get(post_id, ())
 
     def built_on(self, post_id: PostId) -> tuple[Posted, ...]:
         """Return the entries of the posts that build on a post, oldest first."""
-        return tuple(entry for entry in self.posts if post_id in entry.post.builds_on)
+        return _index(self.posts).builds.get(post_id, ())
+
+
+@dataclass(frozen=True, slots=True)
+class _Index:
+    """The posts of one board by the post that they reply to, and by the posts that they build on."""
+
+    posts: tuple[Posted, ...]
+    replies: dict[PostId, tuple[Posted, ...]]
+    builds: dict[PostId, tuple[Posted, ...]]
+
+
+_indexes: list[_Index] = []
+"""The indexes of the boards that were read last. A board never changes, so its index holds for as long as it lives."""
+
+_KEPT_INDEXES = 4
+
+
+def _index(posts: tuple[Posted, ...]) -> _Index:
+    # A view asks for the replies to every post, and a scan of all posts for each one costs time that grows with
+    # the square of the record. The index is built once for a board's posts, which are one tuple that no code changes.
+    for index in _indexes:
+        if index.posts is posts:
+            return index
+    replies: dict[PostId, list[Posted]] = {}
+    builds: dict[PostId, list[Posted]] = {}
+    for entry in posts:
+        if entry.post.reply_to:
+            replies.setdefault(entry.post.reply_to, []).append(entry)
+        for source in dict.fromkeys(entry.post.builds_on):
+            builds.setdefault(source, []).append(entry)
+    index = _Index(
+        posts=posts,
+        replies={post: tuple(entries) for post, entries in replies.items()},
+        builds={post: tuple(entries) for post, entries in builds.items()},
+    )
+    _indexes.append(index)
+    del _indexes[:-_KEPT_INDEXES]
+    return index

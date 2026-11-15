@@ -39,3 +39,7 @@ class HasLeft(ServerError):
 
 class CannotWake(ServerError):
     """An invited agent asked Verifold to wake it. Verifold did not start it, so it has no way to."""
+
+
+class ProfileRejected(ServerError):
+    """A call of `profile` gave fields that do not go together. The message says which."""

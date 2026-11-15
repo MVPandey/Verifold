@@ -53,6 +53,8 @@ function slowServer(): {
     reviseQuestion: () => Promise.reject(new Error('unused')),
     addAgents: () => Promise.reject(new Error('unused')),
     changeSeat: () => Promise.reject(new Error('unused')),
+    changeProfile: () => Promise.reject(new Error('unused')),
+    setReviewerSeats: () => Promise.reject(new Error('unused')),
     askOffers: () => Promise.reject(new Error('unused')),
     setCoordinatorSeat: () => Promise.reject(new Error('unused')),
     invite: () => Promise.reject(new Error('unused')),

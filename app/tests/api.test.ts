@@ -93,6 +93,15 @@ describe('the API client', () => {
     await api.changeSeat('agent-1', { coordinator: false });
     await api.askOffers();
     await api.setCoordinatorSeat(false);
+    await api.changeSeat('agent-1', { reviewer: true });
+    await api.changeProfile('agent 2', {
+      reset_name: true,
+      reset_about: true,
+      reset_picture: true,
+    });
+    await api.changeProfile('agent-1', { role: '' });
+    await api.setReviewerSeats(3);
+    await api.setReviewerSeats(null);
 
     assert.deepEqual(
       server.calls.map((call) => [call.input, call.init.body]),
@@ -101,6 +110,14 @@ describe('the API client', () => {
         ['/api/agents/agent-1/seat', '{"coordinator":false}'],
         ['/api/offers', '{}'],
         ['/api/coordinator', '{"open":false}'],
+        ['/api/agents/agent-1/seat', '{"reviewer":true}'],
+        [
+          '/api/agents/agent%202/profile',
+          '{"reset_name":true,"reset_about":true,"reset_picture":true}',
+        ],
+        ['/api/agents/agent-1/profile', '{"role":""}'],
+        ['/api/reviewers', '{"seats":3}'],
+        ['/api/reviewers', '{"seats":null}'],
       ],
     );
   });
@@ -123,6 +140,19 @@ describe('the API client', () => {
     assert.equal(removal?.init.body, undefined);
     assert.equal(read.agents[0]?.left, null);
     assert.equal(read.close_among, 1);
+    // A lab from before identity and statuses reads as one where no agent chose anything and nothing waits.
+    const [old] = read.agents;
+    assert.deepEqual(
+      [old?.seat, old?.about, old?.picture, old?.given_role, old?.given_by, old?.reviewer],
+      ['', '', null, '', null, false],
+    );
+    assert.deepEqual([old?.need, old?.flag, old?.edits], ['idle', '', []]);
+    assert.deepEqual([old?.in_turn, old?.about_by, old?.chosen_name], [false, null, '']);
+    assert.deepEqual(old?.outcomes, { built_on: [], held: [], refuted: [], open_asks: [] });
+    assert.deepEqual(
+      [read.waits, read.thread_needs, read.reviewer_seats, read.reviewer_seats_set],
+      [[], {}, 0, null],
+    );
   });
 
   it('asks the server to open the agents’ folder, or the folder of one agent', async () => {

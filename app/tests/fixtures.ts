@@ -68,11 +68,13 @@ export const HARNESSES: readonly HarnessOption[] = [
   },
 ];
 
+/** An agent that chose no name, no picture, and no about line: its seat's label is its name. */
 export function agentView(id: string, changes: Partial<AgentView> = {}): AgentView {
+  const name = `Agent ${id.replace('agent-', '')}`;
   return {
     agent: {
       id,
-      name: `Agent ${id.replace('agent-', '')}`,
+      name,
       harness: id === 'agent-2' ? 'codex' : 'claude-code',
       model: { family: 'anthropic', name: null, effort: null },
       role: '',
@@ -82,6 +84,20 @@ export function agentView(id: string, changes: Partial<AgentView> = {}): AgentVi
       recruited_by: null,
       checks: null,
     },
+    seat: name,
+    chosen_name: '',
+    about: '',
+    about_by: null,
+    in_turn: false,
+    picture: null,
+    given_role: '',
+    given_by: null,
+    reviewer: false,
+    flag: '',
+    edits: [],
+    need: 'idle',
+    outcomes: { built_on: [], held: [], refuted: [], open_asks: [] },
+    turns_started: 0,
     role: '',
     on_call: false,
     coordinator: false,
@@ -149,7 +165,7 @@ export function postView(
   standing: PostView['standing'] = 'open',
   builtOnBy: readonly string[] = [],
 ): PostView {
-  return { seq, at: '2026-11-06T14:04:00Z', post, standing, built_on_by: builtOnBy };
+  return { seq, at: '2026-11-06T14:04:00Z', post, by: null, standing, built_on_by: builtOnBy };
 }
 
 export function summary(changes: Partial<ThreadSummary> = {}): ThreadSummary {
@@ -168,6 +184,7 @@ export function summary(changes: Partial<ThreadSummary> = {}): ThreadSummary {
       reply_to: 'p-1',
       seq: 7,
       at: '2026-11-06T14:09:00Z',
+      by: null,
     },
     disputed: 0,
     checked: 0,
@@ -193,6 +210,10 @@ export function labView(changes: Partial<LabView> = {}): LabView {
     threads: 1,
     posts: 3,
     needs_you: 0,
+    waits: [],
+    thread_needs: {},
+    reviewer_seats: 0,
+    reviewer_seats_set: null,
     ends_at: null,
     out_of_time: false,
     state: 'open',
@@ -203,6 +224,7 @@ export function labView(changes: Partial<LabView> = {}): LabView {
       version: 1,
       jobs: { at_time_limit: 'pause', at_exit: 'stop' },
       permissions: { while_you_decide: 'auto' },
+      reviewers: { seats: null },
     },
     ...changes,
   };
