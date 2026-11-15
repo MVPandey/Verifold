@@ -190,6 +190,11 @@ class TurnSummary(Record):
     """The last event that the agent had got when the turn ended. `None` in a record from before Verifold kept it."""
     stopped: bool = False
     """Whether Verifold stopped the agent here, because its harness failed too often in a row."""
+    no_turn: bool = False
+    """
+    Whether the harness failed outside a turn, such as when it started. The entry then ends no turn: it keeps the
+    error for the person, and the agent's last turn is the one before it.
+    """
 
 
 class TurnEnded(EventBase, TurnSummary):

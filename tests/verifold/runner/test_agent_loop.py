@@ -29,11 +29,13 @@ from verifold.runner.messages import (
     back_message,
     cut_short_message,
     more_time_message,
+    time_facts,
 )
 from verifold.runner.permissions import GrantAsks
 from verifold.runner.session import AgentSession, PermissionChoice, PermissionRequest, TurnResult
 from verifold.server.activity import Activity
-from verifold.society.lifecycle import lab_state
+from verifold.society.board import Board
+from verifold.society.lifecycle import lab_state, pending_alarm
 from verifold.society.turns import before
 from verifold.society.views import needs_person
 
@@ -60,6 +62,7 @@ def loop_for(
     activity: Activity | None = None,
     grant_asks: GrantAsks | None = None,
     has_jobs: Callable[[str], Awaitable[bool]] | None = None,
+    done: Callable[[Board], bool] | None = None,
     **settings: float,
 ) -> AgentLoop:
     member, token = served.seat('bo')
@@ -82,6 +85,7 @@ def loop_for(
         member,
         setup,
         LoopSettings(mcp_url=served.url, **options),
+        done,
         shared=Shared(activity=activity, grant_asks=grant_asks, has_jobs=has_jobs),
     )
 
@@ -400,8 +404,9 @@ async def test_a_failing_harness_is_restarted_with_its_session_and_stops_after_t
     async with asyncio.timeout(30):
         await loop_for(served, tmp_path).run()
 
-    assert len(calls(log, 'new_session')) == 1
-    assert [call['session'] for call in calls(log, 'load_session')] == ['session-bo', 'session-bo']
+    # The second failure is a turn in the conversation that the harness loaded, so the last start opens a new one.
+    assert len(calls(log, 'new_session')) == 2
+    assert [call['session'] for call in calls(log, 'load_session')] == ['session-bo']
     turns = served.lab.board.turns
     assert len(turns) == 3
     assert all(turn.error for turn in turns)
@@ -585,6 +590,7 @@ class BlockingSession:
     """A session whose turns never end, so the loop waits in a turn until the lab stops it."""
 
     id = 'session-1'
+    loaded = False
 
     async def send(self, _: str) -> None:
         await asyncio.Event().wait()
@@ -916,7 +922,9 @@ async def one_turn(served: ServedBoard, tmp_path: Path) -> None:
 
 
 def back(tmp_path: Path, why: str = RESTARTED, *, kept: bool = True, cut_off: bool = False) -> str:
-    return back_message(why, 'Start.', tmp_path / 'bo', kept=kept, cut_off=cut_off)
+    # The lab's settings stop the agents' processes when Verifold stops, so a restart says so.
+    stopped = why == RESTARTED
+    return back_message(why, 'Start.', tmp_path / 'bo', kept=kept, cut_off=cut_off, jobs_stopped=stopped)
 
 
 def prompts(log: Path) -> list[object]:
@@ -1129,3 +1137,186 @@ async def test_a_harness_that_fails_and_cannot_load_its_session_tells_the_agent_
         await stop(running)
 
     assert prompts(log) == ['Start.', back(tmp_path, HARNESS_FAILED, kept=False)]
+
+
+async def test_a_harness_that_fails_when_it_starts_spends_no_alarm_and_moves_the_agent_nowhere(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    monkeypatch.setenv('FAKE_ACP_TURN_SECONDS', '0.5')
+    first = asyncio.create_task(loop_for(served, tmp_path).run())
+    await until(lambda: len(lab.board.starts) == 1)
+    set_ = await lab.set_alarm('bo', 1, quiet=False)
+    await until(lambda: len(lab.board.turns) == 1)
+    await stop(first)
+    was = before(lab.board, 'bo')
+    for _ in range(90):
+        lab.now()
+    monkeypatch.setenv('FAKE_ACP_CRASH_LOAD', '1')
+
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        # The harness fails twice when it loads the conversation, and then it opens a new one.
+        await until(lambda: len(lab.board.turns) == 3)
+        failed = lab.board.turns[1:]
+        assert [(turn.no_turn, turn.seen, bool(turn.error)) for turn in failed] == [(True, was.seen, True)] * 2
+        assert (pending_alarm(lab.board, 'bo'), before(lab.board, 'bo')) == (set_, was)
+        await until(lambda: len(lab.board.turns) == 4)
+        await asyncio.sleep(0.5)
+    finally:
+        await stop(running)
+
+    assert prompts(log) == ['Start.', f'{back(tmp_path, kept=False)}\n\n{alarm_message(set_)}']
+
+
+async def test_a_second_restart_after_a_harness_failed_when_it_started_starts_no_turn(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    await one_turn(served, tmp_path)
+    monkeypatch.setenv('FAKE_ACP_CRASH_LOAD', '1')
+    failing = asyncio.create_task(loop_for(served, tmp_path).run())
+    await until(lambda: len(lab.board.turns) == 2)
+    await stop(failing)
+    monkeypatch.delenv('FAKE_ACP_CRASH_LOAD')
+    activity = Activity()
+
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
+    try:
+        await until(lambda: activity.of('bo').state == 'idle')
+        await asyncio.sleep(0.5)
+    finally:
+        await stop(running)
+
+    assert prompts(log) == ['Start.']
+
+
+@pytest.mark.parametrize('cut_off', [True, False])
+async def test_a_blind_checker_starts_its_rerun_again_after_a_restart_and_reads_no_board(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch, *, cut_off: bool
+) -> None:
+    lab = served.lab
+    if cut_off:
+        monkeypatch.setenv('FAKE_ACP_SLOW', '1')
+        first = asyncio.create_task(loop_for(served, tmp_path).run())
+        await until(lambda: len(calls(log, 'prompt')) == 1)
+        await stop(first)
+        monkeypatch.delenv('FAKE_ACP_SLOW')
+    else:
+        await one_turn(served, tmp_path)
+    assert before(lab.board, 'bo').cut_off is cut_off
+
+    # The loop of an agent with one job ends when a turn leaves the job undone and nothing running.
+    async with asyncio.timeout(30):
+        await loop_for(served, tmp_path, done=lambda _: False).run()
+
+    assert prompts(log) == ['Start.', 'Start.']
+    assert (len(calls(log, 'new_session')), calls(log, 'load_session')) == (2, [])
+
+
+async def test_a_turn_with_a_start_and_no_prompt_reads_as_a_turn_without_an_end(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    # Verifold stopped between the mark and the message, so the harness never got the turn.
+    await lab.start_turn('bo', 'session-bo', 5)
+
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+    finally:
+        await stop(running)
+
+    assert prompts(log) == [back(tmp_path, cut_off=True)]
+    assert 'The record has no end for your last turn, so Verifold may have stopped while it ran.' in back(
+        tmp_path, cut_off=True
+    )
+
+
+async def test_a_turn_that_fails_in_a_loaded_conversation_goes_on_in_a_new_one(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    await one_turn(served, tmp_path)
+    monkeypatch.setenv('FAKE_ACP_CRASH_ONCE', str(tmp_path / 'crashed'))
+    await lab.post(ASK, 'ada')
+
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 3)
+    finally:
+        await stop(running)
+
+    woken = f'{back(tmp_path)}\n\n{DOORBELL}'
+    assert prompts(log) == ['Start.', woken, back(tmp_path, kept=False)]
+    assert (len(calls(log, 'load_session')), len(calls(log, 'new_session'))) == (1, 2)
+    assert [turn.no_turn for turn in lab.board.turns] == [False, False, False]
+
+
+async def test_no_agent_of_a_closed_lab_gets_a_message_when_verifold_restarts(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    await lab.post(PostRequest(kind='close', text='The answer stands.', thread='t-1'), 'ada')
+    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-2', accepts=True), 'bo')
+    # The stop cut the agent's turn off. In an open lab the agent would go on at once.
+    await lab.start_turn('bo', 'session-bo', lab.board.seq)
+    assert lab_state(lab.board) == 'closed'
+
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(calls(log, 'load_session')) == 1)
+        await asyncio.sleep(0.5)
+        assert prompts(log) == []
+        # The person's words open the lab again, and they reach every agent.
+        await lab.post(PostRequest(kind='message', text='One more thing.', thread='t-1'), 'person')
+        await until(lambda: len(lab.board.turns) == 1)
+    finally:
+        await stop(running)
+
+    assert prompts(log) == [f'{back(tmp_path, cut_off=True)}\n\n{DOORBELL}']
+
+
+async def test_an_agent_that_comes_back_to_a_lab_out_of_time_waits_and_then_gets_the_new_end(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    await lab.start_turn('bo', 'session-bo', lab.board.seq)
+    await lab.set_time_left(timedelta(0))
+    await lab.run_out_of_time()
+    activity = Activity()
+
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
+    try:
+        await until(lambda: activity.of('bo').state == 'waiting')
+        await asyncio.sleep(0.3)
+        assert prompts(log) == []
+        await lab.set_time_left(timedelta(hours=1))
+        await until(lambda: len(lab.board.turns) == 1)
+    finally:
+        await stop(running)
+
+    # The message says already that the stop of Verifold stopped the agent's processes.
+    facts = time_facts(lab.board.ends_at, AtTimeLimit.FINISH)
+    assert facts.startswith('The person gave the lab more time. The lab now ends at ')
+    assert prompts(log) == [f'{back(tmp_path, cut_off=True)}\n\n{facts}']
+
+
+async def test_a_post_from_before_the_agents_last_turn_that_it_never_read_rings_after_a_restart(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    # The post came before the turn, the turn started for another reason, and the agent read nothing in it.
+    await lab.post(ASK, 'ada')
+    await lab.start_turn('bo', 'session-bo', 5)
+    await lab.end_turn(TurnSummary(agent='bo', seconds=1, usage=Usage(), seen=5))
+
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 2)
+        await asyncio.sleep(0.3)
+    finally:
+        await stop(running)
+
+    assert prompts(log) == [f'{back(tmp_path)}\n\n{DOORBELL}']
+    assert posts_by(served, 'bo')[-1].startswith('Seen p-')

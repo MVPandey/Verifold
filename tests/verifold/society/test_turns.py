@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 from builders import RecordBuilder
 from pydantic import TypeAdapter
@@ -80,3 +82,23 @@ def test_an_agent_that_verifold_stopped_stays_stopped_until_a_turn_of_it_starts(
 def test_the_start_of_a_turn_needs_an_agent_of_the_lab(record: RecordBuilder) -> None:
     with pytest.raises(RejectedEvent, match='nobody is not an agent in this lab'):
         record.start('nobody', seen=1).board()
+
+
+def test_a_harness_that_failed_outside_a_turn_ended_no_turn(record: RecordBuilder) -> None:
+    record.start('bo', seen=3).turn('bo', seen=6)
+    rested = before(record.board(), 'bo')
+    record.turn('bo', error='It broke.', seen=6, stopped=True)
+    record.events[-1] = record.events[-1].model_copy(update={'no_turn': True})
+
+    was = before(record.board(), 'bo')
+
+    # The agent is where its last turn left it. Only whether Verifold stopped it changed.
+    assert was == replace(rested, stopped=True)
+    assert was.rested is not None
+
+
+def test_an_agent_whose_harness_never_started_has_not_worked(record: RecordBuilder) -> None:
+    record.turn('bo', error='It broke.', seen=3, stopped=True)
+    record.events[-1] = record.events[-1].model_copy(update={'no_turn': True})
+
+    assert before(record.board(), 'bo') == Before(seen=3, stopped=True)

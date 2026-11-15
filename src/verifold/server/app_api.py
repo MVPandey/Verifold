@@ -266,7 +266,8 @@ def _agent_view(board: Board, activity: Activity, agent_id: str, working: dict[A
         thread=working.get(agent_id),
         activity=activity.of(agent_id),
         left=board.gone(agent_id),
-        stopped=before(board, agent_id).stopped,
+        # The record says so until the agent's next turn starts. The person's new start shows at once.
+        stopped=before(board, agent_id).stopped and activity.of(agent_id).state == 'stopped',
         turns=len(turns),
         posts=sum(entry.post.author == agent_id for entry in board.posts),
         usage=Usage(

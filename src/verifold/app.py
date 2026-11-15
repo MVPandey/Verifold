@@ -425,21 +425,27 @@ class Host:
         Start an agent that Verifold stopped because its harness failed too often in a row.
 
         The agent keeps its ID, its folder, and its posts. Its harness loads its conversation again when it can.
+        The agent gets a message at once, which says what happened. The app shows it as stopped no longer.
 
         Raises:
             NoLab: The folder has no lab.
             NotFound: The lab has no agent with that ID that Verifold runs.
-            SetupRejected: Verifold did not stop the agent, or its harness runs already.
+            SetupRejected: Verifold did not stop the agent, its harness runs already, or this computer lacks it.
 
         """
         lab = self._running()
         agent = next((worker for worker in self._workers(lab) if worker.id == agent_id), None)
         if agent is None:
             raise NotFound(f'The lab has no agent with the ID {agent_id} that Verifold runs.')
-        loop = self._loops.get(agent_id)
-        if not before(lab.board, agent_id).stopped or (loop and not loop.done()):
-            raise SetupRejected(f'Verifold did not stop {agent.name}, so it needs no new start.')
-        await self._run_agent(lab, agent, under_way=True)
+        entry = self._catalog[agent.harness]
+        if not available(entry):
+            raise SetupRejected(f'This computer does not have {entry.title}, so {agent.name} cannot start.')
+        # One start at a time, so that two requests cannot start two harnesses for one agent.
+        async with self._adding:
+            loop = self._loops.get(agent_id)
+            if not before(lab.board, agent_id).stopped or (loop and not loop.done()):
+                raise SetupRejected(f'Verifold did not stop {agent.name}, so it needs no new start.')
+            await self._run_agent(lab, agent, under_way=True)
 
     async def add_agents(self, choice: AgentChoice) -> None:
         """

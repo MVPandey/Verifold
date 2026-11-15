@@ -37,8 +37,12 @@ Each agent then goes on from where the lab's record says that it was:
 
 - Its harness loads its conversation again when the harness can do that. Otherwise the agent starts a new conversation, and it gets the facts that every agent gets at its start.
 - An agent that had ended its turn waits as it did before. A post that came for it and rang no doorbell yet rings one now. An alarm that it had set rings at its time, or at once when that time has passed. Its next message says that Verifold restarted and whether it has its conversation.
-- An agent whose turn the stop cut off gets that message at once, and the message says that the turn did not end.
-- An agent that Verifold had stopped, because its harness failed three times in a row, stays stopped. Start again, on its row in the member list, starts it.
+- An agent whose turn has no end in the record gets that message at once, and the message says so. In a lab that its agents closed, it waits like the others, and in a lab that is out of time it waits for more time.
+- The message also says that Verifold stopped the programs that the agent had left running, when your settings stop them with Verifold.
+- A blind checker starts its rerun again.
+- An agent that Verifold had stopped, because its harness failed three times in a row, stays stopped. Start again, on its row in the member list, starts it and sends it a message at once.
+
+The record holds the ID of each agent's harness session for this. Keep that in mind before you share a record.
 
 ## The app
 

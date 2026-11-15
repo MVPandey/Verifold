@@ -254,29 +254,42 @@ async def test_an_agent_that_verifold_stopped_stays_stopped_after_a_restart_unti
 ) -> None:
     with RecordFile(project / '.verifold' / 'record.jsonl') as file:
         lab = Lab.create(file, 'Does it hold?')
-        for number in (1, 2):
-            fake = Agent(id=f'agent-{number}', name=f'Agent {number}', harness='fake', model=ModelSpec(family='x'))
+        for number, harness in ((1, 'fake'), (2, 'fake'), (3, 'lost')):
+            fake = Agent(id=f'agent-{number}', name=f'Agent {number}', harness=harness, model=ModelSpec(family='x'))
             await lab.join(fake)
         await lab.start_turn('agent-1', 'session-agent-1', 2)
-        failed = TurnSummary(agent='agent-1', seconds=0, usage=Usage(), error='It broke.', seen=2, stopped=True)
-        await lab.end_turn(failed)
+        for stopped in ('agent-1', 'agent-3'):
+            failed = TurnSummary(agent=stopped, seconds=0, usage=Usage(), error='It broke.', seen=2, stopped=True)
+            await lab.end_turn(failed)
+    lost = FAKE_HARNESS.model_copy(update={'name': 'lost', 'title': 'Lost', 'executable': 'no-such-program'})
 
-    async with serving(project) as client:
+    async with serving(project, catalog={'fake': FAKE_HARNESS, 'lost': lost}) as client:
         await until(lambda: len(prompts_of(log, 'agent-2')) == 1)
         await asyncio.sleep(0.3)
         view = (await client.get('/lab')).json()['agents'][0]
         nothing_started = prompts_of(log, 'agent-1')
         other = await client.post('/agents/agent-2/start')
         unknown = await client.post('/agents/agent-9/start')
-        started = await client.post('/agents/agent-1/start')
-        twice = await client.post('/agents/agent-1/start')
+        missing = await client.post('/agents/agent-3/start')
+        # Two requests at once start one harness.
+        both = await asyncio.gather(client.post('/agents/agent-1/start'), client.post('/agents/agent-1/start'))
+        started, twice = sorted(both, key=lambda response: response.status_code)
+        shown = started.json()['agents'][0]['stopped']
         await until(lambda: len(prompts_of(log, 'agent-1')) == 1)
+        await asyncio.sleep(0.3)
 
     assert (view['activity']['state'], view['stopped'], nothing_started) == ('stopped', True, [])
     assert (other.status_code, unknown.status_code, started.status_code) == (400, 404, 200)
     assert other.json()['detail'] == 'Verifold did not stop Agent 2, so it needs no new start.'
     assert (twice.status_code, twice.json()['detail']) == (400, other.json()['detail'].replace('Agent 2', 'Agent 1'))
     assert prompts_of(log, 'agent-1')[0].startswith(STARTED_AGAIN)
+    assert (missing.status_code, missing.json()['detail']) == (
+        400,
+        'This computer does not have Lost, so Agent 3 cannot start.',
+    )
+    # The row changes when the start is accepted, before the agent's next turn is in the record.
+    assert not shown
+    assert sum(call['event'] == 'load_session' and call['agent'] == 'agent-1' for call in calls(log)) == 1
 
 
 async def test_a_lab_starts_with_the_persons_grants_and_a_granted_command_passes(

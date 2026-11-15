@@ -31,13 +31,16 @@ def before(board: Board, agent_id: AgentId) -> Before:
     """
     Return where an agent was, from its turns in the record.
 
-    A turn that did not end takes the agent back to what it had seen when that turn started, because the turn can
+    An entry for a harness that failed outside a turn ends no turn, so it changes only whether Verifold stopped the
+    agent. A turn that did not end takes the agent back to what it had seen when that turn started, because the turn can
     have lost the tool results that carried its posts. An agent whose turns hold no read position has read the
     board up to its own last post, or up to its join when it has none. That is so in a record from before Verifold
     kept read positions, and for an agent that has no turn.
     """
     started = next((turn for turn in reversed(board.starts) if turn.agent == agent_id), None)
-    ended = next((turn for turn in reversed(board.turns) if turn.agent == agent_id), None)
+    entries = tuple(turn for turn in board.turns if turn.agent == agent_id)
+    # A harness that failed outside a turn ended no turn, so the agent is still where its last turn left it.
+    ended = next((turn for turn in reversed(entries) if not turn.no_turn), None)
     cut_off = started is not None and (ended is None or ended.seq < started.seq)
     if started and cut_off:
         seen = started.seen
@@ -55,5 +58,5 @@ def before(board: Board, agent_id: AgentId) -> Before:
         cut_off=cut_off,
         rested=started if chose else None,
         ended=ended.seq if ended else 0,
-        stopped=ended is not None and ended.stopped and not cut_off,
+        stopped=bool(entries) and entries[-1].stopped and (started is None or started.seq < entries[-1].seq),
     )

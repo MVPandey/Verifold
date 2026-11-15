@@ -388,15 +388,19 @@ async def test_the_person_invites_an_agent_and_gets_its_invitation(lab: Lab, act
 
 
 async def test_the_person_starts_an_agent_that_verifold_stopped_and_the_lab_view_says_which_agent_stopped(
-    client: httpx2.AsyncClient, lab: Lab
+    client: httpx2.AsyncClient, lab: Lab, activity: Activity
 ) -> None:
     await lab.end_turn(TurnSummary(agent='bo', seconds=0, usage=Usage(), error='It broke.', stopped=True))
+    await activity.set('bo', 'stopped')
 
     started = await client.post('/agents/bo/start')
     refused = await client.post('/agents/ada/start')
     ada, bo = started.json()['agents']
+    # The record says that the agent stopped until its next turn starts. The view follows the new start at once.
+    await activity.set('bo', 'starting')
+    _, again = (await client.get('/lab')).json()['agents']
 
-    assert (started.status_code, ada['stopped'], bo['stopped']) == (200, False, True)
+    assert (started.status_code, ada['stopped'], bo['stopped'], again['stopped']) == (200, False, True, False)
     assert (refused.status_code, refused.json()['detail']) == (
         400,
         'Verifold did not stop Ada, so it needs no new start.',
