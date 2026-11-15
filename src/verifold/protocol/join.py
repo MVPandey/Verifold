@@ -5,7 +5,7 @@ from typing import Literal, Self
 from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
 
 from verifold.protocol.agents import Agent, Label
-from verifold.protocol.events import Posted
+from verifold.protocol.events import Note, Posted, Question
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.posts import (
     MAX_BUILDS_ON,
@@ -79,10 +79,17 @@ class PostRequest(Record):
         return self
 
     def to_post(
-        self, post_id: PostId, thread_id: ThreadId, author: AgentId, evidence: tuple[FileEvidence, ...] = ()
+        self,
+        post_id: PostId,
+        thread_id: ThreadId,
+        author: AgentId,
+        evidence: tuple[FileEvidence, ...] = (),
+        question_seen: int | None = None,
     ) -> Post:
         """
         Return the post that this request describes, with the evidence that Verifold pinned for its files.
+
+        `question_seen` is how many revisions of the question the author had been shown. Only a proposal keeps it.
 
         Raises:
             pydantic.ValidationError: The kind does not accept a field of the request, or misses one that it needs.
@@ -93,6 +100,8 @@ class PostRequest(Record):
         unused = {'thread', 'new_thread', 'between', 'files'} | (set() if self.accepts else {'accepts'})
         unused |= set() if self.choices else {'choices'}
         fields = self.model_dump(exclude=unused, exclude_none=True)
+        if self.kind == 'proposal' and question_seen is not None:
+            fields['question_seen'] = question_seen
         return _posts.validate_python(
             fields | {'id': post_id, 'thread': thread_id, 'author': author, 'evidence': evidence}
         )
@@ -328,10 +337,31 @@ class ThreadLine(Record):
     team: tuple[AgentId, ...]
 
 
+class QuestionVersion(Record):
+    """One version of the lab's question: the text that the lab opened with, or a revision by the person."""
+
+    question: Question
+    at: AwareDatetime
+    note: Note = ''
+    """Why the person revised the question, when they said so."""
+    post: PostId | None = None
+    """The person's post that told the lab of the revision. `None` for the text that the lab opened with."""
+
+
+class RevisionLine(Record):
+    """A revision of the question as one line: when it came, why, and the post that holds its text."""
+
+    at: AwareDatetime
+    note: Note = ''
+    post: PostId
+
+
 class AnswerView(Record):
     """The lab's answer so far for the person: the proposal, and each post that it builds on with where it stands."""
 
     answer: PostView
+    to_earlier_question: bool = False
+    """Whether the person revised the question after this proposal, so that it answers an earlier version."""
     builds_on: tuple[PostView, ...] = ()
     results: int = 0
     """How many of `builds_on` are results with files, which a blind checker can rerun."""
@@ -377,6 +407,10 @@ class Brief(Record):
     """What the board holds about you: your role and status, the thread where you work, and your latest plan and post."""
     how: str = ''
     """How the board works. The first brief of a session carries it, and later ones leave it out."""
+    question: Question
+    """The question that the lab works on now. The person can revise it."""
+    revisions: tuple[RevisionLine, ...] = ()
+    """The newest revisions of the question by the person, newest last, at most `MAX_LEADS`. Each one's post holds its text."""
     agents: tuple[AgentLine, ...] = ()
     """The other agents that are in the lab. Blind checkers are not among them."""
     left: tuple[LeftLine, ...] = ()
@@ -385,6 +419,8 @@ class Brief(Record):
     """The lab's answer so far: the newest proposal in the question's thread."""
     answer_standing: Standing | None = None
     """Where the answer stands, such as `disputed` or `conceded`. `None` when the lab has no answer."""
+    answer_to_earlier_question: bool = False
+    """Whether the person revised the question after the answer, so that it answers an earlier version."""
     state: LabState = 'open'
     """Whether the lab's agents say that it is done."""
     close: PostLine | None = None

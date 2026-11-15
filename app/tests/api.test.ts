@@ -99,6 +99,22 @@ describe('the API client', () => {
     }
   });
 
+  it('sends a revision of the question, and reads a lab from before revisions as a lab without versions', async () => {
+    const server = serverThatAnswers(200, '{"question": "Faster?", "agents": []}');
+    const api = createApi('secret', server.fetcher);
+
+    const lab = await api.reviseQuestion('Faster on ARM?', 'x86 only so far.');
+    const read = await api.lab();
+
+    assert.equal(server.calls[0]?.input, '/api/question');
+    assert.equal(
+      server.calls[0]?.init.body,
+      '{"question":"Faster on ARM?","note":"x86 only so far."}',
+    );
+    assert.equal(lab.question, 'Faster?');
+    assert.deepEqual(read.versions, []);
+  });
+
   it('reads threads from a server from before side threads as threads without members', async () => {
     const summaries =
       '[{"thread": {"id": "t-1", "title": "A", "opened_by": "agent-1"}, "posts": 2}]';

@@ -292,7 +292,7 @@ class Host:
                 )
                 for entry in self._catalog.values()
             ),
-            question=self._lab.board.opened.question if self._lab else None,
+            question=self._lab.board.question if self._lab else None,
         )
 
     def _defaults(self) -> tuple[SetupDefaults, str | None]:

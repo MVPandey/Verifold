@@ -14,6 +14,7 @@ from verifold.protocol.events import (
     PermissionGranted,
     Posted,
     ProfileSet,
+    QuestionRevised,
     RerunRequested,
     SettingsSet,
     ThreadOpened,
@@ -33,6 +34,7 @@ from verifold.society.rules import (
     check_post,
     check_profile,
     check_rerun,
+    check_revision,
     check_thread,
     check_time,
     check_time_out,
@@ -55,6 +57,9 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
     match event:
         case LabOpened():
             raise RejectedEvent('A record has one lab_opened event, and it comes first.')
+        case QuestionRevised():
+            check_revision(board, event)
+            return replace(board, seq=event.seq, revisions=(*board.revisions, event))
         case AgentJoined(agent=agent):
             check_agent(board, agent)
             return replace(board, seq=event.seq, agents=(*board.agents, event))
