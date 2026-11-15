@@ -954,6 +954,26 @@ async def test_an_idle_agent_that_the_person_removes_stops_without_another_turn(
     assert (len(lab.board.turns), len(calls(log, 'prompt'))) == (1, 1)
 
 
+async def test_an_agent_that_the_person_removes_while_its_doorbell_waits_for_a_quiet_board_stops_at_once(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    activity = Activity()
+    # The board never counts as quiet here, so the doorbell for the ask would wait for an hour.
+    running = asyncio.create_task(loop_for(served, tmp_path, activity, quiet=3_600, max_quiet=3_600).run())
+    await until(lambda: activity.of('bo').state == 'idle')
+    await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+    # The loop takes the post and starts to wait for a quiet board before the person removes the agent.
+    for _ in range(50):
+        await asyncio.sleep(0)
+
+    await lab.leave('bo', 'person')
+    async with asyncio.timeout(30):
+        await running
+
+    assert (len(lab.board.turns), len(calls(log, 'prompt'))) == (1, 1)
+
+
 async def test_an_agent_that_the_person_removes_while_the_lab_is_out_of_time_stops_too(
     served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
