@@ -140,20 +140,52 @@ async function readLab(api: Api): Promise<Omit<LabData, 'version'>> {
 
 /**
  * Return a function that numbers each read of one thread. The function that it returns says, when the read's
- * answer comes, whether no later read has answered yet, and then counts this answer.
+ * answer comes, whether no later read has shown a thread yet. With `shown`, it then counts this answer as shown.
  *
  * So a read that the next load overtakes still shows when it answers first. In a busy lab the loads follow each
- * other faster than a long thread reads, and dropping every overtaken read would leave the thread as it was.
+ * other faster than a long thread reads, and dropping every overtaken read would leave the thread as it was. A
+ * failed read passes `shown` as `false`: its error shows, and an earlier read that then succeeds replaces it.
  */
-export function inOrder(): () => () => boolean {
+export function inOrder(): () => (shown: boolean) => boolean {
   let started = 0;
-  let shown = 0;
+  let last = 0;
   return () => {
     const ticket = ++started;
-    return () => {
-      if (ticket < shown) return false;
-      shown = ticket;
+    return (shown) => {
+      if (ticket < last) return false;
+      if (shown) last = ticket;
       return true;
     };
+  };
+}
+
+/**
+ * Return a function that runs `run` once the calls to it stop for `quiet` milliseconds, and at the latest `most`
+ * milliseconds after the first call that waits. So a burst of changes causes one read, and a steady stream of
+ * them cannot postpone every read. `stop` drops a run that waits.
+ */
+export function settled(
+  run: () => void,
+  quiet: number,
+  most: number,
+): { readonly poke: () => void; readonly stop: () => void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let since: number | null = null;
+  return {
+    poke: () => {
+      const now = Date.now();
+      since ??= now;
+      clearTimeout(timer);
+      timer = setTimeout(
+        () => {
+          since = null;
+          run();
+        },
+        Math.max(0, Math.min(quiet, since + most - now)),
+      );
+    },
+    stop: () => {
+      clearTimeout(timer);
+    },
   };
 }

@@ -166,7 +166,7 @@ function Members(props: {
         {view.stopped && !view.left ? (
           <StartAgain api={props.api} agent={view.agent.id} onChange={props.onChange} />
         ) : null}
-        <OpenFolder api={props.api} agent={view.agent.id} label="Open folder" />
+        <OpenFolder api={props.api} agent={view.agent} />
         {view.agent.checks === null && !view.left ? (
           <RemoveAgent api={props.api} agent={view.agent} onChange={props.onChange} />
         ) : null}
@@ -222,7 +222,7 @@ function Members(props: {
           </span>
         </p>
         <div className="f-add">
-          <OpenFolder api={props.api} label="Open the agents’ folder" />
+          <OpenFolder api={props.api} />
         </div>
         <AddAgent api={props.api} harnesses={props.harnesses} onChange={props.onChange} />
         <InviteAgent api={props.api} onInvited={props.onInvitation} onChange={props.onChange} />
@@ -447,18 +447,14 @@ function StartAgain(props: {
  * A browser cannot open a folder, so the server opens it in the file manager of its computer. The path shows
  * after the press, for the person to copy.
  */
-function OpenFolder(props: {
-  readonly api: Api;
-  readonly agent?: string;
-  readonly label: string;
-}): ReactElement {
+function OpenFolder(props: { readonly api: Api; readonly agent?: Agent }): ReactElement {
   const [busy, setBusy] = useState(false);
   const [folder, setFolder] = useState<FolderView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const open = (): void => {
     setBusy(true);
     setError(null);
-    props.api.openFolder(props.agent).then(
+    props.api.openFolder(props.agent?.id).then(
       (view) => {
         setBusy(false);
         setFolder(view);
@@ -471,10 +467,17 @@ function OpenFolder(props: {
   };
   return (
     <p className="f-where f-folder">
-      <button className="linkbtn" type="button" onClick={open} disabled={busy}>
-        {props.label}
+      <button
+        className="linkbtn"
+        type="button"
+        // Every row has this button, so its name says whose folder it opens.
+        aria-label={props.agent ? `Open the folder of ${props.agent.name}` : undefined}
+        onClick={open}
+        disabled={busy}
+      >
+        {props.agent ? 'Open folder' : 'Open the agents’ folder'}
       </button>
-      {folder ? <FolderLine folder={folder} /> : null}
+      <FolderLine folder={folder} />
       {error ? (
         <span className="error" role="alert">
           {' '}
@@ -487,13 +490,18 @@ function OpenFolder(props: {
 
 /**
  * Where a folder is, after the person asked to open it. When the server opened nothing, as on a computer without
- * a desktop or after `--no-browser`, the line says so, and the path is still there to copy.
+ * a desktop or after `--no-browser`, the line says so, and the path is still there to copy. The line is in the
+ * page before it has text, so that a screen reader announces the text when it comes.
  */
-export function FolderLine(props: { readonly folder: FolderView }): ReactElement {
+export function FolderLine(props: { readonly folder: FolderView | null }): ReactElement {
   return (
     <span role="status">
-      {props.folder.opened ? 'Opened' : 'No file manager opened. The folder is'}{' '}
-      <code>{props.folder.path}</code>
+      {props.folder ? (
+        <>
+          {props.folder.opened ? 'Opened' : 'No file manager opened. The folder is'}{' '}
+          <code>{props.folder.path}</code>
+        </>
+      ) : null}
     </span>
   );
 }

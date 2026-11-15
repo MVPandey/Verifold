@@ -1266,22 +1266,28 @@ async def test_the_person_opens_the_folders_of_the_labs_agents_and_gets_the_path
         unknown = await client.post('/folder', json={'agent': 'agent-9'})
         monkeypatch.setattr('verifold.runner.folders.OPENERS', {})
         no_opener = (await client.post('/folder', json={'agent': 'agent-1'})).json()
-        # A folder that is gone is not opened, and the lab says which one.
+        # A folder that is gone, or that became a link to another place, is not opened, and the lab says which one.
+        monkeypatch.setattr('verifold.runner.folders.OPENERS', {sys.platform: str(script)})
         agents.rename(tmp_path / 'moved')
-        gone = [await client.post('/folder', json=body) for body in ({}, {'agent': 'agent-1'})]
+        gone = await client.post('/folder', json={})
+        agents.symlink_to(tmp_path / 'moved', target_is_directory=True)
+        linked = await client.post('/folder', json={'agent': 'agent-1'})
+        agents.unlink()
         (tmp_path / 'moved').rename(agents)
     monkeypatch.setattr('verifold.runner.folders.OPENERS', {sys.platform: str(script)})
     async with serving(project, options=ServeOptions(desktop=False)) as client:
         no_desktop = (await client.post('/folder', json={})).json()
 
+    real = agents.resolve()
     assert no_lab.status_code == 409
-    assert every == {'path': str(agents), 'opened': True}
-    assert one == {'path': str(agents / 'agent-1'), 'opened': True}
-    assert seen.read_text().splitlines() == [str(agents), str(agents / 'agent-1')]
+    assert every == {'path': str(real), 'opened': True}
+    assert one == {'path': str(real / 'agent-1'), 'opened': True}
+    assert seen.read_text().splitlines() == [str(real), str(real / 'agent-1')]
     assert (unknown.status_code, unknown.json()['detail']) == (404, 'The lab has no agent with the ID agent-9.')
-    assert no_opener == {'path': str(agents / 'agent-1'), 'opened': False}
-    assert [(answer.status_code, answer.json()['detail']) for answer in gone] == [
-        (404, 'No agent of this lab has a folder on this computer.'),
-        (404, 'Agent 1 has no folder on this computer.'),
-    ]
-    assert no_desktop == {'path': str(agents), 'opened': False}
+    assert no_opener == {'path': str(real / 'agent-1'), 'opened': False}
+    assert (gone.status_code, gone.json()['detail']) == (404, f'{real} is not a folder on this computer.')
+    assert (linked.status_code, linked.json()['detail']) == (
+        404,
+        f'{real / "agent-1"} is a link to another place, so Verifold does not open it.',
+    )
+    assert no_desktop == {'path': str(real), 'opened': False}

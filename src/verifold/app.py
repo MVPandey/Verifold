@@ -38,8 +38,8 @@ from verifold.protocol.record import Record
 from verifold.protocol.settings import AtExit, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
-from verifold.runner.errors import NoFileManager
-from verifold.runner.folders import LAB_FOLDER, agent_folder, agents_folder, open_folder, tracked_lab_files
+from verifold.runner.errors import NoAgentFolder, NoFileManager
+from verifold.runner.folders import LAB_FOLDER, agent_folder, agents_folder, open_folder, real_folder, tracked_lab_files
 from verifold.runner.git import GitError, git
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, running_jobs, sweep
 from verifold.runner.messages import invitation, start_message
@@ -276,21 +276,17 @@ class Host:
 
         Raises:
             NoLab: The folder has no lab.
-            NotFound: The lab has no such agent, or the agent has no folder on this computer, as an invited agent.
+            NotFound: The lab has no such agent, or the folder is missing or is a link to another place.
 
         """
         if self._lab is None:
             raise NoLab('This folder has no lab yet. Start one from the setup screen.')
-        folder = agents_folder(self._project)
-        if agent_id is not None:
-            joined = self._lab.board.agent(agent_id)
-            if joined is None:
-                raise NotFound(f'The lab has no agent with the ID {agent_id}.')
-            folder /= agent_id
-            if not folder.is_dir():
-                raise NotFound(f'{joined.agent.name} has no folder on this computer.')
-        elif not folder.is_dir():
-            raise NotFound('No agent of this lab has a folder on this computer.')
+        if agent_id is not None and self._lab.board.agent(agent_id) is None:
+            raise NotFound(f'The lab has no agent with the ID {agent_id}.')
+        try:
+            folder = real_folder(self._project, agent_id)
+        except NoAgentFolder as error:
+            raise NotFound(str(error)) from error
         opened = False
         if self._desktop:
             with suppress(NoFileManager):

@@ -4,7 +4,7 @@ import { describe, it } from 'node:test';
 import { ApiError } from '../src/api/client.ts';
 import type { Api } from '../src/api/client.ts';
 import type { AnswerView, LabView } from '../src/api/types.ts';
-import { EMPTY, LOST, createLoader, inOrder } from '../src/ui/loader.ts';
+import { EMPTY, LOST, createLoader, inOrder, settled } from '../src/ui/loader.ts';
 import type { LabData } from '../src/ui/loader.ts';
 import { DEFAULTS, labView, postView, result } from './fixtures.ts';
 
@@ -139,7 +139,6 @@ describe('the loader', () => {
       builds_on: [],
       results: 0,
       no_blind_rerun: [],
-      newer_proposal: null,
     }));
     const api = { ...server.api, answer: () => Promise.resolve(answers.shift() ?? null) };
     const loader = createLoader(api, state.apply);
@@ -164,11 +163,53 @@ describe('the loader', () => {
     const [first, second, third] = [order(), order(), order()];
 
     // The first read answers while the second is on its way: the thread moves on instead of waiting.
-    assert.equal(first(), true);
+    assert.equal(first(true), true);
     // The third answers before the second, so the second is old news.
-    assert.equal(third(), true);
-    assert.equal(second(), false);
-    assert.equal(third(), true);
+    assert.equal(third(true), true);
+    assert.equal(second(true), false);
+    assert.equal(second(false), false);
+  });
+
+  it('shows an earlier thread read that succeeds after a later read failed', () => {
+    const order = inOrder();
+    const [first, second, third] = [order(), order(), order()];
+
+    // The later read fails first, and its error shows.
+    assert.equal(second(false), true);
+    // The earlier read then succeeds, and the thread shows in place of the error.
+    assert.equal(first(true), true);
+    // A failure from before a read that has shown says nothing new.
+    assert.equal(third(true), true);
+    assert.equal(second(false), false);
+  });
+
+  it('reads once after a burst of changes, and does not wait for a steady stream of them to stop', async () => {
+    let runs = 0;
+    const read = settled(
+      () => {
+        runs += 1;
+      },
+      30,
+      100,
+    );
+    const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+    read.poke();
+    read.poke();
+    await pause(80);
+    assert.equal(runs, 1);
+
+    // A change every 10 ms never leaves 30 ms of quiet, and a read still comes at the latest after 100 ms.
+    for (let step = 0; step < 35; step += 1) {
+      read.poke();
+      await pause(10);
+    }
+    assert.ok(runs >= 3, `${runs} runs`);
+
+    read.stop();
+    const before = runs;
+    await pause(60);
+    assert.equal(runs, before);
   });
 
   it('keeps saying the connection is lost until the stream is back', async () => {

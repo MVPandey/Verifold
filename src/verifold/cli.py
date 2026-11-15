@@ -20,8 +20,8 @@ from verifold.harnesses.catalog import CATALOG, HarnessEntry, available, catalog
 from verifold.protocol.agents import MAX_AGENTS, AgentChoice
 from verifold.protocol.app import StartRequest
 from verifold.protocol.settings import SettingsLevel, SetupDefaults
-from verifold.runner.errors import NoFileManager, RunnerError
-from verifold.runner.folders import LAB_FOLDER, agents_folder, open_folder
+from verifold.runner.errors import NoAgentFolder, NoFileManager, RunnerError
+from verifold.runner.folders import LAB_FOLDER, agents_folder, open_folder, real_folder
 from verifold.runner.jobs import Job, Sweep
 from verifold.server.errors import ServerError, SetupRejected
 from verifold.store.errors import SettingsInvalid, StoreError
@@ -277,15 +277,17 @@ def _folder(agent: str | None, *, open_it: bool) -> None:
 
     It reads only the project's folder, so it needs no server. With `--no-browser` it only prints the path.
     """
-    folder = agents_folder(Path.cwd())
-    agents = sorted(entry.name for entry in folder.iterdir() if entry.is_dir()) if folder.is_dir() else []
+    every = agents_folder(Path.cwd())
+    agents = sorted(entry.name for entry in every.iterdir() if entry.is_dir()) if every.is_dir() else []
     if not agents:
         sys.exit('verifold: No agent has a folder here yet. Run `verifold` here and start a lab first.')
-    if agent is not None:
-        # The name must be one of the folders, so that no argument leads out of the lab's folder.
-        if agent not in agents:
-            sys.exit(f'verifold: No agent of this lab has the folder {agent}. The folders: {", ".join(agents)}.')
-        folder /= agent
+    # The name must be one of the folders, so that no argument leads out of the lab's folder.
+    if agent is not None and agent not in agents:
+        sys.exit(f'verifold: No agent of this lab has the folder {agent}. The folders: {", ".join(agents)}.')
+    try:
+        folder = real_folder(Path.cwd(), agent)
+    except NoAgentFolder as error:
+        sys.exit(f'verifold: {error}')
     _say(str(folder))
     if not open_it:
         return

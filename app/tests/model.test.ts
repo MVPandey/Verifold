@@ -20,13 +20,13 @@ import {
   workingLine,
 } from '../src/model/agents.ts';
 import { clock, dayClock, duration, minutesBetween, money, tokens } from '../src/model/format.ts';
+import { MAX_CHARS, MAX_LINES, linkHost, plainOnly } from '../src/model/markdown.ts';
 import { orderNeeds, pauses } from '../src/model/needs.ts';
 import { isRevision, revisedLine } from '../src/model/question.ts';
 import {
   builtOnLabel,
   isPermission,
   personAnswer,
-  postMarkdown,
   personMessage,
   split,
   standingChip,
@@ -183,22 +183,32 @@ describe('posts', () => {
     assert.equal(personAnswer(asked, null, ''), null);
   });
 
-  it('keeps the lines and the arithmetic of a body that an agent wrote as plain text', () => {
-    // Two spaces at the end of a line are a Markdown line break.
+  it('parses no Markdown that would break the parser or keep it busy', () => {
+    assert.equal(plainOnly('Method: x\n- one\n  - two\n> 1. quoted\n\n| a |\n| - |'), false);
+    assert.equal(plainOnly(`${'> '.repeat(30)}x`), false);
+    assert.equal(plainOnly(`${'> '.repeat(31)}x`), true);
+    assert.equal(plainOnly(`  ${'- '.repeat(40)}x`), true);
+    assert.equal(plainOnly(`${'1. '.repeat(40)}x`), true);
+    assert.equal(plainOnly(`${'> - '.repeat(20)}x`), true);
+    // A rule line or a row of stars is no nesting.
+    assert.equal(plainOnly(`${'-'.repeat(120)}\n${'*'.repeat(120)}\n${'='.repeat(300)}`), false);
+    assert.equal(plainOnly('['.repeat(200)), true);
+    assert.equal(plainOnly('x'.repeat(MAX_CHARS)), false);
+    assert.equal(plainOnly('x'.repeat(MAX_CHARS + 1)), true);
+    assert.equal(plainOnly('a\n'.repeat(MAX_LINES)), true);
+  });
+
+  it('names the host of a link whose text is not its target', () => {
+    assert.equal(linkHost('the paper', 'https://arxiv.org/abs/2408.08292'), 'arxiv.org');
     assert.equal(
-      postMarkdown('Method: replay.\nResult: +0.02.'),
-      'Method: replay.  \nResult: +0.02.  ',
+      linkHost('https://github.com/safe/repo', 'https://evil.example/x'),
+      'evil.example',
     );
-    // A `*` between two terms multiplies. Markdown would take a pair of them as emphasis and drop both.
-    assert.equal(postMarkdown('fee = 0.07*P*(1-P)'), 'fee = 0.07\\*P\\*(1-P)  ');
-    // Emphasis, a bullet, and a power stay as the agent wrote them.
-    assert.equal(postMarkdown('* a **bold** word, x**2'), '* a **bold** word, x**2  ');
-    // Code passes unchanged: inline, and between fences, where a line end is a line end already.
-    assert.equal(postMarkdown('run `a*b*c` then 2*3'), 'run `a*b*c` then 2\\*3  ');
-    assert.equal(
-      postMarkdown('Run:\n```sh\npytest a*b*c\n```\nDone.'),
-      'Run:  \n```sh\npytest a*b*c\n```\nDone.  ',
-    );
+    assert.equal(linkHost('https://example.com/a', 'https://example.com/a'), null);
+    // A bare address in the text gets its scheme from the parser.
+    assert.equal(linkHost('www.example.com', 'http://www.example.com'), null);
+    assert.equal(linkHost('example.com:8080', 'https://example.com:8080/'), null);
+    assert.equal(linkHost('x', 'http://'), 'http://');
   });
 
   it('names standings, and gives every result a chip', () => {
@@ -427,7 +437,7 @@ describe('turns', () => {
   const target = result('p-1', { author: 'agent-2' });
 
   it('writes a turn as one line from the post and the post that it answers', () => {
-    const context = { called: name, author: null, question: 't-1' };
+    const context = { called: name, author: null };
     const line = (kind: object, to: Post | null = target): string => act(reply(kind), to, context);
     assert.deepEqual(
       [
@@ -454,7 +464,7 @@ describe('turns', () => {
         'posted a result',
         'posted a result in reply to agent-2’s result',
         'proposed an answer in reply to agent-2’s result',
-        'made a proposal',
+        'proposed an answer',
         'posted a plan in reply to agent-2’s result',
         'ruled out a lead in reply to agent-2’s result',
         'objected to agent-2’s result',
@@ -480,7 +490,7 @@ describe('turns', () => {
       reply_to: 'p-1',
       accepts: true,
     });
-    const context = { called: () => 'Agent 1', author: null, question: 't-1' };
+    const context = { called: () => 'Agent 1', author: null };
     assert.equal(act(close, null, context), 'said that the lab is done');
     assert.equal(act(agree, close, context), 'agreed that the lab is done');
     assert.equal(doneLine({ state: 'open', close_agreed: 0, close_among: 0 }), null);
@@ -504,20 +514,19 @@ describe('turns', () => {
     const checker = (checks: string): object => ({
       called: name,
       author: { ...agentView('checker-7').agent, checks },
-      question: null,
     });
     const line = (context: object): string => act(rerun, target, context as ActContext);
     assert.equal(line(checker('p-1')), 'reran agent-2’s result blind: it fails');
     // A member reran it and saw the thread. A checker for another post is not blind to this one.
     assert.equal(
-      line({ called: name, author: agentView('agent-3').agent, question: null }),
+      line({ called: name, author: agentView('agent-3').agent }),
       'reran agent-2’s result: it fails',
     );
     assert.equal(line(checker('p-5')), 'reran agent-2’s result: it fails');
   });
 
   it('names a post that the page does not have as "a post"', () => {
-    const context = { called: name, author: null, question: null };
+    const context = { called: name, author: null };
     const line = (kind: object): string => act(reply(kind), null, context);
     assert.deepEqual(
       [

@@ -44,8 +44,8 @@ export function ChipView(props: { readonly chip: Chip }): ReactElement {
 }
 
 /**
- * Text that an agent or the person wrote, as paragraphs of plain text, exactly as written. The Needs you page
- * uses it, because a permission request shows a command, and Markdown would change a `*` or a `_` in one.
+ * Text that an agent or the person wrote, as paragraphs of plain text. It renders as text, never as HTML. It is
+ * what a body shows as when the app does not parse its Markdown.
  */
 export function Body(props: { readonly text: string }): ReactElement {
   const paragraphs = props.text.split(/\n\s*\n/).filter((paragraph) => paragraph.trim());

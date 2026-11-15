@@ -7,7 +7,7 @@ import { messageOf } from '../api/client.ts';
 import type { LabView, ThreadView } from '../api/types.ts';
 import { parseRoute } from '../model/route.ts';
 import type { Route } from '../model/route.ts';
-import { EMPTY, createLoader, inOrder } from './loader.ts';
+import { EMPTY, createLoader, inOrder, settled } from './loader.ts';
 import type { LabData } from './loader.ts';
 
 /** What each page of a started lab gets: the API, the lab, and the current time. */
@@ -19,6 +19,8 @@ export interface PageProps {
 
 /** Milliseconds to wait after a change, so a burst of changes causes one read. */
 const SETTLE = 150;
+/** The longest that a read waits for the changes to stop, in milliseconds. */
+const MOST = 1_000;
 
 /**
  * Return the lab as the server has it now, and a function that reads all of it again at once.
@@ -32,17 +34,20 @@ export function useLab(api: Api, token: string): LabData & { readonly reload: ()
 
   useEffect(() => {
     loader.full();
-    let timer: ReturnType<typeof setTimeout> | undefined;
     let full = false;
     let last: Change | null = null;
-    const schedule = (needsFull: boolean): void => {
-      full ||= needsFull;
-      clearTimeout(timer);
-      timer = setTimeout(() => {
+    const read = settled(
+      () => {
         if (full) loader.full();
         else loader.activity();
         full = false;
-      }, SETTLE);
+      },
+      SETTLE,
+      MOST,
+    );
+    const schedule = (needsFull: boolean): void => {
+      full ||= needsFull;
+      read.poke();
     };
     const stop = watchChanges(token, {
       onChange: (change) => {
@@ -60,7 +65,7 @@ export function useLab(api: Api, token: string): LabData & { readonly reload: ()
     });
     return () => {
       stop();
-      clearTimeout(timer);
+      read.stop();
     };
   }, [loader, token]);
 
@@ -83,14 +88,14 @@ export function useThread(api: Api, id: string | null, version: number): ThreadR
     if (id === null) return;
     const newest = order();
     // An answer for a thread that the page left is dropped.
-    const shows = (): boolean => wanted.current === id && newest();
+    const shows = (shown: boolean): boolean => wanted.current === id && newest(shown);
     api.thread(id).then(
       (view) => {
-        if (shows()) setRead({ id, view, error: null });
+        if (shows(true)) setRead({ id, view, error: null });
       },
       (failure: unknown) => {
         // A failed read keeps the thread that the page already shows.
-        if (shows()) {
+        if (shows(false)) {
           setRead((old) => ({
             id,
             view: old?.id === id ? old.view : null,

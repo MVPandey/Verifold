@@ -342,14 +342,18 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
 
 def answer(board: Board) -> Posted | None:
     """
-    Return the lab's answer so far: the newest proposal in the question's thread.
+    Return the lab's answer so far: the newest proposal, in whatever thread for the whole lab it is.
 
-    Where it stands says whether an agent disputes it or its author conceded it. An older proposal does not come
-    back as the answer, because the lab moved on from it.
+    The person steers the lab by opening threads, and an agent proposes where it was asked. A side thread takes no
+    proposal. Where the answer stands says whether an agent disputes it or its author conceded it. An older
+    proposal does not come back as the answer, because the lab moved on from it.
     """
-    thread = question_thread(board)
     return next(
-        (entry for entry in reversed(board.posts) if isinstance(entry.post, Proposal) and entry.post.thread == thread),
+        (
+            entry
+            for entry in reversed(board.posts)
+            if isinstance(entry.post, Proposal) and not board.is_side(entry.post.thread)
+        ),
         None,
     )
 
@@ -388,17 +392,12 @@ def answer_view(board: Board) -> AnswerView | None:
         return None
     under = tuple(post for post_id in entry.post.builds_on if (post := board.post(post_id)))
     results = tuple(post for post in under if _can_rerun(post))
-    # The answer is the newest proposal in the question's thread, so a newer one is in another thread.
-    newer = next(
-        (other for other in reversed(board.posts) if isinstance(other.post, Proposal) and other.seq > entry.seq), None
-    )
     return AnswerView(
         answer=post_view(board, entry),
         to_earlier_question=to_earlier_question(board, entry),
         builds_on=tuple(post_view(board, post) for post in under),
         results=len(results),
         no_blind_rerun=tuple(post.post.id for post in _not_rerun(board, results)),
-        newer_proposal=PostLine.of(newer) if newer else None,
     )
 
 

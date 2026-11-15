@@ -100,12 +100,10 @@ describe('the API client', () => {
     );
   });
 
-  it('reads an answer from before it named a newer proposal, and no answer as none', async () => {
-    const old = createApi('secret', serverThatAnswers(200, '{"answer": {"seq": 2}}').fetcher);
+  it('reads no answer as none, also from a server from before the answer route', async () => {
     const none = createApi('secret', serverThatAnswers(200, 'null').fetcher);
     const before = createApi('secret', serverThatAnswers(404, '{"detail": "Not Found"}').fetcher);
 
-    assert.equal((await old.answer())?.newer_proposal, null);
     assert.equal(await none.answer(), null);
     assert.equal(await before.answer(), null);
   });

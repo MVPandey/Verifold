@@ -1,7 +1,7 @@
 import pytest
 from builders import RecordBuilder
 
-from verifold.protocol.join import MAX_NEWS, News, ThreadLink
+from verifold.protocol.join import MAX_NEWS, News, PostLine, ThreadLink
 from verifold.protocol.posts import (
     Answer,
     Ask,
@@ -346,7 +346,7 @@ def test_a_ruled_out_lead_ends_an_agents_work_in_a_thread_but_a_withdrawn_call_e
     assert {summary.thread.id: summary.team for summary in ended.threads} == {'t-1': (), 't-2': (), 't-3': ()}
 
 
-def test_the_answer_is_the_newest_proposal_in_the_questions_thread_with_what_it_builds_on() -> None:
+def test_the_answer_is_the_newest_proposal_in_any_thread_with_what_it_builds_on() -> None:
     record = RecordBuilder().join('ada').join('bo').join('cy', family='openai')
     record.thread('t-1', opened_by='person', title=QUESTION_TITLE).thread('t-2', opened_by='ada')
     file = (FileEvidence(path='run.json', commit='c' * 40),)
@@ -361,7 +361,12 @@ def test_the_answer_is_the_newest_proposal_in_the_questions_thread_with_what_it_
     assert brief(record.board(), 'bo', News(seq=0)).answer is None
 
     record.post(Proposal(id='p-5', thread='t-1', author='cy', text='No.'))
-    record.post(Proposal(id='p-6', thread='t-2', author='bo', text='A proposal for this line only.'))
+    record.post(Proposal(id='p-6', thread='t-2', author='bo', text='Not yet: the tail is open.'))
+    # An agent proposes where it was asked, so the newest proposal is the answer in any thread.
+    asked = answer_view(record.board())
+    assert asked is not None
+    assert (asked.answer.post.id, asked.answer.post.thread) == ('p-6', 't-2')
+    assert brief(record.board(), 'ada', News(seq=0)).answer == PostLine.of(record.board().posts[-1])
     record.post(Proposal(id='p-7', thread='t-1', author='bo', text='Yes.', builds_on=('p-1', 'p-2', 'p-3')))
 
     view = answer_view(record.board())
@@ -395,17 +400,6 @@ def test_the_answer_is_the_newest_proposal_in_the_questions_thread_with_what_it_
     assert (conceded.answer.post.id, conceded.answer.standing) == ('p-7', 'conceded')
     told = brief(record.board(), 'cy', News(seq=0))
     assert (told.answer and told.answer.id, told.answer_standing) == ('p-7', 'conceded')
-
-    # A newer proposal in another thread is not the answer. The view names it, so the person sees that it exists.
-    assert conceded.newer_proposal is None
-    record.post(Proposal(id='p-11', thread='t-2', author='cy', text='An update, in the wrong thread.'))
-    elsewhere = answer_view(record.board())
-    assert elsewhere is not None
-    assert (elsewhere.answer.post.id, elsewhere.newer_proposal and elsewhere.newer_proposal.id) == ('p-7', 'p-11')
-    record.post(Proposal(id='p-12', thread='t-1', author='cy', text='The update, in the question thread.'))
-    moved = answer_view(record.board())
-    assert moved is not None
-    assert (moved.answer.post.id, moved.newer_proposal) == ('p-12', None)
 
 
 def test_the_brief_gives_an_agent_its_own_line(record: RecordBuilder) -> None:

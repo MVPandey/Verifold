@@ -133,14 +133,10 @@ export function createApi(
     report: () => request('/report'),
     // A server from before this route has none, and the page must still load.
     answer: () =>
-      request<AnswerView | null>('/answer').then(
-        // A server from before this field sends none.
-        (view) => view && { ...view, newer_proposal: view.newer_proposal ?? null },
-        (failure: unknown) => {
-          if (failure instanceof ApiError && failure.status === 404) return null;
-          throw failure;
-        },
-      ),
+      request<AnswerView | null>('/answer').catch((failure: unknown) => {
+        if (failure instanceof ApiError && failure.status === 404) return null;
+        throw failure;
+      }),
     file: (postId, path) =>
       request(`/posts/${encodeURIComponent(postId)}/file?path=${encodeURIComponent(path)}`),
     openFolder: (agentId) => request('/folder', agentId ? { agent: agentId } : {}),

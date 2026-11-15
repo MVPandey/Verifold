@@ -24,7 +24,7 @@ import { messageOf } from '../api/client.ts';
 import { cardStatus, doneLine, headClaim, questionThread } from '../model/turns.ts';
 import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
-import { Markdown } from './Markdown.tsx';
+import { Detail, Words } from './Markdown.tsx';
 import { ChipView, Composer, FaceView, Files } from './parts.tsx';
 import { Turns } from './Thread.tsx';
 
@@ -155,6 +155,7 @@ export function Wall(
               {data.answer ? (
                 <Answer
                   view={data.answer}
+                  question={question.thread.id}
                   open={answerOpen}
                   threads={threads}
                   agents={lab.agents}
@@ -508,18 +509,7 @@ function ReportCard(props: {
         <a href={href({ page: 'thread', id: post.thread, post: post.id })}>See it in its thread</a>
       </div>
       <p className="f-report-text">{post.text}</p>
-      {post.body || post.evidence.length > 0 ? (
-        <details className="f-detail">
-          <summary className="f-open">
-            <span className="closed">Read the detail</span>
-            <span className="opened">Hide the detail</span>
-          </summary>
-          <div className="f-words">
-            {post.body ? <Markdown text={post.body} post /> : null}
-            <Files post={post.id} files={post.evidence} />
-          </div>
-        </details>
-      ) : null}
+      <Detail post={post.id} body={post.body} files={post.evidence} />
     </section>
   );
 }
@@ -527,21 +517,23 @@ function ReportCard(props: {
 /**
  * The lab's answer so far, as the server has it now: its headline, where it stands, who proposed it and how long
  * ago, its files, and what it builds on. With `open`, the headline is whole and the detail follows it.
- *
- * Only a proposal in the question's thread is the answer. When an agent wrote a newer proposal in another thread,
- * a line says so and leads to it, so the person does not take the answer for the lab's last word.
  */
 function Answer(props: {
   readonly view: AnswerView;
+  /** The ID of the question's thread. */
+  readonly question: string;
   readonly open: boolean;
   readonly threads: readonly ThreadSummary[];
   readonly agents: readonly AgentView[];
   readonly now: Date;
 }): ReactElement {
-  const { answer, newer_proposal: newer } = props.view;
-  const { post, at, standing } = answer;
+  const { post, at, standing } = props.view.answer;
   const minutes = minutesBetween(at, props.now);
-  const title = props.threads.find((summary) => summary.thread.id === newer?.thread)?.thread.title;
+  // The answer is the newest proposal in any thread. Outside the question's thread, the block names its thread.
+  const elsewhere =
+    post.thread === props.question
+      ? null
+      : props.threads.find((summary) => summary.thread.id === post.thread);
   return (
     <>
       <p className={props.open ? undefined : 'clamp'}>{post.text}</p>
@@ -557,18 +549,18 @@ function Answer(props: {
       {props.view.to_earlier_question ? (
         <p className="f-earlier">This answer is to an earlier version of the question.</p>
       ) : null}
-      {newer ? (
+      {elsewhere ? (
         <p className="f-earlier">
-          {authorName(props.agents, newer.author)} wrote a newer proposal in another thread:{' '}
-          <a href={href({ page: 'thread', id: newer.thread, post: newer.id })}>
-            {title ?? newer.text}
+          Proposed in the thread{' '}
+          <a href={href({ page: 'thread', id: post.thread, post: post.id })}>
+            {elsewhere.thread.title}
           </a>
-          . The answer here changes when an agent proposes it in the question’s thread.
+          .
         </p>
       ) : null}
       {props.open && post.body ? (
         <div className="f-words">
-          <Markdown text={post.body} post />
+          <Words text={post.body} />
         </div>
       ) : null}
       <Files post={post.id} files={post.evidence} />

@@ -10,8 +10,8 @@ import { href } from '../model/route.ts';
 import { sideReplyHint } from '../model/side.ts';
 import { act, isClaim, rows, standingIn } from '../model/turns.ts';
 import { messageOf } from '../api/client.ts';
-import { Markdown } from './Markdown.tsx';
-import { ChipView, Composer, FaceView, Files, Mark } from './parts.tsx';
+import { Detail } from './Markdown.tsx';
+import { ChipView, Composer, FaceView, Mark } from './parts.tsx';
 
 /** What every turn of a thread needs from the lab. */
 interface Around {
@@ -128,7 +128,6 @@ export function Turn(
           {act(post, to, {
             called: (id) => called(agents, id),
             author: agent,
-            question: props.question,
           })}{' '}
           {chip ? <ChipView chip={chip} /> : null}
         </p>
@@ -152,18 +151,7 @@ export function Turn(
             for your answer there, not for a reply in the thread.
           </p>
         ) : null}
-        {post.body || post.evidence.length > 0 ? (
-          <details className="f-detail">
-            <summary className="f-open">
-              <span className="closed">Read the detail</span>
-              <span className="opened">Hide the detail</span>
-            </summary>
-            <div className="f-words">
-              {post.body ? <Markdown text={post.body} post /> : null}
-              <Files post={post.id} files={post.evidence} />
-            </div>
-          </details>
-        ) : null}
+        <Detail post={post.id} body={post.body} files={post.evidence} />
         {canRerun ? <RerunButton postId={post.id} onRerun={props.onRerun} /> : null}
       </div>
     </li>

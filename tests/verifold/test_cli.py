@@ -694,6 +694,16 @@ def test_folder_takes_only_the_folder_of_an_agent_of_this_lab(tmp_path: Path) ->
             main(['folder', name])
 
 
+def test_folder_refuses_an_agents_folder_that_is_a_link_to_another_place(tmp_path: Path, folders: list[Path]) -> None:
+    program = tmp_path / 'Calculator.app'
+    program.mkdir()
+    (tmp_path / '.verifold' / 'agents' / 'agent-3').symlink_to(program, target_is_directory=True)
+
+    with pytest.raises(SystemExit, match='agent-3 is a link to another place, so Verifold does not open it'):
+        main(['folder', 'agent-3'])
+    assert folders == []
+
+
 def test_folder_says_when_the_project_has_no_lab(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
 
