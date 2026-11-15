@@ -485,7 +485,9 @@ async def test_an_agent_that_left_stops_for_good_and_an_invited_one_loses_its_to
     guests = project / '.verifold' / 'guests.json'
 
     async with serving(project, TWO_AGENTS) as client:
-        await until(lambda: len(posts(project)) == 2, timeout=60)
+        # Both first turns must be over. An agent that still ran would read Reader's post in that turn, and then no
+        # doorbell rings for it after the restart.
+        await until(lambda: len(turns(project)) == 2, timeout=60)
         invited = (await client.post('/invitations', json={'name': 'Reader'})).json()
         url, token, _ = invited_parts(invited['text'])
         async with board_of(url, token) as board:
