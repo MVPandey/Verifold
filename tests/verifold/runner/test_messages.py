@@ -106,52 +106,88 @@ def test_a_lab_with_a_time_limit_tells_each_agent_when_it_ends_in_utc() -> None:
     )
 
 
-def test_the_lab_norms_and_the_doorbell_are_short_and_plain() -> None:
+def test_the_lab_norms_are_plain_text_for_one_read_and_the_doorbell_is_one_line() -> None:
     assert NORMS_TEMPLATE.startswith("# The lab's norms")
+    # A norm uses the person's words for a thing. The board's own instructions name the tools.
     assert '`' not in NORMS_TEMPLATE
-    # The limit was 2,800. It grew by 300 for the two norms that came out of Python and the norm on checks by rerun,
-    # by 1,200 for the norms on the goal, on obstacles, on a human's limits, on reviewer seats, on the
-    # coordinator's strategy, and on a name, by 300 for the close, the open coordinator seat, and the helpers, and
-    # by 150 for the norm on deliverables.
-    assert len(NORMS_TEMPLATE) < 4_750
+    # Each norm has its reason and what it looks like in practice, so the file is longer than a list of rules.
+    # An agent still reads it whole at the start of its work.
+    assert len(NORMS_TEMPLATE) < 17_000
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
-def test_the_lab_norms_ask_agents_to_plan_together_check_each_other_and_agree_on_one_answer() -> None:
+def test_the_lab_norms_are_sections_that_each_say_what_the_person_wants_and_why() -> None:
+    sections = [line.removeprefix('## ') for line in NORMS_TEMPLATE.splitlines() if line.startswith('## ')]
+
+    assert sections == [
+        'The question is a goal',
+        'A group with many directions open',
+        'Explore first',
+        'What stands in the way becomes the way',
+        'Chain ideas',
+        'Strategy and the seats',
+        'Votes and badges',
+        'Evidence',
+        'Helpers',
+        'The answer and the person',
+    ]
+    for how_to_read in (
+        'Each section says what the person wants, why, and what that looks like in practice.',
+        'An example shows a norm and does not limit it.',
+        'When a situation fits no norm, act on the reasons.',
+        'When a norm gets in the way of the goal, tell the coordinator, or say so in an ask that names the person.',
+    ):
+        assert how_to_read in NORMS_TEMPLATE
+
+
+def test_the_lab_norms_ask_agents_to_plan_together_keep_threads_apart_and_propose_an_answer() -> None:
     for norm in (
         "post your plan in the question's thread and read the other agents' plans",
         'Wait a moment for the plans that are not there yet',
+        'The direct path to the goal needs an owner too',
         'Give each line of work its own thread',
-        'Read the board before each new piece of work',
         'Post each result when you have it',
-        "propose the lab's answer. Another agent can propose a different one; the newest proposal is the answer that shows",
-        'Object to the proposal when you see a problem in it.',
-        'Chain the work',
+        "Propose the lab's answer as soon as the lab has one that it can defend",
+        'The newest proposal is the answer that the person sees',
+        'A proposal is a draft. It does not end the work',
+        'Another agent can propose a different answer, and any agent can object to a proposal',
     ):
         assert norm in NORMS_TEMPLATE
 
 
-def test_the_lab_norms_hold_the_goal_the_obstacle_the_reviewer_seats_and_the_name() -> None:
+def test_the_lab_norms_hold_the_goal_the_obstacle_the_seats_and_the_name() -> None:
     for norm in (
-        'The question is a goal. Keep working toward it while the lab has time.',
-        'A result that says "this does not work" is a finding on the way, and the next attempt starts from it.',
-        'What stands in the way becomes the way.',
-        'name the obstacle and ask what would remove it. Two things that fail alone can work together.',
+        'When the question asks for something to be done or made, the person wants it done.',
+        'When the question asks whether something is true, the goal is the answer with evidence that holds, and a no is an answer.',
+        'Keep working toward the goal while the lab has time.',
+        'A result that says "this does not work" is a finding on the way.',
+        'When the lab agrees that nothing works while most of its time is left, it has usually looked in too few places.',
+        'Take that agreement as a signal to widen the search',
+        'An agent that thinks so posts a close, and each other agent agrees or objects.',
+        'A line that closed is no reason to end a turn',
+        'set an alarm, because a post for you may never come',
+        'An agent that the board cannot wake has no alarm, and it waits inside its turn.',
+        'name the obstacle exactly and ask what would remove it',
+        'Remove the defender, and the capture works.',
+        'Two things that fail alone can work together.',
         "Do not assume a human's limits.",
-        'Revisit what you ruled out as too slow or too much work.',
-        'Before you rule a method out, search what is published on it.',
-        "Exploring and testing is everyone's main work. Before you build on a result, look at it yourself",
-        'When the lab has reviewer seats, a check that the lab relies on comes from an agent in one.',
-        'Take a seat only when checking is the work you want; leave it free when you would rather build.',
-        "Ask for one of your own result when the lab's answer rests on it",
-        'an agent in a reviewer seat can ask for one of any result',
-        'When the agents agree that nothing useful is left to try, one of them posts a close.',
-        'When no agent holds the seat and it is open, an agent that wants this work can take it.',
+        'Revisit what you ruled out as too slow or too much work',
+        'Before you rule a method out, search what is published on it',
+        "Exploring and testing ideas is everyone's main work.",
+        'Checking the work of others is a side activity for a few agents.',
         'A lead gets a champion and a forward test before it gets an audit.',
-        "When the lab has a coordinator, it owns the lab's strategy: which bets are open, which are missing, and what to try next.",
-        'It can ask one agent to take the strategy. Whoever has it looks across fields',
-        'looks across fields, chains results from different threads, and opens the next line when one closes',
-        'Choose a name, and say in one line the lens you bring.',
+        'When the lab has reviewer seats, a check that the lab relies on comes from an agent in one.',
+        'Take a seat only when checking is the work you want, and give it back when you would rather build.',
+        "Ask for one of your own result when the lab's answer rests on it.",
+        'An agent in a reviewer seat can ask for one of any result.',
+        "When the lab has a coordinator, it owns the lab's strategy",
+        'The coordinator can ask one agent to take the strategy',
+        'it wakes the lab with a post for the whole lab',
+        'Each agent still chooses its own work, and says why when it chooses differently.',
+        'When no agent holds the coordinator seat and it is open, an agent that wants this work can take it.',
+        'An agent on call works only when it is asked.',
+        'Choose a name, a picture, and an about line of one or two sentences that says the lens you bring',
+        'It is a way to work, not a character to play.',
     ):
         assert norm in NORMS_TEMPLATE
     # A live lab showed seven agents that opened with the same doubt, and rival answers are allowed.
@@ -165,28 +201,43 @@ def test_the_lab_norms_hold_the_goal_the_obstacle_the_reviewer_seats_and_the_nam
         assert gone not in NORMS_TEMPLATE
 
 
-def test_the_lab_norms_ask_agents_to_take_other_sides_say_when_they_are_stuck_and_carry_ideas_across() -> None:
+def test_the_lab_norms_say_what_a_chain_is_why_the_lab_wants_one_and_how_an_agent_finds_one() -> None:
     for norm in (
-        'Look at the question from a side that no other plan covers',
-        'Change sides when the work calls for it.',
-        'Open a line that nobody has, join one that is short of hands, or try a long shot',
-        'Look for a result to build on, and for a problem that you can help with',
-        'When you are stuck, post an ask that says what you tried',
+        'To chain is to join things that came up apart into something that none of them gives alone.',
+        # A chain is not two results: the links are of any kind and any number.
+        'The links can be ideas, approaches, methods, tools, sources, obstacles, and results.',
+        'A chain can have any number of links, from any threads and any fields.',
+        'The lab wants chains because each agent holds a part',
+        "Read the board's overview and the threads near your line with that question",
+        'Look for a result to build on, and for a problem that you can help with.',
+        "In your post's builds-on field, name every post that the chain joins",
         "post it in that agent's thread, also when it comes from another field",
-        'When you build on a post, name it',
-        "Use your harness's own helpers for work that can run beside yours, such as a literature search, a side experiment or a second look.",
-        "A helper posts with your token; have it give its own name in the post's helper field, or post what it finds",
+        'When you are stuck, post an ask that says what you tried.',
+    ):
+        assert norm in NORMS_TEMPLATE
+    assert 'join two results' not in NORMS_TEMPLATE
+
+
+def test_the_lab_norms_say_when_a_helper_suits_the_work_and_how_its_posts_are_named() -> None:
+    for norm in (
+        'Your harness can start helpers, such as subagents.',
+        'a literature search, a side experiment, a sweep of variants, a tool that you need, or a second look',
+        "Have it give its own name in the post's helper field",
+        'or post what it finds yourself',
+        'You answer for what your helper posts.',
     ):
         assert norm in NORMS_TEMPLATE
 
 
 def test_the_lab_norms_hold_what_came_out_of_python_and_the_norm_on_reruns() -> None:
     for norm in (
-        "Post your results before the lab's time ends",
-        "have it give its own name in the post's helper field",
-        'When you check a result with a rerun, reproduce it yourself from its files, and do not trust the claim',
-        'Post the check with the files of your own run',
-        'an agent in a reviewer seat can ask for one of any result. One good run out of several is noise',
+        "post your results before the lab's time ends",
+        'When you check a result with a rerun, reproduce it yourself from its files, and do not trust the claim.',
+        'Post the check with the files of your own run.',
+        'One good run out of several is noise, and agreement between agents is not evidence.',
+        'Never invent a result or a source.',
+        'offer the files for each one before the lab ends, and say in the offer what is still missing',
+        'Ask the person only about money, scope, access, or time, and about a norm in this file that blocks the goal.',
     ):
         assert norm in NORMS_TEMPLATE
 

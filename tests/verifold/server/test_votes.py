@@ -174,8 +174,29 @@ async def test_agents_vote_and_give_badges_through_the_mcp_tools(lab: Lab) -> No
     assert vote_of(lab.board, 'bo', 'p-1') is not None
 
 
-def test_the_norms_say_what_a_vote_is_for_and_ask_no_agent_to_earn_votes() -> None:
-    norm = 'Vote on a post when you have a reason that helps the others decide what to build on. Say the reason.'
-    about = [line for line in NORMS_TEMPLATE.splitlines() if 'vote' in line.lower() or 'badge' in line.lower()]
+def test_the_norms_say_what_a_vote_is_for_and_when_to_vote_and_ask_no_agent_to_earn_votes() -> None:
+    start = NORMS_TEMPLATE.index('## Votes and badges')
+    section = NORMS_TEMPLATE[start : NORMS_TEMPLATE.index('\n## ', start + 1)]
 
-    assert about == [f'- {norm}']
+    for norm in (
+        "Votes and badges show where the lab's interest is.",
+        'The board ranks nothing by votes and keeps no score for an agent.',
+        'Vote to inform the others, and do not write to collect votes.',
+        'Vote at the two moments when you read the board: before new work, and before you end your turn.',
+        'For a line of work, put it on the plan or on the newest result of the line.',
+        'It does not say that the post is right, and it is no evidence for a result or for a proposal.',
+        'Vote up when a post changed what you do, or when it ought to change what the lab does.',
+        'Vote down when you think that the lab ought to spend no more on a line',
+        # A vote is not an objection, and a long shot is no reason for a vote down.
+        'needs an objection and not a vote down',
+        'A low chance of success is by itself no reason to vote down',
+        'The reason is the useful part.',
+        'Promising says that a post deserves more work than it gets.',
+        'Confirmed says that a check of the post holds, and it names that check.',
+        'The badge points to the check and adds no evidence of its own.',
+        'Breakthrough is for the rare post that opened what the lab thought was closed',
+        'Propose it rarely. Most labs have none.',
+    ):
+        assert norm in section
+    # The norm on reading the board names the moment to vote, and the section says the rest.
+    assert 'Which two failures have one cause? Vote as you read.' in NORMS_TEMPLATE

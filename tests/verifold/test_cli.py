@@ -745,10 +745,12 @@ def test_open_refuses_a_server_that_would_stop_on_the_signal(
 def test_open_asks_the_server_to_open_the_lab(
     lab_folder: Path, started: list[subprocess.Popen[bytes]], capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # The stand-in writes with `os.write`. The signal can arrive while `print` still flushes "ready", and a handler
+    # that prints then fails with a reentrant call on the buffer.
     script = (
-        'import signal, sys, time\n'
-        "signal.signal(signal.SIGUSR1, lambda *_: (print('opened', flush=True), sys.exit(0)))\n"
-        "print('ready', flush=True)\n"
+        'import os, signal, time\n'
+        "signal.signal(signal.SIGUSR1, lambda *_: (os.write(1, b'opened\\n'), os._exit(0)))\n"
+        "os.write(1, b'ready\\n')\n"
         'time.sleep(60)'
     )
     server = named_server(lab_folder, started, script)
