@@ -33,6 +33,7 @@ from verifold.protocol.posts import MAX_HEADLINE
 from verifold.protocol.record import Record
 from verifold.protocol.settings import MAX_MINUTES, MAX_REVIEWER_SEATS, Settings, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
+from verifold.protocol.votes import Badge, BadgeAction, Direction, ProposalLine, Why
 
 type AgentState = Literal['starting', 'working', 'waiting', 'idle', 'stopped', 'invited', 'here', 'listening', 'void']
 """
@@ -218,6 +219,13 @@ class LabView(Record):
     """The one status of each thread."""
     reruns_wanted: tuple[RerunLine, ...] = ()
     """The reruns that are wanted, oldest first: who asked for each, when, and which agents took it."""
+    proposals: tuple[ProposalLine, ...] = ()
+    """
+    Each `breakthrough` badge that an agent proposed and nobody seconded yet, oldest first. It waits for the
+    coordinator or the person, it is none of `waits`, and it changes no status.
+    """
+    breakthrough_threads: tuple[ThreadId, ...] = ()
+    """The threads that hold a post with a `breakthrough` badge that stands."""
     reviewer_seats: int = 0
     """How many reviewer seats the lab has."""
     reviewer_seats_set: int | None = None
@@ -307,6 +315,28 @@ class RerunRequest(Record):
     """The person asks for an independent rerun of a post."""
 
     post: PostId
+
+
+class VoteRequest(Record):
+    """The person votes on a post, or takes their vote back with `none`."""
+
+    post: PostId
+    direction: Direction
+    reason: Why = ''
+    """Why, as one line. A vote up or down has one."""
+
+
+class BadgeRequest(Record):
+    """The person gives a post a badge, seconds a `breakthrough` that an agent proposed, or takes a badge back."""
+
+    post: PostId
+    badge: Badge
+    action: BadgeAction = 'give'
+    reason: Why = ''
+    proof: PostId | None = None
+    """With `confirmed`: the check or the result that confirmed the post, when the person names one."""
+    giver: AgentId | None = None
+    """With `take_back`: whose badge the person takes back. `None` takes back the person's own."""
 
 
 class FolderRequest(Record):

@@ -13,10 +13,12 @@ from verifold.protocol.events import Posted
 from verifold.protocol.ids import PERSON, AgentId
 from verifold.protocol.join import MAX_SEAT, Byline, PostLine, PostView
 from verifold.protocol.posts import MoveRequest
+from verifold.protocol.votes import NEWEST_VOTES
 from verifold.society.board import Board
 from verifold.society.coordinator import request_end, request_waits
 from verifold.society.labels import is_numbered, plain
 from verifold.society.standing import standing
+from verifold.society.votes import badge_lines, marks, vote_lines
 
 GUEST_LABEL = 'Own harness · model not reported'
 """The label of an invited agent's seat. It runs in a harness that Verifold does not know, and reports no model."""
@@ -89,12 +91,13 @@ def byline(board: Board, entry: Posted, cut: int | None = None) -> Byline | None
 
 
 def post_line(board: Board, entry: Posted) -> PostLine:
-    """Return a post as one line, with who wrote it."""
-    return PostLine.of(entry, byline(board, entry, MAX_SEAT))
+    """Return a post as one line, with who wrote it, its votes up and down, and its badges."""
+    return PostLine.of(entry, byline(board, entry, MAX_SEAT), marks(board, entry.post.id))
 
 
-def post_view(board: Board, entry: Posted) -> PostView:
-    """Return a post with its time, who wrote it, where it stands, and the posts that build on it."""
+def post_view(board: Board, entry: Posted, votes: int = NEWEST_VOTES) -> PostView:
+    """Return a post with its time, who wrote it, where it stands, the posts that build on it, its votes, and its badges."""
+    up, down, _ = marks(board, entry.post.id)
     return PostView(
         seq=entry.seq,
         at=entry.at,
@@ -105,4 +108,8 @@ def post_view(board: Board, entry: Posted) -> PostView:
         decision=board.answer_to(entry.post.id) if isinstance(entry.post, MoveRequest) else None,
         waits=request_waits(board, entry),
         ended=None if board.answer_to(entry.post.id) else request_end(board, entry),
+        up=up,
+        down=down,
+        votes=vote_lines(board, entry.post.id, votes),
+        badges=badge_lines(board, entry.post.id),
     )

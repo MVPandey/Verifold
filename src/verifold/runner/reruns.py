@@ -29,6 +29,7 @@ import re
 import secrets
 import stat
 import subprocess
+import time
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -63,6 +64,11 @@ MAX_LISTED_BYTES = 256 * 1024**2
 
 EXPORT_SECONDS = 300.0
 """How long one Git process for an export may run before Verifold ends it."""
+LEFTOVER_SECONDS = 600.0
+"""
+How old a leftover of an export is before another export removes it. An export that runs now can belong to another
+server of the same lab, and its unfinished folder is no leftover. No export runs for this long.
+"""
 EXPORTS_AT_ONCE = 2
 """How many exports run at the same time. The others wait, so slow ones cannot use up the server's threads."""
 
@@ -127,6 +133,8 @@ class _Job:
     seconds: float
     fetches_nothing: bool
     running: '_Running'
+    leftover: float = LEFTOVER_SECONDS
+    """How old an unfinished folder or file of an export is before this export removes it."""
 
 
 class _Running:
@@ -179,10 +187,22 @@ class CleanCopies:
     A few exports run at the same time, and a call for a copy that is being made waits for that one.
     """
 
-    def __init__(self, project: Path, *, seconds: float = EXPORT_SECONDS, at_once: int = EXPORTS_AT_ONCE) -> None:
-        """Prepare the clean copies of the lab in `project`. Each Git process for one may run for `seconds`."""
+    def __init__(
+        self,
+        project: Path,
+        *,
+        seconds: float = EXPORT_SECONDS,
+        at_once: int = EXPORTS_AT_ONCE,
+        leftover_seconds: float = LEFTOVER_SECONDS,
+    ) -> None:
+        """
+        Prepare the clean copies of the lab in `project`. Each Git process for one may run for `seconds`.
+
+        An export removes what an earlier export left behind once that is `leftover_seconds` old.
+        """
         self._project = project
         self._seconds = seconds
+        self._leftover = leftover_seconds
         self._free = asyncio.Semaphore(at_once)
         self._making: dict[tuple[PostId, CommitId], asyncio.Task[MadeCopy]] = {}
         self._fetches_nothing: bool | None = None
@@ -230,7 +250,14 @@ class CleanCopies:
             if self._fetches_nothing is None:
                 self._fetches_nothing = await asyncio.to_thread(fetches_nothing, self._seconds)
             job = _Job(
-                self._project.resolve(), post_id, author, commit, self._seconds, self._fetches_nothing, self._running
+                self._project.resolve(),
+                post_id,
+                author,
+                commit,
+                self._seconds,
+                self._fetches_nothing,
+                self._running,
+                self._leftover,
             )
             return await asyncio.to_thread(_export, job)
 
@@ -248,7 +275,7 @@ def fetches_nothing(seconds: float = EXPORT_SECONDS) -> bool:
 def _export(job: _Job) -> MadeCopy:
     project, post_id, name = job.project, job.post_id, job.commit[:12]
     with _own(project, post_id) as home:
-        _sweep(home)
+        _sweep(home, job.leftover)
         objects, tree = _pinned(job)
         try:
             folder = _walk(objects, tree, 0, [0, 0])
@@ -707,11 +734,17 @@ _LEFT_OVER = ('.making-', '.discarded-', '.writing-')
 """How the names start of what an export that was cut off, or a removal that failed, can leave behind."""
 
 
-def _sweep(home: int) -> None:
-    # Remove what earlier exports of this post left behind. No such name is ever a copy that a taker gets.
+def _sweep(home: int, older_than: float = LEFTOVER_SECONDS) -> None:
+    # Remove what earlier exports of this post left behind. No such name is ever a copy that a taker gets. An
+    # export of another server can write such a name at this moment, so only an old one goes: its age is its own
+    # modification time, read through the folder that Verifold holds.
+    now = time.time()
     for name in os.listdir(home):
-        if name.startswith(_LEFT_OVER):
-            _remove(home, name)
+        if not name.startswith(_LEFT_OVER):
+            continue
+        with suppress(OSError):
+            if now - os.lstat(name, dir_fd=home).st_mtime >= older_than:
+                _remove(home, name)
 
 
 def _remove(inside: int, name: str) -> None:

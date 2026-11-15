@@ -60,6 +60,8 @@ function slowServer(): {
     start: () => Promise.reject(new Error('unused')),
     thread: () => Promise.reject(new Error('unused')),
     post: () => Promise.reject(new Error('unused')),
+    vote: () => Promise.reject(new Error('unused')),
+    badge: () => Promise.reject(new Error('unused')),
     rerun: () => Promise.reject(new Error('unused')),
     setTime: () => Promise.reject(new Error('unused')),
     reviseQuestion: () => Promise.reject(new Error('unused')),

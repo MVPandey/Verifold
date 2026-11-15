@@ -23,6 +23,7 @@ from verifold.protocol.join import (
 )
 from verifold.protocol.moves import AddMove, AddSeat, Move
 from verifold.protocol.posts import FileEvidence
+from verifold.protocol.votes import Badge, BadgeAction, Direction
 from verifold.server.errors import CannotWake, EvidenceRejected, HasLeft, NoCleanCopy, OutOfTime, UnknownAgent
 from verifold.server.lab import Adds, Lab
 from verifold.society.attention import news, update
@@ -245,9 +246,9 @@ class Member:
         every = thread_summaries(self._lab.board, self.agent_id)
         return ThreadList(threads=work_threads(every), side_threads=side_lines(every, self.agent_id))
 
-    def thread(self, thread_id: ThreadId) -> ThreadView:
-        """Return a thread and its posts."""
-        return thread_view(self._lab.board, self.agent_id, thread_id)
+    def thread(self, thread_id: ThreadId, votes_of: PostId | None = None) -> ThreadView:
+        """Return a thread and its posts. The post that `votes_of` names has the longer list of its votes."""
+        return thread_view(self._lab.board, self.agent_id, thread_id, votes_of)
 
     async def rerun(self, post_id: PostId) -> RerunRequested:
         """
@@ -300,6 +301,48 @@ class Member:
             manifest_sha256=made.digest,
         )
 
+    async def vote(self, post_id: PostId, direction: Direction, reason: str = '') -> PostView:
+        """
+        Vote on a post as the agent, or take the vote back, and return the post as it stands.
+
+        Raises:
+            RejectedEvent: The post is the agent's own, a vote up or down has no reason, or the agent has no vote
+                to take back.
+            OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
+
+        """
+        self._check_in_time()
+        await self._lab.vote(self.agent_id, post_id, direction, reason)
+        return self._view(post_id)
+
+    async def badge(  # noqa: PLR0913
+        self,
+        post_id: PostId,
+        badge: Badge,
+        action: BadgeAction = 'give',
+        reason: str = '',
+        *,
+        proof: PostId | None = None,
+        giver: AgentId | None = None,
+    ) -> PostView:
+        """
+        Give a post a badge as the agent, second a `breakthrough`, or take a badge back, and return the post.
+
+        Raises:
+            RejectedEvent: The change breaks a rule of the record, as `check_badge` says.
+            OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
+
+        """
+        self._check_in_time()
+        await self._lab.badge(self.agent_id, post_id, badge, action, reason, proof=proof, giver=giver)
+        return self._view(post_id)
+
+    def _view(self, post_id: PostId) -> PostView:
+        entry = self._lab.board.post(post_id)
+        if entry is None:
+            raise RejectedEvent(f'Post {post_id} does not exist.')
+        return post_view(self._lab.board, entry)
+
     def _is_guest(self) -> bool:
         joined = self._lab.board.agent(self.agent_id)
         return bool(joined and joined.agent.harness == GUEST)
@@ -312,7 +355,8 @@ class Member:
         if ended and self._is_guest():
             raise OutOfTime(
                 "The lab's time ran out or the person stopped the lab, so the board takes no post, no rerun "
-                'request, and no take of a rerun from you now. The person can give the lab more time.'
+                'request, no take of a rerun, no vote, and no badge from you now. The person can give the lab '
+                'more time.'
             )
 
     async def set_alarm(self, minutes: float, *, quiet: bool) -> AlarmSet:

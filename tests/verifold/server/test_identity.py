@@ -191,7 +191,8 @@ async def test_an_agent_takes_a_reviewer_seat_with_profile_and_the_person_gives_
         brief.structured_content['reviewer_seats'],
         brief.structured_content['reviewer_seats_free'],
     ) == (['cy'], 1, 0)
-    assert [line['reviewer'] for line in brief.structured_content['agents']] == [False, True]
+    # An agent's line leaves out a seat that the agent does not hold.
+    assert [line.get('reviewer') for line in brief.structured_content['agents']] == [None, True]
     assert Lab.load(record_file).board.reviewer('cy')
 
 

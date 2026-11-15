@@ -9,6 +9,7 @@ from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
     AlarmSet,
+    BadgeSet,
     CoordinatorSet,
     DeliverableDecided,
     DeliverableSet,
@@ -27,6 +28,7 @@ from verifold.protocol.events import (
     TimeSet,
     TurnEnded,
     TurnStarted,
+    Voted,
     WatchSet,
 )
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
@@ -82,6 +84,14 @@ class Board:
     """Each time that the person switched a power of the coordinator on or off, oldest first."""
     answers: tuple[RequestAnswered, ...] = ()
     """The answers to the coordinator's requests for a move, oldest first."""
+    votes: tuple[Voted, ...] = ()
+    """Each vote on a post, oldest first. `society.votes` says which of them stand."""
+    badges: tuple[BadgeSet, ...] = ()
+    """Each change to a badge on a post, oldest first."""
+    votes_on: dict[PostId, dict[AgentId, Voted]] = field(default_factory=dict)
+    """The votes that stand on each post, by voter, in the order cast. No code changes a dictionary of a board."""
+    badges_on: dict[PostId, tuple[BadgeSet, ...]] = field(default_factory=dict)
+    """The changes to the badges of each post, oldest first."""
     deliverables: tuple[DeliverableSet, ...] = ()
     """Each time that the person stated, changed, or removed a deliverable, oldest first."""
     decisions: tuple[DeliverableDecided, ...] = ()

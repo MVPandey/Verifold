@@ -220,10 +220,11 @@ async def test_an_agent_takes_and_gives_up_the_coordinator_seat_with_profile_and
     assert given_up.structured_content is not None
     assert given_up.structured_content['coordinator'] is None
     assert mine.structured_content is not None
-    assert [mine.structured_content['your_line'][key] for key in ('given_role', 'on_call', 'coordinator')] == [
+    # An agent's line leaves out a field that holds nothing, such as a seat that the agent does not hold.
+    assert [mine.structured_content['your_line'].get(key) for key in ('given_role', 'on_call', 'coordinator')] == [
         'driver',
         True,
-        False,
+        None,
     ]
     assert mine.structured_content['coordinator'] is None
 

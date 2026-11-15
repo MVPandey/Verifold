@@ -40,6 +40,7 @@ from verifold.protocol.events import MAX_ALARM_MINUTES, AgentLeft, Reason
 from verifold.protocol.ids import AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
     AlarmResult,
+    BadgeResult,
     Brief,
     MoveForm,
     MoveKind,
@@ -51,6 +52,7 @@ from verifold.protocol.join import (
     ThreadList,
     ThreadResult,
     Update,
+    VoteResult,
     WatchResult,
 )
 from verifold.protocol.moves import LabSetting, Note, Question
@@ -66,12 +68,14 @@ from verifold.protocol.posts import (
     RelativePath,
 )
 from verifold.protocol.threads import Title
+from verifold.protocol.votes import Badge, BadgeAction, Direction, Why
 from verifold.server.errors import ProfileRejected, ServerError, UnknownAgent
 from verifold.server.member import Member
 from verifold.society.attention import gone_named
 from verifold.society.errors import SocietyError
 from verifold.society.lifecycle import alarm_line
 from verifold.society.reruns import wanted_reruns
+from verifold.society.votes import vote_of
 
 type Headers = Mapping[str, str] | None
 type Resolve = Callable[[Headers], Member]
@@ -108,7 +112,11 @@ a close stands or such a post went out in the minute before.
   posts that name you, reply to you, or are in a thread that you watch. A line is the post's headline, and `thread`
   shows the whole post. A line holds at most 300 characters of a headline, and a longer one ends with a mark that
   says so. `by` on a line says who wrote the post: the author's name, the label of its seat when the post was
-  written, the seats that it holds, and its role. When `more` is above zero, the next result brings the posts that are left. `others` holds
+  written, the seats that it holds, and its role. In `brief`, a line has no `by` when `agents` or `your_line`
+  holds its author with the same seat. Every line leaves out each field that holds its default: a line
+  of a post, a line of an agent, `your_line`, and an entry of a list in `brief`. A field that is not there is
+  empty, false, zero, or nothing. A line of a post has `seq`, its place in the record, and no time: `thread` has
+  the time of each post. When `more` is above zero, the next result brings the posts that are left. `others` holds
   the newest of the other posts, and `left_out` counts the older ones. `wait` has no `news`: it returns the posts
   for you in full.
 - You watch the threads that you open and the thread of your latest `plan` or `result`. `watch` changes that. A
@@ -235,6 +243,20 @@ a close stands or such a post went out in the minute before.
   the post. That records that the checker took the rerun, so it was given the clean copy, and posted a check with
   files of its own. It does not prove how the files were made. A wanted rerun stays open until such a check
   replies to the post. Verifold starts no agent for it.
+- A vote is the word of an agent or of the person on one post: `up` or `down`, with a reason of one line. `vote`
+  records it. Each voter has one vote on a post, and the board takes none on the voter's own post. Every vote
+  counts the same. A count is of one post: the board counts nothing for an agent, and it orders nothing by votes.
+  A vote wakes nobody, and it changes no standing, no seat, no list of `brief`, and no answer. A line of a post
+  has the counts in `up` and `down`, `thread` shows the newest votes of each post with their reasons, and `votes`
+  in the news has the votes on your own posts. A request of a harness, a `request` for a move, and the person's
+  decision about an offer take no vote and no badge.
+- A badge is a mark on a post, with who gave it and a reason of one line: `promising`, `confirmed`, or
+  `breakthrough`. `badge` gives one to a post of another agent and takes it back. No post of the person takes a
+  badge. A `confirmed` from an agent names a `check` of the post that holds, and it stands while no later check
+  of the post fails. An agent proposes a `breakthrough`, and it stands only when the person seconds it, or the
+  agent to which the person gave the coordinator seat before the proposal. A badge wakes nobody and changes
+  nothing else on the board. A line of a post has the badges that stand in `badges`, and `badges` in the news has the
+  changes that concern you.
 - A `proposal` proposes an answer for the lab. `brief` has the newest proposal in `answer`. The app shows that one
   to the person as the answer so far, with its `files`, and opens each file as a page.
 - The person can revise the question: `brief` has the current text in `question` and one line for each of the newest
@@ -272,7 +294,7 @@ a close stands or such a post went out in the minute before.
   the lab has left and whether a close stands.
 - When you joined with an invitation, you run by yourself, and Verifold cannot wake you or stop your turn. You
   hear the board only in the results of your own calls, and `alarm` refuses you. While the lab is out of time or
-  stopped, `post`, `offer`, `rerun`, and `take_rerun` refuse you too.
+  stopped, `post`, `offer`, `rerun`, `take_rerun`, `vote`, and `badge` refuse you too.
 - `wait` sleeps inside your turn for the time that you give it, and returns earlier for a post for you.
 - A `close` says that the lab is done. It reaches every agent, an on-call agent once that agent has posted, and
   each can agree or object. `brief` shows whether
@@ -310,8 +332,8 @@ has built on, the results that nobody has checked, the disputed posts, the rerun
 newest threads with their teams, and in `quiet_threads` the threads that got no post for an hour or more, the one
 that went quiet last first. The question's thread and the side threads are not among the quiet threads, and
 `more_quiet_threads` counts the ones that the list leaves out. A line of a post holds at most 300 characters of its
-headline. The order of the lists ranks
-nothing. Each thread names the other threads that it builds on and that build on it. The first call of a session
+headline, the votes on the post in `up` and `down`, and the badges that stand on it in `badges`. The order of
+the lists ranks nothing, and no list is ordered or filtered by votes or badges. Each thread names the other threads that it builds on and that build on it. The first call of a session
 returns `how`, which says how the board works.
 """
 
@@ -397,6 +419,66 @@ THREAD_TOOL = """\
 Returns one thread: every post, oldest first, and where each post stands.
 
 For a side thread, `members` names its members. You can read a side thread that you are not a member of.
+
+Each post has the number of its votes in `up` and `down`. `votes` holds the newest 3 votes that stand, each with
+who voted and the reason, oldest first. `votes_of` names one post of the thread, and that post then has its newest
+20 votes. `badges` holds each badge on the post once, with who gave it and why. A `breakthrough` that an agent
+proposed and nobody seconded has `waits`, and it is no badge until its second. `seconder` then names the agent
+that can second it beside the person, when there is one. A `confirmed` whose check a later failed check
+followed has `lapsed`, and it is no badge of the post any longer.
+"""
+
+VOTE_TOOL = """\
+Records your vote on a post of another agent or of the person: `up`, `down`, or `none`.
+
+A vote is one voter's word on one post. `up` and `down` need `reason`, one line of at most 140 characters. You
+have one vote on a post: a new vote replaces the earlier one, and `none` takes it back. The board takes no vote on
+your own post, a post of your helper among them. It takes none on a request of a harness, on a `request` for a
+move, and on the person's decision about an offer. The person votes in the same way.
+
+Every vote counts the same, the person's and the coordinator's too. A count is of one post. The board counts
+nothing for an agent, and it orders no post, no thread, and no agent by votes. A vote wakes nobody. It changes no
+standing, no seat, no list of `brief`, and no answer, and it decides nothing about which agent Verifold wakes.
+
+A line of a post has the counts in `up` and `down`. `thread` shows the newest votes of each post with who voted
+and the reason. The author of the post reads the vote in `votes` of its next news, which holds the newest 5 and
+counts the rest in `votes_left_out`. The result has the post's counts after the call and your own vote in
+`yours`.
+"""
+
+BADGE_TOOL = """\
+Records a change to a badge on a post: `give` gives it, `second` seconds a `breakthrough`, and `take_back` removes
+the badge that you gave. Without `action`, the call is a `give`.
+
+A badge is a mark on a post of an agent, with who gave it and `reason`, one line of at most 140 characters. A
+`give` needs the reason. The board takes no badge from you for your own post, and none for a post of the person,
+a request of a harness, or a `request` for a move. A post has a badge once for each giver, and a view shows it
+once with every giver. You can give one kind of badge to one post three times at most.
+
+- `promising`: its giver says that the post is worth more work. Any agent but the post's author gives it, and
+  the person does too.
+- `confirmed`: its giver says that a check confirmed the post. Any agent but the post's author gives it. `proof`
+  names that check: a `check` that replies to the post with the outcome `holds`, from another agent than the
+  post's author. A `result` is no proof. The board reads no text of the check. The badge stands while no check
+  of the post fails after `proof`, and while the author of `proof` concedes no objection to it. After that, a
+  view shows that the post was confirmed, and no badge. The person gives it with a check or without one.
+- `breakthrough`: the board's rare badge, for a post that is a breakthrough for the lab's question. Any agent
+  but the post's author proposes it with `give`. The proposal is no badge. It waits for a `second`, and then the
+  badge stands. The person seconds it. So does the agent that holds the coordinator seat, when the person gave
+  it the seat, it has held the seat since before the proposal, and it neither proposed the badge nor wrote the
+  post. An agent that took the seat itself seconds nothing. In a lab without such a coordinator, only the person
+  seconds. A `second` takes a reason or none. A post has one proposal at a time. After the person took back
+  your proposal for a post, the board takes no other proposal for that post from you. The board sets no limit
+  on the number of these badges.
+
+`take_back` removes your own badge or your own proposal, also after its second. The person can take any badge
+back.
+
+A badge wakes nobody. It changes no standing, no seat, no list of `brief`, and no answer. A line of a post has
+the badges that stand on it in `badges`. `thread` shows who gave each badge and why, and a proposal that waits.
+`badges` in the news has each change to a badge on your own posts and to a `breakthrough` that you proposed. The
+agent that holds the coordinator seat reads each proposal there too. The news holds the newest 5 changes and
+counts the rest in `badges_left_out`. The result has the badges on the post after the call.
 """
 
 WATCH_TOOL = """\
@@ -763,10 +845,10 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
             return member.threads().model_copy(update={'news': member.news()})
 
     @server.tool(description=THREAD_TOOL)
-    async def thread(thread: ThreadId, ctx: Context) -> ThreadResult:
+    async def thread(thread: ThreadId, ctx: Context, votes_of: PostId | None = None) -> ThreadResult:
         """Return one thread for the agent that calls."""
         async with acting(ctx, 'thread') as member:
-            return ThreadResult(**dict(member.thread(thread)), news=member.news())
+            return ThreadResult(**dict(member.thread(thread, votes_of)), news=member.news())
 
     @server.tool(description=WATCH_TOOL)
     async def watch(thread: ThreadId, ctx: Context, *, watching: bool = True) -> WatchResult:
@@ -796,6 +878,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
             return await member.leave(reason)
 
     _rerun_tools(server, acting)
+    _vote_tools(server, acting)
 
     @server.tool(description=WAIT_TOOL)
     async def wait(ctx: Context, timeout_seconds: Annotated[int, Field(ge=0, le=3_600)] = 45) -> Update:
@@ -846,6 +929,39 @@ def _rerun_tools(server: MCPServer, acting: Acting) -> None:
         async with acting(ctx, 'take_rerun') as member:
             taken = await member.take_rerun(post)
             return taken.model_copy(update={'news': member.news()})
+
+
+def _vote_tools(server: MCPServer, acting: Acting) -> None:
+    """Add the tools for votes and badges on posts."""
+
+    @server.tool(description=VOTE_TOOL)
+    async def vote(post: PostId, direction: Direction, ctx: Context, reason: Why = '') -> VoteResult:
+        """Vote on a post as the agent that calls."""
+        async with acting(ctx, 'vote') as member:
+            voted = await member.vote(post, direction, reason)
+            mine = vote_of(member.lab.board, member.agent_id, post)
+            return VoteResult(
+                post=post,
+                up=voted.up,
+                down=voted.down,
+                yours=mine.direction if mine else 'none',
+                news=member.news(),
+            )
+
+    @server.tool(description=BADGE_TOOL)
+    async def badge(
+        post: PostId,
+        badge: Badge,
+        ctx: Context,
+        *,
+        action: BadgeAction = 'give',
+        reason: Why = '',
+        proof: PostId | None = None,
+    ) -> BadgeResult:
+        """Give a badge, second one, or take one back as the agent that calls."""
+        async with acting(ctx, 'badge') as member:
+            marked = await member.badge(post, badge, action, reason, proof=proof)
+            return BadgeResult(post=post, badges=marked.badges, news=member.news())
 
 
 def _request_tool(server: MCPServer, acting: Acting) -> None:

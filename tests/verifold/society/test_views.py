@@ -2,9 +2,10 @@ from datetime import timedelta
 
 import pytest
 from builders import RecordBuilder, lab
+from pydantic import TypeAdapter
 
-from verifold.protocol.events import AlarmSet
-from verifold.protocol.join import MAX_LINE, MAX_NEWS, QUIET_MINUTES, Brief, News, ThreadLine, ThreadLink
+from verifold.protocol.events import AlarmSet, Posted
+from verifold.protocol.join import MAX_LINE, MAX_NEWS, QUIET_MINUTES, Brief, News, PostLine, ThreadLine, ThreadLink
 from verifold.protocol.posts import (
     Answer,
     Ask,
@@ -14,12 +15,14 @@ from verifold.protocol.posts import (
     Message,
     Objection,
     Plan,
+    Post,
     Proposal,
     Report,
     Result,
     RuledOut,
 )
 from verifold.protocol.threads import QUESTION_TITLE
+from verifold.protocol.votes import BADGES, MAX_NOTES, MAX_WHY, BadgeNote, VoteNote
 from verifold.society.attention import news
 from verifold.society.errors import NotFound
 from verifold.society.identity import post_line
@@ -531,34 +534,52 @@ def test_a_brief_holds_the_line_of_a_post_once_and_then_its_id_alone() -> None:
     assert [(entry.id, entry.line is None) for entry in later.open_asks] == [('p-4', True)]
 
 
-def test_the_largest_brief_is_no_larger_than_before_agents_had_profiles() -> None:
+ONE_TOOL_RESULT = 126_000
+"""
+The most characters of JSON in a brief. A brief is one tool result, and a harness takes a result of this size:
+before votes, the largest brief that the board gave had 126,005 characters. No brief is larger than that.
+"""
+
+
+def _largest(*, full: bool = False) -> RecordBuilder:
     # Twenty agents with the longest name, about line, role, and status, a long label, and every seat mark, in
-    # twenty threads with every list full and headlines of 1,000 characters. Before profiles, the brief of this
-    # board without the profiles had 107,984 characters, and its news 20,857.
+    # twenty threads with every list full and headlines of 1,000 characters. With `full`, every post also has
+    # the longest helper name and builds on ten posts, so that no line has an empty field to leave out.
     record = RecordBuilder()
     for number in range(20):
         record.join(f'a{number}', name=f'Claude Code · {"m" * 40} {number + 2}')
     record.reviewer_seats(20).thread('t-1', opened_by='a0')
-    posts = (f'p-{number}' for number in range(1, 1_000))
+    ids: list[str] = []
     long = 'x' * 1000
+
+    def post(kind: str, thread: str, author: str, reply_to: str | None = None) -> str:
+        more = {'helper': 'h' * 40, 'builds_on': tuple(ids[-10:])} if full else {}
+        ids.append(f'p-{len(ids) + 1}')
+        fields = {'kind': kind, 'id': ids[-1], 'thread': thread, 'author': author, 'text': long, 'reply_to': reply_to}
+        record.post(TypeAdapter(Post).validate_python(fields | more))
+        return ids[-1]
+
     for number in range(1, 20):
         thread, author, other = f't-{number + 1}', f'a{number}', f'a{number % 19 + 1}'
         record.thread(thread, opened_by=author)
-        record.post(Plan(id=next(posts), thread=thread, author=author, text=long))
-        record.post(Result(id=next(posts), thread=thread, author=author, text=long))
-        disputed = next(posts)
-        record.post(Result(id=disputed, thread=thread, author=author, text=long))
-        record.post(Objection(id=next(posts), thread=thread, author=other, text=long, reply_to=disputed))
-        record.post(Ask(id=next(posts), thread=thread, author=author, text=long))
-        record.post(Call(id=next(posts), thread=thread, author=author, text=long))
-    record.post(Proposal(id=next(posts), thread='t-1', author='a1', text=long))
+        post('plan', thread, author)
+        post('result', thread, author)
+        disputed = post('result', thread, author)
+        post('objection', thread, other, disputed)
+        post('ask', thread, author)
+        post('call', thread, author)
+    post('proposal', 't-1', 'a1')
     for number in range(20):
         agent = f'a{number}'
         record.profile(agent, name=f'{"N" * 21}{number:03d}', about='a' * 240, role='r' * 40, status='s' * 140)
         record.reviewer(agent, by='person')
         if number:
             record.on_call(agent)
-    board = record.coordinator('a1').board()
+    return record.coordinator('a1')
+
+
+def test_the_largest_brief_without_votes_is_one_tool_result() -> None:
+    board = _largest().board()
 
     unseen = news(board, 'a0', 0)
     view = brief(board, 'a0', unseen)
@@ -566,9 +587,51 @@ def test_the_largest_brief_is_no_larger_than_before_agents_had_profiles() -> Non
     assert (len(unseen.for_you), len(unseen.others), len(view.agents), len(view.threads)) == (20, 20, 19, 20)
     assert [len(entries) for entries in (view.disputed, view.not_built_on, view.not_checked)] == [19, 10, 19]
     assert [len(entries) for entries in (view.open_asks, view.open_calls)] == [19, 19]
-    # The mark of a thread that holds the offers for a deliverable adds 19 characters to each of the 20 threads.
-    assert len(view.model_dump_json()) < 107_984 + 400
+    assert len(view.model_dump_json()) < ONE_TOOL_RESULT
     assert len(unseen.model_dump_json()) < 28_000
-    # Each author's name, seat, seat marks, and role stand once in the list of agents, and in each line of the news.
+    # Each author's name, seat, seat marks, and role stand once in the brief: in its list of agents. A line of
+    # the news in any other result has them.
     assert all(line.by is not None and line.by.marks for line in (*unseen.for_you, *unseen.others))
+    assert all(line.by is None for line in (*view.news.for_you, *view.news.others))
     assert all(agent.plan is not None and agent.plan.by is None for agent in view.agents)
+    # A line has its place in the record and no time.
+    assert 'at' not in PostLine.model_fields
+
+
+def test_the_largest_brief_with_every_field_of_a_line_full_and_votes_on_every_post_is_one_tool_result() -> None:
+    # Every post has the longest helper name and builds on ten posts. Every other agent and the person voted on
+    # every post with the longest reason, and every post of an agent has all three badges.
+    record = _largest(full=True)
+    plain = len(brief(record.board(), 'a0', news(record.board(), 'a0', 0)).model_dump_json())
+    why = 'w' * MAX_WHY
+    voters = (*(f'a{number}' for number in range(20)), 'person')
+    for post in tuple(event.post for event in record.events if isinstance(event, Posted)):
+        for number, voter in enumerate(voter for voter in voters if voter != post.author):
+            record.vote(voter, post.id, 'up' if number % 2 else 'down', why)
+        proposer = 'a2' if post.author == 'a0' else 'a0'
+        record.badge('person', post.id, 'promising', reason=why).badge('person', post.id, 'confirmed', reason=why)
+        record.badge(proposer, post.id, 'breakthrough', reason=why)
+        record.badge('person', post.id, 'breakthrough', 'second', giver=proposer, reason=why)
+    board = record.board()
+
+    unseen = news(board, 'a0', 0)
+    view = brief(board, 'a0', unseen)
+    lines = (*unseen.for_you, *unseen.others)
+
+    assert len(lines) == 40
+    assert all((line.up, line.down, line.badges) == (10, 10, BADGES) for line in lines)
+    assert all(line.helper for line in lines)
+    assert sum(len(line.builds_on) == 10 for line in lines) >= 30
+    # The news of this brief stops at its last post, before the votes. So the largest notes that a news can hold
+    # count on top: the newest votes on the reader's posts and the newest changes to badges, with the longest
+    # reason, and the counts of the ones left out.
+    votes = tuple(VoteNote(post='p-115', by='a19', direction='down', reason=why) for _ in range(MAX_NOTES))
+    badges = tuple(
+        BadgeNote(post='p-115', badge='breakthrough', by='person', action='take_back', reason=why)
+        for _ in range(MAX_NOTES)
+    )
+    notes = News(seq=1, votes=votes, votes_left_out=99, badges=badges, badges_left_out=99).model_dump_json()
+    assert plain < len(view.model_dump_json())
+    assert len(view.model_dump_json()) + len(notes) < ONE_TOOL_RESULT
+    # No reason of a vote or a badge is in the brief's lines.
+    assert why not in view.model_dump_json()

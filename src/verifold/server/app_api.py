@@ -21,6 +21,7 @@ from sse_starlette import EventSourceResponse
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import (
     AgentView,
+    BadgeRequest,
     ConversationView,
     CoordinatorSeat,
     DeliverableDecision,
@@ -46,6 +47,7 @@ from verifold.protocol.app import (
     SetupView,
     StartRequest,
     TimeRequest,
+    VoteRequest,
 )
 from verifold.protocol.deliverables import Decision
 from verifold.protocol.events import Reason, RerunRequested
@@ -77,6 +79,7 @@ from verifold.society.views import (
     thread_view,
     versions,
 )
+from verifold.society.votes import breakthrough_threads, proposals
 from verifold.store.errors import (
     NormsChanged,
     NormsUnreadable,
@@ -376,7 +379,22 @@ def _seat_routes(api: FastAPI, host: Host, activity: Activity, authorized: param
         return _lab_view(lab.board, activity)
 
     _coordinator_routes(api, host, authorized)
+    _vote_routes(api, host, authorized)
     _deliverable_routes(api, host, activity, authorized)
+
+
+def _vote_routes(api: FastAPI, host: Host, authorized: params.Depends) -> None:
+    """Add the person's votes and badges on posts. Each answer is the post as it stands after the change."""
+
+    @api.post('/votes', dependencies=[authorized])
+    async def vote(request: VoteRequest) -> PostView:
+        return await Member(_lab(host), PERSON).vote(request.post, request.direction, request.reason)
+
+    @api.post('/badges', dependencies=[authorized])
+    async def badge(request: BadgeRequest) -> PostView:
+        return await Member(_lab(host), PERSON).badge(
+            request.post, request.badge, request.action, request.reason, proof=request.proof, giver=request.giver
+        )
 
 
 DECISIONS: dict[str, Decision] = {'accept': 'accepted', 'ask_changes': 'changes_asked', 'take_back': 'taken_back'}
@@ -462,6 +480,8 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
         waits=waiting,
         thread_needs=thread_needs(board, needs, waiting),
         reruns_wanted=reruns_wanted(board),
+        proposals=proposals(board),
+        breakthrough_threads=breakthrough_threads(board),
         reviewer_seats=seats(board),
         reviewer_seats_set=board.settings.reviewers.seats,
         ends_at=board.ends_at,

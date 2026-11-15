@@ -2,7 +2,7 @@
 
 from typing import Literal, Self
 
-from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
+from pydantic import AwareDatetime, Field, SerializerFunctionWrapHandler, TypeAdapter, model_serializer, model_validator
 
 from verifold.protocol.agents import (
     About,
@@ -36,6 +36,7 @@ from verifold.protocol.posts import (
 )
 from verifold.protocol.record import Record
 from verifold.protocol.threads import Thread, Title
+from verifold.protocol.votes import Badge, BadgeLine, BadgeNote, Direction, VoteLine, VoteNote
 
 type LabState = Literal['open', 'closing', 'closed']
 """Whether the lab's agents say that it is done. `closing`: one said so. `closed`: more than half stand behind it."""
@@ -150,6 +151,24 @@ class PostRequest(Record):
         )
 
 
+class Sparse(Record):
+    """
+    A record that leaves out each field that holds its default: an empty text, an empty list, `false`, zero, or nothing.
+
+    A brief holds more than a hundred lines of posts and agents. So a line spends no characters on a field that
+    says nothing, and a reader takes a field that is not there as empty.
+    """
+
+    @model_serializer(mode='wrap')
+    def _without_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        fields = type(self).model_fields
+        return {
+            name: value
+            for name, value in handler(self).items()
+            if fields[name].is_required() or getattr(self, name) != fields[name].get_default(call_default_factory=True)
+        }
+
+
 MAX_SEAT = 28
 """The most characters of a seat's label that a post's line shows. A longer label is cut, and `brief` has it whole."""
 
@@ -236,6 +255,17 @@ class PostView(Record):
     """For a request for a move: whether it waits for the person's answer."""
     ended: RequestEnd | None = None
     """For a request for a move without an answer: why it waits for none. `None` while it waits."""
+    up: int = 0
+    """How many votes up stand on the post. Every vote counts the same."""
+    down: int = 0
+    """How many votes down stand on the post."""
+    votes: tuple[VoteLine, ...] = ()
+    """
+    The newest standing votes with their reasons, oldest first. No order ranks them. An agent's `thread` holds
+    `NEWEST_VOTES` of each post, and `MAX_VOTE_LINES` of the post that the call names in `votes_of`.
+    """
+    badges: tuple[BadgeLine, ...] = ()
+    """Each badge on the post once, with who gave it and why. A `breakthrough` that waits for its second says so."""
 
 
 class ThreadView(Record):
@@ -265,12 +295,15 @@ def line_text(text: str) -> str:
     return f'{text[:MAX_LINE]}… [cut: {len(text)} characters, `thread` shows all of it]'
 
 
-class PostLine(Record):
+class PostLine(Sparse):
     """
     One post as a single line: where it is, who wrote it, what kind it is, and its headline.
 
     A headline of more than `MAX_LINE` characters is cut and ends with a mark that says so. So the lists of a brief
     and of the news stay within what a harness takes as one tool result. `thread` shows the whole headline.
+
+    A line leaves out each field that holds nothing, as `Sparse` says: `by`, `helper`, `reply_to`, `builds_on`,
+    `for_person`, `up`, `down`, and `badges`. It has `seq` and no time.
     """
 
     id: PostId
@@ -281,7 +314,8 @@ class PostLine(Record):
     Who the author is, with its seat's label cut to `MAX_SEAT` characters. `None` for a post of the person. In
     `brief`, the list of agents says who each agent is. So in the brief's lists of posts and in an agent's `plan`
     and `latest`, `by` is `None` for an author that the list of agents holds, unless the label of its seat was
-    another when the post was written. The lines of `news` and of a thread's `latest` always have it.
+    another when the post was written. The same holds for the lines of the news that a brief carries. The lines of
+    `news` in any other result, and of a thread's `latest`, always have it.
     """
     helper: Helper = ''
     kind: PostKind
@@ -293,12 +327,20 @@ class PostLine(Record):
     Whether the lab's coordinator marked the post as one on the person's behalf. The author is still the
     coordinator: the mark is the coordinator's word, and a post by the person has `person` as its author.
     """
+    up: int = 0
+    """How many votes up stand on the post. `thread` shows each vote with its reason."""
+    down: int = 0
+    """How many votes down stand on the post."""
+    badges: tuple[Badge, ...] = ()
+    """The badges that stand on the post, each once. A `breakthrough` is here only after its second."""
     seq: int
-    at: AwareDatetime
+    """The post's place in the record. A line has no time: `thread` has the time of each post."""
 
     @classmethod
-    def of(cls, entry: Posted, by: Byline | None = None) -> Self:
-        """Return the line of a post on the board, with who wrote it."""
+    def of(
+        cls, entry: Posted, by: Byline | None = None, marks: tuple[int, int, tuple[Badge, ...]] = (0, 0, ())
+    ) -> Self:
+        """Return the line of a post on the board, with who wrote it. `marks` are its votes up and down and its badges."""
         post = entry.post
         return cls(
             id=post.id,
@@ -311,12 +353,14 @@ class PostLine(Record):
             reply_to=post.reply_to,
             builds_on=post.builds_on,
             for_person=post.for_person,
+            up=marks[0],
+            down=marks[1],
+            badges=marks[2],
             seq=entry.seq,
-            at=entry.at,
         )
 
 
-class PostEntry(Record):
+class PostEntry(Sparse):
     """A post in a list of a brief: its line, or its ID alone when the brief holds its line already."""
 
     id: PostId
@@ -496,6 +540,21 @@ class News(Record):
     later request for it adds nothing. After the agent got a reviewer seat, every wanted rerun that it can take is
     here once. An agent whose seat is on call has none here, and `brief` lists every wanted rerun.
     """
+    votes: tuple[VoteNote, ...] = ()
+    """
+    The votes on the agent's own posts since: who voted, which way, and the reason. A vote wakes nobody. The
+    newest `MAX_NOTES` are here, and `thread` shows every vote that stands.
+    """
+    votes_left_out: int = 0
+    """How many older votes on the agent's posts `votes` leaves out."""
+    badges: tuple[BadgeNote, ...] = ()
+    """
+    The changes to badges since that concern the agent: on its own posts, on a `breakthrough` that it proposed,
+    and, for the agent that holds the coordinator seat, each `breakthrough` that an agent proposed. The newest
+    `MAX_NOTES` are here.
+    """
+    badges_left_out: int = 0
+    """How many older changes to badges `badges` leaves out."""
     alarm: AlarmLine | None = None
     """The alarm that waits for the agent. `None` means that no alarm waits."""
 
@@ -551,6 +610,25 @@ class WatchResult(Record):
 
     thread: ThreadId
     watching: bool
+    news: News | None = None
+
+
+class VoteResult(Record):
+    """What the `vote` tool returns: the post's counts after the call, the caller's own vote, and the agent's news."""
+
+    post: PostId
+    up: int = 0
+    down: int = 0
+    yours: Direction = 'none'
+    """The vote of the agent that called, as it stands now. `none` when it has no vote on the post."""
+    news: News | None = None
+
+
+class BadgeResult(Record):
+    """What the `badge` tool returns: the badges on the post after the call, and the agent's news."""
+
+    post: PostId
+    badges: tuple[BadgeLine, ...] = ()
     news: News | None = None
 
 
@@ -618,8 +696,12 @@ MAX_FORMER_NAMES = 2
 """The most former names in an agent's line: the newest ones. An `@` and an older name still reach the agent."""
 
 
-class AgentLine(Record):
-    """An agent of the lab at a glance: who it is, the seats that it holds, the plan that it posted last, and its latest post."""
+class AgentLine(Sparse):
+    """
+    An agent of the lab at a glance: who it is, the seats that it holds, the plan that it posted last, and its latest post.
+
+    A line leaves out each field that holds nothing, as `Sparse` says.
+    """
 
     id: AgentId
     name: Name
@@ -921,6 +1003,14 @@ class Update(Record):
     """The other agents whose name changed since, each once, with its name now and the name that it had before."""
     reruns: tuple[RerunLine, ...] = ()
     """The reruns that became wanted since and that the agent can take with `take_rerun`, as in the news."""
+    votes: tuple[VoteNote, ...] = ()
+    """The votes on the agent's own posts since, as in the news. A vote ends no `wait`."""
+    votes_left_out: int = 0
+    """How many older votes on the agent's posts `votes` leaves out."""
+    badges: tuple[BadgeNote, ...] = ()
+    """The changes to badges since that concern the agent, as in the news. A badge ends no `wait`."""
+    badges_left_out: int = 0
+    """How many older changes to badges `badges` leaves out."""
     alarm: AlarmLine | None = None
     """The alarm that waits for the agent. `None` means that no alarm waits."""
     no_alarm: str = ''
