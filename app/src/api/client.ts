@@ -127,6 +127,7 @@ export function createApi(
         close_among: lab.close_among ?? lab.agents.filter((view) => !view.agent.checks).length,
         waits: lab.waits ?? [],
         thread_needs: lab.thread_needs ?? {},
+        reruns_wanted: lab.reruns_wanted ?? [],
         reviewer_seats: lab.reviewer_seats ?? 0,
         reviewer_seats_set: lab.reviewer_seats_set ?? null,
         agents: lab.agents.map((view) => ({

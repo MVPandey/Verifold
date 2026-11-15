@@ -19,7 +19,7 @@ import { clip, personMessage, standingChip } from '../model/posts.ts';
 import { isRevision, revisedLine } from '../model/question.ts';
 import { href } from '../model/route.ts';
 import { hasNew, markSeen, readSeen } from '../model/seen.ts';
-import { NEED_WORDS, WAITS_ID, quietBand, waitGroups } from '../model/status.ts';
+import { NEED_WORDS, WAITS_ID, quietBand, waitGroups, wantedLine } from '../model/status.ts';
 import { betweenLine, isSide, sideHeading, sideLines } from '../model/side.ts';
 import { messageOf } from '../api/client.ts';
 import { cardStatus, doneLine, headClaim, questionThread } from '../model/turns.ts';
@@ -108,7 +108,9 @@ export function Wall(
         needs={needs}
         question={questionId}
         done={lab.state !== 'open'}
-        onRerun={(postId) => api.rerun(postId)}
+        reruns={lab.reruns_wanted}
+        now={props.now}
+        onRerun={(postId) => api.rerun(postId).then(() => data.reload())}
         onSend={(text) => send(text, read.view?.thread.id)}
       />
     ) : (
@@ -227,6 +229,7 @@ export function Wall(
                 threads={threads}
                 agents={lab.agents}
                 need={lab.thread_needs[summary.thread.id] ?? null}
+                wanted={wantedIn(lab, summary.thread.id, props.now)}
                 fresh={hasNew(summary, seen)}
                 read={summary.thread.id === open ? cardRead : null}
                 turns={turns}
@@ -260,6 +263,7 @@ export function Wall(
                       threads={threads}
                       agents={lab.agents}
                       need={lab.thread_needs[summary.thread.id] ?? null}
+                      wanted={wantedIn(lab, summary.thread.id, props.now)}
                       fresh={false}
                       read={cardRead}
                       turns={turns}
@@ -425,14 +429,20 @@ function Versions(props: {
   );
 }
 
+/** Return the line of the reruns that are wanted in a thread, or `null` when none is. */
+function wantedIn(lab: LabView, thread: string, now: Date): string | null {
+  const wanted = lab.reruns_wanted.filter((line) => line.thread === thread);
+  return wantedLine(wanted, lab.agents, now);
+}
+
 function number(summary: ThreadSummary): number {
   return Number(summary.thread.id.slice(2));
 }
 
 /**
  * Return the authors of some posts, each once, with the latest author first. The API does not say who is in a
- * thread now, so the page shows who posted last and, fainter, who posted before. Blind reruns share one place,
- * because they have no name.
+ * thread now, so the page shows who posted last and, fainter, who posted before. The blind reruns of a lab from
+ * before agents took reruns share one place, because they have no name.
  */
 function authors(posts: readonly PostView[], agents: readonly AgentView[]): readonly string[] {
   const known = new Set(members(agents).map((view) => view.agent.id));
@@ -589,8 +599,8 @@ function Answer(props: {
 }
 
 /**
- * What the lab's answer builds on: how many posts, and how many of the results with files among them no blind
- * checker has rerun. With `open`, each post follows with where it stands.
+ * What the lab's answer builds on: how many posts, and how many of the results with files among them have no
+ * check of an independent rerun. With `open`, each post follows with where it stands.
  */
 function Under(props: { readonly view: AnswerView; readonly open: boolean }): ReactElement | null {
   const { builds_on: posts, results, no_blind_rerun: waits } = props.view;
@@ -600,7 +610,7 @@ function Under(props: { readonly view: AnswerView; readonly open: boolean }): Re
       <p>
         Builds on {posts.length === 1 ? '1 post' : `${posts.length} posts`}.
         {results > 0
-          ? ` ${waits.length} of ${results} ${results === 1 ? 'result' : 'results'} with files ${waits.length === 1 ? 'has' : 'have'} no blind rerun.`
+          ? ` ${waits.length} of ${results} ${results === 1 ? 'result' : 'results'} with files ${waits.length === 1 ? 'has' : 'have'} no independent rerun.`
           : null}
       </p>
       {props.open ? (
@@ -615,7 +625,9 @@ function Under(props: { readonly view: AnswerView; readonly open: boolean }): Re
               <a href={href({ page: 'thread', id: item.post.thread, post: item.post.id })}>
                 {clip(item.post.text)}
               </a>
-              {waits.includes(item.post.id) ? <span className="dim"> · no blind rerun</span> : null}
+              {waits.includes(item.post.id) ? (
+                <span className="dim"> · no independent rerun</span>
+              ) : null}
             </li>
           ))}
         </ul>
@@ -695,6 +707,8 @@ function Card(props: {
   readonly agents: readonly AgentView[];
   /** The thread's one status, or `null` when the lab gives none. */
   readonly need: Need | null;
+  /** The line of the reruns that are wanted in the thread, or `null` when none is. */
+  readonly wanted: string | null;
   readonly fresh: boolean;
   /** The thread's posts when the card is open, or `null` for a closed card. */
   readonly read: ThreadRead | null;
@@ -752,6 +766,7 @@ function Card(props: {
             <span className={`o-st o-${props.need}`}>{NEED_WORDS[props.need]}</span>
           </div>
         ) : null}
+        {props.wanted ? <p className="o-wanted">{props.wanted}</p> : null}
         <Cross
           label="Builds on"
           links={summary.builds_on_threads}

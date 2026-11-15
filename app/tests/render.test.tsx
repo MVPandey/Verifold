@@ -15,6 +15,7 @@ import type {
   Post,
   PostView,
   QuestionShown,
+  RerunLine,
   SettingsView,
   ThreadSummary,
   ThreadView,
@@ -68,6 +69,8 @@ describe('agent text', () => {
         agents={[agentView('agent-1')]}
         needs={[]}
         question={null}
+        reruns={[]}
+        now={new Date('2026-11-06T14:26:00Z')}
         onRerun={() => Promise.resolve()}
         onSend={() => Promise.resolve()}
       />,
@@ -131,6 +134,8 @@ describe('agent text', () => {
         agents={[agentView('agent-1')]}
         needs={[]}
         question={null}
+        reruns={[]}
+        now={new Date('2026-11-06T14:26:00Z')}
         onRerun={() => Promise.resolve()}
         onSend={() => Promise.resolve()}
       />,
@@ -345,6 +350,8 @@ describe('an opened thread', () => {
       agents={agents}
       needs={[postView(asked, 6)]}
       question={null}
+      reruns={[]}
+      now={new Date('2026-11-06T14:26:00Z')}
       onRerun={() => Promise.resolve()}
       onSend={() => Promise.resolve()}
     />,
@@ -385,6 +392,8 @@ describe('an opened thread', () => {
           agents={[tessel]}
           needs={[]}
           question={null}
+          reruns={[]}
+          now={new Date('2026-11-06T14:26:00Z')}
           onRerun={() => Promise.resolve()}
           onSend={() => Promise.resolve()}
         />,
@@ -437,8 +446,8 @@ describe('an opened thread', () => {
   it('keeps what the person can do in a thread', () => {
     assert.ok(html.includes('<span class="f-st fs-dis">Disputed</span>'));
     assert.ok(html.includes('<span class="f-st fs-hold">Held up</span>'));
-    // A result with files that is not Held up can get a blind rerun. The Held up one has no files.
-    assert.equal(html.split('Ask for a blind rerun').length - 1, 1);
+    // The person can ask for a rerun of a result with files that is not Held up. The Held up one has no files.
+    assert.equal(html.split('Ask for an independent rerun').length - 1, 1);
     assert.ok(html.includes('bench.py <code>aaaaaaa</code>'));
     assert.ok(html.includes('Choices: Allow once · Reject'));
     assert.ok(html.includes('<a href="#/needs">Answer it on the Needs you page</a>'));
@@ -472,12 +481,126 @@ describe('an opened thread', () => {
         agents={agents}
         needs={[]}
         question="t-1"
+        reruns={[]}
+        now={new Date('2026-11-06T14:26:00Z')}
         onRerun={() => Promise.resolve()}
         onSend={() => Promise.resolve()}
       />,
     );
     assert.ok(folded.includes('<summary>2 short notes</summary>'));
     assert.equal(folded.includes('leads this thread'), false);
+  });
+});
+
+describe('a rerun that is wanted', () => {
+  const file = { type: 'file' as const, path: 'bench.py', commit: 'a'.repeat(40) };
+  const now = new Date('2026-11-06T14:26:00Z');
+  const agents = [
+    agentView('agent-1'),
+    agentView('agent-2', { agent: { ...agentView('agent-2').agent, name: 'Tessel' } }),
+  ];
+  const wanted = (changes: Partial<RerunLine> = {}): RerunLine => ({
+    post: 'p-1',
+    thread: 't-1',
+    asked_by: ['agent-1'],
+    asked_at: '2026-11-06T14:14:00Z',
+    taken_by: [],
+    ...changes,
+  });
+  const thread = (reruns: readonly RerunLine[], posts: PostView[]): string =>
+    renderToStaticMarkup(
+      <Turns
+        view={{
+          thread: { id: 't-1', title: 'A', opened_by: 'agent-1' },
+          watching: false,
+          members: [],
+          posts,
+        }}
+        agents={agents}
+        needs={[]}
+        question={null}
+        reruns={reruns}
+        now={now}
+        onRerun={() => Promise.resolve()}
+        onSend={() => Promise.resolve()}
+      />,
+    );
+  const claim = postView(result('p-1', { evidence: [file] }), 1);
+
+  it('shows on its post with how long it has waited and who took it, and the person can ask too', () => {
+    const open = thread([wanted()], [claim]);
+    assert.ok(
+      open.includes(
+        '<p class="note o-wanted">A rerun is wanted, asked 12 min ago. No agent has taken it.</p>',
+      ),
+    );
+    assert.ok(open.includes('Ask for an independent rerun'));
+    const taken = thread(
+      [wanted({ asked_by: ['agent-1', 'person'], taken_by: ['agent-2'] })],
+      [claim],
+    );
+    assert.ok(taken.includes('A rerun is wanted, asked 12 min ago. Taken by Tessel.'));
+    // The person asked already, so the page offers no second request.
+    assert.equal(taken.includes('Ask for an independent rerun'), false);
+    // A post that nobody asked about has the button and no line.
+    const plain = thread([wanted({ post: 'p-9' })], [claim]);
+    assert.ok(plain.includes('Ask for an independent rerun') && !plain.includes('o-wanted'));
+  });
+
+  it('shows the check that answers it as a rerun from a clean copy, by a member with its own name', () => {
+    const check = postView(
+      {
+        ...result('p-2', { author: 'agent-2', reply_to: 'p-1', evidence: [file] }),
+        kind: 'check',
+        method: 'rerun',
+        outcome: 'holds',
+        take: 7,
+      },
+      2,
+    );
+    const html = thread([], [{ ...claim, standing: 'held_up' }, check]);
+    assert.ok(html.includes('reran Agent 1’s result from a clean copy: it holds'));
+    assert.ok(html.includes('<span class="f-st fs-hold">Held up</span>'));
+    assert.equal(html.includes('Blind rerun'), false);
+    assert.equal(html.includes('outside checker'), false);
+    assert.equal(html.includes('o-wanted'), false);
+  });
+
+  it('shows on the card of its thread, and the top bar counts no process for it', () => {
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    const lab = labView({ agents, reruns_wanted: [wanted({ thread: 't-2' })] });
+    const data = {
+      setup: {
+        folder: '~/code/sort-bench',
+        harnesses: HARNESSES,
+        question: lab.question,
+        defaults: DEFAULTS,
+        defaults_from: null,
+      },
+      lab,
+      threads: [
+        summary({ thread: { id: 't-1', title: 'The question', opened_by: 'person' } }),
+        summary({ thread: { id: 't-2', title: 'Sorted input', opened_by: 'agent-1' } }),
+        summary({ thread: { id: 't-3', title: 'Merge sort', opened_by: 'agent-2' } }),
+      ],
+      needs: [],
+      report: null,
+      answer: null,
+      version: 1,
+      error: null,
+      reload: () => undefined,
+    };
+    const html = renderToStaticMarkup(
+      <LabPage api={{} as Api} data={data} now={now} open={null} post={null} />,
+    );
+    assert.equal(html.split('class="o-wanted"').length - 1, 1);
+    assert.ok(
+      html.indexOf('id="card-t-2"') <
+        html.indexOf(
+          '<p class="o-wanted">A rerun is wanted, asked 12 min ago. No agent has taken it.</p>',
+        ),
+    );
+    assert.ok(html.indexOf('class="o-wanted"') < html.indexOf('id="card-t-3"'));
   });
 });
 
@@ -1221,12 +1344,14 @@ describe('the lab page', () => {
     });
     const closed = wall('t-2', thread('t-1', 'person', posts), none, answer);
     assert.ok(closed.includes('href="#/file/p-2/answer.md"'));
-    assert.ok(closed.includes('Builds on 3 posts. 1 of 2 results with files has no blind rerun.'));
+    assert.ok(
+      closed.includes('Builds on 3 posts. 1 of 2 results with files has no independent rerun.'),
+    );
     assert.ok(!closed.includes('Not rerun.'));
     const open = wall('t-1', thread('t-1', 'person', posts), none, answer);
     assert.ok(
       open.includes(
-        '<a href="#/thread/t-2/p-8">Not rerun.</a><span class="dim"> · no blind rerun</span>',
+        '<a href="#/thread/t-2/p-8">Not rerun.</a><span class="dim"> · no independent rerun</span>',
       ),
     );
     // Nothing under the answer can be rerun, so the page says nothing about reruns.
@@ -1237,7 +1362,7 @@ describe('the lab page', () => {
       no_blind_rerun: [],
     };
     const plain = wall('t-2', thread('t-1', 'person', posts), none, reading);
-    assert.ok(plain.includes('Builds on 1 post.') && !plain.includes('blind rerun'));
+    assert.ok(plain.includes('Builds on 1 post.') && !plain.includes('independent rerun'));
   });
 
   it('shows a Markdown file as a page of text, with no image, HTML, or script link', () => {
@@ -2477,6 +2602,8 @@ describe('a request of a harness', () => {
         agents={lab.agents}
         needs={[]}
         question={null}
+        reruns={[]}
+        now={new Date('2026-11-06T14:26:00Z')}
         onRerun={() => Promise.resolve()}
         onSend={() => Promise.resolve()}
       />,

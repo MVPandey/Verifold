@@ -12,13 +12,14 @@ export interface StateLine {
 
 /**
  * Who an author is to the page: a member, which shows with its own picture, the person, or a blind rerun, which
- * has no name and no picture in a thread.
+ * has no name and no picture in a thread. A blind rerun is a checker that Verifold started for a rerun request, in
+ * a lab from before agents took reruns. Its posts keep that label.
  */
 export type Author =
   | { readonly kind: 'member'; readonly name: string; readonly view: AgentView }
   | { readonly kind: 'person' | 'rerun'; readonly name: string };
 
-/** Return the lab's members: its agents without the blind checkers. */
+/** Return the lab's members: its agents without the blind checkers of a lab from before agents took reruns. */
 export function members(agents: readonly AgentView[]): readonly AgentView[] {
   return agents.filter((view) => view.agent.checks === null);
 }

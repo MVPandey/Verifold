@@ -1,4 +1,4 @@
-import type { AgentView, LabView, Need, Wait } from '../api/types.ts';
+import type { AgentView, LabView, Need, RerunLine, Wait } from '../api/types.ts';
 import { counted, leftLine, memberLine, members, ownName } from './agents.ts';
 import { dayClock, duration, minutesBetween } from './format.ts';
 import { minutesLeft } from './time.ts';
@@ -43,21 +43,41 @@ export interface TurnLine {
 }
 
 /**
- * Return how many members are in a turn, such as "3 of 7 agents in a turn, 2 blind reruns", or "No agent in a
- * turn, 7 in the lab". A member that left does not count, and an invited agent counts from its first post. A turn
- * in which the harness waits for the person's answer still runs, so its agent counts as in a turn.
+ * Return how many members are in a turn, such as "3 of 7 agents in a turn", or "No agent in a turn, 7 in the
+ * lab". A member that left does not count, and an invited agent counts from its first post. A turn in which the
+ * harness waits for the person's answer still runs, so its agent counts as in a turn.
  */
 export function turnLine(agents: readonly AgentView[]): TurnLine {
   const all = counted(agents);
   const busy = all.filter((view) => view.in_turn).length;
-  const reruns = agents.filter((view) => view.agent.checks !== null && view.in_turn).length;
-  const line =
+  const text =
     busy > 0
       ? `${busy} of ${all.length} ${all.length === 1 ? 'agent' : 'agents'} in a turn`
       : `No agent in a turn, ${all.length} in the lab`;
-  const text =
-    reruns === 0 ? line : `${line}, ${reruns} blind ${reruns === 1 ? 'rerun' : 'reruns'}`;
-  return { text, live: busy + reruns > 0 };
+  return { text, live: busy > 0 };
+}
+
+/**
+ * Return the line of the reruns that are wanted for one post or in one thread, such as "A rerun is wanted, asked
+ * 12 min ago. No agent has taken it.", or `null` when none is wanted. Nothing ends a wanted rerun but its check, so
+ * the line says how long the oldest has waited.
+ */
+export function wantedLine(
+  wanted: readonly RerunLine[],
+  agents: readonly AgentView[],
+  now: Date,
+): string | null {
+  const [first, ...more] = wanted;
+  if (first === undefined) return null;
+  const minutes = minutesBetween(first.asked_at, now);
+  const asked = minutes > 0 ? `asked ${duration(minutes)} ago` : 'asked just now';
+  if (more.length === 0) {
+    const takers = first.taken_by.map((id) => ownName(agents, id)).join(', ');
+    return `A rerun is wanted, ${asked}. ${takers ? `Taken by ${takers}.` : 'No agent has taken it.'}`;
+  }
+  const taken = wanted.filter((line) => line.taken_by.length > 0).length;
+  const count = `${wanted.length} reruns are wanted, the first ${asked}.`;
+  return `${count} ${taken > 0 ? `Agents have taken ${taken} of them.` : 'No agent has taken one.'}`;
 }
 
 /** Return the top bar's count of what waits for the person, or `null` when nothing waits. */
@@ -107,7 +127,7 @@ function works(line: string, title: string | null): string {
 /** One row of the seat's list of what waits for the person. */
 export interface WaitRow {
   readonly wait: Wait;
-  /** The agent's own name. Two checkers can ask at once, so each keeps its name here. */
+  /** The agent's own name. */
   readonly name: string;
   /** How long it has waited, such as "12 min". */
   readonly waited: string;
@@ -153,8 +173,7 @@ export interface Quiet {
 }
 
 /**
- * Return the band of a quiet lab, or `null` while an agent or a blind rerun is in a turn, or while no member is
- * in the lab.
+ * Return the band of a quiet lab, or `null` while an agent is in a turn, or while no member is in the lab.
  *
  * In a lab that is out of time or that its agents call done, no alarm rings, so the band says what the person can
  * do and names no time of an alarm.

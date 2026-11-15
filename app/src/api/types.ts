@@ -124,7 +124,10 @@ export interface Agent {
   /** The harness mode that the person chose. `null` follows the lab's auto mode choice. */
   readonly mode: string | null;
   readonly recruited_by: string | null;
-  /** For a blind checker: the post that it reruns. */
+  /**
+   * In a lab from before agents took reruns: the post that a checker reran blind. Verifold started such a checker
+   * for a rerun request. `null` for every agent of a lab of today.
+   */
   readonly checks: string | null;
 }
 
@@ -238,6 +241,21 @@ export interface QuestionVersion {
   readonly post: string | null;
 }
 
+/**
+ * A rerun that is wanted: somebody asked for an independent rerun of a post, and no check has answered it. An
+ * independent rerun is a rerun from a clean copy of the post's files by another agent than the post's author.
+ */
+export interface RerunLine {
+  readonly post: string;
+  readonly thread: string;
+  /** Who asked, each once, the first first: agents, or the person. */
+  readonly asked_by: readonly string[];
+  /** When the first of them asked. */
+  readonly asked_at: string;
+  /** The agents that took the rerun and have not posted its check yet. */
+  readonly taken_by: readonly string[];
+}
+
 export interface LabView {
   /** The question that the lab works on now. */
   readonly question: string;
@@ -255,6 +273,8 @@ export interface LabView {
   readonly waits: readonly Wait[];
   /** The one status of each thread, by the thread's ID. */
   readonly thread_needs: Readonly<Record<string, Need>>;
+  /** The reruns that are wanted, oldest first: who asked for each, when, and which agents took it. */
+  readonly reruns_wanted: readonly RerunLine[];
   /** How many reviewer seats the lab has. */
   readonly reviewer_seats: number;
   /** The number that the person set, or `null` while the number follows the size of the lab. */
@@ -537,6 +557,11 @@ export type Post =
       readonly kind: 'check';
       readonly outcome: 'holds' | 'fails';
       readonly method: 'rerun' | 'code_read' | 'ratings';
+      /**
+       * The event with which the author took the rerun of the post, when the check's files come from the clean
+       * copy that Verifold made for that take. Verifold sets it, and no agent can.
+       */
+      readonly take?: number | null;
     });
 
 /** A fact about a request that Verifold states. The app writes the sentence. */
@@ -596,9 +621,9 @@ export interface AnswerView {
   /** Whether the person revised the question after this answer. */
   readonly to_earlier_question: boolean;
   readonly builds_on: readonly PostView[];
-  /** How many of `builds_on` are results with files, which a blind checker can rerun. */
+  /** How many of `builds_on` are results with files, which an agent can rerun from a clean copy. */
   readonly results: number;
-  /** The results among them that no blind checker has rerun. */
+  /** The results among them that have no check of an independent rerun. The name is from before agents took reruns. */
   readonly no_blind_rerun: readonly string[];
 }
 

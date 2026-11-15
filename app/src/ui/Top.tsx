@@ -4,7 +4,7 @@ import type { ReactElement } from 'react';
 import type { Api } from '../api/client.ts';
 import { messageOf } from '../api/client.ts';
 import type { AgentView, HarnessOption, Invitation, LabView, ThreadSummary } from '../api/types.ts';
-import { costLine, labTotal, leftLine, stateLine } from '../model/agents.ts';
+import { labTotal } from '../model/agents.ts';
 import { href } from '../model/route.ts';
 import type { Route } from '../model/route.ts';
 import { modelSummary, needsModel, newSeat, seatChoice } from '../model/setup.ts';
@@ -156,8 +156,6 @@ function Members(props: {
 }): ReactElement {
   const { lab } = props;
   const { show } = useContext(Profiles);
-  const reruns = lab.agents.filter((view) => view.agent.checks !== null);
-  const first = reruns[0];
   const turns = turnLine(lab.agents);
   const title = (view: AgentView): string | null =>
     props.threads.find((summary) => summary.thread.id === view.thread)?.thread.title ?? null;
@@ -206,39 +204,6 @@ function Members(props: {
               </li>
             )),
           ])}
-          {first ? (
-            <li className="i-reruns">
-              <Who agents={lab.agents} id={first.agent.id} />
-              <div>
-                <p>
-                  <b>{reruns.length === 1 ? '1 blind rerun' : `${reruns.length} blind reruns`}</b>
-                </p>
-                <p className="f-where">
-                  Outside checkers on the other model family. Each leaves after one check.
-                </p>
-                <details className="f-each">
-                  <summary>What each did and cost</summary>
-                  <ul>
-                    {reruns.map((view) => (
-                      <li key={view.agent.id}>
-                        <p>
-                          <b>{view.agent.name}</b>
-                        </p>
-                        <p className="f-where">
-                          {
-                            (view.left ? leftLine(view.left) : stateLine(view.activity, props.now))
-                              .text
-                          }
-                        </p>
-                        <p className="f-where">{costLine(view)}</p>
-                        <OpenFolder api={props.api} agent={view.agent} />
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              </div>
-            </li>
-          ) : null}
         </ul>
         <div className="f-seats">
           {lab.agents.some((view) => view.coordinator) ? null : (
@@ -431,8 +396,8 @@ function InviteAgent(props: {
         <div className="menu">
           <FactFields value={facts} family="unknown" onChange={setFacts} />
           <p>
-            Verifold does not know this agent’s model. With a model family, a blind rerun by another
-            family can hold up its results.
+            Verifold does not know this agent’s model. With a model family, an independent rerun by
+            an agent of another family can hold up its results.
           </p>
         </div>
       </details>

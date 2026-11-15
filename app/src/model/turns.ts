@@ -68,8 +68,10 @@ export interface ActContext {
  *
  * The line comes only from the post's kind, its check outcome and method, its `accepts`, and the post that it
  * replies to. `to` is that post, or `null` when the page does not have it. Every kind names the post that it
- * replies to, so a reply reads right where the indent stops. A plan that replies to a call takes the call. A rerun is "blind" only from the blind checker that
- * Verifold started for that post. A proposal is a proposed answer for the lab in any thread.
+ * replies to, so a reply reads right where the indent stops. A plan that replies to a call takes the call. A
+ * rerun is "from a clean copy" when its author took the rerun and its files come from the copy that Verifold made
+ * for that take. It is "blind" only from the checker that Verifold started for that post, in a lab from before
+ * agents took reruns. A proposal is a proposed answer for the lab in any thread.
  */
 export function act(post: Post, to: Post | null, context: ActContext): string {
   const them = to ? context.called(to.author) : 'a post';
@@ -100,7 +102,8 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
       return post.accepts ? `accepted ${theirs}` : `answered ${them}`;
     case 'check': {
       const blind = context.author?.checks != null && context.author.checks === post.reply_to;
-      return `${checked(post.method, theirs, blind)}: it ${post.outcome === 'holds' ? 'holds' : 'fails'}`;
+      const how = blind ? ' blind' : post.take != null ? ' from a clean copy' : '';
+      return `${checked(post.method, theirs, how)}: it ${post.outcome === 'holds' ? 'holds' : 'fails'}`;
     }
     case 'report':
       return `reported to you${reply}`;
@@ -109,14 +112,10 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
   }
 }
 
-function checked(
-  method: 'rerun' | 'code_read' | 'ratings',
-  theirs: string,
-  blind: boolean,
-): string {
+function checked(method: 'rerun' | 'code_read' | 'ratings', theirs: string, how: string): string {
   switch (method) {
     case 'rerun':
-      return `reran ${theirs}${blind ? ' blind' : ''}`;
+      return `reran ${theirs}${how}`;
     case 'code_read':
       return `read the code of ${theirs}`;
     case 'ratings':
@@ -125,8 +124,9 @@ function checked(
 }
 
 /**
- * Return what an author is to a thread: its lead, a visitor, or an outside checker. `null` for the person, for an
- * author that the lab does not list, and in the question's thread, which belongs to nobody.
+ * Return what an author is to a thread: its lead, a visitor, or an outside checker of a lab from before agents
+ * took reruns. `null` for the person, for an author that the lab does not list, and in the question's thread,
+ * which belongs to nobody.
  *
  * `checkedFamily` is the model family of the author whose post a checker answers, when the page has it.
  */
