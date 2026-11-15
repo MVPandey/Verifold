@@ -155,13 +155,14 @@ async def test_a_post_that_the_agent_got_in_a_tool_result_during_its_turn_rings_
 
 async def test_one_doorbell_covers_a_burst_of_posts(served: ServedBoard, tmp_path: Path, log: Path) -> None:
     lab = served.lab
-    # The posts come with no gap, and the quiet window is far longer than a post takes, so a slow machine cannot
-    # split the burst.
+    # The posts come with a gap, so the loop sees the first one alone and must wait for a quiet board. The quiet
+    # window is far longer than the gaps, so a slow machine cannot split the burst.
     running = asyncio.create_task(loop_for(served, tmp_path, quiet=0.5, max_quiet=10).run())
     try:
         await until(lambda: len(lab.board.turns) == 1)
         for number in range(3):
             await lab.post(PostRequest(kind='ask', text=f'Question {number}?', thread='t-1', mentions=('bo',)), 'ada')
+            await asyncio.sleep(0.05)
         await until(lambda: len(lab.board.turns) == 2)
         # A second doorbell would ring after one more quiet window.
         await asyncio.sleep(0.8)

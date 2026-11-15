@@ -104,7 +104,7 @@ addopts = [
 ]
 # A test that hangs fails with its name after this many seconds. The slowest test takes about five, and the longest
 # wait inside a test gives up after 60.
-timeout = 120
+timeout = 60
 
 [tool.coverage.run]
 source = ["src/verifold"]

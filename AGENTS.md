@@ -89,7 +89,7 @@ Run `make install` once in each clone. It installs the locked Python and app env
 
 pytest runs the tests in parallel, one worker for each core, and a test that runs for two minutes fails with its name. Keep the tests fast:
 
-- A test waits for an event, with `until` from `tests/builders.py`. It does not sleep for a fixed time, and no assertion depends on how fast the machine is.
+- A test waits for an event, with `until` from `tests/builders.py`. It does not sleep for a fixed time to let something happen. A short sleep is right only to show that nothing more happens, or to put a gap between two events. No assertion depends on how fast the machine is. Tests run in parallel; `uv run pytest -n 0` runs them one at a time, which a debugger needs.
 - A test sets every timing that it waits through to a few hundredths of a second: the doorbell's quiet window, a turn's time limit, a grace period. Where the code holds such a timing as a constant, make it a setting with the same default. A test moves the lab's clock instead of waiting for an alarm.
 - A test keeps its files in `tmp_path`, takes a free port, and looks only at the processes that it started, so that it runs beside any other test.
 
