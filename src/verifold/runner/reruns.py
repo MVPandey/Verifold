@@ -32,6 +32,7 @@ import time
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 from verifold.protocol.events import Posted
@@ -39,7 +40,7 @@ from verifold.protocol.ids import AgentId, CommitId, PostId
 from verifold.protocol.join import ManifestLine
 from verifold.runner.folders import LAB_FOLDER
 from verifold.runner.git import GitError
-from verifold.runner.objects import Objects, PinnedCommit, Running, entries, object_hash, reading, whole
+from verifold.runner.objects import Objects, PinnedCommit, Running, entries, object_hash, read_pinned, whole
 from verifold.server.errors import NoCleanCopy
 from verifold.server.member import MadeCopy
 
@@ -168,7 +169,9 @@ class CleanCopies:
             # A caller that goes away leaves the export to the others that wait for it.
             return await asyncio.shield(making)
         except (GitError, OSError, ValueError, IndexError, RecursionError) as error:
-            raise NoCleanCopy(f'Verifold could not make the clean copy of post {post.id}: {error}') from error
+            # The system's own error names the file that it was about, and the post's author chose that name.
+            why = error.strerror if isinstance(error, OSError) and error.strerror else error
+            raise NoCleanCopy(f'Verifold could not make the clean copy of post {post.id}: {why}') from error
 
     async def _make(self, post_id: PostId, author: AgentId, commit: CommitId) -> MadeCopy:
         async with self._free:
@@ -188,19 +191,7 @@ def _export(job: _Job) -> MadeCopy:
     project, post_id, name = job.project, job.post_id, job.commit[:12]
     with _own(project, post_id) as home:
         _sweep(home, job.leftover)
-        with reading(job) as (objects, tree):
-            folder = _walk(objects, tree, 0, [0, 0])
-            lines = _verified(home, name, folder)
-            if lines is None:
-                try:
-                    lines = _fresh(home, name, folder, objects)
-                except OSError:
-                    # Another server of the same lab can have made the copy in the meantime. It counts only when
-                    # it passes the same check.
-                    lines = _verified(home, name, folder)
-                    if lines is None:
-                        raise
-        lines = tuple(sorted(lines, key=lambda line: line.path))
+        lines = tuple(sorted(read_pinned(job, partial(_copied, home, name)), key=lambda line: line.path))
         listed = ''.join(f'{line.sha256}  {line.path}\n' for line in lines).encode()
         _replace_file(home, f'{name}.manifest', listed)
         # The path that the taker gets must be the folder that Verifold holds, and no link that took its place.
@@ -214,6 +205,23 @@ def _export(job: _Job) -> MadeCopy:
         listing=place / f'{name}.manifest',
         digest=hashlib.sha256(listed).hexdigest(),
     )
+
+
+def _copied(home: int, name: str, objects: Objects, tree: str) -> list[ManifestLine]:
+    # The manifest of the copy of a tree, from the objects of one store: of the copy that stands at its place when
+    # it is exactly that tree's files, and else of a new one.
+    folder = _walk(objects, tree, 0, [0, 0])
+    lines = _verified(home, name, folder)
+    if lines is None:
+        try:
+            lines = _fresh(home, name, folder, objects)
+        except OSError:
+            # Another server of the same lab can have made the copy in the meantime. It counts only when
+            # it passes the same check.
+            lines = _verified(home, name, folder)
+            if lines is None:
+                raise
+    return lines
 
 
 @contextmanager
@@ -253,6 +261,8 @@ def _folder(path: Path, name: str, inside: int | None) -> int:
 def _walk(objects: Objects, tree: str, depth: int, seen: list[int]) -> _Tree:
     # Read a folder's listing as Git stores it, and each folder inside it. `seen` counts every entry so far and
     # the bytes of every listing so far, so a few listings that name each other many times stop at a limit.
+    # An error names a folder by its ID and never an entry by its name: the post's author chose the names, and
+    # the error goes to the agent that takes the rerun.
     if depth > MAX_DEPTH:
         raise GitError(f'The snapshot has more than {MAX_DEPTH} folders inside each other.')
     data = whole(objects, tree, 'tree')
@@ -265,9 +275,12 @@ def _walk(objects: Objects, tree: str, depth: int, seen: list[int]) -> _Tree:
         seen[0] += 1
         if seen[0] > MAX_COPY_FILES:
             raise GitError(f'The snapshot has more than {MAX_COPY_FILES:,} files and folders.')
-        text = _safe_name(name)
+        text = _safe_name(name, tree)
         if len(child) != len(tree) or text.casefold() in names:
-            raise GitError(f'The snapshot has an entry that Verifold does not write: {text!r}.')
+            raise GitError(
+                f'The folder {tree} of the snapshot has an entry that Verifold does not write: the folder has its '
+                f'name twice, also when the capitals differ, or the listing ends inside it.'
+            )
         names.add(text.casefold())
         if mode == b'160000':
             # A submodule has no files here.
@@ -277,15 +290,18 @@ def _walk(objects: Objects, tree: str, depth: int, seen: list[int]) -> _Tree:
         elif mode in _FILE_MODES:
             folder[text] = _File(blob=child, mode=_FILE_MODES[mode])
         else:
-            raise GitError(f'The snapshot has an entry that Verifold does not write: {text!r}.')
+            raise GitError(
+                f'The folder {tree} of the snapshot has an entry that Verifold does not write: it is no file, '
+                f'folder, link, or submodule.'
+            )
     return folder
 
 
-def _safe_name(name: bytes) -> str:
+def _safe_name(name: bytes, tree: str) -> str:
     try:
         text = name.decode()
-    except UnicodeDecodeError as error:
-        raise GitError(f'The snapshot has a name that is not UTF-8: {name!r}.') from error
+    except UnicodeDecodeError:
+        raise GitError(f'The folder {tree} of the snapshot has a name that is not UTF-8.') from None
     unsafe = (
         text in ('', '.', '..')
         or text.casefold() == '.git'
@@ -293,7 +309,11 @@ def _safe_name(name: bytes) -> str:
         or any(sign in '/\\' or not sign.isprintable() for sign in text)
     )
     if unsafe:
-        raise GitError(f'The snapshot has an entry that Verifold does not write: {text[:80]!r}.')
+        raise GitError(
+            f'The folder {tree} of the snapshot has an entry that Verifold does not write: its name is empty, '
+            f'`.`, `..`, or `.git`, has more than {MAX_NAME_BYTES} bytes, or has a slash, a backslash, or a sign '
+            f'that does not print.'
+        )
     return text
 
 
@@ -331,8 +351,8 @@ def _write(handle: int, folder: _Tree, prefix: str, objects: Objects, total: lis
         total[0] += size
         if kind != 'blob' or total[0] > MAX_COPY_BYTES:
             raise GitError(
-                f'{prefix}{name} is no file that Verifold copies: it is a {kind}, or the snapshot has more than '
-                f'{MAX_COPY_BYTES:,} bytes.'
+                f'The object {entry.blob} is no file that Verifold copies: it is a {kind}, or the snapshot has '
+                f'more than {MAX_COPY_BYTES:,} bytes.'
             )
         named, plain = object_hash(entry.blob, 'blob', size), hashlib.sha256()
         file = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, entry.mode, dir_fd=handle)
@@ -345,7 +365,7 @@ def _write(handle: int, folder: _Tree, prefix: str, objects: Objects, total: lis
         finally:
             os.close(file)
         if named.hexdigest() != entry.blob:
-            raise GitError(f'The file {prefix}{name} in the repository is not the object that its ID names.')
+            raise GitError(f'The file {entry.blob} in the repository is not the object that its ID names.')
         yield ManifestLine(path=f'{prefix}{name}', size=size, sha256=plain.hexdigest())
 
 

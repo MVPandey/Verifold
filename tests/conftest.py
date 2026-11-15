@@ -22,9 +22,14 @@ from verifold.store.record_file import RecordFile
 
 @pytest.fixture(autouse=True)
 def home(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Give each test an empty home folder, so that no test reads or writes the person's own `~/.verifold`."""
+    """
+    Give each test an empty home folder, so that no test reads or writes the person's own `~/.verifold`.
+
+    Git takes the person's settings from the home folder or from `XDG_CONFIG_HOME`, so both name the empty one.
+    """
     path = tmp_path_factory.mktemp('home')
     monkeypatch.setenv('HOME', str(path))
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(path / '.config'))
     # The catalog takes its npm folder from the home folder when it is imported, before this fixture runs.
     monkeypatch.setattr('verifold.app.NPX_PROJECT', path / '.verifold' / 'npx')
     return path

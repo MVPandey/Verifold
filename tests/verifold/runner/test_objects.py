@@ -7,12 +7,12 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from plants import BEFORE, FORMS, fires, no_fetch_switch, plant, remote
+from plants import BEFORE, FORMS, SENTENCE, fires, mine, no_fetch_switch, plant, remote, spoil
 
 from verifold.runner import objects
 from verifold.runner.folders import agent_folder
 from verifold.runner.git import GIT_ENVIRONMENT, MAX_SMALL_FILE, GitError, git
-from verifold.runner.objects import Missing, NoRepository, PinnedCommit, Running, TooLarge, file_bytes
+from verifold.runner.objects import Missing, NoRepository, Objects, PinnedCommit, Running, TooLarge, file_bytes
 from verifold.runner.snapshots import pin, snapshot
 
 LIMIT = 1_000
@@ -157,6 +157,13 @@ async def test_a_listing_that_git_never_makes_or_that_is_too_large_is_refused(
     ) as big:
         file_bytes(at(project, large), 'result.txt', LIMIT)
     assert not isinstance(big.value, TooLarge)
+    monkeypatch.undo()
+    # That listing has 41 entries. Verifold reads that many, and not one entry more than the limit.
+    monkeypatch.setattr(objects, 'MAX_FOLDER_ENTRIES', 41)
+    assert file_bytes(at(project, large), 'result.txt', LIMIT) == b''
+    monkeypatch.setattr(objects, 'MAX_FOLDER_ENTRIES', 40)
+    with pytest.raises(GitError, match=r'The listing of the folder [0-9a-f]{40} has more than 40 entries'):
+        file_bytes(at(project, large), 'result.txt', LIMIT)
 
 
 async def test_a_replaced_object_is_not_read_and_a_changed_one_is_refused(tmp_path: Path) -> None:
@@ -262,19 +269,63 @@ async def test_a_file_that_names_a_git_directory_is_followed_only_when_it_is_a_s
         'a link': lambda path: path.symlink_to(outside),
         'large': lambda path: path.write_text(names + '#' * MAX_SMALL_FILE),
     }
+    start = re.escape(str(author / '.git'))
+    unread = 'is no plain text file of at most 4,096 bytes' if name == '.git' else 'leads to a `commondir` file that'
     for make in shapes.values():
         file.unlink()
         make(file)
-        why = f'{re.escape(str(file))} is no plain text file of at most 4,096 bytes'
-        with pytest.raises(NoRepository, match=f'found no repository of the lab that it can read .* {why}'):
+        with pytest.raises(NoRepository, match=f'found no repository of the lab that it can read .* {start} {unread}'):
             file_bytes(pinned, 'result.txt', LIMIT)
     # A file that names no Git directory, or a directory without objects.
     file.unlink()
     file.write_text('x\n')
-    with pytest.raises(
-        NoRepository, match='names no Git directory' if name == '.git' else 'is no folder of Git objects'
-    ):
+    nothing = 'names no Git directory' if name == '.git' else 'leads to no folder of Git objects'
+    with pytest.raises(NoRepository, match=f'{start} {nothing}'):
         file_bytes(pinned, 'result.txt', LIMIT)
+
+
+@pytest.mark.parametrize('place', ['gitdir', 'commondir', 'the path of commondir'])
+async def test_an_error_holds_no_text_that_a_file_of_the_authors_folder_names(tmp_path: Path, place: str) -> None:
+    project = tmp_path / 'project'
+    pinned = await a_pin(project)
+    author = project / '.verifold' / 'agents' / 'ada'
+    if place == 'commondir':
+        (author / '.git' / 'commondir').write_text(f'{SENTENCE}\n')
+    else:
+        (author / '.git').rename(tmp_path / 'moved.git')
+        (author / '.git').write_text(f'gitdir: {SENTENCE}\n')
+    if place == 'the path of commondir':
+        # The `.git` file names a directory that is there, and whose `commondir` is no file that Verifold reads.
+        (author / SENTENCE).mkdir(parents=True)
+        os.mkfifo(author / SENTENCE / 'commondir')
+
+    with pytest.raises(NoRepository) as refused:
+        file_bytes(pinned, 'result.txt', LIMIT)
+
+    # The error names the `.git` of the folder, which is Verifold's own path, and nothing that a file there holds.
+    no_file = 'leads to a `commondir` file that is no small plain text file'
+    why = no_file if place == 'the path of commondir' else 'leads to no folder of Git objects'
+    assert str(refused.value) == (
+        f'Verifold found no repository of the lab that it can read and that has the commit {pinned.commit}. '
+        f'{author / ".git"} {why}.'
+    )
+
+
+def test_an_error_names_no_kind_of_object_that_git_does_not_have(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A stand-in for Git that gives an object a kind of its own.
+    (tmp_path / 'git').write_text('#!/bin/sh\nread name\necho "$name sentence 4"\ncat > /dev/null\n')
+    (tmp_path / 'git').chmod(0o755)
+    monkeypatch.setenv('PATH', f'{tmp_path}{os.pathsep}{os.environ["PATH"]}')
+    reader = Objects(tmp_path, tmp_path, tmp_path, 30)
+
+    try:
+        with pytest.raises(GitError, match='Git gave no kind and size that Verifold knows') as refused:
+            reader.ask('ab' * 20)
+    finally:
+        reader.close()
+    assert 'sentence' not in str(refused.value)
 
 
 async def test_git_reads_the_configuration_that_verifold_wrote_and_no_other_in_its_own_directory(
@@ -293,14 +344,14 @@ async def test_git_reads_the_configuration_that_verifold_wrote_and_no_other_in_i
 
     # Somebody adds the remote to the configuration of Verifold's own directory. Git itself would then ask it.
     (own / 'config').write_text(written + remote(ran))
-    assert await fires(own, blob, ran)
+    assert await fires(tmp_path, blob, ran, own)
     with pytest.raises(Missing, match='does not have the object'):
         file_bytes(pinned, 'result.txt', LIMIT)
     assert (own / 'config').read_text() == written
     # Somebody makes the own directory name another directory for its configuration, which has the remote.
     plant(author / '.git', 'plain', ran, tmp_path / 'aside.git')
     (own / 'commondir').write_text(f'{author / ".git"}\n')
-    assert await fires(own, blob, ran)
+    assert await fires(tmp_path, blob, ran, own)
     with pytest.raises(Missing, match='does not have the object'):
         file_bytes(pinned, 'result.txt', LIMIT)
     assert not ran.exists()
@@ -331,3 +382,57 @@ async def test_a_pipe_in_the_object_store_ends_a_read_at_its_time_limit_and_a_st
     pinned.running.stop()
     with pytest.raises(GitError, match='did not answer in time'):
         file_bytes(replace(pinned, seconds=600), 'result.txt', LIMIT)
+
+
+@pytest.mark.parametrize('form', ['other bytes', 'a pipe'])
+async def test_a_store_of_the_authors_own_takes_no_commit_away_that_the_projects_repository_has(
+    tmp_path: Path, form: str
+) -> None:
+    project = await committed(tmp_path / 'project')
+    pinned = await a_pin(project)
+    author = project / '.verifold' / 'agents' / 'ada'
+    mine(author, form, pinned.commit)
+
+    # The project's store is read first. So the read does not fail, and it does not wait for the other store.
+    assert file_bytes(replace(pinned, seconds=600), 'result.txt', LIMIT) == b'11.8'
+
+
+@pytest.mark.parametrize('form', ['other bytes', 'a pipe', 'no commit'])
+async def test_the_next_store_gets_its_turn_when_one_fails_in_any_way(tmp_path: Path, form: str) -> None:
+    project = tmp_path / 'project'
+    pinned = await a_pin(project)
+    # The project becomes a repository after the author's folder. Its store comes first and does not give the commit.
+    await git('init', '--quiet', cwd=project)
+    if form != 'no commit':
+        spoil(project / '.git' / 'objects', form, pinned.commit)
+
+    # A store that waits gets its share of the time limit, and the author's store the rest.
+    assert file_bytes(replace(pinned, seconds=3), 'result.txt', LIMIT) == b'11.8'
+
+
+async def test_the_error_of_stores_that_all_fail_is_the_one_that_says_most(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    pinned = await a_pin(project)
+    author = project / '.verifold' / 'agents' / 'ada'
+    store = author / '.git' / 'objects'
+    blob = await git('rev-parse', f'{pinned.commit}:result.txt', cwd=author)
+    await git('init', '--quiet', cwd=project)
+    wrong = 'is not the object that its ID names|Git ended before it gave every object'
+
+    # The project's store lacks the commit, and the author's has it with a file that holds other bytes.
+    kept = loose(store, blob).read_bytes()
+    loose(store, blob).write_bytes(zlib.compress(b'blob 4\x0099.9'))
+    with pytest.raises(GitError, match=wrong) as refused:
+        file_bytes(pinned, 'result.txt', LIMIT)
+    assert not isinstance(refused.value, Missing)
+    # The author's store has the commit and lacks the file, and the project's holds other bytes under the commit's ID.
+    loose(store, blob).unlink()
+    spoil(project / '.git' / 'objects', 'other bytes', pinned.commit)
+    with pytest.raises(Missing, match=f'does not have the object {blob}'):
+        file_bytes(pinned, 'result.txt', LIMIT)
+    # Only the author's store lacks the commit now.
+    (store / blob[:2] / blob[2:]).write_bytes(kept)
+    loose(store, pinned.commit).unlink()
+    with pytest.raises(GitError, match=wrong) as refused:
+        file_bytes(pinned, 'result.txt', LIMIT)
+    assert not isinstance(refused.value, Missing)

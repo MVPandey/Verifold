@@ -8,13 +8,13 @@ itself. Verifold reads the clean copy for a rerun and the file that the app show
 
 Git reads the objects through a Git directory of Verifold's own, `.verifold/snapshots.git`, with the working
 directory in Verifold's own folder. So Git reads the configuration that Verifold wrote there, and no configuration
-of a repository of the lab. `GIT_OBJECT_DIRECTORY` names the object store of the repository that has the commit.
-Verifold finds that store itself, without Git: from the `.git` of the author's folder or of the project, through
-a `gitdir:` file and a `commondir` file where they are. An agent can write the store of its own folder, and can
-point these files at any other store. Git reads a store's files as data, and Verifold checks the ID of every
-object that it takes from one. Git fetches nothing that is missing, uses no transport, replaces no object, runs no
-hook and no file watcher, and reads no configuration of the person or the system. The Git processes of one read
-end at one time limit, and when the server stops.
+of a repository of the lab. `GIT_OBJECT_DIRECTORY` names the object store that Git reads. Verifold finds the
+stores itself, without Git: from the `.git` of the project and of the author's folder, through a `gitdir:` file
+and a `commondir` file where they are. It reads the project's store first, and the next store when one fails. An
+agent can write the store of its own folder, and can point these files at any other store. Git reads a store's
+files as data, and Verifold checks the ID of every object that it takes from one. Git fetches nothing that is
+missing, uses no transport, replaces no object, runs no hook and no file watcher, and reads no configuration of
+the person or the system. The Git processes of one read end at one time limit, and when the server stops.
 """
 
 import hashlib
@@ -22,8 +22,8 @@ import os
 import re
 import subprocess
 import time
-from collections.abc import Generator, Iterator
-from contextlib import contextmanager, suppress
+from collections.abc import Callable, Iterator
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock, Timer
@@ -40,6 +40,9 @@ READ_SECONDS = 30.0
 MAX_TREE_BYTES = 16 * 1024**2
 """The most bytes of one commit or of one folder's listing, which Verifold reads whole."""
 
+MAX_FOLDER_ENTRIES = 50_000
+"""The most entries of one folder's listing that Verifold reads on the way to one file. It holds each name once."""
+
 _KINDS = {
     b'40000': 'a folder',
     b'100644': 'a file',
@@ -49,6 +52,9 @@ _KINDS = {
     b'160000': 'a submodule',
 }
 """What an entry of a folder's listing is, by its mode."""
+
+_OBJECT_KINDS = frozenset({'commit', 'tree', 'blob', 'tag'})
+"""The kinds of object that Git has. An error names a kind only when it is one of these."""
 
 _CHUNK = 1024 * 1024
 _HASHES = {40: 'sha1', 64: 'sha256'}
@@ -175,7 +181,10 @@ class Objects:
             raise Missing(f'The repository does not have the object {name}. Verifold fetches nothing that is missing.')
         if len(said) != 3:  # noqa: PLR2004
             raise GitError('Git ended before it gave every object, or it did not answer in time.')
-        return said[1].decode(), int(said[2])
+        kind = said[1].decode(errors='replace')
+        if kind not in _OBJECT_KINDS or not said[2].isdigit():
+            raise GitError(f'Git gave no kind and size that Verifold knows for the object {name}.')
+        return kind, int(said[2])
 
     def read(self, size: int) -> Iterator[bytes]:
         """Give the bytes of the object that was asked for last, in pieces."""
@@ -251,51 +260,69 @@ def entries(listing: bytes, id_bytes: int) -> Iterator[tuple[bytes, bytes, str]]
         at = end + 1 + id_bytes
 
 
-@contextmanager
-def reading(pinned: PinnedCommit) -> Generator[tuple[Objects, str]]:
+def read_pinned[T](pinned: PinnedCommit, take: Callable[[Objects, str], T]) -> T:
     """
-    Open the object store of the lab that has the pinned commit, and give it with the ID of the commit's tree.
+    Return what `take` makes of the pinned commit, from an object store that has it.
 
-    Git reads each store through Verifold's own Git directory, one store after the other, and all of them within
-    the one time limit of the read.
+    `take` gets the store's objects and the ID of the commit's tree. Verifold reads the project's store first and
+    the author's after it, each through Verifold's own Git directory. When a store fails in any way, the next one
+    gets its turn, and `take` starts again there: the store lacks an object, holds a changed one, or does not
+    answer in its share of the read's time limit. So an agent that changes the repository of its own folder takes
+    no commit away that the project's repository has. In a project without Git commits, the author's store is the
+    only one. Its author can withhold or change an object there, and the read then fails. Nothing can prevent
+    that.
 
     Raises:
-        NoRepository: Verifold found no object store, or could not read a file that names one, and no store that
-            it read has the commit.
-        Missing: Verifold read every store of the lab, and none has the commit.
-        GitError: The commit is not the object that its ID names, Git did not answer in time, or Verifold's own
-            Git directory is not a folder that Verifold can write.
+        NoRepository: Verifold found no object store, or could not read a file that names one, and every store
+            that it read lacks the commit.
+        Missing: Every store lacks the commit, or the store that has it lacks an object or the path that `take`
+            asks for.
+        GitError: What the stores hold is not what the commit names, or Git did not answer in time. Of the
+            failures of several stores, this is the one that says most.
 
     """
     ends = time.monotonic() + pinned.seconds
     commit, lab = pinned.commit, pinned.project / LAB_FOLDER
     stores, unread = _stores(pinned)
-    for store in stores:
-        objects = Objects(own_repository(lab), store, lab, ends - time.monotonic())
+    failed: list[tuple[bool, GitError]] = []
+    for at, store in enumerate(stores):
+        # Each store gets an equal share of the time that is left, so that one that waits leaves time for the next.
+        objects = Objects(own_repository(lab), store, lab, (ends - time.monotonic()) / (len(stores) - at))
         pinned.running.add(objects)
+        has_commit = False
         try:
-            try:
-                said = re.match(rb'tree ([0-9a-f]+)\n', whole(objects, commit, 'commit'))
-            except Missing:
-                continue
-            if said is None or len(said[1]) != len(commit):
-                raise GitError(f'The commit {commit} names no tree.')
-            yield objects, said[1].decode()
-            return
+            tree = _tree(objects, commit)
+            has_commit = True
+            return take(objects, tree)
+        except GitError as error:
+            failed.append((has_commit, error))
         finally:
             pinned.running.remove(objects)
             objects.close()
+    # The failure that says most is one of a store that has the commit, and there one of an object that is wrong
+    # before one of an object that is not there. Among equals it is the failure of the store that was read first.
+    has_commit, most = max(failed, key=lambda one: (one[0], not isinstance(one[1], Missing)), default=(False, None))
+    if most is not None and (has_commit or not isinstance(most, Missing)):
+        raise most
     if unread or not stores:
         found = f'Verifold found no repository of the lab that it can read and that has the commit {commit}.'
         raise NoRepository(' '.join((found, *unread)))
     raise Missing(f'No repository of the lab has the commit {commit}. Verifold fetches nothing that is missing.')
 
 
+def _tree(objects: Objects, commit: str) -> str:
+    # The ID of a commit's tree, after a check that the commit is the object that its ID names.
+    said = re.match(rb'tree ([0-9a-f]+)\n', whole(objects, commit, 'commit'))
+    if said is None or len(said[1]) != len(commit):
+        raise GitError(f'The commit {commit} names no tree.')
+    return said[1].decode()
+
+
 def _stores(pinned: PinnedCommit) -> tuple[tuple[Path, ...], tuple[str, ...]]:
     """
     Return the object stores that can have the pinned commit, and why Verifold could not read a place for one.
 
-    The author's folder comes first, and then the project. In a project with Git commits, every agent's folder is
+    The project comes first, and then the author's folder. In a project with Git commits, every agent's folder is
     a worktree of the project, so both name the project's store. In any other project, the author's folder is a
     repository of its own.
     """
@@ -304,7 +331,7 @@ def _stores(pinned: PinnedCommit) -> tuple[tuple[Path, ...], tuple[str, ...]]:
     above = next((folder for folder in (project, *project.parents) if os.path.lexists(folder / '.git')), None)
     stores: dict[Path, None] = {}
     unread: list[str] = []
-    for folder in (agents_folder(project) / pinned.author, above):
+    for folder in (above, agents_folder(project) / pinned.author):
         try:
             store = _store(folder) if folder else None
         except GitError as error:
@@ -324,6 +351,12 @@ def _store(folder: Path) -> Path | None:
     That is safe: Git reads a store's files as data and no configuration from there, and Verifold checks the ID of
     every object that it takes from a store.
 
+    An error names `.git` at the folder, which is a path of Verifold's own, and never what a file there holds or
+    a path that comes from one. An agent chooses that text, and an error goes to other agents and to the person.
+
+    These lookups have no time limit. A path that an agent names can be on a file system that does not answer,
+    and the lookup then holds the read's thread and its place among the reads until the system gives up.
+
     Raises:
         GitError: A file on the way is no small plain file, or it leads to no object store.
 
@@ -337,10 +370,13 @@ def _store(folder: Path) -> Path | None:
         home = folder / pointer.removeprefix('gitdir:').strip()
     else:
         raise GitError(f'{at} names no Git directory.')
-    common = small_text(home / 'commondir')
+    try:
+        common = small_text(home / 'commondir')
+    except GitError:
+        raise GitError(f'{at} leads to a `commondir` file that is no small plain text file.') from None
     store = (home if common is None else home / common.strip()) / 'objects'
     if not store.is_dir():
-        raise GitError(f'{store} is no folder of Git objects.')
+        raise GitError(f'{at} leads to no folder of Git objects.')
     return store.resolve()
 
 
@@ -360,8 +396,9 @@ def file_bytes(pinned: PinnedCommit, path: str, limit: int) -> bytes:
             an object is not the one that its ID names, or Git did not answer in time.
 
     """
-    *folders, name = path.split('/')
-    with reading(pinned) as (objects, top):
+
+    def take(objects: Objects, top: str) -> bytes:
+        *folders, name = path.split('/')
         tree = top
         for folder in folders:
             tree = _entry(objects, tree, folder, 'a folder', path)
@@ -371,21 +408,32 @@ def file_bytes(pinned: PinnedCommit, path: str, limit: int) -> bytes:
             raise TooLarge(f'{path} has {size:,} bytes, and this read takes at most {limit:,}.')
         return _checked(objects, blob, 'blob', size)
 
+    return read_pinned(pinned, take)
+
 
 def _entry(objects: Objects, tree: str, name: str, kind: str, path: str) -> str:
     # The ID that a folder's listing gives a name, when the entry there is of the kind that the path needs.
     listing, wanted = whole(objects, tree, 'tree'), name.encode()
+    entry: tuple[bytes, str] | None = None
+    names: set[bytes] = set()
     try:
-        listed = tuple(entries(listing, len(tree) // 2))
-    except ValueError as error:
-        raise GitError(f'The listing of the folder {tree} ends inside an entry.') from error
-    # Git never lists one name twice. With two, the file that a reader gets would depend on who reads.
-    if len({found for _, found, _ in listed}) != len(listed):
-        raise GitError(f'The listing of the folder {tree} has one name twice.')
-    entry = next((entry for entry in listed if entry[1] == wanted), None)
+        for mode, found, child in entries(listing, len(tree) // 2):
+            # Git never lists one name twice. With two, the file that a reader gets would depend on who reads.
+            if found in names:
+                raise GitError(f'The listing of the folder {tree} has one name twice.')
+            if len(names) == MAX_FOLDER_ENTRIES:
+                raise GitError(
+                    f'The listing of the folder {tree} has more than {MAX_FOLDER_ENTRIES:,} entries, and Verifold '
+                    f'reads at most that many on the way to one file.'
+                )
+            names.add(found)
+            if found == wanted:
+                entry = mode, child
+    except ValueError:
+        raise GitError(f'The listing of the folder {tree} ends inside an entry.') from None
     if entry is None:
         raise Missing(f'The pinned commit has no {path}.')
-    mode, _, child = entry
+    mode, child = entry
     if len(child) != len(tree):
         raise GitError(f'The listing of the folder {tree} ends inside an entry.')
     if (is_a := _KINDS.get(mode, 'an entry of no kind that Verifold reads')) != kind:

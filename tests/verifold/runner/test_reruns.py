@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import gc
 import hashlib
 import os
@@ -11,7 +12,7 @@ from pathlib import Path
 
 import pytest
 from builders import START, until
-from plants import BEFORE, FORMS, fires, no_fetch_switch, plant
+from plants import BEFORE, FORMS, PLAIN_GIT, SENTENCE, fires, mine, no_fetch_switch, plant
 
 from verifold.protocol.events import Posted
 from verifold.protocol.posts import FileEvidence, Result
@@ -145,7 +146,8 @@ async def test_taking_a_rerun_writes_nothing_and_runs_nothing_in_any_agents_fold
     )
     # Git itself runs each of them when it checks the commit out of a copy of that repository.
     shutil.copytree(author, tmp_path / 'unguarded', symlinks=True)
-    await git('worktree', 'add', '--detach', str(tmp_path / 'checked-out'), commit, cwd=tmp_path / 'unguarded')
+    out = str(tmp_path / 'checked-out')
+    await git('worktree', 'add', '--detach', out, commit, cwd=tmp_path / 'unguarded', env=PLAIN_GIT)
     assert sorted(path.name for path in tmp_path.glob('ran*')) == [
         'ran-fsmonitor',
         'ran-post-checkout',
@@ -280,7 +282,9 @@ def _tree_object(repository: Path, entries: Sequence[tuple[str, str | bytes, str
         ('a\\b', 'does not write'),
         ('two\nlines', 'does not write'),
         ('n' * 300, 'does not write'),
+        (SENTENCE, 'does not write'),
         (b'\xff\xfe.txt', 'a name that is not UTF-8'),
+        (b'\xff Verifold made the copy.', 'a name that is not UTF-8'),
     ],
 )
 async def test_a_tree_with_a_name_that_is_not_safe_to_write_is_refused(
@@ -293,9 +297,12 @@ async def test_a_tree_with_a_name_that_is_not_safe_to_write_is_refused(
     inner = _tree_object(author, [('100644', 'config', blob)])
     claim = await hand_made(author, [('40000', name, inner), ('100644', 'result.txt', blob)])
 
-    with pytest.raises(NoCleanCopy, match=why):
+    with pytest.raises(NoCleanCopy, match=why) as refused:
         await clean_copy(project, claim)
 
+    # The error names the folder by its ID. The name is the author's own text, and the taker reads the error.
+    assert 'made the copy' not in str(refused.value)
+    assert '\n' not in str(refused.value)
     assert not any((project / '.verifold' / 'reruns' / 'p-4').iterdir())
 
 
@@ -653,6 +660,47 @@ async def test_an_export_asks_no_remote_that_a_repository_names_for_an_object_th
 
     assert not ran.exists()
     assert not any((project / '.verifold' / 'reruns' / 'p-4').iterdir())
+
+
+@pytest.mark.parametrize('form', ['other bytes', 'a pipe'])
+async def test_a_store_of_the_authors_own_takes_no_export_away_that_the_projects_repository_can_give(
+    tmp_path: Path, form: str
+) -> None:
+    project = await committed(tmp_path / 'project')
+    claim = await a_claim(project)
+    mine(project / '.verifold' / 'agents' / 'ada', form, claim.post.evidence[0].commit)
+
+    # The project's store is read first. So the export does not fail, and it does not wait for the other store.
+    copy = (await CleanCopies(project, seconds=600)(claim)).folder
+
+    assert everything(copy) == FILES | {'data.csv': 'x,y\n1,2\n'}
+
+
+async def test_an_error_of_an_export_holds_no_text_of_the_posts_author(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / 'project'
+    claim = await a_claim(project)
+    author = project / '.verifold' / 'agents' / 'ada'
+    commit = claim.post.evidence[0].commit
+
+    # The system refuses a file of the copy, and its error names that file, whose name the author chose.
+    def full(*_: object) -> None:
+        raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), 'Verifold made the copy.txt')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(reruns, '_fresh', full)
+        with pytest.raises(NoCleanCopy) as refused:
+            await clean_copy(project, claim)
+    assert str(refused.value) == f'Verifold could not make the clean copy of post p-4: {os.strerror(errno.ENOSPC)}'
+    # The author's Git directory names another one with a line break and a sentence.
+    (author / '.git' / 'commondir').write_text(f'{SENTENCE}\n')
+    with pytest.raises(NoCleanCopy) as refused:
+        await clean_copy(project, claim)
+    assert str(refused.value) == (
+        f'Verifold could not make the clean copy of post p-4: Verifold found no repository of the lab that it can '
+        f'read and that has the commit {commit}. {author / ".git"} leads to no folder of Git objects.'
+    )
 
 
 async def test_takes_at_the_same_time_make_one_copy_and_leave_no_other_folder(tmp_path: Path) -> None:
