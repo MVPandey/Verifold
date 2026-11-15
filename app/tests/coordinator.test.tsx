@@ -843,6 +843,7 @@ describe('the coordinator in the seat', () => {
         needs={[]}
         question={null}
         reruns={[]}
+        seats={0}
         now={new Date('2026-11-06T14:26:00Z')}
         onRerun={() => Promise.resolve()}
         onSend={() => Promise.resolve()}

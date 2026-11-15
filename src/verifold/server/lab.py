@@ -67,8 +67,8 @@ from verifold.society.fold import apply, fold
 from verifold.society.labels import awaits_model, is_numbered, label, plain
 from verifold.society.lines import question_thread
 from verifold.society.names import check_name
-from verifold.society.reruns import wanted_reruns
-from verifold.society.reviewers import check_review
+from verifold.society.reruns import open_to, wanted_reruns
+from verifold.society.reviewers import check_review, seats_line
 from verifold.store.record_file import RecordFile
 
 type Clock = Callable[[], datetime]
@@ -463,23 +463,27 @@ class Lab:
         Record that an agent takes the rerun of a post, and return the take. A second call returns the first take.
 
         Raises:
-            RejectedEvent: No rerun of the post is wanted, the post is the agent's own, or the take needs a
-                reviewer seat that the agent does not hold.
+            RejectedEvent: The agent cannot take the rerun, as `check_take` says.
 
         """
         if taken := self._board.take(agent_id, post_id):
             return taken
-
-        def build(board: Board, seq: int, at: datetime) -> RerunTaken:
-            target = board.post(post_id)
-            if target is None or not target.post.evidence:
-                raise RejectedEvent(f'No rerun of post {post_id} is wanted now. `rerun` asks for one.')
-            # The seats are the same rule that a check and a request follow, so it stands beside theirs.
-            check_review(board, agent_id, post_id, 'The rerun of')
-            return RerunTaken(seq=seq, at=at, agent=agent_id, post=post_id, commit=target.post.evidence[0].commit)
-
-        board = await self._commit(build)
+        board = await self._commit(_take(agent_id, post_id))
         return board.takes[-1]
+
+    def check_take(self, agent_id: AgentId, post_id: PostId) -> None:
+        """
+        Check that an agent can take the rerun of a post now, and record nothing.
+
+        The clean copy is made between this check and the take, so a copy that fails leaves no take in the record.
+
+        Raises:
+            RejectedEvent: No rerun of the post is wanted, the post is the agent's own, or the rerun is for an
+                agent in a reviewer seat and the agent holds none.
+
+        """
+        board = self._board
+        apply(board, _take(agent_id, post_id)(board, board.seq + 1, self._clock()))
 
     async def start_turn(  # noqa: PLR0913
         self,
@@ -840,6 +844,24 @@ def _setting(move: SettingMove) -> Build:
     return build
 
 
+def _take(agent_id: AgentId, post_id: PostId) -> Build:
+    def build(board: Board, seq: int, at: datetime) -> RerunTaken:
+        target = board.post(post_id)
+        if target is None or not target.post.evidence:
+            raise RejectedEvent(f'No rerun of post {post_id} is wanted now. `rerun` asks for one.')
+        # A rerun is for the holders of the reviewer seats, and for any agent when no holder can take it. An older
+        # record has no such rule, so it is here and not in the record's rules.
+        seated = board.reviewer(agent_id) or target.post.author == agent_id
+        if not seated and wanted_reruns(board, post_id) and open_to(board, post_id) == 'reviewer':
+            raise RejectedEvent(
+                f"The rerun of another agent's post takes a reviewer seat while an agent in such a seat can take "
+                f'it. {seats_line(board)}'
+            )
+        return RerunTaken(seq=seq, at=at, agent=agent_id, post=post_id, commit=target.post.evidence[0].commit)
+
+    return build
+
+
 def _headline(text: str) -> str:
     # The first line with text, cut to a headline. A question can start with a separator that `splitlines` breaks
     # on and the schema's strip keeps.
@@ -901,7 +923,8 @@ def _add_post(  # noqa: PLR0913
             post = post.model_copy(update={'to_lab': True})
         # An older record holds checks from before the reviewer seats, so this rule is here and not in the record's
         # rules.
-        if isinstance(post, Check) and board.post(post.reply_to):
+        # The check of a rerun that its author took needs no seat of its own: the take was open to the author.
+        if isinstance(post, Check) and post.take is None and board.post(post.reply_to):
             check_review(board, author, post.reply_to, 'A check on')
         return Posted(seq=seq, at=at, post=post)
 

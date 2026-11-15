@@ -2,9 +2,10 @@
 The lab's reviewer seats: how many it has, who holds them, and what takes one.
 
 Exploring and testing is every agent's work, and a few agents hold reviewer seats for the rest. A check of another
-agent's post, a request for an independent rerun of another agent's post, and the taking of such a rerun take a
-reviewer seat. An objection takes no seat, and neither does a result that reproduces another's: that is building.
-The person is never limited. A lab with no reviewer seats limits nobody.
+agent's post and a request for an independent rerun of another agent's post take a reviewer seat. So does the
+taking of such a rerun, while an agent in a reviewer seat can take it: the seats limit who reviews, and they make
+no rerun impossible. An objection takes no seat, and neither does a result that reproduces another's: that is
+building. The person is never limited. A lab with no reviewer seats limits nobody.
 """
 
 from verifold.protocol.ids import PERSON, AgentId, PostId
@@ -62,7 +63,7 @@ def seats_line(board: Board) -> str:
 
 
 def may_review(board: Board, agent_id: AgentId, post_id: PostId) -> bool:
-    """Return whether an agent can check a post, ask for an independent rerun of it, or take one, as the module's note says."""
+    """Return whether an agent can check a post or ask for an independent rerun of it, as the module's note says."""
     target = board.post(post_id)
     own = target is not None and target.post.author == agent_id
     return agent_id == PERSON or own or seats(board) == 0 or board.reviewer(agent_id)
@@ -70,7 +71,7 @@ def may_review(board: Board, agent_id: AgentId, post_id: PostId) -> bool:
 
 def check_review(board: Board, agent_id: AgentId, post_id: PostId, what: str) -> None:
     """
-    Check that an agent can check a post, ask for an independent rerun of it, or take one.
+    Check that an agent can check a post or ask for an independent rerun of it.
 
     `what` names the move, such as "A check on".
 

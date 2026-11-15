@@ -48,12 +48,12 @@ from verifold.protocol.settings import AtExit, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
 from verifold.runner.errors import NoAgentFolder, NoFileManager
-from verifold.runner.folders import LAB_FOLDER, agent_folder, agents_folder, open_folder, real_folder, tracked_lab_files
+from verifold.runner.folders import LAB_FOLDER, agent_folder, open_folder, real_folder, tracked_lab_files
 from verifold.runner.git import GitError, git
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
 from verifold.runner.messages import invitation, start_message
 from verifold.runner.permissions import Refusals
-from verifold.runner.reruns import Reruns
+from verifold.runner.reruns import Reruns, evidence_repository
 from verifold.runner.session import Place, SessionOptions, offer_of
 from verifold.runner.snapshots import pin
 from verifold.server.activity import Activity
@@ -315,13 +315,14 @@ class Host:
         file = next((item for item in entry.post.evidence if item.path == path), None) if entry else None
         if entry is None or file is None:
             raise NotFound(f'Post {post_id} names no file {path}.')
-        folder = agents_folder(self._project) / entry.post.author
+        # The files of a check from a clean copy are in Verifold's own directory, and any other in the author's folder.
+        folder, repository = evidence_repository(self._project, entry.post)
         blob = f'{file.commit}:{file.path}'
         try:
-            size = int(await git('cat-file', '-s', blob, cwd=folder))
+            size = int(await git(*repository, 'cat-file', '-s', blob, cwd=folder))
             if size > MAX_FILE_BYTES:
                 raise NotFound(f'{path} is larger than {MAX_FILE_BYTES:,} bytes, so the app does not show it.')
-            text = await git('show', blob, cwd=folder, strip=False)
+            text = await git(*repository, 'show', blob, cwd=folder, strip=False)
         except UnicodeDecodeError as error:
             raise NotFound(f'{path} is not a text file.') from error
         except (GitError, OSError, ValueError) as error:

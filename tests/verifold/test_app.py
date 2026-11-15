@@ -783,9 +783,10 @@ async def test_an_agent_of_another_family_takes_a_wanted_rerun_in_a_clean_copy_a
     assert {call['agent'] for call in calls(log) if call['event'] == 'new_session'} == {'agent-1', 'agent-2'}
     assert [(entry.by, entry.post) for entry in board.reruns] == [('person', result.id)]
     assert [(entry.agent, entry.post) for entry in board.takes] == [('agent-2', result.id)]
-    # The check comes from the clean copy inside the taker's own folder, and its file is the copy's own.
-    copy = project / '.verifold' / 'agents' / 'agent-2' / '.verifold' / 'reruns' / result.id
-    assert (copy / 'result.txt').read_text() == '11.8\n'
+    # The check comes from the clean copy inside the taker's own folder, which is gone after the check. The app
+    # reads the check's file from Verifold's own directory for that take.
+    assert not (project / '.verifold' / 'agents' / 'agent-2' / '.verifold' / 'reruns' / result.id).exists()
+    assert (project / '.verifold' / 'reruns' / 'agent-2' / result.id / 'git').is_dir()
     assert (check.author, check.text, check.model_dump()['take']) == (
         'agent-2',
         'Reran it from a clean copy: 11.8.',

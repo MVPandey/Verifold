@@ -70,6 +70,7 @@ describe('agent text', () => {
         needs={[]}
         question={null}
         reruns={[]}
+        seats={0}
         now={new Date('2026-11-06T14:26:00Z')}
         onRerun={() => Promise.resolve()}
         onSend={() => Promise.resolve()}
@@ -135,6 +136,7 @@ describe('agent text', () => {
         needs={[]}
         question={null}
         reruns={[]}
+        seats={0}
         now={new Date('2026-11-06T14:26:00Z')}
         onRerun={() => Promise.resolve()}
         onSend={() => Promise.resolve()}
@@ -351,6 +353,7 @@ describe('an opened thread', () => {
       needs={[postView(asked, 6)]}
       question={null}
       reruns={[]}
+      seats={0}
       now={new Date('2026-11-06T14:26:00Z')}
       onRerun={() => Promise.resolve()}
       onSend={() => Promise.resolve()}
@@ -393,6 +396,7 @@ describe('an opened thread', () => {
           needs={[]}
           question={null}
           reruns={[]}
+          seats={0}
           now={new Date('2026-11-06T14:26:00Z')}
           onRerun={() => Promise.resolve()}
           onSend={() => Promise.resolve()}
@@ -482,6 +486,7 @@ describe('an opened thread', () => {
         needs={[]}
         question="t-1"
         reruns={[]}
+        seats={0}
         now={new Date('2026-11-06T14:26:00Z')}
         onRerun={() => Promise.resolve()}
         onSend={() => Promise.resolve()}
@@ -505,6 +510,7 @@ describe('a rerun that is wanted', () => {
     asked_by: ['agent-1'],
     asked_at: '2026-11-06T14:14:00Z',
     taken_by: [],
+    open_to: 'reviewer',
     ...changes,
   });
   const thread = (reruns: readonly RerunLine[], posts: PostView[]): string =>
@@ -520,6 +526,7 @@ describe('a rerun that is wanted', () => {
         needs={[]}
         question={null}
         reruns={reruns}
+        seats={0}
         now={now}
         onRerun={() => Promise.resolve()}
         onSend={() => Promise.resolve()}
@@ -531,7 +538,7 @@ describe('a rerun that is wanted', () => {
     const open = thread([wanted()], [claim]);
     assert.ok(
       open.includes(
-        '<p class="note o-wanted">A rerun is wanted, asked 12 min ago. No agent has taken it.</p>',
+        '<p class="note o-wanted">A rerun is wanted, asked 12 min ago. No agent has taken it. An agent in a reviewer seat can take it.</p>',
       ),
     );
     assert.ok(open.includes('Ask for an independent rerun'));
@@ -566,9 +573,27 @@ describe('a rerun that is wanted', () => {
     assert.equal(html.includes('o-wanted'), false);
   });
 
+  it('offers no request for a post that has the checks of two independent reruns', () => {
+    const check = (id: string, author: string): PostView =>
+      postView({
+        ...result(id, { author, reply_to: 'p-1', evidence: [file] }),
+        kind: 'check',
+        method: 'rerun',
+        outcome: 'fails',
+        take: 7,
+      });
+    const one = thread([], [{ ...claim, standing: 'disputed' }, check('p-2', 'agent-2')]);
+    assert.ok(one.includes('Ask for an independent rerun'));
+    const two = thread(
+      [],
+      [{ ...claim, standing: 'disputed' }, check('p-2', 'agent-2'), check('p-3', 'agent-3')],
+    );
+    assert.equal(two.includes('Ask for an independent rerun'), false);
+  });
+
   it('shows on the card of its thread, and the top bar counts no process for it', () => {
     Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
-    const lab = labView({ agents, reruns_wanted: [wanted({ thread: 't-2' })] });
+    const lab = labView({ agents, reruns_wanted: [wanted({ thread: 't-2', open_to: 'none' })] });
     const data = {
       setup: {
         folder: '~/code/sort-bench',
@@ -597,7 +622,7 @@ describe('a rerun that is wanted', () => {
     assert.ok(
       html.indexOf('id="card-t-2"') <
         html.indexOf(
-          '<p class="o-wanted">A rerun is wanted, asked 12 min ago. No agent has taken it.</p>',
+          '<p class="o-wanted">A rerun is wanted, asked 12 min ago. No agent has taken it. No agent of this lab can take it.</p>',
         ),
     );
     assert.ok(html.indexOf('class="o-wanted"') < html.indexOf('id="card-t-3"'));
@@ -2646,6 +2671,7 @@ describe('a request of a harness', () => {
         needs={[]}
         question={null}
         reruns={[]}
+        seats={0}
         now={new Date('2026-11-06T14:26:00Z')}
         onRerun={() => Promise.resolve()}
         onSend={() => Promise.resolve()}

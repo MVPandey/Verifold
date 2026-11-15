@@ -57,14 +57,26 @@ export function turnLine(agents: readonly AgentView[]): TurnLine {
   return { text, live: busy > 0 };
 }
 
+/** The most independent reruns of one post that get a check. The server's `MAX_RERUNS` is the same number. */
+export const MAX_RERUNS = 2;
+
+/** What a wanted rerun's line says about who can take it now, when no agent has taken it. */
+function takers(line: RerunLine, seats: number): string {
+  if (line.open_to === 'none') return 'No agent of this lab can take it.';
+  if (line.open_to === 'reviewer') return 'An agent in a reviewer seat can take it.';
+  return seats === 0
+    ? 'Any agent but the author can take it.'
+    : 'Any agent but the author can take it, because no agent in a reviewer seat can.';
+}
+
 /**
  * Return the line of the reruns that are wanted for one post or in one thread, such as "A rerun is wanted, asked
- * 12 min ago. No agent has taken it.", or `null` when none is wanted. Nothing ends a wanted rerun but its check, so
- * the line says how long the oldest has waited.
+ * 12 min ago. No agent has taken it. An agent in a reviewer seat can take it.", or `null` when none is wanted.
+ * Nothing ends a wanted rerun but its check, so the line says how long the oldest has waited and who can take it.
  */
 export function wantedLine(
   wanted: readonly RerunLine[],
-  agents: readonly AgentView[],
+  lab: Pick<LabView, 'agents' | 'reviewer_seats'>,
   now: Date,
 ): string | null {
   const [first, ...more] = wanted;
@@ -72,12 +84,19 @@ export function wantedLine(
   const minutes = minutesBetween(first.asked_at, now);
   const asked = minutes > 0 ? `asked ${duration(minutes)} ago` : 'asked just now';
   if (more.length === 0) {
-    const takers = first.taken_by.map((id) => ownName(agents, id)).join(', ');
-    return `A rerun is wanted, ${asked}. ${takers ? `Taken by ${takers}.` : 'No agent has taken it.'}`;
+    const names = first.taken_by.map((id) => ownName(lab.agents, id)).join(', ');
+    const taken = names
+      ? `Taken by ${names}.`
+      : `No agent has taken it. ${takers(first, lab.reviewer_seats)}`;
+    return `A rerun is wanted, ${asked}. ${taken}`;
   }
   const taken = wanted.filter((line) => line.taken_by.length > 0).length;
+  const stuck = wanted.filter((line) => line.open_to === 'none' && line.taken_by.length === 0);
   const count = `${wanted.length} reruns are wanted, the first ${asked}.`;
-  return `${count} ${taken > 0 ? `Agents have taken ${taken} of them.` : 'No agent has taken one.'}`;
+  const took = taken > 0 ? `Agents have taken ${taken} of them.` : 'No agent has taken one.';
+  return stuck.length > 0
+    ? `${count} ${took} No agent of this lab can take ${stuck.length} of them.`
+    : `${count} ${took}`;
 }
 
 /** Return the top bar's count of what waits for the person, or `null` when nothing waits. */

@@ -263,6 +263,11 @@ export interface RerunLine {
   readonly asked_at: string;
   /** The agents that took the rerun and have not posted its check yet. */
   readonly taken_by: readonly string[];
+  /**
+   * Who can take the rerun now: an agent in a reviewer seat, any agent that did not write the post, because no
+   * agent in a reviewer seat can take it, or no agent of the lab.
+   */
+  readonly open_to: 'reviewer' | 'any' | 'none';
 }
 
 export interface LabView {

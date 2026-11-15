@@ -229,16 +229,62 @@ async def test_who_can_take_a_rerun(lab: Lab) -> None:
     with pytest.raises(NoCleanCopy, match='cannot make a clean copy'):
         await Member(lab, 'bo').take_rerun('p-2')
 
-    # With a third agent the lab has one reviewer seat, and a take needs it.
+    # With a third agent the lab has one reviewer seat. While its holder can take the rerun, no other agent can.
     await lab.join(agent('cy'))
-    with pytest.raises(RejectedEvent, match="The rerun of another agent's post takes a reviewer seat"):
+    cy = Member(lab, 'cy', copies=FakeCopies())
+    await lab.set_reviewer('cy', 'cy', reviewer=True)
+    assert [line.open_to for line in bo.brief('').reruns_wanted] == ['reviewer']
+    with pytest.raises(RejectedEvent, match='takes a reviewer seat while an agent in such a seat can take it'):
         await bo.take_rerun('p-2')
     assert lab.board.takes == ()
-    await lab.set_reviewer('bo', 'bo', reviewer=True)
+    # The holder took it, so no agent in a reviewer seat can take it any more, and any other agent can.
+    await cy.take_rerun('p-2')
+    assert [(line.open_to, line.taken_by) for line in bo.brief('').reruns_wanted] == [('any', ('cy',))]
     assert (await bo.take_rerun('p-2')).post == 'p-2'
+    # The check of that rerun needs no seat of its own. Any other check of bo's still does.
+    checked = await bo.post(rerun_check())
+    assert checked.post.model_dump()['take'] == lab.board.takes[1].seq
+    with pytest.raises(RejectedEvent, match=r'A check on another agent.s post takes a reviewer seat'):
+        await bo.post(rerun_check(files=(), method='code_read'))
     # A seat that makes no clean copies pins no file from one.
     with pytest.raises(EvidenceRejected, match='cannot pin files'):
-        await Member(lab, 'bo').post(rerun_check())
+        await Member(lab, 'cy').post(rerun_check())
+
+
+async def test_a_clean_copy_that_fails_records_no_take_and_the_agent_can_take_the_rerun_afterwards(lab: Lab) -> None:
+    await a_claim(lab)
+    await Member(lab, 'ada').rerun('p-2')
+    copies = FakeCopies(fails=True)
+    bo = Member(lab, 'bo', copies=copies)
+    seq = lab.board.seq
+
+    with pytest.raises(NoCleanCopy, match='Verifold could not make the clean copy of post p-2'):
+        await bo.take_rerun('p-2')
+
+    assert (lab.board.takes, lab.board.seq) == ((), seq)
+    assert [line.taken_by for line in bo.brief('').reruns_wanted] == [()]
+    copies.fails = False
+    assert (await bo.take_rerun('p-2')).folder == str(copies.folder / 'p-2')
+    assert len(lab.board.takes) == 1
+
+
+async def test_the_copy_goes_after_its_check_and_take_rerun_makes_it_again(lab: Lab) -> None:
+    await a_claim(lab)
+    await Member(lab, 'ada').rerun('p-2')
+    copies = FakeCopies()
+    bo = Member(lab, 'bo', copies=copies)
+    await bo.take_rerun('p-2')
+    # A check without files, and one by another method, leave the copy where it is.
+    await bo.post(rerun_check(files=()))
+    assert copies.removed == []
+
+    await bo.post(rerun_check())
+
+    assert (copies.pinned, copies.removed) == ([('p-2', ('rerun.json',))], ['p-2'])
+    # The take stays, so the agent gets the copy again with no new event.
+    seq = lab.board.seq
+    await bo.take_rerun('p-2')
+    assert (copies.made, lab.board.seq) == ([('p-2', 'ada'), ('p-2', 'ada')], seq)
 
 
 async def test_a_request_ends_the_wait_of_an_agent_that_can_take_it(lab: Lab) -> None:

@@ -184,7 +184,7 @@ def test_the_lab_norms_hold_what_came_out_of_python_and_the_norm_on_reruns() -> 
         "have it give its own name in the post's helper field",
         'When you check a result with a rerun, reproduce it yourself from its files, and do not trust the claim',
         'Post the check with the files of your own run',
-        'an agent in a reviewer seat can ask for one of any result, and takes a rerun that is wanted',
+        'an agent in a reviewer seat can ask for one of any result. One good run out of several is noise',
     ):
         assert norm in NORMS_TEMPLATE
 

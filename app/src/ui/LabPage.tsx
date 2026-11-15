@@ -110,6 +110,7 @@ export function Wall(
         question={questionId}
         done={lab.state !== 'open'}
         reruns={lab.reruns_wanted}
+        seats={lab.reviewer_seats}
         now={props.now}
         onRerun={(postId) => api.rerun(postId).then(() => data.reload())}
         onSend={(text) => send(text, read.view?.thread.id)}
@@ -439,7 +440,7 @@ function Versions(props: {
 /** Return the line of the reruns that are wanted in a thread, or `null` when none is. */
 function wantedIn(lab: LabView, thread: string, now: Date): string | null {
   const wanted = lab.reruns_wanted.filter((line) => line.thread === thread);
-  return wantedLine(wanted, lab.agents, now);
+  return wantedLine(wanted, lab, now);
 }
 
 function number(summary: ThreadSummary): number {

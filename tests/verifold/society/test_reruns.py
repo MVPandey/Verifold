@@ -6,7 +6,15 @@ from builders import START, RecordBuilder, lab
 from verifold.protocol.posts import Check, FileEvidence, Message, Objection, Result
 from verifold.society.attention import news, update
 from verifold.society.errors import RejectedEvent
-from verifold.society.reruns import MAX_RERUNS, can_take, rerun_checks, rerun_line, reruns_wanted, wanted_reruns
+from verifold.society.reruns import (
+    MAX_RERUNS,
+    can_take,
+    open_to,
+    rerun_checks,
+    rerun_line,
+    reruns_wanted,
+    wanted_reruns,
+)
 from verifold.society.standing import standing
 
 EVIDENCE = (FileEvidence(path='bench.json', commit='c' * 40),)
@@ -188,6 +196,71 @@ def test_a_request_reaches_the_agents_that_can_take_it() -> None:
     assert news(wanted().board(), 'cy', 8).reruns == ()
     assert not hears(wanted().take('cy', 'p-1'), 'cy')
     assert not hears(taken_by('cy'), 'bo')
+
+
+def test_a_rerun_is_for_the_reviewer_seats_and_for_any_agent_when_no_holder_can_take_it() -> None:
+    def seated(*holders: str) -> RecordBuilder:
+        record = lab().reviewer_seats(1)
+        for holder in holders:
+            record.reviewer(holder, 'person')
+        return record.post(RESULT).rerun('ada', 'p-1')
+
+    def state(record: RecordBuilder) -> tuple[str, list[bool]]:
+        board = record.board()
+        return open_to(board, 'p-1'), [can_take(board, agent, 'p-1') for agent in ('ada', 'bo', 'cy')]
+
+    # A holder that can take it keeps the rerun for the seats.
+    assert state(seated('bo')) == ('reviewer', [False, True, False])
+    # The lab has no seats, nobody holds one, the only holder wrote the post, or it left: any other agent can.
+    assert state(wanted()) == ('any', [False, True, True])
+    assert state(seated()) == ('any', [False, True, True])
+    assert state(seated('ada')) == ('any', [False, True, True])
+    assert state(seated('bo').leave('bo')) == ('any', [False, False, True])
+    # The only holder took it already, so it is open to the others while that take has no check.
+    assert state(seated('bo').take('bo', 'p-1')) == ('any', [False, False, True])
+    # No agent of the lab can take it: every other agent took it or left, or the author is alone.
+    assert state(wanted().take('bo', 'p-1').leave('cy')) == ('none', [False, False, False])
+    alone = RecordBuilder().join('ada').thread('t-1', opened_by='ada').post(RESULT).rerun('ada', 'p-1')
+    assert open_to(alone.board(), 'p-1') == 'none'
+    line = rerun_line(alone.board(), 'p-1')
+    assert line is not None
+    assert line.open_to == 'none'
+
+
+def test_a_post_that_becomes_wanted_is_news_once_whoever_asks_after() -> None:
+    record = wanted()
+    first = len(record.events)
+    record.rerun('person', 'p-1').rerun('cy', 'p-1')
+    board = record.board()
+
+    # The first request is the news. A later request for the same rerun is recorded and shown, and wakes nobody.
+    assert [line.asked_by for line in news(board, 'cy', first - 1).reruns] == [('bo', 'person', 'cy')]
+    assert news(board, 'cy', first).reruns == ()
+    assert update(board, 'cy', first).reruns == ()
+    line = rerun_line(board, 'p-1')
+    assert line is not None
+    assert line.asked_by == ('bo', 'person', 'cy')
+    # After a check answered it, a new request makes the post wanted again, and that is news again.
+    record.take('cy', 'p-1')
+    record.post(rerun_check('cy', take=len(record.events)))
+    answered = len(record.events)
+    record.rerun('person', 'p-1')
+    assert [line.post for line in news(record.board(), 'bo', answered).reruns] == ['p-1']
+
+
+def test_an_agent_that_gets_a_reviewer_seat_hears_once_of_the_reruns_that_are_wanted() -> None:
+    record = lab().reviewer_seats(1).reviewer('bo', 'person').post(RESULT).rerun('ada', 'p-1')
+    read = len(record.events)
+    # cy holds no seat, so the request was no news for it.
+    assert news(record.board(), 'cy', 0).reruns == ()
+
+    record.reviewer('cy', 'person')
+
+    seat = len(record.events)
+    assert [line.post for line in news(record.board(), 'cy', read).reruns] == ['p-1']
+    assert news(record.board(), 'cy', seat).reruns == ()
+    # A seat that the agent loses again brings no news.
+    assert news(record.reviewer('cy', 'person', reviewer=False).board(), 'cy', seat).reruns == ()
 
 
 def test_a_rerun_that_nobody_takes_stays_wanted_and_nothing_else_happens() -> None:

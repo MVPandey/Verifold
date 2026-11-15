@@ -1,5 +1,5 @@
 import { PERSON } from '../api/types.ts';
-import type { Agent, Post, PostView, Thread, ThreadSummary } from '../api/types.ts';
+import type { Agent, AgentView, Post, PostView, Thread, ThreadSummary } from '../api/types.ts';
 
 /** What a post does to the post that it touches. The mark beside a turn takes its shape and color from this. */
 export type MarkTone = 'claim' | 'bad' | 'good' | 'turn' | 'answer' | 'ask' | 'quiet';
@@ -120,6 +120,30 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
     case 'message':
       return post.reply_to === null ? 'added a note' : `replied to ${them}`;
   }
+}
+
+/**
+ * Return how many agents posted the check of an independent rerun of a post: a check from a clean copy, or the
+ * check of a checker that Verifold started for the post, in a lab from before agents took reruns.
+ */
+export function rerunChecks(
+  posts: readonly PostView[],
+  agents: readonly AgentView[],
+  postId: string,
+): number {
+  const checkers = new Set(
+    agents.filter((view) => view.agent.checks === postId).map((view) => view.agent.id),
+  );
+  const authors = posts
+    .map((item) => item.post)
+    .filter(
+      (post) =>
+        post.kind === 'check' &&
+        post.reply_to === postId &&
+        (post.take != null || checkers.has(post.author)),
+    )
+    .map((post) => post.author);
+  return new Set(authors).size;
 }
 
 function checked(method: 'rerun' | 'code_read' | 'ratings', theirs: string, how: string): string {

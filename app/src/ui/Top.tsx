@@ -4,7 +4,7 @@ import type { ReactElement } from 'react';
 import type { Api } from '../api/client.ts';
 import { messageOf } from '../api/client.ts';
 import type { AgentView, HarnessOption, Invitation, LabView, ThreadSummary } from '../api/types.ts';
-import { labTotal } from '../model/agents.ts';
+import { earlierReruns, labTotal } from '../model/agents.ts';
 import { href } from '../model/route.ts';
 import type { Route } from '../model/route.ts';
 import { modelSummary, needsModel, newSeat, seatChoice } from '../model/setup.ts';
@@ -157,6 +157,7 @@ function Members(props: {
   const { lab } = props;
   const { show } = useContext(Profiles);
   const turns = turnLine(lab.agents);
+  const earlier = earlierReruns(lab.agents);
   const title = (view: AgentView): string | null =>
     props.threads.find((summary) => summary.thread.id === view.thread)?.thread.title ?? null;
   return (
@@ -224,6 +225,7 @@ function Members(props: {
             Lab total <b>{labTotal(lab.agents)}</b>
           </span>
         </p>
+        {earlier ? <p className="f-where">{earlier}</p> : null}
         <div className="f-add">
           <OpenFolder api={props.api} />
         </div>

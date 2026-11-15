@@ -170,3 +170,14 @@ export function labTotal(agents: readonly AgentView[]): string {
   const rest = `${tokens(unpriced)} tokens with cost not reported by the harness`;
   return priced.length > 0 ? `${money(usd)}, and ${rest}` : rest;
 }
+
+/**
+ * Return what the blind reruns of a lab from before agents took reruns cost, such as "Earlier blind reruns: $0.12.
+ * The lab total holds it.", or `null` for a lab without them. Their checkers have no row in the member list, and
+ * the lab total still holds their cost, so this line makes the rows and the total agree.
+ */
+export function earlierReruns(agents: readonly AgentView[]): string | null {
+  const checkers = agents.filter((view) => view.agent.checks !== null);
+  if (checkers.length === 0) return null;
+  return `Earlier blind reruns: ${labTotal(checkers)}. The lab total holds it.`;
+}

@@ -428,6 +428,14 @@ class RenameLine(Record):
     was: str
 
 
+type RerunOpenTo = Literal['reviewer', 'any', 'none']
+"""
+Who can take a wanted rerun now. `reviewer`: an agent in a reviewer seat. `any`: any agent of the lab that did not
+write the post, because the lab has no reviewer seats or no agent in a reviewer seat can take it. `none`: no agent
+of the lab, as when the post's author is the lab's only agent.
+"""
+
+
 class RerunLine(Record):
     """
     A rerun that is wanted: somebody asked for an independent rerun of a post, and no check has answered it.
@@ -443,6 +451,8 @@ class RerunLine(Record):
     """When the first of them asked."""
     taken_by: tuple[AgentId, ...] = ()
     """The agents of the lab that took the rerun and have not posted its check yet. Empty when no agent took it."""
+    open_to: RerunOpenTo = 'reviewer'
+    """Who can take the rerun now."""
 
 
 class News(Record):
@@ -473,8 +483,9 @@ class News(Record):
     """The other agents whose name changed since, each once, with its name now and the name that it had before."""
     reruns: tuple[RerunLine, ...] = ()
     """
-    The reruns that somebody asked for since, that are still wanted, and that the agent can take with `take_rerun`.
-    An agent whose seat is on call has none here, and `brief` lists every wanted rerun.
+    The reruns that became wanted since and that the agent can take with `take_rerun`. A rerun is here once: a
+    later request for it adds nothing. After the agent got a reviewer seat, every wanted rerun that it can take is
+    here once. An agent whose seat is on call has none here, and `brief` lists every wanted rerun.
     """
     alarm: AlarmLine | None = None
     """The alarm that waits for the agent. `None` means that no alarm waits."""
@@ -562,8 +573,9 @@ class RerunTake(Record):
     """The commit that the post pins those files to. `folder` holds the author's files at this commit."""
     folder: str
     """
-    The clean copy, a folder inside the agent's own folder: the author's files at `commit`, and nothing else. A
-    `check` of the agent that replies to `post`, with the method `rerun`, takes its `files` as paths in this folder.
+    The clean copy, a folder of plain files inside the agent's own folder: the author's files at `commit`, and
+    nothing else. A `check` of the agent that replies to `post`, with the method `rerun`, takes its `files` as
+    paths in this folder. Verifold removes the folder after that check.
     """
     news: News | None = None
 
@@ -839,7 +851,8 @@ class Brief(Record):
     """
     reruns_wanted: tuple[RerunLine, ...] = ()
     """
-    The reruns that are wanted, newest last, at most `MAX_NEWS`: who asked for each, when, and which agents took it.
+    The reruns that are wanted, newest last, at most `MAX_NEWS`: who asked for each, when, which agents took it,
+    and in `open_to` who can take it now.
     """
     news: News
 
@@ -868,7 +881,7 @@ class Update(Record):
     renamed: tuple[RenameLine, ...] = ()
     """The other agents whose name changed since, each once, with its name now and the name that it had before."""
     reruns: tuple[RerunLine, ...] = ()
-    """The reruns that somebody asked for since, that are still wanted, and that the agent can take with `take_rerun`."""
+    """The reruns that became wanted since and that the agent can take with `take_rerun`, as in the news."""
     alarm: AlarmLine | None = None
     """The alarm that waits for the agent. `None` means that no alarm waits."""
     no_alarm: str = ''

@@ -224,8 +224,8 @@ class ReviewerSet(EventBase):
 
     A lab has a number of reviewer seats, which the person sets. An agent takes a free seat for itself and gives up
     the seat that it holds, and the person can give a seat to any agent or take it. A check of another agent's
-    post, a request for an independent rerun of another agent's post, and the taking of such a rerun take a
-    reviewer seat.
+    post and a request for an independent rerun of another agent's post take a reviewer seat. So does the taking
+    of such a rerun, while an agent in a reviewer seat can take it.
     """
 
     type: Literal['reviewer_set'] = 'reviewer_set'
@@ -277,8 +277,8 @@ class RerunTaken(EventBase):
     """
     An agent took the rerun of another agent's post that somebody asked for.
 
-    Verifold made a clean copy of the post's files for the agent, in the agent's own folder: the author's files at
-    `commit`, and nothing else. The agent's check of the post with the method `rerun` gets its files from that copy.
+    Verifold made a clean copy of the post's files for the agent, in the agent's own folder: plain files, exactly
+    the ones of `commit`. The agent's check of the post with the method `rerun` gets its files from that copy.
     """
 
     type: Literal['rerun_taken'] = 'rerun_taken'

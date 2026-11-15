@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 
 from verifold.protocol.ids import AgentId, CommitId
 from verifold.protocol.posts import FileEvidence
-from verifold.runner.git import commit_of, git
+from verifold.runner.git import GitError, commit_of, git
 from verifold.server.errors import EvidenceRejected
 
 _AUTHOR = {
@@ -27,18 +27,13 @@ def snapshot_ref(agent_id: AgentId) -> str:
     return f'refs/verifold/agents/{agent_id}'
 
 
-async def snapshot(folder: Path, agent_id: AgentId, ref: str | None = None) -> CommitId:
-    """
-    Commit the folder's current files onto the agent's snapshot ref, and return the commit.
-
-    With `ref`, the commit goes onto that ref, as for the clean copy of a rerun, which is no snapshot of the
-    agent's own folder.
-    """
+async def snapshot(folder: Path, agent_id: AgentId) -> CommitId:
+    """Commit the folder's current files onto the agent's snapshot ref, and return the commit."""
     with tempfile.TemporaryDirectory() as temporary:
         index = {'GIT_INDEX_FILE': str(Path(temporary) / 'index')}
         await git('add', '--all', '.', cwd=folder, env=index)
         tree = await git('write-tree', cwd=folder, env=index)
-    ref = ref or snapshot_ref(agent_id)
+    ref = snapshot_ref(agent_id)
     parent = await commit_of(folder, ref)
     commit = await git(
         'commit-tree',
@@ -53,25 +48,25 @@ async def snapshot(folder: Path, agent_id: AgentId, ref: str | None = None) -> C
     return commit
 
 
-async def pin(
-    folder: Path, agent_id: AgentId, paths: tuple[str, ...], ref: str | None = None
-) -> tuple[FileEvidence, ...]:
+async def pin(folder: Path, agent_id: AgentId, paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
     """
-    Snapshot the folder and pin each path to the snapshot. With `ref`, the snapshot goes onto that ref.
+    Snapshot the folder and pin each path to the snapshot.
 
     Raises:
-        EvidenceRejected: A path is not a file in the folder, or Git ignores it.
+        EvidenceRejected: A path is not a file in the folder, Git ignores it, or Git could not commit the folder.
 
     """
     # Git names a file by its plain path, so `out/./a.md` is pinned as `out/a.md`.
     paths = tuple(str(PurePosixPath(path)) for path in paths)
     missing = [path for path in paths if not (folder / PurePosixPath(path)).is_file()]
     if missing:
-        raise EvidenceRejected(
-            f'These files are not in {"the clean copy" if ref else "your folder"}: {", ".join(missing)}.'
-        )
-    commit = await snapshot(folder, agent_id, ref)
-    tracked = set((await git('ls-tree', '-r', '--name-only', commit, cwd=folder)).splitlines())
+        raise EvidenceRejected(f'These files are not in your folder: {", ".join(missing)}.')
+    try:
+        commit = await snapshot(folder, agent_id)
+        tracked = set((await git('ls-tree', '-r', '--name-only', commit, cwd=folder)).splitlines())
+    except GitError as error:
+        # The agent reads this, so the failure comes back as one that the board's tools pass on.
+        raise EvidenceRejected(f'Verifold could not commit your folder, so it pinned no file: {error}') from error
     ignored = [path for path in paths if path not in tracked]
     if ignored:
         raise EvidenceRejected(f'Git ignores these files, so they cannot be evidence: {", ".join(ignored)}.')
