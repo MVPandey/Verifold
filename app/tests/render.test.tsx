@@ -7,10 +7,12 @@ import type { Api } from '../src/api/client.ts';
 import type {
   AnswerView,
   HarnessOption,
+  LabView,
   Post,
   SettingsView,
   ThreadView,
 } from '../src/api/types.ts';
+import { clock } from '../src/model/format.ts';
 import type { ThreadRead } from '../src/ui/hooks.ts';
 import { LabPage, QuestionForm, Wall } from '../src/ui/LabPage.tsx';
 import { Markdown } from '../src/ui/Markdown.tsx';
@@ -1026,6 +1028,58 @@ describe('an invitation', () => {
     // Only an invited agent has the way to a new invitation, and it is no member in the count before it posts.
     assert.equal(html.split('>Invite again</button>').length, 2);
     assert.ok(html.includes('0 of 1 member working'));
+  });
+});
+
+describe('a member that is in no turn', () => {
+  const idle = { state: 'idle', detail: '', at: '2026-11-06T12:37:00Z' } as const;
+  const rings = '2026-11-06T14:20:00Z';
+  const agents = [
+    agentView('agent-1', {
+      activity: idle,
+      turn_ended_at: idle.at,
+      alarm: { minutes: 10, quiet: false, rings_at: rings },
+    }),
+    agentView('agent-2', { activity: idle, turn_ended_at: idle.at }),
+  ];
+  const list = (lab: LabView): string =>
+    renderToStaticMarkup(
+      <Top
+        folder="~/code/sort-bench"
+        route={{ page: 'lab' }}
+        open={{
+          lab,
+          threads: [],
+          harnesses: HARNESSES,
+          needs: 0,
+          now: new Date('2026-11-06T14:12:00Z'),
+          api: {} as Api,
+          onChange: () => undefined,
+        }}
+      />,
+    );
+
+  it('shows the time of its alarm, or that only a post wakes it', () => {
+    const html = list(labView({ agents }));
+    assert.ok(
+      html.includes(`<span class="dot idle"></span> Waits for its alarm at ${clock(rings)}.</p>`),
+    );
+    assert.ok(
+      html.includes(
+        'Its last turn ended 1 h 35 min ago, and no alarm is set. A post for it wakes it.</p>',
+      ),
+    );
+  });
+
+  it('names no alarm in a lab that is closed or out of time', () => {
+    for (const lab of [
+      labView({ agents, state: 'closed' }),
+      labView({ agents, out_of_time: true }),
+    ]) {
+      const html = list(lab);
+      assert.ok(!html.includes('alarm'));
+      assert.equal(html.split('<span class="dot idle"></span> Idle, 1 h 35 min</p>').length, 3);
+    }
   });
 });
 

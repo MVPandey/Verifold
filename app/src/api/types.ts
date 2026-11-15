@@ -75,6 +75,15 @@ export interface AgentLeft {
   readonly reason: string;
 }
 
+/** The alarm that an agent set for itself. It stays until it rings. */
+export interface AlarmLine {
+  readonly minutes: number;
+  /** Whether the alarm rings when the board got no post for `minutes`. */
+  readonly quiet: boolean;
+  /** When the alarm rings as the lab stands. `null` while the lab is out of time or closed. */
+  readonly rings_at: string | null;
+}
+
 export interface AgentView {
   readonly agent: Agent;
   /** What the agent says that it is to the lab, in its own words. */
@@ -89,6 +98,10 @@ export interface AgentView {
   /** Whether Verifold stopped the agent because its harness failed too often. The person can start it again. */
   readonly stopped: boolean;
   readonly turns: number;
+  /** When the agent's last turn ended, or `null` when none ended. */
+  readonly turn_ended_at: string | null;
+  /** The alarm that waits for the agent, or `null`. */
+  readonly alarm: AlarmLine | null;
   readonly posts: number;
   readonly usage: Usage;
   /** `null` when the harness reports tokens only. */

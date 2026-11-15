@@ -43,7 +43,7 @@ from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
-from verifold.society.lifecycle import close_count, lab_state
+from verifold.society.lifecycle import alarm_line, close_count, lab_state
 from verifold.society.lines import lines_of
 from verifold.society.standing import agreed, closing
 from verifold.society.turns import before
@@ -296,6 +296,8 @@ def _agent_view(board: Board, activity: Activity, agent_id: str, working: dict[A
         # The record says so until the agent's next turn starts. The person's new start shows at once.
         stopped=before(board, agent_id).stopped and activity.of(agent_id).state == 'stopped',
         turns=len(turns),
+        turn_ended_at=next((turn.at for turn in reversed(turns) if not turn.no_turn), None),
+        alarm=alarm_line(board, agent_id),
         posts=sum(entry.post.author == agent_id for entry in board.posts),
         usage=Usage(
             input_tokens=sum(turn.usage.input_tokens for turn in turns),

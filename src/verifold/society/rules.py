@@ -195,12 +195,16 @@ def check_turn(board: Board, turn: TurnStarted | TurnEnded) -> None:
     Check that a turn belongs to an agent in the lab, and that only a blind checker's turn ends a rerun.
 
     Raises:
-        RejectedEvent: The agent is not in the lab, or the turn ends a rerun and the agent is not a blind checker.
+        RejectedEvent: The agent is not in the lab, the turn starts with the ring of an alarm that the agent did
+            not set, or the turn ends a rerun and the agent is not a blind checker.
 
     """
     joined = board.agent(turn.agent)
     if not joined:
         raise RejectedEvent(f'{turn.agent} is not an agent in this lab.')
+    rang = turn.rang if isinstance(turn, TurnStarted) else None
+    if rang is not None and not any(alarm.seq == rang and alarm.agent == turn.agent for alarm in board.alarms):
+        raise RejectedEvent(f'Event {rang} is no alarm of {turn.agent}, so it cannot ring for this turn.')
     if isinstance(turn, TurnEnded) and turn.rerun_failed and not joined.agent.checks:
         raise RejectedEvent(f'{turn.agent} is not a blind checker, so its turn cannot end a rerun.')
 

@@ -126,9 +126,9 @@ class RecordBuilder:
         self.events.append(turn)
         return self
 
-    def start(self, agent_id: str, seen: int, session: str = 'session-1') -> 'RecordBuilder':
+    def start(self, agent_id: str, seen: int, session: str = 'session-1', rang: int | None = None) -> 'RecordBuilder':
         seq, at = self._stamp()
-        self.events.append(TurnStarted(seq=seq, at=at, agent=agent_id, session=session, seen=seen))
+        self.events.append(TurnStarted(seq=seq, at=at, agent=agent_id, session=session, seen=seen, rang=rang))
         return self
 
     def time_set(self, ends_at: datetime) -> 'RecordBuilder':
