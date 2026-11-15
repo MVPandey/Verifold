@@ -67,6 +67,8 @@ class PostRequest(Record):
     outcome: Outcome | None = None
     method: CheckMethod | None = None
     choices: tuple[Choice, ...] = Field(default=(), max_length=MAX_CHOICES)
+    choice: Choice | None = None
+    """On an answer: the choice of the ask that the author picked. The person's app sends it for a press."""
 
     @model_validator(mode='after')
     def _one_thread(self) -> Self:

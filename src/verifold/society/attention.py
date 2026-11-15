@@ -211,6 +211,9 @@ def _names(board: Board, agent_id: AgentId, post: Post) -> bool:
         return True
     if isinstance(post, Check) and any(rerun.by == agent_id and rerun.post == post.reply_to for rerun in board.reruns):
         return True
+    # An ask that carries a harness's request shows a command or a tool's input. A name in that text names nobody.
+    if isinstance(post, Ask) and post.request:
+        return False
     return agent_id in _in_text(f'{post.text}\n{post.body}', _workers(board))
 
 

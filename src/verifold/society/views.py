@@ -28,7 +28,7 @@ from verifold.society.errors import NotFound
 from verifold.society.lifecycle import alarm_line, lab_state
 from verifold.society.lines import lines_of, question_thread
 from verifold.society.rules import blind_checks
-from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing
+from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing, waits_for_person
 
 
 def post_view(board: Board, entry: Posted) -> PostView:
@@ -328,6 +328,7 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
     Return the asks that name the person and have no answer from the person yet, oldest first.
 
     Permission requests are asks too. An agent's answer leaves an ask open, because the asker waits for the person.
+    An ask that carried a harness's request is not among them after Verifold ended the request.
     The ask of an agent that left is not among them: nobody waits for its answer.
     """
     return tuple(
@@ -335,7 +336,7 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
         for entry in board.posts
         if isinstance(entry.post, Ask)
         and PERSON in entry.post.mentions
-        and not is_answered(board, entry.post.id, by=PERSON)
+        and waits_for_person(board, entry.post.id)
         and not board.gone(entry.post.author)
     )
 

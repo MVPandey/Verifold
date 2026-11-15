@@ -5,12 +5,12 @@ import type { AgentView, HarnessOption, PostView } from '../api/types.ts';
 import { face, harnessTitle, ownName } from '../model/agents.ts';
 import { duration, minutesBetween } from '../model/format.ts';
 import { orderNeeds, pauses } from '../model/needs.ts';
-import { isPermission, personAnswer } from '../model/posts.ts';
+import { choiceGroups, harnessRequest, personAnswer } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { messageOf } from '../api/client.ts';
 import type { PageProps } from './hooks.ts';
 import { Words } from './Markdown.tsx';
-import { FaceView } from './parts.tsx';
+import { FaceView, HarnessAsk } from './parts.tsx';
 
 /** Everything that waits for the person's answer. Requests that pause an agent come first. */
 export function NeedsPage({ api, data, now }: PageProps): ReactElement {
@@ -59,8 +59,12 @@ function NeedCard(props: {
   // Two checkers can ask at once, so each keeps its own name here.
   const name = ownName(props.agents, post.author);
   const agent = props.agents.find((view) => view.agent.id === post.author);
-  const permission = isPermission(post);
+  const request = harnessRequest(post);
+  const permission = request === 'permission';
   const choices = post.kind === 'ask' ? post.choices : [];
+  // A request of a harness shows from its recorded data, never from the body's text.
+  const shown = post.kind === 'ask' ? (post.shown ?? null) : null;
+  const groups = choiceGroups(choices, shown);
   const paused = props.paused;
 
   const send = (): void => {
@@ -80,33 +84,42 @@ function NeedCard(props: {
         {agent ? (
           <span className="f-tag">{harnessTitle(props.harnesses, agent.agent.harness)}</span>
         ) : null}
-        <span className="kind">{permission ? 'Permission request' : 'Asks you'}</span>
+        <span className="kind">
+          {permission ? 'Permission request' : request ? 'Question from its harness' : 'Asks you'}
+        </span>
         <span className="wait">Waiting {duration(minutesBetween(at, props.now))}</span>
       </div>
       <div className="nbody">
         <p className="nq">
           {permission ? post.text.replace(/^Permission needed:\s*/, '') : post.text}
         </p>
-        {post.body ? <Words text={post.body} /> : null}
+        {shown ? (
+          <HarnessAsk shown={shown} name={name} />
+        ) : post.body ? (
+          <Words text={post.body} />
+        ) : null}
         {paused ? (
           <p className="blocking">
             <span className="dot wait" /> {name} is paused until you answer.
           </p>
         ) : null}
-        {choices.length > 0 ? (
-          <div className="opts">
-            {choices.map((option) => (
-              <button
-                key={option}
-                type="button"
-                aria-pressed={choice === option}
-                onClick={() => setChoice(choice === option ? null : option)}
-              >
-                {option}
-              </button>
-            ))}
+        {groups.map((group) => (
+          <div key={group.label ?? 'choices'}>
+            {group.label ? <p className="says">{group.label}</p> : null}
+            <div className="opts">
+              {group.options.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  aria-pressed={choice === option.label}
+                  onClick={() => setChoice(choice === option.label ? null : option.label)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
           </div>
-        ) : null}
+        ))}
         <div className="own">
           <label htmlFor={wordsId}>
             {choices.length > 0 ? 'Or answer in your own words' : 'Your answer'}
@@ -120,8 +133,8 @@ function NeedCard(props: {
           {permission ? (
             <p className="note">
               Your words go to {name} with the option you pick. Without an option, Verifold reads
-              your words: naming an option picks it, a yes allows once, and a no or anything unclear
-              rejects.
+              your words: the name of an option picks it, a plain “yes” allows once, and a “no”
+              rejects. Any other answer leaves the request open.
             </p>
           ) : null}
         </div>

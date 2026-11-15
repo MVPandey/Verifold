@@ -3,7 +3,9 @@ import type {
   HarnessOption,
   LabView,
   Offer,
+  PermissionShown,
   Post,
+  QuestionShown,
   SetupDefaults,
   PostView,
   ThreadSummary,
@@ -112,7 +114,13 @@ export function result(id: string, changes: Partial<Post> = {}): Post {
   } as Post;
 }
 
-export function ask(id: string, author: string, choices: readonly string[] = []): Post {
+export function ask(
+  id: string,
+  author: string,
+  choices: readonly string[] = [],
+  request: 'permission' | 'question' | null = 'permission',
+  shown: PermissionShown | QuestionShown | null = null,
+): Post {
   return {
     id,
     thread: 't-2',
@@ -126,6 +134,8 @@ export function ask(id: string, author: string, choices: readonly string[] = [])
     evidence: [],
     kind: 'ask',
     choices,
+    request,
+    shown,
   };
 }
 
@@ -184,7 +194,11 @@ export function labView(changes: Partial<LabView> = {}): LabView {
     close: null,
     close_agreed: 0,
     close_among: 0,
-    settings: { version: 1, jobs: { at_time_limit: 'pause', at_exit: 'stop' } },
+    settings: {
+      version: 1,
+      jobs: { at_time_limit: 'pause', at_exit: 'stop' },
+      permissions: { while_you_decide: 'auto' },
+    },
     ...changes,
   };
 }

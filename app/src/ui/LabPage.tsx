@@ -618,7 +618,11 @@ function Need(props: {
   return (
     <a className="f-need" href={href({ page: 'needs' })}>
       <b>{isPermission(first.post) ? `${name} asks for permission` : `${name} needs you`}</b>
-      <span>{first.post.text.replace(/^Permission needed:\s*/, '')}</span>
+      <span>
+        {isPermission(first.post)
+          ? first.post.text.replace(/^Permission needed:\s*/, '')
+          : first.post.text}
+      </span>
       {more > 0 ? (
         <small>{more === 1 ? 'One more ask waits.' : `${more} more asks wait.`}</small>
       ) : null}

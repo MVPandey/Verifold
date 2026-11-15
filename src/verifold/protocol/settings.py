@@ -44,6 +44,23 @@ class JobSettings(Record):
     at_exit: AtExit = AtExit.STOP
 
 
+class WhileYouDecide(StrEnum):
+    """What an agent's harness gets while its permission request waits for the person's answer on the board."""
+
+    AUTO = 'auto'
+    """As the lab's auto mode: `refuse` in a lab that the person started in auto mode, and `wait` in any other."""
+    WAIT = 'wait'
+    """The request waits for the answer, as it does when the person runs the harness by hand."""
+    REFUSE = 'refuse'
+    """Verifold refuses the request at once, and the answer applies when the agent asks for the same again."""
+
+
+class PermissionSettings(Record):
+    """What Verifold does with a permission request of a harness that the person has to decide."""
+
+    while_you_decide: WhileYouDecide = WhileYouDecide.AUTO
+
+
 class Settings(Record):
     """
     The person's settings, with Verifold's defaults for anything they leave out.
@@ -54,6 +71,7 @@ class Settings(Record):
 
     version: Literal[1] = 1
     jobs: JobSettings = JobSettings()
+    permissions: PermissionSettings = PermissionSettings()
 
 
 class HarnessSettings(Record):
@@ -74,6 +92,13 @@ class HarnessSettings(Record):
     """The harness's own command, when `command` starts an adapter for it. Default: the first word of `command`."""
     auto_mode: str | None = None
     """The ID of the harness's own auto mode, which Verifold sets when the person allows auto mode."""
+    names_mcp_server: bool = False
+    """
+    Whether the harness itself writes the MCP server's name into a tool call's input, as `server`, beside `tool`.
+
+    Verifold then knows a call to the lab's own board and allows it without a question. Where the model writes the
+    input, the name proves nothing, so the default is off.
+    """
 
 
 class SetupDefaults(Record):
@@ -105,6 +130,7 @@ class SettingsFile(Record):
 
     version: Literal[1] = 1
     jobs: JobSettings = JobSettings()
+    permissions: PermissionSettings = PermissionSettings()
     setup: SetupDefaults = SetupDefaults()
     harnesses: dict[Label, HarnessSettings] = Field(default_factory=dict)
 
@@ -120,4 +146,4 @@ class SettingsFile(Record):
 
     def lab_settings(self) -> Settings:
         """Return the settings that a new lab records and follows."""
-        return Settings(version=self.version, jobs=self.jobs)
+        return Settings(version=self.version, jobs=self.jobs, permissions=self.permissions)

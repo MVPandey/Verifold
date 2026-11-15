@@ -1,4 +1,4 @@
-import type { Post, PostRequest, Standing } from '../api/types.ts';
+import type { PermissionShown, Post, PostRequest, QuestionShown, Standing } from '../api/types.ts';
 
 /** The look of a standing's chip, as the stylesheet names it. */
 export type ChipTone = 'ok' | 'hold' | 'dis' | 'con' | 'none';
@@ -67,17 +67,100 @@ export function personMessage(text: string, thread?: string): PostRequest | null
  * Return the person's answer to an ask, or `null` when they gave no choice and no words.
  *
  * A chosen option is the headline and the person's words become the body, so an agent's harness reads the option
- * first. Words alone are the whole answer.
+ * first. The answer also names the option as its `choice`, so Verifold can tell a press from words that only start
+ * like an option. Words alone are the whole answer.
  */
 export function personAnswer(ask: Post, choice: string | null, words: string): PostRequest | null {
   const typed = split(words);
   const text = choice ?? typed.headline;
   if (!text) return null;
   const body = choice ? words.trim() : typed.body;
-  return { kind: 'answer', thread: ask.thread, reply_to: ask.id, text, ...(body ? { body } : {}) };
+  return {
+    kind: 'answer',
+    thread: ask.thread,
+    reply_to: ask.id,
+    text,
+    ...(body ? { body } : {}),
+    ...(choice ? { choice } : {}),
+  };
 }
 
-/** Return whether an ask is a harness's permission request, which pauses its agent until the person answers. */
+/**
+ * Return text in the parts that a box shows: each run of at least `least` blank lines as its length, and the text
+ * between such runs as it is. A line with nothing but spaces and tabs is blank.
+ *
+ * A long run of blank lines can push the end of a command out of sight, so the box names the run instead.
+ */
+export function gaps(text: string, least = 5): readonly (string | number)[] {
+  const parts: (string | number)[] = [];
+  let kept: string[] = [];
+  let blank: string[] = [];
+  const close = (): void => {
+    if (blank.length >= least) {
+      if (kept.length > 0) parts.push(kept.join('\n'));
+      parts.push(blank.length);
+      kept = [];
+    } else {
+      kept.push(...blank);
+    }
+    blank = [];
+  };
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') {
+      blank.push(line);
+    } else {
+      close();
+      kept.push(line);
+    }
+  }
+  close();
+  if (kept.length > 0) parts.push(kept.join('\n'));
+  return parts;
+}
+
+/** The choices of an ask that belong together, under a label that says whose they are. */
+export interface ChoiceGroup {
+  readonly label: string | null;
+  readonly options: readonly { readonly key: string; readonly label: string }[];
+}
+
+/**
+ * Return the choices of an ask in groups: for a harness's request, the harness's own answers apart from Verifold's
+ * grant, each group with its label, so the two never look the same. Each choice has a stable key.
+ */
+export function choiceGroups(
+  choices: readonly string[],
+  shown: PermissionShown | QuestionShown | null,
+): readonly ChoiceGroup[] {
+  const keyed = (labels: readonly string[], ids: readonly string[] = []): ChoiceGroup['options'] =>
+    labels.map((label, index) => ({ key: `${index}:${ids[index] ?? label}`, label }));
+  if (choices.length === 0) return [];
+  // The ask about a request that is too long to show has Verifold's own choice only.
+  if (shown === null || (shown.type === 'permission' && shown.notes.includes('too_long'))) {
+    return [{ label: null, options: keyed(choices) }];
+  }
+  if (shown.type === 'question')
+    return [{ label: 'The harness’s options', options: keyed(choices) }];
+  const own = shown.grant === null ? choices : choices.slice(0, -1);
+  const harness = { label: 'The harness’s answers', options: keyed(own, shown.ids) };
+  if (shown.grant === null) return [harness];
+  const grant = {
+    label: 'Verifold’s grant for every agent',
+    options: keyed(choices.slice(-1), ['grant']),
+  };
+  return own.length > 0 ? [harness, grant] : [grant];
+}
+
+/**
+ * Return what an ask carries for its author's harness: a permission request, a question to its user, or nothing.
+ *
+ * Verifold records it on the ask, and no agent can. So an agent's own ask that only looks like one carries nothing.
+ */
+export function harnessRequest(post: Post): 'permission' | 'question' | null {
+  return post.kind === 'ask' ? (post.request ?? null) : null;
+}
+
+/** Return whether an ask is a harness's permission request. */
 export function isPermission(post: Post): boolean {
-  return post.kind === 'ask' && post.text.startsWith('Permission needed:');
+  return harnessRequest(post) === 'permission';
 }

@@ -36,6 +36,17 @@ def standing(board: Board, post_id: PostId) -> Standing:
     return 'checked' if checks else 'open'
 
 
+def waits_for_person(board: Board, post_id: PostId) -> bool:
+    """
+    Return whether an ask still waits for the person: the person gave no answer, and Verifold did not end it.
+
+    Verifold ends an ask that carries a request of a harness when the request ends without the person, as when the
+    agent's turn ends. An agent's own answer ends nothing, because no agent can mark it so.
+    """
+    replies = [entry.post for entry in board.replies(post_id) if isinstance(entry.post, Answer)]
+    return not any(reply.author == PERSON or reply.ends_request for reply in replies)
+
+
 def is_answered(board: Board, post_id: PostId, by: AgentId | None = None) -> bool:
     """Return whether an answer replies to a post: any answer, or with `by`, an answer from that author."""
     return any(

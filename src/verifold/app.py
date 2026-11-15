@@ -43,7 +43,7 @@ from verifold.runner.folders import LAB_FOLDER, agent_folder, agents_folder, ope
 from verifold.runner.git import GitError, git
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, running_jobs, sweep
 from verifold.runner.messages import invitation, start_message
-from verifold.runner.permissions import GrantAsks
+from verifold.runner.permissions import Refusals
 from verifold.runner.reruns import Crew, Reruns
 from verifold.runner.session import Place, SessionOptions, offer_of
 from verifold.runner.snapshots import pin
@@ -168,7 +168,7 @@ class Host:
         self._settings: LoopSettings | None = None
         self._swept: Callable[[Sweep], None] = _ignore
         self._offers: dict[str, Offer] = {}
-        self._grant_asks: GrantAsks | None = None
+        self._refusals: Refusals | None = None
         self._probing: set[str] = set()
         self._adding = asyncio.Lock()
         self._loops: dict[AgentId, asyncio.Task[None]] = {}
@@ -315,15 +315,15 @@ class Host:
         revisions = {SettingsLevel.PROJECT: change.revisions.project, SettingsLevel.ALL: change.revisions.all_projects}
         values = change_setting(paths, change.level, change.key, _written(change.value), revisions)
         decides = change.level is SettingsLevel.PROJECT or not _holds(values[SettingsLevel.PROJECT], change.key)
-        # The choices for new labs don't change a running lab. Only the job settings do.
-        if self._lab is not None and decides and change.key.startswith('jobs.'):
-            name = change.key.removeprefix('jobs.')
-            chosen = getattr(settings_of(values).jobs, name)
+        # The choices for new labs don't change a running lab. Only the settings that a lab follows do.
+        if self._lab is not None and decides and change.key != 'setup':
+            section, name = change.key.split('.')
+            chosen = getattr(getattr(settings_of(values), section), name)
             running = self._lab.board.settings
             # The lab follows the person's choice, also when the files held it already but the lab doesn't.
-            if getattr(running.jobs, name) != chosen:
-                jobs = running.jobs.model_copy(update={name: chosen})
-                await self._lab.set_settings(running.model_copy(update={'jobs': jobs}))
+            if getattr(getattr(running, section), name) != chosen:
+                changed = getattr(running, section).model_copy(update={name: chosen})
+                await self._lab.set_settings(running.model_copy(update={section: changed}))
         return self.settings()
 
     def setup(self) -> SetupView:
@@ -385,7 +385,7 @@ class Host:
         self._lab = lab
         chosen = [choice for choice in request.agents for _ in range(choice.count)]
         for number, choice in enumerate(chosen, start=1):
-            await lab.join(_agent(number, self._catalog[choice.harness], choice))
+            await lab.join(_agent(number, self._catalog[choice.harness], choice, auto_mode=request.auto_mode))
         await self._launch()
 
     async def resume(self) -> None:
@@ -413,8 +413,8 @@ class Host:
             writing.write_text(WRITING_TEMPLATE)
         group.create_task(keep_time(lab))
         group.create_task(keep_jobs(lab, self._project, self._swept))
-        self._grant_asks = GrantAsks(lab)
-        group.create_task(self._grant_asks.run())
+        self._refusals = Refusals(lab)
+        group.create_task(self._refusals.run())
         # A lab that is served again is under way for all of its agents. A new lab is so for none of them.
         under_way = bool(lab.board.turns or lab.board.starts)
         for agent in self._workers(lab):
@@ -523,7 +523,7 @@ class Host:
             if members + choice.count > MAX_AGENTS:
                 raise SetupRejected(f'A lab has at most {MAX_AGENTS} agents, and this one has {members}.')
             for _ in range(choice.count):
-                agent = _agent(_free_number(lab.board), entry, choice)
+                agent = _agent(_free_number(lab.board), entry, choice, auto_mode=lab.board.opened.auto_mode)
                 # The folder comes first. An agent that the record holds and that has no folder could never start.
                 try:
                     await agent_folder(self._project, agent.id)
@@ -637,7 +637,7 @@ class Host:
         await self._activity.invite(agent.id, 'here' if called else 'invited')
 
     def _shared(self) -> Shared:
-        return Shared(activity=self._activity, grant_asks=self._grant_asks, has_jobs=self._has_jobs)
+        return Shared(activity=self._activity, refusals=self._refusals, has_jobs=self._has_jobs)
 
     async def _has_jobs(self, agent: str) -> bool:
         return bool(await asyncio.to_thread(running_jobs, self._project, agent))
@@ -654,7 +654,7 @@ class Host:
             folder=folder,
             log=self._project / LAB_FOLDER / 'logs' / f'{agent.id}.log',
             token=self._members.add(member),
-            options=_options(agent, auto_mode=lab.board.opened.auto_mode),
+            options=_options(agent, self._catalog[agent.harness], auto_mode=lab.board.opened.auto_mode),
             start=start,
         )
         return member, setup
@@ -859,8 +859,11 @@ def _is_free(port: int) -> bool:
     return True
 
 
-def _agent(number: int, harness: HarnessEntry, choice: AgentChoice) -> Agent:
+def _agent(number: int, harness: HarnessEntry, choice: AgentChoice, *, auto_mode: bool) -> Agent:
+    # The agent's record keeps the harness's auto mode of today, so a later change of the catalog leaves this lab
+    # as it is.
     return Agent(
+        auto_mode=harness.auto_mode if auto_mode else None,
         id=f'agent-{number}',
         name=f'Agent {number}',
         harness=harness.name,
@@ -869,8 +872,16 @@ def _agent(number: int, harness: HarnessEntry, choice: AgentChoice) -> Agent:
     )
 
 
-def _options(agent: Agent, *, auto_mode: bool) -> SessionOptions:
-    return SessionOptions(model=agent.model.name, effort=agent.model.effort, mode=agent.mode, auto_mode=auto_mode)
+def _options(agent: Agent, harness: HarnessEntry, *, auto_mode: bool) -> SessionOptions:
+    """
+    Return what Verifold sets in the agent's harness session.
+
+    The person's own mode for the agent wins. In a lab in auto mode, the agent runs in the auto mode that its
+    record holds. A record from before Verifold kept it goes on with the auto mode that Verifold set then.
+    """
+    kept = agent.auto_mode or harness.auto_mode_before
+    mode = agent.mode or (kept if auto_mode else None)
+    return SessionOptions(model=agent.model.name, effort=agent.model.effort, mode=mode, auto_mode=auto_mode)
 
 
 def _crew(agents: tuple[Agent, ...], catalog: Mapping[str, HarnessEntry], *, auto_mode: bool) -> Crew:
@@ -880,7 +891,7 @@ def _crew(agents: tuple[Agent, ...], catalog: Mapping[str, HarnessEntry], *, aut
     first = {agent.harness: agent for agent in reversed(agents)}
     harnesses = dict.fromkeys(agent.harness for agent in agents)
     return tuple(
-        (catalog[name], _options(first[name].model_copy(update={'mode': None}), auto_mode=auto_mode))
+        (catalog[name], _options(first[name].model_copy(update={'mode': None}), catalog[name], auto_mode=auto_mode))
         for name in harnesses
     )
 

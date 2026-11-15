@@ -28,7 +28,7 @@ from verifold.protocol.events import (
 )
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import PostRequest
-from verifold.protocol.posts import MAX_HEADLINE, FileEvidence
+from verifold.protocol.posts import MAX_HEADLINE, Answer, Ask, FileEvidence, Mark, PermissionShown, QuestionShown
 from verifold.protocol.settings import Settings
 from verifold.protocol.threads import QUESTION_TITLE, Thread
 from verifold.server.changes import wait_until
@@ -127,12 +127,15 @@ class Lab:
         author: AgentId,
         evidence: tuple[FileEvidence, ...] = (),
         question_seen: int | None = None,
+        mark: Mark | None = None,
     ) -> Posted:
         """
         Add a post with the next free post ID. With `new_thread`, open its thread in the same step.
 
         With `between` too, that thread is a side thread between the author and the agents that `between` names.
         `question_seen` is how many revisions of the question the author had been shown, which a proposal keeps.
+        `mark` marks an ask that carries a request of the author's harness, or the answer with which Verifold ends
+        such a request. Only the runner gives it. A post from an agent's tool or from the person has none.
 
         Raises:
             RejectedEvent: The post breaks a rule of the record.
@@ -140,7 +143,7 @@ class Lab:
 
         """
         opens = (_open_thread(request.new_thread, author, request.between),) if request.new_thread else ()
-        board = await self._commit(*opens, _add_post(request, author, evidence, question_seen))
+        board = await self._commit(*opens, _add_post(request, author, evidence, question_seen, mark))
         return board.posts[-1]
 
     async def open_question_thread(self) -> Posted:
@@ -331,11 +334,20 @@ def _open_thread(title: str, opened_by: AgentId, between: tuple[AgentId, ...] = 
 
 
 def _add_post(
-    request: PostRequest, author: AgentId, evidence: tuple[FileEvidence, ...], question_seen: int | None = None
+    request: PostRequest,
+    author: AgentId,
+    evidence: tuple[FileEvidence, ...],
+    question_seen: int | None = None,
+    mark: Mark | None = None,
 ) -> Build:
     def build(board: Board, seq: int, at: datetime) -> Posted:
         thread_id = request.thread or board.threads[-1].thread.id
         post = request.to_post(f'p-{len(board.posts) + 1}', thread_id, author, evidence, question_seen)
+        # No field of a request holds a mark, so no agent and no person's post can carry one.
+        if isinstance(post, Answer) and mark == 'ends_request':
+            post = post.model_copy(update={'ends_request': True})
+        elif isinstance(post, Ask) and isinstance(mark, PermissionShown | QuestionShown):
+            post = post.model_copy(update={'request': mark.type, 'shown': mark})
         return Posted(seq=seq, at=at, post=post)
 
     return build

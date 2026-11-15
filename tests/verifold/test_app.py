@@ -22,7 +22,8 @@ from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import TypeAdapter
 
-from verifold.app import WRITING_TEMPLATE, ServeHooks, ServeOptions, WebServer, serve
+from verifold.app import WRITING_TEMPLATE, ServeHooks, ServeOptions, WebServer, _agent, _options, serve
+from verifold.harnesses.catalog import CATALOG as BUILT_IN
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent, AgentChoice, ModelSpec
 from verifold.protocol.app import StartRequest
@@ -209,6 +210,50 @@ async def test_a_resumed_lab_keeps_its_agents_and_the_persons_edits_to_its_norms
     assert norms.read_text() == '# Our own rules\n'
     resumed = [call for call in calls(log) if call['event'] == 'mode'][2:]
     assert sorted(call['agent'] for call in resumed) == ['agent-1', 'agent-2']
+
+
+async def test_a_lab_that_resumes_keeps_the_auto_mode_that_its_agents_ran_with(project: Path, log: Path) -> None:
+    def modes() -> list[object]:
+        return [call['mode'] for call in calls(log) if call['event'] == 'mode']
+
+    # The catalog changes between the runs, as when a new Verifold gives the harness another auto mode.
+    then = {'fake': FAKE_HARNESS.model_copy(update={'auto_mode': 'ask'})}
+    now = {'fake': FAKE_HARNESS.model_copy(update={'auto_mode': 'auto', 'auto_mode_before': 'ask'})}
+    async with serving(project, ONE_AGENT, catalog=then):
+        await until(lambda: len(posts(project)) == 1)
+    joined = next(event for event in record(project) if isinstance(event, AgentJoined))
+    async with serving(project, catalog=now):
+        await until(lambda: len(modes()) == 2)
+    # A record from before Verifold kept the mode with the agent holds none. That lab goes on with the mode from then.
+    path = project / '.verifold' / 'record.jsonl'
+    path.write_text(path.read_text().replace('"auto_mode":"ask",', '', 1))
+    old = next(event for event in record(project) if isinstance(event, AgentJoined))
+    async with serving(project, catalog=now):
+        await until(lambda: len(modes()) == 3)
+    async with serving(project, catalog={'fake': FAKE_HARNESS}):
+        await until(lambda: len(modes()) == 4)
+
+    assert (joined.agent.auto_mode, old.agent.auto_mode) == ('ask', None)
+    assert modes() == ['ask', 'ask', 'ask', 'auto']
+
+
+def test_the_built_in_codex_entry_keeps_its_earlier_auto_mode_for_the_labs_from_before() -> None:
+    codex = BUILT_IN['codex']
+    before = Agent(id='agent-1', name='Agent 1', harness='codex', model=ModelSpec(family='openai'))
+    new = _agent(2, codex, AgentChoice(harness='codex'), auto_mode=True)
+    chosen = _agent(3, codex, AgentChoice(harness='codex', mode='read-only'), auto_mode=True)
+
+    assert (codex.auto_mode, codex.auto_mode_before, new.auto_mode) == ('agent', 'workspace-write', 'agent')
+    assert _options(before, codex, auto_mode=True).mode == 'workspace-write'
+    assert _options(new, codex, auto_mode=True).mode == 'agent'
+    assert _options(chosen, codex, auto_mode=True).mode == 'read-only'
+    assert _options(before, codex, auto_mode=False).mode is None
+    assert _agent(4, codex, AgentChoice(harness='codex'), auto_mode=False).auto_mode is None
+    # A harness without an earlier mode goes by the catalog, as before.
+    assert (
+        _options(before.model_copy(update={'harness': 'claude-code'}), BUILT_IN['claude-code'], auto_mode=True).mode
+        is None
+    )
 
 
 def turns(project: Path) -> list[TurnEnded]:
@@ -1027,6 +1072,23 @@ async def test_a_lab_follows_the_settings_from_when_it_opened(project: Path) -> 
     assert kept == [AtTimeLimit.STOP]
 
 
+@pytest.mark.parametrize('value', ['wait', 'refuse'])
+async def test_a_projects_file_says_whether_agents_wait_in_a_lab_that_starts_without_the_setup_screen(
+    project: Path, value: str
+) -> None:
+    # `verifold run` starts a lab like this one, without showing the saved choices. A project's file can still hold
+    # either value, because neither lets an answer allow more: a typed yes allows once under both.
+    folder = project / '.verifold'
+    folder.mkdir(exist_ok=True)
+    (folder / 'settings.json').write_text(json.dumps({'permissions': {'while_you_decide': value}}))
+
+    async with serving(project, ONE_AGENT):
+        await until(lambda: any(isinstance(event, SettingsSet) for event in record(project)))
+
+    kept = [event.settings.permissions.while_you_decide for event in record(project) if isinstance(event, SettingsSet)]
+    assert kept == [value]
+
+
 async def test_the_persons_change_applies_to_the_running_lab_but_an_agents_edit_does_not(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1051,7 +1113,11 @@ async def test_the_persons_change_applies_to_the_running_lab_but_an_agents_edit_
         'path': '~/.verifold/settings.json',
         'values': {},
         'revision': '',
-        'settings': {'version': 1, 'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'}},
+        'settings': {
+            'version': 1,
+            'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'},
+            'permissions': {'while_you_decide': 'auto'},
+        },
         'defaults': {'agents': None, 'auto_mode': True, 'minutes': None},
     }
     assert after['all_projects']['values'] == {'jobs': {'at_time_limit': 'stop'}}
@@ -1064,6 +1130,27 @@ async def test_the_persons_change_applies_to_the_running_lab_but_an_agents_edit_
         (AtTimeLimit.PAUSE, AtExit.STOP),
         (AtTimeLimit.STOP, AtExit.STOP),
     ]
+
+
+async def test_the_persons_choice_for_permission_requests_applies_to_the_running_lab(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('HOME', str(project.parent))
+    async with serving(project, ONE_AGENT) as client:
+        await until(lambda: any(isinstance(event, SettingsSet) for event in record(project)))
+        before = (await client.get('/settings')).json()
+        change = {
+            'level': 'all',
+            'key': 'permissions.while_you_decide',
+            'value': 'refuse',
+            'revisions': revisions_of(before),
+        }
+        after = (await client.post('/settings', json=change)).json()
+
+    assert before['lab']['permissions'] == {'while_you_decide': 'auto'}
+    assert after['all_projects']['values'] == {'permissions': {'while_you_decide': 'refuse'}}
+    assert after['lab']['permissions'] == {'while_you_decide': 'refuse'}
+    assert after['lab']['jobs'] == before['lab']['jobs']
 
 
 def revisions_of(view: dict[str, dict[str, str]]) -> dict[str, str]:

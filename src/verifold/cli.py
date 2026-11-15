@@ -320,7 +320,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument(
         '--ask-me',
         action='store_true',
-        help="Keep each harness's own default mode. Permission requests then come to you on the board.",
+        help="Keep each harness's own default mode. The requests that a harness sends then come to you on the board.",
     )
     run.add_argument(
         '--allow',
