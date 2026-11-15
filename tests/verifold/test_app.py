@@ -1506,6 +1506,8 @@ async def test_an_on_call_agent_that_a_post_names_while_the_lab_is_out_of_time_s
     async with serving(project, ON_CALL, {'fake': FAKE_HARNESS}) as client:
         await until(lambda: turns_of(project, 'agent-1') == 1, timeout=60)
         await client.post('/time', json={'minutes': 0})
+        # The record says that the lab is out of time a moment after the person stops it. The ask comes after that.
+        await until(lambda: any(isinstance(event, TimeRanOut) for event in record(project)))
         ask = {'kind': 'ask', 'text': 'A hard one.', 'thread': 't-1', 'mentions': ['agent-2']}
         assert (await client.post('/posts', json=ask)).status_code == 200
         idle = await state_of(client, 'agent-2')
