@@ -2,10 +2,11 @@
 
 import argparse
 import asyncio
+import os
 import signal
 import sys
 import webbrowser
-from collections.abc import Coroutine, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from contextlib import suppress
 from functools import partial
 from importlib.metadata import version
@@ -14,19 +15,24 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from verifold import DISTRIBUTION
-from verifold.app import ServeHooks, serve, stop_lab
+from verifold.app import SERVER_FILE, ServeHooks, serve, stop_lab
 from verifold.harnesses.catalog import CATALOG, HarnessEntry, available, catalog_with
 from verifold.protocol.agents import MAX_AGENTS, AgentChoice
 from verifold.protocol.app import StartRequest
 from verifold.protocol.settings import SettingsLevel, SetupDefaults
 from verifold.runner.errors import RunnerError
+from verifold.runner.folders import LAB_FOLDER
 from verifold.runner.jobs import Job, Sweep
 from verifold.server.errors import ServerError, SetupRejected
 from verifold.store.errors import SettingsInvalid, StoreError
+from verifold.store.server_file import mark_opens, named_server, running_server
 from verifold.store.settings_file import read_settings_file, settings_of, settings_path
 
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 """Ctrl+C, a plain `kill`, and a closed terminal. Each one stops the lab in the same way."""
+
+OPEN_SIGNAL = signal.SIGUSR1
+"""What `verifold open` sends to the server. The server then prints the lab's link and opens it in the browser."""
 
 _REPORTED = (RunnerError, StoreError, ServerError)
 
@@ -46,14 +52,19 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.command == 'stop':
         _stop()
         return
+    if args.command == 'open':
+        _open()
+        return
     try:
         start = _start(args) if args.command == 'run' else None
     except (ValidationError, SettingsInvalid, SetupRejected) as error:
         sys.exit(f'verifold: {error}')
     _say(f'Serving Verifold for {Path.cwd()}. Its record is .verifold/record.jsonl. Press Ctrl+C to stop.')
     try:
-        announce = partial(_announce, open_browser=not args.no_browser, plan=_plan(start) if start else None)
-        asyncio.run(_until_stopped(serve(Path.cwd(), start, hooks=ServeHooks(ready=announce, swept=_report))))
+        links: list[str] = []
+        announce = partial(_announce, links, open_browser=not args.no_browser, plan=_plan(start) if start else None)
+        serving = serve(Path.cwd(), start, hooks=ServeHooks(ready=announce, swept=_report))
+        asyncio.run(_until_stopped(serving, partial(_open_again, links, open_browser=not args.no_browser)))
     except KeyboardInterrupt:
         pass  # Ctrl+C came before the event loop took over the signal.
     except (BaseExceptionGroup, *_REPORTED) as error:
@@ -146,7 +157,7 @@ def _agent_words(choice: AgentChoice) -> str:
     return f'{agents} ({", ".join(details)})' if details else agents
 
 
-async def _until_stopped(serving: Coroutine[None, None, None]) -> None:
+async def _until_stopped(serving: Coroutine[None, None, None], reopen: Callable[[], None] | None = None) -> None:
     """
     Serve until one of `STOP_SIGNALS` comes, and return once the agents, their processes, and the server have stopped.
 
@@ -159,6 +170,8 @@ async def _until_stopped(serving: Coroutine[None, None, None]) -> None:
     handled = [stop for stop in STOP_SIGNALS if signal.getsignal(stop) is not signal.SIG_IGN]
     for stop in handled:
         loop.add_signal_handler(stop, _stop_once, task)
+    if reopen:
+        loop.add_signal_handler(OPEN_SIGNAL, reopen)
     try:
         # A cancel is the normal way to stop. It reaches this await after the server has cleaned up.
         with suppress(asyncio.CancelledError):
@@ -166,6 +179,8 @@ async def _until_stopped(serving: Coroutine[None, None, None]) -> None:
     finally:
         for stop in handled:
             loop.remove_signal_handler(stop)
+        if reopen:
+            loop.remove_signal_handler(OPEN_SIGNAL)
 
 
 def _stop_once(task: asyncio.Task[None]) -> None:
@@ -209,13 +224,46 @@ def _say(text: str) -> None:
         print(text, flush=True)
 
 
-def _announce(link: str, *, open_browser: bool, plan: str | None = None) -> None:
+def _announce(links: list[str], link: str, *, open_browser: bool, plan: str | None = None) -> None:
     # The plan shows once the server is up, so that it never comes before an error about the folder.
     if plan:
         _say(f'Started a lab with {plan}.')
     _say(f'Open the lab: {link}')
     if open_browser:
         webbrowser.open(link)
+    # The link holds the person's token, so it stays in this process. `verifold open` asks this process to open it.
+    links.append(link)
+    mark_opens(Path.cwd() / LAB_FOLDER / SERVER_FILE)
+
+
+def _open_again(links: list[str], *, open_browser: bool) -> None:
+    # A server that started with --no-browser only prints the link: on a computer without a desktop, a text browser
+    # would take the terminal and block the server.
+    for link in links[-1:]:
+        _say(f'Open the lab: {link}')
+        if open_browser:
+            webbrowser.open(link)
+
+
+def _open() -> None:
+    """Ask the server of this folder's lab to open the lab in the browser and to print its link."""
+    path = Path.cwd() / LAB_FOLDER / SERVER_FILE
+    server, named = running_server(path), named_server(path)
+    if server is None or named is None:
+        sys.exit('verifold: No Verifold server runs for this folder. Run `verifold` here to start it.')
+    if not named.opens:
+        sys.exit(
+            'verifold: This server started with an older Verifold, or it is not ready yet, so it cannot open the lab '
+            'again. The link is in the terminal that runs it, on the line "Open the lab".'
+        )
+    try:
+        os.kill(server.pid, OPEN_SIGNAL)
+    except OSError as error:
+        sys.exit(f"verifold: Can't reach the server ({server.pid}): {error}")
+    _say(
+        'Asked the server to show the lab again. Its terminal prints the link, and it opens the lab in your browser '
+        'unless it started with --no-browser.'
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -249,6 +297,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar='COMMAND',
         help='Let every agent run commands that start with COMMAND, such as ./gpu, without a question to you. Give it once for each command. You can also give a grant on the board when an agent asks.',
     )
+    commands.add_parser('open', help="Open this folder's running lab in the browser again, from another terminal.")
     commands.add_parser(
         'stop', help="Stop this folder's lab from another terminal: its server, its agents, and their processes."
     )
