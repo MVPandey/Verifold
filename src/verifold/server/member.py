@@ -85,12 +85,16 @@ class Member:
 
         """
         self._check_in_time()
+        board = self._lab.board
         evidence: tuple[FileEvidence, ...] = ()
         if request.files:
             if self._pin is None:
                 raise EvidenceRejected('This lab cannot pin files for you.')
             evidence = await self._pin(request.files)
-        posted = await self._lab.post(request, self.agent_id, evidence)
+        # A proposal keeps which revisions of the question its author had been shown. An agent that worked on an
+        # earlier version can post just after a revision, and its answer is then to that earlier version.
+        seen = sum(self._seen >= told.seq for revision in board.revisions if (told := board.post(revision.post)))
+        posted = await self._lab.post(request, self.agent_id, evidence, seen)
         return post_view(self._lab.board, posted)
 
     def news(self) -> News | None:

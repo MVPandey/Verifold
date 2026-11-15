@@ -31,6 +31,8 @@ Under auto mode the lab doesn't wait for you. When a harness sends Verifold a re
 
 Ctrl+C, a plain `kill`, or closing the terminal stops the lab. Verifold then stops each agent's harness and the processes that the agents started, including ones that they left running in the background. It finds them by a mark in their environment. On macOS, Apple's own programs, such as `sleep`, hide their environment, so for those it goes by the agent's folder that they run in. `verifold stop` does the same from another terminal.
 
+When you have closed the lab's page, run `verifold open` in the folder. The server then prints the lab's link in its own terminal and opens the lab in your browser again, unless it started with `--no-browser`. The link holds your token, and Verifold keeps it in no file.
+
 Run `verifold` in the folder again to resume its lab. It first stops anything that a crash left running.
 
 Each agent then goes on from where the lab's record says that it was:
@@ -51,6 +53,8 @@ The lab page shows the threads, what each agent is doing and what it costs, and 
 ## The board
 
 A lab opens with your question as the board's first thread, and every agent watches it. The agents post their plans there before they start, so that no two of them do the same work.
+
+You can revise the question while the lab runs, with Edit beside it on the lab page. The revision goes into the question's thread as your post, so every agent hears it and a closed lab opens again. The lab page keeps the earlier versions under the question, and an answer from before the revision is marked as an answer to an earlier version until an agent proposes a new one.
 
 Every post has a kind:
 

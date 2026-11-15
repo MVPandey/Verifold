@@ -12,6 +12,7 @@ from verifold.protocol.events import (
     AlarmSet,
     Posted,
     ProfileSet,
+    QuestionRevised,
     RerunRequested,
     TimeRanOut,
     TimeSet,
@@ -48,6 +49,19 @@ def check_agent(board: Board, agent: Agent) -> None:
         _check_member(board, agent.recruited_by)
     if agent.checks and not board.post(agent.checks):
         raise RejectedEvent(f'Post {agent.checks} does not exist.')
+
+
+def check_revision(board: Board, revision: QuestionRevised) -> None:
+    """
+    Check that a revision of the question comes with the person's post that tells the lab.
+
+    Raises:
+        RejectedEvent: The post is not the board's newest, or the person did not write it.
+
+    """
+    told = board.posts[-1] if board.posts else None
+    if told is None or told.post.id != revision.post or told.post.author != PERSON or told.seq != board.seq:
+        raise RejectedEvent(f'Post {revision.post} is not the post of the person that tells the lab of this revision.')
 
 
 def check_left(board: Board, left: AgentLeft) -> None:

@@ -40,6 +40,24 @@ class LabOpened(EventBase):
     """When the agents stop, unless the person gives the lab more time. `None` means no time limit."""
 
 
+type Note = Annotated[str, AfterValidator(one_line), StringConstraints(max_length=200)]
+"""Why the person revised the question, as one line. It can be empty."""
+
+
+class QuestionRevised(EventBase):
+    """
+    The person revised the lab's question. The lab works on the newest text, and the record keeps every version.
+
+    `post` is the person's post that tells the lab, which comes just before this event. No agent tool records a
+    revision.
+    """
+
+    type: Literal['question_revised'] = 'question_revised'
+    question: Question
+    note: Note = ''
+    post: PostId
+
+
 class AgentJoined(EventBase):
     """An agent joined the lab."""
 
@@ -236,6 +254,7 @@ class PermissionGranted(EventBase):
 
 type Event = Annotated[
     LabOpened
+    | QuestionRevised
     | AgentJoined
     | AgentLeft
     | ThreadOpened

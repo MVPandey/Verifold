@@ -14,6 +14,7 @@ from verifold.protocol.events import (
     Event,
     LabOpened,
     Posted,
+    QuestionRevised,
     RerunRequested,
     ThreadOpened,
     TimeRanOut,
@@ -22,7 +23,7 @@ from verifold.protocol.events import (
     TurnStarted,
     WatchSet,
 )
-from verifold.protocol.posts import Post
+from verifold.protocol.posts import Message, Post
 from verifold.protocol.threads import Thread
 from verifold.protocol.usage import Usage
 from verifold.society.board import Board
@@ -80,6 +81,15 @@ class RecordBuilder:
     def post(self, post: Post) -> 'RecordBuilder':
         seq, at = self._stamp()
         self.events.append(Posted(seq=seq, at=at, post=post))
+        return self
+
+    def revise(self, question: str, post_id: str, thread_id: str = 't-1', note: str = '') -> 'RecordBuilder':
+        """Add the person's revision of the question, with the post that tells the lab."""
+        self.post(
+            Message(id=post_id, thread=thread_id, author='person', text=f'The person revised the question: {question}')
+        )
+        seq, at = self._stamp()
+        self.events.append(QuestionRevised(seq=seq, at=at, question=question, note=note, post=post_id))
         return self
 
     def watch(self, agent_id: str, thread_id: str, *, watching: bool = True) -> 'RecordBuilder':

@@ -5,10 +5,10 @@ from typing import Annotated, Literal
 from pydantic import AfterValidator, AwareDatetime, Field, JsonValue, StringConstraints
 
 from verifold.protocol.agents import Agent, AgentChoices, Label, ValueId, one_line
-from verifold.protocol.events import AgentLeft, Question
+from verifold.protocol.events import AgentLeft, Note, Question
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, PostId, ThreadId
-from verifold.protocol.join import AlarmLine, LabState, PostLine
+from verifold.protocol.join import AlarmLine, LabState, PostLine, QuestionVersion
 from verifold.protocol.record import Record
 from verifold.protocol.settings import MAX_MINUTES, Settings, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
@@ -65,6 +65,9 @@ class LabView(Record):
     """The lab at a glance."""
 
     question: str
+    """The question that the lab works on now."""
+    versions: tuple[QuestionVersion, ...] = ()
+    """Every version of the question, oldest first: the text that the lab opened with, and then each revision."""
     opened_at: AwareDatetime
     seq: int
     agents: tuple[AgentView, ...]
@@ -225,6 +228,14 @@ class SettingsChange(Record):
     Both files' revisions. The files add up, so a change refuses to apply when either one changed since the person
     read it: it could apply a setting that the person didn't see.
     """
+
+
+class QuestionRequest(Record):
+    """The person revises the lab's question."""
+
+    question: Question
+    note: Note = ''
+    """Why, as one line. It can be empty."""
 
 
 class TimeRequest(Record):

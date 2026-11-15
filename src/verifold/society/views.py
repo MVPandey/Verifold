@@ -13,6 +13,8 @@ from verifold.protocol.join import (
     News,
     PostLine,
     PostView,
+    QuestionVersion,
+    RevisionLine,
     SideLine,
     ThreadLine,
     ThreadLink,
@@ -278,10 +280,15 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         your_line=_agent_line(board, you.agent, working) if you else None,
         your_alarm=alarm_line(board, agent_id),
         how=how,
+        question=board.question,
+        revisions=tuple(
+            RevisionLine(at=entry.at, note=entry.note, post=entry.post) for entry in board.revisions[-MAX_LEADS:]
+        ),
         agents=tuple(_agent_line(board, agent, working) for agent in others),
         left=tuple(left_line(board, entry) for entry in board.left),
         answer=PostLine.of(proposed) if proposed else None,
         answer_standing=standing(board, proposed.post.id) if proposed else None,
+        answer_to_earlier_question=bool(proposed) and to_earlier_question(board, proposed),
         state=lab_state(board),
         close=PostLine.of(done) if done else None,
         close_agreed=agreed(board, done) if done else (),
@@ -347,6 +354,33 @@ def answer(board: Board) -> Posted | None:
     )
 
 
+def to_earlier_question(board: Board, proposed: Posted) -> bool:
+    """
+    Return whether a proposal answers an earlier version of the question.
+
+    It does when the board had shown its author fewer revisions than the question has now. So the proposal of an
+    agent that posts just after a revision, before it read the revision, answers the earlier version. A proposal
+    from before Verifold kept that count answers an earlier version when it came before the latest revision. The
+    count goes by revisions, not by text: after the person goes back to an earlier text, an answer from the first
+    time that the question had that text is still marked.
+    """
+    seen = proposed.post.question_seen if isinstance(proposed.post, Proposal) else None
+    if seen is None:
+        return bool(board.revisions) and proposed.seq < board.revisions[-1].seq
+    return seen < len(board.revisions)
+
+
+def versions(board: Board) -> tuple[QuestionVersion, ...]:
+    """Return every version of the question, oldest first: the text that the lab opened with, then each revision."""
+    return (
+        QuestionVersion(question=board.opened.question, at=board.opened.at),
+        *(
+            QuestionVersion(question=entry.question, at=entry.at, note=entry.note, post=entry.post)
+            for entry in board.revisions
+        ),
+    )
+
+
 def answer_view(board: Board) -> AnswerView | None:
     """Return the lab's answer so far with the posts that it builds on, or `None` when no agent proposed one."""
     entry = answer(board)
@@ -356,6 +390,7 @@ def answer_view(board: Board) -> AnswerView | None:
     results = tuple(post for post in under if _can_rerun(post))
     return AnswerView(
         answer=post_view(board, entry),
+        to_earlier_question=to_earlier_question(board, entry),
         builds_on=tuple(post_view(board, post) for post in under),
         results=len(results),
         no_blind_rerun=tuple(post.post.id for post in _not_rerun(board, results)),

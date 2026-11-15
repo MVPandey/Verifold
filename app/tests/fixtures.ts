@@ -171,6 +171,7 @@ export function summary(changes: Partial<ThreadSummary> = {}): ThreadSummary {
 export function labView(changes: Partial<LabView> = {}): LabView {
   return {
     question: 'Is sorted() faster?',
+    versions: [],
     opened_at: '2026-11-06T14:00:00Z',
     seq: 9,
     agents: [],

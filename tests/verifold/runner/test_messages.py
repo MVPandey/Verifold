@@ -202,3 +202,21 @@ def test_the_message_for_an_agent_that_comes_back_holds_facts_and_one_call() -> 
     assert 'no end for your last turn' not in new
     assert 'any program' not in new
     assert new.splitlines()[-1] == 'Start.'
+
+
+def test_an_agent_that_starts_after_a_revision_gets_the_current_question_and_a_checker_gets_none() -> None:
+    record = RecordBuilder().thread('t-1', opened_by='person', title=QUESTION_TITLE).join('ada')
+    record.post(Result(id='p-1', thread='t-1', author='ada', text='It holds.', evidence=(EVIDENCE,)))
+    board = record.revise('Does it hold on ARM?', 'p-2').board()
+
+    lines = start_message(board, board.agents[0].agent, Path('LAB.md')).splitlines()
+
+    assert lines[0] == 'Does it hold on ARM?'
+    assert lines[4:6] == [
+        'Thread t-1 on the board holds this question, and every agent watches it.',
+        (
+            'The person revised the question, last at 2026-11-06 12:05 UTC. The text above is the current one, and '
+            '`brief` lists the posts that hold the revisions.'
+        ),
+    ]
+    assert 'Does it hold' not in rerun_message(board.posts[0].post)

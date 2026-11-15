@@ -49,6 +49,7 @@ function slowServer(): {
     post: () => Promise.reject(new Error('unused')),
     rerun: () => Promise.reject(new Error('unused')),
     setTime: () => Promise.reject(new Error('unused')),
+    reviseQuestion: () => Promise.reject(new Error('unused')),
     addAgents: () => Promise.reject(new Error('unused')),
     invite: () => Promise.reject(new Error('unused')),
     inviteAgain: () => Promise.reject(new Error('unused')),

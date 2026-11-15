@@ -46,7 +46,7 @@ class Host:
 
     def setup(self) -> SetupView:
         harnesses = (HarnessOption(name='fake', title='Fake', family='test', available=True),)
-        question = self.lab.board.opened.question if self.lab else None
+        question = self.lab.board.question if self.lab else None
         return SetupView(folder='~/code/sort-bench', harnesses=harnesses, question=question)
 
     async def start(self, request: StartRequest) -> None:
@@ -498,3 +498,30 @@ async def test_the_lab_view_counts_a_close_among_the_agents_that_keep_their_word
     # Ada keeps its word behind the close, and bo gave none, so one of one stands behind it.
     assert (after['state'], after['close_agreed'], after['close_among'], after['needs_you']) == ('closed', 0, 1, 0)
     assert needs == []
+
+
+async def test_the_person_revises_the_question_and_the_lab_shows_every_version(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    revised = await client.post('/question', json={'question': ' Does it hold on ARM? ', 'note': 'x86 only so far.'})
+    seq = lab.board.seq
+    same = await client.post('/question', json={'question': 'Does it hold on ARM?'})
+    empty = await client.post('/question', json={'question': '  '})
+    stranger = await client.post('/question', json={'question': 'Why?'}, headers={'Authorization': 'Bearer no'})
+
+    view = revised.json()
+    assert view['question'] == 'Does it hold on ARM?'
+    assert [(version['question'], version['note'], version['post']) for version in view['versions']] == [
+        ('Does it hold?', '', None),
+        ('Does it hold on ARM?', 'x86 only so far.', 'p-2'),
+    ]
+    # The same text records nothing.
+    assert (same.status_code, same.json()['versions'], lab.board.seq) == (200, view['versions'], seq)
+    assert (empty.status_code, stranger.status_code) == (422, 401)
+
+
+async def test_a_folder_with_no_lab_takes_no_revision(activity: Activity) -> None:
+    async with client_of(Host(None), activity) as client:
+        refused = await client.post('/question', json={'question': 'Why?'})
+
+    assert refused.status_code == 409

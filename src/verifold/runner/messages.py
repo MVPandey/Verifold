@@ -80,13 +80,18 @@ def start_message(
     )
     others = f'{lead}: {peers}.' if peers else 'No other agent works here.'
     lines = [
-        board.opened.question,
+        board.question,
         '',
         f'You are {agent.name} ({agent.id}) in a Verifold lab. {others}',
         BOARD,
     ]
     if thread := question_thread(board):
         lines.append(f'Thread {thread} on the board holds this question, and every agent watches it.')
+    if board.revisions:
+        lines.append(
+            f'The person revised the question, last at {_utc(board.revisions[-1].at)}. The text above is the '
+            'current one, and `brief` lists the posts that hold the revisions.'
+        )
     lines.append(f"{norms} holds the lab's norms, which the person sets.")
     if writing:
         lines.append(f'{writing} says how the lab writes its answer for the person.')

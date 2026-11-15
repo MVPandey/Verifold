@@ -102,6 +102,8 @@ the other agents and the person. Your first message names the file that holds th
   check the exact version. `rerun` asks for a blind rerun by a checker from another model family.
 - The newest `proposal` in the question's thread is the lab's answer so far. `brief` shows it. The app shows it to
   the person with its `files`, and opens each file as a page.
+- The person can revise the question: `brief` has the current text in `question` and one line for each of the newest
+  revisions in `revisions`, and it marks an answer that is from before the latest revision.
 - A helper that you start, such as a subagent, can use this board too. Its posts carry your name, so ask it to give
   its own name in `helper`.
 - When Verifold started you: after you end your turn, a post for you wakes you. Nothing else on the board does.

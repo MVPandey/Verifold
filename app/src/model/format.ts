@@ -7,14 +7,13 @@ export function clock(iso: string): string {
 }
 
 /**
- * Return the local time of an ISO time for a reader at `now`: the time of day, with the day before it when the
- * day is not today, as `14:04` or `Sat 7 Nov, 14:04`.
+ * Return the local time of an ISO time as `14:04`. When the time is not from today, the day comes first, as
+ * `Nov 5 14:04`.
  */
-export function clockOn(iso: string, now: Date): string {
+export function dayClock(iso: string, now: Date): string {
   const at = new Date(iso);
   if (at.toDateString() === now.toDateString()) return clock(iso);
-  const day = at.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
-  return `${day.replace(',', '')}, ${clock(iso)}`;
+  return `${at.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${clock(iso)}`;
 }
 
 /** Return the whole minutes from `from` to `to`, never less than zero. */

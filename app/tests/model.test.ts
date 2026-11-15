@@ -19,8 +19,9 @@ import {
   stateLine,
   workingLine,
 } from '../src/model/agents.ts';
-import { clock, clockOn, duration, minutesBetween, money, tokens } from '../src/model/format.ts';
+import { clock, dayClock, duration, minutesBetween, money, tokens } from '../src/model/format.ts';
 import { orderNeeds, pauses } from '../src/model/needs.ts';
+import { isRevision, revisedLine } from '../src/model/question.ts';
 import {
   builtOnLabel,
   isPermission,
@@ -102,6 +103,14 @@ describe('format', () => {
     );
     assert.equal(minutesBetween('2026-11-06T14:00:00Z', new Date('2026-11-06T14:26:59Z')), 26);
     assert.equal(minutesBetween('2026-11-06T14:00:00Z', new Date('2026-11-06T13:00:00Z')), 0);
+  });
+});
+
+describe('a time with its day', () => {
+  it('gives the time of day for today, and the day too for another day', () => {
+    const now = new Date(2026, 10, 6, 15, 0);
+    assert.equal(dayClock(new Date(2026, 10, 6, 14, 4).toISOString(), now), '14:04');
+    assert.equal(dayClock(new Date(2026, 10, 5, 14, 4).toISOString(), now), 'Nov 5 14:04');
   });
 });
 
@@ -303,10 +312,10 @@ describe('agents', () => {
     const later = '2026-11-07T13:00:00Z';
     assert.equal(
       memberLine({ ...rested, alarm: { ...alarm, rings_at: later } }, false, now).text,
-      `Waits for its alarm at ${clockOn(later, now)}.`,
+      `Waits for its alarm at ${dayClock(later, now)}.`,
     );
-    assert.match(clockOn(later, now), /^[A-Z][a-z]{2} \d{1,2} Nov, \d\d:\d\d$/);
-    assert.equal(clockOn(rings, now), clock(rings));
+    assert.match(dayClock(later, now), /^Nov \d{1,2} \d\d:\d\d$/);
+    assert.equal(dayClock(rings, now), clock(rings));
     // The time of an alarm for a quiet board moves with each post, so the line gives the rule and no time.
     const quiet = { minutes: 90, quiet: true, rings_at: rings };
     assert.equal(
@@ -949,6 +958,23 @@ describe('crossings', () => {
       crossedLine([summary({ crossed: 4 }), summary({ crossed: 2 })]),
       '6 posts build on another agent’s work in another thread.',
     );
+  });
+});
+
+describe('the question', () => {
+  const version = { question: 'Faster?', at: '2026-11-06T14:00:00Z', note: '', post: null };
+
+  it('says how often the person revised it, and nothing while they did not', () => {
+    assert.equal(revisedLine([]), null);
+    assert.equal(revisedLine([version]), null);
+    assert.equal(revisedLine([version, version]), 'Revised 1 time.');
+    assert.equal(revisedLine([version, version, version]), 'Revised 2 times.');
+  });
+
+  it('takes a new text as a revision, and not an empty text or the question as it is', () => {
+    assert.equal(isRevision('Faster?', 'Faster on ARM?'), true);
+    assert.equal(isRevision('Faster?', ' Faster? '), false);
+    assert.equal(isRevision('Faster?', '  '), false);
   });
 });
 

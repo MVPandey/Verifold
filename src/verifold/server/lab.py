@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Self
+from typing import Final, Self
 
 from verifold.protocol.agents import Agent
 from verifold.protocol.events import (
@@ -15,6 +15,7 @@ from verifold.protocol.events import (
     PermissionGranted,
     Posted,
     ProfileSet,
+    QuestionRevised,
     RerunRequested,
     SettingsSet,
     ThreadOpened,
@@ -35,6 +36,7 @@ from verifold.server.errors import LabExists
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
+from verifold.society.lines import question_thread
 from verifold.society.rules import waiting_reruns
 from verifold.store.record_file import RecordFile
 
@@ -119,11 +121,18 @@ class Lab:
         board = await self._commit(lambda _, seq, at: AgentLeft(seq=seq, at=at, agent=agent_id, by=by, reason=reason))
         return board.left[-1]
 
-    async def post(self, request: PostRequest, author: AgentId, evidence: tuple[FileEvidence, ...] = ()) -> Posted:
+    async def post(
+        self,
+        request: PostRequest,
+        author: AgentId,
+        evidence: tuple[FileEvidence, ...] = (),
+        question_seen: int | None = None,
+    ) -> Posted:
         """
         Add a post with the next free post ID. With `new_thread`, open its thread in the same step.
 
         With `between` too, that thread is a side thread between the author and the agents that `between` names.
+        `question_seen` is how many revisions of the question the author had been shown, which a proposal keeps.
 
         Raises:
             RejectedEvent: The post breaks a rule of the record.
@@ -131,7 +140,7 @@ class Lab:
 
         """
         opens = (_open_thread(request.new_thread, author, request.between),) if request.new_thread else ()
-        board = await self._commit(*opens, _add_post(request, author, evidence))
+        board = await self._commit(*opens, _add_post(request, author, evidence, question_seen))
         return board.posts[-1]
 
     async def open_question_thread(self) -> Posted:
@@ -143,11 +152,47 @@ class Lab:
         body.
         """
         question = self._board.opened.question
-        # A question can start with a separator that `splitlines` breaks on and the schema's strip keeps.
-        first = next((line.strip() for line in question.splitlines() if line.strip()), QUESTION_TITLE)
-        headline = first if len(first) <= MAX_HEADLINE else f'{first[: MAX_HEADLINE - 1]}…'
+        headline = _headline(question)
         body = '' if headline == question else question
         return await self.post(PostRequest(kind='message', text=headline, body=body, new_thread=QUESTION_TITLE), PERSON)
+
+    async def revise_question(self, question: str, note: str = '') -> QuestionRevised | None:
+        """
+        Record that the person revised the question, and return the revision, or `None` when the text is the same.
+
+        The revision comes with a post of the person in the question's thread, which names nobody. So it reaches
+        the agents and opens a closed lab again as the person's other words to the lab do, and the thread shows
+        each version in order. A lab from before the question had a thread gets one thread for these posts.
+        """
+        # The event strips the text, so the same text with spaces around it is no revision.
+        question = question.strip()
+        if question == self._board.question:
+            return None
+        whole = f'{REVISED}{question}'
+        text = _headline(whole)
+        # A question that fits in the headline is not repeated in the body.
+        parts = ('' if text == whole else question, f'Why: {note}' if note else '')
+        body = '\n\n'.join(part for part in parts if part)
+        thread = question_thread(self._board) or next(
+            (
+                opened.thread.id
+                for opened in self._board.threads
+                if opened.thread.opened_by == PERSON and opened.thread.title == REVISED_TITLE
+            ),
+            None,
+        )
+        request = PostRequest(
+            kind='message', text=text, body=body, thread=thread, new_thread=None if thread else REVISED_TITLE
+        )
+        opens = (_open_thread(REVISED_TITLE, PERSON),) if thread is None else ()
+        board = await self._commit(
+            *opens,
+            _add_post(request, PERSON, ()),
+            lambda board, seq, at: QuestionRevised(
+                seq=seq, at=at, question=question, note=note, post=board.posts[-1].post.id
+            ),
+        )
+        return board.revisions[-1]
 
     async def set_alarm(self, agent_id: AgentId, minutes: float, *, quiet: bool) -> AlarmSet:
         """Record that an agent wants to be woken. The alarm replaces the agent's last one, and zero minutes cancels it."""
@@ -260,6 +305,20 @@ class Lab:
             return board
 
 
+REVISED: Final = 'The person revised the question: '
+"""How the post that tells the lab of a revision starts. The new question follows it."""
+
+REVISED_TITLE: Final = 'The question, revised'
+"""The title of the thread that holds the revisions in a lab from before the question had a thread."""
+
+
+def _headline(text: str) -> str:
+    # The first line with text, cut to a headline. A question can start with a separator that `splitlines` breaks
+    # on and the schema's strip keeps.
+    first = next((line.strip() for line in text.splitlines() if line.strip()), QUESTION_TITLE)
+    return first if len(first) <= MAX_HEADLINE else f'{first[: MAX_HEADLINE - 1]}…'
+
+
 def _open_thread(title: str, opened_by: AgentId, between: tuple[AgentId, ...] = ()) -> Build:
     # The author is always in its own side thread, and comes first. An agent that names itself changes nothing.
     members = tuple(dict.fromkeys((opened_by, *between))) if between else ()
@@ -271,9 +330,12 @@ def _open_thread(title: str, opened_by: AgentId, between: tuple[AgentId, ...] = 
     return build
 
 
-def _add_post(request: PostRequest, author: AgentId, evidence: tuple[FileEvidence, ...]) -> Build:
+def _add_post(
+    request: PostRequest, author: AgentId, evidence: tuple[FileEvidence, ...], question_seen: int | None = None
+) -> Build:
     def build(board: Board, seq: int, at: datetime) -> Posted:
         thread_id = request.thread or board.threads[-1].thread.id
-        return Posted(seq=seq, at=at, post=request.to_post(f'p-{len(board.posts) + 1}', thread_id, author, evidence))
+        post = request.to_post(f'p-{len(board.posts) + 1}', thread_id, author, evidence, question_seen)
+        return Posted(seq=seq, at=at, post=post)
 
     return build

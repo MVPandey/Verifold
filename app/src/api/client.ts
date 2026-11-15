@@ -43,6 +43,8 @@ export interface Api {
   post(request: PostRequest): Promise<PostView>;
   rerun(postId: string): Promise<void>;
   setTime(minutes: number): Promise<LabView>;
+  /** Revise the lab's question. `note` says why, and it can be empty. */
+  reviseQuestion(question: string, note: string): Promise<LabView>;
   /** Add agents of one harness to the lab that runs. */
   addAgents(choice: AgentChoice): Promise<LabView>;
   /** Invite an agent that runs by itself. Without a name, it gets the next one, such as "Agent 3". */
@@ -88,6 +90,7 @@ export function createApi(
       // A server from before these fields sends none, and the page must still load.
       request<LabView>('/lab').then((lab) => ({
         ...lab,
+        versions: lab.versions ?? [],
         state: lab.state ?? 'open',
         close: lab.close ?? null,
         close_agreed: lab.close_agreed ?? 0,
@@ -135,6 +138,7 @@ export function createApi(
       await request('/reruns', { post: postId });
     },
     setTime: (minutes) => request('/time', { minutes }),
+    reviseQuestion: (question, note) => request('/question', { question, note }),
     addAgents: (choice) => request('/agents', choice),
     invite: (name) => request('/invitations', name ? { name } : {}),
     inviteAgain: (agentId) => request(`/invitations/${encodeURIComponent(agentId)}`, {}),

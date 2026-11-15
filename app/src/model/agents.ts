@@ -1,6 +1,6 @@
 import { GUEST, PERSON } from '../api/types.ts';
 import type { AgentActivity, AgentLeft, AgentView, HarnessOption } from '../api/types.ts';
-import { clockOn, duration, minutesBetween, money, tokens } from './format.ts';
+import { dayClock, duration, minutesBetween, money, tokens } from './format.ts';
 
 /** The dot before an agent's state. */
 export type Dot = 'live' | 'wait' | 'idle' | 'stop';
@@ -95,7 +95,7 @@ export function memberLine(view: AgentView, resting: boolean, now: Date): StateL
     return { text: `Waits for its alarm: rings after ${quiet} with no new post.`, dot: 'idle' };
   }
   if (view.alarm?.rings_at) {
-    return { text: `Waits for its alarm at ${clockOn(view.alarm.rings_at, now)}.`, dot: 'idle' };
+    return { text: `Waits for its alarm at ${dayClock(view.alarm.rings_at, now)}.`, dot: 'idle' };
   }
   if (!view.turn_ended_at) return stateLine(view.activity, now);
   const minutes = minutesBetween(view.turn_ended_at, now);
