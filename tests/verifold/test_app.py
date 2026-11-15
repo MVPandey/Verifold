@@ -237,7 +237,8 @@ async def test_after_a_restart_each_agent_keeps_its_conversation_and_waits_where
         states = {await state_of(client, 'agent-1'), await state_of(client, 'agent-2')}
         ask = {'kind': 'ask', 'text': 'Which layer?', 'thread': 't-1', 'mentions': ['agent-1']}
         assert (await client.post('/posts', json=ask)).status_code == 200
-        await until(lambda: ended(project) == 3)
+        # The ask can wake agent-2 too, so the test waits for the turn of agent-1.
+        await until(lambda: sum(turn.agent == 'agent-1' for turn in turns(project)) == 2)
 
     assert states == {'idle'}
     loaded = [call for call in calls(log) if call['event'] == 'load_session']
