@@ -5,12 +5,24 @@ import type { AgentView, PostView, RerunLine, ThreadView } from '../api/types.ts
 import { PERSON } from '../api/types.ts';
 import { author, authorName, called } from '../model/agents.ts';
 import { clock } from '../model/format.ts';
-import { builtOnLabel, standingChip } from '../model/posts.ts';
+import { builtOnLabel, isLong, standingChip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { offersReplyHint } from '../model/deliverables.ts';
 import { sideReplyHint } from '../model/side.ts';
 import { MAX_RERUNS, wantedLine } from '../model/status.ts';
-import { act, isClaim, rerunChecks, rows, standingIn } from '../model/turns.ts';
+import { markUnfolded, readUnfolded } from '../model/seen.ts';
+import type { SeenStore } from '../model/seen.ts';
+import {
+  act,
+  foldLabel,
+  foldedCount,
+  isClaim,
+  rerunChecks,
+  rows,
+  standingIn,
+  unfoldLabel,
+} from '../model/turns.ts';
+import type { Depth } from '../model/turns.ts';
 import { hasBreakthrough } from '../model/votes.ts';
 import { messageOf } from '../api/client.ts';
 import { ForYou } from './Coordinator.tsx';
@@ -42,28 +54,61 @@ interface Around {
   readonly marks?: MarkActions | undefined;
 }
 
-/** An opened thread: its turns, each reply under the post that it answers, and a box to reply in it. */
+/** The browser's storage. A browser that refuses storage throws here, so only the model's readers call it. */
+const browserStore = (): SeenStore => window.localStorage;
+
+/**
+ * An opened thread: its turns, each reply under the post that it answers, and a box to reply in it. A run of
+ * agents' plain messages that nobody replied to is one row, which opens in place. One control above the posts
+ * shows every such message and folds them again.
+ */
 export function Turns(
-  props: Around & { readonly onSend: (text: string) => Promise<void> },
+  props: Around & {
+    readonly onSend: (text: string) => Promise<void>;
+    /** The post that the page opened on. It is never inside a fold. */
+    readonly target?: string | null;
+    /** When the lab opened. With it, the browser keeps for each thread whether the person shows every message. */
+    readonly lab?: string;
+  },
 ): ReactElement {
-  const { onSend, ...around } = props;
+  const { onSend, target, lab, ...around } = props;
+  const thread = props.view.thread.id;
+  const [shown, setShown] = useState(
+    () => lab !== undefined && readUnfolded(browserStore, lab, thread),
+  );
+  const list = rows(props.view.posts, target ?? null, !props.view.thread.conversation);
+  const folded = foldedCount(list);
+  const turn = (item: PostView, depth: Depth): ReactElement => (
+    <Turn key={item.post.id} item={item} depth={depth} {...around} />
+  );
   return (
     <>
+      {folded > 0 ? (
+        <p className="f-unfold">
+          <button
+            type="button"
+            className="linkbtn"
+            aria-expanded={shown}
+            onClick={() => {
+              setShown(!shown);
+              if (lab !== undefined) markUnfolded(browserStore, lab, thread, !shown);
+            }}
+          >
+            {unfoldLabel(folded, shown)}
+          </button>
+        </p>
+      ) : null}
       <ol className="f-turns">
-        {rows(props.view.posts, props.question).map((row) =>
+        {list.map((row) =>
           row.kind === 'turn' ? (
-            <Turn key={row.item.post.id} item={row.item} depth={row.depth} {...around} />
+            turn(row.item, row.depth)
+          ) : shown ? (
+            row.items.map((item) => turn(item, row.depth))
           ) : (
-            <li key={row.items[0]?.post.id} className="f-fold">
+            <li key={row.items[0]?.post.id} className={`f-fold d${row.depth}`}>
               <details>
-                <summary>
-                  {row.items.length === 1 ? '1 short note' : `${row.items.length} short notes`}
-                </summary>
-                <ol className="f-turns">
-                  {row.items.map((item) => (
-                    <Turn key={item.post.id} item={item} depth={0} {...around} />
-                  ))}
-                </ol>
+                <summary>{foldLabel(row.items, (id) => called(props.agents, id))}</summary>
+                <ol className="f-turns">{row.items.map((item) => turn(item, 0))}</ol>
               </details>
             </li>
           ),
@@ -93,7 +138,7 @@ export function Turns(
  * list and the profile.
  */
 export function Turn(
-  props: Around & { readonly item: PostView; readonly depth: 0 | 1 | 2 },
+  props: Around & { readonly item: PostView; readonly depth: Depth },
 ): ReactElement {
   const { agents, view } = props;
   const { post, standing, at } = props.item;
@@ -178,7 +223,7 @@ export function Turn(
           .map((id) => near(id))
           .map((other) => other && port('Built on by', other))}
         {onward ? <span className="f-port">{onward}</span> : null}
-        <p className="f-say-text">{post.text}</p>
+        <p className={isLong(post.text) ? 'f-say-text long' : 'f-say-text'}>{post.text}</p>
         {post.kind === 'ask' && post.choices.length > 0 ? (
           <p className="choices">Choices: {post.choices.join(' · ')}</p>
         ) : null}

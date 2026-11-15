@@ -8,6 +8,7 @@ lab, a report tells the person where the lab is, a call offers work that another
 holds files for a deliverable of the person. A new kind is one more model in the `Post` union.
 """
 
+from collections.abc import Callable
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
 
@@ -19,8 +20,9 @@ from verifold.protocol.record import Record
 
 MAX_HEADLINE = 1_000
 """
-The most characters in a post's headline. The limit only keeps a whole report out of the headline. It was 300, and
-agents that wrote a full sentence about a result ran words together to fit. The app clamps a long headline where it
+The most characters in a post's headline in the record. The person's post from the app takes that many, because the
+person's words reach the agents in the headline. A record from before `MAX_AGENT_HEADLINE` in the join protocol
+holds agents' headlines of that length too, so the record's limit stays. The app clamps a long headline where it
 shows one line.
 """
 MAX_CHOICES = 10
@@ -28,21 +30,26 @@ MAX_BUILDS_ON = 10
 MAX_BODY = 20_000
 
 
-def _fits_a_headline(text: str) -> str:
-    # The schema's own error for `max_length` names the limit and not the length, so the author cannot tell how much
-    # to cut.
-    if len(text) > MAX_HEADLINE:
-        raise ValueError(
-            f'`text` has {len(text)} characters, and the limit of a headline is {MAX_HEADLINE}. `body` takes up to '
-            f'{MAX_BODY} characters.'
-        )
-    return text
+def fits_a_headline(limit: int) -> Callable[[str], str]:
+    """Return the check that a headline has `limit` characters at most. Its error says what the headline needs."""
+
+    def check(text: str) -> str:
+        # The schema's own error for `max_length` names the limit and not the length, so the author cannot tell how
+        # much to cut.
+        if len(text) > limit:
+            raise ValueError(
+                f'The headline has {len(text)} characters, and the limit is {limit}. `body` takes the detail, up to '
+                f'{MAX_BODY} characters.'
+            )
+        return text
+
+    return check
 
 
 type Headline = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1),
-    AfterValidator(_fits_a_headline),
+    AfterValidator(fits_a_headline(MAX_HEADLINE)),
     WithJsonSchema({'type': 'string', 'minLength': 1, 'maxLength': MAX_HEADLINE}),
 ]
 type Body = Annotated[str, StringConstraints(max_length=MAX_BODY)]

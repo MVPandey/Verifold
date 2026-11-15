@@ -144,9 +144,25 @@ describe('agent text', () => {
     );
     assert.ok(turn.includes('<p class="f-say-text">A `headline` with **marks**</p>'));
     assert.ok(
+      turn.includes(
+        '<details class="f-detail"><summary class="f-open"><span class="closed">Read the detail</span>',
+      ),
+    );
+    assert.ok(
       turn.includes('<div class="body"><p>Method: replay of **450** combos.\nResult: no edge.</p>'),
     );
     assert.equal(turn.includes('<div class="md">'), false);
+    // The fold shows the body through the same component, with its switch. Once the person opens the fold, the
+    // component parses the body, and until then it does not.
+    assert.ok(
+      turn.includes('<button type="button" class="linkbtn as-toggle">Show as written</button>'),
+    );
+    const opened = renderToStaticMarkup(<Words text={body} parsed />);
+    assert.ok(opened.includes('<div class="md"><p>Method: replay of <strong>450</strong> combos.'));
+    assert.equal(
+      renderToStaticMarkup(<Words text={body} parsed={false} />).includes('<strong>'),
+      false,
+    );
   });
 
   it('shows code of every kind as its author wrote it', () => {
@@ -472,15 +488,36 @@ describe('an opened thread', () => {
     assert.ok(html.includes('<span class="f-port">Built on by 1 post</span>'));
   });
 
-  it('folds a run of status notes in the question’s thread into one row', () => {
-    const note = (id: string): Post => result(id, { kind: 'message', author: 'agent-1' });
-    const folded = renderToStaticMarkup(
+  const note = (id: string, changes: Partial<Post> = {}): PostView =>
+    postView(result(id, { kind: 'message', text: `Note ${id}.`, ...changes }));
+  const talk = [
+    postView(result('p-1')),
+    note('p-2'),
+    note('p-3', { author: 'agent-2' }),
+    note('p-4', { author: 'person', text: 'Go on.' }),
+    note('p-5', { reply_to: 'p-1', author: 'agent-2' }),
+  ];
+  const thread = (
+    posts: readonly PostView[],
+    given: {
+      readonly target?: string;
+      readonly lab?: string;
+      readonly id?: string;
+      readonly conversation?: boolean;
+    } = {},
+  ): string =>
+    renderToStaticMarkup(
       <Turns
         view={{
-          thread: { id: 't-1', title: 'The question', opened_by: 'person' },
+          thread: {
+            id: given.id ?? 't-4',
+            title: 'Maker side',
+            opened_by: 'agent-1',
+            conversation: given.conversation ?? false,
+          },
           watching: false,
           members: [],
-          posts: [postView(note('p-1')), postView(note('p-2'))],
+          posts,
         }}
         agents={agents}
         needs={[]}
@@ -490,10 +527,108 @@ describe('an opened thread', () => {
         now={new Date('2026-11-06T14:26:00Z')}
         onRerun={() => Promise.resolve()}
         onSend={() => Promise.resolve()}
+        target={given.target ?? null}
+        {...(given.lab === undefined ? {} : { lab: given.lab })}
       />,
     );
-    assert.ok(folded.includes('<summary>2 short notes</summary>'));
-    assert.equal(folded.includes('leads this thread'), false);
+
+  it('folds each run of agents’ messages that nobody replied to into one row, in every thread', () => {
+    const folded = thread(talk);
+    // The row says how many messages it holds and who wrote them, and it opens in place.
+    assert.ok(
+      folded.includes(
+        '<li class="f-fold d0"><details><summary>2 messages from Agent 1 and Agent 2</summary><ol class="f-turns"><li id="p-2" class="f-turn d0">',
+      ),
+    );
+    // A fold of replies sits where the replies sit, and its turns have no indent of their own.
+    assert.ok(
+      folded.includes(
+        '<li class="f-fold d1"><details><summary>1 message from Agent 2</summary><ol class="f-turns"><li id="p-5" class="f-turn d0">',
+      ),
+    );
+    // The person's post is a turn of its own between the folds.
+    assert.ok(folded.includes('<li id="p-4" class="f-turn d0">'));
+    assert.equal(folded.split('<details><summary>').length - 1, 2);
+    // The conversation with the coordinator folds nothing: there an agent's message is its word to the person.
+    const conversation = thread(talk, { conversation: true });
+    assert.equal(conversation.includes('f-fold') || conversation.includes('f-unfold'), false);
+    assert.ok(conversation.includes('<li id="p-2" class="f-turn d0">'));
+    // The question's thread folds by the same rule.
+    assert.ok(thread(talk, { id: 't-1' }).includes('<summary>2 messages from Agent 1 and Agent 2'));
+  });
+
+  it('keeps the post that the page opened on out of a fold', () => {
+    const opened = thread(talk, { target: 'p-3' });
+    assert.ok(opened.includes('<summary>1 message from Agent 1</summary>'));
+    assert.ok(opened.includes('</li><li id="p-3" class="f-turn d0">'));
+    assert.equal(opened.includes('2 messages from'), false);
+  });
+
+  it('has one control above the posts that shows every folded message, and none without a fold', () => {
+    const folded = thread(talk);
+    assert.ok(
+      folded.includes(
+        '<p class="f-unfold"><button type="button" class="linkbtn" aria-expanded="false">Show the 3 folded messages</button></p><ol class="f-turns">',
+      ),
+    );
+    assert.equal(
+      thread([postView(result('p-1')), note('p-4', { author: 'person' })]).includes('f-unfold'),
+      false,
+    );
+  });
+
+  it('shows every message as a turn in a thread where the person chose that, and keeps the choice per thread', () => {
+    const asked: string[] = [];
+    const stored = (value: string): void => {
+      Object.assign(globalThis, {
+        window: {
+          localStorage: {
+            getItem: (key: string) => {
+              asked.push(key);
+              return value;
+            },
+          },
+        },
+      });
+    };
+    stored('["t-4"]');
+    const shown = thread(talk, { lab: '2026-11-06T14:00:00Z' });
+    assert.deepEqual(asked, ['verifold-unfolded:2026-11-06T14:00:00Z']);
+    assert.ok(
+      shown.includes(
+        '<button type="button" class="linkbtn" aria-expanded="true">Fold 3 messages again</button>',
+      ),
+    );
+    assert.equal(shown.includes('<summary>'), false);
+    // Each message is a turn at the depth of its fold, in the thread's order.
+    assert.ok(shown.includes('<li id="p-2" class="f-turn d0">'));
+    assert.ok(shown.includes('<li id="p-5" class="f-turn d1">'));
+    assert.ok(shown.indexOf('id="p-2"') < shown.indexOf('id="p-3"'));
+    // Another thread of the lab has its own choice, and so has a thread whose page names no lab.
+    assert.ok(
+      thread(talk, { lab: '2026-11-06T14:00:00Z', id: 't-5' }).includes('aria-expanded="false"'),
+    );
+    assert.ok(thread(talk).includes('aria-expanded="false"'));
+    // Without storage, the thread folds and the page still shows.
+    Object.assign(globalThis, { window: undefined });
+    assert.ok(thread(talk, { lab: '2026-11-06T14:00:00Z' }).includes('aria-expanded="false"'));
+    stored('{}');
+  });
+
+  it('shows a long headline from before the agents’ limit as text that keeps its lines, and never as Markdown', () => {
+    const long = `**Scan** of 143 markets:\n${'no edge after fees in any bucket; '.repeat(12)}`;
+    const old = thread([
+      postView(result('p-1', { text: long })),
+      postView(result('p-2', { text: 'x'.repeat(200) })),
+    ]);
+    // The text is in the page as its author wrote it. The stylesheet keeps its line breaks and wraps it.
+    assert.ok(
+      old.includes(`<p class="f-say-text long">**Scan** of 143 markets:\nno edge after fees`),
+    );
+    assert.equal(old.includes('<strong>'), false);
+    assert.ok(old.includes(`<p class="f-say-text">${'x'.repeat(200)}</p>`));
+    // A post without a body and without files has no fold for a detail.
+    assert.equal(old.includes('f-detail'), false);
   });
 });
 
@@ -1199,7 +1334,7 @@ describe('the lab page', () => {
     const proposal = result('p-2', {
       kind: 'proposal',
       text: 'Yes, 12x.',
-      body: 'Three runs agree.\nThe seed is 7.',
+      body: 'Three runs **agree**.\nThe seed is 7.',
     });
     const posts = [
       result('p-1', { kind: 'message', author: 'person', text: 'Is sorted() faster?' }),
@@ -1214,10 +1349,11 @@ describe('the lab page', () => {
     // The fixture's posts are from 14:04, and the page's clock says 14:26.
     assert.ok(html.includes('<span class="f-by">Agent 1 proposed it <time'));
     assert.ok(html.includes('>22 min ago</time>'));
-    // Open, the answer shows its detail, and each line of it stays a line.
+    // Open, the answer shows its detail as Markdown with the switch to the exact text, and each line of it
+    // stays a line.
     assert.ok(
       html.includes(
-        '<div class="f-words"><div class="words"><div class="md"><p>Three runs agree.<br/>\nThe seed is 7.</p></div><button',
+        '<div class="f-words"><div class="words"><div class="md"><p>Three runs <strong>agree</strong>.<br/>\nThe seed is 7.</p></div><button type="button" class="linkbtn as-toggle">Show as written</button>',
       ),
     );
     assert.ok(
@@ -1227,10 +1363,30 @@ describe('the lab page', () => {
     );
     assert.ok(html.includes('proposed an answer'));
     assert.ok(html.includes('aria-label="Message to everyone in this thread"'));
-    // Closed, the seat clamps the answer.
+    // Closed, the seat clamps the answer, and its detail is one press away in place, behind a fold. As in a
+    // thread, the fold parses the detail as Markdown when the person opens it.
     const closed = wall('t-2', thread('t-1', 'person', posts), none, answer);
     assert.ok(closed.includes('<p class="clamp">Yes, 12x.</p>'));
-    assert.equal(closed.includes('Three runs agree.'), false);
+    assert.ok(
+      closed.includes(
+        '</div><details class="f-detail"><summary class="f-open"><span class="closed">Read the detail</span>',
+      ),
+    );
+    assert.ok(
+      closed.includes(
+        '<div class="f-words"><div class="words"><div class="body"><p>Three runs **agree**.\nThe seed is 7.</p></div><button type="button" class="linkbtn as-toggle">Show as written</button>',
+      ),
+    );
+    // An answer without a detail has no fold, closed or open.
+    const bare = answerOf({ ...proposal, body: '' });
+    assert.equal(wall('t-2', none, none, bare).includes('f-detail'), false);
+    assert.equal(wall('t-1', none, none, bare).includes('f-words'), false);
+    // A long headline from before the agents' limit reads as text, also where the seat clamps it.
+    const long = answerOf({ ...proposal, text: 'y'.repeat(900) });
+    assert.ok(
+      wall('t-2', none, none, long).includes(`<p class="clamp long">${'y'.repeat(900)}</p>`),
+    );
+    assert.ok(wall('t-1', none, none, long).includes(`<p class="long">${'y'.repeat(900)}</p>`));
   });
 
   it('takes the answer so far from the lab’s own answer, not from its read of the question’s thread', () => {

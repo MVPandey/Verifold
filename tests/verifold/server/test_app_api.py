@@ -412,6 +412,17 @@ async def test_the_person_posts_and_gets_a_readable_refusal(client: httpx2.Async
     assert (refused.status_code, refused.json()['detail']) == (400, 'Post p-9 does not exist.')
 
 
+async def test_the_person_posts_a_headline_of_1000_characters_which_is_more_than_a_tool_takes_from_an_agent(
+    client: httpx2.AsyncClient,
+) -> None:
+    posted = await client.post('/posts', json={'kind': 'message', 'text': 'x' * 1000, 'thread': 't-1'})
+    refused = await client.post('/posts', json={'kind': 'message', 'text': 'x' * 1001, 'thread': 't-1'})
+
+    assert (posted.status_code, len(posted.json()['post']['text'])) == (200, 1000)
+    assert refused.status_code == 422
+    assert 'The headline has 1001 characters, and the limit is 1000. `body` takes the detail' in refused.text
+
+
 async def test_the_person_reads_why_a_post_failed_when_another_program_changed_the_record(
     client: httpx2.AsyncClient, record_file: RecordFile
 ) -> None:

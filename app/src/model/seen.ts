@@ -38,6 +38,42 @@ export function hasNew(summary: ThreadSummary, seen: Seen): boolean {
   return latest !== null && latest.author !== PERSON && latest.seq > (seen[summary.thread.id] ?? 0);
 }
 
+/**
+ * Return whether the person chose to see every message of a thread, in the lab that opened at `lab`. `store`
+ * gives the storage, and a browser can refuse it: storage that fails or is damaged counts as no choice.
+ */
+export function readUnfolded(store: () => SeenStore, lab: string, thread: string): boolean {
+  try {
+    return unfolded(store(), lab).includes(thread);
+  } catch {
+    return false;
+  }
+}
+
+/** Record whether the person sees every message of a thread. When the storage fails, nothing is kept. */
+export function markUnfolded(
+  store: () => SeenStore,
+  lab: string,
+  thread: string,
+  shown: boolean,
+): void {
+  try {
+    const others = unfolded(store(), lab).filter((id) => id !== thread);
+    store().setItem(unfoldedKey(lab), JSON.stringify(shown ? [...others, thread] : others));
+  } catch {
+    // The page still has the choice until it loads again.
+  }
+}
+
+function unfolded(store: SeenStore, lab: string): readonly unknown[] {
+  const stored: unknown = JSON.parse(store.getItem(unfoldedKey(lab)) ?? '[]');
+  return Array.isArray(stored) ? (stored as readonly unknown[]) : [];
+}
+
 function key(lab: string): string {
   return `verifold-seen:${lab}`;
+}
+
+function unfoldedKey(lab: string): string {
+  return `verifold-unfolded:${lab}`;
 }

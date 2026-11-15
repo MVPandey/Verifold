@@ -19,7 +19,7 @@ import { crossedLine, crossLines } from '../model/crossings.ts';
 import { deliverLine, isDocked } from '../model/deliverables.ts';
 import type { Docked } from '../model/deliverables.ts';
 import { clock, dayClock, duration, minutesBetween } from '../model/format.ts';
-import { clip, personMessage, standingChip } from '../model/posts.ts';
+import { clip, isLong, personMessage, standingChip } from '../model/posts.ts';
 import { isRevision, noteLabel, revisedBy, revisedLine } from '../model/question.ts';
 import { href } from '../model/route.ts';
 import { hasNew, markSeen, readSeen } from '../model/seen.ts';
@@ -82,7 +82,7 @@ export function LabPage(props: PageProps & Place): ReactElement {
     if (open === null || !ready) return;
     const target =
       (post && document.getElementById(post)) || document.getElementById(`card-${open}`);
-    // A post inside a folded run of notes is not on the screen until the fold opens.
+    // A post inside a closed fold is not on the screen until the fold opens.
     for (
       let fold = target?.closest('details');
       fold;
@@ -129,7 +129,11 @@ export function Wall(
   const turns = (read: ThreadRead): ReactElement =>
     read.view ? (
       <Turns
+        // Each thread has its own choice of whether every message shows.
+        key={read.view.thread.id}
         view={read.view}
+        target={read.view.thread.id === open ? props.post : null}
+        lab={lab.opened_at}
         agents={lab.agents}
         needs={needs}
         question={questionId}
@@ -620,7 +624,8 @@ function ReportCard(props: {
 
 /**
  * The lab's answer so far, as the server has it now: its headline, where it stands, who proposed it and how long
- * ago, its files, and what it builds on. With `open`, the headline is whole and the detail follows it.
+ * ago, its detail, its files, and what it builds on. With `open`, the headline is whole and the detail follows
+ * it. Closed, the detail is behind "Read the detail", as on a post in a thread.
  */
 function Answer(props: {
   readonly view: AnswerView;
@@ -639,9 +644,10 @@ function Answer(props: {
     post.thread === props.question
       ? null
       : props.threads.find((summary) => summary.thread.id === post.thread);
+  const look = `${props.open ? '' : 'clamp'}${isLong(post.text) ? ' long' : ''}`.trim();
   return (
     <>
-      <p className={props.open ? undefined : 'clamp'}>{post.text}</p>
+      <p className={look || undefined}>{post.text}</p>
       <div className="f-card-st">
         <ChipView chip={standingChip(post, standing) ?? { label: 'Not checked', tone: 'none' }} />
         {/* The answer has the badge only when the proposal itself got it. */}
@@ -677,7 +683,10 @@ function Answer(props: {
         <div className="f-words">
           <Words text={post.body} />
         </div>
-      ) : null}
+      ) : (
+        // Closed, the detail is one press away, in place. The files follow it in both states.
+        <Detail post={post.id} body={post.body} files={[]} />
+      )}
       <Files post={post.id} files={post.evidence} />
       <Under view={props.view} open={props.open} />
     </>
@@ -869,7 +878,9 @@ function Card(props: {
           {status.openCalls ? <span className="f-st fs-ask">{status.openCalls}</span> : null}
           {props.breakthrough ? <BadgeChip badge="breakthrough" /> : null}
         </div>
-        {head ? <p className="f-head">{head.post.text}</p> : null}
+        {head ? (
+          <p className={isLong(head.post.text) ? 'f-head long' : 'f-head'}>{head.post.text}</p>
+        ) : null}
         <Faces ids={ids} agents={props.agents} last={open ? null : summary.last_at} team={team} />
         {props.need ? (
           <div className="o-card-need">

@@ -5,7 +5,7 @@ import type { Agent, AgentView, Post, PostView, Thread, ThreadSummary } from '..
 export type MarkTone = 'claim' | 'bad' | 'good' | 'turn' | 'answer' | 'ask' | 'quiet';
 
 const NOUNS = {
-  message: 'note',
+  message: 'message',
   plan: 'plan',
   result: 'result',
   ask: 'question',
@@ -122,7 +122,7 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
     case 'report':
       return `reported to you${reply}`;
     case 'message':
-      return post.reply_to === null ? 'added a note' : `replied to ${them}`;
+      return post.reply_to === null ? 'posted a message' : `replied to ${them}`;
   }
 }
 
@@ -193,21 +193,43 @@ export function questionThread(threads: readonly ThreadSummary[]): ThreadSummary
   return holds ? (threads.find((summary) => summary.thread === first) ?? null) : null;
 }
 
-/** Return whether a post is a status note: an agent's plain message in the question's thread. */
-export function isStatusNote(post: Post, question: string | null): boolean {
-  return post.thread === question && post.kind === 'message' && post.author !== PERSON;
+/**
+ * Return whether a post is an agent's plain message that can go in a fold. A post of the person, a post for the
+ * whole lab or for the person, a post that names the person, and a post with a badge always show. So does a
+ * post whose badge waits for its second or lapsed, because the post shows that too.
+ */
+export function isPlainMessage(item: PostView): boolean {
+  const { post } = item;
+  return (
+    post.kind === 'message' &&
+    post.author !== PERSON &&
+    !post.to_lab &&
+    !post.for_person &&
+    !post.mentions.includes(PERSON) &&
+    (item.badges ?? []).length === 0
+  );
 }
 
-/** A row of an opened thread: one turn at its depth, or a run of status notes that folds into one row. */
+/** How far a row sits from the left: a post, a reply to it, and everything under that reply. */
+export type Depth = 0 | 1 | 2;
+
+/** A row of an opened thread: one turn at its depth, or a run of plain messages that folds into one row. */
 export type Row =
-  | { readonly kind: 'turn'; readonly item: PostView; readonly depth: 0 | 1 | 2 }
-  | { readonly kind: 'notes'; readonly items: readonly PostView[] };
+  | { readonly kind: 'turn'; readonly item: PostView; readonly depth: Depth }
+  | { readonly kind: 'fold'; readonly items: readonly PostView[]; readonly depth: Depth };
 
 /**
  * Return a thread's posts as rows. A reply sits under the post that it answers, and the indent stops at two
- * levels. A run of status notes that nobody answered folds into one row.
+ * levels. A run of agents' plain messages that nobody replied to folds into one row at its depth, in every
+ * thread. The first post of the thread never folds, and neither does `target`, the post that the page opened on.
+ * A message that has replies is a turn, with its replies under it. Without `folding`, every post is a turn: that
+ * is the conversation with the coordinator, where the agent's messages are its words to the person.
  */
-export function rows(posts: readonly PostView[], question: string | null): readonly Row[] {
+export function rows(
+  posts: readonly PostView[],
+  target: string | null = null,
+  folding = true,
+): readonly Row[] {
   const ids = new Set(posts.map((item) => item.post.id));
   const replies = new Map<string, PostView[]>();
   const roots: PostView[] = [];
@@ -217,19 +239,52 @@ export function rows(posts: readonly PostView[], question: string | null): reado
       replies.set(parent, [...(replies.get(parent) ?? []), item]);
     else roots.push(item);
   }
+  const first = posts[0]?.post.id;
   const out: Row[] = [];
-  const walk = (item: PostView, depth: 0 | 1 | 2): void => {
-    out.push({ kind: 'turn', item, depth });
-    for (const reply of replies.get(item.post.id) ?? []) walk(reply, depth === 0 ? 1 : 2);
-  };
-  for (const root of roots) {
+  const walk = (item: PostView, depth: Depth): void => {
+    const { id } = item.post;
     const last = out.at(-1);
-    if (!isStatusNote(root.post, question) || replies.has(root.post.id)) walk(root, 0);
-    else if (last?.kind === 'notes')
-      out[out.length - 1] = { kind: 'notes', items: [...last.items, root] };
-    else out.push({ kind: 'notes', items: [root] });
-  }
+    if (!folding || replies.has(id) || id === first || id === target || !isPlainMessage(item))
+      out.push({ kind: 'turn', item, depth });
+    else if (last?.kind === 'fold' && last.depth === depth)
+      out[out.length - 1] = { ...last, items: [...last.items, item] };
+    else out.push({ kind: 'fold', items: [item], depth });
+    for (const reply of replies.get(id) ?? []) walk(reply, depth === 0 ? 1 : 2);
+  };
+  for (const root of roots) walk(root, 0);
   return out;
+}
+
+/** Return how many messages the folds of a thread hold. */
+export function foldedCount(list: readonly Row[]): number {
+  return list.reduce((count, row) => count + (row.kind === 'fold' ? row.items.length : 0), 0);
+}
+
+/**
+ * Return what a fold says: how many messages it holds and who wrote them, such as "7 messages from Keel, Basis,
+ * and 2 others". The first two authors have their names, in the order of their first message. `called` names an
+ * author inside a sentence.
+ */
+export function foldLabel(
+  items: readonly PostView[],
+  called: (authorId: string) => string,
+): string {
+  const names = [...new Set(items.map((item) => called(item.post.author)))];
+  const [first = '', second = ''] = names;
+  const others = names.length - 2;
+  const who =
+    others > 0
+      ? `${first}, ${second}, and ${others === 1 ? '1 other' : `${others} others`}`
+      : names.length === 2
+        ? `${first} and ${second}`
+        : first;
+  return `${items.length === 1 ? '1 message' : `${items.length} messages`} from ${who}`;
+}
+
+/** Return the words of the control above a thread's posts, which shows every folded message or folds them again. */
+export function unfoldLabel(count: number, shown: boolean): string {
+  if (shown) return count === 1 ? 'Fold 1 message again' : `Fold ${count} messages again`;
+  return count === 1 ? 'Show the folded message' : `Show the ${count} folded messages`;
 }
 
 /**
