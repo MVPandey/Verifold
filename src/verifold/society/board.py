@@ -28,7 +28,8 @@ from verifold.protocol.events import (
     TurnStarted,
     WatchSet,
 )
-from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
+from verifold.protocol.posts import FileOffer
 from verifold.protocol.settings import Settings
 
 
@@ -356,6 +357,19 @@ class Board:
         agents = {joined.agent.id for joined in self.agents if not joined.agent.checks}
         return tuple(dict.fromkeys((*opened.thread.between, *(agent for _, agent in came if agent in agents))))
 
+    def offers(self, deliverable_id: DeliverableId) -> tuple[Posted, ...]:
+        """Return the entries of the offers of files for a deliverable, oldest first."""
+        return _index(self.posts).offers.get(deliverable_id, ())
+
+    def offers_thread(self, deliverable_id: DeliverableId) -> ThreadId | None:
+        """Return the thread that holds the offers for a deliverable, or `None` until the first offer opens it."""
+        return next((entry.thread.id for entry in self.threads if entry.thread.deliverable == deliverable_id), None)
+
+    def holds_offers(self, thread_id: ThreadId) -> bool:
+        """Return whether a thread is the thread of the offers for a deliverable. No post there is for every agent."""
+        opened = self.thread(thread_id)
+        return bool(opened and opened.thread.deliverable)
+
     def post(self, post_id: PostId) -> Posted | None:
         """Return the entry of a post, or `None`."""
         # The fold asks this for every new post, and each of its boards has other posts, so no index pays here.
@@ -372,11 +386,12 @@ class Board:
 
 @dataclass(frozen=True, slots=True)
 class _Index:
-    """The posts of one board by the post that they reply to, and by the posts that they build on."""
+    """The posts of one board by the post that they reply to, by the posts that they build on, and the offers by deliverable."""
 
     posts: tuple[Posted, ...]
     replies: dict[PostId, tuple[Posted, ...]]
     builds: dict[PostId, tuple[Posted, ...]]
+    offers: dict[DeliverableId, tuple[Posted, ...]]
 
 
 _indexes: list[_Index] = []
@@ -393,7 +408,10 @@ def _index(posts: tuple[Posted, ...]) -> _Index:
             return index
     replies: dict[PostId, list[Posted]] = {}
     builds: dict[PostId, list[Posted]] = {}
+    offers: dict[DeliverableId, list[Posted]] = {}
     for entry in posts:
+        if isinstance(entry.post, FileOffer):
+            offers.setdefault(entry.post.deliverable, []).append(entry)
         if entry.post.reply_to:
             replies.setdefault(entry.post.reply_to, []).append(entry)
         for source in dict.fromkeys(entry.post.builds_on):
@@ -402,6 +420,7 @@ def _index(posts: tuple[Posted, ...]) -> _Index:
         posts=posts,
         replies={post: tuple(entries) for post, entries in replies.items()},
         builds={post: tuple(entries) for post, entries in builds.items()},
+        offers={deliverable: tuple(entries) for deliverable, entries in offers.items()},
     )
     _indexes.append(index)
     del _indexes[:-_KEPT_INDEXES]

@@ -122,7 +122,8 @@ def closing(board: Board) -> Posted | None:
     Return the post that says that the lab is done, when one stands: the newest close.
 
     It stands until an objection to it stands, its author concedes one, its author withdraws it with a ruled-out
-    lead that replies to it, or the person posts to the lab after it. An older close does not come back.
+    lead that replies to it, the person posts to the lab after it, or the person asks for changes to an offer of
+    files for a deliverable after it. An older close does not come back.
     """
     entry = next((entry for entry in reversed(board.posts) if isinstance(entry.post, Close)), None)
     if entry is None or standing(board, entry.post.id) in {'disputed', 'conceded'}:
@@ -141,7 +142,9 @@ def closing(board: Board) -> Posted | None:
         and later.post.thread != board.conversation
         for later in board.posts
     )
-    return None if withdrawn or steered else entry
+    # The person's request for changes to an offer of files asks its author for more work.
+    asked = any(decided.decision == 'changes_asked' and decided.seq > entry.seq for decided in board.decisions)
+    return None if withdrawn or steered or asked else entry
 
 
 def agreed(board: Board, close: Posted) -> tuple[AgentId, ...]:

@@ -7,10 +7,16 @@ import { createApi } from '../src/api/client.ts';
 import type { Api } from '../src/api/client.ts';
 import type { Deliverable, DeliverableOffer, Post } from '../src/api/types.ts';
 import {
+  addHint,
+  askHint,
+  authorLeft,
+  changeHint,
   deliverCounts,
   deliverLine,
+  isDocked,
   isNewSentence,
   offerLine,
+  offerState,
   stateLine,
 } from '../src/model/deliverables.ts';
 import { clock } from '../src/model/format.ts';
@@ -41,7 +47,10 @@ function offer(
     note: 'The answer, without the numbers.',
     files: ['answer.md'],
     revised: 0,
-    accepted: false,
+    state: 'waiting',
+    decided_at: null,
+    standing: 'open',
+    disputed_by: null,
     ...changes,
   };
 }
@@ -72,19 +81,27 @@ const ACCEPTED = deliverable('d-2', {
     offer('p-7', 'agent-2', {
       files: ['pairs/run_pairs.py', 'pairs/README.md'],
       note: 'Runs with one command.',
-      accepted: true,
+      state: 'accepted',
+      decided_at: '2026-11-06T14:20:00Z',
     }),
   ],
 });
 const NONE = deliverable('d-3', { text: 'A list of what was ruled out, with the numbers.' });
 const LIST = [OFFERED, ACCEPTED, NONE];
 
-function panel(list: readonly Deliverable[]): string {
+const OPEN_LAB = { close: null, deliverables_told_at: null };
+const CLOSED_LAB = {
+  close: { id: 'p-9', thread: 't-1', author: 'agent-1' },
+  deliverables_told_at: null,
+};
+
+function panel(list: readonly Deliverable[], agents = AGENTS): string {
   return renderToStaticMarkup(
     <Deliverables
       api={{} as Api}
       list={list}
-      agents={AGENTS}
+      lab={OPEN_LAB}
+      agents={agents}
       now={NOW}
       reload={() => undefined}
       onClose={() => undefined}
@@ -212,91 +229,141 @@ describe('the deliverables panel', () => {
     assert.ok(
       html.includes('What you want at the end of the lab. Every agent can read this list.'),
     );
+    // Edit sits with the sentence that it edits.
     assert.ok(
       html.includes(
-        '<li class="d-offered"><p class="d-text">A one-page answer that I can read in five minutes.</p>' +
+        '<li class="d-offered"><div class="d-head"><p class="d-text">A one-page answer that I can read in five minutes.</p>' +
+          '<button type="button" class="linkbtn" aria-label="Edit this deliverable">Edit</button></div>' +
           '<p class="d-state"><i></i>Offered, not accepted yet</p>',
       ),
     );
-    // A file opens as a page, at the version that the offer's post pins.
     assert.ok(
       html.includes(
-        `<span><code>answer.md</code><small>Offered by Maren. Revised 12 times, last at ${clock('2026-11-06T14:10:00Z')}.</small></span>` +
-          '<a href="#/file/p-5/answer.md" aria-label="Read answer.md">Read</a>',
-      ),
-    );
-    assert.ok(
-      html.includes(
-        '<a href="#/file/p-7/pairs%2Frun_pairs.py" aria-label="Read pairs/run_pairs.py">',
+        `<small>Offered by Maren. Revised 12 times, last at ${clock('2026-11-06T14:10:00Z')}.</small>`,
       ),
     );
     assert.ok(html.includes('<p class="d-note">The answer, without the numbers.</p>'));
     assert.ok(html.includes('<a href="#/thread/t-4">Open the thread with every offer</a>'));
     assert.ok(html.includes(`<i></i>Accepted by you at ${clock('2026-11-06T14:20:00Z')}</p>`));
     assert.ok(html.includes('<li class="d-none">'));
-    assert.ok(
-      html.includes(
-        '<i></i>No file yet</p><p class="k-buttons"><button type="button">Edit</button></p>',
-      ),
-    );
+    assert.ok(html.includes('<i></i>No file yet</p></li>'));
     assert.ok(html.includes('<button type="button" class="d-add">Add a deliverable</button>'));
   });
 
-  it('gives the person the buttons that fit the state, and no button that marks a deliverable as met', () => {
+  it('opens a file as a page at the offered version, and names the link by the element that shows the path', () => {
+    const html = panel([OFFERED]);
+    const [, path, read, labelled] =
+      /<code id="([^"]+)">answer\.md<\/code>.*?<a id="([^"]+)" href="#\/file\/p-5\/answer\.md" aria-labelledby="([^"]+)">Read<\/a>/.exec(
+        html,
+      ) ?? [];
+    assert.ok(path && read);
+    assert.equal(labelled, `${read} ${path}`);
+    assert.ok(panel([ACCEPTED]).includes('href="#/file/p-7/pairs%2Frun_pairs.py"'));
+  });
+
+  it('shows what the person decided about each offer beside it, and names each button by the offer’s author', () => {
     const html = panel(LIST);
     const buttons = (item: string): string[] => {
       const part = html.slice(html.indexOf(`<li class="d-${item}">`));
       const row = /<p class="k-buttons">(.*?)<\/p>/.exec(part)?.[1] ?? '';
-      return [...row.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((match) => match[1] ?? '');
+      return [...row.matchAll(/<button[^>]*aria-label="([^"]*)"[^>]*>(.*?)<\/button>/g)].map(
+        (match) => `${match[2] ?? ''} | ${match[1] ?? ''}`,
+      );
     };
-    assert.deepEqual(buttons('offered'), ['Accept', 'Ask for changes', 'Edit']);
-    assert.deepEqual(buttons('accepted'), ['Take the acceptance back', 'Edit']);
-    assert.deepEqual(buttons('none'), ['Edit']);
-    assert.ok(html.includes('<button type="button" class="go">Accept</button>'));
+    assert.deepEqual(buttons('offered'), [
+      'Accept | Accept the offer by Maren',
+      'Ask for changes | Ask for changes to the offer by Maren',
+    ]);
+    assert.deepEqual(buttons('accepted'), [
+      'Take the acceptance back | Take the acceptance back from the offer by Agent 2',
+    ]);
+    assert.ok(html.includes('<div class="d-offer d-o-waiting">'));
+    assert.ok(html.includes('<span class="d-ostate">Waits for your decision</span>'));
+    assert.ok(html.includes(`<div class="d-offer d-o-accepted">`));
+    assert.ok(
+      html.includes(
+        `<span class="d-ostate">Accepted by you at ${clock('2026-11-06T14:20:00Z')}</span>`,
+      ),
+    );
+    // No control marks a deliverable as met: the person decides about offers.
+    assert.equal(/Mark|Done|Met/.test(html.replace(/Maren/g, '')), false);
   });
 
-  it('gives each offer its own buttons when several agents offered files', () => {
+  it('keeps an acceptance beside a request for changes to another offer', () => {
+    const at = '2026-11-06T14:25:00Z';
     const several = deliverable('d-1', {
       state: 'accepted',
       decided_at: '2026-11-06T14:20:00Z',
       thread: 't-4',
       offers: [
-        offer('p-5', 'agent-1', { accepted: true }),
-        offer('p-6', 'agent-2', { note: 'Shorter.' }),
+        offer('p-5', 'agent-1', { state: 'accepted', decided_at: '2026-11-06T14:20:00Z' }),
+        offer('p-6', 'agent-2', { note: 'Shorter.', state: 'changes_asked', decided_at: at }),
       ],
     });
     const html = panel([several]);
-    assert.ok(html.includes('<div class="d-offer took">'));
+    assert.ok(html.includes(`<i></i>Accepted by you at ${clock('2026-11-06T14:20:00Z')}</p>`));
+    assert.ok(html.includes('<div class="d-offer d-o-changes_asked">'));
+    assert.ok(html.includes(`<span class="d-ostate">You asked for changes at ${clock(at)}</span>`));
     assert.ok(
       html.includes(
-        '<p class="k-buttons"><button type="button">Take the acceptance back</button></p></div>',
-      ),
-    );
-    assert.ok(
-      html.includes(
-        '<p class="d-note">Shorter.</p><p class="k-buttons"><button type="button">Accept this one instead</button>' +
-          '<button type="button">Ask for changes</button><button type="button">Edit</button></p>',
+        '<button type="button" aria-label="Accept this one instead, the offer by Agent 2">Accept this one instead</button>' +
+          '<button type="button" aria-label="Ask for changes to the offer by Agent 2">Ask for changes</button>',
       ),
     );
     const asked = panel([
-      { ...several, state: 'changes_asked', offers: [offer('p-5', 'agent-1')] },
+      { ...several, state: 'changes_asked', decided_at: at, offers: several.offers.slice(1) },
     ]);
     assert.ok(asked.includes(`<li class="d-changes_asked">`));
-    assert.ok(asked.includes(`You asked for changes at ${clock('2026-11-06T14:20:00Z')}`));
-    assert.ok(asked.includes('<button type="button" class="go">Accept</button>'));
+    assert.ok(asked.includes(`<i></i>You asked for changes at ${clock(at)}</p>`));
+    assert.ok(
+      asked.includes('class="go" aria-label="Accept the offer by Agent 2">Accept</button>'),
+    );
   });
 
-  it('shows an agent’s words as text, and says what a deliverable is when the person stated none', () => {
+  it('says when the author of an offer left the lab, and offers no request for changes that nobody hears', () => {
+    const gone = agentView('agent-2', {
+      left: { at: '2026-11-06T14:15:00Z', by: 'agent-2', reason: '' },
+    });
+    const html = panel([{ ...OFFERED, offers: [offer('p-6', 'agent-2')] }], [MAREN, gone]);
+    assert.ok(html.includes('<span>Its author left the lab</span>'));
+    assert.ok(html.includes('>Accept</button></p>'));
+    assert.equal(html.includes('Ask for changes'), false);
+  });
+
+  it('says when an agent disputes an offer, with a link to the objection', () => {
+    const html = panel([
+      {
+        ...OFFERED,
+        offers: [offer('p-5', 'agent-1', { standing: 'disputed', disputed_by: 'p-8' })],
+      },
+    ]);
+    assert.ok(
+      html.includes(
+        '<span class="d-disputed">Disputed by an agent <a href="#/thread/t-4/p-8">Read the objection</a></span>',
+      ),
+    );
+    assert.equal(panel([OFFERED]).includes('d-disputed'), false);
+  });
+
+  it('shows an agent’s words as text and in no name of a control, and says what a deliverable is when the person stated none', () => {
     const html = panel([
       deliverable('d-1', {
         text: '<img src=x>',
         state: 'offered',
-        offers: [offer('p-5', 'agent-1', { note: '<script>alert(1)</script>', files: ['<b>.md'] })],
+        offers: [
+          offer('p-5', 'agent-1', { note: 'NOTE"><script>alert(1)</script>', files: ['<b>.md'] }),
+        ],
       }),
     ]);
     assert.equal(html.includes('<img'), false);
     assert.equal(html.includes('<script'), false);
-    assert.ok(html.includes('<code>&lt;b&gt;.md</code>'));
+    assert.ok(html.includes('>&lt;b&gt;.md</code>'));
+    // The note and the path are in elements of their own, and in no `aria-label`.
+    const labels = [...html.matchAll(/aria-label="([^"]*)"/g)].map((match) => match[1] ?? '');
+    assert.equal(
+      labels.some((label) => label.includes('NOTE') || label.includes('.md')),
+      false,
+    );
 
     const empty = panel([]);
     assert.ok(empty.includes('<li class="d-empty">You stated no deliverable.'));
@@ -307,6 +374,68 @@ describe('the deliverables panel', () => {
         '<button type="button" class="d-add" disabled="">A lab has 20 deliverables at most</button>',
       ),
     );
+  });
+});
+
+describe('what a change to the list does, in words', () => {
+  const now = new Date('2026-11-06T14:30:00Z');
+
+  it('says that a new deliverable and a request for changes open a closed lab again', () => {
+    assert.equal(addHint(OPEN_LAB), 'The agents get a post about it.');
+    assert.equal(
+      addHint(CLOSED_LAB),
+      'The agents said the lab is done. Adding this opens the lab again.',
+    );
+    assert.equal(askHint(OPEN_LAB), 'The agent gets it as a reply to its offer.');
+    assert.equal(
+      askHint(CLOSED_LAB),
+      'The agents said the lab is done. Asking for changes opens the lab again.',
+    );
+  });
+
+  it('says when a new sentence or a removal sends no post', () => {
+    assert.ok(changeHint(OPEN_LAB, now).startsWith('The agents get a post about the change.'));
+    assert.ok(
+      changeHint(CLOSED_LAB, now).startsWith(
+        'The agents said the lab is done, so this change sends no post and the lab stays closed.',
+      ),
+    );
+    const told = (at: string): string => changeHint({ close: null, deliverables_told_at: at }, now);
+    assert.ok(
+      told('2026-11-06T14:29:01Z').startsWith(
+        'The agents were told of a change in the last minute',
+      ),
+    );
+    assert.ok(told('2026-11-06T14:29:00Z').startsWith('The agents get a post about the change.'));
+  });
+
+  it('says what the person decided about one offer', () => {
+    const at = '2026-11-06T14:20:00Z';
+    assert.equal(offerState(offer('p-5', 'agent-1'), now), 'Waits for your decision');
+    assert.equal(
+      offerState(offer('p-5', 'agent-1', { state: 'changes_asked', decided_at: at }), now),
+      `You asked for changes at ${clock(at)}`,
+    );
+    assert.equal(
+      offerState(offer('p-5', 'agent-1', { state: 'accepted', decided_at: at }), now),
+      `Accepted by you at ${clock(at)}`,
+    );
+    assert.equal(authorLeft(offer('p-5', 'agent-1'), AGENTS), false);
+  });
+
+  it('makes room for one docked panel, also across a switch from one panel to the other', () => {
+    assert.equal(isDocked(null, true), false);
+    assert.equal(isDocked('deliver', false), true);
+    assert.equal(isDocked('deliver', true), true);
+    // The page asks once, with the panel that is docked. So talk → deliver → talk never drops the room.
+    assert.deepEqual(
+      (['talk', 'deliver', 'powers', 'deliver', null] as const).map((panel) =>
+        isDocked(panel, true),
+      ),
+      [true, true, true, true, false],
+    );
+    // A tab of the panel for the coordinator shows only while an agent holds the seat.
+    assert.equal(isDocked('talk', false), false);
   });
 });
 
@@ -360,6 +489,48 @@ describe('the deliverables on the lab page', () => {
     assert.equal(talk.includes('d-panel'), false);
     assert.ok(talk.includes('class="d-door" aria-expanded="false"'));
     assert.ok(talk.includes('Close the conversation'));
+  });
+
+  it('shows no card for the thread of a deliverable’s offers until the person opens it from the panel', () => {
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    const offers = summary({
+      thread: {
+        id: 't-4',
+        title: 'Deliverable d-1: A one-page answer.',
+        opened_by: 'agent-1',
+        deliverable: 'd-1',
+      },
+    });
+    const work = summary({ thread: { id: 't-2', title: 'Sorted input', opened_by: 'agent-1' } });
+    const render = (open: string | null): string =>
+      renderToStaticMarkup(
+        <LabPage
+          api={{ thread: () => new Promise(() => undefined) } as unknown as Api}
+          data={{
+            setup: null,
+            lab: labView({ agents: AGENTS, deliverables: [OFFERED] }),
+            threads: [...threads, work, offers],
+            needs: [],
+            report: null,
+            answer: null,
+            conversation: null,
+            version: 1,
+            error: null,
+            reload: () => undefined,
+          }}
+          now={NOW}
+          open={open}
+          post={null}
+        />,
+      );
+    const wall = render(null);
+    assert.ok(wall.includes('id="card-t-2"'));
+    assert.equal(wall.includes('id="card-t-4"'), false);
+    const opened = render('t-4');
+    assert.ok(opened.includes('<section id="card-t-4" class="f-card'));
+    // The thread is no line of work, so its card counts no results.
+    assert.equal(opened.slice(opened.indexOf('id="card-t-4"')).includes('No result yet'), false);
+    assert.ok(opened.slice(opened.indexOf('id="card-t-2"')).includes('No result yet'));
   });
 
   it('adds the counts to the banner of a lab that the agents closed, as a fact and not a gate', () => {

@@ -60,7 +60,7 @@ from verifold.server.lab import Build, Lab
 from verifold.server.member import Member
 from verifold.server.status import agent_need, all_outcomes, in_turn, profile_edits, thread_needs, waits
 from verifold.society.board import Board
-from verifold.society.deliverables import deliverable_lines
+from verifold.society.deliverables import deliverable_lines, told_at
 from verifold.society.errors import NotFound, SocietyError
 from verifold.society.identity import post_line, seat_label
 from verifold.society.lifecycle import alarm_line, close_count, lab_state
@@ -466,6 +466,7 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
         out_of_time=board.out_of_time,
         settings=board.settings,
         deliverables=deliverable_lines(board),
+        deliverables_told_at=told_at(board),
     )
 
 

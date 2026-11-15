@@ -283,6 +283,8 @@ export interface LabView {
   readonly settings: Settings;
   /** What the person wants to hold at the end of the lab, each with its state and the offers for it. */
   readonly deliverables: readonly Deliverable[];
+  /** When a post of the person last told the lab of a new sentence or a removal, or `null`. */
+  readonly deliverables_told_at: string | null;
 }
 
 /** Where a deliverable stands, by the lab's record. Only the person's acceptance makes it `accepted`. */
@@ -299,8 +301,14 @@ export interface DeliverableOffer {
   readonly files: readonly string[];
   /** How many earlier offers of the same agent for this deliverable this one replaced. */
   readonly revised: number;
-  /** Whether this is the offer that the person accepted. */
-  readonly accepted: boolean;
+  /** What the person decided about this offer: nothing yet, a request for changes, or an acceptance that stands. */
+  readonly state: 'waiting' | 'changes_asked' | 'accepted';
+  /** When the person accepted the offer or asked for changes, while `state` says so. */
+  readonly decided_at: string | null;
+  /** Where the offer's post stands after the objections and checks to it. */
+  readonly standing: Standing;
+  /** While the offer is disputed: the newest objection or failed check that replies to it. */
+  readonly disputed_by: string | null;
 }
 
 /** A deliverable: the person's sentence, its state, and each agent's newest offer. */
@@ -532,6 +540,8 @@ export interface Thread {
   readonly conversation?: boolean;
   /** Whether the lab's coordinator opened the thread for the person. */
   readonly for_person?: boolean;
+  /** For the thread that holds the offers of files for one deliverable: that deliverable. */
+  readonly deliverable?: string | null;
 }
 
 /** A kind of move that the person can hand to the lab's coordinator. Each one is off until the person switches it on. */

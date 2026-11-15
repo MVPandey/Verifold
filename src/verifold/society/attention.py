@@ -104,9 +104,10 @@ def wakes(
     if _tied(board, agent_id, post) or (_named(board, agent_id, post) and (not on_call or _addresses(post))):
         return True
     talk = post.thread == board.conversation
-    if talk or board.is_side(post.thread):
+    if talk or board.is_side(post.thread) or board.holds_offers(post.thread):
         # A side thread is for the members that watch it. No post in it is for every agent, the person's neither.
-        # The same holds for the conversation, where the person's words are for the coordinator, whatever it watches.
+        # The same holds for the conversation, where the person's words are for the coordinator, whatever it watches,
+        # and for the thread of the offers for a deliverable, which the person reads in the panel.
         told = talk and post.author == PERSON and agent_id == board.coordinator
         return told or watches_thread(board, agent_id, post.thread)
     if reader and on_call:

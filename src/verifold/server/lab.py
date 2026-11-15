@@ -60,12 +60,12 @@ from verifold.protocol.posts import (
     QuestionShown,
 )
 from verifold.protocol.settings import Settings
-from verifold.protocol.threads import CONVERSATION_TITLE, MAX_TITLE, QUESTION_TITLE, Carries, Thread, Title
+from verifold.protocol.threads import CONVERSATION_TITLE, QUESTION_TITLE, Carries, Thread
 from verifold.server.changes import wait_until
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.society.board import Board
 from verifold.society.coordinator import check_asks, permission_choice, power_covers, time_given
-from verifold.society.deliverables import live, offers
+from verifold.society.deliverables import accepted, check_decidable, live, offers_title, told_at
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
 from verifold.society.labels import awaits_model, is_numbered, label, plain
@@ -73,6 +73,7 @@ from verifold.society.lines import question_thread
 from verifold.society.names import check_name
 from verifold.society.reviewers import check_review
 from verifold.society.rules import waiting_reruns
+from verifold.society.standing import closing
 from verifold.store.record_file import RecordFile
 
 type Clock = Callable[[], datetime]
@@ -337,6 +338,7 @@ class Lab:
         Record that the person changed the sentence of a deliverable. The same sentence again records nothing.
 
         The record keeps the earlier sentence. The offers for the deliverable stay, and so does an acceptance.
+        `_change` says when a post of the person tells the lab.
 
         Raises:
             RejectedEvent: The lab has no such deliverable.
@@ -344,8 +346,7 @@ class Lab:
         """
         if live(self._board, deliverable_id).text == text:
             return
-        said = f'{CHANGED.format(id=deliverable_id)}{text}'
-        await self._commit(*_told_lab(self._board, said), _deliverable(deliverable_id, text))
+        await self._change(f'{CHANGED.format(id=deliverable_id)}{text}', deliverable_id, text, removed=False)
 
     async def remove_deliverable(self, deliverable_id: DeliverableId) -> None:
         """
@@ -356,17 +357,27 @@ class Lab:
 
         """
         text = live(self._board, deliverable_id).text
-        said = f'{REMOVED.format(id=deliverable_id)}{text}'
-        gone = _deliverable(deliverable_id, text, removed=True)
-        await self._commit(*_told_lab(self._board, said), gone)
+        await self._change(f'{REMOVED.format(id=deliverable_id)}{text}', deliverable_id, text, removed=True)
 
-    async def offer(
+    async def _change(self, said: str, deliverable_id: DeliverableId, text: str, *, removed: bool) -> None:
+        # A new sentence or a removal is no new work for the lab. So its post does not open a closed lab again:
+        # while a close stands, the record takes the change without a post. For the whole list, one such post
+        # goes out in `TOLD_WINDOW` at most. The agents read every change in `brief`.
+        board = self._board
+        last = told_at(board)
+        quiet = closing(board) is not None or (last is not None and self._clock() - last < TOLD_WINDOW)
+        tells = () if quiet else _told_lab(board, said)
+        await self._commit(*tells, _deliverable(deliverable_id, text, removed=removed, told=not quiet))
+
+    async def offer(  # noqa: PLR0913
         self,
         author: AgentId,
         deliverable_id: DeliverableId,
         evidence: tuple[FileEvidence, ...],
         note: str,
         body: str = '',
+        *,
+        helper: str = '',
     ) -> Posted:
         """
         Post an agent's offer of files for a deliverable, and return the post.
@@ -379,15 +390,16 @@ class Lab:
 
         """
         # No other change comes between this read of the board and the commit, so the first offer opens the thread.
-        title = _offer_title(live(self._board, deliverable_id))
-        first = not offers(self._board, deliverable_id)
+        stands = live(self._board, deliverable_id)
+        title = offers_title(deliverable_id, stands.text)
+        first = self._board.offers_thread(deliverable_id) is None
 
         def post(board: Board, seq: int, at: datetime) -> Posted:
-            earlier = offers(board, deliverable_id)
             offered = FileOffer(
                 id=f'p-{len(board.posts) + 1}',
-                thread=earlier[0].post.thread if earlier else board.threads[-1].thread.id,
+                thread=board.offers_thread(deliverable_id) or board.threads[-1].thread.id,
                 author=author,
+                helper=helper,
                 text=note,
                 body=body,
                 deliverable=deliverable_id,
@@ -395,7 +407,7 @@ class Lab:
             )
             return Posted(seq=seq, at=at, post=offered)
 
-        opens = (_open_thread(title, author),) if first else ()
+        opens = (_open_thread(title, author, deliverable=deliverable_id),) if first else ()
         board = await self._commit(*opens, post)
         return board.posts[-1]
 
@@ -404,30 +416,23 @@ class Lab:
         Record what the person decided about an offer: an acceptance, a request for changes, or an acceptance taken back.
 
         The decision comes with a post of the person that replies to the offer, so the offer's author hears it.
-        With a request for changes, `text` holds the person's words, and they are that post.
+        With a request for changes, `text` holds the person's words, and they are that post. A deliverable has one
+        accepted offer at most: an acceptance of another offer first takes the standing one back, in the same
+        step, so that its author hears it too.
 
         Raises:
-            RejectedEvent: The post is no offer for the deliverable, or there is no acceptance to take back.
+            RejectedEvent: The post is no offer for the deliverable, its author replaced it, or there is no
+                acceptance to take back.
             pydantic.ValidationError: A request for changes has no words.
 
         """
-        entry = self._board.post(offer)
-        if entry is None:
-            raise RejectedEvent(f'Post {offer} does not exist.')
-        words = {'accepted': ACCEPTED, 'taken_back': TAKEN_BACK}
-        said = text if decision == 'changes_asked' else words[decision].format(id=deliverable_id)
-        reply = PostRequest(kind='message', text=said, thread=entry.post.thread, reply_to=offer)
-        await self._commit(
-            _add_post(reply, PERSON, ()),
-            lambda board, seq, at: DeliverableDecided(
-                seq=seq,
-                at=at,
-                deliverable=deliverable_id,
-                decision=decision,
-                offer=offer,
-                post=board.posts[-1].post.id,
-            ),
-        )
+        board = self._board
+        live(board, deliverable_id)
+        # The record refuses the same. This says so before the person's reply to another offer is built.
+        check_decidable(board, deliverable_id, decision, offer)
+        took = accepted(board, deliverable_id)
+        back = _decision(board, deliverable_id, 'taken_back', took.offer) if decision == 'accepted' and took else ()
+        await self._commit(*back, *_decision(board, deliverable_id, decision, offer, text))
 
     async def set_alarm(self, agent_id: AgentId, minutes: float, *, quiet: bool) -> AlarmSet:
         """Record that an agent wants to be woken. The alarm replaces the agent's last one, and zero minutes cancels it."""
@@ -808,8 +813,8 @@ TAKEN_BACK: Final = 'The person took back the acceptance of these files for the 
 DELIVERABLES_TITLE: Final = 'Deliverables'
 """The title of the thread that holds the person's deliverables in a lab from before the question had a thread."""
 
-OFFERS_TITLE: Final = 'Deliverable {id}: '
-"""How the title of the thread with the offers for a deliverable starts. The sentence at the first offer follows it."""
+TOLD_WINDOW: Final = timedelta(seconds=60)
+"""How long after a post about a new sentence or a removal the next such change sends no post."""
 
 
 def _next_deliverable(board: Board) -> DeliverableId:
@@ -844,9 +849,26 @@ def _told_lab(board: Board, said: str) -> tuple[Build, ...]:
     return (*opens, _add_post(request, PERSON, ()))
 
 
-def _offer_title(stated: DeliverableSet) -> Title:
-    title = f'{OFFERS_TITLE.format(id=stated.deliverable)}{stated.text}'
-    return title if len(title) <= MAX_TITLE else f'{title[: MAX_TITLE - 1]}…'
+def _decision(
+    board: Board, deliverable_id: DeliverableId, decision: Decision, offer: PostId, text: str = ''
+) -> tuple[Build, ...]:
+    # The person's reply to the offer, and the decision after it.
+    entry = board.post(offer)
+    thread = entry.post.thread if entry else None
+    words = {'accepted': ACCEPTED, 'taken_back': TAKEN_BACK}
+    said = text if decision == 'changes_asked' else words[decision].format(id=deliverable_id)
+    reply = PostRequest(kind='message', text=said, thread=thread, reply_to=offer)
+    return (
+        _add_post(reply, PERSON, ()),
+        lambda board, seq, at: DeliverableDecided(
+            seq=seq,
+            at=at,
+            deliverable=deliverable_id,
+            decision=decision,
+            offer=offer,
+            post=board.posts[-1].post.id,
+        ),
+    )
 
 
 def _revision(board: Board, question: str, note: str, by: AgentId, *, requested: bool = False) -> tuple[Build, ...]:
@@ -1005,6 +1027,7 @@ def _open_thread(  # noqa: PLR0913
     *,
     conversation: bool = False,
     for_person: bool = False,
+    deliverable: DeliverableId | None = None,
 ) -> Build:
     # The author is always in its own side thread, and comes first. An agent that names itself changes nothing.
     members = tuple(dict.fromkeys((opened_by, *between))) if between else ()
@@ -1018,6 +1041,7 @@ def _open_thread(  # noqa: PLR0913
             carries=carries,
             conversation=conversation,
             for_person=for_person,
+            deliverable=deliverable,
         )
         return ThreadOpened(seq=seq, at=at, thread=thread)
 

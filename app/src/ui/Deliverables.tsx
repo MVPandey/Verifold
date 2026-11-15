@@ -1,5 +1,5 @@
-import { useEffect, useId, useState } from 'react';
-import type { FormEvent, ReactElement, ReactNode } from 'react';
+import { useId, useState } from 'react';
+import type { FormEvent, ReactElement } from 'react';
 
 import { messageOf } from '../api/client.ts';
 import type { Api } from '../api/client.ts';
@@ -9,14 +9,21 @@ import type {
   DeliverableDecision,
   DeliverableOffer,
 } from '../api/types.ts';
+import { authorName } from '../model/agents.ts';
 import {
   MAX_DELIVERABLES,
   MAX_SENTENCE,
+  addHint,
+  askHint,
+  authorLeft,
+  changeHint,
   deliverCounts,
   isNewSentence,
   offerLine,
+  offerState,
   stateLine,
 } from '../model/deliverables.ts';
+import type { LabNow } from '../model/deliverables.ts';
 import { href } from '../model/route.ts';
 import { Who } from './Picture.tsx';
 
@@ -53,31 +60,27 @@ export function DeliverDoor(props: {
   );
 }
 
-/** What the panel needs: the API, the lab's agents, the time, and the way to read the lab again. */
+/** What the panel needs: the API, the lab's agents and state, the time, and the way to read the lab again. */
 interface Shared {
   readonly api: Api;
   readonly agents: readonly AgentView[];
+  /** Whether a close stands, and when the agents were last told of a change to the list. */
+  readonly lab: LabNow;
   readonly now: Date;
   readonly reload: () => void;
 }
 
 /**
  * The panel for the deliverables, in the place where the panel for the coordinator docks. Each deliverable shows
- * the person's sentence, its one state, and the offers for it. Verifold judges no file: the person accepts an
- * offer, asks for changes, or takes an acceptance back. The foot adds a deliverable.
+ * the person's sentence, its one state, and the offers for it, each with what the person decided about it.
+ * Verifold judges no file: the person accepts an offer, asks for changes, or takes an acceptance back. The foot
+ * adds a deliverable. The page that docks the panel makes the room for it.
  */
 export function Deliverables(
   props: Shared & { readonly list: readonly Deliverable[]; readonly onClose: () => void },
 ): ReactElement {
   const { api, list, reload } = props;
   const [adding, setAdding] = useState(false);
-  useEffect(() => {
-    // The page makes room for the panel, as it does for the panel for the coordinator.
-    document.body.classList.add('with-panel');
-    return () => {
-      document.body.classList.remove('with-panel');
-    };
-  }, []);
   const full = list.length >= MAX_DELIVERABLES;
   return (
     <aside className="k-panel d-panel" aria-label="Deliverables">
@@ -96,8 +99,8 @@ export function Deliverables(
         {list.length === 0 ? (
           <li className="d-empty">
             You stated no deliverable. Say what you want to hold at the end, such as a one-page
-            answer or a script that runs the result again. Agents offer files for it, and you accept
-            them or ask for changes.
+            answer or a script that runs the result again. An agent can offer files for it, and you
+            accept an offer or ask for changes.
           </li>
         ) : null}
         {list.map((item) => (
@@ -109,7 +112,7 @@ export function Deliverables(
           <LineForm
             label="A new deliverable"
             placeholder="Say what you want at the end, in one sentence"
-            hint="The agents get a post about it."
+            hint={addHint(props.lab)}
             button="Add"
             ready={(text) => isNewSentence(text)}
             onSave={async (text) => {
@@ -137,28 +140,18 @@ export function Deliverables(
   );
 }
 
-/** One deliverable: the sentence, the state, each offer with its files and buttons, and the way to edit it. */
+/** One deliverable: the sentence with the way to edit it, the state, and each offer with its own state and buttons. */
 function Item(props: Shared & { readonly item: Deliverable }): ReactElement {
   const { api, item, reload } = props;
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const edit = (
-    <button
-      type="button"
-      onClick={() => {
-        setEditing(true);
-      }}
-    >
-      Edit
-    </button>
-  );
   if (editing) {
     return (
       <li className={`d-${item.state}`}>
         <LineForm
           label="The deliverable"
           start={item.text}
-          hint="The agents get a post about the change. The record keeps the earlier sentence."
+          hint={changeHint(props.lab, props.now)}
           button="Save"
           ready={(text) => isNewSentence(text, item.text)}
           onSave={async (text) => {
@@ -178,21 +171,26 @@ function Item(props: Shared & { readonly item: Deliverable }): ReactElement {
   }
   return (
     <li className={`d-${item.state}`}>
-      <p className="d-text">{item.text}</p>
+      <div className="d-head">
+        <p className="d-text">{item.text}</p>
+        <button
+          type="button"
+          className="linkbtn"
+          aria-label="Edit this deliverable"
+          onClick={() => {
+            setEditing(true);
+          }}
+        >
+          Edit
+        </button>
+      </div>
       <p className="d-state">
         <i />
         {stateLine(item, props.now)}
       </p>
-      {item.offers.map((offer, index) => (
-        <OfferBlock
-          key={offer.post}
-          {...props}
-          offer={offer}
-          onError={setError}
-          last={index === item.offers.length - 1 ? edit : null}
-        />
+      {item.offers.map((offer) => (
+        <OfferBlock key={offer.post} {...props} offer={offer} onError={setError} />
       ))}
-      {item.offers.length === 0 ? <p className="k-buttons">{edit}</p> : null}
       {item.thread ? (
         <p className="d-more">
           <a href={href({ page: 'thread', id: item.thread, post: null })}>
@@ -211,52 +209,78 @@ function Item(props: Shared & { readonly item: Deliverable }): ReactElement {
 
 /**
  * One agent's offer: its files, each of which opens as a page at the version that the agent offered, the agent's
- * note, and the person's buttons. `last` is the Edit button of the deliverable, which the last offer's row holds.
+ * note, what the person decided about it, and the person's buttons. A button names the offer by its author. No
+ * text of an agent stands inside a sentence of the app or inside a control's name.
  */
 function OfferBlock(
   props: Shared & {
     readonly item: Deliverable;
     readonly offer: DeliverableOffer;
-    readonly last: ReactNode;
     readonly onError: (error: string | null) => void;
   },
 ): ReactElement {
   const { api, item, offer, reload } = props;
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
+  const id = useId();
   const line = offerLine(offer, props.agents, props.now);
+  const by = `the offer by ${authorName(props.agents, offer.by)}`;
+  const left = authorLeft(offer, props.agents);
   const decide = (decision: DeliverableDecision): void => {
     setBusy(true);
     props.onError(null);
     api
       .decideDeliverable(item.id, decision, offer.post)
       .then(reload, (failure: unknown) => {
+        // The server refuses a decision about an offer that its author replaced. The page reads the newer one.
         props.onError(messageOf(failure));
+        reload();
       })
       .finally(() => {
         setBusy(false);
       });
   };
   return (
-    <div className={`d-offer${offer.accepted && item.offers.length > 1 ? ' took' : ''}`}>
-      {offer.files.map((path) => (
+    <div className={`d-offer d-o-${offer.state}`}>
+      {offer.files.map((path, index) => (
         <div key={path} className="d-file">
           <Who agents={props.agents} id={offer.by} size={22} dot={false} />
           <span>
-            <code>{path}</code>
+            <code id={`${id}-path-${index}`}>{path}</code>
             <small>{line}</small>
           </span>
-          <a href={href({ page: 'file', post: offer.post, path })} aria-label={`Read ${path}`}>
+          <a
+            id={`${id}-read-${index}`}
+            href={href({ page: 'file', post: offer.post, path })}
+            aria-labelledby={`${id}-read-${index} ${id}-path-${index}`}
+          >
             Read
           </a>
         </div>
       ))}
       <p className="d-note">{offer.note}</p>
+      <p className="d-facts">
+        <span className="d-ostate">{offerState(offer, props.now)}</span>
+        {left ? <span>Its author left the lab</span> : null}
+        {offer.standing === 'disputed' ? (
+          <span className="d-disputed">
+            Disputed by an agent
+            {item.thread && offer.disputed_by ? (
+              <>
+                {' '}
+                <a href={href({ page: 'thread', id: item.thread, post: offer.disputed_by })}>
+                  Read the objection
+                </a>
+              </>
+            ) : null}
+          </span>
+        ) : null}
+      </p>
       {asking ? (
         <LineForm
           label="What to change"
           placeholder="Say what you want changed"
-          hint="The agent gets it as a reply to its offer."
+          hint={askHint(props.lab)}
           button="Ask for changes"
           most={1000}
           ready={(text) => isNewSentence(text)}
@@ -270,10 +294,11 @@ function OfferBlock(
         />
       ) : (
         <p className="k-buttons">
-          {offer.accepted ? (
+          {offer.state === 'accepted' ? (
             <button
               type="button"
               disabled={busy}
+              aria-label={`Take the acceptance back from ${by}`}
               onClick={() => {
                 decide('take_back');
               }}
@@ -286,24 +311,29 @@ function OfferBlock(
                 type="button"
                 className={item.state === 'accepted' ? undefined : 'go'}
                 disabled={busy}
+                aria-label={
+                  item.state === 'accepted' ? `Accept this one instead, ${by}` : `Accept ${by}`
+                }
                 onClick={() => {
                   decide('accept');
                 }}
               >
                 {item.state === 'accepted' ? 'Accept this one instead' : 'Accept'}
               </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => {
-                  setAsking(true);
-                }}
-              >
-                Ask for changes
-              </button>
+              {left ? null : (
+                <button
+                  type="button"
+                  disabled={busy}
+                  aria-label={`Ask for changes to ${by}`}
+                  onClick={() => {
+                    setAsking(true);
+                  }}
+                >
+                  Ask for changes
+                </button>
+              )}
             </>
           )}
-          {props.last}
         </p>
       )}
     </div>
@@ -313,7 +343,7 @@ function OfferBlock(
 /**
  * A form of one text box: a new deliverable, a new sentence for one, or what to change in an offer. The button
  * is off until `ready` says that the text can go. `onClose` runs after a save and on Cancel. With `onRemove`, the
- * form also removes the deliverable.
+ * form also removes the deliverable, after the person said so a second time.
  */
 function LineForm(props: {
   readonly label: string;
@@ -330,6 +360,7 @@ function LineForm(props: {
 }): ReactElement {
   const [text, setText] = useState(props.start ?? '');
   const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const id = useId();
   const ready = props.ready(text) && !busy;
@@ -345,6 +376,38 @@ function LineForm(props: {
     event.preventDefault();
     if (ready) run(props.onSave(text.trim()));
   };
+  const { onRemove } = props;
+  if (removing && onRemove) {
+    return (
+      <div className="d-form" role="group" aria-label="Remove the deliverable">
+        <p className="d-ask">Remove this deliverable? Its offers stay as posts.</p>
+        <div>
+          <span className={error ? 'error' : undefined} role={error ? 'alert' : undefined}>
+            {error ?? props.hint}
+          </span>
+          <button
+            type="button"
+            className="linkbtn"
+            onClick={() => {
+              setRemoving(false);
+            }}
+          >
+            Keep it
+          </button>
+          <button
+            type="button"
+            className="d-go"
+            disabled={busy}
+            onClick={() => {
+              run(onRemove());
+            }}
+          >
+            {busy ? 'Removing' : 'Remove it'}
+          </button>
+        </div>
+      </div>
+    );
+  }
   return (
     <form className="d-form" onSubmit={save}>
       <label htmlFor={id}>{props.label}</label>
@@ -365,13 +428,13 @@ function LineForm(props: {
         <span className={error ? 'error' : undefined} role={error ? 'alert' : undefined}>
           {error ?? props.hint}
         </span>
-        {props.onRemove ? (
+        {onRemove ? (
           <button
             type="button"
             className="linkbtn"
             disabled={busy}
             onClick={() => {
-              if (props.onRemove) run(props.onRemove());
+              setRemoving(true);
             }}
           >
             Remove
@@ -380,7 +443,7 @@ function LineForm(props: {
         <button type="button" className="linkbtn" onClick={props.onClose}>
           Cancel
         </button>
-        <button type="submit" disabled={!ready}>
+        <button type="submit" className="d-go" disabled={!ready}>
           {busy ? 'Saving' : props.button}
         </button>
       </div>

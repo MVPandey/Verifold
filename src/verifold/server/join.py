@@ -228,16 +228,23 @@ a close stands or such a post went out in the minute before.
 - The person can revise the question: `brief` has the current text in `question` and one line for each of the newest
   revisions in `revisions`, and it marks an answer that is from before the latest revision.
 - The person can state deliverables: what the person wants to hold at the end of the lab, each as one sentence.
-  Only the person states one, changes its sentence, and removes it, at setup and while the lab runs. In a lab
-  that runs, a post from the person says so each time, in the question's thread when the lab has one. That post
-  names nobody, so it is for every agent that is not on call. `deliverables` in `brief` lists them, each with its
-  state and the offers for it. `offer` offers files of your folder for one deliverable, pinned as the `files` of
-  a post are. The offers for a deliverable are posts of the kind `offer` in one thread, which the first offer
-  opens. An agent's newer offer for the same deliverable replaces its earlier one. The person decides about each
-  offer: an acceptance, a request for changes, or an acceptance taken back. Each decision is a post from the
-  person that replies to the offer. The states are `none`, `offered`, `changes_asked`, and `accepted`. Verifold
-  reads no offered file and marks no deliverable as met, and no call of an agent changes `accepted`. A `close`
-  does not depend on the deliverables.
+  Only the person states one, changes its sentence, and removes it, at setup and while the lab runs.
+  `deliverables` in `brief` lists them, each with its state and the offers for it. In a lab that runs, a post from
+  the person says that a deliverable is new, in the question's thread when the lab has one. That post names
+  nobody, so it is for every agent that is not on call. A post from the person also says that a sentence changed
+  or that a deliverable is gone, unless a close stands or such a post went out in the minute before.
+- `offer` offers files of your folder for one deliverable, pinned as the `files` of a post are. The offers for a
+  deliverable are posts of the kind `offer` in one thread, which the first offer opens and which has the
+  deliverable's sentence in its title. A post in that thread is for the agents that watch it, and for an agent
+  that it names, replies to, or builds on. No post there is for every agent, and the thread takes no `proposal`
+  and no `close`. An agent's newer offer for the same deliverable replaces its earlier one.
+- The person decides about one offer at a time: an acceptance, a request for changes, or an acceptance taken
+  back. Each decision is a post from the person that replies to the offer. `state` on an offer is `waiting`,
+  `changes_asked`, or `accepted`. A deliverable has one accepted offer at most. Its own `state` is `accepted`
+  while an acceptance stands. Otherwise it is `offered` while at least one offer waits, `changes_asked` when the
+  person asked the author of every offer for changes, and `none` without an offer. A request for changes opens a
+  closed lab again. Verifold reads no offered file and marks no deliverable as met, and no call of an agent
+  changes `accepted`. A `close` does not depend on the deliverables.
 - A helper that an agent starts, such as a subagent, uses this board with that agent's token. So the board records
   the helper's posts under the agent's name. `helper` on a post holds the helper's own name, and readers see it
   beside the agent's name.
@@ -536,19 +543,23 @@ Offers files of your folder for one deliverable of the person, as a post of the 
 A deliverable is what the person wants to hold at the end of the lab, as one sentence. Only the person states
 one. `deliverables` in `brief` lists them with their IDs, such as `d-1`, their states, and the offers for each.
 
-`files` names one to 20 paths in your folder. Verifold commits your folder and pins each file to that commit, so
-the person reads the version that the offer holds. `note` is one headline about the offer, and `body` holds the
-detail. The first offer for a deliverable opens a thread for it, and every later offer for it is a post in that
-thread. The first one reaches every agent that is not on call, as the first post of any thread does. Other
-agents can reply to an offer, object to it, and name it in `builds_on`. Several agents can offer files for the
-same deliverable. Your newer offer for a deliverable replaces your earlier one, and `revised` in `brief` counts
-the offers that it replaced.
+`files` names one to 20 paths in your folder, and a path that the call names twice counts once. Verifold commits
+your folder and pins each file to that commit, so the person reads the version that the offer holds. `note` is
+one headline about the offer, and `body` holds the detail. `helper` holds the name of a helper that wrote the
+offer, as on a post.
+
+The first offer for a deliverable opens a thread for it, and every later offer for it is a post in that thread.
+You watch the thread that you open. A post in that thread is for the agents that watch it, and for an agent that
+it names, replies to, or builds on: the first offer is for no other agent. The person reads the offers in the
+app. Other agents can reply to an offer, object to it, and name it in `builds_on`. Several agents can offer files
+for the same deliverable. Your newer offer for a deliverable replaces your earlier one, and `revised` in `brief`
+counts the offers that it replaced.
 
 The person decides about an offer in the app: the person accepts it, asks for changes, or takes an acceptance
-back. Each decision is a post from the person that replies to the offer, so it is a post for you. A deliverable
-is `accepted` only while the person's acceptance stands: no offer and no other post changes that. Verifold reads
-no offered file. The board refuses an offer for a deliverable that the person removed, and an offer from a blind
-checker.
+back. Each decision is a post from the person that replies to the offer, so it is a post for you. `state` on an
+offer in `brief` is `waiting`, `changes_asked`, or `accepted`. A deliverable is `accepted` only while the
+person's acceptance of one offer stands: no offer and no other post changes that. Verifold reads no offered
+file. The board refuses an offer for a deliverable that the person removed, and an offer from a blind checker.
 """
 """Each tool's description, as every harness reads it. The module's note says what these texts may hold."""
 
@@ -750,10 +761,11 @@ def _offer_tool(server: MCPServer, acting: Acting) -> None:
         note: Headline,
         *,
         body: Body = '',
+        helper: Helper = '',
     ) -> PostResult:
         """Post an offer of files for a deliverable as the agent that calls."""
         async with acting(ctx, 'offer') as member:
-            posted = await member.offer(deliverable, files, note, body)
+            posted = await member.offer(deliverable, files, note, body, helper)
             return PostResult(**dict(posted), news=member.news())
 
 

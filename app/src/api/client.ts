@@ -157,6 +157,7 @@ export function createApi(
         reviewer_seats: lab.reviewer_seats ?? 0,
         reviewer_seats_set: lab.reviewer_seats_set ?? null,
         deliverables: lab.deliverables ?? [],
+        deliverables_told_at: lab.deliverables_told_at ?? null,
         agents: lab.agents.map((view) => ({
           ...view,
           agent: { ...view.agent, given_role: view.agent.given_role ?? '' },

@@ -129,6 +129,7 @@ class RecordBuilder:
         *,
         conversation: bool = False,
         for_person: bool = False,
+        deliverable: str | None = None,
     ) -> 'RecordBuilder':
         seq, at = self._stamp()
         thread = Thread(
@@ -138,6 +139,7 @@ class RecordBuilder:
             between=between,
             conversation=conversation,
             for_person=for_person,
+            deliverable=deliverable,
         )
         self.events.append(ThreadOpened(seq=seq, at=at, thread=thread))
         return self
@@ -270,7 +272,7 @@ class RecordBuilder:
     ) -> 'RecordBuilder':
         """Add an agent's offer of files for a deliverable. The first one for a deliverable opens `thread_id`."""
         if not any(isinstance(event, ThreadOpened) and event.thread.id == thread_id for event in self.events):
-            self.thread(thread_id, opened_by=author, title=f'Deliverable {deliverable_id}')
+            self.thread(thread_id, opened_by=author, title=f'Deliverable {deliverable_id}', deliverable=deliverable_id)
         evidence = tuple(FileEvidence(path=path, commit='c' * 40) for path in paths)
         return self.post(
             FileOffer(

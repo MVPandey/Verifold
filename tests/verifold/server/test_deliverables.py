@@ -17,6 +17,7 @@ from verifold.server.member import Member
 from verifold.society.attention import wakes
 from verifold.society.deliverables import deliverable_lines
 from verifold.society.errors import RejectedEvent
+from verifold.society.lifecycle import lab_state
 from verifold.store.record_file import RecordFile
 
 ANSWER = 'A one-page answer that I can read in five minutes.'
@@ -27,10 +28,25 @@ async def pin(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
     return tuple(FileEvidence(path=path, commit='a' * 40) for path in paths)
 
 
+class Clock:
+    """The lab's clock, which a test moves."""
+
+    def __init__(self) -> None:
+        self.now = START
+
+    def pass_seconds(self, seconds: float) -> None:
+        self.now += timedelta(seconds=seconds)
+
+
 @pytest.fixture
-async def asked(record_file: RecordFile) -> Lab:
+def clock() -> Clock:
+    return Clock()
+
+
+@pytest.fixture
+async def asked(record_file: RecordFile, clock: Clock) -> Lab:
     """A lab with the question's thread, the deliverable d-1 from the setup, and the agents `ada` and `bo`."""
-    lab = Lab.create(record_file, 'Does it hold?', clock=lambda: START)
+    lab = Lab.create(record_file, 'Does it hold?', clock=lambda: clock.now)
     await lab.open_question_thread()
     await lab.state_deliverables((ANSWER,))
     await lab.join(agent('ada'))
@@ -76,12 +92,15 @@ async def test_a_new_deliverable_goes_in_the_questions_thread_as_the_persons_pos
     assert Lab.load(record_file).board == asked.board
 
 
-async def test_the_person_changes_and_removes_a_deliverable_and_the_lab_hears_each_once(asked: Lab) -> None:
+async def test_the_person_changes_and_removes_a_deliverable_and_the_record_keeps_every_sentence(
+    asked: Lab, clock: Clock
+) -> None:
     await asked.change_deliverable('d-1', 'A two-page answer.')
     changed = asked.board.posts[-1].post.text
     seq = asked.board.seq
     await asked.change_deliverable('d-1', 'A two-page answer.')
     same = asked.board.seq
+    clock.pass_seconds(60)
     await asked.remove_deliverable('d-1')
 
     assert changed == 'The person changed the sentence of the deliverable d-1 to: A two-page answer.'
@@ -98,6 +117,63 @@ async def test_the_person_changes_and_removes_a_deliverable_and_the_lab_hears_ea
             await call
     with pytest.raises(RejectedEvent, match='no deliverable d-7'):
         await asked.remove_deliverable('d-7')
+
+
+async def test_new_sentences_and_removals_send_one_post_in_a_minute_for_the_whole_list(
+    asked: Lab, clock: Clock, record_file: RecordFile
+) -> None:
+    await asked.add_deliverable(SCRIPT)
+    posts = len(asked.board.posts)
+
+    # A post about a new deliverable starts no window: the first new sentence has its post.
+    await asked.change_deliverable('d-1', 'A two-page answer.')
+    clock.pass_seconds(59)
+    await asked.change_deliverable('d-2', 'A short script.')
+    await asked.remove_deliverable('d-1')
+    told = len(asked.board.posts)
+    # A new deliverable has its post at any time.
+    await asked.add_deliverable('A list of what was ruled out.')
+    clock.pass_seconds(1)
+    await asked.change_deliverable('d-2', 'A script.')
+
+    assert (told, len(asked.board.posts)) == (posts + 1, posts + 3)
+    assert [
+        (entry.deliverable, entry.text, entry.removed, entry.post is not None) for entry in asked.board.deliverables[2:]
+    ] == [
+        ('d-1', 'A two-page answer.', False, True),
+        ('d-2', 'A short script.', False, False),
+        ('d-1', 'A two-page answer.', True, False),
+        ('d-3', 'A list of what was ruled out.', False, True),
+        ('d-2', 'A script.', False, True),
+    ]
+    # The agents read every change in the brief, also one without a post.
+    assert [(line.id, line.text) for line in Member(asked, 'ada').brief('').deliverables] == [
+        ('d-2', 'A script.'),
+        ('d-3', 'A list of what was ruled out.'),
+    ]
+    assert Lab.load(record_file).board == asked.board
+
+
+async def test_a_new_sentence_and_a_removal_send_no_post_and_open_no_lab_while_a_close_stands(asked: Lab) -> None:
+    await asked.add_deliverable(SCRIPT)
+    close = await asked.post(PostRequest(kind='close', text='Nothing is left.', thread='t-1'), 'ada')
+    await asked.post(
+        PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to=close.post.id, accepts=True), 'bo'
+    )
+    posts = len(asked.board.posts)
+
+    await asked.change_deliverable('d-1', 'A two-page answer.')
+    await asked.remove_deliverable('d-2')
+
+    assert (lab_state(asked.board), len(asked.board.posts)) == ('closed', posts)
+    assert [(entry.text, entry.removed, entry.post) for entry in asked.board.deliverables[-2:]] == [
+        ('A two-page answer.', False, None),
+        (SCRIPT, True, None),
+    ]
+    assert states(asked) == [('d-1', 'none')]
+    # A new deliverable is new work: its post opens the lab again.
+    await asked.add_deliverable('A list of what was ruled out.')
+    assert lab_state(asked.board) == 'open'
 
 
 async def test_a_lab_from_before_the_question_had_a_thread_gets_one_thread_for_its_deliverables(lab: Lab) -> None:
@@ -131,13 +207,20 @@ async def test_the_first_offer_opens_the_thread_of_its_deliverable_and_later_off
 
     opened = asked.board.thread(first.post.thread)
     assert opened is not None
-    assert (opened.thread.title, opened.thread.opened_by) == (f'Deliverable d-1: {ANSWER}', 'ada')
+    assert (opened.thread.title, opened.thread.opened_by, opened.thread.deliverable) == (
+        f'Deliverable d-1: {ANSWER}',
+        'ada',
+        'd-1',
+    )
     assert [entry.post.thread for entry in (first, second, again)] == ['t-2', 't-2', 't-2']
     assert isinstance(first.post, FileOffer)
     assert (first.post.kind, first.post.deliverable, first.post.body) == ('offer', 'd-1', 'Page two is still missing.')
-    # The first post of a thread is for every agent. A later offer is for the agents that watch the thread.
-    assert wakes(asked.board, 'bo', first)
+    # No offer is for every agent. A later offer is for the agents that watch the thread, as its opener does.
+    assert not wakes(asked.board, 'bo', first)
     assert wakes(asked.board, 'ada', second)
+    # The title follows the person's new sentence.
+    await asked.change_deliverable('d-1', 'A two-page answer.')
+    assert asked.board.threads[-1].thread.title == 'Deliverable d-1: A two-page answer.'
     (line,) = deliverable_lines(asked.board)
     assert [(offer.by, offer.files, offer.note, offer.revised) for offer in line.offers] == [
         ('bo', ('short.md', 'long.md'), 'Two lengths.', 0),
@@ -207,7 +290,7 @@ async def test_a_decision_that_the_record_refuses_leaves_no_post(asked: Lab) -> 
         await asked.decide('d-1', 'changes_asked', offered.post.id, '  ')
     with pytest.raises(RejectedEvent, match='no acceptance to take back'):
         await asked.decide('d-1', 'taken_back', offered.post.id)
-    with pytest.raises(RejectedEvent, match='Post p-9 does not exist'):
+    with pytest.raises(RejectedEvent, match='Post p-9 is no offer of files'):
         await asked.decide('d-1', 'accepted', 'p-9')
     with pytest.raises(RejectedEvent, match='no offer of files'):
         await asked.decide('d-1', 'accepted', 'p-1')
@@ -303,3 +386,87 @@ async def test_an_agent_reads_the_deliverables_in_its_brief_and_offers_files_wit
     assert [result.is_error for result in (no_file, too_many, outside, unknown, as_post)] == [True] * 5
     assert 'goes through the `offer` tool' in str(as_post.content)
     assert 'no deliverable d-5' in str(unknown.content)
+
+
+async def test_the_acceptance_of_another_offer_takes_the_first_back_and_both_authors_hear_it(asked: Lab) -> None:
+    first = await asked.offer('ada', 'd-1', await pin(('answer.md',)), 'The answer.')
+    second = await asked.offer('bo', 'd-1', await pin(('short.md',)), 'A shorter one.')
+    await asked.decide('d-1', 'accepted', first.post.id)
+
+    await asked.decide('d-1', 'accepted', second.post.id)
+
+    back, took = asked.board.posts[-2], asked.board.posts[-1]
+    assert (back.post.reply_to, back.post.text) == (
+        first.post.id,
+        'The person took back the acceptance of these files for the deliverable d-1.',
+    )
+    assert (took.post.reply_to, wakes(asked.board, 'ada', back), wakes(asked.board, 'bo', took)) == (
+        second.post.id,
+        True,
+        True,
+    )
+    assert [(entry.decision, entry.offer) for entry in asked.board.decisions] == [
+        ('accepted', first.post.id),
+        ('taken_back', first.post.id),
+        ('accepted', second.post.id),
+    ]
+    (line,) = deliverable_lines(asked.board)
+    assert (line.state, [(offer.by, offer.state) for offer in line.offers]) == (
+        'accepted',
+        [('ada', 'waiting'), ('bo', 'accepted')],
+    )
+
+
+async def test_a_decision_on_an_offer_that_its_author_replaced_names_the_newer_offer_and_records_nothing(
+    asked: Lab,
+) -> None:
+    old = await asked.offer('ada', 'd-1', await pin(('answer.md',)), 'The answer.')
+    new = await asked.offer('ada', 'd-1', await pin(('answer.md',)), 'With the numbers.')
+    seq = asked.board.seq
+
+    for decision in ('accepted', 'changes_asked'):
+        with pytest.raises(RejectedEvent, match=f'the offer {new.post.id} replaces it'):
+            await asked.decide('d-1', decision, old.post.id, 'Shorter.')
+
+    assert asked.board.seq == seq
+
+
+async def test_a_request_for_changes_opens_a_closed_lab_again_and_an_acceptance_does_not(asked: Lab) -> None:
+    offered = await asked.offer('ada', 'd-1', await pin(('answer.md',)), 'The answer.')
+    close = await asked.post(PostRequest(kind='close', text='Nothing is left.', thread='t-1'), 'ada')
+    await asked.post(
+        PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to=close.post.id, accepts=True), 'bo'
+    )
+
+    await asked.decide('d-1', 'accepted', offered.post.id)
+    await asked.decide('d-1', 'taken_back', offered.post.id)
+    still = lab_state(asked.board)
+    await asked.decide('d-1', 'changes_asked', offered.post.id, 'Add the numbers.')
+
+    assert (still, lab_state(asked.board)) == ('closed', 'open')
+
+
+async def test_an_offer_takes_each_path_once_and_the_name_of_a_helper(asked: Lab) -> None:
+    pinned: list[tuple[str, ...]] = []
+
+    async def pins(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+        pinned.append(paths)
+        return await pin(paths)
+
+    ada = Member(asked, 'ada', pin=pins)
+    async with Client(join_server(lambda _: ada)) as client:
+        offered = await client.call_tool(
+            'offer',
+            {
+                'deliverable': 'd-1',
+                'files': ['answer.md', 'data.csv', 'answer.md'],
+                'note': 'The answer.',
+                'helper': ' writer ',
+            },
+        )
+
+    assert pinned == [('answer.md', 'data.csv')]
+    assert offered.structured_content is not None
+    post = offered.structured_content['post']
+    assert ([file['path'] for file in post['evidence']], post['helper']) == (['answer.md', 'data.csv'], 'writer')
+    assert deliverable_lines(asked.board)[0].offers[0].files == ('answer.md', 'data.csv')

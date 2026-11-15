@@ -3247,7 +3247,8 @@ body.with-panel {
   overflow-y: auto;
   list-style: none;
   margin: 0;
-  padding: 0 18px;
+  /* Room under the last deliverable, so that its form does not sit against the foot. */
+  padding: 0 18px 28px;
 }
 .d-list > li {
   padding: 20px 0;
@@ -3257,6 +3258,16 @@ body.with-panel {
   color: var(--ink2);
   font-size: 14.5px;
   line-height: 1.5;
+}
+.d-head {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.d-head .linkbtn {
+  flex: none;
+  font-size: 13.5px;
 }
 .d-text {
   margin: 0;
@@ -3313,9 +3324,39 @@ body.with-panel {
 .d-file:hover {
   border-color: var(--ink2);
 }
-/* Among several offers, the one that the person accepted has the color of the state. */
-.d-offer.took .d-file {
+/* The offer that the person accepted has the color of that state. */
+.d-o-accepted .d-file {
   border-color: var(--good);
+}
+.d-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--ink2);
+}
+.d-o-accepted .d-ostate {
+  color: var(--good);
+  font-weight: 600;
+}
+.d-o-changes_asked .d-ostate {
+  color: var(--turn);
+  font-weight: 600;
+}
+.d-disputed {
+  color: var(--bad);
+  font-weight: 600;
+}
+.d-disputed a {
+  color: inherit;
+  font-weight: 500;
+  text-underline-offset: 3px;
+}
+.d-ask {
+  margin: 0;
+  font-size: 15px;
+  color: var(--ink);
 }
 .d-file code {
   display: block;
@@ -3357,7 +3398,7 @@ body.with-panel {
   font-size: 13px;
 }
 .d-more a {
-  color: var(--muted);
+  color: var(--ink2);
   text-underline-offset: 3px;
 }
 .d-list .error {
@@ -3424,7 +3465,7 @@ body.with-panel {
 .d-form > div > span {
   flex: 1 1 180px;
 }
-.d-form button[type='submit'] {
+.d-form .d-go {
   flex: none;
   padding: 8px 18px;
   background: var(--accent);
@@ -3433,7 +3474,7 @@ body.with-panel {
   font: 600 14px var(--body);
   cursor: pointer;
 }
-.d-form button[type='submit']:disabled {
+.d-form .d-go:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }

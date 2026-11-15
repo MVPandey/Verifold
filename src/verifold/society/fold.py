@@ -35,7 +35,13 @@ from verifold.protocol.events import (
 )
 from verifold.society.board import Board
 from verifold.society.coordinator import check_answered, check_made, check_power
-from verifold.society.deliverables import check_decision, check_deliverable, check_offer
+from verifold.society.deliverables import (
+    check_decision,
+    check_deliverable,
+    check_offer,
+    check_offers_thread,
+    offers_title,
+)
 from verifold.society.errors import RejectedEvent
 from verifold.society.rules import (
     check_agent,
@@ -91,6 +97,7 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
             return replace(board, seq=event.seq, left=(*board.left, event))
         case ThreadOpened(thread=thread):
             check_thread(board, thread)
+            check_offers_thread(board, thread)
             return replace(board, seq=event.seq, threads=(*board.threads, event))
         case Posted(post=post):
             check_post(board, post)
@@ -141,7 +148,7 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
             return replace(board, seq=event.seq, answers=(*board.answers, event))
         case DeliverableSet():
             check_deliverable(board, event)
-            return replace(board, seq=event.seq, deliverables=(*board.deliverables, event))
+            return _stated(board, event)
         case DeliverableDecided():
             check_decision(board, event)
             return replace(board, seq=event.seq, decisions=(*board.decisions, event))
@@ -166,6 +173,19 @@ def _profiled(board: Board, event: ProfileSet) -> Board:
         return replace(board, seq=event.seq, profiles=profiles)
     name = event.name or board.label(event.agent)
     return replace(board, seq=event.seq, profiles=profiles, agents=_with_name(board, event.agent, name))
+
+
+def _stated(board: Board, event: DeliverableSet) -> Board:
+    # The thread of the offers for a deliverable has the deliverable's sentence in its title. The title follows a
+    # new sentence, and the thread's event in the record keeps the title that it opened with.
+    title = offers_title(event.deliverable, event.text)
+    threads = tuple(
+        entry.model_copy(update={'thread': entry.thread.model_copy(update={'title': title})})
+        if entry.thread.deliverable == event.deliverable
+        else entry
+        for entry in board.threads
+    )
+    return replace(board, seq=event.seq, deliverables=(*board.deliverables, event), threads=threads)
 
 
 def _with_name(board: Board, agent_id: str, name: str) -> tuple[AgentJoined, ...]:

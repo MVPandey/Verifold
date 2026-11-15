@@ -13,9 +13,11 @@ import type {
   ThreadSummary,
 } from '../api/types.ts';
 import { authorName, members } from '../model/agents.ts';
+import { coordinatorOf } from '../model/coordinator.ts';
 import type { Tab } from '../model/coordinator.ts';
 import { crossedLine, crossLines } from '../model/crossings.ts';
-import { deliverLine } from '../model/deliverables.ts';
+import { deliverLine, isDocked } from '../model/deliverables.ts';
+import type { Docked } from '../model/deliverables.ts';
 import { clock, dayClock, duration, minutesBetween } from '../model/format.ts';
 import { clip, personMessage, standingChip } from '../model/posts.ts';
 import { isRevision, noteLabel, revisedBy, revisedLine } from '../model/question.ts';
@@ -101,7 +103,16 @@ export function Wall(
   const question = questionThread(threads);
   const questionId = question?.thread.id ?? null;
   // The panel that is docked beside the wall: a tab of the panel for the coordinator, or the deliverables.
-  const [panel, setPanel] = useState<Tab | 'deliver' | null>(props.panel ?? null);
+  const [panel, setPanel] = useState<Docked>(props.panel ?? null);
+  const docked = isDocked(panel, coordinatorOf(lab.agents) !== null);
+  useEffect(() => {
+    // The page makes room for the docked panel, so the person reads the wall and the panel at once. This is
+    // the one place that does it: a switch from one panel to the other keeps the room.
+    document.body.classList.toggle('with-panel', docked);
+    return () => {
+      document.body.classList.remove('with-panel');
+    };
+  }, [docked]);
 
   const send = async (text: string, thread?: string): Promise<void> => {
     const request = personMessage(text, thread);
@@ -124,8 +135,11 @@ export function Wall(
         {read.error ?? 'Loading the thread.'}
       </p>
     );
+  // The thread of the offers for a deliverable is no line of work, so it has no card. The panel for the
+  // deliverables links to it, and it shows as a card while it is open.
   const cards = threads
     .filter((summary) => summary !== question && !isSide(summary))
+    .filter((summary) => !summary.thread.deliverable || summary.thread.id === open)
     .sort((first, second) => number(first) - number(second));
   const side = threads.filter(isSide);
   const answerOpen = question !== null && open === questionId;
@@ -191,6 +205,7 @@ export function Wall(
             <Deliverables
               api={api}
               list={lab.deliverables}
+              lab={lab}
               agents={lab.agents}
               now={props.now}
               reload={data.reload}
@@ -773,7 +788,7 @@ function Card(props: {
         <div className="f-card-st">
           {chip ? (
             <ChipView chip={chip} />
-          ) : (
+          ) : summary.thread.deliverable ? null : (
             <span className={`f-st fs-count-${status.edge}`}>{status.label}</span>
           )}
           {status.openAsks ? <span className="f-st fs-ask">{status.openAsks}</span> : null}

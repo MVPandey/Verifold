@@ -40,8 +40,9 @@ from verifold.runner.messages import (
     start_message,
 )
 from verifold.server.join import INSTRUCTIONS, join_server
-from verifold.server.lab import ACCEPTED, CHANGED, OFFERS_TITLE, REMOVED, STATED, TAKEN_BACK, Lab
+from verifold.server.lab import ACCEPTED, CHANGED, REMOVED, STATED, TAKEN_BACK, Lab
 from verifold.server.member import Member
+from verifold.society.deliverables import OFFERS_TITLE
 from verifold.society.lifecycle import no_alarm_line
 
 VERBS = (

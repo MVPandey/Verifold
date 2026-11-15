@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useId, useState } from 'react';
 import type { FormEvent, ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
@@ -72,13 +72,6 @@ export function CoordinatorSeat(
   const setTab = props.onTab;
   const holder = coordinatorOf(data.lab.agents);
   const open = holder !== null && tab !== null;
-  useEffect(() => {
-    // The page makes room for the panel, so the person reads the wall and the conversation at once.
-    document.body.classList.toggle('with-panel', open);
-    return () => {
-      document.body.classList.remove('with-panel');
-    };
-  }, [open]);
   if (holder === null) {
     return (
       <p className="k-empty">

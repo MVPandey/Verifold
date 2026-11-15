@@ -36,13 +36,25 @@ type Decision = Literal['accepted', 'changes_asked', 'taken_back']
 
 type DeliverableState = Literal['none', 'offered', 'changes_asked', 'accepted']
 """
-Where a deliverable stands, by the record. `none`: no agent offered files. `offered`: an offer waits for the person.
-`changes_asked`: the person asked for changes, and no offer came since. `accepted`: the person accepted an offer.
+Where a deliverable stands, by the record. `accepted`: the person's acceptance of an offer stands. `offered`: no
+acceptance stands, and at least one offer waits for the person. `changes_asked`: the person asked the author of
+every offer for changes, and none offered again. `none`: no agent offered files.
 """
 
 
+type OfferState = Literal['waiting', 'changes_asked', 'accepted']
+"""
+Where one offer stands, by the person's decisions about it. `waiting`: the person decided nothing about it, or took
+their acceptance of it back. `changes_asked`: the person asked its author for changes. `accepted`: the person's
+acceptance of it stands.
+"""
+
+type OfferStanding = Literal['open', 'checked', 'held_up', 'disputed', 'conceded']
+"""Where the post of an offer stands after the objections, checks, and answers to it, as for any post."""
+
+
 class OfferLine(Record):
-    """One agent's offer for a deliverable as it stands: the post, its files, and how often the agent revised it."""
+    """One agent's offer for a deliverable as it stands: the post, its files, and what the person decided about it."""
 
     post: PostId
     """The post that holds the offer. Its files open at the commit that the post pins."""
@@ -54,8 +66,12 @@ class OfferLine(Record):
     """The paths of the offered files in the agent's folder."""
     revised: int = 0
     """How many earlier offers of the same agent for this deliverable this one replaced."""
-    accepted: bool = False
-    """Whether this is the offer that the person accepted."""
+    state: OfferState = 'waiting'
+    decided_at: AwareDatetime | None = None
+    """When the person accepted the offer or asked for changes, while `state` says so. `None` otherwise."""
+    standing: OfferStanding = 'open'
+    disputed_by: PostId | None = None
+    """While `standing` is `disputed`: the newest objection or failed check that replies to the offer."""
 
 
 class DeliverableLine(Record):
@@ -65,11 +81,11 @@ class DeliverableLine(Record):
     text: Sentence
     state: DeliverableState = 'none'
     decided_at: AwareDatetime | None = None
-    """When the person accepted an offer or asked for changes, while the state says so. `None` otherwise."""
+    """When the person accepted an offer or last asked for changes, while the state says so. `None` otherwise."""
     thread: ThreadId | None = None
     """The thread that holds the offers for the deliverable. `None` until the first offer opens it."""
     offers: tuple[OfferLine, ...] = ()
     """
-    Each agent's newest offer, oldest first. The offer that the person accepted is among them also when its agent
-    offered again later.
+    Each agent's newest offer, oldest first, each with its own state. The offer that the person accepted is among
+    them also when its agent offered again later.
     """

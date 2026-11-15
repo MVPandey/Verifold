@@ -1,7 +1,8 @@
 /** What the lab page says about the person's deliverables: the counts, each state, and each offer. */
 
-import type { AgentView, Deliverable, DeliverableOffer } from '../api/types.ts';
+import type { AgentView, Deliverable, DeliverableOffer, LabView } from '../api/types.ts';
 import { authorName } from './agents.ts';
+import type { Tab } from './coordinator.ts';
 import { dayClock } from './format.ts';
 
 /** The most characters in a deliverable's sentence, as `MAX_SENTENCE` in the server's `protocol/deliverables.py`. */
@@ -77,4 +78,71 @@ export function offerLine(
 export function isNewSentence(text: string, standing = ''): boolean {
   const line = text.trim();
   return line !== '' && line !== standing;
+}
+
+/**
+ * Return what the person decided about one offer, in words: the offer waits, the person asked for changes, or the
+ * person's acceptance of it stands.
+ */
+export function offerState(offer: DeliverableOffer, now: Date): string {
+  const at = offer.decided_at ? ` at ${dayClock(offer.decided_at, now)}` : '';
+  switch (offer.state) {
+    case 'accepted':
+      return `Accepted by you${at}`;
+    case 'changes_asked':
+      return `You asked for changes${at}`;
+    case 'waiting':
+      return 'Waits for your decision';
+  }
+}
+
+/** Return whether the author of an offer left the lab, so that nobody hears a request for changes to it. */
+export function authorLeft(offer: DeliverableOffer, agents: readonly AgentView[]): boolean {
+  return agents.some((view) => view.agent.id === offer.by && view.left !== null);
+}
+
+/** What a form needs from the lab to say what its change does: whether a close stands, and the last post about a change. */
+export type LabNow = Pick<LabView, 'close' | 'deliverables_told_at'>;
+
+/** How long after a post about a new sentence or a removal the next such change sends no post, as `TOLD_WINDOW` in the server. */
+const TOLD_WINDOW_MS = 60_000;
+
+/** Return what a new deliverable does to the lab. In a lab that the agents closed, it opens the lab again. */
+export function addHint(lab: LabNow): string {
+  return lab.close
+    ? 'The agents said the lab is done. Adding this opens the lab again.'
+    : 'The agents get a post about it.';
+}
+
+/**
+ * Return what a new sentence or a removal does to the lab. It sends no post while a close stands, and none when a
+ * post about such a change went out in the last minute. The agents then read the change when they read the board.
+ */
+export function changeHint(lab: LabNow, now: Date): string {
+  if (lab.close) {
+    return 'The agents said the lab is done, so this change sends no post and the lab stays closed. The agents read it when they next read the board.';
+  }
+  const told = lab.deliverables_told_at;
+  if (told !== null && now.getTime() - new Date(told).getTime() < TOLD_WINDOW_MS) {
+    return 'The agents were told of a change in the last minute, so this one sends no post. They read it when they next read the board.';
+  }
+  return 'The agents get a post about the change. The record keeps the earlier sentence.';
+}
+
+/** Return what a request for changes does to the lab. In a lab that the agents closed, it opens the lab again. */
+export function askHint(lab: LabNow): string {
+  return lab.close
+    ? 'The agents said the lab is done. Asking for changes opens the lab again.'
+    : 'The agent gets it as a reply to its offer.';
+}
+
+/** The panel that is docked beside the wall: a tab of the panel for the coordinator, the deliverables, or none. */
+export type Docked = Tab | 'deliver' | null;
+
+/**
+ * Return whether a panel is docked, so that the page makes room for it. A tab of the panel for the coordinator
+ * shows only while an agent holds the coordinator seat.
+ */
+export function isDocked(panel: Docked, hasCoordinator: boolean): boolean {
+  return panel === 'deliver' || (panel !== null && hasCoordinator);
 }

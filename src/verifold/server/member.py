@@ -127,9 +127,13 @@ class Member:
         posted = await self._lab.post(request, self.agent_id, evidence, seen)
         return post_view(self._lab.board, posted)
 
-    async def offer(self, deliverable_id: DeliverableId, files: tuple[str, ...], note: str, body: str = '') -> PostView:
+    async def offer(
+        self, deliverable_id: DeliverableId, files: tuple[str, ...], note: str, body: str = '', helper: str = ''
+    ) -> PostView:
         """
         Offer files of the agent's folder for a deliverable of the person, and return the offer as it stands.
+
+        `helper` names the helper of the agent that wrote the offer, as on any post.
 
         Raises:
             BlindCheck: The agent is a blind checker.
@@ -144,8 +148,9 @@ class Member:
         live(self._lab.board, deliverable_id)
         if self._pin is None:
             raise EvidenceRejected('This lab cannot pin files for you.')
-        evidence = await self._pin(files)
-        posted = await self._lab.offer(self.agent_id, deliverable_id, evidence, note, body)
+        # A path that the call names twice is one file of the offer.
+        evidence = await self._pin(tuple(dict.fromkeys(files)))
+        posted = await self._lab.offer(self.agent_id, deliverable_id, evidence, note, body, helper=helper)
         return post_view(self._lab.board, posted)
 
     async def request(self, move: Move, text: str, body: str = '') -> PostView:

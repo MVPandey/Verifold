@@ -750,8 +750,11 @@ async def test_the_person_states_changes_and_removes_deliverables_and_no_other_c
         401,
     ]
     assert unknown.json()['detail'] == 'This lab has no deliverable d-9. `brief` lists the deliverables.'
-    # Each change is a post of the person, and the record keeps every sentence.
-    assert [entry.post.author for entry in lab.board.posts[1:]] == ['person'] * 4
+    # A new deliverable and the first new sentence are posts of the person. The removal came in the same minute,
+    # so it sent no post. The record keeps every sentence.
+    assert [entry.post.author for entry in lab.board.posts[1:]] == ['person'] * 3
+    assert removed.json()['deliverables_told_at'] == changed.json()['deliverables_told_at'] is not None
+    assert added.json()['deliverables_told_at'] is None
     assert [entry.text for entry in lab.board.deliverables if entry.deliverable == 'd-1'] == [
         'A one-page answer.',
         'A two-page answer.',
@@ -786,13 +789,16 @@ async def test_the_person_accepts_an_offer_asks_for_changes_and_takes_an_accepta
             'note': 'The answer.',
             'files': ['answer.md'],
             'revised': 0,
-            'accepted': False,
+            'state': 'waiting',
+            'decided_at': None,
+            'standing': 'open',
+            'disputed_by': None,
         }
     ]
     assert [reply.status_code for reply in (wordless, early, twice, other, word)] == [400, 400, 400, 400, 422]
     states = [reply.json()['deliverables'][0] for reply in (asked, accepted, back)]
     assert [line['state'] for line in states] == ['changes_asked', 'accepted', 'offered']
-    assert [line['offers'][0]['accepted'] for line in states] == [False, True, False]
+    assert [line['offers'][0]['state'] for line in states] == ['changes_asked', 'accepted', 'waiting']
     assert (states[0]['decided_at'] is not None, states[2]['decided_at']) == (True, None)
     said = [entry.post for entry in lab.board.posts if entry.post.author == 'person' and entry.post.reply_to == offer]
     assert [post.text for post in said] == [

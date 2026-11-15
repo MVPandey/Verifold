@@ -228,6 +228,11 @@ class LabView(Record):
     """The settings that the lab follows, such as what happens to the agents' processes when the person stops it."""
     deliverables: tuple[DeliverableLine, ...] = ()
     """What the person wants to hold at the end of the lab, each with its state and the files that agents offered."""
+    deliverables_told_at: AwareDatetime | None = None
+    """
+    When a post of the person last told the lab of a new sentence or a removal. For a minute after it, and while
+    a close stands, such a change sends no post, and the agents read it in `brief`.
+    """
 
 
 class InviteRequest(SeatFacts):
