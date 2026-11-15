@@ -1,12 +1,14 @@
 """One agent's ACP session: its harness process, the board attached as its MCP server, and the messages sent to it."""
 
 import asyncio
+import json
+import shlex
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
-from typing import NoReturn, Self, override
+from typing import Literal, NoReturn, Self, override
 
 import acp
 from acp import schema
@@ -43,6 +45,37 @@ class PermissionRequest(Record):
     """The shell command that the action runs, when the harness reports one."""
     board: bool = False
     """Whether the action is a call to the lab's board, which Verifold itself gave the harness."""
+    detail: str = ''
+    """The action's input as the harness reports it, for a request that has no command to show."""
+
+
+class FieldOption(Record):
+    """One value that a field of a question offers."""
+
+    value: str
+    name: str
+
+
+class QuestionField(Record):
+    """One field of a question from a harness to its user."""
+
+    name: str
+    title: str
+    description: str = ''
+    kind: Literal['text', 'number', 'integer', 'boolean', 'choice', 'choices']
+    """`choice` takes one of `options`, and `choices` takes any number of them."""
+    options: tuple[FieldOption, ...] = ()
+
+
+class Question(Record):
+    """A harness asks its user a structured question, which ACP calls an elicitation."""
+
+    message: str
+    fields: tuple[QuestionField, ...]
+
+
+type FieldValue = str | int | float | bool | list[str]
+type Answers = dict[str, FieldValue]
 
 
 BOARD_SERVER = 'verifold'
@@ -57,8 +90,20 @@ type ConfigOption = schema.SessionConfigOptionSelect | schema.SessionConfigOptio
 type Permissions = Callable[[PermissionRequest], Awaitable[str | None]]
 """Decides a permission request: the ID of the chosen answer, or `None` to cancel the action."""
 
+type Questions = Callable[[Question], Awaitable[Answers | None]]
+"""Answers a harness's question: a value for each field, or `None` when the user gives no answer."""
+
+MAX_DETAIL = 2_000
+"""The most characters of an action's input that a permission request carries."""
+
+_SHELLS = frozenset({'bash', 'sh', 'zsh'})
+
 
 async def _ignore(_: str) -> None:
+    return None
+
+
+async def _no_answer(_: Question) -> Answers | None:
     return None
 
 
@@ -69,6 +114,7 @@ class SessionHooks:
     permissions: Permissions
     step: Callable[[str], Awaitable[None]] = _ignore
     """Gets the title of each tool call that the harness starts."""
+    questions: Questions = _no_answer
 
 
 class BoardAccess(Record):
@@ -109,10 +155,10 @@ class TurnResult(Record):
 
 class _Client(acp.Client):
     """
-    The client side of the ACP connection. It decides permission requests and tracks the running cost.
+    The client side of the ACP connection. It decides permission requests and questions, and tracks the cost.
 
-    Verifold offers no files, terminals, or forms. The agent learns that from the capabilities in `initialize`, and a
-    call to one of them gets a "method not found" error.
+    Verifold offers no files, no terminals, and no question that opens a link. The agent learns that from the
+    capabilities in `initialize`, and a call to one of them gets an error.
     """
 
     def __init__(self, hooks: SessionHooks, *, names_mcp_server: bool = False) -> None:
@@ -128,7 +174,7 @@ class _Client(acp.Client):
     ) -> schema.RequestPermissionResponse:
         call = self._calls.get(tool_call.tool_call_id, _Call()).updated(tool_call)
         # Only a call that runs a command has one. Another tool's `command` field is not a shell command.
-        command = _field(call.given, 'command') if call.kind == 'execute' else None
+        command = _command(call.given) if call.kind == 'execute' else None
         named = _field(call.given, 'server') == BOARD_SERVER and _field(call.given, 'tool') is not None
         request = PermissionRequest(
             title=command or call.title or 'an action',
@@ -138,6 +184,8 @@ class _Client(acp.Client):
             command=command,
             # A shell command is never a call to the board, whatever its text says.
             board=self._names_mcp_server and command is None and named,
+            # Without a command, the person reads the input in the harness's own shape.
+            detail='' if command else _shown(call.given),
         )
         chosen = await self._hooks.permissions(request)
         outcome = (
@@ -206,7 +254,17 @@ class _Client(acp.Client):
     async def create_elicitation(
         self, message: str, mode: schema.ElicitationMode, **_: object
     ) -> schema.CreateElicitationResponse:
-        _unsupported('elicitation/create')
+        question = _question(message, mode)
+        if question is None:
+            raise acp.RequestError.invalid_params(
+                {
+                    'details': 'Verifold shows a form with text, number, yes-or-no, and choice fields. It cannot show this.'
+                }
+            )
+        answers = await self._hooks.questions(question)
+        if answers is None:
+            return schema.CancelElicitationResponse(action='cancel')
+        return schema.AcceptElicitationResponse(action='accept', content=dict(answers))
 
     @override
     async def complete_elicitation(self, elicitation_id: str, **_: object) -> None:
@@ -249,6 +307,64 @@ def _field(given: object, name: str) -> str | None:
     return value.strip() or None if isinstance(value, str) else None
 
 
+def _command(given: object) -> str | None:
+    """
+    Return the shell command in a tool call's input, or `None` when Verifold finds none.
+
+    A harness reports it as text or as a list of arguments, under `command` or `cmd`. A list that starts a shell
+    with one script, such as `bash -lc 'make test'`, runs that script, so the script is the command.
+    """
+    found = next((given[key] for key in ('command', 'cmd') if key in given), None) if isinstance(given, dict) else None
+    if isinstance(found, list) and found and all(isinstance(word, str) for word in found):
+        match [str(word) for word in found]:
+            case [shell, '-c' | '-lc', script] if Path(shell).name in _SHELLS:
+                found = script
+            case words:
+                found = shlex.join(words)
+    return found.strip() or None if isinstance(found, str) else None
+
+
+def _shown(given: object) -> str:
+    if given is None:
+        return ''
+    return json.dumps(given, indent=2, ensure_ascii=False, default=str)[:MAX_DETAIL]
+
+
+def _question(message: str, mode: schema.ElicitationMode) -> Question | None:
+    """Return the harness's question in Verifold's own shape, or `None` when it holds what the board cannot show."""
+    if not isinstance(mode, schema.ElicitationFormSessionMode | schema.ElicitationFormRequestMode):
+        return None
+    fields = [_question_field(name, asked) for name, asked in (mode.requested_schema.properties or {}).items()]
+    known = tuple(field for field in fields if field)
+    return Question(message=message, fields=known) if known and len(known) == len(fields) else None
+
+
+def _question_field(name: str, asked: object) -> QuestionField | None:
+    title, description = getattr(asked, 'title', None) or name, getattr(asked, 'description', None) or ''
+    if isinstance(asked, schema.ElicitationStringPropertySchema):
+        titled = [FieldOption(value=option.const, name=option.title) for option in asked.one_of or []]
+        options = tuple(titled or [FieldOption(value=value, name=value) for value in asked.enum or []])
+        kind = 'choice' if options else 'text'
+    elif isinstance(asked, schema.ElicitationMultiSelectPropertySchema):
+        items = asked.items
+        if isinstance(items, schema.TitledMultiSelectItems):
+            options = tuple(FieldOption(value=option.const, name=option.title) for option in items.any_of)
+        elif isinstance(items, schema.StringMultiSelectItems):
+            options = tuple(FieldOption(value=value, name=value) for value in items.enum)
+        else:
+            return None
+        kind = 'choices'
+    elif isinstance(asked, schema.ElicitationBooleanPropertySchema):
+        options, kind = (), 'boolean'
+    elif isinstance(asked, schema.ElicitationIntegerPropertySchema):
+        options, kind = (), 'integer'
+    elif isinstance(asked, schema.ElicitationNumberPropertySchema):
+        options, kind = (), 'number'
+    else:
+        return None
+    return QuestionField(name=name, title=title, description=description, kind=kind, options=options)
+
+
 def _unsupported(method: str) -> NoReturn:
     raise acp.RequestError.method_not_found(method)
 
@@ -284,7 +400,8 @@ async def _connected(harness: HarnessEntry, place: Place, client: _Client) -> As
         if process.stdin is None or process.stdout is None:
             await stop(process)
             raise RunnerError(f'{harness.name} started without its protocol pipes.')
-        connection = acp.connect_to_agent(client, process.stdin, process.stdout)
+        # ACP marks a harness's question to its user as unstable. Verifold answers it, so the library must not warn.
+        connection = acp.connect_to_agent(client, process.stdin, process.stdout, use_unstable_protocol=True)
         try:
             yield connection
         finally:
@@ -299,7 +416,10 @@ async def _initialize(connection: ClientSideConnection) -> schema.InitializeResp
     return await connection.initialize(
         protocol_version=acp.PROTOCOL_VERSION,
         client_capabilities=schema.ClientCapabilities(
-            fs=schema.FileSystemCapabilities(read_text_file=False, write_text_file=False), terminal=False
+            fs=schema.FileSystemCapabilities(read_text_file=False, write_text_file=False),
+            terminal=False,
+            # A form reaches the person as asks on the board. A question that opens a link does not.
+            elicitation=schema.ElicitationCapabilities(form=schema.ElicitationFormCapabilities()),
         ),
         client_info=schema.Implementation(name='verifold', version=version(DISTRIBUTION)),
     )

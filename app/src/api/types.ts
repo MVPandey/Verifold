@@ -128,9 +128,17 @@ export interface JobSettings {
   readonly at_exit: AtExit;
 }
 
+/** What an agent's harness gets while its permission request waits for the person's answer on the board. */
+export type WhileYouDecide = 'wait' | 'refuse';
+
+export interface PermissionSettings {
+  readonly while_you_decide: WhileYouDecide;
+}
+
 export interface Settings {
   readonly version: number;
   readonly jobs: JobSettings;
+  readonly permissions: PermissionSettings;
 }
 
 /** Where a setting lives: in one project's file, which wins, or in the file for all projects. */
@@ -156,7 +164,8 @@ export interface SettingsView {
 }
 
 /** The settings that the app changes. */
-export type SettingKey = 'jobs.at_time_limit' | 'jobs.at_exit' | 'setup';
+export type SettingKey =
+  'jobs.at_time_limit' | 'jobs.at_exit' | 'permissions.while_you_decide' | 'setup';
 
 /**
  * The person changes one setting. A `null` value removes it, so the one for all projects, or Verifold's default,

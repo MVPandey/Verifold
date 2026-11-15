@@ -13,7 +13,8 @@ from fakes import FAKE_HARNESS
 from verifold.protocol.app import AgentState
 from verifold.protocol.events import TurnSummary
 from verifold.protocol.join import MAX_NEWS, PostRequest
-from verifold.protocol.settings import AtTimeLimit, JobSettings, Settings
+from verifold.protocol.posts import Ask
+from verifold.protocol.settings import AtTimeLimit, JobSettings, PermissionSettings, Settings, WhileYouDecide
 from verifold.protocol.usage import Usage
 from verifold.runner import agent_loop
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
@@ -31,7 +32,7 @@ from verifold.runner.messages import (
     more_time_message,
     time_facts,
 )
-from verifold.runner.permissions import GrantAsks
+from verifold.runner.permissions import Refusals
 from verifold.runner.session import AgentSession, PermissionChoice, PermissionRequest, TurnResult
 from verifold.server.activity import Activity
 from verifold.society.board import Board
@@ -60,7 +61,7 @@ def loop_for(
     served: ServedBoard,
     tmp_path: Path,
     activity: Activity | None = None,
-    grant_asks: GrantAsks | None = None,
+    refusals: Refusals | None = None,
     has_jobs: Callable[[str], Awaitable[bool]] | None = None,
     done: Callable[[Board], bool] | None = None,
     **settings: float,
@@ -86,7 +87,7 @@ def loop_for(
         setup,
         LoopSettings(mcp_url=served.url, **options),
         done,
-        shared=Shared(activity=activity, grant_asks=grant_asks, has_jobs=has_jobs),
+        shared=Shared(activity=activity, refusals=refusals, has_jobs=has_jobs),
     )
 
 
@@ -454,13 +455,61 @@ async def test_a_permission_request_waits_for_the_persons_answer_on_the_board(
     assert asked.text == 'Permission needed: run make'
 
 
+NO_WAIT = Settings(permissions=PermissionSettings(while_you_decide=WhileYouDecide.REFUSE))
+
+
 @pytest.mark.usefixtures('log')
-async def test_in_auto_mode_a_command_without_a_grant_is_refused_at_once_and_the_person_gets_an_ask(
+async def test_a_command_that_no_grant_can_cover_waits_for_the_persons_answer_too(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_COMMAND', 'git commit -m "x"')
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path, refusals=Refusals(lab)).run())
+    try:
+        await until(lambda: any(entry.post.kind == 'ask' for entry in lab.board.posts))
+        asked = lab.board.posts[-1].post
+        waited = posts_by(served, 'bo')
+        await lab.post(PostRequest(kind='answer', text='Allow once', thread=asked.thread, reply_to=asked.id), 'person')
+        await until(lambda: 'Permission: yes.' in posts_by(served, 'bo'))
+    finally:
+        running.cancel()
+
+    assert (lab.board.opened.auto_mode, asked.text) == (True, 'Permission needed: git commit -m "x"')
+    assert isinstance(asked, Ask)
+    assert asked.choices == ('Allow once', 'Reject')
+    assert all(not text.startswith('Permission:') for text in waited)
+
+
+@pytest.mark.usefixtures('log')
+async def test_a_question_of_the_harness_waits_for_the_persons_answer_on_the_board(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_QUESTION', '1')
+    lab = served.lab
+    activity = Activity()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
+    try:
+        await until(lambda: any(entry.post.kind == 'ask' for entry in lab.board.posts))
+        asked = lab.board.posts[-1].post
+        state = activity.of('bo')
+        await lab.post(PostRequest(kind='answer', text='dev', thread=asked.thread, reply_to=asked.id), 'person')
+        await until(lambda: 'Answer: {"branch": "dev"}.' in posts_by(served, 'bo'))
+    finally:
+        running.cancel()
+
+    assert isinstance(asked, Ask)
+    assert (asked.text, asked.choices, asked.mentions) == ('Which branch?', ('main', 'dev'), ('person',))
+    assert (state.state, state.detail) == ('waiting', 'Asks you: Which branch?')
+
+
+@pytest.mark.usefixtures('log')
+async def test_when_the_person_chose_that_no_agent_waits_a_command_is_refused_at_once_and_the_ask_stays(
     served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv('FAKE_ACP_COMMAND', './gpu python3 train.py')
     lab = served.lab
-    running = asyncio.create_task(loop_for(served, tmp_path, grant_asks=GrantAsks(lab)).run())
+    await lab.set_settings(NO_WAIT)
+    running = asyncio.create_task(loop_for(served, tmp_path, refusals=Refusals(lab)).run())
     try:
         await until(lambda: 'Permission: no.' in posts_by(served, 'bo'))
     finally:
@@ -477,7 +526,7 @@ async def test_a_granted_command_runs_without_a_question(
     monkeypatch.setenv('FAKE_ACP_COMMAND', './gpu python3 train.py')
     lab = served.lab
     await lab.grant('./gpu')
-    running = asyncio.create_task(loop_for(served, tmp_path, grant_asks=GrantAsks(lab)).run())
+    running = asyncio.create_task(loop_for(served, tmp_path, refusals=Refusals(lab)).run())
     try:
         await until(lambda: 'Permission: yes.' in posts_by(served, 'bo'))
     finally:

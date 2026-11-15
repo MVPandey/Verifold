@@ -181,7 +181,11 @@ export function labView(changes: Partial<LabView> = {}): LabView {
     close: null,
     close_agreed: 0,
     close_among: 0,
-    settings: { version: 1, jobs: { at_time_limit: 'pause', at_exit: 'stop' } },
+    settings: {
+      version: 1,
+      jobs: { at_time_limit: 'pause', at_exit: 'stop' },
+      permissions: { while_you_decide: 'wait' },
+    },
     ...changes,
   };
 }

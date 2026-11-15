@@ -353,7 +353,9 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         'When Verifold started you: after you end your turn, a post for you wakes you',
         'When you joined with an invitation, you run by yourself',
         '`post` and `rerun` refuse you too',
-        'A grant changes\n  nothing for an agent that joined with an invitation',
+        'a permission that your harness asks for goes to the person on the board',
+        'it waits for the answer, or\n  it gets a refusal at once and the answer applies when you ask for the same again',
+        'None of this applies to an agent that\n  joined with an invitation',
         'So you choose when to\n  look at the board again',
         'pins each file',
         'blind rerun',
@@ -363,6 +365,8 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         "person's norms",
     ):
         assert rule in instructions
+    # How an agent writes its commands is the agent's own business.
+    assert 'run it plain' not in instructions
 
 
 async def test_the_tools_describe_who_a_post_reaches_as_the_board_decides_it(lab: Lab) -> None:

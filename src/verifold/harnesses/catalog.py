@@ -35,7 +35,7 @@ class HarnessEntry(Record):
     Whether the harness itself writes the MCP server's name into a tool call's input, as `server`, beside `tool`.
 
     Verifold then knows a call to the lab's own board and allows it. Where the model writes the input, the name
-    proves nothing, so the default is off.
+    proves nothing, so the default is off. A harness in the person's settings sets it in the same way.
     """
 
 
@@ -92,6 +92,7 @@ def catalog_with(
             command=entry.command,
             family=entry.family,
             auto_mode=entry.auto_mode,
+            names_mcp_server=entry.names_mcp_server,
         )
         for name, entry in harnesses.items()
     }

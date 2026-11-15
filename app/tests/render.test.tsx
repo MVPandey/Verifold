@@ -932,13 +932,17 @@ describe('the setup screen', () => {
 });
 
 describe('the settings page', () => {
-  const pause = { version: 1, jobs: { at_time_limit: 'pause', at_exit: 'stop' } } as const;
+  const pause = {
+    version: 1,
+    jobs: { at_time_limit: 'pause', at_exit: 'stop' },
+    permissions: { while_you_decide: 'wait' },
+  } as const;
   const view: SettingsView = {
     all_projects: {
       path: '~/.verifold/settings.json',
-      values: {},
+      values: { permissions: { while_you_decide: 'refuse' } },
       revision: '',
-      settings: pause,
+      settings: { ...pause, permissions: { while_you_decide: 'refuse' } },
       defaults: DEFAULTS,
     },
     project: {
@@ -952,7 +956,11 @@ describe('the settings page', () => {
         },
       },
       revision: 'abc',
-      settings: { ...pause, jobs: { ...pause.jobs, at_exit: 'keep' } },
+      settings: {
+        ...pause,
+        jobs: { ...pause.jobs, at_exit: 'keep' },
+        permissions: { while_you_decide: 'refuse' },
+      },
       defaults: {
         agents: [{ harness: 'claude-code', count: 2, model: 'opus', effort: null, mode: null }],
         auto_mode: false,
@@ -984,7 +992,19 @@ describe('the settings page', () => {
       ),
     );
     assert.ok(html.includes('<button type="button" aria-pressed="true"><b>Keep them</b>'));
-    assert.equal(html.split('aria-pressed="true"').length - 1, 2);
+    // The project follows the choice for all projects that no agent waits. The lab opened before that choice.
+    assert.ok(html.includes('When an agent needs a permission from you'));
+    assert.ok(
+      html.includes(
+        '<button type="button" aria-pressed="true"><b>Same as all projects</b><span>Now: The agent goes on.</span>',
+      ),
+    );
+    assert.ok(
+      html.includes(
+        'The running lab still follows “The agent waits”. Choose an answer to change it.',
+      ),
+    );
+    assert.equal(html.split('aria-pressed="true"').length - 1, 3);
     // The lab started before the project kept its processes, and follows its own copy until the person chooses.
     assert.ok(
       html.includes('The running lab still follows “Stop them”. Choose an answer to change it.'),
@@ -1001,12 +1021,17 @@ describe('the settings page', () => {
     assert.equal(html.includes('Same as all projects'), false);
     assert.ok(html.includes('<button type="button" aria-pressed="true"><b>Pause them</b>'));
     assert.ok(html.includes('<button type="button" aria-pressed="true"><b>Stop them</b>'));
+    assert.ok(html.includes('<button type="button" aria-pressed="true"><b>The agent goes on</b>'));
+    assert.ok(
+      html.includes('Its harness waits for your answer, as it does when you run it yourself.'),
+    );
     assert.ok(
       html.includes('This project has its own setting, “Keep them”, and it wins over this one.'),
     );
     assert.equal(html.split('has its own setting').length - 1, 1);
     // No answer here changes the lab where the project has its own setting, so the page doesn't offer one.
-    assert.equal(html.includes('The running lab still follows'), false);
+    assert.equal(html.includes('The running lab still follows “Stop them”'), false);
+    assert.ok(html.includes('The running lab still follows “The agent waits”.'));
     assert.ok(
       html.includes('One agent of each harness that this computer has. Auto mode. No time limit.'),
     );

@@ -27,7 +27,7 @@ from verifold.protocol.app import AgentState
 from verifold.protocol.events import TimeRanOut, TurnSummary
 from verifold.protocol.ids import PERSON
 from verifold.protocol.record import Record
-from verifold.protocol.settings import AtExit, AtTimeLimit
+from verifold.protocol.settings import AtExit, AtTimeLimit, WhileYouDecide
 from verifold.protocol.usage import Usage
 from verifold.runner.git import GitError
 from verifold.runner.messages import (
@@ -43,12 +43,14 @@ from verifold.runner.messages import (
     more_time_message,
     time_facts,
 )
-from verifold.runner.permissions import GrantAsks, ask_the_person, refusal, settled
+from verifold.runner.permissions import Refusals, ask_the_person, ask_the_question, refusal, settled
 from verifold.runner.session import (
     AgentSession,
+    Answers,
     BoardAccess,
     PermissionRequest,
     Place,
+    Question,
     SessionHooks,
     SessionOptions,
 )
@@ -105,8 +107,8 @@ class Shared:
 
     activity: Activity | None = None
     """Receives what each agent is doing now, for the person's view."""
-    grant_asks: GrantAsks | None = None
-    """With it, a lab in auto mode refuses a command that no grant covers and asks the person for the grant."""
+    refusals: Refusals | None = None
+    """Keeps the asks of the requests that Verifold refuses at once, when the person chose that no agent waits."""
     has_jobs: Callable[[str], Awaitable[bool]] | None = None
     """Says whether an agent has processes of its own that still run. Without it, no loop waits for them."""
 
@@ -140,7 +142,7 @@ class AgentLoop:
         share.
         """
         shared = shared or Shared()
-        self._grant_asks = shared.grant_asks
+        self._refusals = shared.refusals
         self._has_jobs = shared.has_jobs
         self._done = done
         self._activity = shared.activity
@@ -181,7 +183,7 @@ class AgentLoop:
 
     async def _run(self) -> None:
         setup = self._setup
-        hooks = SessionHooks(permissions=self._permission, step=self._step)
+        hooks = SessionHooks(permissions=self._permission, step=self._step, questions=self._question)
         board = BoardAccess(url=self._settings.mcp_url, token=setup.token)
         was = self._before
         resume = was.session
@@ -480,13 +482,22 @@ class AgentLoop:
             return refusal(request)
         if allowed := settled(board, request):
             return allowed
-        if self._grant_asks and board.opened.auto_mode and request.command:
-            await self._grant_asks.offer(self._member, request)
-            return refusal(request)
+        # The person's setting says whether the request waits for their answer, as in a harness run by hand.
+        if self._refusals and board.settings.permissions.while_you_decide is WhileYouDecide.REFUSE:
+            return await self._refusals.decide(self._member, request)
         await self._report('waiting', f'Asks you: {request.title}')
         chosen = await ask_the_person(self._member, request)
         await self._report('working')
         return chosen
+
+    async def _question(self, question: Question) -> Answers | None:
+        # Nobody can answer an agent that left.
+        if self._left():
+            return None
+        await self._report('waiting', f'Asks you: {question.message}')
+        answers = await ask_the_question(self._member, question)
+        await self._report('working')
+        return answers
 
     async def _step(self, title: str) -> None:
         await self._report('working', title)

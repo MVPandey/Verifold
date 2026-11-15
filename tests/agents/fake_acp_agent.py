@@ -3,7 +3,7 @@ A fake ACP agent for tests. It reaches the lab's board over MCP with its token, 
 
 The first message makes it post in a new thread. The doorbell makes it read its posts with `wait` and answer each ask.
 Environment variables change its behavior: `FAKE_ACP_LOG` logs each call, `FAKE_ACP_PERMISSION` asks permission
-first, `FAKE_ACP_COMMAND` asks permission for that shell command, which the request names by its call's ID only, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, `FAKE_ACP_SLOW_AGENT` does the
+first, `FAKE_ACP_COMMAND` asks permission for that shell command, which the request names by its call's ID only, `FAKE_ACP_QUESTION` asks its user which branch to take, as a form, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, `FAKE_ACP_SLOW_AGENT` does the
 same for an agent whose name starts with its value, and `FAKE_ACP_CHILD` starts a
 child that holds the agent's pipes open and writes its process ID to that path. `FAKE_ACP_JOB` starts a job in a
 session of its own, the way that a harness starts a background command, and writes its process ID to that path.
@@ -236,6 +236,14 @@ class FakeAgent(acp.Agent):
             )
             outcome = response.outcome
             text = f'Permission: {outcome.option_id if isinstance(outcome, schema.AllowedOutcome) else "cancelled"}.'
+        if os.environ.get('FAKE_ACP_QUESTION') and self._client:
+            branch = schema.ElicitationStringPropertySchema(type='string', title='Branch', enum=['main', 'dev'])
+            form = schema.ElicitationFormSessionMode(
+                session_id=session_id, requested_schema=schema.ElicitationSchema(properties={'branch': branch})
+            )
+            answered = await self._client.create_elicitation(message='Which branch?', mode=form)
+            given = answered.content if isinstance(answered, schema.AcceptElicitationResponse) else None
+            text = f'Answer: {json.dumps(given)}.'
         await self._call('post', {'kind': 'message', 'text': text, 'new_thread': f'Hello {self._name}'})
         if os.environ.get('FAKE_ACP_LEAVE') == self._name:
             await self._call('leave', {'reason': 'Nothing is left for me.'})

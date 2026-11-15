@@ -6,7 +6,15 @@ from pathlib import Path
 import psutil
 import pytest
 
-from verifold.protocol.settings import AtExit, AtTimeLimit, HarnessSettings, Settings, SettingsFile, SettingsLevel
+from verifold.protocol.settings import (
+    AtExit,
+    AtTimeLimit,
+    HarnessSettings,
+    Settings,
+    SettingsFile,
+    SettingsLevel,
+    WhileYouDecide,
+)
 from verifold.store.errors import SettingsChanged, SettingsInvalid, SettingsUnwritable
 from verifold.store.settings_file import (
     SettingsValues,
@@ -31,17 +39,25 @@ def test_without_files_a_lab_gets_the_defaults(tmp_path: Path) -> None:
     assert settings.harnesses == {}
     assert settings.jobs.at_time_limit is AtTimeLimit.PAUSE
     assert settings.jobs.at_exit is AtExit.STOP
+    # A harness that the person runs by hand waits for their answer, so a lab's agents do too.
+    assert settings.lab_settings().permissions.while_you_decide is WhileYouDecide.WAIT
 
 
 def test_a_projects_settings_win_over_the_global_ones_setting_by_setting(tmp_path: Path) -> None:
     home, project = tmp_path / 'home', tmp_path / 'project'
-    write(home / '.verifold', {'jobs': {'at_time_limit': 'stop', 'at_exit': 'keep'}})
-    write(project / '.verifold', {'jobs': {'at_time_limit': 'finish'}})
+    write(
+        home / '.verifold',
+        {'jobs': {'at_time_limit': 'stop', 'at_exit': 'keep'}, 'permissions': {'while_you_decide': 'refuse'}},
+    )
+    write(project / '.verifold', {'jobs': {'at_time_limit': 'finish'}, 'permissions': {'while_you_decide': 'wait'}})
 
     settings = load_settings(project, home=home)
+    everywhere = load_settings(tmp_path / 'other', home=home)
 
     assert settings.jobs.at_time_limit is AtTimeLimit.FINISH
     assert settings.jobs.at_exit is AtExit.KEEP
+    assert settings.lab_settings().permissions.while_you_decide is WhileYouDecide.WAIT
+    assert everywhere.lab_settings().permissions.while_you_decide is WhileYouDecide.REFUSE
 
 
 @pytest.mark.parametrize('content', ['{not json', '[]', '{"jobs": {"at_exit": "later"}}', '{"colour": "blue"}'])

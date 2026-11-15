@@ -12,7 +12,7 @@ Verifold starts each agent's harness, Claude Code or Codex, through the harness'
 
 Only `~/.verifold/settings.json` can add or change a harness. Verifold refuses a project's settings file that holds harnesses, and it refuses to start when the project's repository tracks lab files in `.verifold/` other than `settings.json`, because a lab's record decides which agents start and what they get.
 
-When a harness asks for a permission, Verifold shows the request to you on the board, and the agent waits for your answer. When you allow auto mode for a lab, each harness uses its own auto mode.
+When a harness asks for a permission, Verifold shows the request to you on the board. The agent waits for your answer, or gets a refusal until you answer, as your settings say. When you allow auto mode for a lab, each harness uses its own auto mode.
 
 The server listens only on 127.0.0.1. The app needs the token in the link that Verifold prints, and each agent joins the board with its own token. Text from agents is untrusted. The app shows it as text, never as HTML, and its Content-Security-Policy allows images and connections only from Verifold's own server.
 

@@ -1005,7 +1005,11 @@ async def test_the_persons_change_applies_to_the_running_lab_but_an_agents_edit_
         'path': '~/.verifold/settings.json',
         'values': {},
         'revision': '',
-        'settings': {'version': 1, 'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'}},
+        'settings': {
+            'version': 1,
+            'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'},
+            'permissions': {'while_you_decide': 'wait'},
+        },
         'defaults': {'agents': None, 'auto_mode': True, 'minutes': None},
     }
     assert after['all_projects']['values'] == {'jobs': {'at_time_limit': 'stop'}}
@@ -1018,6 +1022,27 @@ async def test_the_persons_change_applies_to_the_running_lab_but_an_agents_edit_
         (AtTimeLimit.PAUSE, AtExit.STOP),
         (AtTimeLimit.STOP, AtExit.STOP),
     ]
+
+
+async def test_the_persons_choice_for_permission_requests_applies_to_the_running_lab(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('HOME', str(project.parent))
+    async with serving(project, ONE_AGENT) as client:
+        await until(lambda: any(isinstance(event, SettingsSet) for event in record(project)))
+        before = (await client.get('/settings')).json()
+        change = {
+            'level': 'all',
+            'key': 'permissions.while_you_decide',
+            'value': 'refuse',
+            'revisions': revisions_of(before),
+        }
+        after = (await client.post('/settings', json=change)).json()
+
+    assert before['lab']['permissions'] == {'while_you_decide': 'wait'}
+    assert after['all_projects']['values'] == {'permissions': {'while_you_decide': 'refuse'}}
+    assert after['lab']['permissions'] == {'while_you_decide': 'refuse'}
+    assert after['lab']['jobs'] == before['lab']['jobs']
 
 
 def revisions_of(view: dict[str, dict[str, str]]) -> dict[str, str]:

@@ -1,4 +1,4 @@
-import type { AtExit, AtTimeLimit, Settings } from '../api/types.ts';
+import type { AtExit, AtTimeLimit, Settings, WhileYouDecide } from '../api/types.ts';
 
 /** One answer to a setting: the value that it sends, and what the page says about it. */
 export interface Choice<T extends string> {
@@ -21,6 +21,20 @@ export const AT_EXIT: readonly Choice<AtExit>[] = [
     value: 'keep',
     label: 'Keep them',
     detail: "The next verifold in this folder pauses or resumes them with the lab's time.",
+  },
+];
+
+/** The answers to `permissions.while_you_decide`. */
+export const WHILE_YOU_DECIDE: readonly Choice<WhileYouDecide>[] = [
+  {
+    value: 'wait',
+    label: 'The agent waits',
+    detail: 'Its harness waits for your answer, as it does when you run it yourself.',
+  },
+  {
+    value: 'refuse',
+    label: 'The agent goes on',
+    detail: 'Its harness gets a no at once. Your answer applies when the agent asks again.',
   },
 ];
 

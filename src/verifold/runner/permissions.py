@@ -1,17 +1,18 @@
 """
-Permission requests of the agents' harnesses, and who decides them.
+Permission requests and questions of the agents' harnesses, and who decides them.
 
 Verifold allows a call to the lab's own board, and a command that a grant of the person covers. Every other request
-goes to the person on the board. Under auto mode, a command without a grant is refused at once, so that the lab never
-waits for the person. When the command is plain, the person gets an ask that offers the grant.
+goes to the person on the board, with the harness's own answers. The person's setting says what the harness gets
+until the person answers. Either the request waits, as it does in a harness that the person runs by hand, or
+Verifold refuses it at once and the answer applies when the agent asks for the same again.
 """
 
 import re
 
-from verifold.protocol.ids import PERSON, PostId
+from verifold.protocol.ids import PERSON, AgentId, PostId
 from verifold.protocol.join import PostRequest
-from verifold.protocol.posts import MAX_CHOICE, MAX_HEADLINE, Answer
-from verifold.runner.session import PermissionChoice, PermissionRequest
+from verifold.protocol.posts import MAX_CHOICE, MAX_CHOICES, MAX_HEADLINE, Answer
+from verifold.runner.session import Answers, FieldValue, PermissionChoice, PermissionRequest, Question, QuestionField
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.board import Board
@@ -56,7 +57,7 @@ async def ask_the_person(member: Member, request: PermissionRequest) -> str | No
     prefix = _offered(request)
     names = tuple(choice.name for choice in request.choices)
     choices = (*names, grant_choice(prefix)) if prefix else names
-    asked = await _ask(member, f'Permission needed: {request.title}', choices, '')
+    asked = await _ask(member, _headline(request), choices, _input(request))
     answer = await _answer(member, asked)
     if prefix and _gives(answer, prefix, any_yes=False):
         await member.lab.grant(prefix)
@@ -65,68 +66,190 @@ async def ask_the_person(member: Member, request: PermissionRequest) -> str | No
     return choose(answer, request.choices)
 
 
-class GrantAsks:
-    """
-    The asks that offer the person a grant after Verifold refused a command, and the grants that the answers give.
+type _Key = str | tuple[AgentId, str, str]
+"""What an open ask is about: the start of a command, for a grant, or one agent's request by its title and input."""
 
-    Under auto mode the lab doesn't wait for the person. The agent gets a refusal at once, and the ask stays open. When
-    the person picks the grant, the next such command passes, for every agent. The asks live in this process: after a
-    restart of Verifold, an answer to an ask from before gives no grant, and the next refusal asks again.
+
+class Refusals:
+    """
+    The asks that stay open after Verifold refused a request at once, and what the person's answers to them give.
+
+    The person can choose that no agent waits for them. The agent's harness then gets a refusal, and the ask stays in
+    Needs you. For a command that a grant can cover, the ask offers the grant, and with it the next such command
+    passes, for every agent. For every other request, the ask has the harness's own answers, and the person's
+    answer decides the same request of that agent once, when it comes again. The asks live in this process: after a
+    restart of Verifold, an answer to an ask from before gives nothing, and the next refusal asks again.
     """
 
     def __init__(self, lab: Lab) -> None:
         """Prepare to keep the asks of `lab`."""
         self._lab = lab
-        self._open: dict[str, PostId | None] = {}
-        """The ask for each grant that has no answer yet. `None` holds the place of an ask that is on its way."""
+        self._open: dict[_Key, PostId | None] = {}
+        """The ask for each key that has no answer yet. `None` holds the place of an ask that is on its way."""
         self._declined: set[str] = set()
-        """The grants that the person said no to. Verifold doesn't ask for them again."""
+        """The grants that the person said no to. Verifold doesn't offer them again."""
+        self._answers: dict[_Key, str] = {}
+        """The person's answer to one agent's request, until that request comes again."""
+
+    async def decide(self, member: Member, request: PermissionRequest) -> str | None:
+        """
+        Return the answer to a request for which the agent does not wait: the ID of an option, or `None` to cancel.
+
+        When the person answered an earlier ask for the same request of this agent, that answer decides it, once.
+        Otherwise the person gets an ask, and the request is refused.
+        """
+        answer = None if self._grant(request) else self._answers.pop(_one(member, request), None)
+        if answer is not None:
+            return choose(answer, request.choices)
+        await self.offer(member, request)
+        return refusal(request)
 
     async def offer(self, member: Member, request: PermissionRequest) -> None:
         """
-        Ask the person for the grant that would cover the request's command.
+        Ask the person about a request that Verifold refused.
 
-        It asks nothing while such an ask is open, or after the person said no to that grant.
-
-        A command that no grant can cover gets no ask: the board's instructions tell the agent to run it plain.
+        A command that a grant can cover gets an ask for the grant, unless the person said no to that grant. Every
+        other request gets an ask with the harness's own answers. It asks nothing while such an ask is open.
         """
-        prefix = _offered(request)
-        if prefix is None or prefix in self._open or prefix in self._declined:
+        prefix = self._grant(request)
+        key = prefix or _one(member, request)
+        if key in self._open:
             return
-        body = (
-            f'Verifold refused this command, so that the lab does not wait:\n\n{(request.command or "")[:MAX_SHOWN]}'
-            f'\n\nWith the grant, every agent can run a command that starts with `{prefix}` and has plain arguments. '
-            'A grant names a command, not what a file holds: give it only for a command that the agents may change.'
-        )
+        if prefix:
+            headline, choices = f'Refused without a grant: {request.title}', (grant_choice(prefix), 'No')
+            body = (
+                f'Verifold refused this command at once, as your settings say:\n\n'
+                f'{(request.command or "")[:MAX_SHOWN]}'
+                f'\n\nWith the grant, every agent can run a command that starts with `{prefix}` and has plain '
+                'arguments. A grant names a command, not what a file holds: give it only for a command that the '
+                'agents may change.'
+            )
+        else:
+            headline, choices = _headline(request), tuple(choice.name for choice in request.choices)
+            shown = _input(request)
+            body = (
+                f'{shown}\n\n' if shown else ''
+            ) + 'Verifold refused this at once, as your settings say. Your answer applies when the agent asks again.'
         # The place is taken before the post, so that agents that are refused at the same moment share one ask.
-        self._open[prefix] = None
+        self._open[key] = None
         asked = None
         try:
-            asked = await _ask(member, f'Refused without a grant: {request.title}', (grant_choice(prefix), 'No'), body)
+            asked = await _ask(member, headline, choices, body)
         finally:
             if asked is None:
-                del self._open[prefix]
+                del self._open[key]
             else:
-                self._open[prefix] = asked
+                self._open[key] = asked
+
+    def _grant(self, request: PermissionRequest) -> str | None:
+        # After the person's no to a grant, a command that it would cover is asked as that one command.
+        prefix = _offered(request)
+        return None if prefix in self._declined else prefix
 
     async def run(self) -> None:
-        """Record the grant of each ask that the person answers with it, until the caller cancels this."""
+        """Record what each answered ask gives, a grant or the answer to a request, until the caller cancels this."""
         while True:
             board = self._lab.board
             answered = [
-                (prefix, answer)
-                for prefix, ask_id in self._open.items()
+                (key, answer)
+                for key, ask_id in self._open.items()
                 if ask_id and (answer := _persons_answer(board, ask_id)) is not None
             ]
-            for prefix, answer in answered:
+            for key, answer in answered:
+                if not isinstance(key, str):
+                    self._answers[key] = answer
                 # The ask offers nothing but the grant, so a plain yes gives it.
-                if _gives(answer, prefix, any_yes=True):
-                    await self._lab.grant(prefix)
+                elif _gives(answer, key, any_yes=True):
+                    await self._lab.grant(key)
                 elif _NEGATIVE.intersection(_words(answer)):
-                    self._declined.add(prefix)
+                    self._declined.add(key)
                 # The place stays taken until the grant is on the board, so that no refusal asks in between.
-                del self._open[prefix]
+                del self._open[key]
             await self._lab.wait_for_change(board.seq)
+
+
+async def ask_the_question(member: Member, question: Question) -> Answers | None:
+    """
+    Post a harness's question to its user as asks to the person, one for each field, and return the answers.
+
+    A field with a few options offers them as choices, and a yes-or-no field offers "Yes" and "No". The person
+    answers every other field in their own words. An answer that does not fit its field ends the question without
+    an answer, as a form that the user closes does.
+    """
+    answers: Answers = {}
+    for field in question.fields:
+        names = tuple(option.name.strip() for option in field.options)
+        fits = len(names) <= MAX_CHOICES and all(0 < len(name) <= MAX_CHOICE for name in names)
+        picks = field.kind == 'choice' and fits
+        choices = ('Yes', 'No') if field.kind == 'boolean' else names if picks else ()
+        alone = len(question.fields) == 1 and question.message
+        headline = question.message if alone else f'{question.message}: {field.title}'.removeprefix(': ')
+        hints = (
+            question.message if len(headline) > MAX_HEADLINE else '',
+            field.description,
+            '' if picks or not names else f'The options: {", ".join(names)}.',
+            {
+                'choices': 'Name each option that you choose, with commas between them.',
+                'number': 'Answer with a number.',
+                'integer': 'Answer with a whole number.',
+            }.get(field.kind, ''),
+        )
+        body = '\n\n'.join(hint for hint in hints if hint)
+        asked = await _ask(member, headline, choices, body, 'Questions')
+        value = _value(field, await _answer(member, asked))
+        if value is None:
+            return None
+        answers[field.name] = value
+    return answers
+
+
+def _value(field: QuestionField, answer: str) -> FieldValue | None:
+    """Return the person's answer as the field's kind of value, or `None` when the answer does not fit the field."""
+    headline = answer.split('\n', 1)[0].strip()
+    words = set(_words(answer))
+    value: FieldValue | None
+    match field.kind:
+        case 'text':
+            value = answer.strip()
+        case 'boolean':
+            value = False if _NEGATIVE & words else True if _POSITIVE & words else None
+        case 'integer' | 'number':
+            try:
+                value = int(headline) if field.kind == 'integer' else float(headline)
+            except ValueError:
+                value = None
+        case 'choice':
+            value = _option(field, headline)
+        case _:
+            named = [_option(field, part) for part in re.split(r'[,\n]', answer) if part.strip()]
+            value = None if None in named else [name for name in named if name is not None]
+    return value
+
+
+def _option(field: QuestionField, named: str) -> str | None:
+    wanted = named.strip().casefold()
+    return next(
+        (
+            option.value
+            for option in field.options
+            if wanted in (option.name.strip().casefold(), option.value.casefold())
+        ),
+        None,
+    )
+
+
+def _headline(request: PermissionRequest) -> str:
+    return f'Permission needed: {request.title}'
+
+
+def _input(request: PermissionRequest) -> str:
+    """Return what the ask's body shows of the request: its input, or a command that the headline cannot hold."""
+    cut = len(_headline(request)) > MAX_HEADLINE
+    return request.detail or (request.command or '' if cut else '')[:MAX_SHOWN]
+
+
+def _one(member: Member, request: PermissionRequest) -> _Key:
+    return (member.agent_id, request.title, request.detail)
 
 
 MAX_SHOWN = 2_000
@@ -141,8 +264,11 @@ def _offered(request: PermissionRequest) -> str | None:
     return prefix if prefix and len(grant_choice(prefix)) <= MAX_CHOICE else None
 
 
-async def _ask(member: Member, text: str, choices: tuple[str, ...], body: str) -> PostId:
-    thread = _permission_thread(member)
+async def _ask(
+    member: Member, text: str, choices: tuple[str, ...], body: str, about: str = 'Permission requests'
+) -> PostId:
+    title = _thread_title(member, about)
+    thread = _own_thread(member, title)
     asked = await member.post(
         PostRequest(
             kind='ask',
@@ -151,7 +277,7 @@ async def _ask(member: Member, text: str, choices: tuple[str, ...], body: str) -
             choices=choices,
             mentions=(PERSON,),
             thread=thread,
-            new_thread=None if thread else _thread_title(member),
+            new_thread=None if thread else title,
         )
     )
     return asked.post.id
@@ -204,13 +330,12 @@ def _contains(words: tuple[str, ...], phrase: tuple[str, ...]) -> bool:
     return bool(phrase) and any(words[start : start + len(phrase)] == phrase for start in range(len(words)))
 
 
-def _thread_title(member: Member) -> str:
+def _thread_title(member: Member, about: str) -> str:
     joined = member.lab.board.agent(member.agent_id)
-    return f'Permission requests from {joined.agent.name if joined else member.agent_id}'
+    return f'{about} from {joined.agent.name if joined else member.agent_id}'
 
 
-def _permission_thread(member: Member) -> str | None:
-    title = _thread_title(member)
+def _own_thread(member: Member, title: str) -> str | None:
     return next(
         (
             entry.thread.id
