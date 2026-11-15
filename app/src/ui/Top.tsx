@@ -394,7 +394,7 @@ function InviteAgent(props: {
       ...(facts.role.trim() ? { role: facts.role.trim() } : {}),
       ...(facts.family.trim() ? { family: facts.family.trim() } : {}),
       ...(facts.onCall ? { on_call: true } : {}),
-      ...(facts.coordinator ? { coordinator: true } : {}),
+      ...(facts.coordinator ? { coordinator: true, powers: facts.powers ?? [] } : {}),
     };
     props.api.invite(request).then(
       (made) => {

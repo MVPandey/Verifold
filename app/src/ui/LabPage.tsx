@@ -25,6 +25,7 @@ import { cardStatus, doneLine, headClaim, questionThread } from '../model/turns.
 import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
 import { Detail, Words } from './Markdown.tsx';
+import { CoordinatorSeat, OpenedForYou } from './Coordinator.tsx';
 import { ChipView, Composer, FaceView, Files } from './parts.tsx';
 import { Turns } from './Thread.tsx';
 
@@ -178,6 +179,7 @@ export function Wall(
               {done}
             </a>
           ) : null}
+          <CoordinatorSeat {...props} />
           <Composer
             variant="steer"
             label="Steer the lab"
@@ -693,6 +695,7 @@ function Card(props: {
         </div>
         {head ? <p className="f-head">{head.post.text}</p> : null}
         <Faces faces={faces} last={open ? null : summary.last_at} team={team} />
+        <OpenedForYou summary={summary} agents={props.agents} />
         <Cross
           label="Builds on"
           links={summary.builds_on_threads}

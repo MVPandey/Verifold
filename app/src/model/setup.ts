@@ -3,6 +3,7 @@ import type {
   HarnessOption,
   Offer,
   OptionValue,
+  Power,
   SavedChoice,
   SetupChoices,
   SetupDefaults,
@@ -32,6 +33,8 @@ export interface Seat {
   readonly family: string;
   readonly onCall: boolean;
   readonly coordinator: boolean;
+  /** The powers that the person switches on for the coordinator from the start. Only the coordinator's seat sends them. */
+  readonly powers: readonly Power[];
 }
 
 /** Return a seat of a harness with the person's own settings and no facts. */
@@ -47,6 +50,7 @@ export function newSeat(harness: string, count = 1): Seat {
     family: '',
     onCall: false,
     coordinator: false,
+    powers: [],
   };
 }
 
@@ -87,6 +91,8 @@ export function firstSeats(
       family: choice.family ?? '',
       onCall: choice.on_call ?? false,
       coordinator: choice.coordinator ?? false,
+      // A saved choice switches on no power. The person does that for each lab.
+      powers: [],
     }));
   });
 }
@@ -188,6 +194,7 @@ export function seatChoice(seat: Seat): AgentChoice {
     ...(seat.family.trim() ? { family: seat.family.trim() } : {}),
     ...(seat.onCall ? { on_call: true } : {}),
     ...(seat.coordinator ? { coordinator: true } : {}),
+    ...(seat.coordinator && seat.powers.length > 0 ? { powers: seat.powers } : {}),
   };
 }
 

@@ -10,6 +10,7 @@ import { href } from '../model/route.ts';
 import { sideReplyHint } from '../model/side.ts';
 import { act, isClaim, rows, standingIn } from '../model/turns.ts';
 import { messageOf } from '../api/client.ts';
+import { ForYou } from './Coordinator.tsx';
 import { Detail } from './Markdown.tsx';
 import { ChipView, Composer, FaceView, HarnessAsk, Mark } from './parts.tsx';
 
@@ -124,6 +125,7 @@ export function Turn(
             <span className="f-tag">{harnessTitle(props.harnesses, agent.harness)}</span>
           ) : null}
           {tag ? <span className="f-tag">{tag}</span> : null}
+          <ForYou marked={post.for_person} />
           <time dateTime={at}>{clock(at)}</time>
         </p>
         <p className="f-act">

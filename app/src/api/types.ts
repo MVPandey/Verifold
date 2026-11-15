@@ -30,7 +30,8 @@ export type PostKind =
   | 'ruled_out'
   | 'report'
   | 'call'
-  | 'close';
+  | 'close'
+  | 'request';
 export type Standing = 'open' | 'checked' | 'held_up' | 'disputed' | 'conceded';
 
 export interface ModelSpec {
@@ -75,6 +76,8 @@ export interface AgentLeft {
   readonly by: string;
   /** One line, or empty. */
   readonly reason: string;
+  /** With `by` the person: the coordinator, when it removed the agent with the power that the person switched on. */
+  readonly through?: string | null;
 }
 
 /** The alarm that an agent set for itself. It stays until it rings. */
@@ -307,6 +310,8 @@ export interface AgentChoice {
   readonly on_call?: boolean;
   /** Whether the seat's agent is the lab's coordinator. Such a seat has one agent. */
   readonly coordinator?: boolean;
+  /** The powers that the person switches on for the coordinator from the start. Only the coordinator's seat has any. */
+  readonly powers?: readonly Power[];
 }
 
 /** The person invites an agent that runs by itself, and can state the facts of its seat. */
@@ -337,6 +342,38 @@ export interface Thread {
   readonly opened_by: string;
   /** For the thread that Verifold opened for an agent's requests of one kind: that kind. */
   readonly carries?: 'permission' | 'question' | null;
+  /** Whether this is the thread where the person and the lab's coordinator talk. */
+  readonly conversation?: boolean;
+  /** Whether the lab's coordinator opened the thread for the person. */
+  readonly for_person?: boolean;
+}
+
+/** A kind of move that the person can hand to the lab's coordinator. Each one is off until the person switches it on. */
+export type Power = 'time' | 'permissions' | 'agents' | 'settings' | 'question';
+
+/** A move that only the person makes, and that the lab's coordinator can ask the person for. */
+export type Move =
+  | { readonly type: 'time'; readonly minutes: number }
+  /** `option` is the harness's own ID of one of its answers on the ask. */
+  | { readonly type: 'permission'; readonly ask: string; readonly option: string }
+  | { readonly type: 'add_agent'; readonly seat: SavedChoice }
+  | { readonly type: 'remove_agent'; readonly agent: string }
+  | {
+      readonly type: 'setting';
+      readonly key: 'jobs.at_time_limit' | 'jobs.at_exit';
+      readonly value: string;
+    }
+  | { readonly type: 'question'; readonly question: string; readonly note: string };
+
+/** The answer to a coordinator's request for a move: the person's yes or no, or the yes of a power that is on. */
+export interface RequestAnswered {
+  readonly at: string;
+  readonly request: string;
+  readonly yes: boolean;
+  /** `person`, or the coordinator itself while the person's power for this kind of move is on. */
+  readonly by: string;
+  /** With the person's yes to more time: the minutes that the person gave, when not the minutes of the request. */
+  readonly minutes: number | null;
 }
 
 export interface FileEvidence {
@@ -360,6 +397,8 @@ interface PostBase {
   /** The posts that this one builds on, in any thread. */
   readonly builds_on: readonly string[];
   readonly evidence: readonly FileEvidence[];
+  /** Whether the lab's coordinator posted this for the person. Only the coordinator can mark a post so. */
+  readonly for_person?: boolean;
 }
 
 export type Post =
@@ -388,6 +427,13 @@ export type Post =
       readonly accepts: boolean;
       /** Whether Verifold ended the harness's request that the ask carries, without the person's answer. */
       readonly ends_request?: boolean;
+      /** The coordinator's request that this answer carries out. Verifold sets it, and no agent can. */
+      readonly for_request?: string | null;
+    })
+  | (PostBase & {
+      /** The coordinator's request to the person for a move. `text` and `body` hold the reason. */
+      readonly kind: 'request';
+      readonly move: Move;
     })
   | (PostBase & {
       readonly kind: 'check';
@@ -442,6 +488,46 @@ export interface PostView {
   readonly standing: Standing;
   /** The posts that build on this one, oldest first. */
   readonly built_on_by: readonly string[];
+  /** For a request for a move: its answer, or `null` while it has none. */
+  readonly decision?: RequestAnswered | null;
+  /** For a request for a move: whether it waits for the person's answer. */
+  readonly waits?: boolean;
+}
+
+/** One power of the coordinator as the person sees it. */
+export interface PowerView {
+  readonly power: Power;
+  readonly on: boolean;
+  /** When the person switched it on, or `null` while it is off. */
+  readonly since: string | null;
+  /** How many moves the agent that holds the seat made with it. */
+  readonly used: number;
+}
+
+/** A move that came from a request of the coordinator: with the person's yes, or under a power. */
+export interface Deed {
+  /** The request, with its answer in `decision`. */
+  readonly request: PostView;
+  /** For a move that added an agent: that agent. */
+  readonly agent: string | null;
+  /** The way back that the person has now, or `null` when there is none. */
+  readonly undo: 'remove_agent' | 'take_minutes' | null;
+}
+
+/** What the panel for the coordinator shows: the conversation, the powers, and what was done for the person. */
+export interface ConversationView {
+  /** The agent that holds the coordinator seat, or `null`. */
+  readonly coordinator: string | null;
+  /** The thread where the person and the coordinator talk, or `null` while the lab has none. */
+  readonly thread: ThreadView | null;
+  /** The posts of that thread that wait for the person's answer. */
+  readonly waits: readonly string[];
+  /** The permission requests that the requests in the conversation name. */
+  readonly asks: readonly PostView[];
+  /** Every power, in a fixed order. */
+  readonly powers: readonly PowerView[];
+  /** The moves that came from the coordinator's requests, newest first. */
+  readonly deeds: readonly Deed[];
 }
 
 /** The lab's answer so far, which is the newest proposal in any thread, and each post that it builds on with where it stands. */
@@ -535,6 +621,8 @@ export interface PostRequest {
   readonly mentions?: readonly string[];
   /** On an answer: the choice of the ask that the person pressed. Words that they typed are in the text. */
   readonly choice?: string;
+  /** Whether the post goes in the conversation with the coordinator, in place of `thread` and `new_thread`. */
+  readonly conversation?: boolean;
 }
 
 /** The person's own author ID on the board. */

@@ -1,0 +1,708 @@
+import { useEffect, useId, useState } from 'react';
+import type { FormEvent, ReactElement } from 'react';
+
+import type { Api } from '../api/client.ts';
+import { messageOf } from '../api/client.ts';
+import { PERSON } from '../api/types.ts';
+import type {
+  AgentView,
+  ConversationView,
+  Deed,
+  HarnessOption,
+  PostView,
+  Power,
+  ThreadSummary,
+} from '../api/types.ts';
+import { authorName, face, harnessTitle, memberLine } from '../model/agents.ts';
+import {
+  POWER_WORDS,
+  askLine,
+  coordinatorOf,
+  decidedLine,
+  deedOf,
+  doneLine,
+  minutesOf,
+  powerLine,
+  requestState,
+  tabs,
+  talkLabel,
+  undoLabel,
+  yesLabel,
+} from '../model/coordinator.ts';
+import type { Around, Tab } from '../model/coordinator.ts';
+import { clock } from '../model/format.ts';
+import { personAnswer, split } from '../model/posts.ts';
+import { href } from '../model/route.ts';
+import type { PageProps } from './hooks.ts';
+import { Words } from './Markdown.tsx';
+import { Exact, FaceView, HarnessAsk } from './parts.tsx';
+
+const NO_VIEW: ConversationView = {
+  coordinator: null,
+  thread: null,
+  waits: [],
+  asks: [],
+  powers: [],
+  deeds: [],
+};
+
+/** What every part of the panel needs: the API, the lab's agents, and the way to read the lab again. */
+interface Shared extends Around {
+  readonly api: Api;
+  readonly view: ConversationView;
+  readonly reload: () => void;
+}
+
+/**
+ * The coordinator's place in the seat of the lab page: who holds the seat, and the button that opens the
+ * conversation beside the wall. With no coordinator, it says so.
+ */
+export function CoordinatorSeat(props: PageProps & { readonly start?: Tab }): ReactElement {
+  const { api, data } = props;
+  const [tab, setTab] = useState<Tab | null>(props.start ?? null);
+  const holder = coordinatorOf(data.lab.agents);
+  const open = holder !== null && tab !== null;
+  useEffect(() => {
+    // The page makes room for the panel, so the person reads the wall and the conversation at once.
+    document.body.classList.toggle('with-panel', open);
+    return () => {
+      document.body.classList.remove('with-panel');
+    };
+  }, [open]);
+  if (holder === null) {
+    return (
+      <p className="k-empty">
+        <b>No agent holds the coordinator seat.</b> Give the seat to an agent in the member list, or
+        write to the whole lab here.
+      </p>
+    );
+  }
+  const view = data.conversation ?? NO_VIEW;
+  const name = holder.agent.name;
+  return (
+    <div className="k-door">
+      <p className="k-door-head">
+        <FaceView face={face(data.lab.agents, holder.agent.id)} />
+        <b>{name}</b>
+        <span className="k-seat">Coordinator</span>
+      </p>
+      <button
+        type="button"
+        className="k-open"
+        aria-expanded={open}
+        onClick={() => {
+          setTab(open ? null : 'talk');
+        }}
+      >
+        {open ? 'Close the conversation' : talkLabel(name, view.waits.length)}
+      </button>
+      {tab === null ? null : (
+        <Panel
+          api={api}
+          view={view}
+          holder={holder}
+          agents={data.lab.agents}
+          harnesses={data.setup?.harnesses ?? []}
+          resting={data.lab.out_of_time || data.lab.state === 'closed'}
+          now={props.now}
+          tab={tab}
+          onTab={setTab}
+          reload={data.reload}
+        />
+      )}
+    </div>
+  );
+}
+
+/** The panel for the coordinator: the conversation, what the coordinator may do, and what it did for the person. */
+export function Panel(props: {
+  readonly api: Api;
+  readonly view: ConversationView;
+  readonly holder: AgentView;
+  readonly agents: readonly AgentView[];
+  readonly harnesses: readonly HarnessOption[];
+  /** Whether the lab is out of time or closed, so that no agent works. */
+  readonly resting: boolean;
+  readonly now: Date;
+  readonly tab: Tab;
+  readonly onTab: (tab: Tab | null) => void;
+  readonly reload: () => void;
+}): ReactElement {
+  const { view, holder, tab } = props;
+  const name = holder.agent.name;
+  const shared: Shared = {
+    api: props.api,
+    view,
+    agents: props.agents,
+    harnesses: props.harnesses,
+    asks: view.asks,
+    reload: props.reload,
+  };
+  return (
+    <aside className="k-panel" aria-label={`${name}, the coordinator`}>
+      <header>
+        <FaceView face={face(props.agents, holder.agent.id)} />
+        <div>
+          <p className="k-title">
+            <b>{name}</b>
+            <span className="k-seat">Coordinator</span>
+          </p>
+          <p className="k-prov">
+            {harnessTitle(props.harnesses, holder.agent.harness)}.{' '}
+            {memberLine(holder, props.resting, props.now).text}
+          </p>
+        </div>
+        <button
+          type="button"
+          className="linkbtn"
+          onClick={() => {
+            props.onTab(null);
+          }}
+        >
+          Close
+        </button>
+      </header>
+      <nav aria-label="The panel for the coordinator">
+        {tabs(name, view.waits.length).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            aria-current={tab === key ? 'page' : undefined}
+            onClick={() => {
+              props.onTab(key);
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+      {tab === 'talk' ? <Talk {...shared} name={name} /> : null}
+      {tab === 'powers' ? <Powers {...shared} name={name} /> : null}
+      {tab === 'log' ? <Log {...shared} /> : null}
+    </aside>
+  );
+}
+
+/** The conversation: one row for each post, and the box where the person writes to the coordinator. */
+function Talk(props: Shared & { readonly name: string }): ReactElement {
+  const posts = props.view.thread?.posts ?? [];
+  return (
+    <>
+      <ol className="k-talk">
+        <li className="k-public">
+          Every agent can read this conversation. It is a thread of the lab.
+        </li>
+        {posts.map((item) => (
+          <Say key={item.post.id} item={item} {...props} />
+        ))}
+      </ol>
+      <Write
+        placeholder={`Tell ${props.name} what you want`}
+        hint={`Your message wakes ${props.name}.`}
+        onSend={async (text) => {
+          const { headline, body } = split(text);
+          await props.api.post({
+            kind: 'message',
+            text: headline,
+            ...(body ? { body } : {}),
+            conversation: true,
+          });
+          props.reload();
+        }}
+      />
+    </>
+  );
+}
+
+/** One row of the conversation: who wrote it, when, and the words. A request and an ask that waits are boxed. */
+function Say(props: Shared & { readonly item: PostView }): ReactElement {
+  const { item } = props;
+  const { post, at } = item;
+  const mine = post.author === PERSON;
+  const waits = props.view.waits.includes(post.id);
+  const boxed = post.kind === 'request' || (post.kind === 'ask' && waits);
+  return (
+    <li id={`k-${post.id}`} className={`k-say${mine ? ' you' : ''}${boxed ? ' ask' : ''}`}>
+      <p className="k-who">
+        <b>{mine ? 'You' : authorName(props.agents, post.author)}</b>
+        <time dateTime={at}>{clock(at)}</time>
+      </p>
+      {post.kind === 'request' ? (
+        <RequestBox {...props} />
+      ) : (
+        <>
+          <p className="k-text">{post.text}</p>
+          {post.body ? <Words text={post.body} /> : null}
+          {post.kind === 'ask' && waits ? (
+            <Answer
+              choices={post.choices}
+              onAnswer={async (choice, words) => {
+                const answer = personAnswer(post, choice, words);
+                if (answer) await props.api.post(answer);
+                props.reload();
+              }}
+            />
+          ) : null}
+        </>
+      )}
+    </li>
+  );
+}
+
+/**
+ * A request of the coordinator for a move: what it asks for, its reason, what the move holds, and the answers.
+ *
+ * The app writes the heading from the move's fields. The coordinator's own words follow it as text. A command
+ * shows only in the boxes of the permission request that the move names.
+ */
+export function RequestBox(props: Shared & { readonly item: PostView }): ReactElement | null {
+  const { item, view } = props;
+  const { post } = item;
+  if (post.kind !== 'request') return null;
+  const { move } = post;
+  const asked =
+    move.type === 'permission' ? view.asks.find((ask) => ask.post.id === move.ask) : null;
+  const shown = asked?.post.kind === 'ask' ? (asked.post.shown ?? null) : null;
+  const state = requestState(item);
+  const deed = deedOf(view, post.id);
+  return (
+    <>
+      <p className="k-ask-head">{askLine(move, props)}</p>
+      <p className="k-text">{post.text}</p>
+      {post.body ? <Words text={post.body} /> : null}
+      {move.type === 'question' ? (
+        <>
+          <Exact label="The new question" text={move.question} />
+          {move.note ? <p className="k-note">Why: {move.note}</p> : null}
+        </>
+      ) : null}
+      {asked && shown ? (
+        <>
+          <HarnessAsk shown={shown} name={authorName(props.agents, asked.post.author)} />
+          <p className="k-note">
+            <a href={href({ page: 'thread', id: asked.post.thread, post: asked.post.id })}>
+              See the request in its thread
+            </a>
+            . To pick another answer, answer it on the Needs you page.
+          </p>
+        </>
+      ) : null}
+      {state === 'waits' ? (
+        <Decide {...props} item={item} />
+      ) : state === 'ended' ? (
+        <p className="k-did">This request ended when the coordinator seat changed.</p>
+      ) : state === 'no' ? (
+        <p className="k-did">You said: not now.</p>
+      ) : (
+        <>
+          <p className="k-did">
+            <span className="f-mark fm-good" aria-hidden="true" />{' '}
+            {doneLine(item, deed?.agent ?? null, props)}. {decidedLine(item, props)}
+          </p>
+          {deed ? <Undo {...props} deed={deed} /> : null}
+        </>
+      )}
+    </>
+  );
+}
+
+/** The answers to a request that waits: yes, for more time another amount, and not now. */
+function Decide(props: Shared & { readonly item: PostView }): ReactElement | null {
+  const { post } = props.item;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [other, setOther] = useState<string | null>(null);
+  const amountId = useId();
+  if (post.kind !== 'request') return null;
+  const { move } = post;
+  const answer = (yes: boolean, minutes?: number): void => {
+    setBusy(true);
+    setError(null);
+    props.api.answerRequest(post.id, yes, minutes).then(
+      () => {
+        props.reload();
+      },
+      (failure: unknown) => {
+        setError(messageOf(failure));
+        setBusy(false);
+      },
+    );
+  };
+  const minutes = other === null ? null : minutesOf(other);
+  return (
+    <>
+      <p className="k-buttons">
+        <button
+          type="button"
+          className="go"
+          disabled={busy}
+          onClick={() => {
+            answer(true);
+          }}
+        >
+          {yesLabel(move, props)}
+        </button>
+        {move.type === 'time' && other === null ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setOther(String(move.minutes));
+            }}
+          >
+            Give another amount
+          </button>
+        ) : null}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            answer(false);
+          }}
+        >
+          Not now
+        </button>
+      </p>
+      {other === null ? null : (
+        <p className="k-amount">
+          <label htmlFor={amountId}>Minutes</label>
+          <input
+            id={amountId}
+            type="number"
+            min={1}
+            value={other}
+            onChange={(event) => {
+              setOther(event.target.value);
+            }}
+          />
+          <button
+            type="button"
+            disabled={busy || minutes === null}
+            onClick={() => {
+              if (minutes !== null) answer(true, minutes);
+            }}
+          >
+            Give {minutes ?? '…'} min
+          </button>
+        </p>
+      )}
+      {error ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+/** The way back from a move, when the person has one: the removal of an added agent, or of the minutes. */
+function Undo(props: Shared & { readonly deed: Deed }): ReactElement | null {
+  const { deed } = props;
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const label = undoLabel(deed);
+  if (label === null) return null;
+  const agent = deed.undo === 'remove_agent' ? deed.agent : null;
+  const undo = (): void => {
+    setBusy(true);
+    setError(null);
+    const done = agent
+      ? props.api.removeAgent(agent)
+      : props.api.takeMinutesBack(deed.request.post.id);
+    done.then(
+      () => {
+        props.reload();
+      },
+      (failure: unknown) => {
+        setError(messageOf(failure));
+        setBusy(false);
+      },
+    );
+  };
+  return (
+    <>
+      <p className="k-buttons">
+        {agent && confirming ? (
+          <>
+            <span>
+              Remove {authorName(props.agents, agent)} for good? Its posts stay on the board.
+            </span>
+            <button type="button" disabled={busy} onClick={undo}>
+              Remove
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setConfirming(false);
+              }}
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              if (agent) setConfirming(true);
+              else undo();
+            }}
+          >
+            {label}
+          </button>
+        )}
+      </p>
+      {error ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+/** The answer to an ask of the coordinator: a press on a choice, or the person's own words. */
+function Answer(props: {
+  readonly choices: readonly string[];
+  readonly onAnswer: (choice: string | null, words: string) => Promise<void>;
+}): ReactElement {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const send = async (choice: string | null, words: string): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      await props.onAnswer(choice, words);
+    } catch (failure) {
+      setError(messageOf(failure));
+      throw failure;
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      {props.choices.length > 0 ? (
+        <p className="k-buttons">
+          {props.choices.map((choice) => (
+            <button
+              key={choice}
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                send(choice, '').catch(() => undefined);
+              }}
+            >
+              {choice}
+            </button>
+          ))}
+        </p>
+      ) : null}
+      <Write
+        placeholder={props.choices.length > 0 ? 'Or answer in your own words' : 'Your answer'}
+        hint=""
+        button="Answer"
+        onSend={(text) => send(null, text)}
+      />
+      {error ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+/** A box where the person writes: the first line is the headline, and the rest is the detail. */
+function Write(props: {
+  readonly placeholder: string;
+  readonly hint: string;
+  readonly button?: string;
+  readonly onSend: (text: string) => Promise<void>;
+}): ReactElement {
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const send = (event: FormEvent): void => {
+    event.preventDefault();
+    if (!text.trim() || sending) return;
+    setSending(true);
+    setError(null);
+    props.onSend(text).then(
+      () => {
+        setText('');
+        setSending(false);
+      },
+      (failure: unknown) => {
+        setError(messageOf(failure));
+        setSending(false);
+      },
+    );
+  };
+  return (
+    <form className="k-write" onSubmit={send}>
+      <textarea
+        rows={2}
+        aria-label={props.placeholder}
+        placeholder={props.placeholder}
+        value={text}
+        onChange={(event) => {
+          setText(event.target.value);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) send(event);
+        }}
+      />
+      <div>
+        {error ? (
+          <span className="error" role="alert">
+            {error}
+          </span>
+        ) : (
+          <span>{props.hint}</span>
+        )}
+        <button type="submit" disabled={!text.trim() || sending}>
+          {sending ? 'Sending' : (props.button ?? 'Send')}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** What the coordinator may do without asking: one switch for each kind of move, each off until the person switches it on. */
+function Powers(props: Shared & { readonly name: string }): ReactElement {
+  const { name } = props;
+  const [busy, setBusy] = useState<Power | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const change = (power: Power, on: boolean): void => {
+    setBusy(power);
+    setError(null);
+    props.api
+      .setPower(power, on)
+      .then(
+        () => {
+          props.reload();
+        },
+        (failure: unknown) => {
+          setError(messageOf(failure));
+        },
+      )
+      .finally(() => {
+        setBusy(null);
+      });
+  };
+  return (
+    <div className="k-powers">
+      <p className="k-lede">
+        {name} asks you before each of these. Switch one on, and {name} does it without asking. Each
+        use shows under “Done for you”.
+      </p>
+      <ul>
+        {props.view.powers.map((power) => {
+          const words = POWER_WORDS[power.power];
+          const line = powerLine(power);
+          return (
+            <li key={power.power} className={power.on ? 'on' : undefined}>
+              <div>
+                <b>{words.name}</b>
+                <p>{words.what(name)}</p>
+                {line ? <p className="k-since">{line}</p> : null}
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={power.on}
+                aria-label={words.name}
+                className="k-switch"
+                disabled={busy === power.power}
+                onClick={() => {
+                  change(power.power, !power.on);
+                }}
+              >
+                <i aria-hidden="true" />
+                <span>{power.on ? 'On' : 'Off'}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {error ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : null}
+      <p className="k-foot">Stopping the lab stays with you. No switch gives it away.</p>
+    </div>
+  );
+}
+
+/** What was done for the person: each move that came from a request, newest first, with the way back when there is one. */
+function Log(props: Shared): ReactElement {
+  const { deeds } = props.view;
+  if (deeds.length === 0) {
+    return <p className="k-log k-none">Nothing was done for you yet.</p>;
+  }
+  return (
+    <ol className="k-log">
+      {deeds.map((deed) => {
+        const at = deed.request.decision?.at ?? deed.request.at;
+        return (
+          <li key={deed.request.post.id}>
+            <time dateTime={at}>{clock(at)}</time>
+            <div>
+              <p>{doneLine(deed.request, deed.agent, props)}</p>
+              <span className="k-by">{decidedLine(deed.request, props)}</span>
+              <Undo {...props} deed={deed} />
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** The line on a thread's card that says that the coordinator opened the thread for the person. */
+export function OpenedForYou(props: {
+  readonly summary: ThreadSummary;
+  readonly agents: readonly AgentView[];
+}): ReactElement | null {
+  const { thread } = props.summary;
+  if (!thread.for_person) return null;
+  return (
+    <span className="k-for">Opened for you by {authorName(props.agents, thread.opened_by)}</span>
+  );
+}
+
+/** The mark on a post that the coordinator wrote for the person. */
+export function ForYou(props: { readonly marked: boolean | undefined }): ReactElement | null {
+  return props.marked ? <span className="k-for">for you, through the coordinator</span> : null;
+}
+
+/** A request of the coordinator on the Needs you page, with its answers. */
+export function RequestNeed(props: PageProps & { readonly item: PostView }): ReactElement {
+  const { api, data, item } = props;
+  const view = data.conversation ?? NO_VIEW;
+  const name = authorName(data.lab.agents, item.post.author);
+  return (
+    <section className="nitem open k-need" aria-label={`${name}: ${item.post.text}`}>
+      <div className="nh">
+        <FaceView face={face(data.lab.agents, item.post.author)} />
+        <b>{name}</b>
+        <span className="kind">Asks you for a move</span>
+      </div>
+      <div className="nbody">
+        <RequestBox
+          api={api}
+          view={view}
+          agents={data.lab.agents}
+          harnesses={data.setup?.harnesses ?? []}
+          asks={view.asks}
+          reload={data.reload}
+          item={item}
+        />
+      </div>
+    </section>
+  );
+}
