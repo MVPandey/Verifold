@@ -47,8 +47,8 @@ class Member:
         Seat an agent that has joined the lab. It has read everything up to now, or up to event `seen` when given.
 
         `pin` commits the agent's folder and pins the files that a post names. Without it, posts cannot name files.
-        `adds` starts an agent for the coordinator's move that adds one. Without it, such a move waits for the
-        person also while the coordinator's power over agents is on.
+        `adds` starts an agent for the coordinator's move that adds one. Without it, the lab refuses such a move
+        while the coordinator's power over agents is on, and the request waits for the person otherwise.
         """
         self._adds = adds
         self._lab = lab

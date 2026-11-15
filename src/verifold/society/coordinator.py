@@ -191,9 +191,9 @@ def request_waits(board: Board, entry: Posted) -> bool:
     return isinstance(post, MoveRequest) and not board.answer_to(post.id) and post.author == board.coordinator
 
 
-def permission_choice(board: Board, move: PermissionMove, by: AgentId) -> str:
+def permission_choice(board: Board, move: PermissionMove, by: AgentId) -> tuple[Ask, str]:
     """
-    Return the choice on a permission request that a move picks, as the ask names it.
+    Return the permission request that a move answers, and the choice that it picks, as the ask names it.
 
     Raises:
         RejectedEvent: The ask is no permission request that waits, it is the request of `by`'s own harness, or the
@@ -223,7 +223,7 @@ def permission_choice(board: Board, move: PermissionMove, by: AgentId) -> str:
             f'The harness remembers the answer `{move.option}` beyond this lab, so only the person picks it. A '
             'move picks an answer for this once.'
         )
-    return label
+    return ask, label
 
 
 def joined_by(board: Board, answered: RequestAnswered) -> AgentId | None:
@@ -293,5 +293,5 @@ def _check_carried(board: Board, answer: Answer) -> None:
     made = answered and answered.yes and answered.request == answer.for_request and answered.by == answer.author
     if not (request and made and isinstance(move, PermissionMove) and move.ask == answer.reply_to):
         raise RejectedEvent('Only the yes to a request for a move decides a permission request for it.')
-    if answer.choice != permission_choice(board, move, request.author):
+    if answer.choice != permission_choice(board, move, request.author)[1]:
         raise RejectedEvent(f'The request {request.id} picks another answer of the permission request.')

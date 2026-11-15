@@ -410,9 +410,10 @@ class Lab:
 
         """
         holder = self._board.coordinator
-        if holder and (power in self._board.powers) == on:
-            return
-        await self._commit(_power(power, holder or PERSON, on=on))
+        if holder is None:
+            raise RejectedEvent('A power is for the agent that holds the coordinator seat, and nobody holds it now.')
+        if (power in self._board.powers) != on:
+            await self._commit(_power(power, holder, on=on))
 
     async def request(self, move: Move, text: str, body: str, author: AgentId, adds: Adds | None = None) -> Posted:
         """
@@ -445,13 +446,13 @@ class Lab:
             return Posted(seq=seq, at=at, post=request)
 
         builds: tuple[Build, ...] = (*opens, post)
-        if author == board.coordinator and power_of(move) in board.powers:
+        if power_of(move) in board.powers:
             builds = (*builds, _answered(None, author, yes=True))
             if isinstance(move, AddMove):
                 await _add(adds, move, builds)
                 board = self._board
             else:
-                board = await self._commit(*builds, *_effects(board, move, author, None))
+                board = await self._commit(*builds, *_effects(board, move, author, text))
         else:
             board = await self._commit(*builds)
         return next(
@@ -483,17 +484,17 @@ class Lab:
         """
         board = self._board
         entry = board.post(request_id)
-        move = entry.post.move if entry and isinstance(entry.post, MoveRequest) else None
+        request = entry.post if entry and isinstance(entry.post, MoveRequest) else None
         builds: tuple[Build, ...] = (_answered(request_id, PERSON, yes=yes, minutes=minutes),)
-        if entry and move:
-            said = PostRequest(kind='answer', text=YES if yes else NO, thread=entry.post.thread, reply_to=request_id)
+        if request:
+            said = PostRequest(kind='answer', text=YES if yes else NO, thread=request.thread, reply_to=request_id)
             builds = (_add_post(said, PERSON, ()), *builds)
-        if not yes or move is None:
+        if not yes or request is None:
             await self._commit(*builds)
-        elif isinstance(move, AddMove):
-            await _add(adds, move, builds)
+        elif isinstance(request.move, AddMove):
+            await _add(adds, request.move, builds)
         else:
-            await self._commit(*builds, *_effects(board, move, PERSON, minutes))
+            await self._commit(*builds, *_effects(board, request.move, PERSON, request.text, minutes))
         return self._board.answers[-1]
 
     async def take_minutes_back(self, request_id: PostId) -> None:
@@ -612,11 +613,14 @@ type RecordedMove = TimeMove | PermissionMove | RemoveMove | SettingMove | Quest
 """A move that the record alone makes. A move that adds an agent is not one, because the host starts the agent."""
 
 
-def _effects(board: Board, move: RecordedMove, by: AgentId, minutes: int | None) -> tuple[Build, ...]:
+def _effects(
+    board: Board, move: RecordedMove, by: AgentId, reason: str, minutes: int | None = None
+) -> tuple[Build, ...]:
     """
     Return the events that make a move after the yes to its request. `by` is who said yes.
 
-    They are the events that the person's own move records.
+    They are the events that the person's own move records. `reason` is the headline of the request, and
+    `minutes` is the amount that the person gave in place of the request's.
     """
     match move:
         case TimeMove():
@@ -624,7 +628,7 @@ def _effects(board: Board, move: RecordedMove, by: AgentId, minutes: int | None)
         case PermissionMove():
             return (_permission_answer(move, by),)
         case RemoveMove():
-            return (_removal(move, by),)
+            return (_removal(move, by, reason),)
         case SettingMove():
             return (_setting(move),)
         case QuestionMove():
@@ -646,32 +650,28 @@ def _more_time(minutes: int) -> Build:
 
 def _permission_answer(move: PermissionMove, by: AgentId) -> Build:
     def build(board: Board, seq: int, at: datetime) -> Posted:
-        answered = board.answers[-1]
-        asked = board.post(move.ask)
-        request = board.post(answered.request)
-        label = permission_choice(board, move, request.post.author if request else by)
+        # The record's rules check the answer against the request and its author once more.
+        ask, label = permission_choice(board, move, by)
         answer = Answer(
             id=f'p-{len(board.posts) + 1}',
-            thread=asked.post.thread if asked else '',
+            thread=ask.thread,
             author=by,
             text=label,
-            reply_to=move.ask,
+            reply_to=ask.id,
             choice=label,
-            for_request=answered.request,
+            for_request=board.answers[-1].request,
         )
         return Posted(seq=seq, at=at, post=answer)
 
     return build
 
 
-def _removal(move: RemoveMove, by: AgentId) -> Build:
-    def build(board: Board, seq: int, at: datetime) -> AgentLeft:
-        request = board.post(board.answers[-1].request)
-        reason = one_line(request.post.text)[:200] if request else ''
-        through = None if by == PERSON else by
-        return AgentLeft(seq=seq, at=at, agent=move.agent, by=PERSON, reason=reason, through=through)
-
-    return build
+def _removal(move: RemoveMove, by: AgentId, reason: str) -> Build:
+    # The removal is the person's. With the coordinator's power, it names the coordinator too.
+    through = None if by == PERSON else by
+    return lambda _, seq, at: AgentLeft(
+        seq=seq, at=at, agent=move.agent, by=PERSON, reason=one_line(reason)[:200], through=through
+    )
 
 
 def _setting(move: SettingMove) -> Build:

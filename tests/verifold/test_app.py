@@ -1849,3 +1849,40 @@ async def test_the_person_opens_the_folders_of_the_labs_agents_and_gets_the_path
         f'{real / "agent-1"} is a link to another place, so Verifold does not open it.',
     )
     assert no_desktop == {'path': str(real), 'opened': False}
+
+
+async def test_an_invited_coordinator_adds_an_agent_under_its_power_and_asks_the_person_for_the_rest(
+    project: Path, log: Path
+) -> None:
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),), minutes=60)
+    invite = {'name': 'Lead', 'coordinator': True, 'powers': ['agents']}
+
+    async with serving(project, start, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
+        invited = (await client.post('/invitations', json=invite)).json()
+        url, token, _ = invited_parts(invited['text'])
+        ends_at = fold(record(project)).ends_at
+        async with board_of(url, token) as board:
+            added = await board.call_tool(
+                'request', {'move': 'add_agent', 'text': 'The run needs one more hand.', 'harness': 'fake'}
+            )
+            asked = await board.call_tool('request', {'move': 'time', 'text': 'The run is long.', 'minutes': 30})
+        # The host started the agent that the move added, as it starts an agent that the person adds.
+        await until(lambda: any(call['agent'] == 'agent-3' for call in calls(log)), timeout=60)
+        waiting = (await client.get('/conversation')).json()
+        assert asked.structured_content is not None
+        yes = await client.post(f'/requests/{asked.structured_content["post"]["id"]}', json={'yes': True})
+        done = yes.json()
+
+    board_now = fold(record(project))
+    assert added.structured_content is not None
+    assert added.structured_content['decision']['by'] == 'agent-2'
+    assert (board_now.powers, board_now.coordinator) == (frozenset({'agents'}), 'agent-2')
+    assert [joined.agent.id for joined in board_now.agents] == ['agent-1', 'agent-2', 'agent-3']
+    assert ends_at is not None
+    assert board_now.ends_at == ends_at + timedelta(minutes=30)
+    assert waiting['waits'] == [asked.structured_content['post']['id']]
+    assert [(deed['agent'], deed['undo']) for deed in done['deeds']] == [
+        (None, 'take_minutes'),
+        ('agent-3', 'remove_agent'),
+    ]

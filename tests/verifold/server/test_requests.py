@@ -174,7 +174,7 @@ async def test_no_other_agent_asks_for_a_move_or_uses_a_power(led: Lab) -> None:
     asked = await led.request(MORE, 'I want time.', '', 'bo')
     assert (led.board.powers, led.board.answer_to(asked.post.id)) == (frozenset(), None)
     await led.set_coordinator(None, 'person')
-    with pytest.raises(RejectedEvent, match='A power is for the agent that holds the coordinator seat'):
+    with pytest.raises(RejectedEvent, match='A power is for the agent that holds the coordinator seat, and nobody'):
         await led.set_power('time', on=True)
 
 

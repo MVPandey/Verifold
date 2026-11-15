@@ -305,7 +305,7 @@ def test_only_the_yes_to_a_request_decides_another_agents_permission_request() -
     yes = RecordBuilder(events=list(asked.events)).answered('p-2').post(carried('person')).board()
 
     assert not waits_for_person(yes, 'p-1')
-    assert permission_choice(asked.board(), PermissionMove(ask='p-1', option='no'), 'ada') == 'Reject'
+    assert permission_choice(asked.board(), PermissionMove(ask='p-1', option='no'), 'ada')[1] == 'Reject'
     # No agent decides the request with an answer of its own: not without a yes, and not after another yes.
     forge = 'Only the yes to a request for a move decides a permission request'
     refused(RecordBuilder(events=list(asked.events)).post(carried('ada')), forge)
