@@ -83,6 +83,31 @@ describe('the API client', () => {
     assert.equal(read.close_among, 1);
   });
 
+  it('asks the server to open the agents’ folder, or the folder of one agent', async () => {
+    const server = serverThatAnswers(200, '{"path": "/p/.verifold/agents", "opened": false}');
+    const api = createApi('secret', server.fetcher);
+
+    const folder = await api.openFolder();
+    await api.openFolder('agent-3');
+
+    assert.deepEqual(folder, { path: '/p/.verifold/agents', opened: false });
+    assert.deepEqual(
+      server.calls.map((call) => [call.input, call.init.method, call.init.body]),
+      [
+        ['/api/folder', 'POST', '{}'],
+        ['/api/folder', 'POST', '{"agent":"agent-3"}'],
+      ],
+    );
+  });
+
+  it('reads no answer as none, also from a server from before the answer route', async () => {
+    const none = createApi('secret', serverThatAnswers(200, 'null').fetcher);
+    const before = createApi('secret', serverThatAnswers(404, '{"detail": "Not Found"}').fetcher);
+
+    assert.equal(await none.answer(), null);
+    assert.equal(await before.answer(), null);
+  });
+
   it('turns a refusal into an error with the server reason', async () => {
     const refusals = [
       [409, '{"detail": "This folder has a lab already."}', 'This folder has a lab already.'],

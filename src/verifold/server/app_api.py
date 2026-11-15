@@ -20,6 +20,8 @@ from sse_starlette import EventSourceResponse
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import (
     AgentView,
+    FolderRequest,
+    FolderView,
     Invitation,
     InviteRequest,
     LabView,
@@ -85,6 +87,10 @@ class Host(Protocol):
 
     async def file_text(self, post_id: PostId, path: str) -> FileText:
         """Return the text of a file that backs a post, at the commit that the post pins."""
+        ...
+
+    async def open_folder(self, agent_id: AgentId | None = None) -> FolderView:
+        """Open the folder where the lab's agents work, or one agent's folder, and return where it is."""
         ...
 
     async def add_agents(self, choice: AgentChoice) -> None:
@@ -211,6 +217,11 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     @api.get('/posts/{post_id}/file', dependencies=[authorized])
     async def file(post_id: PostId, path: str) -> FileText:
         return await host.file_text(post_id, path)
+
+    @api.post('/folder', dependencies=[authorized])
+    async def folder(request: FolderRequest) -> FolderView:
+        # The request names an agent of the lab at most, never a path.
+        return await host.open_folder(request.agent)
 
     @api.get('/needs', dependencies=[authorized])
     async def needs() -> tuple[PostView, ...]:

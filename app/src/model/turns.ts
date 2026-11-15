@@ -61,8 +61,6 @@ export interface ActContext {
   readonly called: (authorId: string) => string;
   /** The post's author, or `null` for the person and for an author that the lab does not list. */
   readonly author: Agent | null;
-  /** The ID of the question's thread, or `null` when the lab has none. */
-  readonly question: string | null;
 }
 
 /**
@@ -71,7 +69,7 @@ export interface ActContext {
  * The line comes only from the post's kind, its check outcome and method, its `accepts`, and the post that it
  * replies to. `to` is that post, or `null` when the page does not have it. Every kind names the post that it
  * replies to, so a reply reads right where the indent stops. A plan that replies to a call takes the call. A rerun is "blind" only from the blind checker that
- * Verifold started for that post. A proposal is an answer only in the question's thread.
+ * Verifold started for that post. A proposal is a proposed answer for the lab in any thread.
  */
 export function act(post: Post, to: Post | null, context: ActContext): string {
   const them = to ? context.called(to.author) : 'a post';
@@ -81,7 +79,7 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
     case 'result':
       return `posted a result${reply}`;
     case 'proposal':
-      return `${post.thread === context.question ? 'proposed an answer' : 'made a proposal'}${reply}`;
+      return `proposed an answer${reply}`;
     case 'plan':
       // The caller's own plan takes nothing, as `takers` in the server's `society/standing.py` says.
       return to?.kind === 'call' && to.author !== post.author
@@ -205,14 +203,6 @@ export function headClaim(posts: readonly PostView[]): PostView | null {
     .filter((item) => item.post.kind === 'result' || item.post.kind === 'proposal')
     .reverse();
   return claims.find((item) => item.standing !== 'conceded') ?? claims[0] ?? null;
-}
-
-/**
- * Return the lab's answer so far: the newest proposal in the question's thread. Its chip says where it stands,
- * so a Conceded answer shows as one. An older proposal does not come back, because the lab moved on from it.
- */
-export function answerSoFar(posts: readonly PostView[]): PostView | null {
-  return posts.filter((item) => item.post.kind === 'proposal').at(-1) ?? null;
 }
 
 /** The status of a closed card. `edge` colors the card's top edge. */

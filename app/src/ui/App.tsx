@@ -100,3 +100,23 @@ export function Message(props: { readonly text: string }): ReactElement {
     </main>
   );
 }
+
+/** What the app shows in place of a page that failed to render: what happened, and the way to load the page again. */
+export function Failed(): ReactElement {
+  return (
+    <main className="page">
+      <p className="lone" role="alert">
+        Verifold could not show this page. The lab runs on, and its record is safe.{' '}
+        <a
+          href="."
+          onClick={(event) => {
+            event.preventDefault();
+            window.location.reload();
+          }}
+        >
+          Load the page again
+        </a>
+      </p>
+    </main>
+  );
+}

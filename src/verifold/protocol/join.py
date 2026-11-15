@@ -380,7 +380,7 @@ class RevisionLine(Record):
 
 
 class AnswerView(Record):
-    """The lab's answer so far for the person: the proposal, and each post that it builds on with where it stands."""
+    """The lab's answer so far for the person: the newest proposal, and each post that it builds on with where it stands."""
 
     answer: PostView
     to_earlier_question: bool = False
@@ -446,7 +446,7 @@ class Brief(Record):
     left: tuple[LeftLine, ...] = ()
     """The agents that left the lab or that the person removed, oldest first."""
     answer: PostLine | None = None
-    """The lab's answer so far: the newest proposal in the question's thread."""
+    """The lab's answer so far: the newest proposal, in whatever thread it is."""
     answer_standing: Standing | None = None
     """Where the answer stands, such as `disputed` or `conceded`. `None` when the lab has no answer."""
     answer_to_earlier_question: bool = False
