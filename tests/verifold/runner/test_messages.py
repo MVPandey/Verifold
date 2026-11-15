@@ -7,7 +7,15 @@ from verifold.app import NORMS_TEMPLATE
 from verifold.protocol.posts import FileEvidence, Result
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.threads import QUESTION_TITLE
-from verifold.runner.messages import DOORBELL, invitation, more_time_message, rerun_message, start_message
+from verifold.runner.messages import (
+    DOORBELL,
+    RESTARTED,
+    back_message,
+    invitation,
+    more_time_message,
+    rerun_message,
+    start_message,
+)
 
 EVIDENCE = FileEvidence(path='bench.py', commit='c' * 40)
 SAME_MOMENT = 'The other agents got this question at the same moment'
@@ -164,3 +172,33 @@ def test_an_invitation_gives_the_address_the_token_the_folder_and_the_facts_and_
     assert lines[-3:] == ['Does it hold?', '', 'You are Agent 3.']
     assert text.count('the-token') == 1
     assert 'role' not in text.lower()
+
+
+def test_the_message_for_an_agent_that_comes_back_holds_facts_and_one_call() -> None:
+    folder = Path('/lab/.verifold/agents/agent-1')
+
+    kept = back_message(RESTARTED, 'Start.', folder, kept=True, cut_off=True, jobs_stopped=True)
+    new = back_message(RESTARTED, 'Start.', folder, kept=False)
+
+    # A harness can load a conversation that holds nothing, so the facts of the start come with every message.
+    assert kept.splitlines() == [
+        'Verifold restarted. You worked in this lab before the restart.',
+        'Your harness reported that it loaded your conversation from before.',
+        'The record has no end for your last turn, so Verifold may have stopped while it ran.',
+        'Verifold stopped any program that you had left running in the background.',
+        'Your folder is /lab/.verifold/agents/agent-1.',
+        (
+            'Call `brief` on the lab board. It shows the board as it is now, with your own role, status, and plan '
+            'in `your_line`, and the posts that you have not seen.'
+        ),
+        '',
+        'The rest of this text is what every agent of the lab gets when it starts.',
+        '',
+        'Start.',
+    ]
+    assert (
+        new.splitlines()[1] == 'Your harness did not load your conversation from before, so this conversation is new.'
+    )
+    assert 'no end for your last turn' not in new
+    assert 'any program' not in new
+    assert new.splitlines()[-1] == 'Start.'

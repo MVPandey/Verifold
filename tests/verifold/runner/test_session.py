@@ -98,9 +98,27 @@ async def test_a_session_can_be_loaded_again(served: ServedBoard, folder: Place,
     async with AgentSession.open(
         FAKE_HARNESS, folder, BoardAccess(url=served.url, token=token), options, NO_PERMISSION
     ) as session:
-        assert session.id == 'session-bo'
+        assert (session.id, session.loaded) == ('session-bo', True)
 
     assert calls(log) == [{'agent': 'bo', 'event': 'load_session', 'session': 'session-bo'}]
+
+
+@pytest.mark.parametrize('switch', ['FAKE_ACP_NO_LOAD', 'FAKE_ACP_REFUSE_LOAD'])
+async def test_a_harness_that_cannot_load_the_session_opens_a_new_one(
+    served: ServedBoard, folder: Place, log: Path, monkeypatch: pytest.MonkeyPatch, switch: str
+) -> None:
+    monkeypatch.setenv(switch, '1')
+    _, token = served.seat('bo')
+    options = SessionOptions(resume='session-gone', model='small')
+
+    async with AgentSession.open(
+        FAKE_HARNESS, folder, BoardAccess(url=served.url, token=token), options, NO_PERMISSION
+    ) as session:
+        assert (session.id, session.loaded) == ('session-bo', False)
+
+    # A harness that says that it loads no sessions is not asked. The lab's options go to the new session.
+    asked = [] if switch == 'FAKE_ACP_NO_LOAD' else ['load_session']
+    assert [call['event'] for call in calls(log)] == [*asked, 'new_session', 'option']
 
 
 @pytest.mark.parametrize(('decision', 'posted'), [('yes', 'Permission: yes.'), (None, 'Permission: cancelled.')])

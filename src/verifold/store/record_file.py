@@ -72,7 +72,10 @@ class RecordFile:
         try:
             return tuple(_events.validate_json(line) for line in file.read().splitlines())
         except ValidationError as error:
-            raise CorruptRecord(f'The record {self._path} has a line that is not a valid event.') from error
+            raise CorruptRecord(
+                f'The record {self._path} has a line that is not a valid event. A newer version of Verifold can '
+                'have written it.'
+            ) from error
 
     def append(self, *events: Event) -> None:
         """

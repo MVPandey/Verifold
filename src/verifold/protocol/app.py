@@ -45,6 +45,11 @@ class AgentView(Record):
     activity: AgentActivity
     left: AgentLeft | None = None
     """When the agent left the lab, who caused it, and why. `None` while the agent is in the lab."""
+    stopped: bool = False
+    """
+    Whether Verifold stopped the agent because its harness failed too often, and the agent has not started since.
+    The person can start it again.
+    """
     turns: int = Field(ge=0)
     posts: int = Field(ge=0)
     usage: Usage

@@ -96,7 +96,7 @@ class SessionOptions(Record):
     """One of the harness's own modes. It wins over `auto_mode`."""
     auto_mode: bool = False
     resume: str | None = None
-    """A session ID to load, so the agent keeps its conversation."""
+    """A session ID to load, so the agent keeps its conversation. A harness that cannot load it opens a new one."""
 
 
 class TurnResult(Record):
@@ -295,8 +295,8 @@ async def _connected(harness: HarnessEntry, place: Place, client: _Client) -> As
                     await connection.close()
 
 
-async def _initialize(connection: ClientSideConnection) -> None:
-    await connection.initialize(
+async def _initialize(connection: ClientSideConnection) -> schema.InitializeResponse:
+    return await connection.initialize(
         protocol_version=acp.PROTOCOL_VERSION,
         client_capabilities=schema.ClientCapabilities(
             fs=schema.FileSystemCapabilities(read_text_file=False, write_text_file=False), terminal=False
@@ -395,9 +395,14 @@ def _option(value: str, name: str) -> OptionValue | None:
 
 async def _begin(
     connection: ClientSideConnection, harness: HarnessEntry, folder: Path, board: BoardAccess, options: SessionOptions
-) -> str:
-    """Initialize the connection, open or load the session, and set the options that the lab asks for."""
-    await _initialize(connection)
+) -> tuple[str, bool]:
+    """
+    Initialize the connection, open or load the session, and set the options that the lab asks for.
+
+    Return the session's ID, and whether it is the session that `options.resume` names. It is a new one when the
+    harness says that it loads no sessions, and when it refuses to load this one.
+    """
+    abilities = (await _initialize(connection)).agent_capabilities
     servers: McpServers = [
         schema.HttpMcpServer(
             type='http',
@@ -406,8 +411,12 @@ async def _begin(
             headers=[schema.HttpHeader(name='Authorization', value=f'Bearer {board.token.get_secret_value()}')],
         )
     ]
-    if options.resume:
-        loaded = await connection.load_session(cwd=str(folder), session_id=options.resume, mcp_servers=servers)
+    loaded = None
+    if options.resume and abilities and abilities.load_session:
+        # A harness refuses a session that it no longer has. The agent then goes on in a new one.
+        with suppress(acp.RequestError):
+            loaded = await connection.load_session(cwd=str(folder), session_id=options.resume, mcp_servers=servers)
+    if options.resume and loaded:
         session_id, offered = options.resume, loaded.config_options
     else:
         opened = await connection.new_session(cwd=str(folder), mcp_servers=servers)
@@ -422,7 +431,7 @@ async def _begin(
     # The mode comes last, so that a switch of model can't change it.
     if mode := options.mode or (harness.auto_mode if options.auto_mode else None):
         await connection.set_session_mode(session_id=session_id, mode_id=mode)
-    return session_id
+    return session_id, loaded is not None
 
 
 def _option_id(offered: Sequence[ConfigOption], category: str, harness: HarnessEntry) -> str:
@@ -443,10 +452,11 @@ def _option_id(offered: Sequence[ConfigOption], category: str, harness: HarnessE
 class AgentSession:
     """A running ACP session. Open it with `AgentSession.open`, which stops the harness when the block ends."""
 
-    def __init__(self, connection: ClientSideConnection, session_id: str, client: _Client) -> None:
-        """Wrap a session that is open on `connection`."""
+    def __init__(self, connection: ClientSideConnection, session_id: str, client: _Client, *, loaded: bool) -> None:
+        """Wrap a session that is open on `connection`. `loaded` says that it holds an earlier conversation."""
         self._connection = connection
         self.id = session_id
+        self.loaded = loaded
         self._client = client
 
     @classmethod
@@ -458,12 +468,14 @@ class AgentSession:
         Start the harness's ACP agent in the agent's folder, with the board as its MCP server, and open a session.
 
         The harness starts with the person's own settings and environment. Verifold sets only the options in
-        `options`, through the generic ACP calls. When the block ends, Verifold stops the harness's whole process
-        group.
+        `options`, through the generic ACP calls. With `options.resume`, the session holds that conversation when
+        the harness can load it, and `loaded` says so. When the block ends, Verifold stops the harness's whole
+        process group.
         """
         client = _Client(hooks, names_mcp_server=harness.names_mcp_server)
         async with _connected(harness, place, client) as connection:
-            yield cls(connection, await _begin(connection, harness, place.folder, board, options), client)
+            session_id, loaded = await _begin(connection, harness, place.folder, board, options)
+            yield cls(connection, session_id, client, loaded=loaded)
 
     async def send(self, text: str) -> TurnResult:
         """Send one message, and return once the harness ends its turn."""

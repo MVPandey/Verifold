@@ -16,6 +16,7 @@ from verifold.protocol.events import (
     TimeRanOut,
     TimeSet,
     TurnEnded,
+    TurnStarted,
     WatchSet,
 )
 from verifold.protocol.ids import PERSON, AgentId, PostId
@@ -175,7 +176,7 @@ def check_profile(board: Board, profile: ProfileSet) -> None:
         raise RejectedEvent('Give a role, a status, or both.')
 
 
-def check_turn(board: Board, turn: TurnEnded) -> None:
+def check_turn(board: Board, turn: TurnStarted | TurnEnded) -> None:
     """
     Check that a turn belongs to an agent in the lab, and that only a blind checker's turn ends a rerun.
 
@@ -186,7 +187,7 @@ def check_turn(board: Board, turn: TurnEnded) -> None:
     joined = board.agent(turn.agent)
     if not joined:
         raise RejectedEvent(f'{turn.agent} is not an agent in this lab.')
-    if turn.rerun_failed and not joined.agent.checks:
+    if isinstance(turn, TurnEnded) and turn.rerun_failed and not joined.agent.checks:
         raise RejectedEvent(f'{turn.agent} is not a blind checker, so its turn cannot end a rerun.')
 
 

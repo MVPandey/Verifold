@@ -19,6 +19,7 @@ from verifold.protocol.events import (
     TimeRanOut,
     TimeSet,
     TurnEnded,
+    TurnStarted,
     WatchSet,
 )
 from verifold.protocol.posts import Post
@@ -91,12 +92,33 @@ class RecordBuilder:
         self.events.append(RerunRequested(seq=seq, at=at, by=by, post=post_id))
         return self
 
-    def turn(self, agent_id: str, error: str | None = None, *, rerun_failed: bool = False) -> 'RecordBuilder':
+    def turn(
+        self,
+        agent_id: str,
+        error: str | None = None,
+        *,
+        rerun_failed: bool = False,
+        seen: int | None = None,
+        stopped: bool = False,
+    ) -> 'RecordBuilder':
         seq, at = self._stamp()
         turn = TurnEnded(
-            seq=seq, at=at, agent=agent_id, seconds=0, usage=Usage(), error=error, rerun_failed=rerun_failed
+            seq=seq,
+            at=at,
+            agent=agent_id,
+            seconds=0,
+            usage=Usage(),
+            error=error,
+            rerun_failed=rerun_failed,
+            seen=seen,
+            stopped=stopped,
         )
         self.events.append(turn)
+        return self
+
+    def start(self, agent_id: str, seen: int, session: str = 'session-1') -> 'RecordBuilder':
+        seq, at = self._stamp()
+        self.events.append(TurnStarted(seq=seq, at=at, agent=agent_id, session=session, seen=seen))
         return self
 
     def time_set(self, ends_at: datetime) -> 'RecordBuilder':

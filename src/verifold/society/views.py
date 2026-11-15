@@ -207,7 +207,8 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
     """
     Return the lab for one agent in one read.
 
-    It holds the other agents with their latest plans, and then where the agent's work is of use: the calls that
+    It holds the agent's own line and the other agents with their latest plans, and then where the agent's work is
+    of use: the calls that
     need an agent, the threads where one agent works alone, the results that nobody has built on, the asks that
     nobody has answered, the results that nobody has checked, and the disputed posts. Then come the newest threads,
     one line for each side thread, and the agent's `news`. `how` says how the board works.
@@ -271,8 +272,10 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
     )
     proposed = answer(board)
     done = closing(board)
+    you = board.agent(agent_id)
     return Brief(
         you=agent_id,
+        your_line=_agent_line(board, you.agent, working) if you else None,
         how=how,
         agents=tuple(_agent_line(board, agent, working) for agent in others),
         left=tuple(left_line(board, entry) for entry in board.left),
