@@ -25,8 +25,6 @@ class Member:
     gets each post once, and a post that it got during a turn does not wake it later.
     """
 
-    # ponytail: the read position lives in memory. After a restart the agent starts from the newest event, and it
-    # can read the threads to catch up. Record read positions if agents miss too much across restarts.
     def __init__(self, lab: Lab, agent_id: AgentId, pin: Pin | None = None, seen: int | None = None) -> None:
         """
         Seat an agent that has joined the lab. It has read everything up to now, or up to event `seen` when given.

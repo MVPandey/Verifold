@@ -17,6 +17,10 @@ adapters do under their own IDs, and the modes `ask` and `auto`. As in real adap
 levels, and `small-model` has none. `FAKE_ACP_NO_OPTIONS` makes it offer no options, `FAKE_ACP_REFUSE_MODEL`
 names a model that it refuses to switch to, and `FAKE_ACP_SLOW_SESSION` and `FAKE_ACP_SLOW_SWITCH` make a new
 session or a change take a minute.
+
+`FAKE_ACP_NO_LOAD` makes it say that it loads no sessions, `FAKE_ACP_REFUSE_LOAD` makes it refuse to load one, and
+`FAKE_ACP_CRASH_LOAD` makes it exit when it loads one. `FAKE_ACP_CRASH_ONCE` names a file: the agent exits during a
+turn when the file is not there, and makes it. `FAKE_ACP_TURN_SECONDS` makes each turn take that long.
 """
 
 import asyncio
@@ -101,7 +105,8 @@ class FakeAgent(acp.Agent):
         return schema.InitializeResponse(
             protocol_version=protocol_version,
             agent_capabilities=schema.AgentCapabilities(
-                load_session=True, mcp_capabilities=schema.McpCapabilities(http=True)
+                load_session=not os.environ.get('FAKE_ACP_NO_LOAD'),
+                mcp_capabilities=schema.McpCapabilities(http=True),
             ),
             agent_info=schema.Implementation(name='fake', version='0'),
         )
@@ -143,6 +148,10 @@ class FakeAgent(acp.Agent):
         self._connect(cwd, mcp_servers)
         self._session = session_id
         self._note(event='load_session', session=session_id)
+        if os.environ.get('FAKE_ACP_CRASH_LOAD'):
+            os._exit(3)
+        if os.environ.get('FAKE_ACP_REFUSE_LOAD'):
+            raise acp.RequestError.invalid_params({'session': session_id})
         return schema.LoadSessionResponse(config_options=self._options())
 
     @override
@@ -170,12 +179,17 @@ class FakeAgent(acp.Agent):
     async def prompt(self, session_id: str, prompt: Prompt, **_: object) -> schema.PromptResponse:
         text = prompt[0].text if isinstance(prompt[0], schema.TextContentBlock) else ''
         self._note(event='prompt', text=text)
-        if os.environ.get('FAKE_ACP_CRASH'):
+        once = os.environ.get('FAKE_ACP_CRASH_ONCE')
+        if os.environ.get('FAKE_ACP_CRASH') or (once and not Path(once).exists()):
+            if once:
+                Path(once).touch()
             os._exit(3)
+        await asyncio.sleep(float(os.environ.get('FAKE_ACP_TURN_SECONDS', '0')))
         slow_agent = os.environ.get('FAKE_ACP_SLOW_AGENT')
         if os.environ.get('FAKE_ACP_SLOW') or (slow_agent and self._name.startswith(slow_agent)):
             await asyncio.sleep(60)
-        if text == DOORBELL:
+        # The doorbell can follow other news, such as a restart of Verifold.
+        if text.endswith(DOORBELL):
             await self._answer_news()
         elif text.startswith('Rerun this claim blind'):
             await self._rerun(text)

@@ -54,7 +54,8 @@ def pending_alarm(board: Board, agent_id: AgentId) -> AlarmSet | None:
     """
     if board.gone(agent_id):
         return None
-    ends = tuple(turn.seq for turn in board.turns if turn.agent == agent_id)
+    # A harness that failed outside a turn ended no turn, so it spends no alarm.
+    ends = tuple(turn.seq for turn in board.turns if turn.agent == agent_id and not turn.no_turn)
     before = ends[-2] if len(ends) > 1 else 0
     alarm = next((alarm for alarm in reversed(board.alarms) if alarm.agent == agent_id), None)
     return alarm if alarm and ends and before < alarm.seq < ends[-1] and alarm.minutes > 0 else None

@@ -15,6 +15,7 @@ from verifold.protocol.join import PostRequest
 from verifold.server.join import Members, join_server
 from verifold.server.lab import Lab
 from verifold.server.member import Member
+from verifold.society.turns import before
 from verifold.store.record_file import RecordFile
 
 
@@ -64,8 +65,13 @@ class ServedBoard:
     members: Members
 
     def seat(self, agent_id: str) -> tuple[Member, SecretStr]:
-        """Seat an agent of the lab, and return its member and token."""
-        member = Member(self.lab, agent_id)
+        """
+        Seat an agent of the lab, and return its member and token.
+
+        An agent with a turn in the record sits where the record says that it was, as after a restart of Verifold.
+        """
+        was = before(self.lab.board, agent_id)
+        member = Member(self.lab, agent_id, seen=was.seen if was.worked else None)
         return member, SecretStr(self.members.add(member))
 
 

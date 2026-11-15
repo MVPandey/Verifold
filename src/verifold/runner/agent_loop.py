@@ -5,6 +5,11 @@ The agent's harness owns its work. Verifold keeps the agent's ACP session open, 
 agent arrive after it ended its turn, rings the alarm that the agent set for itself, and starts the harness again
 when its process fails. The doorbell waits for a quiet moment on the board, so that a burst of posts wakes the agent
 once.
+
+After Verifold restarts, the loop goes on from the agent's turns in the record. An agent that ended its last turn by
+its own choice waits again, with the same doorbell and the same alarm. So does every agent of a closed lab. Any
+other agent that worked before gets a message at once, because its turn did not end or the record cannot tell. A
+blind checker has no board and one job, so it starts its rerun again.
 """
 
 import asyncio
@@ -22,16 +27,21 @@ from verifold.protocol.app import AgentState
 from verifold.protocol.events import TimeRanOut, TurnSummary
 from verifold.protocol.ids import PERSON
 from verifold.protocol.record import Record
-from verifold.protocol.settings import AtTimeLimit
+from verifold.protocol.settings import AtExit, AtTimeLimit
 from verifold.protocol.usage import Usage
 from verifold.runner.git import GitError
 from verifold.runner.messages import (
     DEPARTURE,
     DOORBELL,
+    HARNESS_FAILED,
     JOBS_ENDED,
+    RESTARTED,
+    STARTED_AGAIN,
     alarm_message,
+    back_message,
     cut_short_message,
     more_time_message,
+    time_facts,
 )
 from verifold.runner.permissions import GrantAsks, ask_the_person, refusal, settled
 from verifold.runner.session import (
@@ -48,6 +58,7 @@ from verifold.server.member import Member
 from verifold.society.attention import update
 from verifold.society.board import Board
 from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
+from verifold.society.turns import Before, before
 
 
 class LoopSettings(Record):
@@ -73,7 +84,7 @@ class LoopSettings(Record):
 
 
 class AgentSetup(Record):
-    """One agent, its harness, its folder, its token, and its first message."""
+    """One agent, its harness, its folder, its token, and the facts that it starts with."""
 
     agent: Agent
     harness: HarnessEntry
@@ -85,6 +96,7 @@ class AgentSetup(Record):
     token: SecretStr
     options: SessionOptions = SessionOptions()
     start: str
+    """The facts that an agent gets when it starts. An agent that comes back gets them with a new conversation only."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +114,9 @@ class Shared:
 class AgentLoop:
     """
     Keeps one agent's ACP session open until the agent fails `max_failures` times in a row or the lab stops.
+
+    The record keeps the start and the end of each turn, with the harness's session ID and what the agent had seen.
+    So a loop that starts after a restart of Verifold loads the agent's conversation again, when the harness can.
 
     The loop also ends when the agent leaves the lab. Verifold cancels the turn at once when the person removed
     the agent, and after `leave_grace` seconds when the agent left by itself and its turn runs on.
@@ -133,12 +148,26 @@ class AgentLoop:
         self._lab = member.lab
         self._setup = setup
         self._settings = settings
-        self._notified = self._lab.board.seq
+        board = self._lab.board
+        # An agent with one job, such as a blind checker, has no board to find its place on. It starts the job again.
+        self._before = Before(seen=member.seen) if done else before(board, setup.agent.id)
+        """Where the agent was, from its turns in the record. A new agent has none."""
+        was, rested = self._before, self._before.rested
+        self._rests = was.worked and not was.stopped and (rested is not None or lab_state(board) == 'closed')
+        """
+        Whether the agent waits when its harness starts, and gets no message. An agent that ended its last turn by
+        its own choice does, and so does every agent of a closed lab. An agent that the person starts again does not.
+        """
+        # An agent that waits again gets a doorbell for every post for it that it has not read. One of them can
+        # have rung before Verifold stopped: a doorbell that rings twice is better than one that never rings.
+        self._notified = member.seen if self._rests else board.seq
         self._seen_at_turn = member.seen
         """What the agent had seen when its turn started. A failed turn takes the agent back to it."""
-        self._turn_ended = self._lab.board.seq
+        self._in_turn = False
+        """Whether a turn of the agent runs: its start is in the record, and its end is not."""
+        self._turn_ended = was.ended if rested else board.seq
         """The board's sequence number when the agent's last turn ended. A stop after it concerns the agent's jobs."""
-        self._turn_started = self._lab.board.seq
+        self._turn_started = rested.seq if rested else board.seq
         """The board's sequence number when the agent's last turn started. An alarm from before it is spent."""
         self._cut_short = ''
         """Why the agent's last turn ended without the agent's choice, or empty when the agent ended it."""
@@ -154,70 +183,124 @@ class AgentLoop:
         setup = self._setup
         hooks = SessionHooks(permissions=self._permission, step=self._step)
         board = BoardAccess(url=self._settings.mcp_url, token=setup.token)
-        resume: str | None = None
+        was = self._before
+        resume = was.session
         message, failures, resumed = setup.start, 0, False
+        # What the agent's next message says first, while the agent comes back from a restart or a stop.
+        back = STARTED_AGAIN if was.stopped else RESTARTED if was.worked else None
+        worked, rests = back is not None, self._rests
+        # Under this setting, a stop of Verifold also stops the processes that the agents left running.
+        jobs_stopped = back is RESTARTED and self._lab.board.settings.jobs.at_exit is AtExit.STOP
         # The person can remove the agent while a failed harness waits for its restart. No harness starts for an
         # agent that left.
         while not self._left():
+            opened = loaded = False
             try:
                 options = setup.options.model_copy(update={'resume': resume})
                 place = Place(folder=setup.folder, log=setup.log, lab=setup.lab, agent=setup.agent.id)
                 async with AgentSession.open(setup.harness, place, board, options, hooks) as session:
-                    resume = session.id
+                    opened, loaded, resume = True, session.loaded, session.id
+                    if back or (worked and not loaded):
+                        message = back_message(
+                            back or HARNESS_FAILED,
+                            setup.start,
+                            setup.folder,
+                            kept=loaded,
+                            cut_off=bool(back) and was.cut_off,
+                            jobs_stopped=jobs_stopped,
+                        )
+                    if rests:
+                        # The agent ended its last turn itself, so the restart starts no turn. What wakes the agent
+                        # next carries the news of the restart. A harness that loads a session can report old steps.
+                        await self._report('idle')
+                        message, rests = f'{message}\n\n{await self._news()}', False
                     while True:
-                        await self._while_out_of_time()
+                        if await self._while_out_of_time() and back:
+                            # The agent comes back to a lab that was out of time, so it gets the lab's new end. The
+                            # message says already what a stop of Verifold did to the agent's processes.
+                            jobs = AtTimeLimit.FINISH if jobs_stopped else self._lab.board.settings.jobs.at_time_limit
+                            message = f'{message}\n\n{time_facts(self._lab.board.ends_at, jobs)}'
                         # An agent that left gets no other turn. Leaving this block ends its harness.
                         if self._left():
                             return
+                        # From here the agent has a conversation, which a harness that fails can lose.
+                        worked = True
                         stopped = await self._send(session, message)
-                        failures = 0
+                        failures, back = 0, None
                         if self._done and self._done(self._lab.board):
                             return
-                        if stopped:
-                            await self._while_out_of_time()
-                            current = self._lab.board
-                            message = more_time_message(current.ends_at, current.settings.jobs.at_time_limit)
-                        elif self._done:
-                            # No post wakes a blind checker. One that waits for its own rerun wakes when the rerun
-                            # ends. One that left nothing running would wait for ever, so its loop ends.
-                            if not await self._jobs_ended():
-                                return
-                            await self._while_out_of_time()
-                            message = (
-                                more_time_message(self._lab.board.ends_at, AtTimeLimit.STOP)
-                                if self._jobs_stopped(self._lab.board)
-                                else JOBS_ENDED
-                            )
-                        elif self._cut_short and not resumed:
-                            # The agent did not choose to stop, so no post may be on its way. It goes on once. A
-                            # second cut in a row waits for a post, so a turn that always fails does not repeat.
-                            message, resumed = cut_short_message(self._cut_short), True
-                        else:
-                            resumed = False
-                            message = await self._news()
+                        following = await self._following(stopped=stopped, resumed=resumed)
+                        if following is None:
+                            return
+                        message, resumed = following
             # Any failure of one harness restarts that harness. It must not stop the lab's other agents.
             except Exception as error:
                 # While the lab stops, the harness's cleanup can fail too. That error ends the agent and restarts nothing.
                 if (task := asyncio.current_task()) and task.cancelling():
                     raise asyncio.CancelledError from error
                 failures += 1
-                # The failed turn can have lost the tool results that carried its news.
-                self._member.rewind(self._seen_at_turn)
-                failed = TurnSummary(
-                    agent=setup.agent.id, seconds=0, usage=Usage(), error=f'{type(error).__name__}: {error}'
-                )
-                await self._lab.end_turn(failed)
-                if failures >= self._settings.max_failures or self._left():
+                in_turn, ends = await self._failed(error, failures)
+                if ends:
                     return
                 await self._back_off(self._settings.retry_after * 2 ** (failures - 1))
+                if (in_turn and loaded) or (not opened and failures == self._settings.max_failures - 1):
+                    # The conversation can be what makes the harness fail: a turn failed in one that the harness
+                    # loaded, or the harness fails before its last start. The next start opens a new one.
+                    resume = None
                 message = DOORBELL if resume else setup.start
+
+    async def _failed(self, error: Exception, failures: int) -> tuple[bool, bool]:
+        # Record that the harness failed, for the `failures`-th time in a row. Return whether it failed in a turn,
+        # and whether the loop ends: Verifold stops the agent, or the agent left.
+        in_turn, self._in_turn = self._in_turn, False
+        if in_turn:
+            # The failed turn can have lost the tool results that carried its news.
+            self._member.rewind(self._seen_at_turn)
+        stops = failures >= self._settings.max_failures
+        failed = TurnSummary(
+            agent=self._setup.agent.id,
+            seconds=0,
+            usage=Usage(),
+            error=f'{type(error).__name__}: {error}',
+            seen=self._member.seen,
+            stopped=stops,
+            # A harness that fails when it starts ends no turn. So the agent's place in the record, and the alarm
+            # that it set in its last turn, stay as they are.
+            no_turn=not in_turn,
+        )
+        await self._lab.end_turn(failed)
+        return in_turn, stops or self._left()
+
+    async def _following(self, *, stopped: bool, resumed: bool) -> tuple[str, bool] | None:
+        # Wait for what starts the agent's next turn. Return its message, and whether that turn resumes one that
+        # was cut short. Return `None` when the loop of an agent with one job ends. `stopped` says that the turn
+        # stopped because the lab ran out of time.
+        if stopped:
+            await self._while_out_of_time()
+            current = self._lab.board
+            return more_time_message(current.ends_at, current.settings.jobs.at_time_limit), resumed
+        if self._done:
+            # No post wakes a blind checker. One that waits for its own rerun wakes when the rerun ends. One that
+            # left nothing running would wait for ever, so its loop ends.
+            if not await self._jobs_ended():
+                return None
+            await self._while_out_of_time()
+            stop = self._jobs_stopped(self._lab.board)
+            return (more_time_message(self._lab.board.ends_at, AtTimeLimit.STOP) if stop else JOBS_ENDED), resumed
+        if self._cut_short and not resumed:
+            # The agent did not choose to stop, so no post may be on its way. It goes on once. A second cut in a
+            # row waits for a post, so a turn that always fails does not repeat.
+            return cut_short_message(self._cut_short), True
+        return await self._news(), False
 
     async def _send(self, session: AgentSession, message: str) -> bool:
         # Return whether the turn stopped because the lab ran out of time.
-        self._turn_started = self._lab.board.seq
         await self._report('working')
         started = time.monotonic()
         self._seen_at_turn = self._member.seen
+        # The mark comes before the message. A turn with a mark and no end did not end.
+        mark = await self._lab.start_turn(self._setup.agent.id, session.id, self._seen_at_turn)
+        self._turn_started, self._in_turn = mark.seq, True
         try:
             async with asyncio.timeout(self._settings.turn_timeout) as limit:
                 stopper = asyncio.create_task(self._stop_when_out_of_time(limit))
@@ -276,17 +359,19 @@ class AgentLoop:
     def _left(self) -> bool:
         return self._lab.board.gone(self._setup.agent.id) is not None
 
-    async def _while_out_of_time(self) -> None:
+    async def _while_out_of_time(self) -> bool:
+        # Wait while the lab is out of time. Return whether the lab was.
         lab = self._lab
         if not lab.board.out_of_time or self._left():
-            return
+            return False
         await self._report('waiting', 'The lab is out of time. The person can give it more.')
         while lab.board.out_of_time and not self._left():
             await lab.wait_for_change(lab.board.seq)
+        return True
 
     async def _record(self, started: float, usage: Usage, cost_usd: float | None, error: str | None) -> None:
         # Mark the end of the turn before the snapshot, which can take seconds in a large folder.
-        self._turn_ended = self._lab.board.seq
+        self._turn_ended, self._in_turn = self._lab.board.seq, False
         agent_id = self._setup.agent.id
         try:
             commit = await snapshot(self._setup.folder, agent_id)
@@ -294,7 +379,15 @@ class AgentLoop:
             commit = None
         seconds = time.monotonic() - started
         await self._lab.end_turn(
-            TurnSummary(agent=agent_id, seconds=seconds, usage=usage, cost_usd=cost_usd, error=error, snapshot=commit)
+            TurnSummary(
+                agent=agent_id,
+                seconds=seconds,
+                usage=usage,
+                cost_usd=cost_usd,
+                error=error,
+                snapshot=commit,
+                seen=self._member.seen,
+            )
         )
 
     async def _jobs_ended(self) -> bool:
@@ -361,7 +454,7 @@ class AgentLoop:
             # The agent's own alarm. It does not ring in a lab that is out of time or closed.
             alarm = pending_alarm(board, agent_id)
             left = None
-            # An alarm from before this run of Verifold is spent too: the turn that held it never ended.
+            # So is an alarm from a turn that did not end, because Verifold stopped while the turn ran.
             fresh = alarm is not None and alarm.seq > self._turn_started
             if alarm and fresh and not stopped and not board.out_of_time and lab_state(board) != 'closed':
                 left = (rings_at(board, alarm) - self._lab.now()).total_seconds()

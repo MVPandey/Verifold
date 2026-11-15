@@ -26,11 +26,23 @@ from verifold.app import WRITING_TEMPLATE, ServeHooks, ServeOptions, WebServer, 
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent, AgentChoice, ModelSpec
 from verifold.protocol.app import StartRequest
-from verifold.protocol.events import AgentJoined, Event, Posted, RerunRequested, SettingsSet, TimeRanOut, TurnEnded
+from verifold.protocol.events import (
+    AgentJoined,
+    Event,
+    Posted,
+    RerunRequested,
+    SettingsSet,
+    TimeRanOut,
+    TurnEnded,
+    TurnStarted,
+    TurnSummary,
+)
 from verifold.protocol.settings import AtExit, AtTimeLimit
+from verifold.protocol.usage import Usage
 from verifold.runner.environment import harness_environment
 from verifold.runner.git import GitError, git
 from verifold.runner.jobs import Sweep, sweep
+from verifold.runner.messages import DOORBELL, RESTARTED, STARTED_AGAIN
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.server.lab import Lab
 from verifold.server.web import web_app
@@ -54,7 +66,7 @@ def posts(project: Path) -> list[Posted]:
 
 
 def calls(log: Path) -> list[dict[str, str]]:
-    return [json.loads(line) for line in log.read_text().splitlines()]
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
 @pytest.fixture
@@ -195,6 +207,89 @@ async def test_a_resumed_lab_keeps_its_agents_and_the_persons_edits_to_its_norms
     assert norms.read_text() == '# Our own rules\n'
     resumed = [call for call in calls(log) if call['event'] == 'mode'][2:]
     assert sorted(call['agent'] for call in resumed) == ['agent-1', 'agent-2']
+
+
+def turns(project: Path) -> list[TurnEnded]:
+    return [event for event in record(project) if isinstance(event, TurnEnded)]
+
+
+def ended(project: Path) -> int:
+    return len(turns(project))
+
+
+def prompts_of(log: Path, agent_id: str) -> list[str]:
+    return [call['text'] for call in calls(log) if call['event'] == 'prompt' and call['agent'] == agent_id]
+
+
+async def test_after_a_restart_each_agent_keeps_its_conversation_and_waits_where_it_was(
+    project: Path, log: Path
+) -> None:
+    async with serving(project, TWO_AGENTS):
+        await until(lambda: ended(project) == 2)
+    sessions = {event.agent: event.session for event in record(project) if isinstance(event, TurnStarted)}
+    assert sessions == {'agent-1': 'session-agent-1', 'agent-2': 'session-agent-2'}
+
+    async with serving(project) as client:
+        await until(lambda: sum(call['event'] == 'load_session' for call in calls(log)) == 2)
+        await asyncio.sleep(0.5)
+        # Both agents ended their turns before the restart, so the restart starts no turn.
+        assert (ended(project), len(prompts_of(log, 'agent-1'))) == (2, 1)
+        states = {await state_of(client, 'agent-1'), await state_of(client, 'agent-2')}
+        ask = {'kind': 'ask', 'text': 'Which layer?', 'thread': 't-1', 'mentions': ['agent-1']}
+        assert (await client.post('/posts', json=ask)).status_code == 200
+        await until(lambda: ended(project) == 3)
+
+    assert states == {'idle'}
+    loaded = [call for call in calls(log) if call['event'] == 'load_session']
+    assert sorted(call['session'] for call in loaded) == ['session-agent-1', 'session-agent-2']
+    woken = prompts_of(log, 'agent-1')[-1]
+    assert woken.startswith(RESTARTED)
+    assert woken.endswith(DOORBELL)
+    assert f'Your folder is {project / ".verifold" / "agents" / "agent-1"}.' in woken
+    assert posts(project)[-1].post.text.startswith('Seen p-')
+
+
+async def test_an_agent_that_verifold_stopped_stays_stopped_after_a_restart_until_the_person_starts_it(
+    project: Path, log: Path
+) -> None:
+    with RecordFile(project / '.verifold' / 'record.jsonl') as file:
+        lab = Lab.create(file, 'Does it hold?')
+        for number, harness in ((1, 'fake'), (2, 'fake'), (3, 'lost')):
+            fake = Agent(id=f'agent-{number}', name=f'Agent {number}', harness=harness, model=ModelSpec(family='x'))
+            await lab.join(fake)
+        await lab.start_turn('agent-1', 'session-agent-1', 2)
+        for stopped in ('agent-1', 'agent-3'):
+            failed = TurnSummary(agent=stopped, seconds=0, usage=Usage(), error='It broke.', seen=2, stopped=True)
+            await lab.end_turn(failed)
+    lost = FAKE_HARNESS.model_copy(update={'name': 'lost', 'title': 'Lost', 'executable': 'no-such-program'})
+
+    async with serving(project, catalog={'fake': FAKE_HARNESS, 'lost': lost}) as client:
+        await until(lambda: len(prompts_of(log, 'agent-2')) == 1)
+        await asyncio.sleep(0.3)
+        view = (await client.get('/lab')).json()['agents'][0]
+        nothing_started = prompts_of(log, 'agent-1')
+        other = await client.post('/agents/agent-2/start')
+        unknown = await client.post('/agents/agent-9/start')
+        missing = await client.post('/agents/agent-3/start')
+        # Two requests at once start one harness.
+        both = await asyncio.gather(client.post('/agents/agent-1/start'), client.post('/agents/agent-1/start'))
+        started, twice = sorted(both, key=lambda response: response.status_code)
+        shown = started.json()['agents'][0]['stopped']
+        await until(lambda: len(prompts_of(log, 'agent-1')) == 1)
+        await asyncio.sleep(0.3)
+
+    assert (view['activity']['state'], view['stopped'], nothing_started) == ('stopped', True, [])
+    assert (other.status_code, unknown.status_code, started.status_code) == (400, 404, 200)
+    assert other.json()['detail'] == 'Verifold did not stop Agent 2, so it needs no new start.'
+    assert (twice.status_code, twice.json()['detail']) == (400, other.json()['detail'].replace('Agent 2', 'Agent 1'))
+    assert prompts_of(log, 'agent-1')[0].startswith(STARTED_AGAIN)
+    assert (missing.status_code, missing.json()['detail']) == (
+        400,
+        'This computer does not have Lost, so Agent 3 cannot start.',
+    )
+    # The row changes when the start is accepted, before the agent's next turn is in the record.
+    assert not shown
+    assert sum(call['event'] == 'load_session' and call['agent'] == 'agent-1' for call in calls(log)) == 1
 
 
 async def test_a_lab_starts_with_the_persons_grants_and_a_granted_command_passes(
@@ -415,8 +510,9 @@ async def test_an_agent_that_left_stops_for_good_and_an_invited_one_loses_its_to
     assert views['agent-3']['left']['reason'] == 'Read it all.'
 
     # After a restart, Verifold starts only the agent that is still in the lab, and the old token opens nothing.
+    # The doorbell for Reader's post had not rung when Verifold stopped, so it rings now.
     async with serving(project) as client:
-        await until(lambda: len([post for post in posts(project) if post.post.author == 'agent-1']) == 2, timeout=60)
+        await until(lambda: sum(turn.agent == 'agent-1' for turn in turns(project)) == 2, timeout=60)
         async with board_of(url, token) as board:
             void = await board.call_tool('brief', {})
         running = len(harness_pids())

@@ -16,4 +16,4 @@ When a harness asks for a permission, Verifold shows the request to you on the b
 
 The server listens only on 127.0.0.1. The app needs the token in the link that Verifold prints, and each agent joins the board with its own token. Text from agents is untrusted. The app shows it as text, never as HTML, and its Content-Security-Policy allows images and connections only from Verifold's own server.
 
-Model providers receive what each harness sends them, as the harness's configuration allows. The lab's record and the agents' folders stay in `.verifold/` in the project.
+Model providers receive what each harness sends them, as the harness's configuration allows. The lab's record and the agents' folders stay in `.verifold/` in the project. The record holds the ID of each agent's harness session, so that the harness can load the conversation again after a restart. A record that you share shows those IDs, and so does the file to any program on this computer that reads it.

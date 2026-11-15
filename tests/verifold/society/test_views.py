@@ -395,3 +395,21 @@ def test_the_answer_is_the_newest_proposal_in_the_questions_thread_with_what_it_
     assert (conceded.answer.post.id, conceded.answer.standing) == ('p-7', 'conceded')
     told = brief(record.board(), 'cy', News(seq=0))
     assert (told.answer and told.answer.id, told.answer_standing) == ('p-7', 'conceded')
+
+
+def test_the_brief_gives_an_agent_its_own_line(record: RecordBuilder) -> None:
+    record.thread('t-2', opened_by='bo', title='Line B')
+    record.post(Plan(id='p-1', thread='t-2', author='bo', text='I measure line B.'))
+    record.post(Message(id='p-2', thread='t-2', author='bo', text='The first run is in.'))
+
+    mine = brief(record.board(), 'bo', News(seq=0)).your_line
+
+    assert mine is not None
+    assert (mine.id, mine.thread, mine.plan and mine.plan.id, mine.latest and mine.latest.id) == (
+        'bo',
+        't-2',
+        'p-1',
+        'p-2',
+    )
+    assert all(line.id != 'bo' for line in brief(record.board(), 'bo', News(seq=0)).agents)
+    assert brief(record.board(), 'person', News(seq=0)).your_line is None
