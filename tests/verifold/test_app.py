@@ -22,7 +22,8 @@ from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import TypeAdapter
 
-from verifold.app import WRITING_TEMPLATE, ServeHooks, ServeOptions, WebServer, serve
+from verifold.app import WRITING_TEMPLATE, ServeHooks, ServeOptions, WebServer, _agent, _options, serve
+from verifold.harnesses.catalog import CATALOG as BUILT_IN
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent, AgentChoice, ModelSpec
 from verifold.protocol.app import StartRequest
@@ -207,6 +208,50 @@ async def test_a_resumed_lab_keeps_its_agents_and_the_persons_edits_to_its_norms
     assert norms.read_text() == '# Our own rules\n'
     resumed = [call for call in calls(log) if call['event'] == 'mode'][2:]
     assert sorted(call['agent'] for call in resumed) == ['agent-1', 'agent-2']
+
+
+async def test_a_lab_that_resumes_keeps_the_auto_mode_that_its_agents_ran_with(project: Path, log: Path) -> None:
+    def modes() -> list[object]:
+        return [call['mode'] for call in calls(log) if call['event'] == 'mode']
+
+    # The catalog changes between the runs, as when a new Verifold gives the harness another auto mode.
+    then = {'fake': FAKE_HARNESS.model_copy(update={'auto_mode': 'ask'})}
+    now = {'fake': FAKE_HARNESS.model_copy(update={'auto_mode': 'auto', 'auto_mode_before': 'ask'})}
+    async with serving(project, ONE_AGENT, catalog=then):
+        await until(lambda: len(posts(project)) == 1)
+    joined = next(event for event in record(project) if isinstance(event, AgentJoined))
+    async with serving(project, catalog=now):
+        await until(lambda: len(modes()) == 2)
+    # A record from before Verifold kept the mode with the agent holds none. That lab goes on with the mode from then.
+    path = project / '.verifold' / 'record.jsonl'
+    path.write_text(path.read_text().replace('"auto_mode":"ask",', '', 1))
+    old = next(event for event in record(project) if isinstance(event, AgentJoined))
+    async with serving(project, catalog=now):
+        await until(lambda: len(modes()) == 3)
+    async with serving(project, catalog={'fake': FAKE_HARNESS}):
+        await until(lambda: len(modes()) == 4)
+
+    assert (joined.agent.auto_mode, old.agent.auto_mode) == ('ask', None)
+    assert modes() == ['ask', 'ask', 'ask', 'auto']
+
+
+def test_the_built_in_codex_entry_keeps_its_earlier_auto_mode_for_the_labs_from_before() -> None:
+    codex = BUILT_IN['codex']
+    before = Agent(id='agent-1', name='Agent 1', harness='codex', model=ModelSpec(family='openai'))
+    new = _agent(2, codex, AgentChoice(harness='codex'), auto_mode=True)
+    chosen = _agent(3, codex, AgentChoice(harness='codex', mode='read-only'), auto_mode=True)
+
+    assert (codex.auto_mode, codex.auto_mode_before, new.auto_mode) == ('agent', 'workspace-write', 'agent')
+    assert _options(before, codex, auto_mode=True).mode == 'workspace-write'
+    assert _options(new, codex, auto_mode=True).mode == 'agent'
+    assert _options(chosen, codex, auto_mode=True).mode == 'read-only'
+    assert _options(before, codex, auto_mode=False).mode is None
+    assert _agent(4, codex, AgentChoice(harness='codex'), auto_mode=False).auto_mode is None
+    # A harness without an earlier mode goes by the catalog, as before.
+    assert (
+        _options(before.model_copy(update={'harness': 'claude-code'}), BUILT_IN['claude-code'], auto_mode=True).mode
+        is None
+    )
 
 
 def turns(project: Path) -> list[TurnEnded]:

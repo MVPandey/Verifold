@@ -376,7 +376,7 @@ class Host:
         self._lab = lab
         chosen = [choice for choice in request.agents for _ in range(choice.count)]
         for number, choice in enumerate(chosen, start=1):
-            await lab.join(_agent(number, self._catalog[choice.harness], choice))
+            await lab.join(_agent(number, self._catalog[choice.harness], choice, auto_mode=request.auto_mode))
         await self._launch()
 
     async def resume(self) -> None:
@@ -514,7 +514,7 @@ class Host:
             if members + choice.count > MAX_AGENTS:
                 raise SetupRejected(f'A lab has at most {MAX_AGENTS} agents, and this one has {members}.')
             for _ in range(choice.count):
-                agent = _agent(_free_number(lab.board), entry, choice)
+                agent = _agent(_free_number(lab.board), entry, choice, auto_mode=lab.board.opened.auto_mode)
                 # The folder comes first. An agent that the record holds and that has no folder could never start.
                 try:
                     await agent_folder(self._project, agent.id)
@@ -645,7 +645,7 @@ class Host:
             folder=folder,
             log=self._project / LAB_FOLDER / 'logs' / f'{agent.id}.log',
             token=self._members.add(member),
-            options=_options(agent, auto_mode=lab.board.opened.auto_mode),
+            options=_options(agent, self._catalog[agent.harness], auto_mode=lab.board.opened.auto_mode),
             start=start,
         )
         return member, setup
@@ -845,8 +845,11 @@ def _is_free(port: int) -> bool:
     return True
 
 
-def _agent(number: int, harness: HarnessEntry, choice: AgentChoice) -> Agent:
+def _agent(number: int, harness: HarnessEntry, choice: AgentChoice, *, auto_mode: bool) -> Agent:
+    # The agent's record keeps the harness's auto mode of today, so a later change of the catalog leaves this lab
+    # as it is.
     return Agent(
+        auto_mode=harness.auto_mode if auto_mode else None,
         id=f'agent-{number}',
         name=f'Agent {number}',
         harness=harness.name,
@@ -855,8 +858,16 @@ def _agent(number: int, harness: HarnessEntry, choice: AgentChoice) -> Agent:
     )
 
 
-def _options(agent: Agent, *, auto_mode: bool) -> SessionOptions:
-    return SessionOptions(model=agent.model.name, effort=agent.model.effort, mode=agent.mode, auto_mode=auto_mode)
+def _options(agent: Agent, harness: HarnessEntry, *, auto_mode: bool) -> SessionOptions:
+    """
+    Return what Verifold sets in the agent's harness session.
+
+    The person's own mode for the agent wins. In a lab in auto mode, the agent runs in the auto mode that its
+    record holds. A record from before Verifold kept it goes on with the auto mode that Verifold set then.
+    """
+    kept = agent.auto_mode or harness.auto_mode_before
+    mode = agent.mode or (kept if auto_mode else None)
+    return SessionOptions(model=agent.model.name, effort=agent.model.effort, mode=mode, auto_mode=auto_mode)
 
 
 def _crew(agents: tuple[Agent, ...], catalog: Mapping[str, HarnessEntry], *, auto_mode: bool) -> Crew:
@@ -866,7 +877,7 @@ def _crew(agents: tuple[Agent, ...], catalog: Mapping[str, HarnessEntry], *, aut
     first = {agent.harness: agent for agent in reversed(agents)}
     harnesses = dict.fromkeys(agent.harness for agent in agents)
     return tuple(
-        (catalog[name], _options(first[name].model_copy(update={'mode': None}), auto_mode=auto_mode))
+        (catalog[name], _options(first[name].model_copy(update={'mode': None}), catalog[name], auto_mode=auto_mode))
         for name in harnesses
     )
 

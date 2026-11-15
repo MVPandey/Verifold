@@ -26,6 +26,8 @@ import { isRevision, revisedLine } from '../src/model/question.ts';
 import {
   builtOnLabel,
   harnessRequest,
+  choiceGroups,
+  gaps,
   isPermission,
   personAnswer,
   personMessage,
@@ -174,6 +176,7 @@ describe('posts', () => {
       reply_to: 'p-4',
       text: 'Allow once',
       body: 'Only this time.',
+      choice: 'Allow once',
     });
     assert.deepEqual(personAnswer(asked, null, 'No, use pure Python.'), {
       kind: 'answer',
@@ -868,6 +871,43 @@ describe('time', () => {
       30,
     );
     assert.equal(moreTime(labView({ ends_at: '2026-11-20T14:00:00Z' }), 60, now), MAX_MINUTES);
+  });
+});
+
+describe('an answer to an ask', () => {
+  it('names a pressed choice as its choice, and sends typed words as words only', () => {
+    const asked = ask('p-1', 'agent-1', ['Yes', 'No']);
+    assert.deepEqual(personAnswer(asked, 'Yes', ' but not on prod '), {
+      kind: 'answer',
+      thread: 't-2',
+      reply_to: 'p-1',
+      text: 'Yes',
+      body: 'but not on prod',
+      choice: 'Yes',
+    });
+    assert.deepEqual(personAnswer(asked, null, 'Yes\n\nbut wait, not on prod'), {
+      kind: 'answer',
+      thread: 't-2',
+      reply_to: 'p-1',
+      text: 'Yes',
+      body: 'but wait, not on prod',
+    });
+  });
+
+  it('finds the long runs of blank lines in a text and keeps the rest as it is', () => {
+    assert.deepEqual(gaps('a\n\n\nb'), ['a\n\n\nb']);
+    assert.deepEqual(gaps(`a\n${'  \n'.repeat(5)}b\n`), ['a', 5, 'b\n']);
+    assert.deepEqual(gaps(`${'\n'.repeat(6)}tail`), [6, 'tail']);
+    assert.deepEqual(gaps(''), ['']);
+  });
+
+  it('gives each choice a key of its own, also when two have one name', () => {
+    const groups = choiceGroups(['Same', 'Same'], null);
+    assert.deepEqual(
+      groups[0]?.options.map((option) => option.key),
+      ['0:Same', '1:Same'],
+    );
+    assert.deepEqual(choiceGroups([], null), []);
   });
 });
 

@@ -11,6 +11,7 @@ from verifold.runner import permissions
 from verifold.runner.permissions import (
     Refusals,
     _offers,
+    _Reply,
     ask_the_person,
     ask_the_question,
     decide,
@@ -50,14 +51,16 @@ EDIT = PermissionRequest(title='Edit notes.md', choices=CHOICES, kind='edit', gi
 
 def chosen(answer: str, request: PermissionRequest = MAKE, prefix: str | None = None) -> str | None:
     """Return the ID that the answer picks, `'cancel'` when it cancels, and `None` when it decides nothing."""
-    decision = decide(answer, _offers(request, prefix), request)
+    decision = decide(_Reply(None, answer), _offers(request, prefix), request)
     return (decision.option or 'cancel') if decision else None
 
 
 async def answered(lab: Lab, text: str, body: str = '') -> None:
-    """Answer the newest ask as the person."""
+    """Answer the newest ask as the person does in the app: a press on a choice when `text` is one, or else words."""
     asked = asks(lab)[-1]
-    await lab.post(PostRequest(kind='answer', text=text, body=body, thread=asked.thread, reply_to=asked.id), 'person')
+    pressed = text if text in asked.choices else None
+    request = PostRequest(kind='answer', text=text, body=body, choice=pressed, thread=asked.thread, reply_to=asked.id)
+    await lab.post(request, 'person')
 
 
 def asks(lab: Lab) -> list[Ask]:
@@ -73,7 +76,7 @@ def waiting(lab: Lab) -> list[str]:
     [
         ('Allow once', 'once'),
         ('Allow always', 'always'),
-        ('allow  ALWAYS\nNo need to ask again.', 'always'),
+        ('allow  ALWAYS ', 'always'),
         ('Reject', 'no'),
         ('yes', 'once'),
         ('Yes.', 'once'),
@@ -102,6 +105,8 @@ def test_an_answer_picks_an_option_by_its_name_and_a_plain_yes_or_no_allows_once
         'Maybe later',
         'yes and always',
         'I do not know this command',
+        'allow always\nNo need to ask again.',
+        'Allow once\n\nbut wait, not on prod',
         'yes?',
         'OK?',
         'ok ???',
@@ -137,21 +142,35 @@ def test_a_typed_yes_allows_once_also_when_the_harness_lists_allow_always_first(
 STOP = PermissionChoice(id='cancel', name='No, and tell the agent what to do differently', kind='reject_once')
 
 
+DENY = PermissionChoice(id='deny', name='No', kind='reject_once')
+NETWORK = (
+    PermissionChoice(id='allow_once', name='Yes, just this once', kind='allow_once'),
+    PermissionChoice(id='allow_for_session', name='Yes, and allow this host', kind='allow_always'),
+    PermissionChoice(id='apply_network_policy_amendment:0', name='No, and block this host', kind='reject_always'),
+    PermissionChoice(id='cancel', name='No, and tell the agent what to do differently', kind='reject_once'),
+)
+"""The answers that the pinned Codex adapter sends for a request to reach a host."""
+
+
 @pytest.mark.parametrize(
-    ('choices', 'clean'),
+    ('choices', 'declined'),
     [
-        ((ONCE, NO), 'yes'),
-        ((ONCE, STOP), 'no'),
-        ((ONCE, STOP.model_copy(update={'id': 'Abort-Turn'})), 'no'),
-        ((ONCE, ALWAYS), 'no'),
-        ((ONCE, STOP, PermissionChoice(id='decline', name='No', kind='reject_once')), 'yes'),
-        ((ONCE, PermissionChoice(id='block_host', name='No, never', kind='reject_always')), 'yes'),
+        ((ONCE, NO), 'no'),
+        ((ONCE, STOP), None),
+        ((ONCE, STOP.model_copy(update={'id': 'Abort-Turn'})), None),
+        ((ONCE, STOP.model_copy(update={'id': 'abort'}), DENY), 'deny'),
+        ((ONCE, ALWAYS), None),
+        ((ONCE, PermissionChoice(id='deny_always', name='No, never', kind='reject_always')), None),
+        (NETWORK, None),
     ],
 )
-def test_a_harness_declines_cleanly_only_with_a_no_that_does_not_stop_the_turn(
-    choices: tuple[PermissionChoice, ...], clean: str
+def test_verifold_declines_only_with_a_no_for_this_once_that_does_not_stop_the_turn(
+    choices: tuple[PermissionChoice, ...], declined: str | None
 ) -> None:
-    assert declines(MAKE.model_copy(update={'choices': choices})) is (clean == 'yes')
+    request = MAKE.model_copy(update={'choices': choices})
+
+    # One answer decides all three: what Verifold refuses with, whether it may refuse, and what a typed "no" picks.
+    assert (refusal(request), declines(request), chosen('no', request)) == (declined, declined is not None, declined)
 
 
 async def test_an_ask_says_when_the_harness_cannot_decline_without_stopping_the_turn(lab: Lab) -> None:
@@ -160,13 +179,13 @@ async def test_an_ask_says_when_the_harness_cannot_decline_without_stopping_the_
     long = request.model_copy(update={'command': f'./gpu {"x" * 30_000}'})
     asking = asyncio.create_task(ask_the_person(bo, request))
     await until(lambda: bool(asks(lab)))
-    await answered(lab, 'no')
+    await answered(lab, STOP.name)
     stopped = await asking
     refused = await ask_the_person(bo, long)
 
     asked, told = asks(lab)
     fact = "The agent's harness offers no way to decline this request without stopping the agent's turn."
-    assert (stopped, refused) == ('cancel', 'cancel')
+    assert (stopped, refused) == ('cancel', None)
     assert isinstance(asked.shown, PermissionShown)
     assert isinstance(told.shown, PermissionShown)
     assert (asked.shown.notes, told.shown.notes) == (('no_decline',), ('too_long', 'no_decline'))
@@ -174,8 +193,31 @@ async def test_an_ask_says_when_the_harness_cannot_decline_without_stopping_the_
     assert f'{fact} So an answer that rejects it stops the turn. So this refusal stopped the turn.' in told.body
 
 
-def test_without_a_reject_option_a_no_cancels() -> None:
-    assert chosen('no', MAKE.model_copy(update={'choices': (ONCE, ALWAYS)})) == 'cancel'
+def test_a_typed_no_decides_nothing_when_the_harness_has_no_answer_that_declines_and_goes_on() -> None:
+    assert chosen('no', MAKE.model_copy(update={'choices': (ONCE, ALWAYS)})) is None
+    assert chosen('no', MAKE.model_copy(update={'choices': (ONCE, STOP)})) is None
+
+
+def test_a_press_on_a_choice_picks_it_and_words_pick_one_only_as_its_whole_name() -> None:
+    yes_no = MAKE.model_copy(
+        update={
+            'choices': (
+                PermissionChoice(id='y', name='Yes', kind='allow_always'),
+                PermissionChoice(id='n', name='No', kind='reject_once'),
+            )
+        }
+    )
+    offers = _offers(yes_no, None)
+
+    def picked(reply: _Reply) -> str | None:
+        decision = decide(reply, offers, yes_no)
+        return decision.option if decision else 'nothing'
+
+    assert picked(_Reply('Yes', 'but wait, not on prod')) == 'y'
+    assert picked(_Reply(None, 'Yes\n\nbut wait, not on prod')) == 'nothing'
+    assert picked(_Reply(None, 'Yes\n')) == 'y'
+    assert picked(_Reply('Maybe', '')) == 'nothing'
+    assert picked(_Reply('Yes!', '')) == 'nothing'
 
 
 async def test_a_request_becomes_an_ask_to_the_person_and_their_answer_decides_it(lab: Lab) -> None:
@@ -188,7 +230,7 @@ async def test_a_request_becomes_an_ask_to_the_person_and_their_answer_decides_i
     assert await asking == 'once'
     assert (asked.author, asked.mentions, asked.text) == ('bo', ('person',), 'Permission needed: a tool call')
     assert (asked.choices, asked.request) == (('Allow once', 'Allow always', 'Reject'), 'permission')
-    assert asked.shown == PermissionShown(title='run make', remembered=('Allow always',))
+    assert asked.shown == PermissionShown(title='run make', remembered=('Allow always',), ids=('once', 'always', 'no'))
     assert asked.body.startswith("The harness's name for the request:\n\n```\nrun make\n```")
     thread = lab.board.thread(asked.thread)
     assert thread is not None
@@ -258,7 +300,9 @@ async def test_the_person_can_answer_a_command_with_a_grant_for_every_agent(lab:
     (asked,) = asks(lab)
     assert asked.choices == ('Allow once', 'Allow always', 'Reject', 'Allow `./gpu` for every agent')
     assert asked.text == 'Permission needed: a shell command'
-    assert asked.shown == PermissionShown(command='./gpu python3 train.py', grant='./gpu', remembered=('Allow always',))
+    assert asked.shown == PermissionShown(
+        command='./gpu python3 train.py', grant='./gpu', remembered=('Allow always',), ids=('once', 'always', 'no')
+    )
     assert 'The command:\n\n```\n./gpu python3 train.py\n```' in asked.body
     assert 'every agent can run a command that starts with `./gpu` and has plain arguments' in asked.body
     assert await asking == 'once'
@@ -329,14 +373,14 @@ def test_characters_that_a_reader_cannot_see_are_written_as_code_points() -> Non
 
 @pytest.mark.parametrize(
     'point',
-    [0x3164, 0x115F, 0x1160, 0x2800, 0xFE0F, 0xFE00, 0x034F, 0x00AD, 0xFFA0, 0x180B, 0x061C, 0xE0041, 0xE0100, 0x1D173],
+    [0x3164, 0x115F, 0x1160, 0x2800, 0xFE0F, 0xFE00, 0x034F, 0x00AD, 0xFFA0, 0x180B, 0x061C, 0xE0041, 0xE0100, 0xFFFC],
 )
 def test_characters_that_a_renderer_may_show_as_nothing_are_written_as_code_points(point: int) -> None:
     assert visible(f'a{chr(point)}b') == f'a<U+{point:04X}>b'
 
 
 def test_text_that_looks_like_a_code_point_is_told_apart_from_one() -> None:
-    assert visible('echo <U+202E> < x') == 'echo <U+003C>U+202E> < x'
+    assert visible('echo <U+202E> <u+202e> < x') == 'echo <U+003C>U+202E> <U+003C>u+202e> < x'
     assert visible('echo \u202e') == 'echo <U+202E>'
 
 
@@ -356,7 +400,9 @@ async def test_the_ask_records_a_script_whole_as_data_and_shows_it_to_agents_in_
     (asked,) = asks(lab)
     shown = script.replace('\u202e', '<U+202E>')
     assert asked.text == 'Permission needed: a shell script of 8 lines'
-    assert asked.shown == PermissionShown(command=shown, given='{\n  "cwd": "/tmp"\n}', remembered=('Allow always',))
+    assert asked.shown == PermissionShown(
+        command=shown, given='{\n  "cwd": "/tmp"\n}', remembered=('Allow always',), ids=('once', 'always', 'no')
+    )
     assert asked.body.startswith(f'The command:\n\n````\n{shown}\n````\n\n')
     assert (
         'What the request holds beside the command, as the harness reports it:\n\n```\n{\n  "cwd": "/tmp"\n}\n```'
@@ -377,7 +423,9 @@ async def test_a_request_without_a_command_records_the_harnesss_name_and_its_who
 
     (asked,) = asks(lab)
     assert asked.text == 'Permission needed: a tool call (edit)'
-    assert asked.shown == PermissionShown(kind='edit', title=title, given=request.given, remembered=('Allow always',))
+    assert asked.shown == PermissionShown(
+        kind='edit', title=title, given=request.given, remembered=('Allow always',), ids=('once', 'always', 'no')
+    )
     assert f"The harness's name for the request:\n\n```\n{title}\n```" in asked.body
     assert f'The request, as the harness reports it:\n\n```\n{request.given}\n```' in asked.body
 
@@ -459,6 +507,26 @@ async def test_answers_that_the_board_cannot_hold_are_cut_for_the_choice_and_lis
     assert 'To pick one that has no choice here, answer with its name:' in asked.body
     assert all(choice.name in asked.body for choice in (long, twin, *many))
     assert lab.board.grants == ('./gpu',)
+
+
+async def test_an_answer_of_the_harness_never_has_the_name_of_verifolds_grant(lab: Lab) -> None:
+    twin = PermissionChoice(id='twin', name='allow `./gpu`  for every agent', kind='allow_always')
+    request = COMMAND.model_copy(update={'choices': (ONCE, twin, NO)})
+    bo = Member(lab, 'bo')
+    picked: list[str | None] = []
+    for number in (1, 3):
+        asking = asyncio.create_task(ask_the_person(bo, request))
+        before = len(asks(lab))
+        await until(lambda before=before: len(asks(lab)) > before)
+        await answered(lab, asks(lab)[-1].choices[number])
+        picked.append(await asking)
+
+    (*harness, grant) = asks(lab)[0].choices
+    shown = asks(lab)[0].shown
+    assert (harness[1], grant) == ('allow `./gpu` for every agent… (2)', 'Allow `./gpu` for every agent')
+    assert isinstance(shown, PermissionShown)
+    assert (shown.ids, shown.grant) == (('once', 'twin', 'no'), './gpu')
+    assert (picked, lab.board.grants) == (['twin', 'once'], ('./gpu',))
 
 
 async def test_the_ask_says_that_an_answer_which_the_harness_remembers_is_the_harnesss_own(lab: Lab) -> None:
@@ -994,6 +1062,17 @@ async def test_a_description_that_an_ask_cannot_hold_is_cut_and_the_ask_says_so(
     assert asked.body.startswith('Verifold cut this text, because an ask cannot hold all of it.')
     assert isinstance(asked.shown, QuestionShown)
     assert len(asked.shown.description) == MAX_BODY
+
+
+async def test_a_question_that_is_too_long_to_record_is_cut_between_characters_and_says_so(lab: Lab) -> None:
+    long = Question(message='x' * (MAX_BODY - 3) + chr(0x202E) * 5, fields=(FORM.fields[0],))
+
+    assert await asked_question(lab, long, [('Run 7', '')]) == {'name': 'Run 7'}
+    (asked,) = asks(lab)
+    assert isinstance(asked.shown, QuestionShown)
+    assert (asked.shown.cut, asked.shown.message) == (True, 'x' * (MAX_BODY - 3))
+    assert asked.body.startswith('Verifold cut this text, because an ask cannot hold all of it.')
+    assert len(asked.body) <= MAX_BODY
 
 
 async def test_the_person_can_leave_out_a_field_that_the_harness_does_not_need(lab: Lab) -> None:

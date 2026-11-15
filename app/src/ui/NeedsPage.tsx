@@ -5,7 +5,7 @@ import type { AgentView, HarnessOption, PostView } from '../api/types.ts';
 import { face, harnessTitle, ownName } from '../model/agents.ts';
 import { duration, minutesBetween } from '../model/format.ts';
 import { orderNeeds, pauses } from '../model/needs.ts';
-import { harnessRequest, personAnswer } from '../model/posts.ts';
+import { choiceGroups, harnessRequest, personAnswer } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { messageOf } from '../api/client.ts';
 import type { PageProps } from './hooks.ts';
@@ -64,6 +64,7 @@ function NeedCard(props: {
   const choices = post.kind === 'ask' ? post.choices : [];
   // A request of a harness shows from its recorded data, never from the body's text.
   const shown = post.kind === 'ask' ? (post.shown ?? null) : null;
+  const groups = choiceGroups(choices, shown);
   const paused = props.paused;
 
   const send = (): void => {
@@ -102,23 +103,23 @@ function NeedCard(props: {
             <span className="dot wait" /> {name} is paused until you answer.
           </p>
         ) : null}
-        {choices.length > 0 && request === 'question' ? (
-          <p className="says">The harness’s options:</p>
-        ) : null}
-        {choices.length > 0 ? (
-          <div className="opts">
-            {choices.map((option) => (
-              <button
-                key={option}
-                type="button"
-                aria-pressed={choice === option}
-                onClick={() => setChoice(choice === option ? null : option)}
-              >
-                {option}
-              </button>
-            ))}
+        {groups.map((group) => (
+          <div key={group.label ?? 'choices'}>
+            {group.label ? <p className="says">{group.label}</p> : null}
+            <div className="opts">
+              {group.options.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  aria-pressed={choice === option.label}
+                  onClick={() => setChoice(choice === option.label ? null : option.label)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
           </div>
-        ) : null}
+        ))}
         <div className="own">
           <label htmlFor={wordsId}>
             {choices.length > 0 ? 'Or answer in your own words' : 'Your answer'}

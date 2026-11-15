@@ -2035,10 +2035,25 @@ a.file:hover {
 .exact pre {
   margin: 0;
   padding: 10px 12px;
-  max-height: 60vh;
-  overflow: auto;
+  overflow-x: auto;
   font: 12.5px/1.5 var(--mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   tab-size: 4;
+}
+.exact .gap {
+  margin: 0;
+  padding: 4px 12px;
+  border-top: 1px dashed var(--line);
+  border-bottom: 1px dashed var(--line);
+  font-size: 12px;
+  font-style: italic;
+}
+.exact details {
+  border-top: 1px solid var(--line);
+}
+.exact summary {
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
 }

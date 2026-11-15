@@ -135,7 +135,9 @@ class PermissionShown(Record):
     remembered: tuple[str, ...] = ()
     """The choices that are the harness's own to remember, beyond this lab."""
     grant: str | None = None
-    """The start of the command that the grant choice names, when the ask offers a grant."""
+    """The start of the command that the grant choice names, when the ask offers a grant. It is the last choice."""
+    ids: tuple[str, ...] = ()
+    """The harness's ID of each of its answers among the ask's choices, in their order."""
     notes: tuple[RequestNote, ...] = ()
     size: int = 0
     """With the note `too_long`: how many characters the request has."""
@@ -156,6 +158,8 @@ class QuestionShown(Record):
     part: int = 1
     parts: int = 1
     """Which field of the question this is, and how many it has."""
+    cut: bool = False
+    """Whether Verifold cut the message, the title, or the description, because it is too long to record."""
 
 
 type Shown = Annotated[PermissionShown | QuestionShown, Field(discriminator='type')]
@@ -187,6 +191,11 @@ class Answer(PostBase):
     kind: Literal['answer'] = 'answer'
     reply_to: PostId
     accepts: bool = False
+    choice: Choice | None = None
+    """
+    The choice of the ask that the author picked, when the author picked one and did not only write words. The
+    person's app sends it for a press on a choice, so words that only start like a choice pick nothing.
+    """
     ends_request: bool = False
     """
     Whether Verifold ended the harness's request that the ask carries, without the person's answer. Verifold sets

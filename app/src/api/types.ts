@@ -371,8 +371,10 @@ export interface PermissionShown {
   readonly answers: readonly string[];
   /** The choices that are the harness's own to remember. */
   readonly remembered: readonly string[];
-  /** The start of the command that the grant choice names. */
+  /** The start of the command that the grant choice names. With it, the ask's last choice is Verifold's grant. */
   readonly grant: string | null;
+  /** The harness's ID of each of its answers among the ask's choices, in their order. */
+  readonly ids: readonly string[];
   readonly notes: readonly RequestNote[];
   /** With the note `too_long`: how many characters the request has. */
   readonly size: number;
@@ -389,6 +391,8 @@ export interface QuestionShown {
   readonly optional: boolean;
   readonly part: number;
   readonly parts: number;
+  /** Whether Verifold cut the harness's text, because it is too long to record. */
+  readonly cut: boolean;
 }
 
 export interface PostView {
@@ -489,6 +493,8 @@ export interface PostRequest {
   readonly new_thread?: string;
   readonly reply_to?: string;
   readonly mentions?: readonly string[];
+  /** On an answer: the choice of the ask that the person pressed. Words that they typed are in the text. */
+  readonly choice?: string;
 }
 
 /** The person's own author ID on the board. */

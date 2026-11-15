@@ -122,11 +122,15 @@ _IGNORABLE = (
     (0xFEFF, 0xFEFF),
     (0xFFA0, 0xFFA0),
     (0xFFF0, 0xFFF8),
+    (0xFFFC, 0xFFFC),
     (0x1BCA0, 0x1BCA3),
     (0x1D173, 0x1D17A),
     (0xE0000, 0xE0FFF),
 )
-"""Unicode's Default_Ignorable_Code_Point set, which a renderer may show as nothing, and the blank Braille cell."""
+"""
+Unicode's Default_Ignorable_Code_Point set, which a renderer may show as nothing, the blank Braille cell, and the
+object replacement character.
+"""
 
 
 def settled(board: Board, request: PermissionRequest) -> str | None:
@@ -142,21 +146,38 @@ def settled(board: Board, request: PermissionRequest) -> str | None:
 
 
 def refusal(request: PermissionRequest) -> str | None:
-    """Return the ID of the answer that refuses the request once, or `None`, which cancels it."""
-    return next((choice.id for choice in request.choices if choice.kind == 'reject_once'), None)
+    """
+    Return the ID of the answer that declines the request once and lets the agent's turn go on.
+
+    `None` cancels the request, which stops the turn. So Verifold refuses a request by itself only when `declines`
+    holds, or when nothing else is left: for an agent that left the lab, and for a request that no ask can show.
+    """
+    declined = _decline(request)
+    return declined.id if declined else None
+
+
+def _decline(request: PermissionRequest) -> PermissionChoice | None:
+    # The first answer that says "no" for this once and whose ID does not say that the turn stops.
+    return next(
+        (
+            choice
+            for choice in request.choices
+            if choice.kind == 'reject_once' and not _STOPS.search(choice.id.casefold())
+        ),
+        None,
+    )
 
 
 def declines(request: PermissionRequest) -> bool:
     """
-    Return whether the harness offers an answer that declines the request and lets the agent's turn go on.
+    Return whether the harness offers an answer that declines the request once and lets the agent's turn go on.
 
-    A harness can offer, as its only "no", an answer that stops the turn. ACP gives that answer the same kind as an
-    ordinary "no", so Verifold goes by the answer's ID: `cancel`, `abort`, `interrupt`, or `stop` in it means that
-    the turn stops. With no reject answer at all, Verifold can only cancel the request, which stops the turn too.
+    A harness can offer, as its only "no" for this once, an answer that stops the turn. ACP gives that answer the
+    same kind as an ordinary "no", so Verifold goes by the answer's ID: `cancel`, `abort`, `interrupt`, or `stop`
+    in it means that the turn stops. A "no" that the harness remembers is no answer for Verifold to pick. Without
+    an answer to decline with, Verifold can only cancel the request, which stops the turn too.
     """
-    return any(
-        choice.kind.startswith('reject') and not _STOPS.search(choice.id.casefold()) for choice in request.choices
-    )
+    return _decline(request) is not None
 
 
 def grant_choice(prefix: str) -> str:
@@ -170,10 +191,10 @@ def visible(text: str) -> str:
 
     Those are the control, format, and unassigned characters, every space but the plain one, and the characters
     that a renderer may show as nothing: a carriage return, a zero-width space, a mark that turns the reading
-    direction, a variation selector, a filler. A line break and a tab stay. A `<` before `U+` in the text is
+    direction, a variation selector, a filler. A line break and a tab stay. A `<` before `U+` or `u+` in the text is
     written as its code point too, so text cannot look like one of these. Letters that look like other letters stay.
     """
-    marked = re.sub(r'<(?=U\+)', '<U+003C>', text)
+    marked = re.sub(r'<(?=[Uu]\+)', '<U+003C>', text)
     return ''.join(char if _shows(char) else f'<U+{ord(char):04X}>' for char in marked)
 
 
@@ -236,12 +257,15 @@ class _Decision:
 
 def _offers(request: PermissionRequest, prefix: str | None) -> tuple[_Offer, ...]:
     # A choice on the board is one short line. A longer name is cut for the choice, and the ask lists it whole.
+    # No answer of the harness has the name of another, or of Verifold's own grant choice.
     offers: list[_Offer] = []
+    taken = {grant_choice(prefix).casefold()} if prefix else set()
     for number, choice in enumerate(request.choices, start=1):
         name = ' '.join(visible(choice.name).split()) or f'Answer {number}'
         label = name if len(name) <= MAX_CHOICE else f'{name[: MAX_CHOICE - 1]}…'
-        if any(label.casefold() == offer.label.casefold() for offer in offers):
+        if label.casefold() in taken:
             label = f'{label[: MAX_CHOICE - 6]}… ({number})'
+        taken.add(label.casefold())
         offers.append(_Offer(label, choice))
     return (*offers, _Offer(grant_choice(prefix), None)) if prefix else tuple(offers)
 
@@ -267,6 +291,7 @@ def _present(request: PermissionRequest, prefix: str | None, *notes: RequestNote
         answers=tuple(visible(offer.choice.name) for offer in harness if offer.choice) if listed else (),
         remembered=tuple(offer.label for offer in harness if offer.choice and offer.choice.kind not in _ONCE),
         grant=prefix,
+        ids=tuple(offer.choice.id for offer in harness[: len(buttons) - len(grant)] if offer.choice),
         notes=notes,
     )
     parts = [_SAID[note] for note in notes]
@@ -300,26 +325,43 @@ def _present(request: PermissionRequest, prefix: str | None, *notes: RequestNote
     return _Shown(body, data, offers, buttons)
 
 
-def decide(answer: str, offers: tuple[_Offer, ...], request: PermissionRequest) -> _Decision | None:
+@dataclass(frozen=True, slots=True)
+class _Reply:
+    """The person's answer to an ask: the choice that they pressed, if any, and the words that they wrote."""
+
+    choice: str | None
+    words: str
+
+
+def decide(reply: _Reply, offers: tuple[_Offer, ...], request: PermissionRequest) -> _Decision | None:
     """
     Return what the person's answer decides, or `None` when it decides nothing.
 
-    An answer whose first line is the name of an answer picks that answer, as a choice in the app does. In the
-    person's own words, only a whole answer such as "yes" allows, and it allows once: it never picks an answer that
-    the harness remembers, and it never gives a grant. Only a whole answer such as "no" rejects. One "." or "!" can
-    end either. Any other answer, such as "yes?" or a question, decides nothing.
+    A press on a choice picks that answer. Words pick an answer only when the whole of them is its name. Otherwise
+    only the whole answer "yes", or a word like it, allows, and it allows once: it never picks an answer that the
+    harness remembers, and it never gives a grant. Only the whole answer "no", or a word like it, rejects, with the
+    answer that lets the agent's turn go on. One "." or "!" can end either. Any other words, such as "yes?", a
+    question, or a name with more text after it, decide nothing.
     """
-    headline = ' '.join(answer.split('\n', 1)[0].split()).casefold()
+    picked = _name(reply.words if reply.choice is None else reply.choice)
     once = next((choice.id for choice in request.choices if choice.kind == 'allow_once'), None)
-    for offer in offers:
-        names = {offer.label.casefold(), ' '.join(offer.choice.name.split()).casefold() if offer.choice else ''}
-        # A name is never empty, so an answer with an empty first line names nothing.
-        if headline and headline in names:
-            return _Decision(offer.choice.id) if offer.choice else _Decision(once, grant=True)
-    said = _said(answer)
+    # The names on the ask are all different. A whole name of the harness counts for words only, and only when it
+    # is no other answer's name on the ask, such as the name of Verifold's grant.
+    named_ = next((offer for offer in offers if picked == _name(offer.label)), None)
+    if named_ is None and reply.choice is None and picked:
+        whole = [offer for offer in offers if offer.choice and picked == _name(offer.choice.name)]
+        named_ = whole[0] if len(whole) == 1 else None
+    if named_:
+        return _Decision(named_.choice.id) if named_.choice else _Decision(once, grant=True)
+    said = '' if reply.choice else _said(reply.words)
     if said in _YES:
         return _Decision(once) if once else None
-    return _Decision(refusal(request)) if said in _NO else None
+    declined = _decline(request)
+    return _Decision(declined.id) if said in _NO and declined else None
+
+
+def _name(text: str) -> str:
+    return ' '.join(text.split()).casefold()
 
 
 def _said(answer: str) -> str:
@@ -538,17 +580,20 @@ async def ask_the_question(member: Member, question: Question, over: asyncio.Eve
     """
     answers: Answers = {}
     total = len(question.fields)
-    message = visible(question.message.strip())[:MAX_BODY]
+    message, cut = _cut(visible(question.message.strip()), MAX_BODY)
     for part, field in enumerate(question.fields, start=1):
         names = tuple(' '.join(visible(option.name).split()) for option in field.options)
         room = MAX_CHOICES - (not field.required)
         fits = len(names) <= room and all(0 < len(name) <= MAX_CHOICE for name in names)
         picks = field.kind == 'choice' and fits
         choices = ('Yes', 'No') if field.kind == 'boolean' else names if picks else ()
+        title, cut_title = _cut(visible(field.title.strip()), MAX_BODY)
+        description, cut_description = _cut(visible(field.description), MAX_BODY)
         data = QuestionShown(
             message=message,
-            field=visible(field.title.strip())[:MAX_BODY],
-            description=visible(field.description)[:MAX_BODY],
+            field=title,
+            description=description,
+            cut=cut or cut_title or cut_description,
             kind=field.kind,
             options=() if picks else names,
             optional=not field.required,
@@ -561,7 +606,7 @@ async def ask_the_question(member: Member, question: Question, over: asyncio.Eve
         answer = await _answer(member, asked, over)
         if answer is None:
             return None
-        if not field.required and _said(answer) == 'skip':
+        if not field.required and 'skip' in (_name(answer.choice or ''), _said(answer.words)):
             continue
         value = _value(field, answer, names)
         if value is None:
@@ -585,17 +630,25 @@ def _question_body(data: QuestionShown) -> str:
     parts += ['The harness does not need this answer. To leave it out, answer "skip".'] if data.optional else []
     body = '\n\n'.join(parts)
     cut = 'Verifold cut this text, because an ask cannot hold all of it.\n\n'
-    return body if len(body) <= MAX_BODY else f'{cut}{body}'[:MAX_BODY]
+    return body if len(body) <= MAX_BODY and not data.cut else _cut(f'{cut}{body}', MAX_BODY)[0]
 
 
-def _value(field: QuestionField, answer: str, names: tuple[str, ...]) -> FieldValue | None:
+def _cut(text: str, limit: int) -> tuple[str, bool]:
+    """Return `text` cut to `limit` characters, never inside a code point that `visible` wrote, and whether it cut."""
+    if len(text) <= limit:
+        return text, False
+    return re.sub(r'<(U(\+[0-9A-F]{0,6})?)?$', '', text[:limit]), True
+
+
+def _value(field: QuestionField, reply: _Reply, names: tuple[str, ...]) -> FieldValue | None:
     """Return the person's answer as the field's kind of value, or `None` when the answer does not fit the field."""
-    headline = answer.split('\n', 1)[0].strip()
-    said = _said(answer)
+    words = reply.words
+    headline = words.split('\n', 1)[0].strip()
+    said = _said(reply.choice or words)
     value: FieldValue | None
     match field.kind:
         case 'text':
-            value = answer.strip()
+            value = words.strip()
         case 'boolean':
             value = False if said in _NO else True if said in _YES else None
         case 'integer' | 'number':
@@ -607,9 +660,10 @@ def _value(field: QuestionField, answer: str, names: tuple[str, ...]) -> FieldVa
             if isinstance(value, float) and not math.isfinite(value):
                 value = None
         case 'choice':
-            value = _option(field, headline, names)
+            # A press on a choice, or words that are an option's whole name.
+            value = _option(field, reply.choice or words, names)
         case _:
-            picked = [_option(field, part, names) for part in re.split(r'[,\n]', answer) if part.strip()]
+            picked = [_option(field, part, names) for part in re.split(r'[,\n]', words) if part.strip()]
             value = None if None in picked else [name for name in picked if name is not None]
     return value
 
@@ -646,7 +700,7 @@ async def _tell_too_long(member: Member, request: PermissionRequest) -> None:
     """Tell the person that Verifold refused a request that an ask cannot show whole. The ask offers no allow."""
     whole = request.command or request.given or request.title
     # The start is cut after its hidden characters are written out, so the ask always has room for it.
-    start = re.sub(r'<(U(\+[0-9A-F]{0,6})?)?$', '', visible(whole[:_START])[:_START])
+    start = _cut(visible(whole[:_START]), _START)[0]
     data = PermissionShown(
         kind=request.kind if request.kind in _KINDS else '',
         command=start if request.command else None,
@@ -712,7 +766,7 @@ def _own_thread(member: Member, title: str) -> str | None:
     )
 
 
-async def _answer(member: Member, ask_id: PostId, over: asyncio.Event | None) -> str | None:
+async def _answer(member: Member, ask_id: PostId, over: asyncio.Event | None) -> _Reply | None:
     """
     Return the person's answer to an ask, or `None` when the agent's turn ended first.
 
@@ -736,7 +790,7 @@ async def _answer(member: Member, ask_id: PostId, over: asyncio.Event | None) ->
         ended.cancel()
 
 
-async def _persons(lab: Lab, ask_id: PostId) -> str:
+async def _persons(lab: Lab, ask_id: PostId) -> _Reply:
     while True:
         answer = _persons_answer(lab.board, ask_id)
         if answer is not None:
@@ -744,13 +798,16 @@ async def _persons(lab: Lab, ask_id: PostId) -> str:
         await lab.wait_for_change(lab.board.seq)
 
 
-def _persons_answer(board: Board, ask_id: PostId) -> str | None:
-    # The whole answer counts: a picked option leads the text, and the person's own words can follow in the body.
-    return next(
+def _persons_answer(board: Board, ask_id: PostId) -> _Reply | None:
+    # With a pressed choice, the person's own words are the body. Without one, the whole answer is their words.
+    answer = next(
         (
-            f'{entry.post.text}\n{entry.post.body}'
+            entry.post
             for entry in board.replies(ask_id)
             if isinstance(entry.post, Answer) and entry.post.author == PERSON
         ),
         None,
     )
+    if answer is None:
+        return None
+    return _Reply(answer.choice, answer.body if answer.choice else f'{answer.text}\n{answer.body}')

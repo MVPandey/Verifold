@@ -3,6 +3,7 @@ import type { FormEvent, ReactElement } from 'react';
 
 import type { FileEvidence, PermissionShown, Post, QuestionShown } from '../api/types.ts';
 import type { Face } from '../model/agents.ts';
+import { gaps } from '../model/posts.ts';
 import type { Chip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { tone } from '../model/turns.ts';
@@ -64,11 +65,42 @@ export function Body(props: { readonly text: string }): ReactElement {
  * It is preformatted text: every space and line break shows, nothing is collapsed, and it never goes through
  * paragraphs or Markdown. So no line of it can stand beside Verifold's own sentences as one of them.
  */
-export function Exact(props: { readonly label: string; readonly text: string }): ReactElement {
+export function Exact(props: {
+  readonly label: string;
+  readonly text: string;
+  /** Whether the label says how many lines the text has, as for a command. */
+  readonly counted?: boolean;
+}): ReactElement {
+  const { text } = props;
+  const lines = text.split('\n').length;
+  const parts = gaps(text);
+  const collapsed = parts.some((part) => typeof part === 'number');
   return (
     <figure className="exact">
-      <figcaption>{props.label}</figcaption>
-      <pre>{props.text}</pre>
+      <figcaption>
+        {props.label}
+        {props.counted ? ` (${lines} ${lines === 1 ? 'line' : 'lines'})` : ''}
+      </figcaption>
+      {collapsed ? (
+        <>
+          {parts.map((part, index) =>
+            typeof part === 'number' ? (
+              // The app's own line, set apart from the text, for a run of blank lines that would hide what follows.
+              <p className="gap" key={index}>
+                ({part} blank lines)
+              </p>
+            ) : (
+              <pre key={index}>{part}</pre>
+            ),
+          )}
+          <details>
+            <summary>Show as written</summary>
+            <pre>{text}</pre>
+          </details>
+        </>
+      ) : (
+        <pre>{text}</pre>
+      )}
     </figure>
   );
 }
@@ -125,6 +157,7 @@ export function HarnessAsk(props: {
               : `The command, exactly as the harness of ${name} sent it`
           }
           text={shown.command}
+          counted={!long}
         />
       )}
       {shown.command === null && shown.title ? (
@@ -195,6 +228,11 @@ function QuestionAsk(props: {
       {shown.description ? <Exact label="Its description" text={shown.description} /> : null}
       {shown.options.length > 0 ? (
         <Exact label="The options" text={shown.options.join('\n')} />
+      ) : null}
+      {shown.cut ? (
+        <p className="says">
+          Verifold cut the harness’s text, because it is too long to keep whole.
+        </p>
       ) : null}
       {hint ? <p className="says">{hint}</p> : null}
       {shown.optional ? (

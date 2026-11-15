@@ -30,6 +30,11 @@ class HarnessEntry(Record):
     """The model family of the harness's default models. Blind checks compare families."""
     auto_mode: str | None = None
     """The ID of the harness's own auto mode, set when the person allows auto mode for the lab's agents."""
+    auto_mode_before: str | None = None
+    """
+    The auto mode that Verifold set for this harness before each agent's record kept its own. An agent of a lab in
+    auto mode whose record holds none goes on with this one, so a lab that resumes runs as it ran.
+    """
     names_mcp_server: bool = False
     """
     Whether the harness itself writes the MCP server's name into a tool call's input, as `server`, beside `tool`.
@@ -74,6 +79,7 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
                 # mode sends each such request to Verifold, and the only "no" that the adapter offers for many of
                 # them stops the agent's turn. In both modes the adapter turns the sandbox's network off.
                 auto_mode='agent',
+                auto_mode_before='workspace-write',
                 names_mcp_server=True,
             ),
         )
