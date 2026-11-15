@@ -9,7 +9,8 @@ import { harnessRequest, personAnswer } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { messageOf } from '../api/client.ts';
 import type { PageProps } from './hooks.ts';
-import { Body, FaceView, HarnessAsk } from './parts.tsx';
+import { Words } from './Markdown.tsx';
+import { FaceView, HarnessAsk } from './parts.tsx';
 
 /** Everything that waits for the person's answer. Requests that pause an agent come first. */
 export function NeedsPage({ api, data, now }: PageProps): ReactElement {
@@ -94,7 +95,7 @@ function NeedCard(props: {
         {shown ? (
           <HarnessAsk shown={shown} name={name} />
         ) : post.body ? (
-          <Body text={post.body} />
+          <Words text={post.body} />
         ) : null}
         {paused ? (
           <p className="blocking">

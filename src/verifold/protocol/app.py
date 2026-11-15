@@ -112,6 +112,21 @@ class RerunRequest(Record):
     post: PostId
 
 
+class FolderRequest(Record):
+    """The person asks to see the folder where the lab's agents work, or the folder of one agent."""
+
+    agent: AgentId | None = None
+    """The agent whose folder to open. `None` opens the folder that holds every agent's folder."""
+
+
+class FolderView(Record):
+    """A folder of the lab on the server's computer, and whether the server opened it in the file manager."""
+
+    path: str
+    opened: bool
+    """`False` when the server started with `--no-browser`, or when its computer has no command that opens a folder."""
+
+
 class OptionValue(Record):
     """One value that a harness offers for an option, such as a model, with the name that the harness shows for it."""
 

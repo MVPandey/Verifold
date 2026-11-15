@@ -10,6 +10,7 @@ from pydantic import SecretStr
 
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import (
+    FolderView,
     HarnessOption,
     Invitation,
     SettingsChange,
@@ -95,6 +96,11 @@ class Host:
     async def start_again(self, agent_id: str) -> None:
         if agent_id != 'bo':
             raise SetupRejected('Verifold did not stop Ada, so it needs no new start.')
+
+    async def open_folder(self, agent_id: str | None = None) -> FolderView:
+        if agent_id not in {None, 'ada'}:
+            raise NotFound(f'The lab has no agent with the ID {agent_id}.')
+        return FolderView(path=f'/project/.verifold/agents/{agent_id or ""}'.rstrip('/'), opened=agent_id is None)
 
     async def file_text(self, post_id: str, path: str) -> FileText:
         if path != 'answer.md':
@@ -529,3 +535,22 @@ async def test_a_folder_with_no_lab_takes_no_revision(activity: Activity) -> Non
         refused = await client.post('/question', json={'question': 'Why?'})
 
     assert refused.status_code == 409
+
+
+async def test_the_person_opens_the_agents_folder_and_only_an_agent_of_the_lab_names_one(
+    client: httpx2.AsyncClient, lab: Lab, activity: Activity
+) -> None:
+    every = await client.post('/folder', json={})
+    one = await client.post('/folder', json={'agent': 'ada'})
+    unknown = await client.post('/folder', json={'agent': 'zed'})
+    path = await client.post('/folder', json={'agent': '../../etc'})
+    extra = await client.post('/folder', json={'path': '/etc'})
+    async with client_of(Host(lab), activity) as stranger:
+        stranger.headers.pop('Authorization')
+        refused = await stranger.post('/folder', json={})
+
+    assert every.json() == {'path': '/project/.verifold/agents', 'opened': True}
+    assert one.json() == {'path': '/project/.verifold/agents/ada', 'opened': False}
+    assert (unknown.status_code, unknown.json()['detail']) == (404, 'The lab has no agent with the ID zed.')
+    # An agent's ID has no slash and no dot, and the request has no field for a path.
+    assert (path.status_code, extra.status_code, refused.status_code) == (422, 422, 401)

@@ -436,6 +436,17 @@ details[open] > summary .opened {
   color: var(--ink2);
   overflow-wrap: anywhere;
 }
+.f-folder {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  align-items: baseline;
+}
+.f-folder code {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
 .f-add {
   display: flex;
   flex-wrap: wrap;
@@ -656,6 +667,28 @@ details[open] > summary .opened {
   font: 600 13px/1.4 var(--body);
   letter-spacing: 0;
   color: var(--muted);
+}
+/* The link covers the whole answer block, so a link inside the block sits above it. */
+.f-answer .f-earlier a {
+  position: relative;
+  z-index: 1;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.f-answer .f-by {
+  margin: 0;
+}
+/* The answer's detail, where the person selects text and follows links. */
+.f-answer .f-words {
+  position: relative;
+  z-index: 1;
+  max-width: none;
+}
+.f-answer .md p {
+  margin: 0 0 10px;
+  font: 15px/1.65 var(--body);
+  letter-spacing: 0;
+  max-width: none;
 }
 .f-label {
   display: block;
@@ -1206,6 +1239,70 @@ details[open] > summary .opened {
   padding: 14px 18px;
   background: var(--raise);
   max-width: 68ch;
+}
+/* A post's body as Markdown. The sizes of .md are for a file's page, so a post's body gets smaller ones. */
+.words .md {
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--ink2);
+}
+.words .md p,
+.words .md ul,
+.words .md ol,
+.words .md blockquote,
+.words .md pre,
+.words .md-table {
+  margin-bottom: 10px;
+}
+.words .md h1,
+.words .md h2,
+.words .md h3,
+.words .md h4,
+.words .md h5,
+.words .md h6 {
+  margin: 16px 0 6px;
+  font-size: 15.5px;
+  line-height: 1.35;
+}
+.words .md h1 {
+  font-size: 17px;
+}
+.words .md > :first-child {
+  margin-top: 0;
+}
+.words .md > :last-child,
+.words .md li > :last-child {
+  margin-bottom: 0;
+}
+/* A long path, hash, or line of JSON wraps in the text and scrolls inside a code block. */
+.words .md pre {
+  max-width: 100%;
+}
+.f-words .words + .files {
+  margin-top: 12px;
+}
+/* The control that switches one body between its Markdown and the exact text that its author wrote. */
+.as-toggle {
+  display: block;
+  margin-top: 8px;
+  min-height: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.as-written {
+  margin: 0;
+  font: 13px/1.55 var(--mono);
+  color: var(--ink2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* The host of a link's target, when the link's text is not the target. */
+.md-host {
+  color: var(--muted);
+  font-size: 0.9em;
 }
 .body {
   font-size: 15px;

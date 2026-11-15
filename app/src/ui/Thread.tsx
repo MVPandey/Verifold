@@ -10,7 +10,8 @@ import { href } from '../model/route.ts';
 import { sideReplyHint } from '../model/side.ts';
 import { act, isClaim, rows, standingIn } from '../model/turns.ts';
 import { messageOf } from '../api/client.ts';
-import { Body, ChipView, Composer, FaceView, Files, HarnessAsk, Mark } from './parts.tsx';
+import { Detail } from './Markdown.tsx';
+import { ChipView, Composer, FaceView, HarnessAsk, Mark } from './parts.tsx';
 
 /** What every turn of a thread needs from the lab. */
 interface Around {
@@ -127,7 +128,6 @@ export function Turn(
           {act(post, to, {
             called: (id) => called(agents, id),
             author: agent,
-            question: props.question,
           })}{' '}
           {chip ? <ChipView chip={chip} /> : null}
         </p>
@@ -151,22 +151,20 @@ export function Turn(
             for your answer there, not for a reply in the thread.
           </p>
         ) : null}
-        {post.body || post.evidence.length > 0 ? (
+        {post.kind === 'ask' && post.shown ? (
+          // A request of a harness shows from its recorded data. It never goes through Markdown.
           <details className="f-detail">
             <summary className="f-open">
               <span className="closed">Read the detail</span>
               <span className="opened">Hide the detail</span>
             </summary>
             <div className="f-words">
-              {post.kind === 'ask' && post.shown ? (
-                <HarnessAsk shown={post.shown} name={agent?.name ?? post.author} />
-              ) : post.body ? (
-                <Body text={post.body} />
-              ) : null}
-              <Files post={post.id} files={post.evidence} />
+              <HarnessAsk shown={post.shown} name={agent?.name ?? post.author} />
             </div>
           </details>
-        ) : null}
+        ) : (
+          <Detail post={post.id} body={post.body} files={post.evidence} />
+        )}
         {canRerun ? <RerunButton postId={post.id} onRerun={props.onRerun} /> : null}
       </div>
     </li>

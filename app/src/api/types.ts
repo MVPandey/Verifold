@@ -400,7 +400,7 @@ export interface PostView {
   readonly built_on_by: readonly string[];
 }
 
-/** The lab's answer so far, and each post that it builds on with where it stands. */
+/** The lab's answer so far, which is the newest proposal in any thread, and each post that it builds on with where it stands. */
 export interface AnswerView {
   readonly answer: PostView;
   /** Whether the person revised the question after this answer. */
@@ -410,6 +410,12 @@ export interface AnswerView {
   readonly results: number;
   /** The results among them that no blind checker has rerun. */
   readonly no_blind_rerun: readonly string[];
+}
+
+/** A folder of the lab on the server's computer, and whether the server opened it in the file manager. */
+export interface FolderView {
+  readonly path: string;
+  readonly opened: boolean;
 }
 
 /** The text of one file that backs a post, at the commit that the post pins. */

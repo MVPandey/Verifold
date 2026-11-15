@@ -343,14 +343,18 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
 
 def answer(board: Board) -> Posted | None:
     """
-    Return the lab's answer so far: the newest proposal in the question's thread.
+    Return the lab's answer so far: the newest proposal, in whatever thread for the whole lab it is.
 
-    Where it stands says whether an agent disputes it or its author conceded it. An older proposal does not come
-    back as the answer, because the lab moved on from it.
+    The person steers the lab by opening threads, and an agent proposes where it was asked. A side thread takes no
+    proposal. Where the answer stands says whether an agent disputes it or its author conceded it. An older
+    proposal does not come back as the answer, because the lab moved on from it.
     """
-    thread = question_thread(board)
     return next(
-        (entry for entry in reversed(board.posts) if isinstance(entry.post, Proposal) and entry.post.thread == thread),
+        (
+            entry
+            for entry in reversed(board.posts)
+            if isinstance(entry.post, Proposal) and not board.is_side(entry.post.thread)
+        ),
         None,
     )
 
