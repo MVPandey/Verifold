@@ -4,9 +4,21 @@ from typing import Literal, Self
 
 from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
 
-from verifold.protocol.agents import About, Agent, Label, Name, Picture, SeatMark
-from verifold.protocol.events import Note, Posted, Question
-from verifold.protocol.ids import AgentId, PostId, ThreadId
+from verifold.protocol.agents import (
+    About,
+    Agent,
+    Label,
+    Name,
+    Picture,
+    Power,
+    Role,
+    SeatMark,
+    TypedId,
+    ValueId,
+)
+from verifold.protocol.events import Note, Posted, Question, RequestAnswered
+from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
+from verifold.protocol.moves import LabSetting, Move
 from verifold.protocol.posts import (
     MAX_BUILDS_ON,
     MAX_CHOICES,
@@ -34,6 +46,10 @@ MAX_NEWS = 20
 """The most posts in each list of an agent's news or update, and the most threads in a brief."""
 
 _posts: TypeAdapter[Post] = TypeAdapter(Post)
+_moves: TypeAdapter[Move] = TypeAdapter(Move)
+
+type MoveKind = Literal['time', 'permission', 'add_agent', 'remove_agent', 'setting', 'question']
+"""The kinds of move that the coordinator can ask the person for."""
 
 
 class PostRequest(Record):
@@ -71,9 +87,22 @@ class PostRequest(Record):
     """On an answer: the choice of the ask that the author picked. The person's app sends it for a press."""
     to_lab: bool = False
     """Whether the post is for the whole lab. Only the lab's coordinator and the person can mark a post so."""
+    conversation: bool = False
+    """
+    Whether the post goes in the conversation between the person and the lab's coordinator, in place of `thread`
+    and `new_thread`. The lab opens that thread with the first such post.
+    """
+    for_person: bool = False
+    """Whether the coordinator posts this for the person. With `new_thread`, the thread is one for the person too."""
 
     @model_validator(mode='after')
     def _one_thread(self) -> Self:
+        if self.kind == 'request':
+            raise ValueError('A request for a move of the person goes through the `request` tool.')
+        if self.conversation:
+            if self.thread or self.new_thread or self.for_person:
+                raise ValueError('`conversation` stands alone: without thread, new_thread, and for_person.')
+            return self
         if (self.thread is None) == (self.new_thread is None):
             raise ValueError('Give thread to post in a thread, or new_thread to open one.')
         if self.new_thread and self.reply_to:
@@ -104,7 +133,8 @@ class PostRequest(Record):
         """
         # `accepts=False` and empty `choices` mean the same as leaving them out. Only an answer takes `accepts`, and
         # only an ask takes `choices`.
-        unused = {'thread', 'new_thread', 'between', 'files'} | (set() if self.accepts else {'accepts'})
+        unused = {'thread', 'new_thread', 'between', 'files', 'conversation'}
+        unused |= set() if self.accepts else {'accepts'}
         unused |= set() if self.choices else {'choices'}
         unused |= set() if self.to_lab else {'to_lab'}
         fields = self.model_dump(exclude=unused, exclude_none=True)
@@ -141,6 +171,51 @@ class Byline(Record):
     """What the author says that it is to the lab, or else the role that somebody gave its seat."""
 
 
+type RequestEnd = Literal['seat', 'ask']
+"""
+Why a request for a move ended without an answer. `seat`: the coordinator seat changed after the request. `ask`:
+the permission request that the move answers got its answer or ended.
+"""
+
+
+class MoveForm(Record):
+    """
+    A move as the coordinator names it in the `request` tool: its kind, and the fields of that kind.
+
+    The form is one flat object, as `PostRequest` is, because harnesses fill a flat tool schema more reliably than
+    a `oneOf`. `to_move` validates it against the `Move` union, so a field that the kind does not use is refused.
+    """
+
+    move: MoveKind
+    minutes: int | None = None
+    ask: PostId | None = None
+    option: ValueId | None = None
+    agent: AgentId | None = None
+    harness: Label | None = None
+    model: TypedId | None = None
+    effort: TypedId | None = None
+    role: Role | None = None
+    on_call: bool | None = None
+    setting: LabSetting | None = None
+    value: str | None = None
+    question: Question | None = None
+    note: Note | None = None
+
+    def to_move(self) -> Move:
+        """
+        Return the move that this form describes.
+
+        Raises:
+            pydantic.ValidationError: The kind does not take a field of the form, or misses one that it needs.
+
+        """
+        seat_names = {'harness', 'model', 'effort', 'role', 'on_call'}
+        given = self.model_dump(exclude={'move'}, exclude_none=True)
+        seat = {name: value for name, value in given.items() if name in seat_names}
+        fields = {('key' if name == 'setting' else name): value for name, value in given.items() if name not in seat}
+        return _moves.validate_python({'type': self.move, **fields, **({'seat': seat} if seat else {})})
+
+
 class PostView(Record):
     """A post with its time, who wrote it, where it stands, and the posts that build on it."""
 
@@ -152,6 +227,12 @@ class PostView(Record):
     standing: Standing
     built_on_by: tuple[PostId, ...] = ()
     """The posts that name this one in `builds_on`, oldest first."""
+    decision: RequestAnswered | None = None
+    """For a request for a move: its answer, with who gave it and when. `None` while it has none."""
+    waits: bool = False
+    """For a request for a move: whether it waits for the person's answer."""
+    ended: RequestEnd | None = None
+    """For a request for a move without an answer: why it waits for none. `None` while it waits."""
 
 
 class ThreadView(Record):
@@ -198,6 +279,11 @@ class PostLine(Record):
     text: Headline
     reply_to: PostId | None = None
     builds_on: tuple[PostId, ...] = ()
+    for_person: bool = False
+    """
+    Whether the lab's coordinator marked the post as one on the person's behalf. The author is still the
+    coordinator: the mark is the coordinator's word, and a post by the person has `person` as its author.
+    """
     seq: int
     at: AwareDatetime
 
@@ -215,6 +301,7 @@ class PostLine(Record):
             text=line_text(post.text),
             reply_to=post.reply_to,
             builds_on=post.builds_on,
+            for_person=post.for_person,
             seq=entry.seq,
             at=entry.at,
         )
@@ -285,6 +372,13 @@ class LeftLine(Record):
     by: AgentId
     """The agent itself, or `person` when the person removed it."""
     reason: str = ''
+    through: AgentId | None = None
+    """With `by` the person: the coordinator, when it removed the agent with the power that the person switched on."""
+    request: PostId | None = None
+    """
+    The coordinator's request that the removal came from: the person said yes to it, or the power decided it. The
+    request holds the coordinator's reason. `reason` never holds it.
+    """
 
 
 class AlarmLine(Record):
@@ -548,22 +642,33 @@ class ThreadLine(Record):
 
 
 class QuestionVersion(Record):
-    """One version of the lab's question: the text that the lab opened with, or a revision by the person."""
+    """One version of the lab's question: the text that the lab opened with, or a revision of it."""
 
     question: Question
     at: AwareDatetime
     note: Note = ''
-    """Why the person revised the question, when they said so."""
+    """Why the question was revised, in the words of the one who revised it, when they said so."""
     post: PostId | None = None
-    """The person's post that told the lab of the revision. `None` for the text that the lab opened with."""
+    """The post that told the lab of the revision. `None` for the text that the lab opened with."""
+    by: AgentId = PERSON
+    """Who revised the question: the person, or the coordinator under the person's power to revise it."""
+    request: PostId | None = None
+    """
+    The coordinator's request that the revision came from: the person said yes to it, or the power decided it.
+    `None` for a revision that the person made by themselves.
+    """
 
 
 class RevisionLine(Record):
-    """A revision of the question as one line: when it came, why, and the post that holds its text."""
+    """A revision of the question as one line: when it came, who made it, why, and the post that holds its text."""
 
     at: AwareDatetime
     note: Note = ''
     post: PostId
+    by: AgentId = PERSON
+    """Who revised the question: the person, or the coordinator under the person's power to revise it."""
+    request: PostId | None = None
+    """The coordinator's request that the revision came from, when it came from one."""
 
 
 class AnswerView(Record):
@@ -687,6 +792,13 @@ class Brief(Record):
     """How many reviewer seats the lab has. With zero, a check and a rerun request take no seat."""
     reviewer_seats_free: int = 0
     """How many reviewer seats an agent can take with `profile`."""
+    conversation: ThreadId | None = None
+    """The thread where the person and the coordinator talk, which every agent can read. `None` while the lab has none."""
+    powers: tuple[Power, ...] = ()
+    """
+    The kinds of move for which the person switched on a power of the coordinator. A request of the coordinator
+    for such a move takes effect at once. Every other request waits for the person's answer.
+    """
     left: tuple[LeftLine, ...] = ()
     """The agents that left the lab or that the person removed, oldest first."""
     answer: PostLine | None = None

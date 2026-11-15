@@ -42,6 +42,7 @@ from verifold.protocol.app import (
 from verifold.protocol.events import TurnSummary
 from verifold.protocol.ids import PERSON, AgentId, PostId
 from verifold.protocol.join import FileText, PostRequest
+from verifold.protocol.moves import AddSeat
 from verifold.protocol.record import Record
 from verifold.protocol.settings import AtExit, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
@@ -59,14 +60,14 @@ from verifold.server.activity import Activity
 from verifold.server.app_api import app_api, new_person_token
 from verifold.server.errors import LabExists, NoLab, SetupRejected
 from verifold.server.join import Members, join_server, token_digest
-from verifold.server.lab import Lab
+from verifold.server.lab import Build, Lab
 from verifold.server.member import Member
 from verifold.server.timekeeper import keep_time
 from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.attention import update
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
-from verifold.society.labels import label
+from verifold.society.labels import NOT_LISTED, label
 from verifold.society.lines import question_thread
 from verifold.society.standing import closing
 from verifold.society.turns import before
@@ -524,11 +525,38 @@ class Host:
             await self._join(lab, number, choice, auto_mode=request.auto_mode)
         await self._launch()
 
-    async def _join(self, lab: Lab, number: int, choice: AgentChoice, *, auto_mode: bool) -> Agent:
-        # Add one agent of a seat to the record, with its name and the facts that the person gave the seat.
+    async def _join(  # noqa: PLR0913
+        self,
+        lab: Lab,
+        number: int,
+        choice: AgentChoice,
+        *,
+        auto_mode: bool,
+        first: tuple[Build, ...] = (),
+        given: tuple[str, AgentId] | None = None,
+        asked: bool = False,
+    ) -> Agent:
+        # Add one agent of a seat to the record, with its name and the facts that the person gave the seat. `given`
+        # is a role that the coordinator gives the seat, which the record keeps as the coordinator's. With `asked`,
+        # a coordinator's move named the seat.
         harness = self._catalog[choice.harness]
-        agent = _agent(number, harness, choice, self._offers.get(harness.name), _names(lab.board), auto_mode=auto_mode)
-        await lab.join(agent, on_call=choice.on_call, coordinator=choice.coordinator)
+        agent = _agent(
+            number,
+            harness,
+            choice,
+            self._offers.get(harness.name),
+            _names(lab.board),
+            auto_mode=auto_mode,
+            asked=asked,
+        )
+        await lab.join(
+            agent,
+            on_call=choice.on_call,
+            coordinator=choice.coordinator,
+            powers=choice.powers,
+            first=first,
+            given=given,
+        )
         return agent
 
     async def resume(self) -> None:
@@ -680,9 +708,53 @@ class Host:
                 raise SetupRejected(f'Verifold did not stop {agent.name}, so it needs no new start.')
             await self._run_agent(lab, agent, under_way=True)
 
-    async def add_agents(self, choice: AgentChoice) -> None:
+    async def add_seat(self, seat: AddSeat, first: tuple[Build, ...], asked_by: AgentId) -> None:
+        """
+        Add the one agent of a seat that the coordinator's move describes, and start it.
+
+        The seat gives a harness, a model, an effort, and whether the agent is on call. Everything else is as in a
+        seat that the person adds with no facts: the family of the harness, the lab's auto mode, no coordinator
+        mark, and no power. A role of the seat is recorded as given by `asked_by`, the coordinator that asked.
+        The record takes `first` in the same step as the agent, before it.
+        """
+        self.check_seat(seat)
+        choice = AgentChoice(harness=seat.harness, model=seat.model, effort=seat.effort, on_call=seat.on_call)
+        await self.add_agents(choice, first, given=(seat.role, asked_by) if seat.role else None, asked=True)
+
+    def check_seat(self, seat: AddSeat) -> None:
+        """
+        Check that this computer has the harness of a seat that a coordinator's move names.
+
+        The board calls it when the coordinator asks, so a request for a harness that cannot start never waits for
+        the person.
+
+        Raises:
+            SetupRejected: The harness is not in the catalog, or this computer does not have it.
+
+        """
+        entry = self._catalog.get(seat.harness)
+        if entry is None or not available(entry):
+            raise SetupRejected(
+                f'This computer has no harness with the key `{seat.harness}`. It has: '
+                f'{", ".join(name for name, known in self._catalog.items() if available(known))}.'
+            )
+
+    async def add_agents(
+        self,
+        choice: AgentChoice,
+        first: tuple[Build, ...] = (),
+        given: tuple[str, AgentId] | None = None,
+        *,
+        asked: bool = False,
+    ) -> None:
         """
         Add agents of one harness to the lab that runs, and start them.
+
+        With `asked`, the seat comes from a coordinator's move, so its model's ID is an agent's text: the agent's
+        name holds the model's name only when the harness lists the model.
+
+        `first` are events that the record takes in the same step as the first agent, before it: the yes to the
+        coordinator's request that asked for the agent. `given` is a role that the coordinator gives the seat.
 
         Raises:
             NoLab: The folder has no lab.
@@ -709,7 +781,10 @@ class Host:
                     await agent_folder(self._project, f'agent-{number}')
                 except (GitError, OSError) as error:
                     raise SetupRejected(f"Can't make the folder of agent-{number}: {error}") from error
-                agent = await self._join(lab, number, choice, auto_mode=lab.board.opened.auto_mode)
+                agent = await self._join(
+                    lab, number, choice, auto_mode=lab.board.opened.auto_mode, first=first, given=given, asked=asked
+                )
+                first = ()
                 await self._run_agent(lab, agent, under_way=True)
 
     async def change_seat(self, agent_id: AgentId, change: SeatChange) -> None:
@@ -814,7 +889,7 @@ class Host:
         except (GitError, OSError, GuestsInvalid) as error:
             raise SetupRejected(f"Can't invite {agent.name}: {error}") from error
         if joins:
-            await lab.join(agent, on_call=joins.on_call, coordinator=joins.coordinator)
+            await lab.join(agent, on_call=joins.on_call, coordinator=joins.coordinator, powers=joins.powers)
         await self._seat_guest(lab, agent, digest)
         start = self._start_message(lab, agent, under_way=True)
         return Invitation(agent=agent.id, name=agent.name, text=invitation(start, url, token, folder))
@@ -839,6 +914,8 @@ class Host:
             pin=partial(pin, folder, agent.id),
             seen=before(board, agent.id).seen,
             copies=Reruns(self._project, agent.id),
+            adds=self.add_seat,
+            seat_ok=self.check_seat,
         )
         self._members.add_guest(member, digest)
         # A `brief` leaves no mark on the record, so an agent that only read the board shows as invited again.
@@ -866,6 +943,8 @@ class Host:
             pin=partial(pin, folder, agent.id),
             seen=before(lab.board, agent.id).seen,
             copies=Reruns(self._project, agent.id),
+            adds=self.add_seat,
+            seat_ok=self.check_seat,
         )
         setup = AgentSetup(
             agent=agent,
@@ -1067,18 +1146,29 @@ def _agent(  # noqa: PLR0913
     taken: tuple[str, ...],
     *,
     auto_mode: bool,
+    asked: bool = False,
 ) -> Agent:
     # The agent's record keeps the harness's auto mode of today, so a later change of the catalog leaves this lab
-    # as it is.
+    # as it is. With `asked`, a coordinator's move named the seat. Its model's ID is then an agent's text, so the
+    # name holds the harness's own name for the model when the harness lists it, and "model not listed" when it
+    # does not, until the harness reports its model.
+    shown = _model_name(offer, choice.model)
+    listed = not asked or choice.model is None or _lists(offer, choice.model)
     return Agent(
         auto_mode=harness.auto_mode if auto_mode else None,
         id=f'agent-{number}',
-        name=label(harness.title, _model_name(offer, choice.model), taken),
+        name=label(harness.title, shown if listed else NOT_LISTED, taken),
         harness=harness.name,
         model=ModelSpec(family=choice.family or harness.family, name=choice.model, effort=choice.effort),
         mode=choice.mode,
         given_role=choice.role,
+        model_listed=listed,
     )
+
+
+def _lists(offer: Offer | None, model: str) -> bool:
+    # Whether the harness told Verifold that it offers a model.
+    return offer is not None and any(entry.value == model for entry in offer.models)
 
 
 def _model_name(offer: Offer | None, model: str | None) -> str | None:

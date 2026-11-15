@@ -3,11 +3,12 @@ import type { ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
 import { messageOf } from '../api/client.ts';
-import type { HarnessOption, LabView, Offer } from '../api/types.ts';
+import type { HarnessOption, LabView, Offer, Power } from '../api/types.ts';
 import { MAX_REVIEWER_SEATS, seatsValue } from '../model/settings.ts';
 import { OTHER_MODEL, effortsOf, menuEntries, modeEntries, withModel } from '../model/setup.ts';
 import type { MenuEntry, Seat } from '../model/setup.ts';
 import { reviewerLine } from '../model/status.ts';
+import { PowerChoices } from './PowerChoices.tsx';
 
 /** The facts that the person can state about a seat. */
 export interface Facts {
@@ -15,6 +16,8 @@ export interface Facts {
   readonly family: string;
   readonly onCall: boolean;
   readonly coordinator: boolean;
+  /** The powers that the person switches on for the coordinator from the start. */
+  readonly powers?: readonly Power[];
 }
 
 /**
@@ -85,6 +88,12 @@ export function FactFields<T extends Facts>(props: {
         />
         Coordinator. A lab has one.
       </label>
+      {value.coordinator ? (
+        <PowerChoices
+          value={value.powers ?? []}
+          onChange={(powers) => props.onChange({ ...value, powers })}
+        />
+      ) : null}
     </>
   );
 }

@@ -7,7 +7,7 @@ the board is the agent's choice, and the person's norms are in the lab's `LAB.md
 
 from datetime import datetime, timedelta
 
-from verifold.protocol.agents import GUEST, Agent
+from verifold.protocol.agents import GUEST, POWERS, Agent
 from verifold.protocol.events import (
     ERROR_MODEL_REFUSED,
     ERROR_OUT_OF_TIME,
@@ -42,6 +42,7 @@ from verifold.protocol.join import (
 from verifold.protocol.posts import Ask, Call, Check, Close, Objection, Plan, Proposal, Report, Result
 from verifold.society.attention import left_line, watches_thread
 from verifold.society.board import Board
+from verifold.society.coordinator import request_waits
 from verifold.society.errors import NotFound
 from verifold.society.identity import post_line, post_view, seat_label
 from verifold.society.lifecycle import (
@@ -159,7 +160,7 @@ def team(board: Board, opened: ThreadOpened, lines: dict[AgentId, ThreadId | Non
     # person, blind checkers, and agents that left are in no team. The question's thread has none, and neither has a
     # side thread, where no agent works.
     thread = opened.thread
-    if thread.between or thread.id == question_thread(board):
+    if thread.between or thread.conversation or thread.id == question_thread(board):
         return ()
     workers = tuple(
         joined.agent.id for joined in board.agents if not joined.agent.checks and not board.gone(joined.agent.id)
@@ -267,6 +268,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         and entry.post.author != agent_id
         and entry.post.mentions != (PERSON,)
         and entry.post.thread not in not_mine
+        and entry.post.thread != board.conversation
         and not is_answered(board, entry.post.id)
         and not board.gone(entry.post.author)
     )
@@ -292,7 +294,8 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         (
             summary
             for summary in summaries
-            if summary.thread.id != question_thread(board) and now - summary.last_at >= timedelta(minutes=QUIET_MINUTES)
+            if summary.thread.id not in (question_thread(board), board.conversation)
+            and now - summary.last_at >= timedelta(minutes=QUIET_MINUTES)
         ),
         key=lambda summary: summary.last_at,
         reverse=True,
@@ -354,7 +357,8 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         how=how,
         question=board.question,
         revisions=tuple(
-            RevisionLine(at=entry.at, note=entry.note, post=entry.post) for entry in board.revisions[-MAX_LEADS:]
+            RevisionLine(at=entry.at, note=entry.note, post=entry.post, by=entry.by, request=entry.request)
+            for entry in board.revisions[-MAX_LEADS:]
         ),
         state=lab_state(board),
         close=close_line,
@@ -369,6 +373,8 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         reviewers=holders(board),
         reviewer_seats=seats(board),
         reviewer_seats_free=free_seats(board),
+        conversation=board.conversation,
+        powers=tuple(power for power in POWERS if power in board.powers),
         left=tuple(left_line(board, entry) for entry in board.left),
         answer=answer_line,
         answer_standing=standing(board, proposed.post.id) if proposed else None,
@@ -481,20 +487,28 @@ def _reason(failed: TurnEnded | None) -> str | None:
 
 def needs_person(board: Board) -> tuple[PostView, ...]:
     """
-    Return the asks that name the person and have no answer from the person yet, oldest first.
+    Return the posts that wait for the person's answer, oldest first.
+
+    They are the asks that name the person and have no answer from the person yet, the coordinator's asks in the
+    conversation with the person, and the coordinator's requests for a move that wait.
 
     Permission requests are asks too. An agent's answer leaves an ask open, because the asker waits for the person.
     An ask that carried a harness's request is not among them after Verifold ended the request.
     The ask of an agent that left is not among them: nobody waits for its answer.
     """
-    return tuple(
-        post_view(board, entry)
-        for entry in board.posts
-        if isinstance(entry.post, Ask)
-        and PERSON in entry.post.mentions
-        and waits_for_person(board, entry.post.id)
-        and not board.gone(entry.post.author)
-    )
+    return tuple(post_view(board, entry) for entry in board.posts if _waits_for_person(board, entry))
+
+
+def _waits_for_person(board: Board, entry: Posted) -> bool:
+    post = entry.post
+    if not isinstance(post, Ask):
+        return request_waits(board, entry)
+    # In the conversation, the ask of the agent that held the coordinator seat when it asked is to the person, also
+    # after the seat changed. Another agent's ask there is to the person only when it names the person, as in any
+    # thread.
+    talks = post.thread == board.conversation and post.author == board.coordinator_at(entry.seq)
+    to_person = PERSON in post.mentions or talks
+    return to_person and waits_for_person(board, post.id) and not board.gone(post.author)
 
 
 def answer(board: Board) -> Posted | None:
@@ -536,7 +550,14 @@ def versions(board: Board) -> tuple[QuestionVersion, ...]:
     return (
         QuestionVersion(question=board.opened.question, at=board.opened.at),
         *(
-            QuestionVersion(question=entry.question, at=entry.at, note=entry.note, post=entry.post)
+            QuestionVersion(
+                question=entry.question,
+                at=entry.at,
+                note=entry.note,
+                post=entry.post,
+                by=entry.by,
+                request=entry.request,
+            )
             for entry in board.revisions
         ),
     )

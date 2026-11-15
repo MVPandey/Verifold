@@ -4,11 +4,30 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, AwareDatetime, Field, JsonValue, StringConstraints
 
-from verifold.protocol.agents import Agent, AgentChoices, Label, Name, Picture, Role, SeatFacts, ValueId, one_line
+from verifold.protocol.agents import (
+    Agent,
+    AgentChoices,
+    Label,
+    Name,
+    Picture,
+    Power,
+    Role,
+    SeatFacts,
+    ValueId,
+    one_line,
+)
 from verifold.protocol.events import AgentLeft, Note, Question
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, PostId, ThreadId
-from verifold.protocol.join import AlarmLine, LabState, PostLine, QuestionVersion, RerunLine
+from verifold.protocol.join import (
+    AlarmLine,
+    LabState,
+    PostLine,
+    PostView,
+    QuestionVersion,
+    RerunLine,
+    ThreadView,
+)
 from verifold.protocol.record import Record
 from verifold.protocol.settings import MAX_MINUTES, MAX_REVIEWER_SEATS, Settings, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
@@ -479,6 +498,60 @@ class NormsChange(Record):
     text: Annotated[str, StringConstraints(max_length=MAX_NORMS)]
     revision: str
     """The revision of the file when the person read it. The save is refused when the file changed since."""
+
+
+class PowerView(Record):
+    """One power of the coordinator as the person sees it: whether it is on, since when, and how often it was used."""
+
+    power: Power
+    on: bool = False
+    since: AwareDatetime | None = None
+    """When the person switched it on. `None` while it is off."""
+    used: int = 0
+    """How many moves the agent that holds the seat made with it."""
+
+
+class Deed(Record):
+    """A move that came from a request of the coordinator: with the person's yes, or under a power."""
+
+    request: PostView
+    """The request, with its answer in `decision`: who said yes, and when."""
+    agent: AgentId | None = None
+    """For a move that added an agent: that agent."""
+    undo: Literal['remove_agent', 'take_minutes'] | None = None
+    """The way back that the person has now: the removal of that agent, or of the minutes. `None` when there is none."""
+
+
+class ConversationView(Record):
+    """What the person's panel for the coordinator shows: the conversation, the powers, and what was done for the person."""
+
+    coordinator: AgentId | None = None
+    """The agent that holds the coordinator seat, or `None`."""
+    thread: ThreadView | None = None
+    """The thread where the person and the coordinator talk, or `None` while the lab has none."""
+    waits: tuple[PostId, ...] = ()
+    """The posts of that thread that wait for the person's answer: requests for a move, and asks."""
+    asks: tuple[PostView, ...] = ()
+    """The permission requests that the requests in the conversation name, each with what its harness asks for."""
+    powers: tuple[PowerView, ...] = ()
+    """Every power, in a fixed order."""
+    deeds: tuple[Deed, ...] = ()
+    """The moves that came from the coordinator's requests, newest first."""
+
+
+class PowerChange(Record):
+    """The person switches a power of the coordinator on or off."""
+
+    power: Power
+    on: bool
+
+
+class RequestAnswer(Record):
+    """The person answers a request of the coordinator for a move."""
+
+    yes: bool
+    minutes: int | None = Field(default=None, ge=1, le=MAX_MINUTES)
+    """With a yes to more time: another amount than the request names."""
 
 
 class QuestionRequest(Record):

@@ -32,6 +32,7 @@ from verifold.protocol.ids import PERSON, AgentId
 from verifold.protocol.posts import Answer, Check, Close, Objection, Post, Proposal
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
+from verifold.society.coordinator import check_marked_thread, check_marks, check_removal, check_reviser
 from verifold.society.errors import RejectedEvent
 from verifold.society.lifecycle import lab_state
 from verifold.society.reruns import MAX_RERUNS, rerun_checks, wanted_reruns
@@ -136,15 +137,21 @@ def _check_seat(board: Board, agent_id: AgentId) -> None:
 
 def check_revision(board: Board, revision: QuestionRevised) -> None:
     """
-    Check that a revision of the question comes with the person's post that tells the lab.
+    Check that a revision of the question comes with the post that tells the lab, from the one who revised it.
+
+    The person revises the question. The lab's coordinator does with its own request, while the person switched on
+    the power to revise the question.
 
     Raises:
-        RejectedEvent: The post is not the board's newest, or the person did not write it.
+        RejectedEvent: The post is not the board's newest, or the one who revised the question did not write it,
+            or an agent revised the question without that power.
 
     """
     told = board.posts[-1] if board.posts else None
-    if told is None or told.post.id != revision.post or told.post.author != PERSON or told.seq != board.seq:
+    if told is None or told.post.id != revision.post or told.post.author != revision.by or told.seq != board.seq:
         raise RejectedEvent(f'Post {revision.post} is not the post of the person that tells the lab of this revision.')
+    if revision.by != PERSON or revision.request:
+        check_reviser(board, revision)
 
 
 def check_left(board: Board, left: AgentLeft) -> None:
@@ -164,6 +171,8 @@ def check_left(board: Board, left: AgentLeft) -> None:
         raise RejectedEvent('A blind checker is gone after its one check, so it does not leave and nobody removes it.')
     if left.by not in (left.agent, PERSON):
         raise RejectedEvent(f'Only {left.agent} itself or the person can remove {left.agent} from the lab.')
+    if left.through or left.request:
+        check_removal(board, left)
 
 
 def check_thread(board: Board, thread: Thread) -> None:
@@ -180,6 +189,8 @@ def check_thread(board: Board, thread: Thread) -> None:
     _check_here(board, thread.opened_by)
     if thread.between:
         _check_between(board, thread)
+    if thread.conversation or thread.for_person:
+        check_marked_thread(board, thread)
 
 
 def check_post(board: Board, post: Post) -> None:
@@ -204,6 +215,7 @@ def check_post(board: Board, post: Post) -> None:
         if not board.post(built_on):
             raise RejectedEvent(f'Post {built_on} does not exist, so no post can build on it.')
     _check_for_lab(board, post)
+    check_marks(board, post, opened.thread)
     if post.reply_to is None:
         return
     target = board.post(post.reply_to)

@@ -323,8 +323,9 @@ class AgentLoop:
             await session.cancel()
             if left := self._lab.board.gone(self._setup.agent.id):
                 # The loop ends next, so nothing resumes this turn.
+                remover = f'{left.through}, with a power from the person,' if left.through else 'The person'
                 error = (
-                    'The person removed the agent, so Verifold cancelled the turn.'
+                    f'{remover} removed the agent, so Verifold cancelled the turn.'
                     if left.by == PERSON
                     else f'The agent left the lab and its turn ran on for {self._settings.leave_grace:g} seconds, '
                     'so Verifold cancelled the turn.'

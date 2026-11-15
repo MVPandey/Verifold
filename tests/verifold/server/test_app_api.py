@@ -28,6 +28,7 @@ from verifold.protocol.app import (
 )
 from verifold.protocol.events import Posted, TurnSummary
 from verifold.protocol.join import FileText, PostRequest
+from verifold.protocol.moves import AddSeat
 from verifold.protocol.posts import Ask, FileEvidence, Objection, PermissionShown, Result
 from verifold.protocol.settings import Settings
 from verifold.protocol.usage import Usage
@@ -35,7 +36,7 @@ from verifold.server import status as status_module
 from verifold.server.activity import Activity
 from verifold.server.app_api import _changes, _lab_view, app_api
 from verifold.server.errors import LabExists, NoLab, SetupRejected
-from verifold.server.lab import Lab
+from verifold.server.lab import Build, Lab
 from verifold.society import board as board_module
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
@@ -108,6 +109,9 @@ class Host:
             raise SettingsUnwritable("Can't write .verifold/LAB.md: No space left on device")
         self.norms_text = change.text
         return self.norms().model_copy(update={'told': 'p-9'})
+
+    async def add_seat(self, seat: AddSeat, first: tuple[Build, ...], asked_by: str) -> None:
+        raise SetupRejected(f'This stand-in starts no agent for {asked_by}: {seat.harness}, {len(first)}.')
 
     async def add_agents(self, choice: AgentChoice) -> None:
         if choice.harness != 'fake':

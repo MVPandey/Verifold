@@ -1415,7 +1415,7 @@ describe('an agent’s identity', () => {
     assert.equal(seatBeside(plain), null);
   });
 
-  it('draws the chosen picture, or else the seat’s number, and marks on call, left, and the two dots', () => {
+  it('draws the chosen picture, or else the number of the agent’s ID, and marks on call, left, and the two dots', () => {
     assert.deepEqual(pictureLook(maren), {
       picture: { shape: 'hex', color: '#f08c3a', symbol: 'orbit' },
       number: 1,
@@ -1423,13 +1423,20 @@ describe('an agent’s identity', () => {
       gone: false,
       dot: null,
     });
-    // An agent that chose nothing has the number at the end of its seat's label, or 1 without one.
+    // An agent that chose nothing has the number of its ID, which no other agent of the lab has.
     assert.deepEqual([pictureLook(plain).picture, pictureLook(plain).number], [null, 2]);
     assert.deepEqual(
-      ['Codex · gpt-6.1-sol', 'Codex · gpt-6.1-sol 12', 'Own harness · model not reported', ''].map(
-        (seat) => seatNumber(seat),
-      ),
-      [1, 12, 1, 1],
+      ['agent-1', 'agent-3', 'agent-12', 'checker-7', 'ada', ''].map((id) => seatNumber(id)),
+      [1, 3, 12, 7, 1, 1],
+    );
+    // The seat's label and a chosen name do not decide the number: three such agents show three numbers.
+    const labels = ['Claude Code · Sonnet 5.5', 'Codex · 6 Astra', 'Claude Code · haiku 2'];
+    const three = labels.map((seat, index) =>
+      agentView(`agent-${index + 1}`, { seat, chosen_name: index === 1 ? 'Sieve Scout' : '' }),
+    );
+    assert.deepEqual(
+      three.map((view) => pictureLook(view).number),
+      [1, 2, 3],
     );
     assert.equal(pictureLook({ ...maren, on_call: true }).hollow, true);
     const left = { at: '2026-11-06T14:00:00Z', by: 'person', reason: '' };

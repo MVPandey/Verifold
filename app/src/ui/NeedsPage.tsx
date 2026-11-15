@@ -9,6 +9,7 @@ import { choiceGroups, harnessRequest, personAnswer } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { messageOf } from '../api/client.ts';
 import type { PageProps } from './hooks.ts';
+import { RequestNeed } from './Coordinator.tsx';
 import { Words } from './Markdown.tsx';
 import { HarnessAsk } from './parts.tsx';
 import { Name, Who } from './Picture.tsx';
@@ -24,20 +25,24 @@ export function NeedsPage({ api, data, now }: PageProps): ReactElement {
           ? 'Nothing waits for you now.'
           : `${ordered.length} waiting. Requests that pause an agent come first.`}
       </p>
-      {ordered.map((item) => (
-        <NeedCard
-          key={item.post.id}
-          item={item}
-          agents={data.lab.agents}
-          paused={pauses(item, data.lab)}
-          now={now}
-          onAnswer={async (choice, words) => {
-            const request = personAnswer(item.post, choice, words);
-            if (request) await api.post(request);
-            data.reload();
-          }}
-        />
-      ))}
+      {ordered.map((item) =>
+        item.post.kind === 'request' ? (
+          <RequestNeed key={item.post.id} api={api} data={data} now={now} item={item} />
+        ) : (
+          <NeedCard
+            key={item.post.id}
+            item={item}
+            agents={data.lab.agents}
+            paused={pauses(item, data.lab)}
+            now={now}
+            onAnswer={async (choice, words) => {
+              const request = personAnswer(item.post, choice, words);
+              if (request) await api.post(request);
+              data.reload();
+            }}
+          />
+        ),
+      )}
     </div>
   );
 }

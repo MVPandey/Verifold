@@ -104,6 +104,7 @@ async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
     assert tools == {
         'brief',
         'post',
+        'request',
         'threads',
         'thread',
         'watch',
@@ -499,7 +500,7 @@ async def test_an_agent_leaves_with_a_reason_and_the_board_then_refuses_its_ever
     assert (len(lab.board.posts), lab.board.watches, lab.board.alarms, lab.board.profiles) == (1, (), (), ())
     assert brief.structured_content is not None
     assert brief.structured_content['left'] == [
-        {'id': 'bo', 'name': 'Bo', 'by': 'bo', 'reason': 'My line is ruled out.'}
+        {'id': 'bo', 'name': 'Bo', 'by': 'bo', 'reason': 'My line is ruled out.', 'through': None, 'request': None}
     ]
     assert (brief.structured_content['agents'], 'An agent can leave the lab' in INSTRUCTIONS) == ([], True)
 
@@ -531,7 +532,7 @@ async def test_a_departure_reaches_the_agents_that_wrote_to_the_agent_and_ends_t
         )
         plain = await client.call_tool('post', {'kind': 'message', 'text': 'Then I go on.', 'thread': 't-1'})
 
-    line = {'id': 'bo', 'name': 'Bo', 'by': 'person', 'reason': 'Off the question.'}
+    line = {'id': 'bo', 'name': 'Bo', 'by': 'person', 'reason': 'Off the question.', 'through': None, 'request': None}
     assert (woken.posts, [entry.model_dump() for entry in woken.left]) == ((), [line])
     # A post that names only an agent that left goes on the board, and its result says that the agent is gone.
     assert named.structured_content is not None

@@ -7,6 +7,12 @@ from verifold.protocol.agents import one_line
 DEFAULT_MODEL = 'default model'
 """What a name says for the model of an agent that runs its harness's default model, until the harness names it."""
 
+NOT_LISTED = 'model not listed'
+"""
+What a name says for the model of a seat that a coordinator's move added with a model that the harness did not
+list, until the harness names the model. The model's ID is the coordinator's text, so no name holds it.
+"""
+
 MAX_MODEL = 60
 """The most characters of a model's name that a name holds. A longer one keeps its start and its end."""
 
@@ -52,7 +58,8 @@ def awaits_model(name: str, title: str, chosen: str | None = None) -> bool:
     """
     Return whether Verifold built a name for an agent of the harness `title` before the harness named its model.
 
-    Such a name says "default model", or it holds the ID of the model that the person chose, `chosen`.
+    Such a name says "default model" or "model not listed", or it holds the ID of the model that the person
+    chose, `chosen`.
     """
-    bases = (plain(title, None), *((plain(title, chosen),) if chosen else ()))
+    bases = (plain(title, None), plain(title, NOT_LISTED), *((plain(title, chosen),) if chosen else ()))
     return any(is_numbered(name, base) for base in bases)

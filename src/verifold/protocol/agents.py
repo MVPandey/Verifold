@@ -145,6 +145,12 @@ class Agent(Record):
     """
     mode: ValueId | None = None
     """The harness mode that the person chose for the agent. `None` follows the lab's auto mode choice."""
+    model_listed: bool = True
+    """
+    `False` for a seat that a coordinator's move added with a model that the harness did not list. Its model's ID
+    is the coordinator's text: it is in no name that Verifold builds, and it reserves no name, until the harness
+    reports the model. `True` for every other seat, and in a record from before this field.
+    """
     auto_mode: ValueId | None = None
     """
     The harness's own auto mode at the time the agent joined a lab in auto mode. The agent keeps it for the whole
@@ -172,6 +178,18 @@ MAX_AGENTS = 20
 """The most agents that one lab starts."""
 
 
+type Power = Literal['time', 'permissions', 'agents', 'settings', 'question']
+"""
+A kind of move that the person can hand to the lab's coordinator: more time for the lab, the answers to other
+agents' permission requests, one more agent or one fewer, a setting of the lab, or a revision of the question. Each
+one is off until the person switches it on.
+
+No power stops the lab, changes a power, or changes how Verifold handles permission requests.
+"""
+
+POWERS: tuple[Power, ...] = ('time', 'permissions', 'agents', 'settings', 'question')
+
+
 class SeatFacts(Record):
     """What the person can say about an agent's seat when they add or invite the agent. Each part is optional."""
 
@@ -185,11 +203,19 @@ class SeatFacts(Record):
     """
     coordinator: bool = False
     """Whether the seat's agent is the lab's coordinator. A lab has one coordinator at most."""
+    powers: tuple[Power, ...] = ()
+    """The powers that the person switches on for the coordinator from the start. Only the coordinator's seat has any."""
     family: Family | None = None
     """
     The model family of the seat's model. `None` takes the family of the harness's entry, or for an invited agent
     says that nobody stated one.
     """
+
+    @model_validator(mode='after')
+    def _powers_of_the_coordinator(self) -> Self:
+        if self.powers and not self.coordinator:
+            raise ValueError('Only the seat of the coordinator has powers.')
+        return self
 
     @field_validator('family')
     @classmethod

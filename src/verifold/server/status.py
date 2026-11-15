@@ -11,7 +11,7 @@ from typing import Literal
 from verifold.protocol.app import NEEDS, AgentActivity, Need, Outcomes, PostRef, ProfileEdit, Wait
 from verifold.protocol.events import Posted, ProfileSet
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
-from verifold.protocol.posts import Answer, Ask, Check, Close, Objection, Report, Result, RuledOut
+from verifold.protocol.posts import Answer, Ask, Check, Close, MoveRequest, Objection, Report, Result, RuledOut
 from verifold.society.board import Board
 from verifold.society.lines import lines_of, withdraws
 from verifold.society.standing import is_answered, standing
@@ -27,7 +27,7 @@ def waits(board: Board) -> tuple[Wait, ...]:
     """Return what waits for the person: the approvals first, then the answers, each group oldest first."""
     found = tuple(
         Wait(
-            kind='approval' if view.post.request == 'permission' else 'answer',
+            kind='approval' if isinstance(view.post, MoveRequest) or view.post.request == 'permission' else 'answer',
             agent=view.post.author,
             what=_what(view.post),
             since=view.at,
@@ -35,12 +35,25 @@ def waits(board: Board) -> tuple[Wait, ...]:
             thread=view.post.thread,
         )
         for view in needs_person(board)
-        if isinstance(view.post, Ask)
+        if isinstance(view.post, Ask | MoveRequest)
     )
     return tuple(sorted(found, key=lambda wait: wait.kind != 'approval'))
 
 
-def _what(ask: Ask) -> str:
+MOVES: dict[str, str] = {
+    'time': 'Asks for more time for the lab',
+    'permission': "Asks to answer another agent's permission request",
+    'add_agent': 'Asks to add an agent',
+    'remove_agent': 'Asks to remove an agent',
+    'setting': 'Asks to change a setting of the lab',
+    'question': 'Asks to revise the question',
+}
+"""Verifold's own words for each kind of move that the coordinator asks the person for."""
+
+
+def _what(ask: Ask | MoveRequest) -> str:
+    if isinstance(ask, MoveRequest):
+        return MOVES[ask.move.type]
     if ask.request == 'permission':
         command = ask.shown is not None and ask.shown.type == 'permission' and ask.shown.command is not None
         return APPROVAL_COMMAND if command else APPROVAL_OTHER
