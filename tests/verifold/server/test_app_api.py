@@ -412,6 +412,20 @@ async def test_the_person_posts_and_gets_a_readable_refusal(client: httpx2.Async
     assert (refused.status_code, refused.json()['detail']) == (400, 'Post p-9 does not exist.')
 
 
+async def test_the_person_reads_why_a_post_failed_when_another_program_changed_the_record(
+    client: httpx2.AsyncClient, record_file: RecordFile
+) -> None:
+    record_file.path.unlink()
+
+    failed = await client.post('/posts', json={'kind': 'message', 'text': 'Try sorted data too.', 'thread': 't-1'})
+
+    why = f'Another program replaced or removed the record {record_file.path}, so Verifold stops.'
+    assert (failed.status_code, failed.json()['detail']) == (
+        500,
+        f'{why} What Verifold wrote is in {record_file.kept}.',
+    )
+
+
 async def test_the_report_route_gives_the_newest_report_or_nothing(client: httpx2.AsyncClient, lab: Lab) -> None:
     before = (await client.get('/report')).json()
     await lab.post(PostRequest(kind='report', text='Nothing trained yet.', thread='t-1'), 'bo')

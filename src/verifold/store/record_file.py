@@ -16,8 +16,19 @@ from verifold.store.errors import CorruptRecord, RecordChanged, RecordLocked, St
 
 _events: TypeAdapter[Event] = TypeAdapter(Event)
 
-_SIDE_FILE = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
-"""How the side file opens: at its end, through no link, and without a wait for the reader of a pipe at its path."""
+TAIL = 4096
+"""
+How many of the record's last bytes are compared before each write. A change by another program that keeps these
+bytes and the record's length is not seen.
+"""
+
+_OWN_FILE = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+"""How a file beside the record opens: at its end, through no link, and without a wait for a pipe's reader."""
+
+_NOT_OWN = 'the path holds a link, a file with a second name, or no regular file'
+
+_MOVES = 16
+"""How often one check moves what another program added, before it takes that program to be one that never stops."""
 
 
 class RecordFile:
@@ -28,8 +39,13 @@ class RecordFile:
     process writes a record. A crash can leave a half-written last line, and opening the file removes that line.
 
     The lock stops a second Verifold. It does not stop another program. So the record knows where its own last write
-    ended, and it checks the file before each write. It moves what another program added to `foreign`, a file beside
-    the record. It writes nothing to a file that another program replaced, removed, or shortened.
+    ended and which bytes came before that end, and it checks the file before each write:
+
+    - Bytes that another program added after that end go to `foreign`, a file beside the record.
+    - A file that another program replaced, removed, shortened, or rewrote gets no write, now or later. When the
+      path names another file or none, the record as this object wrote it goes to `kept`, a file beside the record.
+
+    The check sees the path, the record's length, and its last `TAIL` bytes. It sees no other change.
     """
 
     def __init__(self, path: Path) -> None:
@@ -37,7 +53,12 @@ class RecordFile:
         self._path = path
         self._file: FileIO | None = None
         self._end = 0
-        """Where the record ends: the size of the file at the open, and after each write of this object since."""
+        """Where the record ends: the size of the file at the open, plus what this object wrote since."""
+        self._tail = b''
+        """The record's last bytes before `_end`, at most `TAIL` of them."""
+        self._moved = 0
+        self._refusal: str | None = None
+        """Why the record takes no more writes, once a check found that another program changed it."""
 
     @property
     def path(self) -> Path:
@@ -48,6 +69,16 @@ class RecordFile:
     def foreign(self) -> Path:
         """The file beside the record that keeps what another program added to the record."""
         return self._path.with_suffix('.foreign.jsonl')
+
+    @property
+    def kept(self) -> Path:
+        """The file beside the record that keeps the record as this object wrote it, once the path names another."""
+        return self._path.with_suffix('.kept.jsonl')
+
+    @property
+    def moved(self) -> int:
+        """How many bytes of other programs this object moved from the record to `foreign` since it opened."""
+        return self._moved
 
     def __enter__(self) -> Self:
         """
@@ -63,8 +94,10 @@ class RecordFile:
         try:
             fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
             file.seek(0)
-            complete = file.read().rpartition(b'\n')[0]
+            content = file.read()
+            complete = content.rpartition(b'\n')[0]
             self._end = file.truncate(len(complete) + 1 if complete else 0)
+            self._tail = content[: self._end][-TAIL:]
         except BlockingIOError as error:
             file.close()
             raise RecordLocked(f'Another process has the record {self._path} open.') from error
@@ -87,78 +120,108 @@ class RecordFile:
         Return every event in the record, in order. What another program added since the last write is not in it.
 
         Raises:
-            CorruptRecord: A line is not a valid event.
+            CorruptRecord: A line is not a valid event. The message gives the line.
 
         """
-        file = self._opened()
-        file.seek(0)
-        try:
-            return tuple(_events.validate_json(line) for line in file.read()[: self._end].splitlines())
-        except ValidationError as error:
-            raise CorruptRecord(
-                f'The record {self._path} has a line that is not a valid event. A newer version of Verifold can '
-                'have written it.'
-            ) from error
+        lines = self._written(self._opened()).splitlines()
+        return tuple(self._event(number, line) for number, line in enumerate(lines, start=1))
 
-    def append(self, *events: Event) -> int:
+    def append(self, *events: Event) -> None:
         """
         Write events at the end of the record in one write, and wait until they are on disk.
 
-        Before the write, the record moves the bytes that another program added since the last write to `foreign`,
-        and goes back to where that write ended. Return the number of bytes that it moved.
-
-        When the write fails, the record goes back to its size before the write, so it never keeps part of a commit.
+        Before the write, the record moves the bytes that another program added after its end to `foreign`, and
+        `moved` counts them. When the write fails, the record keeps none of the write's bytes, so it never keeps
+        part of a commit.
 
         Raises:
-            RecordChanged: Another program replaced, removed, or shortened the file, or the bytes that it added
-                can't go to `foreign`. Nothing is written.
+            RecordChanged: Another program replaced, removed, shortened, or rewrote the file, or the bytes that it
+                added can't go to `foreign`. Nothing is written, and every later call raises the same.
             OSError: The disk refused the write. The record is unchanged.
 
         """
         file = self._opened()
-        moved = self._set_aside(file)
+        if self._refusal is None:
+            self._refusal = self._check(file)
+        if self._refusal:
+            raise RecordChanged(self._refusal)
         data = b''.join(_events.dump_json(event) + b'\n' for event in events)
+        written = 0
         try:
             # A full disk can take only a part of the data. The next call then raises the disk's error.
-            written = 0
             while written < len(data):
                 written += file.write(data[written:])
             _sync(file)
         except OSError:
-            file.truncate(self._end)
+            if written:
+                # Another program can have written since the check, so only this write's own bytes go.
+                file.truncate(file.tell() - written)
             raise
-        if written:
-            # Another program can write after the check, so the file says where this write ended.
-            self._end = file.tell()
-        return moved
+        # When another program wrote since the check, its bytes are before these. The next check then finds that
+        # the record does not end with what this object wrote.
+        self._end += written
+        self._tail = (self._tail + data)[-TAIL:]
 
-    def _set_aside(self, file: FileIO) -> int:
-        # Check the file before a write, and return how many bytes of another program went to the side file.
-        held = os.fstat(file.fileno())
+    def _check(self, file: FileIO) -> str | None:
+        # Move what another program added after the record's end to `foreign`. Return why the record takes no more
+        # writes, when another program changed more than that.
+        descriptor = file.fileno()
         try:
-            same = os.path.samestat(held, self._path.stat())
+            same = os.path.samestat(os.fstat(descriptor), self._path.stat())
         except OSError:
             same = False
         if not same:
-            raise RecordChanged(
-                f'Another program replaced or removed the record {self._path}, so Verifold writes nothing to it.'
-            )
-        if held.st_size < self._end:
-            raise RecordChanged(f'Another program shortened the record {self._path}, so Verifold writes nothing to it.')
-        if held.st_size == self._end:
-            return 0
-        file.seek(self._end)
-        added = file.read()
+            return self._keep(file)
+        copied, why = self._end, None
+        # More can arrive while the bytes move, so the size is read again after each move. A program that never
+        # stops must not hold the server here.
+        for _ in range(_MOVES):
+            # The record's own bytes are compared before each look at the size, and so also just before the cut.
+            if os.pread(descriptor, len(self._tail), self._end - len(self._tail)) != self._tail:
+                return f'Another program shortened or rewrote the record {self._path}, so Verifold stops.'
+            size = os.fstat(descriptor).st_size
+            if size <= copied:
+                if copied > self._end:
+                    file.truncate(self._end)
+                    self._moved += copied - self._end
+                return None
+            added = os.pread(descriptor, size - copied, copied)
+            try:
+                _add(self.foreign, added)
+            except OSError as error:
+                why = error.strerror
+                break
+            copied += len(added)
+        return (
+            f'Another program added to the record {self._path}, and Verifold could not move what it added to '
+            f'{self.foreign}: {why or "the program went on adding"}. Verifold stops, and what the program added '
+            'is still at the end of the record.'
+        )
+
+    def _keep(self, file: FileIO) -> str:
+        # The path names another file or none, so only this process still has the record as it wrote it. Copy it to
+        # a file that outlives the process, and return what happened in one line.
+        gone = f'Another program replaced or removed the record {self._path}, so Verifold stops.'
+        if not self._end:
+            return gone
         try:
-            _keep(self.foreign, added)
+            _add(self.kept, self._written(file))
         except OSError as error:
-            raise RecordChanged(
-                f'Another program added to the record {self._path}. Verifold moves such bytes to {self.foreign}, '
-                f'but it cannot write that file: {error.strerror}. Verifold writes nothing to the record until that '
-                'path holds a regular file or nothing.'
+            return f'{gone} Verifold could not keep what it wrote in {self.kept}: {error.strerror}.'
+        return f'{gone} What Verifold wrote is in {self.kept}.'
+
+    def _written(self, file: FileIO) -> bytes:
+        file.seek(0)
+        return file.read()[: self._end]
+
+    def _event(self, number: int, line: bytes) -> Event:
+        try:
+            return _events.validate_json(line)
+        except ValidationError as error:
+            raise CorruptRecord(
+                f'Line {number} of the record {self._path} is not a valid event. Another program can have written '
+                'it, or a newer version of Verifold.'
             ) from error
-        file.truncate(self._end)
-        return len(added)
 
     def _opened(self) -> FileIO:
         if self._file is None:
@@ -166,15 +229,23 @@ class RecordFile:
         return self._file
 
 
-def _keep(path: Path, added: bytes) -> None:
-    # A link could take the bytes to any file, so the side file is a regular file that only its owner reads.
-    descriptor = os.open(path, _SIDE_FILE, 0o600)
-    with os.fdopen(descriptor, 'ab') as side:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise OSError(errno.EINVAL, 'It is not a regular file')
-        side.write(added)
-        side.flush()
-        _sync(side)
+def _add(path: Path, data: bytes) -> None:
+    # Write at the end of a file of Verifold's own beside the record. A link, or a second name of another file,
+    # could take the bytes to any file. So the file is a regular file with one name, and only its owner reads it.
+    try:
+        descriptor = os.open(path, _OWN_FILE, 0o600)
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise OSError(errno.ELOOP, _NOT_OWN) from error
+        raise
+    with os.fdopen(descriptor, 'ab') as file:
+        found = os.fstat(descriptor)
+        if not stat.S_ISREG(found.st_mode) or found.st_nlink != 1:
+            raise OSError(errno.EINVAL, _NOT_OWN)
+        os.fchmod(descriptor, 0o600)
+        file.write(data)
+        file.flush()
+        _sync(file)
 
 
 def _sync(file: IO[bytes]) -> None:

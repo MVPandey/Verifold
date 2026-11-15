@@ -67,6 +67,7 @@ from verifold.society.attention import update
 from verifold.society.fold import fold
 from verifold.society.standing import standing
 from verifold.society.turns import before as place_of
+from verifold.store.errors import RecordChanged
 from verifold.store.record_file import RecordFile
 
 events: TypeAdapter[Event] = TypeAdapter(Event)
@@ -636,6 +637,53 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
     assert 'is not a valid file of invitations' in refused.json()['detail']
     assert (back.status_code, state) == (200, 'here')
     assert len([event for event in record(project) if isinstance(event, AgentJoined)]) == 2
+
+
+async def test_a_record_that_another_program_replaces_stops_the_server_and_each_caller_reads_why(
+    project: Path,
+) -> None:
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),))
+    path = project / '.verifold' / 'record.jsonl'
+    kept = project / '.verifold' / 'record.kept.jsonl'
+    ready: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+    running = asyncio.create_task(
+        serve(project, start, catalog={'fake': FAKE_HARNESS}, hooks=ServeHooks(ready=ready.set_result))
+    )
+    try:
+        async with asyncio.timeout(60):
+            base, _, token = (await ready).partition('/#token=')
+            headers = {'Authorization': f'Bearer {token}'}
+            async with httpx2.AsyncClient(base_url=f'{base}/api', headers=headers) as client:
+                await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
+                invited = (await client.post('/invitations', json={'name': 'Reader'})).json()
+                url, bearer, _ = invited_parts(invited['text'])
+                async with board_of(url, bearer) as board:
+                    await board.call_tool('brief', {})
+                    written = path.read_bytes()
+                    # Another program saves the record with its first line only, and renames its file over it.
+                    saved = path.with_name('saved')
+                    saved.write_bytes(written.splitlines(keepends=True)[0])
+                    saved.replace(path)
+                    post = {'kind': 'message', 'text': 'Still there?', 'thread': 't-1'}
+                    # Both calls are on their way before the first of them stops the server.
+                    from_app, from_agent = await asyncio.gather(
+                        client.post('/posts', json=post), board.call_tool('post', post)
+                    )
+            with pytest.raises(ExceptionGroup) as stopped:
+                await running
+    finally:
+        running.cancel()
+
+    why = f'Another program replaced or removed the record {path}, so Verifold stops. What Verifold wrote is in {kept}.'
+    assert stopped.group_contains(RecordChanged, match=re.escape(why))
+    assert (from_app.status_code, from_app.json()['detail']) == (500, why)
+    assert from_agent.is_error
+    assert f'Error executing tool post: {why}' in str(from_agent.content)
+    # The copy holds every event that the server wrote, and the record is as the other program left it.
+    assert kept.read_bytes() == written
+    assert stat.S_IMODE(kept.stat().st_mode) == 0o600
+    assert path.read_bytes() == written.splitlines(keepends=True)[0]
+    assert harness_pids() == []
 
 
 async def test_an_agent_that_left_stops_for_good_and_an_invited_one_loses_its_token(project: Path) -> None:

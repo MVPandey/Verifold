@@ -8,6 +8,7 @@ order.
 """
 
 import re
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 
@@ -42,6 +43,8 @@ from verifold.server.lab import ACCEPTED, CHANGED, REMOVED, STATED, TAKEN_BACK, 
 from verifold.server.member import Member
 from verifold.society.deliverables import OFFERS_TITLE
 from verifold.society.lifecycle import no_alarm_line
+from verifold.store.errors import RecordChanged
+from verifold.store.record_file import RecordFile
 
 VERBS = (
     r"Add|Agree|Always|Answer|Ask|Avoid|Back|Be|Build|Call|Change|Check|Choose|Consider|Do|Don't|End|Ensure|First"
@@ -255,6 +258,41 @@ def test_no_message_from_verifold_to_an_agent_holds_an_order(name: str, text: st
     # The question is the person's own text, and the claim is an agent's. Verifold wrote every other line.
     own = text.replace('Is it stable?', '').replace(CLAIM.text, '')
     assert orders(own) == [], name
+
+
+def removed(record: RecordFile) -> None:
+    record.path.unlink()
+
+
+def removed_and_no_place_for_a_copy(record: RecordFile) -> None:
+    record.kept.mkdir()
+    record.path.unlink()
+
+
+def rewritten(record: RecordFile) -> None:
+    record.path.write_bytes(b'{}\n')
+
+
+def added_and_no_place_for_it(record: RecordFile) -> None:
+    record.foreign.symlink_to('elsewhere')
+    with record.path.open('ab') as other:
+        other.write(b'{}\n')
+
+
+@pytest.mark.parametrize('change', [removed, removed_and_no_place_for_a_copy, rewritten, added_and_no_place_for_it])
+def test_what_an_agent_reads_when_another_program_changed_the_record_holds_no_order(
+    tmp_path: Path, change: Callable[[RecordFile], None]
+) -> None:
+    first, second = RecordBuilder().join('ada').events
+
+    with RecordFile(tmp_path / 'record.jsonl') as record:
+        record.append(first)
+        change(record)
+        # A tool of the board gives the agent this error's text.
+        with pytest.raises(RecordChanged, match='Verifold stops') as refused:
+            record.append(second)
+
+    assert orders(str(refused.value)) == []
 
 
 def test_the_norms_file_is_where_the_orders_are() -> None:

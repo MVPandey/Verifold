@@ -64,7 +64,12 @@ Each agent then goes on from where the lab's record says that it was:
 
 The record holds the ID of each agent's harness session for this. Keep that in mind before you share a record.
 
-While Verifold serves the folder, only Verifold writes `.verifold/record.jsonl`. You can read the file with any program then, but do not change it. Before each write, Verifold checks that the file is the one that it opened and that it ends where its last write ended. When another program added to the file, Verifold moves what that program added to `.verifold/record.foreign.jsonl`, says so in its terminal with the number of bytes, and goes on. Verifold never reads that file, so you can look at it and delete it. When another program replaced, removed, or shortened the record, as an editor does when it saves the file, Verifold writes nothing more to it. After that, every change to the lab fails, and the terminal says why. Stop Verifold, look at the file, and run `verifold` again.
+While Verifold serves the folder, do not change `.verifold/record.jsonl` with another program. You can read it. Before each write, Verifold checks that the path still names the file that it opened, that the file ends where its last write ended, and that the file's last bytes are the ones that it wrote.
+
+- When another program added bytes at the end, Verifold moves them to `.verifold/record.foreign.jsonl`, says so in its terminal with the number of bytes, and goes on.
+- When another program replaced, removed, shortened, or rewrote the file, as an editor does when it saves, the lab stops at Verifold's next write. The agents' turns end as at any stop, and `verifold` exits with one line that says what happened. When the path names another file or none, Verifold first copies the record as it wrote it to the end of `.verifold/record.kept.jsonl`, and the line names that file. After a save in place, Verifold has no such copy, because the file that it holds is the changed one.
+
+Verifold only adds to these two files and never reads them, so look at them and delete them when you are done. To go on, look at `record.jsonl`, put the kept copy in its place if you want the record as Verifold wrote it, and run `verifold` again. Verifold then reads the record as it is. It cannot tell another program's change from its own writing when the change came after the server's last write or while no server ran, or when it kept the file's length and its last 4,096 bytes. A record that does not add up to a lab stops `verifold` with one line that gives the line of the first event that does not fit.
 
 ## The app
 

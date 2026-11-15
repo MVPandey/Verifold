@@ -15,9 +15,10 @@ class CorruptRecord(StoreError):
 
 class RecordChanged(StoreError):
     """
-    Another program changed the record's file while Verifold had it open, and Verifold writes nothing to it.
+    Another program changed the record's file while Verifold had it open. Verifold writes nothing more to it.
 
-    The program replaced, removed, or shortened the file, or it added bytes that Verifold can't move out of the record.
+    The program replaced, removed, shortened, or rewrote the file, or it added bytes that Verifold can't move out of
+    the record. The message says which, in one line. The server stops when a write raises this.
     """
 
 
