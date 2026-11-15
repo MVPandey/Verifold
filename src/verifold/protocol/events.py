@@ -225,8 +225,8 @@ class ReviewerSet(EventBase):
 
     A lab has a number of reviewer seats, which the person sets. An agent takes a free seat for itself and gives up
     the seat that it holds, and the person can give a seat to any agent or take it. A check of another agent's
-    result and a request for a blind rerun take a reviewer seat, unless the agent's own work builds on the post or
-    replies to it, or the lab's answer builds on it.
+    post and a request for an independent rerun of another agent's post take a reviewer seat. So does the taking
+    of such a rerun, while an agent in a reviewer seat can take it.
     """
 
     type: Literal['reviewer_set'] = 'reviewer_set'
@@ -262,11 +262,37 @@ class AlarmSet(EventBase):
 
 
 class RerunRequested(EventBase):
-    """An agent or the person asked for a blind rerun of a post. Verifold answers it by starting a checker."""
+    """
+    An agent or the person asked for an independent rerun of a post.
+
+    That is a rerun from a clean copy of the post's files by another agent. The request starts nothing. It stays open until the check of such a rerun replies to the post. In a record from
+    before agents took reruns, Verifold answered a request by starting a checker of its own.
+    """
 
     type: Literal['rerun_requested'] = 'rerun_requested'
     by: AgentId
     post: PostId
+
+
+class RerunTaken(EventBase):
+    """
+    An agent took the rerun of another agent's post that somebody asked for.
+
+    Verifold gave the agent the clean copy of the post's files: plain files, exactly the ones of `commit`, in a
+    folder of Verifold's own that no agent's folder holds. The agent's next check of the post with the method
+    `rerun` and with files is the check of this take.
+    """
+
+    type: Literal['rerun_taken'] = 'rerun_taken'
+    agent: AgentId
+    post: PostId
+    commit: CommitId
+    """The commit that the post pins its files to, which the clean copy holds."""
+    manifest: Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')] | None = None
+    """
+    The SHA-256 of the clean copy's manifest as Verifold gave it to the agent: one line for each file, with the
+    SHA-256 of the file's bytes and its path. `None` in a record from before Verifold kept it.
+    """
 
 
 class TimeSet(EventBase):
@@ -339,7 +365,10 @@ class TurnSummary(Record):
     snapshot: CommitId | None = None
     """The commit of the agent's folder after the turn, which other agents and checks can read."""
     rerun_failed: bool = False
-    """Whether a blind checker's rerun ended here without a check. The requests that the rerun had get no check."""
+    """
+    In a record from before agents took reruns: whether the rerun of a checker that Verifold started ended here
+    without a check. Verifold sets it no longer.
+    """
     seen: int | None = Field(default=None, ge=0)
     """The last event that the agent had got when the turn ended. `None` in a record from before Verifold kept it."""
     stopped: bool = False
@@ -479,6 +508,7 @@ type Event = Annotated[
     | TurnStarted
     | TurnEnded
     | RerunRequested
+    | RerunTaken
     | TimeSet
     | TimeRanOut
     | WentQuiet

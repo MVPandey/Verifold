@@ -20,7 +20,15 @@ from verifold.protocol.deliverables import MAX_DELIVERABLES, DeliverableLine, Se
 from verifold.protocol.events import AgentLeft, Note, Question
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, PostId, ThreadId
-from verifold.protocol.join import AlarmLine, LabState, PostLine, PostView, QuestionVersion, ThreadView
+from verifold.protocol.join import (
+    AlarmLine,
+    LabState,
+    PostLine,
+    PostView,
+    QuestionVersion,
+    RerunLine,
+    ThreadView,
+)
 from verifold.protocol.posts import MAX_HEADLINE
 from verifold.protocol.record import Record
 from verifold.protocol.settings import MAX_MINUTES, MAX_REVIEWER_SEATS, Settings, SettingsLevel, SetupDefaults
@@ -208,6 +216,8 @@ class LabView(Record):
     """What waits for the person: the approvals first, then the answers, and in each the one that waits longest first."""
     thread_needs: dict[ThreadId, Need] = Field(default_factory=dict)
     """The one status of each thread."""
+    reruns_wanted: tuple[RerunLine, ...] = ()
+    """The reruns that are wanted, oldest first: who asked for each, when, and which agents took it."""
     reviewer_seats: int = 0
     """How many reviewer seats the lab has."""
     reviewer_seats_set: int | None = None
@@ -239,8 +249,8 @@ class InviteRequest(SeatFacts):
     """
     The person invites an agent that runs by itself, and can state the facts of its seat.
 
-    Verifold does not know the agent's model. With `family`, the person states its model family, so that a blind
-    rerun by another family can hold up its results.
+    Verifold does not know the agent's model. With `family`, the person states its model family, so that an
+    independent rerun by an agent of another family can hold up its results.
     """
 
     name: Annotated[str, AfterValidator(one_line), StringConstraints(min_length=1, max_length=40)] | None = None
@@ -292,7 +302,7 @@ class Invitation(Record):
 
 
 class RerunRequest(Record):
-    """The person asks for a blind rerun of a post."""
+    """The person asks for an independent rerun of a post."""
 
     post: PostId
 

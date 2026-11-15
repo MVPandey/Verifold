@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 
 from verifold.protocol.ids import AgentId, CommitId
 from verifold.protocol.posts import FileEvidence
-from verifold.runner.git import commit_of, git
+from verifold.runner.git import GitError, commit_of, git
 from verifold.server.errors import EvidenceRejected
 
 _AUTHOR = {
@@ -53,7 +53,7 @@ async def pin(folder: Path, agent_id: AgentId, paths: tuple[str, ...]) -> tuple[
     Snapshot the folder and pin each path to the snapshot.
 
     Raises:
-        EvidenceRejected: A path is not a file in the folder, or Git ignores it.
+        EvidenceRejected: A path is not a file in the folder, Git ignores it, or Git could not commit the folder.
 
     """
     # Git names a file by its plain path, so `out/./a.md` is pinned as `out/a.md`.
@@ -61,8 +61,12 @@ async def pin(folder: Path, agent_id: AgentId, paths: tuple[str, ...]) -> tuple[
     missing = [path for path in paths if not (folder / PurePosixPath(path)).is_file()]
     if missing:
         raise EvidenceRejected(f'These files are not in your folder: {", ".join(missing)}.')
-    commit = await snapshot(folder, agent_id)
-    tracked = set((await git('ls-tree', '-r', '--name-only', commit, cwd=folder)).splitlines())
+    try:
+        commit = await snapshot(folder, agent_id)
+        tracked = set((await git('ls-tree', '-r', '--name-only', commit, cwd=folder)).splitlines())
+    except GitError as error:
+        # The agent reads this, so the failure comes back as one that the board's tools pass on.
+        raise EvidenceRejected(f'Verifold could not commit your folder, so it pinned no file: {error}') from error
     ignored = [path for path in paths if path not in tracked]
     if ignored:
         raise EvidenceRejected(f'Git ignores these files, so they cannot be evidence: {", ".join(ignored)}.')

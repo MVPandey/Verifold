@@ -12,13 +12,14 @@ export interface StateLine {
 
 /**
  * Who an author is to the page: a member, which shows with its own picture, the person, or a blind rerun, which
- * has no name and no picture in a thread.
+ * has no name and no picture in a thread. A blind rerun is a checker that Verifold started for a rerun request, in
+ * a lab from before agents took reruns. Its posts keep that label.
  */
 export type Author =
   | { readonly kind: 'member'; readonly name: string; readonly view: AgentView }
   | { readonly kind: 'person' | 'rerun'; readonly name: string };
 
-/** Return the lab's members: its agents without the blind checkers. */
+/** Return the lab's members: its agents without the blind checkers of a lab from before agents took reruns. */
 export function members(agents: readonly AgentView[]): readonly AgentView[] {
   return agents.filter((view) => view.agent.checks === null);
 }
@@ -168,4 +169,15 @@ export function labTotal(agents: readonly AgentView[]): string {
   if (unpriced === 0) return priced.length > 0 ? money(usd) : 'No cost reported yet';
   const rest = `${tokens(unpriced)} tokens with cost not reported by the harness`;
   return priced.length > 0 ? `${money(usd)}, and ${rest}` : rest;
+}
+
+/**
+ * Return what the blind reruns of a lab from before agents took reruns cost, such as "Earlier blind reruns: $0.12.
+ * The lab total holds it.", or `null` for a lab without them. Their checkers have no row in the member list, and
+ * the lab total still holds their cost, so this line makes the rows and the total agree.
+ */
+export function earlierReruns(agents: readonly AgentView[]): string | null {
+  const checkers = agents.filter((view) => view.agent.checks !== null);
+  if (checkers.length === 0) return null;
+  return `Earlier blind reruns: ${labTotal(checkers)}. The lab total holds it.`;
 }

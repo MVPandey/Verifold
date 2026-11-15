@@ -25,6 +25,7 @@ from verifold.protocol.events import (
     QuestionRevised,
     RequestAnswered,
     RerunRequested,
+    RerunTaken,
     ReviewerSet,
     SettingsSet,
     ThreadOpened,
@@ -201,6 +202,12 @@ class RecordBuilder:
         self.events.append(RerunRequested(seq=seq, at=at, by=by, post=post_id))
         return self
 
+    def take(self, agent_id: str, post_id: str, commit: str = 'c' * 40) -> 'RecordBuilder':
+        """Add an agent's take of the rerun of a post, whose files are pinned to `commit`."""
+        seq, at = self._stamp()
+        self.events.append(RerunTaken(seq=seq, at=at, agent=agent_id, post=post_id, commit=commit))
+        return self
+
     def turn(
         self,
         agent_id: str,
@@ -232,10 +239,20 @@ class RecordBuilder:
         session: str = 'session-1',
         rang: int | None = None,
         model_name: str | None = None,
+        model: str | None = None,
     ) -> 'RecordBuilder':
         seq, at = self._stamp()
         self.events.append(
-            TurnStarted(seq=seq, at=at, agent=agent_id, session=session, seen=seen, rang=rang, model_name=model_name)
+            TurnStarted(
+                seq=seq,
+                at=at,
+                agent=agent_id,
+                session=session,
+                seen=seen,
+                rang=rang,
+                model_name=model_name,
+                model=model,
+            )
         )
         return self
 

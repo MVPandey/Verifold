@@ -21,6 +21,7 @@ import {
   isNewSentence,
   offerLine,
   offerState,
+  rerunFact,
   stateLine,
 } from '../model/deliverables.ts';
 import type { LabNow } from '../model/deliverables.ts';
@@ -226,6 +227,7 @@ function OfferBlock(
   const line = offerLine(offer, props.agents, props.now);
   const by = `the offer by ${authorName(props.agents, offer.by)}`;
   const left = authorLeft(offer, props.agents);
+  const rerun = rerunFact(offer, props.lab.reruns_wanted ?? []);
   const decide = (decision: DeliverableDecision): void => {
     setBusy(true);
     props.onError(null);
@@ -262,6 +264,7 @@ function OfferBlock(
       <p className="d-facts">
         <span className="d-ostate">{offerState(offer, props.now)}</span>
         {left ? <span>Its author left the lab</span> : null}
+        {rerun ? <span>{rerun}</span> : null}
         {offer.standing === 'disputed' ? (
           <span className="d-disputed">
             Disputed by an agent
@@ -269,7 +272,7 @@ function OfferBlock(
               <>
                 {' '}
                 <a href={href({ page: 'thread', id: item.thread, post: offer.disputed_by })}>
-                  Read the objection
+                  Read why
                 </a>
               </>
             ) : null}

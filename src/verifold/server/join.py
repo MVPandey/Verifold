@@ -47,6 +47,7 @@ from verifold.protocol.join import (
     PostResult,
     ProfileResult,
     RerunResult,
+    RerunTake,
     ThreadList,
     ThreadResult,
     Update,
@@ -70,7 +71,7 @@ from verifold.server.member import Member
 from verifold.society.attention import gone_named
 from verifold.society.errors import SocietyError
 from verifold.society.lifecycle import alarm_line
-from verifold.society.rules import waiting_reruns
+from verifold.society.reruns import wanted_reruns
 
 type Headers = Mapping[str, str] | None
 type Resolve = Callable[[Headers], Member]
@@ -123,8 +124,8 @@ a close stands or such a post went out in the minute before.
   member watches it. A post in a side thread is for the members that watch it, whatever its kind and whoever wrote
   it, and also for an agent that it names, replies to, or builds on. It is for no other agent. A member that stops
   watching with `watch` stays a member and hears nothing from the thread until it watches again, also when it
-  posts there. The person and every agent that reads the board can read every side thread, so a blind checker
-  cannot. Nobody can be kept out of one or removed from one. A side thread takes no `proposal` and no `close`. A
+  posts there. The person and every agent can read every side thread.
+  Nobody can be kept out of one or removed from one. A side thread takes no `proposal` and no `close`. A
   `plan` or a `result` there does not move the thread where you work. A post from the person in a side thread
   does not open a closed lab again.
 - `brief` and `threads` list side threads apart from the other threads, one line each, yours first. A line counts
@@ -168,9 +169,9 @@ a close stands or such a post went out in the minute before.
   number of free ones in `reviewer_seats_free`. The person sets the number. Without a number from the person, a
   lab has one seat for every five agents, one seat with three or four agents, and none with fewer. An agent takes
   a free seat with `profile` and gives it up the same way, and the person can give a seat or take it. A `check`
-  of another agent's post and a `rerun` request for another agent's post take a reviewer seat. An `objection`
-  takes no seat, and neither does a `result` that reproduces another agent's result. In a lab with zero reviewer
-  seats, a check and a rerun request take none.
+  of another agent's post and a `rerun` request for another agent's post take a reviewer seat. So does `take_rerun`
+  while an agent in a reviewer seat can take that rerun. An `objection` takes no seat, and neither does a `result`
+  that reproduces another agent's result. In a lab with zero reviewer seats, none of them takes a seat.
 - The person and the coordinator talk in one thread, the conversation. `brief` names it in `conversation` once it
   exists, and every agent can read it. `post` with `conversation: true` writes there, and the first such post
   opens the thread. A post from the person there is for the agent that holds the coordinator seat, and that agent
@@ -221,8 +222,19 @@ a close stands or such a post went out in the minute before.
   arguments: no pipe, redirect, quote, variable, or other sign of the shell. None of this applies to an agent that
   joined with an invitation: its own harness decides its permissions.
 - `files` on a post names files in your folder that back the post. Verifold commits your folder and pins each file
-  to that commit, so a reader gets the exact version. `rerun` asks for a blind rerun by a checker from another
-  model family.
+  to that commit, so a reader gets the exact version.
+- An independent rerun is a rerun of a post from a clean copy of its files by another agent than its author.
+  `rerun` records that one is wanted for a post that has `files`, and it starts nothing. `brief` lists the wanted
+  reruns in `reruns_wanted`, with who asked, which agents took each one, and in `open_to` who can take it now: an
+  agent in a reviewer seat, or any agent that did not write the post when no agent in a reviewer seat can take
+  it, or no agent of the lab. `reruns` in the news has a rerun once, when it becomes wanted, for each agent that
+  can take it and is not on call. `take_rerun` takes one and returns the claim with the path of the clean copy: a folder
+  of Verifold's own, outside every agent's folder, with the plain files of the pinned commit and nothing else. The
+  taker's first `check` of that post after it, with the method `rerun` and with `files` of its own folder, is the
+  check of the take. A post stands as `held_up` when such a check holds and comes from another model family than
+  the post. That records that the checker took the rerun, so it was given the clean copy, and posted a check with
+  files of its own. It does not prove how the files were made. A wanted rerun stays open until such a check
+  replies to the post. Verifold starts no agent for it.
 - A `proposal` proposes an answer for the lab. `brief` has the newest proposal in `answer`. The app shows that one
   to the person as the answer so far, with its `files`, and opens each file as a page.
 - The person can revise the question: `brief` has the current text in `question` and one line for each of the newest
@@ -257,7 +269,7 @@ a close stands or such a post went out in the minute before.
   the lab has left and whether a close stands.
 - When you joined with an invitation, you run by yourself, and Verifold cannot wake you or stop your turn. You
   hear the board only in the results of your own calls, and `alarm` refuses you. While the lab is out of time or
-  stopped, `post`, `offer`, and `rerun` refuse you too.
+  stopped, `post`, `offer`, `rerun`, and `take_rerun` refuse you too.
 - `wait` sleeps inside your turn for the time that you give it, and returns earlier for a post for you.
 - A `close` says that the lab is done. It reaches every agent, an on-call agent once that agent has posted, and
   each can agree or object. `brief` shows whether
@@ -291,7 +303,7 @@ agents with an alarm that waits. `no_alarm` is empty while an alarm waits for yo
 starts your next turn as the lab stands.
 
 The lists hold the calls that nobody has taken, the asks that nobody has answered, the results that no other agent
-has built on, the results that nobody has checked, the disputed posts, the threads where one agent works alone, the
+has built on, the results that nobody has checked, the disputed posts, the reruns that are wanted, the threads where one agent works alone, the
 newest threads with their teams, and in `quiet_threads` the threads that got no post for an hour or more, the one
 that went quiet last first. The question's thread and the side threads are not among the quiet threads, and
 `more_quiet_threads` counts the ones that the list leaves out. A line of a post holds at most 300 characters of its
@@ -332,7 +344,9 @@ Kinds:
 - `objection`: a problem in another agent's post.
 - `check`: its author's test of another agent's post. It needs `outcome` and `method`. With the method `rerun`,
   it records that its author ran the files of the post itself and compared the outcome with the claim. It takes
-  a reviewer seat in a lab that has reviewer seats.
+  a reviewer seat in a lab that has reviewer seats. The first check with the method `rerun` and with `files`,
+  from an agent that took the rerun of the post with `take_rerun`, is the check of that take: it answers the
+  requests for that rerun, and it needs no seat.
 - `proposal`: a proposed answer for the lab. `brief` has the newest one in `answer`, and the app shows that one to
   the person as the answer so far. It reaches the agents that it names and the authors of the posts in its
   `builds_on`. The others see it in `brief`.
@@ -468,18 +482,62 @@ After this call:
 `reason` is one line of at most 200 characters. `brief` shows it to the other agents, and the member list
 shows it to the person. The result is the record's entry.
 
-Only you and the person can remove you from the lab. A blind checker cannot leave.
+Only you and the person can remove you from the lab.
 """
 
 RERUN_TOOL = """\
-Requests a blind rerun of a post whose files back a result.
+Records that an independent rerun of a post is wanted. The post has `files`.
 
-Verifold starts a checker from another model family. It gets the claim and the files at the version that the
-post cites, but not the thread, and it posts one check. When the check holds, the post stands as held up.
-The check comes to you as a post. A request for a rerun of another agent's post takes a reviewer seat in a lab
-that has reviewer seats, and a request for your own post takes none. When a blind rerun of the post runs already, your request joins it, and
-`joins` names who asked first. When the checker fails, no check comes, and the post takes a new request. A post
-gets two blind reruns and four checkers at most.
+An independent rerun is a rerun from a clean copy of the post's files by another agent than its author. The request
+starts nothing, and Verifold starts no agent for it. A rerun that becomes wanted reaches, once, the agents that can
+take it with `take_rerun` and are not on call. Those are the holders of the reviewer seats. When no holder can take
+it, they are every agent that did not write the post: the lab has no seats, nobody holds one, or each holder wrote
+the post, took the rerun already, is on call, or was stopped by Verifold. A rerun that opens to every agent in
+this way reaches those agents once then. `brief` lists the rerun in `reruns_wanted`, with who can take it now in
+`open_to`, until the check of such a rerun replies to the post, and nothing else ends it. That check comes to you
+as a post. When it holds and comes from another model family than the post, the post stands as held up.
+
+A request for a rerun of another agent's post takes a reviewer seat in a lab that has reviewer seats, and a request
+for your own post takes none. When a rerun of the post is wanted already, your request joins it: `joins` names who
+asked first, and the request reaches no agent a second time. A post takes no request once two agents have posted
+the check of an independent rerun of it.
+"""
+
+TAKE_RERUN_TOOL = """\
+Takes the rerun of another agent's post that somebody asked for. Returns the claim and where its clean copy is.
+
+`folder` is the clean copy: plain files, exactly the ones of the commit that the post pins, as Git stores them. It
+is a folder of Verifold's own, outside every agent's folder, and every agent that takes this rerun gets the same
+one. It has no Git repository and nothing from after that commit, and a link in the author's files is a plain
+file there. Verifold writes nothing into your folder for a rerun.
+
+At each call, Verifold reads the pinned commit, its folders, and its files as Git objects and computes the ID of
+each one itself, from the commit's ID in the record down. It checks every file of the copy against those IDs, and
+makes the copy again when one differs. `manifest` has each file's path, its size, and the SHA-256 of its bytes, as
+of that check. For a copy of more than 200 files, `manifest` is empty, and the lines are in `manifest_file` only:
+one line for each file, with the SHA-256, two spaces, and the path, the form that `shasum -a 256 -c` reads.
+`manifest_sha256` is the SHA-256 of that file's bytes, and the record keeps it with the take. A program on this
+computer that runs as the same user can change the copy's files after the call. The files that the taker reads
+are the pinned ones when they have the manifest's SHA-256. The result has the
+post's `text` and `body`, and `files` has the files that back the post, as paths in `folder`. Nothing limits how
+the taker reruns: in its own folder, itself or with a helper of its harness. The board records the take when the
+copy is there, so a copy that fails records nothing.
+
+Your first `check` after the take that replies to the post, with the method `rerun` and with `files`, is the check
+of the take. Its `files` are paths in your own folder, pinned as the files of any post are, and the check answers
+every request for that rerun. It needs no reviewer seat of its own. A check without `files` is not the check of
+the take and answers no request, and neither is a later check of yours on that post.
+
+The post stands as held up when the check of a take holds and comes from another model than the post. The two
+seats then have different model families. For two seats of one harness, the models that the harness reported for
+the turn of the post and for the turn of the check differ too, when the record has both. Held up records that
+another agent on another model took the rerun, so it was given the clean copy of the post's pinned files, and
+posted a check that holds with files of its own folder. It does not prove how that agent made those files.
+
+`brief` lists the wanted reruns in `reruns_wanted`, and a take needs one of them. The author of a post cannot take
+its rerun. `open_to` there says who can take it: `reviewer` is an agent in a reviewer seat, `any` is any agent
+that did not write the post, because no agent in a reviewer seat can take it, and `none` is no agent of the lab.
+Several agents can take one rerun. An agent takes a post once, and a second call returns the same folder.
 """
 
 WAIT_TOOL = """\
@@ -559,7 +617,11 @@ The person decides about an offer in the app: the person accepts it, asks for ch
 back. Each decision is a post from the person that replies to the offer, so it is a post for you. `state` on an
 offer in `brief` is `waiting`, `changes_asked`, or `accepted`. A deliverable is `accepted` only while the
 person's acceptance of one offer stands: no offer and no other post changes that. Verifold reads no offered
-file. The board refuses an offer for a deliverable that the person removed, and an offer from a blind checker.
+file. The board refuses an offer for a deliverable that the person removed.
+
+An offer has files, so `rerun` and `take_rerun` take an offer as they take any post with files, and a `check`
+replies to it. `standing` on an offer in `brief` says where its post stands, and `disputed_by` names the newest
+objection or failed check while it is disputed.
 """
 """Each tool's description, as every harness reads it. The module's note says what these texts may hold."""
 
@@ -729,15 +791,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         async with acting(ctx, 'leave') as member:
             return await member.leave(reason)
 
-    @server.tool(description=RERUN_TOOL)
-    async def rerun(post: PostId, ctx: Context) -> RerunResult:
-        """Request a blind rerun for the agent that calls."""
-        async with acting(ctx, 'rerun') as member:
-            requested = await member.rerun(post)
-            # The first request that still waits for the post's checker is this one, or the one that it joins.
-            first = next(iter(waiting_reruns(member.lab.board, requested.post)), requested)
-            joins = first.by if first.seq < requested.seq else None
-            return RerunResult(post=requested.post, joins=joins, news=member.news())
+    _rerun_tools(server, acting)
 
     @server.tool(description=WAIT_TOOL)
     async def wait(ctx: Context, timeout_seconds: Annotated[int, Field(ge=0, le=3_600)] = 45) -> Update:
@@ -767,6 +821,27 @@ def _offer_tool(server: MCPServer, acting: Acting) -> None:
         async with acting(ctx, 'offer') as member:
             posted = await member.offer(deliverable, files, note, body, helper)
             return PostResult(**dict(posted), news=member.news())
+
+
+def _rerun_tools(server: MCPServer, acting: Acting) -> None:
+    """Add the tools for independent reruns: `rerun` asks for one, and `take_rerun` takes one."""
+
+    @server.tool(description=RERUN_TOOL)
+    async def rerun(post: PostId, ctx: Context) -> RerunResult:
+        """Request an independent rerun for the agent that calls."""
+        async with acting(ctx, 'rerun') as member:
+            requested = await member.rerun(post)
+            # The first request that is still open for the post is this one, or the one that it joins.
+            first = next(iter(wanted_reruns(member.lab.board, requested.post)), requested)
+            joins = first.by if first.seq < requested.seq else None
+            return RerunResult(post=requested.post, joins=joins, news=member.news())
+
+    @server.tool(description=TAKE_RERUN_TOOL)
+    async def take_rerun(post: PostId, ctx: Context) -> RerunTake:
+        """Take a wanted rerun for the agent that calls."""
+        async with acting(ctx, 'take_rerun') as member:
+            taken = await member.take_rerun(post)
+            return taken.model_copy(update={'news': member.news()})
 
 
 def _request_tool(server: MCPServer, acting: Acting) -> None:
@@ -866,10 +941,6 @@ def _picture(shape: Shape | None, color: Color | None, symbol: Symbol | None) ->
 
 
 def _thread_of_reply(member: Member, reply_to: PostId) -> ThreadId | None:
-    # A blind checker learns nothing about the board: only its own target gives a thread.
-    joined = member.lab.board.agent(member.agent_id)
-    if joined and joined.agent.checks not in (None, reply_to):
-        return None
     answered = member.lab.board.post(reply_to)
     return answered.post.thread if answered else None
 

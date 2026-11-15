@@ -17,6 +17,7 @@ import {
   isNewSentence,
   offerLine,
   offerState,
+  rerunFact,
   stateLine,
 } from '../src/model/deliverables.ts';
 import { clock } from '../src/model/format.ts';
@@ -330,6 +331,47 @@ describe('the deliverables panel', () => {
     assert.equal(html.includes('Ask for changes'), false);
   });
 
+  it('says beside an offer that a rerun of it is wanted or taken, and that a check holds', () => {
+    const wanted = {
+      post: 'p-5',
+      thread: 't-4',
+      asked_by: ['person'],
+      asked_at: '2026-11-06T14:12:00Z',
+      taken_by: [] as string[],
+      open_to: 'reviewer' as const,
+    };
+    const waits = offer('p-5', 'agent-1');
+    assert.equal(rerunFact(waits, []), null);
+    assert.equal(rerunFact(waits, [wanted]), 'A rerun is wanted');
+    assert.equal(
+      rerunFact(waits, [{ ...wanted, taken_by: ['agent-2'] }]),
+      'An agent took its rerun',
+    );
+    assert.equal(rerunFact(waits, [{ ...wanted, post: 'p-9' }]), null);
+    assert.equal(
+      rerunFact({ ...waits, standing: 'held_up' }, []),
+      'Held up by an independent rerun',
+    );
+    assert.equal(rerunFact({ ...waits, standing: 'checked' }, []), 'Checked by an agent');
+    assert.equal(rerunFact({ ...waits, standing: 'disputed' }, []), null);
+    const html = renderToStaticMarkup(
+      <Deliverables
+        api={{} as Api}
+        list={[OFFERED]}
+        lab={{ ...OPEN_LAB, reruns_wanted: [wanted] }}
+        agents={AGENTS}
+        now={NOW}
+        reload={() => undefined}
+        onClose={() => undefined}
+      />,
+    );
+    assert.ok(
+      html.includes(
+        '<span class="d-ostate">Waits for your decision</span><span>A rerun is wanted</span></p>',
+      ),
+    );
+  });
+
   it('says when an agent disputes an offer, with a link to the objection', () => {
     const html = panel([
       {
@@ -339,7 +381,7 @@ describe('the deliverables panel', () => {
     ]);
     assert.ok(
       html.includes(
-        '<span class="d-disputed">Disputed by an agent <a href="#/thread/t-4/p-8">Read the objection</a></span>',
+        '<span class="d-disputed">Disputed by an agent <a href="#/thread/t-4/p-8">Read why</a></span>',
       ),
     );
     assert.equal(panel([OFFERED]).includes('d-disputed'), false);

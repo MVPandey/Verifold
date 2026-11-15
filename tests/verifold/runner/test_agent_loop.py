@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from datetime import timedelta
 from pathlib import Path
@@ -8,12 +8,12 @@ from pathlib import Path
 import pytest
 from builders import until
 from conftest import ServedBoard, agent
-from fakes import FAKE_HARNESS
+from fakes import FAKE_HARNESS, FakeCopies
 
 from verifold.protocol.app import AgentState, WaitsFor
 from verifold.protocol.events import AlarmSet, TurnSummary
 from verifold.protocol.join import MAX_NEWS, PostRequest
-from verifold.protocol.posts import Ask, PermissionShown, QuestionShown
+from verifold.protocol.posts import Ask, FileEvidence, PermissionShown, QuestionShown
 from verifold.protocol.settings import AtTimeLimit, JobSettings, PermissionSettings, Settings, WhileYouDecide
 from verifold.protocol.usage import Usage
 from verifold.runner import agent_loop
@@ -25,8 +25,8 @@ from verifold.runner.messages import (
     DOORBELL,
     HARNESS_FAILED,
     IN_TURN,
-    JOBS_ENDED,
     OUT_OF_TIME,
+    RERUN_WANTED,
     RESTARTED,
     STARTED_AGAIN,
     alarm_message,
@@ -38,7 +38,6 @@ from verifold.runner.messages import (
 from verifold.runner.permissions import Refusals
 from verifold.runner.session import AgentSession, PermissionChoice, PermissionRequest, TurnResult
 from verifold.server.activity import Activity
-from verifold.society.board import Board
 from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
 from verifold.society.turns import before
 from verifold.society.views import needs_person
@@ -56,17 +55,11 @@ def calls(log: Path, event: str) -> list[dict[str, object]]:
     return [call for call in map(json.loads, lines) if call['event'] == event]
 
 
-async def no_jobs(_agent: str) -> bool:
-    return False
-
-
 def loop_for(
     served: ServedBoard,
     tmp_path: Path,
     activity: Activity | None = None,
     refusals: Refusals | None = None,
-    has_jobs: Callable[[str], Awaitable[bool]] | None = None,
-    done: Callable[[Board], bool] | None = None,
     **settings: float,
 ) -> AgentLoop:
     member, token = served.seat('bo')
@@ -89,8 +82,7 @@ def loop_for(
         member,
         setup,
         LoopSettings(mcp_url=served.url, **options),
-        done,
-        shared=Shared(activity=activity, refusals=refusals, has_jobs=has_jobs),
+        shared=Shared(activity=activity, refusals=refusals),
     )
 
 
@@ -513,116 +505,6 @@ async def test_a_failed_turn_gives_the_agent_its_news_again(
 
     assert member.seen == before
     assert [entry.post.text for entry in (await member.wait(timeout=0)).posts] == ['Which layer?']
-
-
-async def test_an_agent_with_one_job_that_left_nothing_running_gets_one_turn_for_it(
-    served: ServedBoard, tmp_path: Path, log: Path
-) -> None:
-    loop = loop_for(served, tmp_path, has_jobs=no_jobs)
-    loop._done = lambda _: False
-
-    async with asyncio.timeout(30):
-        await loop.run()
-
-    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
-    assert len(served.lab.board.turns) == 1
-
-
-async def test_an_agent_with_one_job_wakes_when_the_processes_that_it_left_running_end(
-    served: ServedBoard, tmp_path: Path, log: Path
-) -> None:
-    looks: list[str] = []
-
-    async def has_jobs(agent: str) -> bool:
-        # The agent's process runs for the first three looks of the first turn, and no process runs after that.
-        looks.append(agent)
-        return len(looks) <= 3
-
-    loop = loop_for(served, tmp_path, has_jobs=has_jobs, job_poll=0.01)
-    loop._done = lambda _: False
-
-    async with asyncio.timeout(30):
-        await loop.run()
-
-    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', JOBS_ENDED]
-    assert len(served.lab.board.turns) == 2
-    assert set(looks) == {'bo'}
-
-
-async def test_an_agent_with_one_job_does_not_wait_for_ever_for_a_process_that_never_ends(
-    served: ServedBoard, tmp_path: Path, log: Path
-) -> None:
-    async def always(_agent: str) -> bool:
-        return True
-
-    activity = Activity()
-    loop = loop_for(served, tmp_path, activity, has_jobs=always, job_poll=0.01, job_wait=0.05)
-    loop._done = lambda _: False
-
-    async with asyncio.timeout(30):
-        await loop.run()
-
-    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
-
-
-async def test_an_agent_with_one_job_hears_that_the_time_limit_stopped_its_processes(
-    served: ServedBoard, tmp_path: Path, log: Path
-) -> None:
-    lab = served.lab
-    await lab.set_settings(Settings(jobs=JobSettings(at_time_limit=AtTimeLimit.STOP)))
-    stop = asyncio.Event()
-
-    async def until_stopped(_agent: str) -> bool:
-        return not stop.is_set()
-
-    loop = loop_for(served, tmp_path, has_jobs=until_stopped, job_poll=0.01)
-    loop._done = lambda _: False
-    running = asyncio.create_task(loop.run())
-    try:
-        await until(lambda: bool(lab.board.turns))
-        await lab.set_time_left(timedelta(0))
-        await lab.run_out_of_time()
-        stop.set()
-        await asyncio.sleep(0.1)
-        assert len(calls(log, 'prompt')) == 1
-
-        await lab.set_time_left(timedelta(hours=1))
-        await until(lambda: len(calls(log, 'prompt')) == 2)
-    finally:
-        running.cancel()
-        with suppress(asyncio.CancelledError):
-            await running
-
-    assert calls(log, 'prompt')[1]['text'] == more_time_message(lab.board.ends_at, AtTimeLimit.STOP)
-
-
-async def test_an_agent_with_one_job_that_the_time_limit_stopped_goes_on_when_the_lab_gets_more_time(
-    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv('FAKE_ACP_SLOW', '1')
-    lab = served.lab
-    loop = loop_for(served, tmp_path)
-    loop._done = lambda _: False
-    running = asyncio.create_task(loop.run())
-    try:
-        await until(lambda: bool(calls(log, 'prompt')))
-        await lab.set_time_left(timedelta(0))
-        await lab.run_out_of_time()
-        await until(lambda: bool(lab.board.turns))
-        await asyncio.sleep(0.1)
-        # The stop was not the agent's choice, so its one turn is not used up.
-        assert not running.done()
-
-        await lab.set_time_left(timedelta(hours=1))
-        await until(lambda: len(calls(log, 'prompt')) == 2)
-    finally:
-        running.cancel()
-        with suppress(asyncio.CancelledError):
-            await running
-
-    assert calls(log, 'prompt')[1]['text'] == more_time_message(
-        lab.board.ends_at, lab.board.settings.jobs.at_time_limit
-    )
 
 
 async def test_a_failing_harness_is_restarted_with_its_session_and_stops_after_three_failures(
@@ -1330,6 +1212,47 @@ async def test_an_agent_that_ended_its_turn_wakes_when_an_agent_that_it_wrote_to
     assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DEPARTURE]
 
 
+async def test_a_rerun_that_the_agent_can_take_wakes_it_and_it_takes_the_rerun_in_its_own_turn(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
+    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
+    # The clean copy that the fake agent reads, and the pin of the files that it posts from its own folder.
+    served.copies = FakeCopies(folder=tmp_path / 'copies')
+    (tmp_path / 'copies' / 'p-2').mkdir(parents=True)
+    (tmp_path / 'copies' / 'p-2' / 'bench.json').write_text('11.8')
+    pinned: list[tuple[str, ...]] = []
+
+    async def pin(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+        pinned.append(paths)
+        return tuple(FileEvidence(path=path, commit='d' * 40) for path in paths)
+
+    served.pin = pin
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        # The author's own request is no news for the author, and it wakes the agent that can take it.
+        await lab.request_rerun('ada', 'p-2')
+        await until(lambda: len(lab.board.turns) == 2)
+        await asyncio.sleep(0.3)
+    finally:
+        running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', RERUN_WANTED]
+    # The agent's own harness took the rerun and posted the check, in the turn that the request started.
+    assert [entry.agent for entry in lab.board.takes] == ['bo']
+    check = lab.board.posts[-1].post
+    assert (check.kind, check.author, check.reply_to, [file.path for file in check.evidence]) == (
+        'check',
+        'bo',
+        'p-2',
+        ['rerun.txt'],
+    )
+    assert (pinned, (tmp_path / 'bo' / 'rerun.txt').read_text()) == ([('rerun.txt',)], '11.8')
+    assert lab.board.posts[-1].post.model_dump()['take'] == lab.board.takes[0].seq
+
+
 async def stop(running: asyncio.Task[None]) -> None:
     """Stop an agent's loop, the way that a stop of Verifold does."""
     running.cancel()
@@ -1632,29 +1555,6 @@ async def test_a_second_restart_after_a_harness_failed_when_it_started_starts_no
         await stop(running)
 
     assert prompts(log) == ['Start.']
-
-
-@pytest.mark.parametrize('cut_off', [True, False])
-async def test_a_blind_checker_starts_its_rerun_again_after_a_restart_and_reads_no_board(
-    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch, *, cut_off: bool
-) -> None:
-    lab = served.lab
-    if cut_off:
-        monkeypatch.setenv('FAKE_ACP_SLOW', '1')
-        first = asyncio.create_task(loop_for(served, tmp_path).run())
-        await until(lambda: len(calls(log, 'prompt')) == 1)
-        await stop(first)
-        monkeypatch.delenv('FAKE_ACP_SLOW')
-    else:
-        await one_turn(served, tmp_path)
-    assert before(lab.board, 'bo').cut_off is cut_off
-
-    # The loop of an agent with one job ends when a turn leaves the job undone and nothing running.
-    async with asyncio.timeout(30):
-        await loop_for(served, tmp_path, done=lambda _: False).run()
-
-    assert prompts(log) == ['Start.', 'Start.']
-    assert (len(calls(log, 'new_session')), calls(log, 'load_session')) == (2, [])
 
 
 async def test_a_turn_with_a_start_and_no_prompt_reads_as_a_turn_without_an_end(

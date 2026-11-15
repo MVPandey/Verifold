@@ -12,6 +12,7 @@ from verifold.society.deliverables import told_at
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply
 from verifold.society.lifecycle import lab_state
+from verifold.society.reruns import reruns_wanted
 from verifold.society.views import brief, thread_view
 
 ANSWER = 'A one-page answer that I can read in five minutes.'
@@ -465,3 +466,38 @@ def test_the_board_says_when_a_post_last_told_the_lab_of_a_new_sentence_or_a_rem
     assert told_at(record.board()) == record.at(len(record.events))
     record.deliverable('d-1', 'A two-page answer.', 'p-4', removed=True)
     assert told_at(record.board()) == record.at(len(record.events))
+
+
+def test_a_rerun_of_an_offer_is_wanted_and_taken_as_for_any_post_with_files() -> None:
+    record = asked().offer('p-2', 'ada', 'd-1', 't-2').rerun('person', 'p-2')
+    assert [(line.post, line.asked_by, line.taken_by) for line in reruns_wanted(record.board())] == [
+        ('p-2', ('person',), ())
+    ]
+
+    record.take('cy', 'p-2')
+    assert [line.taken_by for line in reruns_wanted(record.board())] == [('cy',)]
+    take = record.board().takes[-1].seq
+    ran = (FileEvidence(path='rerun.log', commit='d' * 40),)
+
+    def check(outcome: str) -> Check:
+        return Check.model_validate(
+            {
+                'id': 'p-3',
+                'thread': 't-2',
+                'author': 'cy',
+                'text': 'I ran it.',
+                'reply_to': 'p-2',
+                'outcome': outcome,
+                'method': 'rerun',
+                'take': take,
+                'evidence': ran,
+            }
+        )
+
+    held, failed = record.copy().post(check('holds')), record.copy().post(check('fails'))
+
+    assert reruns_wanted(held.board()) == ()
+    assert [(offer.standing, offer.disputed_by) for offer in lines(held)[0].offers] == [('held_up', None)]
+    assert [(offer.standing, offer.disputed_by) for offer in lines(failed)[0].offers] == [('disputed', 'p-3')]
+    # A check decides nothing for the person: the offer waits as before.
+    assert [offer.state for offer in lines(held)[0].offers] == ['waiting']

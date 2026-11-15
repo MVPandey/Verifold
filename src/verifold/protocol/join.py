@@ -114,18 +114,21 @@ class PostRequest(Record):
             raise ValueError('`between` names the agents of a new side thread. Give new_thread with it.')
         return self
 
-    def to_post(
+    def to_post(  # noqa: PLR0913
         self,
         post_id: PostId,
         thread_id: ThreadId,
         author: AgentId,
         evidence: tuple[FileEvidence, ...] = (),
         question_seen: int | None = None,
+        *,
+        take: int | None = None,
     ) -> Post:
         """
         Return the post that this request describes, with the evidence that Verifold pinned for its files.
 
         `question_seen` is how many revisions of the question the author had been shown. Only a proposal keeps it.
+        `take` is the event with which the author took the rerun that a check answers. Only a check keeps it.
 
         Raises:
             pydantic.ValidationError: The kind does not accept a field of the request, or misses one that it needs.
@@ -140,6 +143,8 @@ class PostRequest(Record):
         fields = self.model_dump(exclude=unused, exclude_none=True)
         if self.kind == 'proposal' and question_seen is not None:
             fields['question_seen'] = question_seen
+        if self.kind == 'check' and take is not None:
+            fields['take'] = take
         return _posts.validate_python(
             fields | {'id': post_id, 'thread': thread_id, 'author': author, 'evidence': evidence}
         )
@@ -426,6 +431,33 @@ class RenameLine(Record):
     was: str
 
 
+type RerunOpenTo = Literal['reviewer', 'any', 'none']
+"""
+Who can take a wanted rerun now. `reviewer`: an agent in a reviewer seat. `any`: any agent of the lab that did not
+write the post, because the lab has no reviewer seats or no agent in a reviewer seat can take it. `none`: no agent
+of the lab, as when the post's author is the lab's only agent.
+"""
+
+
+class RerunLine(Record):
+    """
+    A rerun that is wanted: somebody asked for an independent rerun of a post, and no check has answered it.
+
+    An independent rerun is a rerun from a clean copy of the post's files by another agent than the post's author.
+    """
+
+    post: PostId
+    thread: ThreadId
+    asked_by: tuple[AgentId, ...]
+    """Who asked, each once, the first first: agents, or `person`."""
+    asked_at: AwareDatetime
+    """When the first of them asked."""
+    taken_by: tuple[AgentId, ...] = ()
+    """The agents of the lab that took the rerun and have not posted its check yet. Empty when no agent took it."""
+    open_to: RerunOpenTo = 'reviewer'
+    """Who can take the rerun now."""
+
+
 class News(Record):
     """
     The posts that an agent has not seen yet, oldest first, with the agent's alarm.
@@ -452,6 +484,12 @@ class News(Record):
     """The changes that the person or the coordinator made to the agent's own profile since, oldest first."""
     renamed: tuple[RenameLine, ...] = ()
     """The other agents whose name changed since, each once, with its name now and the name that it had before."""
+    reruns: tuple[RerunLine, ...] = ()
+    """
+    The reruns that became wanted since and that the agent can take with `take_rerun`. A rerun is here once: a
+    later request for it adds nothing. After the agent got a reviewer seat, every wanted rerun that it can take is
+    here once. An agent whose seat is on call has none here, and `brief` lists every wanted rerun.
+    """
     alarm: AlarmLine | None = None
     """The alarm that waits for the agent. `None` means that no alarm waits."""
 
@@ -460,7 +498,6 @@ class PostResult(PostView):
     """What the `post` tool returns: the post as it stands, and the agent's news."""
 
     news: News | None = None
-    """`None` for a blind checker, which reads nothing but its claim."""
     left: tuple[LeftLine, ...] = ()
     """The agents that the post names in `mentions` or answers with `reply_to`, and that left the lab before it."""
 
@@ -512,11 +549,62 @@ class WatchResult(Record):
 
 
 class RerunResult(Record):
-    """What the `rerun` tool returns: the post that gets a blind rerun, and the agent's news."""
+    """What the `rerun` tool returns: the post whose independent rerun is wanted, and the agent's news."""
 
     post: PostId
     joins: AgentId | None = None
-    """Who asked first, when a blind rerun of the post runs already. This request joins it: one check answers both."""
+    """Who asked first, when a rerun of the post is wanted already. This request joins it: one check answers both."""
+    news: News | None = None
+
+
+MAX_MANIFEST = 200
+"""The most files whose lines the result of `take_rerun` holds. A longer manifest is in its file only."""
+
+
+class ManifestLine(Record):
+    """One file of a clean copy: its path in the copy, its size in bytes, and the SHA-256 of its bytes."""
+
+    path: str
+    size: int
+    sha256: str
+
+
+class RerunTake(Record):
+    """
+    What the `take_rerun` tool returns: the claim, and where the clean copy of its files is.
+
+    The claim is the post as its author wrote it. A post has no field of its own for command lines, so the ones
+    that its author named are in `text` and `body`.
+    """
+
+    post: PostId
+    thread: ThreadId
+    author: AgentId
+    text: Headline
+    body: Body = ''
+    files: tuple[RelativePath, ...]
+    """The files that back the claim, as paths in `folder`."""
+    commit: str
+    """The commit that the post pins those files to. `folder` holds the author's files at this commit."""
+    folder: str
+    """
+    The clean copy: a folder of Verifold's own, outside every agent's folder, with the author's files at `commit`
+    as plain files, and nothing else. Every agent that takes this rerun gets the same folder.
+    """
+    manifest: tuple[ManifestLine, ...] = ()
+    """
+    Each file of the clean copy with its size and the SHA-256 of its bytes, as Verifold computed them from the
+    pinned commit's objects at this call. Empty when the copy has more than `MAX_MANIFEST` files.
+    """
+    manifest_files: int = 0
+    """How many files the clean copy has."""
+    manifest_file: str = ''
+    """
+    A file of Verifold's own, beside the copy, with one line for each file: the SHA-256, two spaces, and the path,
+    in the order of the paths. `shasum -a 256 -c` reads that form.
+    """
+    manifest_sha256: str = ''
+    """The SHA-256 of the bytes of `manifest_file` as Verifold wrote it at this call. The record holds it with the take."""
     news: News | None = None
 
 
@@ -631,9 +719,9 @@ class AnswerView(Record):
     """Whether the person revised the question after this proposal, so that it answers an earlier version."""
     builds_on: tuple[PostView, ...] = ()
     results: int = 0
-    """How many of `builds_on` are results with files, which a blind checker can rerun."""
+    """How many of `builds_on` are results with files, which an agent can rerun from a clean copy."""
     no_blind_rerun: tuple[PostId, ...] = ()
-    """The results among them that no blind checker has rerun."""
+    """The results among them that have no check of an independent rerun. The name is from before agents took reruns."""
 
 
 class FileText(Record):
@@ -738,7 +826,7 @@ class Brief(Record):
     alarms_waiting: int = 0
     """How many agents of the lab have an alarm that waits, the reader among them."""
     agents: tuple[AgentLine, ...] = ()
-    """The other agents that are in the lab. Blind checkers are not among them."""
+    """The other agents that are in the lab."""
     coordinator: AgentId | None = None
     """The agent that holds the lab's coordinator seat, or `None` when nobody does."""
     coordinator_open: bool = True
@@ -794,6 +882,11 @@ class Brief(Record):
     Calls from others that still need an agent, newest last. A plan that replies to a call takes it. A call in a
     side thread is here only for the thread's members, and so is an ask in `open_asks`.
     """
+    reruns_wanted: tuple[RerunLine, ...] = ()
+    """
+    The reruns that are wanted, newest last, at most `MAX_NEWS`: who asked for each, when, which agents took it,
+    and in `open_to` who can take it now.
+    """
     news: News
 
 
@@ -820,6 +913,8 @@ class Update(Record):
     """The changes that the person or the coordinator made to the agent's own profile since, oldest first."""
     renamed: tuple[RenameLine, ...] = ()
     """The other agents whose name changed since, each once, with its name now and the name that it had before."""
+    reruns: tuple[RerunLine, ...] = ()
+    """The reruns that became wanted since and that the agent can take with `take_rerun`, as in the news."""
     alarm: AlarmLine | None = None
     """The alarm that waits for the agent. `None` means that no alarm waits."""
     no_alarm: str = ''

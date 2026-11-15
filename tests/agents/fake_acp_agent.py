@@ -2,15 +2,15 @@
 A fake ACP agent for tests. It reaches the lab's board over MCP with its token, the way a real harness does.
 
 The first message makes it post in a new thread. The doorbell makes it read its posts with `wait` and answer each ask.
+It also takes each rerun that this news holds, reads the clean copy, and posts the check with a file of its own folder.
 Environment variables change its behavior: `FAKE_ACP_LOG` logs each call, `FAKE_ACP_PERMISSION` asks permission
-first, `FAKE_ACP_COMMAND` asks permission for that shell command, which the request names by its call's ID only, `FAKE_ACP_ABORT` makes the only "no" to that request an answer that stops the turn, `FAKE_ACP_QUESTION` asks its user which branch to take, as a form, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, `FAKE_ACP_SLOW_AGENT` does the
-same for an agent whose name starts with its value, and `FAKE_ACP_CHILD` starts a
+first, `FAKE_ACP_COMMAND` asks permission for that shell command, which the request names by its call's ID only, `FAKE_ACP_ABORT` makes the only "no" to that request an answer that stops the turn, `FAKE_ACP_QUESTION` asks its user which branch to take, as a form, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, and `FAKE_ACP_CHILD` starts a
 child that holds the agent's pipes open and writes its process ID to that path. `FAKE_ACP_JOB` starts a job in a
 session of its own, the way that a harness starts a background command, and writes its process ID to that path.
 `FAKE_ACP_LEAVE` makes the agent of that name leave the lab at the end of its first turn, and
 `FAKE_ACP_SLOW_AFTER_LEAVE` makes that turn take a minute more.
-`FAKE_ACP_NO_CHECK` makes a blind checker end its turn without a check, and `FAKE_ACP_SLOW_AFTER_CHECK` makes its
-turn take a minute after it posted its check.
+`FAKE_ACP_RESULT` makes the agent of that name post a result with a file and ask for a rerun of it, and
+`FAKE_ACP_NO_RERUN` makes it post the result only.
 
 Each session offers a model option `llm` and an effort option `thinking`, under their ACP categories, as real
 adapters do under their own IDs, and the modes `ask` and `auto`. As in real adapters, each model has its own effort
@@ -26,7 +26,6 @@ turn when the file is not there, and makes it. `FAKE_ACP_TURN_SECONDS` makes eac
 import asyncio
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -35,7 +34,7 @@ from typing import Literal, override
 import acp
 from acp import schema
 
-from verifold.runner.messages import DOORBELL
+from verifold.runner.messages import DOORBELL, RERUN_WANTED
 
 EFFORTS = {'default': ('default', 'low', 'high'), 'small': ('default', 'low'), 'small-model': ()}
 """The effort levels of each model."""
@@ -187,14 +186,11 @@ class FakeAgent(acp.Agent):
                 Path(once).touch()
             os._exit(3)
         await asyncio.sleep(float(os.environ.get('FAKE_ACP_TURN_SECONDS', '0')))
-        slow_agent = os.environ.get('FAKE_ACP_SLOW_AGENT')
-        if os.environ.get('FAKE_ACP_SLOW') or (slow_agent and self._name.startswith(slow_agent)):
+        if os.environ.get('FAKE_ACP_SLOW'):
             await asyncio.sleep(60)
         # The doorbell can follow other news, such as a restart of Verifold.
-        if text.endswith(DOORBELL):
+        if text.endswith((DOORBELL, RERUN_WANTED)):
             await self._answer_news()
-        elif ', a blind checker in a Verifold lab.' in text.partition('\n')[0]:
-            await self._rerun(text)
         elif os.environ.get('FAKE_ACP_RESULT') == self._name:
             await self._post_result()
         else:
@@ -262,31 +258,11 @@ class FakeAgent(acp.Agent):
             {'kind': 'result', 'text': 'sorted() is 11.8x faster.', 'new_thread': 'Speed', 'files': ['result.txt']},
         )
         post = posted.get('post')
-        if isinstance(post, dict):
+        if isinstance(post, dict) and not os.environ.get('FAKE_ACP_NO_RERUN'):
             await self._call('rerun', {'post': post.get('id')})
 
-    async def _rerun(self, text: str) -> None:
-        if os.environ.get('FAKE_ACP_NO_CHECK'):
-            return
-        thread = re.search(r'thread (t-\d+)', text)
-        target = re.search(r'as a reply to (p-\d+)', text)
-        claimed = (Path.cwd() / 'result.txt').read_text().strip()
-        (Path.cwd() / 'rerun.txt').write_text(claimed)
-        request: dict[str, object] = {
-            'kind': 'check',
-            'text': f'Reran it blind: {claimed}.',
-            'thread': thread.group(1) if thread else '',
-            'reply_to': target.group(1) if target else '',
-            'outcome': 'holds',
-            'method': 'rerun',
-            'files': ['rerun.txt'],
-        }
-        await self._call('post', request)
-        if os.environ.get('FAKE_ACP_SLOW_AFTER_CHECK'):
-            await asyncio.sleep(60)
-
     async def _answer_news(self) -> None:
-        from verifold.protocol.join import Update  # noqa: PLC0415
+        from verifold.protocol.join import RerunTake, Update  # noqa: PLC0415
 
         news = Update.model_validate(await self._call('wait', {'timeout_seconds': 0}))
         # Only asks get an answer. An answer to every post would make two fake agents answer each other without end.
@@ -298,6 +274,21 @@ class FakeAgent(acp.Agent):
                 'reply_to': post.id,
             }
             await self._call('post', request)
+        # The agent takes each rerun that its news holds, reads the clean copy, reruns in its own folder, and
+        # posts the check with a file of its own.
+        for wanted in news.reruns:
+            taken = RerunTake.model_validate(await self._call('take_rerun', {'post': wanted.post}))
+            claimed = (Path(taken.folder) / taken.files[0]).read_text().strip()
+            (Path.cwd() / 'rerun.txt').write_text(claimed)
+            check: dict[str, object] = {
+                'kind': 'check',
+                'text': f'Reran it from a clean copy: {claimed}.',
+                'reply_to': taken.post,
+                'outcome': 'holds',
+                'method': 'rerun',
+                'files': ['rerun.txt'],
+            }
+            await self._call('post', check)
 
 
 def _select(

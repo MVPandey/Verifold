@@ -10,7 +10,7 @@ from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import MAX_OFFER_FILES, FileEvidence, FileOffer
 from verifold.protocol.threads import MAX_TITLE
-from verifold.server.errors import BlindCheck, EvidenceRejected, OutOfTime
+from verifold.server.errors import EvidenceRejected, OutOfTime
 from verifold.server.join import join_server
 from verifold.server.lab import Lab
 from verifold.server.member import Member
@@ -321,15 +321,7 @@ async def test_a_members_offer_pins_the_files_that_it_names(asked: Lab) -> None:
     assert len(pinned) == 1
 
 
-async def test_a_blind_checker_a_member_without_a_pin_and_the_person_offer_nothing(asked: Lab) -> None:
-    posted = await asked.post(PostRequest(kind='result', text='It holds.', thread='t-1'), 'ada')
-    checker = Agent(
-        id='checker-1', name='Checker 1', harness='fake', model=ModelSpec(family='openai'), checks=posted.post.id
-    )
-    await asked.join(checker)
-
-    with pytest.raises(BlindCheck, match='cannot read the board'):
-        await Member(asked, 'checker-1', pin=pin).offer('d-1', ('answer.md',), 'The answer.')
+async def test_a_member_without_a_pin_and_the_person_offer_nothing(asked: Lab) -> None:
     with pytest.raises(EvidenceRejected, match='cannot pin files'):
         await Member(asked, 'bo').offer('d-1', ('answer.md',), 'The answer.')
     with pytest.raises(RejectedEvent, match='An agent offers files'):

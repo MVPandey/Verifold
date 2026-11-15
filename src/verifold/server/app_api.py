@@ -65,6 +65,7 @@ from verifold.society.errors import NotFound, SocietyError
 from verifold.society.identity import post_line, seat_label
 from verifold.society.lifecycle import alarm_line, close_count, lab_state
 from verifold.society.lines import lines_of
+from verifold.society.reruns import reruns_wanted
 from verifold.society.reviewers import seats
 from verifold.society.standing import agreed, closing
 from verifold.society.turns import before
@@ -460,6 +461,7 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
         needs_you=len(waiting),
         waits=waiting,
         thread_needs=thread_needs(board, needs, waiting),
+        reruns_wanted=reruns_wanted(board),
         reviewer_seats=seats(board),
         reviewer_seats_set=board.settings.reviewers.seats,
         ends_at=board.ends_at,

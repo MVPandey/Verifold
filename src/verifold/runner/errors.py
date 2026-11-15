@@ -13,9 +13,5 @@ class NoAgentFolder(RunnerError):
     """A folder of the lab's agents is missing, or it is a link to another place and not a real folder of the lab."""
 
 
-class NoCrew(RunnerError):
-    """A rerun request found no agent that Verifold started, so it has no harness for a blind checker."""
-
-
 class ModelRefused(RunnerError):
     """A harness refused the model that the lab set for an agent, such as a model ID that the person typed."""

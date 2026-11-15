@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from verifold.protocol.ids import AgentId, CommitId
+from verifold.protocol.ids import AgentId
 from verifold.runner.errors import NoAgentFolder, NoFileManager
 from verifold.runner.git import GitError, commit_of, git
 
@@ -123,20 +123,3 @@ async def _exclude_lab_folder(project: Path) -> None:
     if rule not in lines:
         exclude.parent.mkdir(parents=True, exist_ok=True)
         exclude.write_text('\n'.join([*lines, rule]) + '\n')
-
-
-async def checker_folder(project: Path, checker_id: AgentId, source: Path, ref: str, commit: CommitId) -> Path:
-    """
-    Return a blind checker's folder: a new repository with the author's files at the commit that the evidence cites.
-
-    The folder holds only what the author's snapshot holds, fetched from the author's folder. A later call returns the
-    same folder.
-    """
-    folder = agents_folder(project) / checker_id
-    if folder.exists():
-        return folder
-    folder.mkdir(parents=True)
-    await git('init', '--quiet', cwd=folder)
-    await git('fetch', '--quiet', str(source), ref, cwd=folder)
-    await git('checkout', '--quiet', '--detach', commit, cwd=folder)
-    return folder

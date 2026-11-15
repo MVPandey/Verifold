@@ -15,7 +15,6 @@ from pathlib import Path
 from verifold.protocol.agents import Agent
 from verifold.protocol.events import AlarmSet
 from verifold.protocol.ids import PERSON
-from verifold.protocol.posts import Post
 from verifold.protocol.settings import AtTimeLimit
 from verifold.society.board import Board
 from verifold.society.deliverables import stated
@@ -28,8 +27,8 @@ DOORBELL = 'New posts for you on the lab board.'
 DEPARTURE = 'An agent that you named or answered on the lab board has left the lab.'
 """The message that wakes an agent after it ended its turn, when no post came and such an agent left."""
 
-JOBS_ENDED = 'The processes that you left running when your turn ended have ended.'
-"""The message that wakes an agent with one job, which ended its turn while its own processes still ran."""
+RERUN_WANTED = 'An independent rerun that you can take is wanted on the lab board.'
+"""The message that wakes an agent after it ended its turn, when no post came and it can take a rerun that is wanted."""
 
 
 IN_TURN = 'while you were in a turn'
@@ -212,8 +211,9 @@ def invitation(start: str, url: str, token: str, folder: Path) -> str:
                 'cannot back a post.'
             ),
             (
-                'Verifold commits the whole folder when a post names files, and a blind checker gets a copy of '
-                'it. So a token or MCP settings in this folder reach those commits and each blind checker.'
+                'Verifold commits the whole folder when a post names files, and an agent that takes a rerun of '
+                'such a post gets a copy of that commit. So a token or MCP settings in this folder reach those '
+                'commits and each such agent.'
             ),
             '',
             (
@@ -243,38 +243,3 @@ def time_facts(ends_at: datetime | None, jobs: AtTimeLimit) -> str:
     """Return what an agent that waited for more time gets: the lab's new end, and what happened to its processes."""
     until = f' The lab now ends at {_utc(ends_at)}.' if ends_at else ''
     return f'The person gave the lab more time.{until}{JOBS_AFTER_TIME[jobs]}'
-
-
-def rerun_message(post: Post, checker: Agent, folder: Path) -> str:
-    """
-    Return a blind checker's first message: the claim, its files, where they are, and the post that a check answers.
-
-    It holds facts only, and nothing from the claim's thread. It names no norms file: the claim's author can write
-    that file, so it could carry a hint to the checker. What the checker's one move means is protocol, so the
-    message says what a `check` with the method `rerun` records.
-    """
-    files = ', '.join(item.path for item in post.evidence)
-    return '\n'.join(
-        [
-            (
-                f'You are {checker.name} ({checker.id}), a blind checker in a Verifold lab. An agent of the lab '
-                f'asked for a blind rerun of post {post.id}, which makes this claim:'
-            ),
-            f'"{post.text}"',
-            (
-                f"Your folder is {folder}. It is a copy of the folder of the claim's author at the version that "
-                f'the claim cites. These files in it back the claim: {files}.'
-            ),
-            (
-                'A blind checker gets the claim and its files, and nothing else from the board: the board refuses '
-                'every read from you.'
-            ),
-            (
-                f'The `post` tool of the MCP server `verifold` takes one `check` from you, in thread {post.thread}, '
-                f'as a reply to {post.id}. A `check` records `outcome`, which is `holds` or `fails`, `method`, '
-                'and in `files` the files of your folder that back it. With the `method` `rerun`, a check '
-                'records that its author ran the files of the claim itself and compared the outcome with the '
-                'claim, without the thread. The check ends your part in the lab.'
-            ),
-        ]
-    )

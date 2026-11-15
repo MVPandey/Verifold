@@ -1,6 +1,6 @@
 /** What the lab page says about the person's deliverables: the counts, each state, and each offer. */
 
-import type { AgentView, Deliverable, DeliverableOffer, LabView } from '../api/types.ts';
+import type { AgentView, Deliverable, DeliverableOffer, LabView, RerunLine } from '../api/types.ts';
 import { authorName } from './agents.ts';
 import type { Tab } from './coordinator.ts';
 import { dayClock } from './format.ts';
@@ -102,7 +102,10 @@ export function authorLeft(offer: DeliverableOffer, agents: readonly AgentView[]
 }
 
 /** What a form needs from the lab to say what its change does: whether a close stands, and the last post about a change. */
-export type LabNow = Pick<LabView, 'close' | 'deliverables_told_at'>;
+export type LabNow = Pick<LabView, 'close' | 'deliverables_told_at'> & {
+  /** The reruns that are wanted in the lab. An offer has files, so an agent can rerun it as any result. */
+  readonly reruns_wanted?: readonly RerunLine[];
+};
 
 /** How long after a post about a new sentence or a removal the next such change sends no post, as `TOLD_WINDOW` in the server. */
 const TOLD_WINDOW_MS = 60_000;
@@ -145,4 +148,16 @@ export type Docked = Tab | 'deliver' | null;
  */
 export function isDocked(panel: Docked, hasCoordinator: boolean): boolean {
   return panel === 'deliver' || (panel !== null && hasCoordinator);
+}
+
+/**
+ * Return what the reruns and checks of an offer say, in a few words, or `null` when there is nothing to say: a
+ * rerun is wanted, an agent took it, an independent rerun held the offer up, or an agent's check holds. A check
+ * that failed shows as a dispute, with its link.
+ */
+export function rerunFact(offer: DeliverableOffer, wanted: readonly RerunLine[]): string | null {
+  const line = wanted.find((item) => item.post === offer.post);
+  if (line) return line.taken_by.length > 0 ? 'An agent took its rerun' : 'A rerun is wanted';
+  if (offer.standing === 'held_up') return 'Held up by an independent rerun';
+  return offer.standing === 'checked' ? 'Checked by an agent' : null;
 }

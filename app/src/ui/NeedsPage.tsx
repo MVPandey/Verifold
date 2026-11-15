@@ -60,7 +60,7 @@ function NeedCard(props: {
   const [error, setError] = useState<string | null>(null);
   const wordsId = useId();
   const { post, at } = props.item;
-  // Two checkers can ask at once, so each keeps its own name here.
+  // Each agent that asks keeps its own name here.
   const name = ownName(props.agents, post.author);
   const who = author(props.agents, post.author);
   const request = harnessRequest(post);

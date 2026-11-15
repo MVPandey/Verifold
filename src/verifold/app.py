@@ -50,10 +50,10 @@ from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shar
 from verifold.runner.errors import NoAgentFolder, NoFileManager
 from verifold.runner.folders import LAB_FOLDER, agent_folder, agents_folder, open_folder, real_folder, tracked_lab_files
 from verifold.runner.git import GitError, git
-from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, running_jobs, sweep
+from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
 from verifold.runner.messages import invitation, start_message
 from verifold.runner.permissions import Refusals
-from verifold.runner.reruns import Crew, Reruns
+from verifold.runner.reruns import CleanCopies
 from verifold.runner.session import Place, SessionOptions, offer_of
 from verifold.runner.snapshots import pin
 from verifold.server.activity import Activity
@@ -184,6 +184,8 @@ class Host:
     ) -> None:
         """Prepare a host for the folder at `project`. Call `attach` before a lab starts."""
         self._project = project
+        self._copies = CleanCopies(project)
+        """Gives the clean copies for reruns, each verified against the pinned commit at every take."""
         self._desktop = True
         self._record = record
         self._catalog = catalog
@@ -604,7 +606,6 @@ class Host:
             if not lab.board.gone(agent.id):
                 await self._seat_guest(lab, agent, digests.get(agent.id))
         group.create_task(self._forget_guests(lab))
-        group.create_task(Reruns(lab, self._members, self._project, partial(self._crew, lab), self._supervise).run())
 
     async def _forget_guests(self, lab: Lab) -> None:
         # Drops the token digest of each invited agent that left, whoever caused it. The board refuses the agent
@@ -622,8 +623,8 @@ class Host:
             await lab.wait_for_change(board.seq)
 
     def _workers(self, lab: Lab) -> tuple[Agent, ...]:
-        # The lab's agents that Verifold runs: no blind checkers, no invited agents, no agent that left, and no
-        # agent of a harness that this computer lacks.
+        # The lab's agents that Verifold runs: no invited agents, no agent that left, no agent of a harness that
+        # this computer lacks, and no checker of a record from before agents took reruns.
         return tuple(
             entry.agent
             for entry in lab.board.agents
@@ -632,12 +633,6 @@ class Host:
             and entry.agent.harness in self._catalog
             and not lab.board.gone(entry.agent.id)
         )
-
-    def _crew(self, lab: Lab) -> Crew:
-        # A checker takes the model of an on-call seat only when the lab has no other seat of that family.
-        workers = self._workers(lab)
-        on_call = frozenset(agent.id for agent in workers if lab.board.on_call(agent.id))
-        return _crew(workers, self._catalog, auto_mode=lab.board.opened.auto_mode, on_call=on_call)
 
     async def _run_agent(self, lab: Lab, agent: Agent, *, under_way: bool) -> None:
         group, settings = self._group, self._settings
@@ -921,6 +916,7 @@ class Host:
             agent.id,
             pin=partial(pin, folder, agent.id),
             seen=before(board, agent.id).seen,
+            copies=self._copies,
             adds=self.add_seat,
             seat_ok=self.check_seat,
         )
@@ -930,6 +926,7 @@ class Host:
             (
                 any(watch.agent == agent.id for watch in board.watches),
                 any(rerun.by == agent.id for rerun in board.reruns),
+                any(take.agent == agent.id for take in board.takes),
                 any(profile.agent == agent.id for profile in board.profiles),
                 any(entry.by == agent.id for entry in board.coordinators),
             )
@@ -937,18 +934,20 @@ class Host:
         await self._activity.invite(agent.id, 'here' if called else 'invited')
 
     def _shared(self) -> Shared:
-        return Shared(activity=self._activity, refusals=self._refusals, has_jobs=self._has_jobs)
-
-    async def _has_jobs(self, agent: str) -> bool:
-        return bool(await asyncio.to_thread(running_jobs, self._project, agent))
+        return Shared(activity=self._activity, refusals=self._refusals)
 
     async def _seat(self, lab: Lab, agent: Agent, start: str) -> tuple[Member, AgentSetup]:
         folder = await agent_folder(self._project, agent.id)
         # The seat starts at what the record says that the agent had seen. So after a restart, the posts for the
         # agent that came since reach it by the usual rules.
-        seen = before(lab.board, agent.id).seen
         member = Member(
-            lab, agent.id, pin=partial(pin, folder, agent.id), seen=seen, adds=self.add_seat, seat_ok=self.check_seat
+            lab,
+            agent.id,
+            pin=partial(pin, folder, agent.id),
+            seen=before(lab.board, agent.id).seen,
+            copies=self._copies,
+            adds=self.add_seat,
+            seat_ok=self.check_seat,
         )
         setup = AgentSetup(
             agent=agent,
@@ -961,24 +960,6 @@ class Host:
             start=start,
         )
         return member, setup
-
-    async def _supervise(self, member: Member, setup: AgentSetup, done: Callable[[Board], bool]) -> None:
-        if self._settings is None:
-            return
-        limit = self._settings.turn_timeout
-        try:
-            async with asyncio.timeout(limit):
-                await AgentLoop(member, setup, self._settings, done, self._shared()).run()
-        except TimeoutError:
-            # A checker that runs too long stops, and the lab goes on. Its post stays unchecked, and the board says why.
-            error = f'The check ran past {limit:g} seconds, so Verifold stopped the checker.'
-            checked = done(member.lab.board)
-            await member.lab.end_turn(_stopped_checker(setup.agent.id, error, checked=checked, seconds=limit))
-            return
-        if not done(member.lab.board):
-            # The failed rerun frees its requests, so a member can ask again and get another checker.
-            error = 'The checker stopped without a check.'
-            await member.lab.end_turn(_stopped_checker(setup.agent.id, error, checked=False))
 
 
 async def serve(
@@ -1109,11 +1090,6 @@ async def _closed(serving: asyncio.Task[None]) -> None:
         await serving
 
 
-def _stopped_checker(checker: str, error: str, *, checked: bool, seconds: float = 0) -> TurnSummary:
-    # The rerun failed only when the checker stopped before it posted its check.
-    return TurnSummary(agent=checker, seconds=seconds, usage=Usage(), error=error, rerun_failed=not checked)
-
-
 def _kept(path: Path) -> Guests:
     # What the guests file holds. A file that is not valid holds nothing for this run, so its invitations are void
     # until the person invites the agents again. The file stays as it is.
@@ -1126,7 +1102,7 @@ def _kept(path: Path) -> Guests:
 NO_HARNESS = 'Its harness is not on this computer.'
 """What the app shows for an agent whose harness this computer lacks, so that Verifold cannot start it."""
 
-RESERVED_NAMES = frozenset({'agent', 'checker', 'blind rerun', 'you', PERSON})
+RESERVED_NAMES = frozenset({'agent', 'checker', 'blind rerun', 'independent rerun', 'you', PERSON})
 """The names that the app and the board use for something else."""
 NUMBERED_NAME = re.compile(r'(agent|checker)[ -]?\d+')
 """The form of the names and IDs that Verifold gives, such as "Agent 3", "agent-3", and "Checker 12"."""
@@ -1221,30 +1197,6 @@ def _options(agent: Agent, harness: HarnessEntry, *, auto_mode: bool) -> Session
     kept = agent.auto_mode or harness.auto_mode_before
     mode = agent.mode or (kept if auto_mode else None)
     return SessionOptions(model=agent.model.name, effort=agent.model.effort, mode=mode, auto_mode=auto_mode)
-
-
-def _crew(
-    agents: tuple[Agent, ...],
-    catalog: Mapping[str, HarnessEntry],
-    *,
-    auto_mode: bool,
-    on_call: frozenset[AgentId] = frozenset(),
-) -> Crew:
-    # One entry for each harness and model family, with the model and effort of the first agent that has both. The
-    # agents of on-call seats come last, so a checker takes the model of an on-call seat only when no other seat has
-    # that family. The entry carries the agent's family, which the person can state for a seat. Checkers come from
-    # this crew. A checker follows the auto mode answer, not a worker's mode, because it must be able to run the
-    # work again.
-    first: dict[tuple[str, str], Agent] = {}
-    for agent in sorted(agents, key=lambda agent: agent.id in on_call):
-        first.setdefault((agent.harness, agent.model.family.strip().casefold()), agent)
-    return tuple(
-        (
-            catalog[harness].model_copy(update={'family': agent.model.family}),
-            _options(agent.model_copy(update={'mode': None}), catalog[harness], auto_mode=auto_mode),
-        )
-        for (harness, _), agent in first.items()
-    )
 
 
 def _written(value: int | str | SetupDefaults | None) -> JsonValue:
