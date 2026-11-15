@@ -485,7 +485,8 @@ async def test_an_agent_that_left_stops_for_good_and_an_invited_one_loses_its_to
     guests = project / '.verifold' / 'guests.json'
 
     async with serving(project, TWO_AGENTS) as client:
-        # Both first turns must end, so that no agent is in a turn when the test removes it.
+        # Both first turns must be over. An agent that still ran would read Reader's post in that turn, and then no
+        # doorbell rings for it after the restart.
         await until(lambda: len(turns(project)) == 2, timeout=60)
         invited = (await client.post('/invitations', json={'name': 'Reader'})).json()
         url, token, _ = invited_parts(invited['text'])

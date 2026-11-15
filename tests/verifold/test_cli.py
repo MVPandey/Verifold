@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 from collections.abc import Iterator
+from functools import partial
 from importlib.metadata import version
 from pathlib import Path
 from typing import override
@@ -18,7 +19,7 @@ from fakes import FAKE_HARNESS
 
 from verifold import DISTRIBUTION
 from verifold.app import ServeHooks, serve
-from verifold.cli import _until_stopped, main
+from verifold.cli import OPEN_SIGNAL, _announce, _open_again, _until_stopped, main
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import StartRequest
@@ -26,7 +27,7 @@ from verifold.runner.environment import harness_environment
 from verifold.runner.jobs import Job, Sweep
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.store.record_file import RecordFile
-from verifold.store.server_file import ServerProcess
+from verifold.store.server_file import ServerProcess, mark_opens
 
 
 def test_version_prints_the_installed_version(capsys: pytest.CaptureFixture[str]) -> None:
@@ -522,3 +523,109 @@ def test_a_signal_that_nohup_ignores_stays_ignored(monkeypatch: pytest.MonkeyPat
 
     assert during == [signal.SIG_IGN]
     assert after is signal.SIG_IGN
+
+
+def test_open_says_when_no_server_runs_for_the_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit, match='No Verifold server runs for this folder'):
+        main(['open'])
+
+
+def test_open_refuses_a_server_that_would_stop_on_the_signal(
+    lab_folder: Path, started: list[subprocess.Popen[bytes]]
+) -> None:
+    server = named_server(lab_folder, started, 'import time; time.sleep(60)')
+
+    with pytest.raises(SystemExit, match='older Verifold'):
+        main(['open'])
+
+    assert server.poll() is None
+
+
+def test_open_asks_the_server_to_open_the_lab(
+    lab_folder: Path, started: list[subprocess.Popen[bytes]], capsys: pytest.CaptureFixture[str]
+) -> None:
+    script = (
+        'import signal, sys, time\n'
+        "signal.signal(signal.SIGUSR1, lambda *_: (print('opened', flush=True), sys.exit(0)))\n"
+        "print('ready', flush=True)\n"
+        'time.sleep(60)'
+    )
+    server = named_server(lab_folder, started, script)
+    assert server.stdout is not None
+    assert server.stdout.readline() == b'ready\n'
+    mark_opens(lab_folder / 'server.json')
+
+    main(['open'])
+
+    assert server.stdout.readline() == b'opened\n'
+    assert 'Asked the server to show the lab again' in capsys.readouterr().out
+
+
+def test_open_says_when_the_server_cannot_be_reached(
+    lab_folder: Path, started: list[subprocess.Popen[bytes]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    named_server(lab_folder, started, 'import time; time.sleep(60)')
+    mark_opens(lab_folder / 'server.json')
+
+    def refuse(*_: int) -> None:
+        raise PermissionError('not yours')
+
+    # The patch ends before the fixture kills the stand-in, which uses the same call.
+    with monkeypatch.context() as patch:
+        patch.setattr('verifold.cli.os.kill', refuse)
+        with pytest.raises(SystemExit, match="Can't reach the server"):
+            main(['open'])
+
+
+async def test_the_server_opens_the_lab_again_on_the_open_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    folder = tmp_path / '.verifold'
+    folder.mkdir()
+    this = psutil.Process()
+    (folder / 'server.json').write_text(ServerProcess(pid=this.pid, started=this.create_time()).model_dump_json())
+    opened: list[str] = []
+    monkeypatch.setattr('verifold.cli.webbrowser.open', opened.append)
+    links: list[str] = []
+
+    async def serving() -> None:
+        _announce(links, 'http://127.0.0.1:1/#token=t', open_browser=False)
+        os.kill(os.getpid(), OPEN_SIGNAL)
+        await asyncio.sleep(0.05)
+
+    await _until_stopped(serving(), partial(_open_again, links, open_browser=True))
+
+    assert opened == ['http://127.0.0.1:1/#token=t']
+    assert capsys.readouterr().out.count('Open the lab: http://127.0.0.1:1/#token=t') == 2
+    assert ServerProcess.model_validate_json((folder / 'server.json').read_text()).opens
+
+
+def test_marking_a_missing_server_file_does_nothing(tmp_path: Path) -> None:
+    mark_opens(tmp_path / 'server.json')
+
+    assert not (tmp_path / 'server.json').exists()
+
+
+def test_a_server_without_a_browser_only_prints_the_link_again(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    opened: list[str] = []
+    monkeypatch.setattr('verifold.cli.webbrowser.open', opened.append)
+
+    _open_again(['http://127.0.0.1:1/#token=t'], open_browser=False)
+
+    assert opened == []
+    assert 'Open the lab: http://127.0.0.1:1/#token=t' in capsys.readouterr().out
+
+
+def test_marking_leaves_no_half_written_server_file(tmp_path: Path) -> None:
+    path = tmp_path / 'server.json'
+    path.write_text(ServerProcess(pid=1, started=2.0).model_dump_json())
+
+    mark_opens(path)
+
+    assert ServerProcess.model_validate_json(path.read_text()).opens
+    assert [entry.name for entry in tmp_path.iterdir()] == ['server.json']
