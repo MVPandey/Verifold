@@ -49,9 +49,12 @@ def mark_opens(path: Path) -> None:
     """Note in `path` that this server opens the lab on the open signal. Without the file, do nothing."""
     try:
         named = ServerProcess.model_validate_json(path.read_text())
+        # A reader, such as `verifold stop`, must never see half a file.
+        fresh = path.with_name(f'{path.name}.new')
+        fresh.write_text(named.model_copy(update={'opens': True}).model_dump_json())
+        fresh.replace(path)
     except (OSError, ValidationError):
         return
-    path.write_text(named.model_copy(update={'opens': True}).model_dump_json())
 
 
 def named_server(path: Path) -> ServerProcess | None:

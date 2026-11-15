@@ -560,7 +560,7 @@ def test_open_asks_the_server_to_open_the_lab(
     main(['open'])
 
     assert server.stdout.readline() == b'opened\n'
-    assert 'Asked the server to open the lab' in capsys.readouterr().out
+    assert 'Asked the server to show the lab again' in capsys.readouterr().out
 
 
 def test_open_says_when_the_server_cannot_be_reached(
@@ -596,7 +596,7 @@ async def test_the_server_opens_the_lab_again_on_the_open_signal(
         os.kill(os.getpid(), OPEN_SIGNAL)
         await asyncio.sleep(0.05)
 
-    await _until_stopped(serving(), partial(_open_again, links))
+    await _until_stopped(serving(), partial(_open_again, links, open_browser=True))
 
     assert opened == ['http://127.0.0.1:1/#token=t']
     assert capsys.readouterr().out.count('Open the lab: http://127.0.0.1:1/#token=t') == 2
@@ -607,3 +607,25 @@ def test_marking_a_missing_server_file_does_nothing(tmp_path: Path) -> None:
     mark_opens(tmp_path / 'server.json')
 
     assert not (tmp_path / 'server.json').exists()
+
+
+def test_a_server_without_a_browser_only_prints_the_link_again(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    opened: list[str] = []
+    monkeypatch.setattr('verifold.cli.webbrowser.open', opened.append)
+
+    _open_again(['http://127.0.0.1:1/#token=t'], open_browser=False)
+
+    assert opened == []
+    assert 'Open the lab: http://127.0.0.1:1/#token=t' in capsys.readouterr().out
+
+
+def test_marking_leaves_no_half_written_server_file(tmp_path: Path) -> None:
+    path = tmp_path / 'server.json'
+    path.write_text(ServerProcess(pid=1, started=2.0).model_dump_json())
+
+    mark_opens(path)
+
+    assert ServerProcess.model_validate_json(path.read_text()).opens
+    assert [entry.name for entry in tmp_path.iterdir()] == ['server.json']

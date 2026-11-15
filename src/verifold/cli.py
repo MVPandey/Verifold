@@ -64,7 +64,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         links: list[str] = []
         announce = partial(_announce, links, open_browser=not args.no_browser, plan=_plan(start) if start else None)
         serving = serve(Path.cwd(), start, hooks=ServeHooks(ready=announce, swept=_report))
-        asyncio.run(_until_stopped(serving, partial(_open_again, links)))
+        asyncio.run(_until_stopped(serving, partial(_open_again, links, open_browser=not args.no_browser)))
     except KeyboardInterrupt:
         pass  # Ctrl+C came before the event loop took over the signal.
     except (BaseExceptionGroup, *_REPORTED) as error:
@@ -236,10 +236,13 @@ def _announce(links: list[str], link: str, *, open_browser: bool, plan: str | No
     mark_opens(Path.cwd() / LAB_FOLDER / SERVER_FILE)
 
 
-def _open_again(links: list[str]) -> None:
+def _open_again(links: list[str], *, open_browser: bool) -> None:
+    # A server that started with --no-browser only prints the link: on a computer without a desktop, a text browser
+    # would take the terminal and block the server.
     for link in links[-1:]:
         _say(f'Open the lab: {link}')
-        webbrowser.open(link)
+        if open_browser:
+            webbrowser.open(link)
 
 
 def _open() -> None:
@@ -257,7 +260,10 @@ def _open() -> None:
         os.kill(server.pid, OPEN_SIGNAL)
     except OSError as error:
         sys.exit(f"verifold: Can't reach the server ({server.pid}): {error}")
-    _say('Asked the server to open the lab in your browser. Its terminal shows the link too.')
+    _say(
+        'Asked the server to show the lab again. Its terminal prints the link, and it opens the lab in your browser '
+        'unless it started with --no-browser.'
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
