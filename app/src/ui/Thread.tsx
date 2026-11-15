@@ -7,6 +7,7 @@ import { author, authorName, called } from '../model/agents.ts';
 import { clock } from '../model/format.ts';
 import { builtOnLabel, standingChip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
+import { offersReplyHint } from '../model/deliverables.ts';
 import { sideReplyHint } from '../model/side.ts';
 import { MAX_RERUNS, wantedLine } from '../model/status.ts';
 import { act, isClaim, rerunChecks, rows, standingIn } from '../model/turns.ts';
@@ -26,6 +27,8 @@ interface Around {
   readonly question: string | null;
   /** Whether the lab's agents say that it is done, so that a side thread's reply box says what a reply does. */
   readonly done?: boolean;
+  /** Whether the lab is open, closing, or closed, for what the person's post in a thread of offers does. */
+  readonly state?: 'open' | 'closing' | 'closed';
   /** The reruns that are wanted in the lab. */
   readonly reruns: readonly RerunLine[];
   /** How many reviewer seats the lab has, for what a wanted rerun says about who can take it. */
@@ -69,7 +72,9 @@ export function Turns(
         hint={
           props.view.members.length > 0
             ? sideReplyHint(props.done ?? false)
-            : 'Agents that watch this thread get your reply. When nobody watches it, every agent does.'
+            : props.view.person_reaches
+              ? offersReplyHint(props.view.person_reaches, props.agents, props.state ?? 'open')
+              : 'Agents that watch this thread get your reply. When nobody watches it, every agent does.'
         }
         onSend={onSend}
       />

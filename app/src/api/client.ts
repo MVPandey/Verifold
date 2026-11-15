@@ -2,6 +2,7 @@ import type {
   AgentChoice,
   AnswerView,
   ConversationView,
+  DeliverableDecision,
   FileText,
   FolderView,
   Invitation,
@@ -58,6 +59,22 @@ export interface Api {
   setTime(minutes: number): Promise<LabView>;
   /** Revise the lab's question. `note` says why, and it can be empty. */
   reviseQuestion(question: string, note: string): Promise<LabView>;
+  /** State one more deliverable: what the person wants to hold at the end of the lab, as one sentence. */
+  addDeliverable(text: string): Promise<LabView>;
+  /** Give a deliverable another sentence. The record keeps the earlier one. */
+  changeDeliverable(id: string, text: string): Promise<LabView>;
+  /** Remove a deliverable. Its offers stay on the board as posts. */
+  removeDeliverable(id: string): Promise<LabView>;
+  /**
+   * Decide about an offer of files for a deliverable: accept it, ask its author for changes, or take the
+   * acceptance back. `text` says what to change, and the offer's author gets it as a reply.
+   */
+  decideDeliverable(
+    id: string,
+    decision: DeliverableDecision,
+    offer: string,
+    text?: string,
+  ): Promise<LabView>;
   /** Add the agents of one seat to the lab that runs. */
   addAgents(choice: AgentChoice): Promise<LabView>;
   /** Put an agent's seat on call or take it off, and give or take the coordinator seat or a reviewer seat. */
@@ -140,6 +157,9 @@ export function createApi(
         reruns_wanted: lab.reruns_wanted ?? [],
         reviewer_seats: lab.reviewer_seats ?? 0,
         reviewer_seats_set: lab.reviewer_seats_set ?? null,
+        deliverables: lab.deliverables ?? [],
+        removed_deliverables: lab.removed_deliverables ?? [],
+        deliverables_told_at: lab.deliverables_told_at ?? null,
         agents: lab.agents.map((view) => ({
           ...view,
           agent: { ...view.agent, given_role: view.agent.given_role ?? '' },
@@ -203,6 +223,16 @@ export function createApi(
     },
     setTime: (minutes) => request('/time', { minutes }),
     reviseQuestion: (question, note) => request('/question', { question, note }),
+    addDeliverable: (text) => request('/deliverables', { text }),
+    changeDeliverable: (id, text) => request(`/deliverables/${encodeURIComponent(id)}`, { text }),
+    removeDeliverable: (id) =>
+      request(`/deliverables/${encodeURIComponent(id)}`, undefined, 'DELETE'),
+    decideDeliverable: (id, decision, offer, text) =>
+      request(`/deliverables/${encodeURIComponent(id)}/decision`, {
+        decision,
+        offer,
+        ...(text ? { text } : {}),
+      }),
     addAgents: (choice) => request('/agents', choice),
     changeSeat: (agentId, change) => request(`/agents/${encodeURIComponent(agentId)}/seat`, change),
     changeProfile: (agentId, change) =>

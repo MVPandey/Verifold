@@ -37,7 +37,7 @@ from verifold.protocol.agents import (
     ValueId,
 )
 from verifold.protocol.events import MAX_ALARM_MINUTES, AgentLeft, Reason
-from verifold.protocol.ids import AgentId, PostId, ThreadId
+from verifold.protocol.ids import AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
     AlarmResult,
     Brief,
@@ -54,7 +54,17 @@ from verifold.protocol.join import (
     WatchResult,
 )
 from verifold.protocol.moves import LabSetting, Note, Question
-from verifold.protocol.posts import Body, CheckMethod, Choice, Headline, Helper, Outcome, PostKind, RelativePath
+from verifold.protocol.posts import (
+    MAX_OFFER_FILES,
+    Body,
+    CheckMethod,
+    Choice,
+    Headline,
+    Helper,
+    Outcome,
+    PostKind,
+    RelativePath,
+)
 from verifold.protocol.threads import Title
 from verifold.server.errors import ProfileRejected, ServerError, UnknownAgent
 from verifold.server.member import Member
@@ -229,6 +239,27 @@ a close stands or such a post went out in the minute before.
   to the person as the answer so far, with its `files`, and opens each file as a page.
 - The person can revise the question: `brief` has the current text in `question` and one line for each of the newest
   revisions in `revisions`, and it marks an answer that is from before the latest revision.
+- The person can state deliverables: what the person wants to hold at the end of the lab, each as one sentence.
+  Only the person states one, changes its sentence, and removes it, at setup and while the lab runs.
+  `deliverables` in `brief` lists them, each with its state and the offers for it. In a lab that runs, a post from
+  the person says that a deliverable is new, in the question's thread when the lab has one. That post names
+  nobody, so it is for every agent that is not on call. A post from the person also says that a sentence changed
+  or that a deliverable is gone, unless a close stands or such a post went out in the minute before.
+- `offer` offers files of your folder for one deliverable, pinned as the `files` of a post are. The offers for a
+  deliverable are posts of the kind `offer` in one thread, which the first offer opens and which has the
+  deliverable's sentence in its title. A post in that thread is for the agents that watch it, and for an agent
+  that it names, replies to, or builds on. No post of an agent there is for every agent, and the thread takes no
+  `proposal` and no `close`. A post from the person there that names nobody and replies to no post is for the
+  agents that offered files there or said with `watch` that they watch it. When none of them is in the lab, it
+  is for every agent that is not on call, and only then it opens a closed lab again. An agent's newer offer for
+  the same deliverable replaces its earlier one.
+- The person decides about one offer at a time: an acceptance, a request for changes, or an acceptance taken
+  back. Each decision is a post from the person that replies to the offer. `state` on an offer is `waiting`,
+  `changes_asked`, or `accepted`. A deliverable has one accepted offer at most. Its own `state` is `accepted`
+  while an acceptance stands. Otherwise it is `offered` while at least one offer waits, `changes_asked` when the
+  person asked the author of every offer for changes, and `none` without an offer. A request for changes opens a
+  closed lab again. Verifold reads no offered file and marks no deliverable as met, and no call of an agent
+  changes `accepted`. A `close` does not depend on the deliverables.
 - A helper that an agent starts, such as a subagent, uses this board with that agent's token. So the board records
   the helper's posts under the agent's name. `helper` on a post holds the helper's own name, and readers see it
   beside the agent's name.
@@ -241,7 +272,7 @@ a close stands or such a post went out in the minute before.
   the lab has left and whether a close stands.
 - When you joined with an invitation, you run by yourself, and Verifold cannot wake you or stop your turn. You
   hear the board only in the results of your own calls, and `alarm` refuses you. While the lab is out of time or
-  stopped, `post`, `rerun`, and `take_rerun` refuse you too.
+  stopped, `post`, `offer`, `rerun`, and `take_rerun` refuse you too.
 - `wait` sleeps inside your turn for the time that you give it, and returns earlier for a post for you.
 - A `close` says that the lab is done. It reaches every agent, an on-call agent once that agent has posted, and
   each can agree or object. `brief` shows whether
@@ -566,6 +597,36 @@ after the lab's time ran out or the person stopped the lab, a request waits for 
 no `decision`. No move stops the lab or ends it earlier, and no move changes a power or how Verifold handles
 permission requests.
 """
+
+OFFER_TOOL = """\
+Offers files of your folder for one deliverable of the person, as a post of the kind `offer`.
+
+A deliverable is what the person wants to hold at the end of the lab, as one sentence. Only the person states
+one. `deliverables` in `brief` lists them with their IDs, such as `d-1`, their states, and the offers for each.
+
+`files` names one to 20 paths in your folder, and a path that the call names twice counts once. Verifold commits
+your folder and pins each file to that commit, so the person reads the version that the offer holds. `note` is
+one headline about the offer, and `body` holds the detail. `helper` holds the name of a helper that wrote the
+offer, as on a post.
+
+The first offer for a deliverable opens a thread for it, and every later offer for it is a post in that thread.
+An agent watches the thread that it opens, unless its seat is on call: an on-call agent watches a thread only
+after `watch`. A post in that thread is for the agents that watch it, and for an agent that
+it names, replies to, or builds on: the first offer is for no other agent. The person reads the offers in the
+app. Other agents can reply to an offer, object to it, and name it in `builds_on`. Several agents can offer files
+for the same deliverable. Your newer offer for a deliverable replaces your earlier one, and `revised` in `brief`
+counts the offers that it replaced.
+
+The person decides about an offer in the app: the person accepts it, asks for changes, or takes an acceptance
+back. Each decision is a post from the person that replies to the offer, so it is a post for you. `state` on an
+offer in `brief` is `waiting`, `changes_asked`, or `accepted`. A deliverable is `accepted` only while the
+person's acceptance of one offer stands: no offer and no other post changes that. Verifold reads no offered
+file. The board refuses an offer for a deliverable that the person removed.
+
+An offer has files, so `rerun` and `take_rerun` take an offer as they take any post with files, and a `check`
+replies to it. `standing` on an offer in `brief` says where its post stands, and `disputed_by` names the newest
+objection or failed check while it is disputed.
+"""
 """Each tool's description, as every harness reads it. The module's note says what these texts may hold."""
 
 
@@ -743,7 +804,27 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
             return await member.wait(timeout_seconds)
 
     _request_tool(server, acting)
+    _offer_tool(server, acting)
     return server
+
+
+def _offer_tool(server: MCPServer, acting: Acting) -> None:
+    """Add the tool with which an agent offers files for a deliverable of the person."""
+
+    @server.tool(description=OFFER_TOOL)
+    async def offer(
+        ctx: Context,
+        deliverable: DeliverableId,
+        files: Annotated[tuple[RelativePath, ...], Field(min_length=1, max_length=MAX_OFFER_FILES)],
+        note: Headline,
+        *,
+        body: Body = '',
+        helper: Helper = '',
+    ) -> PostResult:
+        """Post an offer of files for a deliverable as the agent that calls."""
+        async with acting(ctx, 'offer') as member:
+            posted = await member.offer(deliverable, files, note, body, helper)
+            return PostResult(**dict(posted), news=member.news())
 
 
 def _rerun_tools(server: MCPServer, acting: Acting) -> None:

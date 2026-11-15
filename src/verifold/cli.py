@@ -123,6 +123,8 @@ def _start(args: argparse.Namespace) -> StartRequest:
         minutes=shorter if args.minutes is None else args.minutes,
         allow=tuple(args.allow or ()),
         reviewer_seats=_reviewer_seats(values, own=own),
+        # A deliverable is the person's own sentence for this lab, as the question is. No settings file holds one.
+        deliverables=tuple(args.deliverable or ()),
     )
 
 
@@ -195,7 +197,9 @@ def _plan(start: StartRequest) -> str:
     agents = ', '.join(_agent_words(choice) for choice in start.agents)
     time = f'a time limit of {start.minutes} min' if start.minutes else 'no time limit'
     waits = f'. {NOTHING_STARTS}' if all(choice.on_call for choice in start.agents) else ''
-    return f'{agents}; {"auto mode" if start.auto_mode else "no auto mode"}; {time}{waits}'
+    wanted = len(start.deliverables)
+    deliverables = f'; {wanted} {"deliverable" if wanted == 1 else "deliverables"}' if wanted else ''
+    return f'{agents}; {"auto mode" if start.auto_mode else "no auto mode"}; {time}{deliverables}{waits}'
 
 
 def _agent_words(choice: AgentChoice) -> str:
@@ -382,6 +386,12 @@ def _parser() -> argparse.ArgumentParser:
         action='append',
         metavar='COMMAND',
         help='Let every agent run commands that start with COMMAND, such as ./gpu, without a question to you. Give it once for each command. You can also give a grant on the board when an agent asks.',
+    )
+    run.add_argument(
+        '--deliverable',
+        action='append',
+        metavar='SENTENCE',
+        help='State something that you want to hold at the end of the lab, as one sentence, such as "A script that runs the best strategy again". Give it once for each deliverable. You can add, change, and remove deliverables in the app.',
     )
     commands.add_parser('open', help="Open this folder's running lab in the browser again, from another terminal.")
     folder = commands.add_parser(

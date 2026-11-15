@@ -227,6 +227,9 @@ export function labView(changes: Partial<LabView> = {}): LabView {
       permissions: { while_you_decide: 'auto' },
       reviewers: { seats: null },
     },
+    deliverables: [],
+    removed_deliverables: [],
+    deliverables_told_at: null,
     ...changes,
   };
 }

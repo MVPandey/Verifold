@@ -4,10 +4,13 @@ from typing import Annotated, Final, Literal
 
 from pydantic import StringConstraints
 
-from verifold.protocol.ids import AgentId, ThreadId
+from verifold.protocol.ids import AgentId, DeliverableId, ThreadId
 from verifold.protocol.record import Record
 
-type Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+MAX_TITLE = 200
+"""The most characters in a thread's title."""
+
+type Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_TITLE)]
 
 QUESTION_TITLE: Final = 'The question'
 """The title of the thread that a lab opens with. It holds the person's question, the plans, and the lab's answer."""
@@ -48,3 +51,9 @@ class Thread(Record):
     """
     for_person: bool = False
     """Whether the lab's coordinator opened the thread for the person. Only the coordinator can mark a thread so."""
+    deliverable: DeliverableId | None = None
+    """
+    For the thread that holds the offers of files for one deliverable of the person: that deliverable. The first
+    offer opens it, and Verifold sets the mark. A post there is for the agents that watch the thread, and for an
+    agent that it names, replies to, or builds on. No post there is for every agent. `None` for any other thread.
+    """

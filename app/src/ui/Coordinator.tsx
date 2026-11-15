@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useId, useState } from 'react';
 import type { FormEvent, ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
@@ -61,18 +61,17 @@ interface Shared extends Around {
  * The coordinator's place in the seat of the lab page: who holds the seat, and the button that opens the
  * conversation beside the wall. With no coordinator, it says so.
  */
-export function CoordinatorSeat(props: PageProps & { readonly start?: Tab }): ReactElement {
-  const { api, data } = props;
-  const [tab, setTab] = useState<Tab | null>(props.start ?? null);
+export function CoordinatorSeat(
+  props: PageProps & {
+    /** The tab of the panel that shows, or `null` while the panel is closed. The page has one docked panel at a time. */
+    readonly tab: Tab | null;
+    readonly onTab: (tab: Tab | null) => void;
+  },
+): ReactElement {
+  const { api, data, tab } = props;
+  const setTab = props.onTab;
   const holder = coordinatorOf(data.lab.agents);
   const open = holder !== null && tab !== null;
-  useEffect(() => {
-    // The page makes room for the panel, so the person reads the wall and the conversation at once.
-    document.body.classList.toggle('with-panel', open);
-    return () => {
-      document.body.classList.remove('with-panel');
-    };
-  }, [open]);
   if (holder === null) {
     return (
       <p className="k-empty">

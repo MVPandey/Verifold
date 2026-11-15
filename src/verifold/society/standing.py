@@ -156,7 +156,8 @@ def closing(board: Board) -> Posted | None:
     Return the post that says that the lab is done, when one stands: the newest close.
 
     It stands until an objection to it stands, its author concedes one, its author withdraws it with a ruled-out
-    lead that replies to it, or the person posts to the lab after it. An older close does not come back.
+    lead that replies to it, the person posts to the lab after it, or the person asks for changes to an offer of
+    files for a deliverable after it. An older close does not come back.
     """
     entry = next((entry for entry in reversed(board.posts) if isinstance(entry.post, Close)), None)
     if entry is None or standing(board, entry.post.id) in {'disputed', 'conceded'}:
@@ -173,9 +174,51 @@ def closing(board: Board) -> Posted | None:
         and later.seq > entry.seq
         and not board.is_side(later.post.thread)
         and later.post.thread != board.conversation
+        and not _for_listeners(board, later)
         for later in board.posts
     )
-    return None if withdrawn or steered else entry
+    # The person's request for changes to an offer of files asks its author for more work.
+    asked = any(decided.decision == 'changes_asked' and decided.seq > entry.seq for decided in board.decisions)
+    return None if withdrawn or steered or asked else entry
+
+
+def _for_listeners(board: Board, said: Posted) -> bool:
+    # The person's words in the thread of a deliverable's offers are words to the lab only when they reach the
+    # whole lab: they name nobody, and no agent that offered files there or watches the thread was in the lab.
+    if not board.holds_offers(said.post.thread):
+        return False
+    return bool(said.post.mentions or board.offer_listeners(said.post.thread, said.seq))
+
+
+def disputes(board: Board, post_id: PostId) -> tuple[Posted, ...]:
+    """
+    Return the replies that dispute a post now, oldest first: each failed check and each objection that stands.
+
+    A reply that its own author conceded disputes nothing, and neither does an objection that a later check
+    overruled.
+    """
+    replies = tuple(entry for entry in board.replies(post_id) if standing(board, entry.post.id) != 'conceded')
+    checks = tuple((entry.seq, entry.post) for entry in replies if isinstance(entry.post, Check))
+    return tuple(
+        entry
+        for entry in replies
+        if (isinstance(entry.post, Check) and entry.post.outcome == 'fails')
+        or (isinstance(entry.post, Objection) and not _overruled(entry.seq, entry.post, checks))
+    )
+
+
+def conceded_to(board: Board, post_id: PostId) -> PostId | None:
+    """Return the objection to a post that the post's author accepted, or `None`."""
+    return next(
+        (
+            entry.post.id
+            for entry in board.replies(post_id)
+            if isinstance(entry.post, Objection)
+            and standing(board, entry.post.id) != 'conceded'
+            and _conceded(board, entry.post)
+        ),
+        None,
+    )
 
 
 def agreed(board: Board, close: Posted) -> tuple[AgentId, ...]:

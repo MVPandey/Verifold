@@ -16,6 +16,7 @@ from verifold.protocol.agents import (
     ValueId,
     one_line,
 )
+from verifold.protocol.deliverables import MAX_DELIVERABLES, DeliverableLine, RemovedDeliverable, Sentence
 from verifold.protocol.events import AgentLeft, Note, Question
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, PostId, ThreadId
@@ -28,6 +29,7 @@ from verifold.protocol.join import (
     RerunLine,
     ThreadView,
 )
+from verifold.protocol.posts import MAX_HEADLINE
 from verifold.protocol.record import Record
 from verifold.protocol.settings import MAX_MINUTES, MAX_REVIEWER_SEATS, Settings, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
@@ -234,6 +236,15 @@ class LabView(Record):
     """Among how many agents its author and the agents that agreed count. Zero while no close stands."""
     settings: Settings = Settings()
     """The settings that the lab follows, such as what happens to the agents' processes when the person stops it."""
+    deliverables: tuple[DeliverableLine, ...] = ()
+    """What the person wants to hold at the end of the lab, each with its state and the files that agents offered."""
+    removed_deliverables: tuple[RemovedDeliverable, ...] = ()
+    """The deliverables that the person removed after agents offered files for them, with the thread of the offers."""
+    deliverables_told_at: AwareDatetime | None = None
+    """
+    When a post of the person last told the lab of a new sentence or a removal. For a minute after it, and while
+    a close stands, such a change sends no post, and the agents read it in `brief`.
+    """
 
 
 class InviteRequest(SeatFacts):
@@ -384,6 +395,8 @@ class StartRequest(Record):
     How many reviewer seats the lab has. `size` follows the size of the lab, whatever the settings files say, and
     `None` takes the number from the person's settings files.
     """
+    deliverables: tuple[Sentence, ...] = Field(default=(), max_length=MAX_DELIVERABLES)
+    """What the person wants to hold at the end of the lab, each as one sentence. They can add more while it runs."""
 
 
 class SettingsFileView(Record):
@@ -560,6 +573,22 @@ class QuestionRequest(Record):
     question: Question
     note: Note = ''
     """Why, as one line. It can be empty."""
+
+
+class DeliverableRequest(Record):
+    """The person states a deliverable, or gives one another sentence."""
+
+    text: Sentence
+
+
+class DeliverableDecision(Record):
+    """The person decides about an offer of files for a deliverable."""
+
+    decision: Literal['accept', 'ask_changes', 'take_back']
+    offer: PostId
+    """The offer that the person accepts, wants changed, or accepted before."""
+    text: Annotated[str, StringConstraints(strip_whitespace=True, max_length=MAX_HEADLINE)] = ''
+    """With `ask_changes`: what the person wants changed. It reaches the offer's author as a reply to the offer."""
 
 
 class TimeRequest(Record):

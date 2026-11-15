@@ -17,6 +17,7 @@ from verifold.protocol.events import AlarmSet
 from verifold.protocol.ids import PERSON
 from verifold.protocol.settings import AtTimeLimit
 from verifold.society.board import Board
+from verifold.society.deliverables import stated
 from verifold.society.lifecycle import utc as _utc
 from verifold.society.lines import question_thread
 
@@ -122,6 +123,11 @@ def start_message(
         lines.append(
             f'The question was revised, last at {_utc(board.revisions[-1].at)}. The text above is the '
             'current one, and `brief` lists the posts that hold the revisions.'
+        )
+    if count := len(stated(board)):
+        lines.append(
+            f'The person stated {count} {"deliverable" if count == 1 else "deliverables"}: what the person wants '
+            'to hold at the end of the lab. `brief` lists each one with the files offered for it.'
         )
     lines.append(f"{norms} holds the lab's norms, which the person sets and can change while the lab runs.")
     if writing:
