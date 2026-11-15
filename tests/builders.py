@@ -12,6 +12,7 @@ from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
     AgentNamed,
+    BadgeSet,
     CoordinatorSet,
     Event,
     LabOpened,
@@ -30,6 +31,7 @@ from verifold.protocol.events import (
     TimeSet,
     TurnEnded,
     TurnStarted,
+    Voted,
     WatchSet,
 )
 from verifold.protocol.moves import Move
@@ -259,6 +261,24 @@ class RecordBuilder:
     def ran_out(self) -> 'RecordBuilder':
         seq, at = self._stamp()
         self.events.append(TimeRanOut(seq=seq, at=at))
+        return self
+
+    def vote(
+        self, by: str, post_id: str, direction: str = 'up', reason: str = 'It holds on my data.'
+    ) -> 'RecordBuilder':
+        seq, at = self._stamp()
+        fields = {'seq': seq, 'at': at, 'by': by, 'post': post_id, 'direction': direction, 'reason': reason}
+        self.events.append(Voted.model_validate(fields))
+        return self
+
+    def badge(
+        self, by: str, post_id: str, badge: str = 'promising', action: str = 'give', **fields: object
+    ) -> 'RecordBuilder':
+        """Add a change to a badge. A `give` has a reason unless `fields` gives another."""
+        seq, at = self._stamp()
+        reason = {'reason': 'Worth a second look.'} if action == 'give' else {}
+        base = {'seq': seq, 'at': at, 'by': by, 'post': post_id, 'badge': badge, 'action': action}
+        self.events.append(BadgeSet.model_validate(base | reason | fields))
         return self
 
     def board(self) -> Board:

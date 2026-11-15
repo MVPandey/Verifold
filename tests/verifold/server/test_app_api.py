@@ -957,3 +957,51 @@ def test_the_lab_view_of_a_long_record_does_work_that_grows_with_the_record_and_
         # A loose bound on the time too: the scan of every post for each result took seconds here.
         assert taken < 3.0, f'The lab view of {events} events took {taken:.2f} seconds.'
     assert counts[1] < 3.1 * counts[0]
+
+
+async def test_the_person_votes_gives_promising_seconds_and_declines_through_the_app(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    await lab.join(agent('cy'))
+    await lab.post(PostRequest(kind='result', text='On 114 pairs too.', thread='t-1', builds_on=('p-1',)), 'bo')
+    await lab.badge('bo', 'p-1', 'breakthrough', reason='It gives the strategy a size.')
+    await lab.badge('cy', 'p-2', 'breakthrough', reason='It holds on every pair.')
+    waiting = (await client.get('/lab')).json()
+
+    voted = await client.post('/votes', json={'post': 'p-1', 'direction': 'up', 'reason': 'This is what I asked.'})
+    bare = await client.post('/votes', json={'post': 'p-1', 'direction': 'down'})
+    back = await client.post('/votes', json={'post': 'p-1', 'direction': 'none'})
+    promising = await client.post('/badges', json={'post': 'p-1', 'badge': 'promising', 'reason': 'Go on here.'})
+    confirmed = await client.post(
+        '/badges', json={'post': 'p-1', 'badge': 'confirmed', 'reason': 'p-2 repeats it.', 'proof': 'p-2'}
+    )
+    seconded = await client.post('/badges', json={'post': 'p-1', 'badge': 'breakthrough', 'action': 'second'})
+    declined = await client.post(
+        '/badges', json={'post': 'p-2', 'badge': 'breakthrough', 'action': 'take_back', 'giver': 'cy'}
+    )
+    taken = await client.post('/badges', json={'post': 'p-1', 'badge': 'promising', 'action': 'take_back'})
+    after = (await client.get('/lab')).json()
+    thread = (await client.get('/threads/t-1')).json()
+
+    # A proposal that waits is in the lab view with whether a coordinator can second it. It is none of the waits.
+    assert [(wait['post'], wait['by'], wait['coordinator_can_second']) for wait in waiting['proposals']] == [
+        ('p-1', 'bo', False),
+        ('p-2', 'cy', False),
+    ]
+    assert (waiting['needs_you'], waiting['waits'], waiting['breakthrough_threads']) == (0, [], [])
+    assert (voted.status_code, voted.json()['up'], voted.json()['votes'][0]['by']) == (200, 1, 'person')
+    assert (bare.status_code, bare.json()['detail']) == (
+        400,
+        'A vote down has a reason of one line. `reason` holds it.',
+    )
+    assert (back.json()['up'], back.json()['votes']) == (0, [])
+    assert [line['badge'] for line in promising.json()['badges']] == ['promising', 'breakthrough']
+    assert confirmed.json()['badges'][1]['given'][0]['proof'] == 'p-2'
+    assert seconded.json()['badges'][2]['second']['by'] == 'person'
+    assert (declined.status_code, declined.json()['badges']) == (200, [])
+    assert [line['badge'] for line in taken.json()['badges']] == ['confirmed', 'breakthrough']
+    assert (after['proposals'], after['breakthrough_threads']) == ([], ['t-1'])
+    # No status of an agent or a thread changed with any of it.
+    assert [view['need'] for view in after['agents']] == [view['need'] for view in waiting['agents']]
+    assert after['thread_needs'] == waiting['thread_needs']
+    assert [item['post']['id'] for item in thread['posts']] == ['p-1', 'p-2']

@@ -11,6 +11,7 @@ from verifold.protocol.events import (
     AgentLeft,
     AgentNamed,
     AlarmSet,
+    BadgeSet,
     CoordinatorSet,
     Event,
     LabOpened,
@@ -31,6 +32,7 @@ from verifold.protocol.events import (
     TurnEnded,
     TurnStarted,
     TurnSummary,
+    Voted,
     WatchSet,
 )
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
@@ -58,6 +60,7 @@ from verifold.protocol.posts import (
 )
 from verifold.protocol.settings import Settings
 from verifold.protocol.threads import CONVERSATION_TITLE, QUESTION_TITLE, Carries, Thread
+from verifold.protocol.votes import Badge, BadgeAction, Direction
 from verifold.server.changes import wait_until
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.society.board import Board
@@ -69,6 +72,7 @@ from verifold.society.lines import question_thread
 from verifold.society.names import check_name
 from verifold.society.reruns import open_take, open_to, wanted_reruns
 from verifold.society.reviewers import check_review, seats_line
+from verifold.society.votes import proposal, vote_of
 from verifold.store.record_file import RecordFile
 
 type Clock = Callable[[], datetime]
@@ -479,6 +483,64 @@ class Lab:
                 return taken
             raise
         return board.takes[-1]
+
+    async def vote(self, by: AgentId, post_id: PostId, direction: Direction, reason: str = '') -> Voted | None:
+        """
+        Record a vote of an agent or the person on a post, and return the voter's vote as it stands, or `None`.
+
+        A voter has one vote on a post: a new one replaces it, and `none` takes it back. The same vote again
+        records nothing. A vote wakes nobody and changes nothing else on the board.
+
+        Raises:
+            RejectedEvent: The vote breaks a rule of the record, as `check_vote` says.
+
+        """
+        now = vote_of(self._board, by, post_id)
+        if now and (now.direction, now.reason) == (direction, one_line(reason)):
+            return now
+        board = await self._commit(
+            lambda _, seq, at: Voted(seq=seq, at=at, by=by, post=post_id, direction=direction, reason=reason)
+        )
+        return vote_of(board, by, post_id)
+
+    async def badge(  # noqa: PLR0913
+        self,
+        by: AgentId,
+        post_id: PostId,
+        badge: Badge,
+        action: BadgeAction = 'give',
+        reason: str = '',
+        *,
+        proof: PostId | None = None,
+        giver: AgentId | None = None,
+    ) -> BadgeSet:
+        """
+        Record a change to a badge on a post: `by` gives it, seconds it, or takes it back.
+
+        A second is for the one proposal of a `breakthrough` that waits on the post. `giver` names whose badge the
+        person takes back. A badge wakes nobody and changes nothing else on the board.
+
+        Raises:
+            RejectedEvent: The change breaks a rule of the record, as `check_badge` says.
+
+        """
+
+        def build(board: Board, seq: int, at: datetime) -> BadgeSet:
+            waiting = proposal(board, post_id) if action == 'second' else None
+            return BadgeSet(
+                seq=seq,
+                at=at,
+                by=by,
+                post=post_id,
+                badge=badge,
+                action=action,
+                reason=reason,
+                proof=proof,
+                giver=waiting.by if waiting else giver,
+            )
+
+        board = await self._commit(build)
+        return board.badges[-1]
 
     def check_take(self, agent_id: AgentId, post_id: PostId) -> None:
         """

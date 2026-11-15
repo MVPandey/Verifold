@@ -213,6 +213,8 @@ export function labView(changes: Partial<LabView> = {}): LabView {
     waits: [],
     thread_needs: {},
     reruns_wanted: [],
+    proposals: [],
+    breakthrough_threads: [],
     reviewer_seats: 0,
     reviewer_seats_set: null,
     ends_at: null,

@@ -10,6 +10,7 @@ from verifold.protocol.events import (
     AgentLeft,
     AgentNamed,
     AlarmSet,
+    BadgeSet,
     CoordinatorSet,
     Event,
     LabOpened,
@@ -29,6 +30,7 @@ from verifold.protocol.events import (
     TimeSet,
     TurnEnded,
     TurnStarted,
+    Voted,
     WatchSet,
     WentQuiet,
 )
@@ -54,6 +56,7 @@ from verifold.society.rules import (
     check_turn,
     check_watch,
 )
+from verifold.society.votes import check_badge, check_vote
 
 
 # One case with one return per event type keeps the match flat.
@@ -141,6 +144,12 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
         case RequestAnswered():
             check_answered(board, event)
             return replace(board, seq=event.seq, answers=(*board.answers, event))
+        case Voted():
+            check_vote(board, event)
+            return replace(board, seq=event.seq, votes=(*board.votes, event))
+        case BadgeSet():
+            check_badge(board, event)
+            return replace(board, seq=event.seq, badges=(*board.badges, event))
         case _:
             assert_never(event)
 

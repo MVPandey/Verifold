@@ -23,6 +23,7 @@ import { NEED_WORDS, WAITS_ID, quietBand, waitGroups, wantedLine } from '../mode
 import { betweenLine, isSide, sideHeading, sideLines } from '../model/side.ts';
 import { messageOf } from '../api/client.ts';
 import { cardStatus, doneLine, headClaim, questionThread } from '../model/turns.ts';
+import { hasBreakthrough, proposalRows, proposalsHeading } from '../model/votes.ts';
 import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
 import { Detail, Words } from './Markdown.tsx';
@@ -30,6 +31,7 @@ import { CoordinatorSeat, OpenedForYou } from './Coordinator.tsx';
 import { ChipView, Composer, Exact, Files } from './parts.tsx';
 import { Who } from './Picture.tsx';
 import { Turns } from './Thread.tsx';
+import { BadgeChip } from './Votes.tsx';
 
 /** A question longer than this gets smaller type, so it does not fill the screen. */
 const LONG_QUESTION = 120;
@@ -113,6 +115,11 @@ export function Wall(
         seats={lab.reviewer_seats}
         now={props.now}
         onRerun={(postId) => api.rerun(postId).then(() => data.reload())}
+        marks={{
+          onVote: (postId, direction, reason) =>
+            api.vote(postId, direction, reason).then(() => data.reload()),
+          onBadge: (change) => api.badge(change).then(() => data.reload()),
+        }}
         onSend={(text) => send(text, read.view?.thread.id)}
       />
     ) : (
@@ -233,6 +240,7 @@ export function Wall(
                 agents={lab.agents}
                 need={lab.thread_needs[summary.thread.id] ?? null}
                 wanted={wantedIn(lab, summary.thread.id, props.now)}
+                breakthrough={lab.breakthrough_threads.includes(summary.thread.id)}
                 fresh={hasNew(summary, seen)}
                 read={summary.thread.id === open ? cardRead : null}
                 turns={turns}
@@ -267,6 +275,7 @@ export function Wall(
                       agents={lab.agents}
                       need={lab.thread_needs[summary.thread.id] ?? null}
                       wanted={wantedIn(lab, summary.thread.id, props.now)}
+                      breakthrough={lab.breakthrough_threads.includes(summary.thread.id)}
                       fresh={false}
                       read={cardRead}
                       turns={turns}
@@ -576,6 +585,10 @@ function Answer(props: {
       <p className={props.open ? undefined : 'clamp'}>{post.text}</p>
       <div className="f-card-st">
         <ChipView chip={standingChip(post, standing) ?? { label: 'Not checked', tone: 'none' }} />
+        {/* The answer has the mark when it, or a post that it builds on, has a Breakthrough badge. */}
+        {[props.view.answer, ...props.view.builds_on].some(hasBreakthrough) ? (
+          <BadgeChip badge="breakthrough" />
+        ) : null}
         <span className="f-by">
           {authorName(props.agents, post.author)} proposed it{' '}
           <time dateTime={at} title={clock(at)}>
@@ -630,6 +643,7 @@ function Under(props: { readonly view: AnswerView; readonly open: boolean }): Re
                   standingChip(item.post, item.standing) ?? { label: 'Not checked', tone: 'none' }
                 }
               />{' '}
+              {hasBreakthrough(item) ? <BadgeChip badge="breakthrough" /> : null}{' '}
               <a href={href({ page: 'thread', id: item.post.thread, post: item.post.id })}>
                 {clip(item.post.text)}
               </a>
@@ -650,7 +664,8 @@ function Under(props: { readonly view: AnswerView; readonly open: boolean }): Re
  */
 function Waits(props: { readonly lab: LabView; readonly now: Date }): ReactElement | null {
   const groups = waitGroups(props.lab, props.now);
-  if (groups.length === 0) return null;
+  const proposed = proposalRows(props.lab, props.now);
+  if (groups.length === 0 && proposed.length === 0) return null;
   return (
     <div className="o-waits" id={WAITS_ID}>
       {groups.map((group) => (
@@ -667,6 +682,25 @@ function Waits(props: { readonly lab: LabView; readonly now: Date }): ReactEleme
           ))}
         </div>
       ))}
+      {proposed.length > 0 ? (
+        // A proposal waits for a second and blocks nothing. Its row goes to the post, where the person decides.
+        <div>
+          <p className="o-waits-head">{proposalsHeading(proposed.length)}</p>
+          {proposed.map((row) => (
+            <a
+              key={row.proposal.post}
+              className="o-wait"
+              href={href({ page: 'thread', id: row.proposal.thread, post: row.proposal.post })}
+            >
+              <span>
+                <b>{row.name}</b> proposes a Breakthrough badge
+              </span>
+              <time dateTime={row.proposal.at}>{row.waited}</time>
+              <em>Decide</em>
+            </a>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -717,6 +751,8 @@ function Card(props: {
   readonly need: Need | null;
   /** The line of the reruns that are wanted in the thread, or `null` when none is. */
   readonly wanted: string | null;
+  /** Whether a post of the thread has a Breakthrough badge. The card shows nothing else about votes. */
+  readonly breakthrough: boolean;
   readonly fresh: boolean;
   /** The thread's posts when the card is open, or `null` for a closed card. */
   readonly read: ThreadRead | null;
@@ -766,6 +802,7 @@ function Card(props: {
           )}
           {status.openAsks ? <span className="f-st fs-ask">{status.openAsks}</span> : null}
           {status.openCalls ? <span className="f-st fs-ask">{status.openCalls}</span> : null}
+          {props.breakthrough ? <BadgeChip badge="breakthrough" /> : null}
         </div>
         {head ? <p className="f-head">{head.post.text}</p> : null}
         <Faces ids={ids} agents={props.agents} last={open ? null : summary.last_at} team={team} />

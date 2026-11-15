@@ -270,6 +270,65 @@ export interface RerunLine {
   readonly open_to: 'reviewer' | 'any' | 'none';
 }
 
+/** What a vote says about a post. `none` takes the voter's vote back. */
+export type Direction = 'up' | 'down' | 'none';
+
+/** A mark on a post, with who gave it and why. A `breakthrough` stands only after its second. */
+export type Badge = 'promising' | 'confirmed' | 'breakthrough';
+
+/** What a change does to a badge: give it, second a proposed `breakthrough`, or take it back. */
+export type BadgeAction = 'give' | 'second' | 'take_back';
+
+/** One standing vote on a post: who voted, which way, and why. Every vote counts the same. */
+export interface VoteLine {
+  /** The voter: an agent, or the person. */
+  readonly by: string;
+  readonly direction: 'up' | 'down';
+  readonly reason: string;
+  readonly at: string;
+}
+
+/** One giver's word for a badge: who gave or seconded it, why, and when. */
+export interface Given {
+  readonly by: string;
+  readonly reason: string;
+  readonly at: string;
+  /** For `confirmed`: the check or the result that the giver named as what confirmed the post. */
+  readonly proof?: string | null;
+}
+
+/** One badge on a post, once, with every giver. A `breakthrough` has one giver, the agent that proposed it. */
+export interface BadgeLine {
+  readonly badge: Badge;
+  readonly given: readonly Given[];
+  /** For `breakthrough`: the second of the agent that held the coordinator seat, or of the person. */
+  readonly second?: Given | null;
+  /** Whether this is a `breakthrough` that an agent proposed and nobody seconded yet. */
+  readonly waits?: boolean;
+}
+
+/** A `breakthrough` that an agent proposed for a post and that nobody seconded yet. */
+export interface ProposalLine {
+  readonly post: string;
+  readonly thread: string;
+  /** The agent that proposed it. */
+  readonly by: string;
+  readonly reason: string;
+  readonly at: string;
+  /** Whether the agent that holds the coordinator seat can second it. The person can in any case. */
+  readonly coordinator_can_second: boolean;
+}
+
+/** The person's change to a badge on a post. */
+export interface BadgeRequest {
+  readonly post: string;
+  readonly badge: Badge;
+  readonly action: BadgeAction;
+  readonly reason?: string;
+  /** With `take_back`: whose badge the person takes back. Without it, the person's own. */
+  readonly giver?: string;
+}
+
 export interface LabView {
   /** The question that the lab works on now. */
   readonly question: string;
@@ -289,6 +348,10 @@ export interface LabView {
   readonly thread_needs: Readonly<Record<string, Need>>;
   /** The reruns that are wanted, oldest first: who asked for each, when, and which agents took it. */
   readonly reruns_wanted: readonly RerunLine[];
+  /** Each `breakthrough` that waits for its second, oldest first. It is none of `waits` and changes no status. */
+  readonly proposals: readonly ProposalLine[];
+  /** The threads that hold a post with a `breakthrough` that stands. */
+  readonly breakthrough_threads: readonly string[];
   /** How many reviewer seats the lab has. */
   readonly reviewer_seats: number;
   /** The number that the person set, or `null` while the number follows the size of the lab. */
@@ -693,6 +756,13 @@ export interface PostView {
    * it. `ask`: the permission request that it answers got its answer or ended. `null` while it waits.
    */
   readonly ended?: 'seat' | 'ask' | null;
+  /** How many votes up and down stand on the post. */
+  readonly up?: number;
+  readonly down?: number;
+  /** The newest standing votes with their reasons, oldest first. */
+  readonly votes?: readonly VoteLine[];
+  /** Each badge on the post once, with who gave it. A `breakthrough` that waits for its second says so. */
+  readonly badges?: readonly BadgeLine[];
 }
 
 /** One power of the coordinator as the person sees it. */
@@ -770,11 +840,12 @@ export interface PostLine {
   readonly author: string;
   readonly kind: PostKind;
   readonly text: string;
-  readonly reply_to: string | null;
+  /** A line leaves out each field that holds nothing, so the post that it replies to and its author's line can be absent. */
+  readonly reply_to?: string | null;
   readonly seq: number;
   readonly at: string;
-  /** Who the author is. `null` for a post of the person. */
-  readonly by: Byline | null;
+  /** Who the author is. Absent for a post of the person. */
+  readonly by?: Byline | null;
 }
 
 /** Ideas that crossed between two threads: posts in one build on another agent's posts in the other. */

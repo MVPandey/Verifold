@@ -9,6 +9,7 @@ from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
     AlarmSet,
+    BadgeSet,
     CoordinatorSet,
     LabOpened,
     OnCallSet,
@@ -25,6 +26,7 @@ from verifold.protocol.events import (
     TimeSet,
     TurnEnded,
     TurnStarted,
+    Voted,
     WatchSet,
 )
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
@@ -79,6 +81,10 @@ class Board:
     """Each time that the person switched a power of the coordinator on or off, oldest first."""
     answers: tuple[RequestAnswered, ...] = ()
     """The answers to the coordinator's requests for a move, oldest first."""
+    votes: tuple[Voted, ...] = ()
+    """Each vote on a post, oldest first. `society.votes` says which of them stand."""
+    badges: tuple[BadgeSet, ...] = ()
+    """Each change to a badge on a post, oldest first."""
 
     @property
     def question(self) -> str:

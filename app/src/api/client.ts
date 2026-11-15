@@ -1,7 +1,9 @@
 import type {
   AgentChoice,
   AnswerView,
+  BadgeRequest,
   ConversationView,
+  Direction,
   FileText,
   FolderView,
   Invitation,
@@ -55,6 +57,10 @@ export interface Api {
   openFolder(agentId?: string): Promise<FolderView>;
   post(request: PostRequest): Promise<PostView>;
   rerun(postId: string): Promise<void>;
+  /** Vote on a post with a reason of one line, or take the vote back with `none`. The answer is the post after it. */
+  vote(postId: string, direction: Direction, reason: string): Promise<PostView>;
+  /** Give a post a badge, second a Breakthrough badge that an agent proposed, or take a badge back. */
+  badge(request: BadgeRequest): Promise<PostView>;
   setTime(minutes: number): Promise<LabView>;
   /** Revise the lab's question. `note` says why, and it can be empty. */
   reviseQuestion(question: string, note: string): Promise<LabView>;
@@ -138,6 +144,8 @@ export function createApi(
         waits: lab.waits ?? [],
         thread_needs: lab.thread_needs ?? {},
         reruns_wanted: lab.reruns_wanted ?? [],
+        proposals: lab.proposals ?? [],
+        breakthrough_threads: lab.breakthrough_threads ?? [],
         reviewer_seats: lab.reviewer_seats ?? 0,
         reviewer_seats_set: lab.reviewer_seats_set ?? null,
         agents: lab.agents.map((view) => ({
@@ -201,6 +209,8 @@ export function createApi(
     rerun: async (postId) => {
       await request('/reruns', { post: postId });
     },
+    vote: (postId, direction, reason) => request('/votes', { post: postId, direction, reason }),
+    badge: (change) => request('/badges', change),
     setTime: (minutes) => request('/time', { minutes }),
     reviseQuestion: (question, note) => request('/question', { question, note }),
     addAgents: (choice) => request('/agents', choice),

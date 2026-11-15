@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 from builders import RecordBuilder, lab
 
-from verifold.protocol.events import AlarmSet
+from verifold.protocol.events import AlarmSet, Posted
 from verifold.protocol.join import MAX_LINE, MAX_NEWS, QUIET_MINUTES, Brief, News, ThreadLine, ThreadLink
 from verifold.protocol.posts import (
     Answer,
@@ -20,6 +20,7 @@ from verifold.protocol.posts import (
     RuledOut,
 )
 from verifold.protocol.threads import QUESTION_TITLE
+from verifold.protocol.votes import BADGES, MAX_NOTES, MAX_WHY, BadgeNote, VoteNote
 from verifold.society.attention import news
 from verifold.society.errors import NotFound
 from verifold.society.identity import post_line
@@ -531,10 +532,9 @@ def test_a_brief_holds_the_line_of_a_post_once_and_then_its_id_alone() -> None:
     assert [(entry.id, entry.line is None) for entry in later.open_asks] == [('p-4', True)]
 
 
-def test_the_largest_brief_is_no_larger_than_before_agents_had_profiles() -> None:
+def _largest() -> RecordBuilder:
     # Twenty agents with the longest name, about line, role, and status, a long label, and every seat mark, in
-    # twenty threads with every list full and headlines of 1,000 characters. Before profiles, the brief of this
-    # board without the profiles had 107,984 characters, and its news 20,857.
+    # twenty threads with every list full and headlines of 1,000 characters.
     record = RecordBuilder()
     for number in range(20):
         record.join(f'a{number}', name=f'Claude Code · {"m" * 40} {number + 2}')
@@ -558,7 +558,13 @@ def test_the_largest_brief_is_no_larger_than_before_agents_had_profiles() -> Non
         record.reviewer(agent, by='person')
         if number:
             record.on_call(agent)
-    board = record.coordinator('a1').board()
+    return record.coordinator('a1')
+
+
+def test_the_largest_brief_is_no_larger_than_before_agents_had_profiles() -> None:
+    # Before profiles, the brief of this board without the profiles had 107,984 characters, and its news 20,857.
+    # A line that leaves out its empty fields brought the brief to 96,320 characters.
+    board = _largest().board()
 
     unseen = news(board, 'a0', 0)
     view = brief(board, 'a0', unseen)
@@ -566,8 +572,42 @@ def test_the_largest_brief_is_no_larger_than_before_agents_had_profiles() -> Non
     assert (len(unseen.for_you), len(unseen.others), len(view.agents), len(view.threads)) == (20, 20, 19, 20)
     assert [len(entries) for entries in (view.disputed, view.not_built_on, view.not_checked)] == [19, 10, 19]
     assert [len(entries) for entries in (view.open_asks, view.open_calls)] == [19, 19]
-    assert len(view.model_dump_json()) < 107_984
+    assert len(view.model_dump_json()) < 96_500
     assert len(unseen.model_dump_json()) < 28_000
     # Each author's name, seat, seat marks, and role stand once in the list of agents, and in each line of the news.
     assert all(line.by is not None and line.by.marks for line in (*unseen.for_you, *unseen.others))
     assert all(agent.plan is not None and agent.plan.by is None for agent in view.agents)
+
+
+def test_the_largest_brief_with_votes_and_badges_on_every_post_is_no_larger_than_before_votes() -> None:
+    # The same board, where every other agent and the person voted on every post with the longest reason, and
+    # every post has all three badges. Before votes, the brief of the board had 107,851 characters.
+    record = _largest()
+    why = 'w' * MAX_WHY
+    voters = (*(f'a{number}' for number in range(20)), 'person')
+    for post in tuple(event.post for event in record.events if isinstance(event, Posted)):
+        for number, voter in enumerate(voter for voter in voters if voter != post.author):
+            record.vote(voter, post.id, 'up' if number % 2 else 'down', why)
+        proposer = 'a2' if post.author == 'a0' else 'a0'
+        record.badge('person', post.id, 'promising', reason=why).badge('person', post.id, 'confirmed', reason=why)
+        record.badge(proposer, post.id, 'breakthrough', reason=why)
+        record.badge('person', post.id, 'breakthrough', 'second', giver=proposer, reason=why)
+    board = record.board()
+
+    unseen = news(board, 'a0', 0)
+    view = brief(board, 'a0', unseen)
+    lines = (*unseen.for_you, *unseen.others)
+
+    assert len(lines) == 40
+    assert all((line.up, line.down, line.badges) == (10, 10, BADGES) for line in lines)
+    # The news of this brief stops at its last post, before the votes. So the largest notes that a news can hold
+    # count on top: the newest votes on the reader's posts and the newest changes to badges, with the longest reason.
+    votes = tuple(VoteNote(post='p-115', by='a19', direction='down', reason=why) for _ in range(MAX_NOTES))
+    badges = tuple(
+        BadgeNote(post='p-115', badge='breakthrough', by='person', action='take_back', reason=why)
+        for _ in range(MAX_NOTES)
+    )
+    notes = News(seq=1, votes=votes, badges=badges).model_dump_json()
+    assert len(view.model_dump_json()) + len(notes) < 107_851
+    # No reason of a vote or a badge is in the brief's lines.
+    assert why not in view.model_dump_json()

@@ -3201,3 +3201,243 @@ body.with-panel {
     border-left: 0;
   }
 }
+
+/* Votes and badges ("v-"). A count belongs to a post, and nothing is sorted by it. */
+:root {
+  /* The color of a Breakthrough badge. Nothing else on the page uses it. */
+  --rare: #0e7490;
+  --rare-ink: #fff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --rare: #22d3ee;
+    --rare-ink: #04222a;
+  }
+}
+.v-badge {
+  font: 700 12px/1.2 var(--body);
+  padding: 2px 7px;
+  border: 1.5px solid var(--turn);
+  color: var(--turn);
+  white-space: nowrap;
+}
+.v-badge.rare {
+  position: relative;
+  overflow: hidden;
+  font-size: 13px;
+  padding: 3px 9px;
+  background: var(--rare);
+  border-color: var(--rare);
+  color: var(--rare-ink);
+}
+/* A light crosses a Breakthrough badge every few seconds. */
+.v-badge.rare::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -60%;
+  width: 45%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.85), transparent);
+  animation: v-sheen 4.5s ease-in-out 1s infinite;
+}
+@keyframes v-sheen {
+  0%,
+  70% {
+    left: -60%;
+  }
+  100% {
+    left: 130%;
+  }
+}
+/* A post with a Breakthrough badge has an outline in the badge's color, and a ring spreads from it once. */
+.f-turn.v-break,
+.f-turn.claim.v-break {
+  border: 1.5px solid var(--rare);
+  margin-top: 18px;
+  padding-top: 20px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--rare) 16%, transparent);
+  animation: v-arrive 1.6s ease-out 0.3s both;
+}
+@keyframes v-arrive {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--rare) 70%, transparent);
+  }
+  40% {
+    box-shadow: 0 0 0 14px color-mix(in srgb, var(--rare) 0%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--rare) 16%, transparent);
+  }
+}
+/* With reduced motion, only the outline shows: no ring and no light. */
+@media (prefers-reduced-motion: reduce) {
+  .v-badge.rare::after {
+    display: none;
+  }
+}
+.f-card-st .v-badge {
+  margin-left: 4px;
+}
+.v-box {
+  margin-top: 14px;
+  max-width: 64ch;
+}
+.v-row,
+.v-why {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0 0;
+}
+.v-arrow {
+  width: 0;
+  height: 0;
+  flex: none;
+  display: inline-block;
+  border-left: 5.5px solid transparent;
+  border-right: 5.5px solid transparent;
+  align-self: center;
+}
+.v-arrow.up {
+  border-bottom: 9px solid var(--good);
+}
+.v-arrow.down {
+  border-top: 9px solid var(--bad);
+}
+.v-count {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  min-width: 52px;
+  background: none;
+  border: 1px solid var(--line2);
+  color: var(--ink);
+  padding: 5px 10px;
+  font: 700 14px var(--body);
+  font-variant-numeric: tabular-nums;
+}
+button.v-count {
+  cursor: pointer;
+}
+button.v-count:hover {
+  border-color: var(--ink2);
+}
+/* The person's own vote tints its count. */
+.v-count.mine {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.v-more {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0 0 0 6px;
+  color: var(--muted);
+  font: 13px var(--body);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.v-vote {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  background: none;
+  border: 1px solid var(--line2);
+  color: var(--ink);
+  padding: 5px 10px;
+  font: 600 13px var(--body);
+  cursor: pointer;
+}
+.v-vote:hover {
+  border-color: var(--ink2);
+}
+.v-vote:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.v-give {
+  margin-left: auto;
+  color: var(--turn);
+  border-color: var(--turn);
+}
+.v-why input {
+  flex: 1;
+  min-width: 180px;
+  background: var(--bg);
+  border: 1px solid var(--line2);
+  color: var(--ink);
+  padding: 6px 10px;
+  font: 14px var(--body);
+  outline: none;
+}
+.v-why input:focus {
+  border-color: var(--accent);
+}
+.v-detail {
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: var(--raise);
+}
+.v-detail ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.v-detail li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 0;
+  font-size: 14.5px;
+  line-height: 1.45;
+  color: var(--ink2);
+  overflow-wrap: anywhere;
+}
+.v-detail li b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.v-detail li.you b {
+  color: var(--accent-ink);
+}
+.v-detail .v-more {
+  margin: 0;
+}
+.v-badge-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 10px 0 0;
+  font-size: 13.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.v-giver .v-more {
+  margin-left: 6px;
+}
+.v-note {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.v-proposal {
+  margin: 0 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line2);
+  font-size: 13.5px;
+  color: var(--ink2);
+}
+.v-proposal p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .v-detail li span:last-of-type {
+    flex-basis: 100%;
+  }
+}

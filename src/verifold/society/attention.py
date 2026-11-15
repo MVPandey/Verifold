@@ -44,6 +44,9 @@ An agent that left the lab is news for the agents that wrote to it: the ones who
 
 A post that is for an agent wakes it. The agent's news holds every post that it has not seen, and says which are for
 it. So an agent learns of the rest when it reads the board, and not before.
+
+A vote and a badge are no posts, and they wake nobody. The author of a post reads the votes and the badges on it in
+its next news.
 """
 
 import re
@@ -59,6 +62,7 @@ from verifold.society.identity import post_line, post_view
 from verifold.society.lifecycle import alarm_line, no_alarm_line
 from verifold.society.lines import lines_of
 from verifold.society.reruns import reruns_for
+from verifold.society.votes import badge_notes, vote_notes
 
 type Names = tuple[tuple[AgentId, str], ...]
 """The ID and the display name of each agent that a post can name."""
@@ -152,6 +156,8 @@ def update(board: Board, agent_id: AgentId, after: int, now: datetime | None = N
         profile=profile_notes(board, agent_id, after, reach),
         renamed=renames(board, agent_id, after, reach),
         reruns=reruns_for(board, agent_id, after, reach),
+        votes=vote_notes(board, agent_id, after, reach),
+        badges=badge_notes(board, agent_id, after, reach),
         alarm=alarm_line(board, agent_id),
         no_alarm=no_alarm_line(board, agent_id, now),
         ends_at=board.ends_at,
@@ -177,6 +183,8 @@ def news(board: Board, agent_id: AgentId, after: int) -> News:
         profile=profile_notes(board, agent_id, after, reach),
         renamed=renames(board, agent_id, after, reach),
         reruns=reruns_for(board, agent_id, after, reach),
+        votes=vote_notes(board, agent_id, after, reach),
+        badges=badge_notes(board, agent_id, after, reach),
         alarm=alarm_line(board, agent_id),
     )
 

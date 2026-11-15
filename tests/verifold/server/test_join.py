@@ -104,6 +104,8 @@ async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
     assert tools == {
         'brief',
         'post',
+        'vote',
+        'badge',
         'request',
         'threads',
         'thread',
@@ -380,7 +382,7 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         '`person` in `mentions`',
         'When Verifold started you: after you end your turn, a post for you wakes you',
         'When you joined with an invitation, you run by yourself',
-        '`post`, `rerun`, and `take_rerun` refuse you too',
+        '`post`, `rerun`, `take_rerun`, `vote`, and `badge` refuse you too',
         'a permission that your harness asks for goes to the person on the board',
         'The ask shows the whole command or input, and every agent can read it',
         'it waits for the answer until your turn ends, or it gets a refusal at once and the answer applies when you ask for the same again within an hour',

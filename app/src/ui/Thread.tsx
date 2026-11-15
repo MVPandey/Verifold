@@ -10,11 +10,14 @@ import { href } from '../model/route.ts';
 import { sideReplyHint } from '../model/side.ts';
 import { MAX_RERUNS, wantedLine } from '../model/status.ts';
 import { act, isClaim, rerunChecks, rows, standingIn } from '../model/turns.ts';
+import { hasBreakthrough } from '../model/votes.ts';
 import { messageOf } from '../api/client.ts';
 import { ForYou } from './Coordinator.tsx';
 import { Detail } from './Markdown.tsx';
 import { ChipView, Composer, HarnessAsk, Mark } from './parts.tsx';
 import { Name, Who } from './Picture.tsx';
+import { Badges, Votes } from './Votes.tsx';
+import type { MarkActions } from './Votes.tsx';
 
 /** What every turn of a thread needs from the lab. */
 interface Around {
@@ -32,6 +35,8 @@ interface Around {
   readonly seats: number;
   readonly now: Date;
   readonly onRerun: (postId: string) => Promise<void>;
+  /** The person's moves on votes and badges. Without them, a post shows its votes and takes none. */
+  readonly marks?: MarkActions | undefined;
 }
 
 /** An opened thread: its turns, each reply under the post that it answers, and a box to reply in it. */
@@ -125,7 +130,10 @@ export function Turn(
     </a>
   );
   return (
-    <li id={post.id} className={`f-turn${claim ? ' claim' : ''} d${props.depth}`}>
+    <li
+      id={post.id}
+      className={`f-turn${claim ? ' claim' : ''}${hasBreakthrough(props.item) ? ' v-break' : ''} d${props.depth}`}
+    >
       <Who agents={agents} id={post.author} size={36} dot={false} />
       <div>
         <p className="f-turn-line">
@@ -151,6 +159,7 @@ export function Turn(
             author: agent,
           })}{' '}
           {chip ? <ChipView chip={chip} /> : null}
+          <Badges item={props.item} />
         </p>
         {post.builds_on
           .map((id) => near(id))
@@ -188,6 +197,7 @@ export function Turn(
         )}
         {waits ? <p className="note o-wanted">{waits}</p> : null}
         {canRerun ? <RerunButton postId={post.id} onRerun={props.onRerun} /> : null}
+        <Votes item={props.item} agents={agents} actions={props.marks} />
       </div>
     </li>
   );

@@ -28,15 +28,22 @@ def test_a_plan_is_a_post_of_its_own_kind_and_becomes_one_line() -> None:
         'id': 'p-2',
         'thread': 't-1',
         'author': 'bo',
-        'by': None,
-        'helper': '',
         'kind': 'plan',
         'text': 'I take the small models.',
         'reply_to': 'p-1',
-        'builds_on': (),
-        'for_person': False,
         'seq': 7,
     }
+    # A line leaves out each field that holds nothing, and a reader takes such a field as empty.
+    assert PostLine.model_validate(line.model_dump()) == line
+    assert (line.by, line.helper, line.builds_on, line.for_person, line.up, line.down, line.badges) == (
+        None,
+        '',
+        (),
+        False,
+        0,
+        0,
+        (),
+    )
 
 
 def test_a_false_accepts_is_the_same_as_none() -> None:

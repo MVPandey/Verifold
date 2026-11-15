@@ -29,6 +29,7 @@ from verifold.protocol.record import Record
 from verifold.protocol.settings import MAX_MINUTES, Settings
 from verifold.protocol.threads import Thread
 from verifold.protocol.usage import Usage
+from verifold.protocol.votes import Badge, BadgeAction, Direction, Why
 
 
 class EventBase(Record):
@@ -454,6 +455,50 @@ class RequestAnswered(EventBase):
     """With the person's yes to more time: the minutes that the person gave, when not the minutes of the request."""
 
 
+class Voted(EventBase):
+    """
+    An agent or the person voted on a post, or took its vote back.
+
+    A voter has one vote on a post: this one replaces its earlier one, and `none` takes it back. A vote up or down
+    has a reason. Nobody votes on its own post. A vote changes nothing else on the board and wakes nobody.
+    """
+
+    type: Literal['voted'] = 'voted'
+    by: AgentId
+    """The voter: an agent, or `person`."""
+    post: PostId
+    direction: Direction
+    reason: Why = ''
+
+
+class BadgeSet(EventBase):
+    """
+    A change to a badge on a post: somebody gave it, seconded it, or took it back.
+
+    `promising` and `confirmed` come from any agent but the post's author, and from the person. A `confirmed` from
+    an agent names in `proof` what confirmed the post. An agent but the author proposes `breakthrough` with `give`,
+    and it stands when the agent that holds the coordinator seat or the person seconds it. The coordinator seconds
+    no proposal of its own, and nobody seconds for its own post. A giver takes its own badge back, and the person
+    takes any badge back. A badge changes nothing else on the board and wakes nobody.
+    """
+
+    type: Literal['badge_set'] = 'badge_set'
+    by: AgentId
+    """Who made the change: an agent, or `person`."""
+    post: PostId
+    badge: Badge
+    action: BadgeAction = 'give'
+    reason: Why = ''
+    """Why. A `give` has one. A `second` can have one."""
+    proof: PostId | None = None
+    """With `give` of `confirmed`: a check of the post that holds, or a result that builds on the post."""
+    giver: AgentId | None = None
+    """
+    Whose badge a `second` or a `take_back` is about. A `second` names the agent that proposed the badge. A
+    `take_back` without it takes back the badge that `by` gave.
+    """
+
+
 type Event = Annotated[
     LabOpened
     | QuestionRevised
@@ -478,6 +523,8 @@ type Event = Annotated[
     | SettingsSet
     | PermissionGranted
     | PowerSet
-    | RequestAnswered,
+    | RequestAnswered
+    | Voted
+    | BadgeSet,
     Field(discriminator='type'),
 ]
