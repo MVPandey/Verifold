@@ -332,10 +332,13 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         instructions = client.instructions
 
     assert instructions == INSTRUCTIONS
-    assert instructions.startswith('You are one agent in a Verifold lab. Call `brief` first.')
+    # The text opens with the tool that gives the board's state, as a fact and not as an order.
+    assert instructions.startswith('This is the board of a Verifold lab. `brief` gives the board as it is now')
+    # The text wraps, so the rules are compared without its line breaks.
+    flat = ' '.join(instructions.split())
     for rule in (
         'A `plan` says what',
-        'at most 300 characters',
+        'at most 1000 characters',
         '`holds` or `fails`',
         'has `news`',
         "A line is the post's headline",
@@ -346,8 +349,8 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         'An agent sees any other post when it next reads the board',
         'A post from the person that names nobody',
         'an `ask` that replies to no post',
-        'name them in `builds_on`',
-        'give\n  its own name in `helper`',
+        '`builds_on` names the posts, in any thread, that a post builds on',
+        "`helper` on a post holds the helper's own name",
         'stays in `brief` until somebody answers it',
         '`person` in `mentions`',
         'When Verifold started you: after you end your turn, a post for you wakes you',
@@ -355,18 +358,20 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         '`post` and `rerun` refuse you too',
         'a permission that your harness asks for goes to the person on the board',
         'The ask shows the whole command or input, and every agent can read it',
-        'it waits for the answer until your turn ends, or it gets a refusal at\n  once and the answer applies when you ask for the same again within an hour',
-        'None of this applies to an agent that\n  joined with an invitation',
-        'So you choose when to look at the\n  board again',
+        'it waits for the answer until your turn ends, or it gets a refusal at once and the answer applies when you ask for the same again within an hour',
+        'None of this applies to an agent that joined with an invitation',
+        'The order of these fields ranks nothing',
+        'The person can change the norms while the lab runs',
+        'When no alarm waits, `no_alarm` in `brief` and in `wait` says what starts your next turn as the lab stands',
         'pins each file',
         'blind rerun',
         'time limit',
         '`alarm` wakes you when you are not in a turn',
-        'Your alarm\n  stays until it rings',
+        'Your alarm stays until it rings',
         'A `close` says that the lab is done',
         "person's norms",
     ):
-        assert rule in instructions
+        assert rule in flat, rule
     # How an agent writes its commands is the agent's own business.
     assert 'run it plain' not in instructions
 
@@ -409,6 +414,12 @@ async def test_an_agent_sets_and_cancels_its_own_alarm_and_every_result_says_whi
     gone = AlarmResult.model_validate(cancelled.structured_content)
     assert (gone.rings_at, gone.news and gone.news.alarm) == (None, None)
     assert ThreadList.model_validate(after.structured_content).news == News(seq=lab.board.seq)
+    # With no alarm, `brief` says what starts the agent's next turn as the lab stands. With one, it is empty.
+    assert first.no_alarm == (
+        'No alarm is set for you. After you end this turn, your next turn starts only when a post for you arrives '
+        'or when an agent that you named or answered leaves. The lab has no time limit. No close stands.'
+    )
+    assert now.no_alarm == ''
     assert too_long.is_error
     assert [(alarm.agent, alarm.minutes, alarm.quiet, alarm.stays) for alarm in lab.board.alarms] == [
         ('bo', 20, True, True),
@@ -514,3 +525,39 @@ async def test_a_departure_reaches_the_agents_that_wrote_to_the_agent_and_ends_t
     assert (named.is_error, named.structured_content['left'], plain.structured_content['left']) == (False, [line], [])
     # The agent got the departure in its wait, so its news does not repeat it.
     assert named.structured_content['news']['left'] == []
+
+
+async def test_the_wait_tool_states_what_starts_the_next_turn_and_gives_no_advice(lab: Lab) -> None:
+    async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
+        text = next(tool.description or '' for tool in (await client.list_tools()).tools if tool.name == 'wait')
+        waited = await client.call_tool('wait', {'timeout_seconds': 0})
+        await client.call_tool('alarm', {'minutes': 10})
+        with_alarm = await client.call_tool('wait', {'timeout_seconds': 0})
+
+    flat = ' '.join(text.split())
+    assert 'nothing to do' not in flat
+    assert 'you can also end your turn' not in flat.lower()
+    assert 'Verifold starts your next turn when a post for you arrives' in flat
+    assert 'No turn starts while the lab is out of time.' in flat
+    update = Update.model_validate(waited.structured_content)
+    assert update.alarm is None
+    assert update.no_alarm == (
+        'No alarm is set for you. After you end this turn, your next turn starts only when a post for you arrives '
+        'or when an agent that you named or answered leaves. The lab has no time limit. No close stands.'
+    )
+    assert Update.model_validate(with_alarm.structured_content).no_alarm == ''
+
+
+async def test_a_headline_takes_a_full_sentence_and_a_longer_one_is_refused_with_its_length_and_the_limit(
+    lab: Lab,
+) -> None:
+    async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
+        long = await client.call_tool('post', {'kind': 'message', 'text': 'x' * 1000, 'thread': 't-1'})
+        too_long = await client.call_tool('post', {'kind': 'message', 'text': 'x' * 1001, 'thread': 't-1'})
+        schema = next(tool for tool in (await client.list_tools()).tools if tool.name == 'post').input_schema
+
+    assert not long.is_error
+    assert too_long.is_error
+    assert '`text` has 1001 characters, and the limit of a headline is 1000.' in str(too_long.content)
+    assert '`body` takes up to 20000 characters.' in str(too_long.content)
+    assert schema['$defs']['Headline']['maxLength'] == 1000

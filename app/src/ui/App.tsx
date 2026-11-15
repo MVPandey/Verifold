@@ -6,6 +6,7 @@ import { FilePage } from './FilePage.tsx';
 import { LabPage } from './LabPage.tsx';
 import { Manifold } from './Manifold.tsx';
 import { NeedsPage } from './NeedsPage.tsx';
+import { NormsPage } from './NormsPage.tsx';
 import { SettingsPage } from './SettingsPage.tsx';
 import { SetupPage } from './SetupPage.tsx';
 import { Top } from './Top.tsx';
@@ -31,6 +32,8 @@ export function App(props: { readonly api: Api; readonly token: string }): React
               harnesses={data.setup.harnesses}
               onChanged={data.reload}
             />
+          ) : route.page === 'norms' ? (
+            <NormsPage api={props.api} labOpen={false} />
           ) : (
             <SetupPage
               api={props.api}
@@ -71,6 +74,8 @@ export function App(props: { readonly api: Api; readonly token: string }): React
           <NeedsPage {...shared} />
         ) : route.page === 'file' ? (
           <FilePage api={props.api} post={route.post} path={route.path} />
+        ) : route.page === 'norms' ? (
+          <NormsPage api={props.api} labOpen />
         ) : route.page === 'settings' ? (
           <SettingsPage
             api={props.api}

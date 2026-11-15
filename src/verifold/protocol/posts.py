@@ -10,17 +10,39 @@ lab, a report tells the person where the lab is, and a call offers work that ano
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, Field, StringConstraints
+from pydantic import AfterValidator, Field, StringConstraints, WithJsonSchema
 
 from verifold.protocol.ids import AgentId, CommitId, PostId, ThreadId
 from verifold.protocol.record import Record
 
-MAX_HEADLINE = 300
+MAX_HEADLINE = 1_000
+"""
+The most characters in a post's headline. The limit only keeps a whole report out of the headline. It was 300, and
+agents that wrote a full sentence about a result ran words together to fit. The app clamps a long headline where it
+shows one line.
+"""
 MAX_CHOICES = 10
 MAX_BUILDS_ON = 10
-
-type Headline = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_HEADLINE)]
 MAX_BODY = 20_000
+
+
+def _fits_a_headline(text: str) -> str:
+    # The schema's own error for `max_length` names the limit and not the length, so the author cannot tell how much
+    # to cut.
+    if len(text) > MAX_HEADLINE:
+        raise ValueError(
+            f'`text` has {len(text)} characters, and the limit of a headline is {MAX_HEADLINE}. `body` takes up to '
+            f'{MAX_BODY} characters.'
+        )
+    return text
+
+
+type Headline = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1),
+    AfterValidator(_fits_a_headline),
+    WithJsonSchema({'type': 'string', 'minLength': 1, 'maxLength': MAX_HEADLINE}),
+]
 type Body = Annotated[str, StringConstraints(max_length=MAX_BODY)]
 type PostKind = Literal[
     'message',

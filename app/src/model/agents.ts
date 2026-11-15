@@ -144,7 +144,7 @@ export function costLine(view: AgentView): string {
   const turns = `${view.turns} ${view.turns === 1 ? 'turn' : 'turns'}`;
   if (view.cost_usd !== null) return `${money(view.cost_usd)} over ${turns}`;
   const { input_tokens: input, output_tokens: output } = view.usage;
-  return `${tokens(input)} tokens in, ${tokens(output)} out over ${turns}. No price.`;
+  return `${tokens(input)} tokens in, ${tokens(output)} out over ${turns}. Cost not reported by the harness.`;
 }
 
 /**
@@ -160,12 +160,18 @@ export function workingLine(agents: readonly AgentView[]): string {
   return `${line}, ${reruns} blind ${reruns === 1 ? 'rerun' : 'reruns'}`;
 }
 
-/** Return what the lab has cost so far, such as "$0.37 and 463k tokens" for harnesses with and without prices. */
+/**
+ * Return what the lab has cost so far, such as "$0.37, and 463k tokens with cost not reported by the harness".
+ * Only a cost that a harness reported counts as money: a harness that reports tokens and no cost adds tokens,
+ * and never $0.
+ */
 export function labTotal(agents: readonly AgentView[]): string {
-  const usd = agents.reduce((sum, view) => sum + (view.cost_usd ?? 0), 0);
+  const priced = agents.filter((view) => view.cost_usd !== null);
+  const usd = priced.reduce((sum, view) => sum + (view.cost_usd ?? 0), 0);
   const unpriced = agents
     .filter((view) => view.cost_usd === null)
     .reduce((sum, view) => sum + view.usage.input_tokens + view.usage.output_tokens, 0);
-  if (unpriced === 0) return money(usd);
-  return usd > 0 ? `${money(usd)} and ${tokens(unpriced)} tokens` : `${tokens(unpriced)} tokens`;
+  if (unpriced === 0) return priced.length > 0 ? money(usd) : 'No cost reported yet';
+  const rest = `${tokens(unpriced)} tokens with cost not reported by the harness`;
+  return priced.length > 0 ? `${money(usd)}, and ${rest}` : rest;
 }

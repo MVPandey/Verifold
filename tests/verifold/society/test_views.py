@@ -1,7 +1,10 @@
+from datetime import timedelta
+
 import pytest
 from builders import RecordBuilder
 
-from verifold.protocol.join import MAX_NEWS, News, PostLine, ThreadLink
+from verifold.protocol.events import AlarmSet
+from verifold.protocol.join import MAX_LINE, MAX_NEWS, QUIET_MINUTES, Brief, News, PostLine, ThreadLine, ThreadLink
 from verifold.protocol.posts import (
     Answer,
     Ask,
@@ -17,6 +20,7 @@ from verifold.protocol.posts import (
     RuledOut,
 )
 from verifold.protocol.threads import QUESTION_TITLE
+from verifold.society.attention import news
 from verifold.society.errors import NotFound
 from verifold.society.standing import is_open_call, takers
 from verifold.society.views import (
@@ -282,7 +286,7 @@ def test_the_caller_withdraws_a_call_with_a_ruled_out_lead_and_the_person_takes_
     assert thread_summaries(withdrawn, 'person')[0].open_calls == 0
 
 
-def test_a_brief_lists_where_an_agents_work_is_of_use_before_what_to_check(record: RecordBuilder) -> None:
+def test_a_brief_lists_the_threads_with_one_agent_and_the_results_that_nobody_built_on(record: RecordBuilder) -> None:
     record.thread('t-2', opened_by='ada').thread('t-3', opened_by='bo').thread('t-4', opened_by='cy')
     record.post(Result(id='p-1', thread='t-2', author='ada', text='Curves help.'))
     record.post(Result(id='p-2', thread='t-3', author='bo', text='Planes lose.'))
@@ -297,9 +301,6 @@ def test_a_brief_lists_where_an_agents_work_is_of_use_before_what_to_check(recor
     # Ada went on from p-1 herself, so only the newest result of her chain waits. Cy built on p-2.
     assert [line.id for line in seen.not_built_on] == ['p-4']
     assert brief(record.board(), 'ada', News(seq=0)).one_agent_threads == ()
-    fields = list(type(seen).model_fields)
-    assert fields.index('open_calls') < fields.index('one_agent_threads') < fields.index('not_built_on')
-    assert fields.index('not_built_on') < fields.index('open_asks') < fields.index('not_checked')
 
 
 def test_a_report_a_check_and_the_person_build_nothing_and_a_disputed_result_is_not_work_to_build_on(
@@ -418,3 +419,79 @@ def test_the_brief_gives_an_agent_its_own_line(record: RecordBuilder) -> None:
     )
     assert all(line.id != 'bo' for line in brief(record.board(), 'bo', News(seq=0)).agents)
     assert brief(record.board(), 'person', News(seq=0)).your_line is None
+
+
+def test_a_brief_shows_the_labs_time_its_turns_its_alarms_and_its_quiet_threads() -> None:
+    record = RecordBuilder().thread('t-1', opened_by='person', title=QUESTION_TITLE)
+    record.join('ada').join('bo').join('cy').join('guest', harness='guest')
+    record.thread('t-2', opened_by='ada').post(Plan(id='p-1', thread='t-2', author='ada', text='I take the bound.'))
+    record.thread('t-3', opened_by='bo').post(Plan(id='p-2', thread='t-3', author='bo', text='I take the data.'))
+    # Ada and Bo are in a turn. Cy ended its turn, and set an alarm before that.
+    record.start('ada', seen=0).start('bo', seen=0).start('cy', seen=0)
+    seq = len(record.events) + 1
+    record.events.append(AlarmSet(seq=seq, at=record.at(seq), agent='cy', minutes=30, stays=True))
+    record.turn('cy', seen=seq)
+    ends_at = record.at(len(record.events) + 1) + timedelta(hours=3)
+    board = record.time_set(ends_at).board()
+    now = board.posts[-1].at + timedelta(minutes=QUIET_MINUTES)
+
+    view = brief(board, 'ada', News(seq=0), now=now)
+
+    assert (view.state, view.ends_at, view.in_turn, view.alarms_waiting) == ('open', ends_at, 2, 1)
+    assert view.minutes_left == (ends_at - now).total_seconds() / 60
+    # Bo's thread got its last post an hour ago, and Ada's a minute earlier. The thread that went quiet last comes
+    # first, and the question's thread is not listed.
+    assert view.quiet_threads == (
+        ThreadLine(id='t-3', title='Subject', team=('bo',), last_at=board.posts[1].at),
+        ThreadLine(id='t-2', title='Subject', team=('ada',), last_at=board.posts[0].at),
+    )
+    assert view.more_quiet_threads == 0
+    # A minute earlier only Ada's thread is that quiet, and without a clock the time counts from the newest post.
+    assert [line.id for line in brief(board, 'ada', News(seq=0), now=now - timedelta(minutes=1)).quiet_threads] == [
+        't-2'
+    ]
+    assert brief(board, 'ada', News(seq=0)).quiet_threads == ()
+    assert brief(board, 'ada', News(seq=0)).minutes_left == (ends_at - board.posts[-1].at).total_seconds() / 60
+
+    # A lab without a time limit has no time left to state, and a lab that is out of time has none left.
+    assert brief(RecordBuilder().join('ada').board(), 'ada', News(seq=0)).minutes_left is None
+    out = record.time_set(record.at(len(record.events) + 1)).ran_out().board()
+    assert brief(out, 'ada', News(seq=0)).minutes_left == 0
+
+
+def test_a_brief_orders_its_lists_by_what_they_are_and_not_by_what_to_do_first() -> None:
+    fields = list(Brief.model_fields)
+    lists = [name for name in fields if name in {'open_calls', 'open_asks', 'not_built_on', 'not_checked', 'disputed'}]
+
+    # The lists of posts come in the order of the alphabet, after the threads, so the order ranks nothing.
+    assert lists == sorted(lists)
+    assert fields.index('quiet_threads') < fields.index(lists[0])
+    assert 'in this order' not in (Brief.__doc__ or '')
+    assert 'ranks nothing' in (Brief.__doc__ or '')
+
+
+def test_a_brief_counts_the_quiet_threads_that_its_list_leaves_out_and_lists_no_side_thread() -> None:
+    record = RecordBuilder().join('ada').join('bo')
+    for number in range(1, 14):
+        record.thread(f't-{number}', opened_by='ada', between=('ada', 'bo') if number == 13 else ())
+        record.post(Message(id=f'p-{number}', thread=f't-{number}', author='ada', text='A note.'))
+    board = record.board()
+
+    view = brief(board, 'bo', News(seq=0), now=board.posts[-1].at + timedelta(minutes=QUIET_MINUTES))
+
+    assert [line.id for line in view.quiet_threads] == [f't-{number}' for number in range(12, 2, -1)]
+    assert view.more_quiet_threads == 2
+
+
+def test_a_line_cuts_a_long_headline_and_says_so_and_the_thread_keeps_all_of_it(record: RecordBuilder) -> None:
+    long = 'x' * 1000
+    record.post(Result(id='p-1', thread='t-1', author='ada', text=long))
+    record.post(Result(id='p-2', thread='t-1', author='ada', text='y' * MAX_LINE))
+    board = record.board()
+
+    cut, whole = brief(board, 'bo', News(seq=0)).not_checked
+
+    assert cut.text == f'{"x" * MAX_LINE}… [cut: the headline has 1000 characters, and `thread` shows all of it]'
+    assert whole.text == 'y' * MAX_LINE
+    assert news(board, 'bo', 0).for_you[0].text == cut.text
+    assert thread_view(board, 'bo', 't-1').posts[0].post.text == long

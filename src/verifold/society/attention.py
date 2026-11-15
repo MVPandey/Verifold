@@ -31,6 +31,7 @@ it. So an agent learns of the rest when it reads the board, and not before.
 """
 
 import re
+from datetime import datetime
 from functools import lru_cache
 
 from verifold.protocol.events import AgentLeft, Posted
@@ -38,7 +39,7 @@ from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.join import MAX_NEWS, LeftLine, News, PostLine, Update
 from verifold.protocol.posts import Ask, Call, Check, Close, Post
 from verifold.society.board import Board
-from verifold.society.lifecycle import alarm_line
+from verifold.society.lifecycle import alarm_line, no_alarm_line
 from verifold.society.lines import lines_of
 
 type Names = tuple[tuple[AgentId, str], ...]
@@ -99,12 +100,12 @@ def wakes(
     return watches_thread(board, agent_id, post.thread, working)
 
 
-def update(board: Board, agent_id: AgentId, after: int) -> Update:
+def update(board: Board, agent_id: AgentId, after: int, now: datetime | None = None) -> Update:
     """
     Return what happened after event `after`: the posts for an agent in full, and a summary of the rest.
 
     It holds at most `MAX_NEWS` posts for the agent, the oldest first. When more wait, it reaches only as far as the
-    last one that it holds, so the next update brings the others.
+    last one that it holds, so the next update brings the others. `now` dates the time that the lab has left.
     """
     woken, rest = _unseen(board, agent_id, after)
     shown, others, reach = _page(woken, rest, board.seq)
@@ -125,6 +126,7 @@ def update(board: Board, agent_id: AgentId, after: int) -> Update:
         ),
         left=departures(board, agent_id, after, reach),
         alarm=alarm_line(board, agent_id),
+        no_alarm=no_alarm_line(board, agent_id, now),
         ends_at=board.ends_at,
     )
 

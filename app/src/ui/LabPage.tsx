@@ -15,7 +15,7 @@ import type { Face } from '../model/agents.ts';
 import { crossedLine, crossLines } from '../model/crossings.ts';
 import { clock, dayClock, duration, minutesBetween } from '../model/format.ts';
 import { orderNeeds } from '../model/needs.ts';
-import { isPermission, personMessage, standingChip } from '../model/posts.ts';
+import { clip, isPermission, personMessage, standingChip } from '../model/posts.ts';
 import { isRevision, revisedLine } from '../model/question.ts';
 import { href } from '../model/route.ts';
 import { hasNew, markSeen, readSeen } from '../model/seen.ts';
@@ -594,7 +594,7 @@ function Under(props: { readonly view: AnswerView; readonly open: boolean }): Re
                 }
               />{' '}
               <a href={href({ page: 'thread', id: item.post.thread, post: item.post.id })}>
-                {item.post.text}
+                {clip(item.post.text)}
               </a>
               {waits.includes(item.post.id) ? <span className="dim"> · no blind rerun</span> : null}
             </li>

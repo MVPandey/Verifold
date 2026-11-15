@@ -1,6 +1,13 @@
-"""The board as one agent, or the person, sees it."""
+"""
+The board as one agent, or the person, sees it.
 
-from verifold.protocol.agents import Agent
+A view holds what is on the board, as facts. `brief` ranks nothing and gives no advice: what an agent does with
+the board is the agent's choice, and the person's norms are in the lab's `LAB.md`.
+"""
+
+from datetime import datetime, timedelta
+
+from verifold.protocol.agents import GUEST, Agent
 from verifold.protocol.events import (
     ERROR_MODEL_REFUSED,
     ERROR_OUT_OF_TIME,
@@ -14,6 +21,7 @@ from verifold.protocol.join import (
     MAX_LEADS,
     MAX_LINKS,
     MAX_NEWS,
+    QUIET_MINUTES,
     AgentLine,
     AnswerView,
     Brief,
@@ -32,10 +40,18 @@ from verifold.protocol.posts import Ask, Call, Check, Close, Objection, Plan, Pr
 from verifold.society.attention import left_line, watches_thread
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
-from verifold.society.lifecycle import alarm_line, lab_state
+from verifold.society.lifecycle import (
+    alarm_line,
+    lab_state,
+    latest_time,
+    minutes_left,
+    no_alarm_line,
+    pending_alarm,
+)
 from verifold.society.lines import lines_of, question_thread
 from verifold.society.rules import blind_checks
 from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing, waits_for_person
+from verifold.society.turns import before
 
 
 def post_view(board: Board, entry: Posted) -> PostView:
@@ -212,16 +228,22 @@ def _built_on(board: Board, entry: Posted) -> bool:
     )
 
 
-def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
+def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: datetime | None = None) -> Brief:
     """
     Return the lab for one agent in one read.
 
-    It holds the agent's own line and the other agents with their latest plans, and then where the agent's work is
-    of use: the calls that
-    need an agent, the threads where one agent works alone, the results that nobody has built on, the asks that
-    nobody has answered, the results that nobody has checked, and the disputed posts. Then come the newest threads,
-    one line for each side thread, and the agent's `news`. `how` says how the board works.
+    It holds the agent's own line, the lab's state and the time that it has left, how many agents are in a turn
+    and how many have an alarm that waits, and the other agents with their latest plans. Then come the threads: the
+    newest ones, one line for each side thread, the threads where one agent works alone, and the threads that got
+    no post for a long while. Then come the posts by where they stand: the disputed posts, the results that nobody
+    has built on, the results that nobody has checked, the asks that nobody has answered, and the calls that need an
+    agent. The order ranks nothing. `how` says how the board works.
+
+    `now` dates the time that the lab has left and the quiet threads. Without it, time counts from the board's
+    newest post. The agents in a turn come from the record, because this package does no I/O and so knows no live
+    activity.
     """
+    now = now or latest_time(board)
     # An invited agent that has not posted may never come, so no agent reads it as a peer to ask or wait for. An
     # agent that left is no peer either, and the brief lists it apart.
     others = tuple(
@@ -271,6 +293,22 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         for summary in every
         if len(summary.team) == 1 and agent_id not in summary.team and summary.thread.id in busy
     )
+    quiet = sorted(
+        (
+            summary
+            for summary in summaries
+            if summary.thread.id != question_thread(board) and now - summary.last_at >= timedelta(minutes=QUIET_MINUTES)
+        ),
+        key=lambda summary: summary.last_at,
+        reverse=True,
+    )
+    # The agents that Verifold runs. An invited agent has no turns in the record, and a blind checker is no agent
+    # of the lab.
+    run = tuple(
+        joined.agent.id
+        for joined in board.agents
+        if not joined.agent.checks and joined.agent.harness != GUEST and not board.gone(joined.agent.id)
+    )
     not_built_on = tuple(
         PostLine.of(entry)
         for entry, state in stands
@@ -286,11 +324,19 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         you=agent_id,
         your_line=_agent_line(board, you.agent, working) if you else None,
         your_alarm=alarm_line(board, agent_id),
+        no_alarm=no_alarm_line(board, agent_id, now),
         how=how,
         question=board.question,
         revisions=tuple(
             RevisionLine(at=entry.at, note=entry.note, post=entry.post) for entry in board.revisions[-MAX_LEADS:]
         ),
+        state=lab_state(board),
+        close=PostLine.of(done) if done else None,
+        close_agreed=agreed(board, done) if done else (),
+        ends_at=board.ends_at,
+        minutes_left=minutes_left(board, now),
+        in_turn=sum(before(board, agent).cut_off for agent in run),
+        alarms_waiting=sum(pending_alarm(board, joined.agent.id) is not None for joined in board.agents),
         agents=tuple(_agent_line(board, agent, working) for agent in others),
         coordinator=board.coordinator,
         coordinator_open=board.coordinator_open,
@@ -298,21 +344,22 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         answer=PostLine.of(proposed) if proposed else None,
         answer_standing=standing(board, proposed.post.id) if proposed else None,
         answer_to_earlier_question=bool(proposed) and to_earlier_question(board, proposed),
-        state=lab_state(board),
-        close=PostLine.of(done) if done else None,
-        close_agreed=agreed(board, done) if done else (),
-        open_calls=open_calls[-MAX_NEWS:],
-        one_agent_threads=alone[:MAX_LEADS],
-        not_built_on=not_built_on[-MAX_LEADS:],
-        open_asks=open_asks[-MAX_NEWS:],
-        not_checked=not_checked[-MAX_NEWS:],
-        disputed=disputed[-MAX_NEWS:],
         threads=summaries[:MAX_NEWS],
         more_threads=max(len(summaries) - MAX_NEWS, 0),
         side_threads=side[:MAX_NEWS],
         more_side_threads=max(len(side) - MAX_NEWS, 0),
+        one_agent_threads=alone[:MAX_LEADS],
+        quiet_threads=tuple(
+            ThreadLine(id=summary.thread.id, title=summary.thread.title, team=summary.team, last_at=summary.last_at)
+            for summary in quiet[:MAX_LEADS]
+        ),
+        more_quiet_threads=max(len(quiet) - MAX_LEADS, 0),
+        disputed=disputed[-MAX_NEWS:],
+        not_built_on=not_built_on[-MAX_LEADS:],
+        not_checked=not_checked[-MAX_NEWS:],
+        open_asks=open_asks[-MAX_NEWS:],
+        open_calls=open_calls[-MAX_NEWS:],
         news=news,
-        ends_at=board.ends_at,
     )
 
 

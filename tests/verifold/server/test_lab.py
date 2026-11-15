@@ -149,7 +149,7 @@ async def test_a_lab_opens_the_question_thread_with_the_question_as_the_persons_
 async def test_a_long_question_keeps_its_first_line_as_the_headline_and_all_of_it_as_the_body(
     record_file: RecordFile,
 ) -> None:
-    question = f'{"Why " * 100}?\nUse the GPU.'
+    question = f'{"Why " * 300}?\nUse the GPU.'
     lab = Lab.create(record_file, question)
 
     post = (await lab.open_question_thread()).post
@@ -228,7 +228,7 @@ async def test_a_revision_goes_in_the_questions_thread_as_the_persons_post_and_s
 async def test_a_long_revision_keeps_all_of_its_text_in_the_body_of_its_post(record_file: RecordFile) -> None:
     lab = Lab.create(record_file, 'Does it hold?')
     await lab.open_question_thread()
-    question = f'{"Why " * 100}?\nUse the GPU.'
+    question = f'{"Why " * 300}?\nUse the GPU.'
 
     await lab.revise_question(question)
 

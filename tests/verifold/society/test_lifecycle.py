@@ -6,15 +6,17 @@ from builders import START, RecordBuilder, lab
 
 from verifold.protocol.events import AlarmSet
 from verifold.protocol.join import AlarmLine, News
-from verifold.protocol.posts import Answer, Close, Message, Objection, Result, RuledOut
+from verifold.protocol.posts import Answer, Close, FileEvidence, Message, Objection, Result, RuledOut
 from verifold.runner.messages import start_message
 from verifold.society.attention import news, update, wakes
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply
-from verifold.society.lifecycle import alarm_line, lab_state, pending_alarm, rings_at
+from verifold.society.lifecycle import alarm_line, lab_state, no_alarm_line, pending_alarm, rings_at
 from verifold.society.lines import lines_of
 from verifold.society.standing import agreed, closing
 from verifold.society.views import brief
+
+EVIDENCE = FileEvidence(path='bench.py', commit='c' * 40)
 
 
 def test_the_lab_closes_when_more_than_half_of_its_agents_stand_behind_a_close(record: RecordBuilder) -> None:
@@ -255,3 +257,61 @@ def test_an_invited_agent_that_has_not_posted_is_no_peer_in_a_brief_an_update_or
     assert [line.id for line in brief(came, 'ada', News(seq=0)).agents] == ['bo', 'guest']
     assert [agent.id for agent in update(came, 'ada', 0).agents] == ['bo', 'guest']
     assert 'Bo (bo, fake), Guest (guest, guest).' in start_message(came, ada, Path('LAB.md'))
+
+
+NO_ALARM = 'No alarm is set for you.'
+A_POST = 'After you end this turn, your next turn starts only when a post for you arrives'
+OR_A_DEPARTURE = f'{A_POST} or when an agent that you named or answered leaves.'
+
+
+def test_an_agent_without_an_alarm_reads_what_starts_its_next_turn_as_the_lab_stands(record: RecordBuilder) -> None:
+    board = record.board()
+    line = f'{NO_ALARM} {OR_A_DEPARTURE} The lab has no time limit. No close stands.'
+    assert (no_alarm_line(board, 'bo'), update(board, 'bo', 0).no_alarm) == (line, line)
+    assert brief(board, 'bo', News(seq=0)).no_alarm == line
+    # The news of the other tools does not carry the line, so it does not come with every call.
+    assert 'no_alarm' not in News.model_fields
+
+    # The time counts from the clock that the caller gives, and from the newest post without one.
+    record.post(Close(id='p-1', thread='t-1', author='ada', text='Done.'))
+    ends_at = record.at(len(record.events)) + timedelta(hours=2)
+    board = record.time_set(ends_at).board()
+    stands = 'A close stands: p-1 by ada. 1 of 3 agents stand behind it, so the lab is closing.'
+    ends = 'The lab ends at 2026-11-06 14:05 UTC'
+    assert no_alarm_line(board, 'bo') == f'{NO_ALARM} {OR_A_DEPARTURE} {ends}, 120 minutes from now. {stands}'
+    assert [
+        no_alarm_line(board, 'bo', ends_at - timedelta(seconds=seconds)).split(' UTC, ')[1].split(' from now')[0]
+        for seconds in (440, 119, 60, 59, 1)
+    ] == ['7 minutes', '1 minute', '1 minute', 'less than a minute', 'less than a minute']
+    assert update(board, 'bo', 0, ends_at - timedelta(minutes=7)).no_alarm == (
+        f'{NO_ALARM} {OR_A_DEPARTURE} {ends}, 7 minutes from now. {stands}'
+    )
+
+    # In a closed lab the leaving of an agent starts no turn, so the line does not name it.
+    record.post(Answer(id='p-2', thread='t-1', author='bo', text='Agreed.', reply_to='p-1', accepts=True))
+    closed = 'A close stands: p-1 by ada. 2 of 3 agents stand behind it, so the lab is closed.'
+    assert no_alarm_line(record.board(), 'cy') == f'{NO_ALARM} {A_POST}. {ends}, 118 minutes from now. {closed}'
+
+    # While the lab is out of time no post starts a turn. The turn that reads the line stops, and more time
+    # starts the next one.
+    out = record.time_set(record.at(len(record.events) + 1)).ran_out().board()
+    assert no_alarm_line(out, 'cy') == (
+        f'{NO_ALARM} The lab is out of time, so Verifold stops this turn. Your next turn starts when the person '
+        f'gives the lab more time. {closed}'
+    )
+
+
+def test_the_line_is_empty_while_an_alarm_waits_and_for_an_agent_that_verifold_cannot_wake(
+    record: RecordBuilder,
+) -> None:
+    set_alarm(record, 15)
+    record.post(Result(id='p-1', thread='t-1', author='ada', text='It holds.', evidence=(EVIDENCE,)))
+    record.join('guest', harness='guest').join('dee', family='other', checks='p-1').leave('cy')
+    board = record.board()
+
+    # The result shows the alarm that waits, so it needs no second line.
+    assert (update(board, 'bo', 0).alarm is not None, update(board, 'bo', 0).no_alarm) == (True, '')
+    assert [no_alarm_line(board, agent) for agent in ('guest', 'dee', 'cy', 'nobody')] == ['', '', '', '']
+    assert no_alarm_line(board, 'ada').startswith(NO_ALARM)
+    # The line states facts and gives no advice.
+    assert not any(word in no_alarm_line(board, 'ada') for word in ('should', 'keep working', 'set an alarm'))

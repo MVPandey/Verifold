@@ -31,6 +31,7 @@ import {
   isPermission,
   personAnswer,
   personMessage,
+  clip,
   split,
   standingChip,
   titleOf,
@@ -155,9 +156,16 @@ describe('posts', () => {
       headline: 'Try sorted input.',
       body: 'Also reversed.',
     });
-    const long = split('x'.repeat(400));
-    assert.equal(long.headline.length, 300);
-    assert.equal(long.body, 'x'.repeat(400));
+    // A first line of 400 characters is a headline, as it is for an agent. The server takes 1,000.
+    assert.deepEqual(split('x'.repeat(400)), { headline: 'x'.repeat(400), body: '' });
+    const long = split('x'.repeat(1200));
+    assert.equal(long.headline.length, 1000);
+    assert.equal(long.body, 'x'.repeat(1200));
+  });
+
+  it('clips a long headline where the page lists posts', () => {
+    assert.equal(clip('Short.'), 'Short.');
+    assert.equal(clip('x'.repeat(300)), `${'x'.repeat(199)}…`);
   });
 
   it('opens a new thread for a message to all agents, and posts in a thread for a reply', () => {
@@ -414,7 +422,10 @@ describe('agents', () => {
       usage: { input_tokens: 461_000, cached_input_tokens: 0, output_tokens: 2_000 },
     });
     assert.equal(costLine(priced), '$0.37 over 4 turns');
-    assert.equal(costLine(unpriced), '461k tokens in, 2k out over 3 turns. No price.');
+    assert.equal(
+      costLine(unpriced),
+      '461k tokens in, 2k out over 3 turns. Cost not reported by the harness.',
+    );
     assert.equal(costLine(agentView('agent-3')), 'No turns yet');
     // An invited agent runs by itself. Verifold sees its board calls and nothing else.
     const guest = agentView('agent-4', {
@@ -444,7 +455,13 @@ describe('agents', () => {
       stateLine({ state: 'here', detail: '', at: '2026-11-06T14:11:30Z' }, now).text,
       'Last board call just now',
     );
-    assert.equal(labTotal([priced, unpriced]), '$0.37 and 463k tokens');
+    assert.equal(
+      labTotal([priced, unpriced]),
+      '$0.37, and 463k tokens with cost not reported by the harness',
+    );
+    // A harness that reports tokens and no cost never shows as $0.
+    assert.equal(labTotal([unpriced]), '463k tokens with cost not reported by the harness');
+    assert.equal(labTotal([]), 'No cost reported yet');
     assert.equal(labTotal([priced]), '$0.37');
   });
 });
@@ -1024,6 +1041,8 @@ describe('settings', () => {
     assert.equal(valueAt({}, 'jobs.at_exit'), undefined);
     assert.equal(labelOf(AT_EXIT, 'keep'), 'Keep them');
     assert.deepEqual(parseRoute('#/settings'), { page: 'settings' });
+    assert.deepEqual(parseRoute('#/norms'), { page: 'norms' });
+    assert.equal(href({ page: 'norms' }), '#/norms');
     assert.equal(href({ page: 'settings' }), '#/settings');
   });
 

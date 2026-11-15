@@ -8,8 +8,10 @@ export interface Chip {
   readonly tone: ChipTone;
 }
 
-const HEADLINE_LIMIT = 300;
+/** The most characters in a headline, as the server takes it. */
+const HEADLINE_LIMIT = 1000;
 const TITLE_LIMIT = 80;
+const LIST_LIMIT = 200;
 
 /** Return the chip that says where a post stands, or `null` when there is nothing to say. Results always get one. */
 export function standingChip(post: Post, standing: Standing): Chip | null {
@@ -40,6 +42,11 @@ export function split(text: string): { readonly headline: string; readonly body:
   const headline = first.trim();
   if (headline.length <= HEADLINE_LIMIT) return { headline, body: rest.join('\n').trim() };
   return { headline: `${headline.slice(0, HEADLINE_LIMIT - 1)}…`, body: trimmed };
+}
+
+/** Return a headline as a list shows it: whole, or its first 200 characters. The post's thread shows all of it. */
+export function clip(headline: string): string {
+  return headline.length <= LIST_LIMIT ? headline : `${headline.slice(0, LIST_LIMIT - 1)}…`;
 }
 
 /** Return a thread title from a headline: the headline itself, or its words up to about 80 characters. */

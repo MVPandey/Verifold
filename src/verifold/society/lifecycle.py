@@ -1,7 +1,8 @@
 """Whether the lab is done, by its own agents' word, and the alarms that agents set for themselves."""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
+from verifold.protocol.agents import GUEST
 from verifold.protocol.events import AlarmSet, Posted
 from verifold.protocol.ids import AgentId
 from verifold.protocol.join import AlarmLine, LabState
@@ -76,6 +77,81 @@ def alarm_line(board: Board, agent_id: AgentId) -> AlarmLine | None:
     # No alarm rings while the lab is out of time or closed, so the alarm has no time then.
     resting = board.out_of_time or lab_state(board) == 'closed'
     return AlarmLine(minutes=alarm.minutes, quiet=alarm.quiet, rings_at=None if resting else rings_at(board, alarm))
+
+
+def utc(at: datetime) -> str:
+    """Return a time as agents read it, in UTC to the minute."""
+    return f'{at.astimezone(UTC):%Y-%m-%d %H:%M} UTC'
+
+
+def latest_time(board: Board) -> datetime:
+    """Return the time of the board's newest post, or of the lab's opening. It stands in for a clock that nobody gave."""
+    return board.posts[-1].at if board.posts else board.opened.at
+
+
+def minutes_left(board: Board, now: datetime) -> float | None:
+    """Return how many minutes the lab has left at `now`: zero when it is out of time, `None` without a time limit."""
+    if board.out_of_time:
+        return 0
+    if board.ends_at is None:
+        return None
+    return max((board.ends_at - now).total_seconds() / 60, 0)
+
+
+def _minutes(left: float) -> str:
+    whole = int(left)
+    if whole == 0:
+        return 'less than a minute'
+    return '1 minute' if whole == 1 else f'{whole} minutes'
+
+
+def no_alarm_line(board: Board, agent_id: AgentId, now: datetime | None = None) -> str:
+    """
+    Return the facts for an agent that Verifold started and that has no alarm, as the lab stands now.
+
+    The line says that no alarm is set, what starts the agent's next turn in the lab's present state, how much time
+    the lab has left, and whether a close stands. It names only what does start a turn in that state:
+
+    - While the lab is out of time, Verifold stops the turn that reads this, and the next turn starts when the
+      person gives the lab more time.
+    - In a closed lab, a post for the agent starts it. The leaving of another agent does not.
+    - In any other lab, a post for the agent starts it, and so does the leaving of an agent that it named or
+      answered.
+
+    The line speaks of a turn that the agent ends itself, because Verifold resumes once a turn that it or the
+    harness cut short. It gives no advice. It is empty while an alarm waits, because the result shows that alarm,
+    and for an agent that Verifold cannot wake: an invited agent, a blind checker, or an agent that left. Without
+    `now`, time counts from the board's newest post.
+    """
+    joined = board.agent(agent_id)
+    if joined is None or joined.agent.harness == GUEST or joined.agent.checks or board.gone(agent_id):
+        return ''
+    if pending_alarm(board, agent_id):
+        return ''
+    left = minutes_left(board, now or latest_time(board))
+    state = lab_state(board)
+    if left == 0:
+        starts = (
+            'The lab is out of time, so Verifold stops this turn. Your next turn starts when the person gives the '
+            'lab more time.'
+        )
+    else:
+        also = '' if state == 'closed' else ' or when an agent that you named or answered leaves'
+        starts = f'After you end this turn, your next turn starts only when a post for you arrives{also}.'
+        if left is None or board.ends_at is None:
+            starts += ' The lab has no time limit.'
+        else:
+            starts += f' The lab ends at {utc(board.ends_at)}, {_minutes(left)} from now.'
+    close = closing(board)
+    if close is None:
+        stands = 'No close stands.'
+    else:
+        behind, among = close_count(board, close)
+        stands = (
+            f'A close stands: {close.post.id} by {close.post.author}. {behind} of {among} agents stand behind it, '
+            f'so the lab is {state}.'
+        )
+    return f'No alarm is set for you. {starts} {stands}'
 
 
 def rings_at(board: Board, alarm: AlarmSet) -> datetime:
