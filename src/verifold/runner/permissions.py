@@ -44,6 +44,7 @@ from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 from verifold.society.grants import agent_waits, grantable, granted
 from verifold.society.standing import waits_for_person
+from verifold.store.errors import RecordChanged
 
 logger = logging.getLogger(__name__)
 
@@ -474,7 +475,8 @@ class Refusals:
         """
         Record what each answered ask gives, a grant or the answer to a request, until the caller cancels this.
 
-        A failure here must not end the server that runs it, so it is logged and the next change is read.
+        A failure here must not end the server that runs it, so it is logged and the next change is read. A record
+        that another program changed ends the server, so that error goes on to it.
         """
         for stale, why in self._stale:
             await _end(self._lab, stale, why)
@@ -483,6 +485,9 @@ class Refusals:
             try:
                 await self._forget()
                 await self._read(board)
+            except RecordChanged:
+                # Verifold stops on this error, and it says why in one line.
+                raise
             except Exception:
                 logger.exception('Verifold could not read the answers to the requests that it refused.')
             await self._lab.wait_for_change(board.seq)

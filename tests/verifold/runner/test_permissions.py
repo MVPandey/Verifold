@@ -38,6 +38,7 @@ from verifold.society.attention import wakes
 from verifold.society.board import Board
 from verifold.society.grants import agent_waits
 from verifold.society.views import needs_person
+from verifold.store.errors import RecordChanged
 from verifold.store.record_file import RecordFile
 
 ONCE = PermissionChoice(id='once', name='Allow once', kind='allow_once')
@@ -843,6 +844,22 @@ async def test_a_failure_while_verifold_reads_the_answers_is_logged_and_does_not
 
     assert (tried, len(failed)) == ('once', 1)
     assert 'Verifold could not read the answers to the requests that it refused.' in caplog.text
+
+
+async def test_a_record_that_another_program_changed_ends_the_reading_of_the_answers_and_is_not_logged(
+    lab: Lab, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    refusals = Refusals(lab)
+
+    async def find_the_record_changed(_: Board) -> None:
+        raise RecordChanged('Another program shortened or rewrote the record, so Verifold stops.')
+
+    monkeypatch.setattr(refusals, '_read', find_the_record_changed)
+
+    # The server stops on this error and says why in one line, so the loop adds no traceback to it.
+    with pytest.raises(RecordChanged, match='so Verifold stops'):
+        await refusals.run()
+    assert caplog.text == ''
 
 
 async def test_under_refusal_an_answer_that_decides_nothing_asks_again(lab: Lab) -> None:

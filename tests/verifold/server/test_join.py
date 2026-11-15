@@ -4,6 +4,7 @@ import pytest
 from conftest import agent
 from fakes import FakeCopies
 from mcp import Client
+from mcp.types import TextContent
 
 from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.join import AlarmLine, AlarmResult, Brief, News, PostRequest, ThreadList, Update
@@ -13,6 +14,7 @@ from verifold.server.errors import HasLeft, UnknownAgent
 from verifold.server.join import INSTRUCTIONS, Members, join_server, token_digest
 from verifold.server.lab import Lab
 from verifold.server.member import Member
+from verifold.store.record_file import RecordFile
 
 
 def test_members_are_found_by_their_bearer_token(lab: Lab) -> None:
@@ -324,6 +326,23 @@ async def test_a_broken_rule_comes_back_to_the_agent_as_a_readable_error(lab: La
 
     assert result.is_error
     assert 'is your own' in str(result.content)
+
+
+async def test_an_agent_reads_that_another_program_changed_the_record_and_that_verifold_stops(
+    lab: Lab, record_file: RecordFile
+) -> None:
+    ada = Member(lab, 'ada')
+    record_file.path.unlink()
+
+    async with Client(join_server(lambda _: ada)) as client:
+        result = await client.call_tool('post', {'kind': 'message', 'text': 'More.', 'thread': 't-1'})
+
+    # The first words are the MCP library's, as on every error of a tool.
+    why = f'Another program replaced or removed the record {record_file.path}, so Verifold stops.'
+    assert result.is_error
+    assert [part.text for part in result.content if isinstance(part, TextContent)] == [
+        f'Error executing tool post: {why} What Verifold wrote is in {record_file.path.with_name("record.kept.jsonl")}.'
+    ]
 
 
 async def test_an_unknown_agent_gets_a_readable_error() -> None:
