@@ -98,7 +98,9 @@ addopts = [
     "--maxfail=3",
     "--durations=5",
     # One worker for each logical core. Every test has its own folders, ports, and processes, so the order does not matter.
+    # A worker with nothing left takes tests from another one, because a few tests take seconds and most take none.
     "--numprocesses=logical",
+    "--dist=worksteal",
 ]
 # A test that hangs fails with its name after this many seconds. The slowest test takes about five, and the longest
 # wait inside a test gives up after 60.

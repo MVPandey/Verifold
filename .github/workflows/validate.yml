@@ -25,6 +25,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      # Two workers for each of the runner's four cores, because most of a slow test is a wait for a fake harness.
+      PYTEST_XDIST_AUTO_NUM_WORKERS: 8
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
