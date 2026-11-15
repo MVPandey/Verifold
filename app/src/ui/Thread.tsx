@@ -115,7 +115,10 @@ export function Turn(
             {who.name}
           </b>
           {post.helper ? <span className="f-tag">helper {post.helper}</span> : null}
-          {member?.role ? <span className="f-role">{member.role}</span> : null}
+          {/* The agent's own word for what it is, or else the role that the person gave its seat. */}
+          {member?.role || member?.agent.given_role ? (
+            <span className="f-role">{member.role || member.agent.given_role}</span>
+          ) : null}
           {agent ? (
             <span className="f-tag">{harnessTitle(props.harnesses, agent.harness)}</span>
           ) : null}

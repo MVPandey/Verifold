@@ -9,7 +9,10 @@ here.
 from verifold.protocol.agents import Agent
 from verifold.protocol.events import (
     AgentLeft,
+    AgentNamed,
     AlarmSet,
+    CoordinatorSet,
+    OnCallSet,
     Posted,
     ProfileSet,
     QuestionRevised,
@@ -49,6 +52,76 @@ def check_agent(board: Board, agent: Agent) -> None:
         _check_member(board, agent.recruited_by)
     if agent.checks and not board.post(agent.checks):
         raise RejectedEvent(f'Post {agent.checks} does not exist.')
+
+
+def check_named(board: Board, named: AgentNamed) -> str:
+    """
+    Check that an agent can get a new name, and return the name that it has now.
+
+    Raises:
+        RejectedEvent: The agent is not in the lab, or another agent has or had the name.
+
+    """
+    joined = board.agent(named.agent)
+    if not joined:
+        raise RejectedEvent(f'{named.agent} is not an agent in this lab.')
+    folded = named.name.casefold()
+    others = (entry.agent.name for entry in board.agents if entry.agent.id != named.agent)
+    former = (before for event, before in board.renames if event.agent != named.agent)
+    if any(name.casefold() == folded for name in (*others, *former)):
+        raise RejectedEvent(f'Another agent has the name {named.name}.')
+    return joined.agent.name
+
+
+def check_on_call(board: Board, event: OnCallSet) -> None:
+    """
+    Check that a seat can go on call or come off it.
+
+    Raises:
+        RejectedEvent: The agent is not in the lab, left it, or is a blind checker.
+
+    """
+    _check_seat(board, event.agent)
+
+
+def check_coordinator(board: Board, event: CoordinatorSet) -> None:
+    """
+    Check that the lab's coordinator can change.
+
+    The person can give the seat to any agent of the lab and can clear it. An agent can take the seat for itself
+    when nobody holds it, and give up the seat that it holds.
+
+    Raises:
+        RejectedEvent: The agent is not in the lab, left it, or is a blind checker, an agent names another agent,
+            an agent takes a seat that somebody holds, or an agent gives up a seat that it does not hold.
+
+    """
+    if event.agent:
+        _check_seat(board, event.agent)
+    if event.by == PERSON:
+        return
+    _check_seat(board, event.by)
+    holder = board.coordinator
+    if event.agent is None:
+        if holder != event.by:
+            raise RejectedEvent('You are not the coordinator of this lab, so you have no seat to give up.')
+        return
+    if event.agent != event.by:
+        raise RejectedEvent('An agent takes the coordinator seat for itself. Only the person gives it to another.')
+    if holder and holder != event.by:
+        raise RejectedEvent(
+            f'{holder} is the coordinator of this lab. The seat is free when {holder} gives it up or the person '
+            'clears it.'
+        )
+
+
+def _check_seat(board: Board, agent_id: AgentId) -> None:
+    joined = board.agent(agent_id)
+    if not joined:
+        raise RejectedEvent(f'{agent_id} is not an agent in this lab.')
+    _check_here(board, agent_id)
+    if joined.agent.checks:
+        raise RejectedEvent('A blind checker has no seat in the lab: it posts one check and is gone.')
 
 
 def check_revision(board: Board, revision: QuestionRevised) -> None:

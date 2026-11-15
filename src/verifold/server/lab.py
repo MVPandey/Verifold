@@ -9,9 +9,12 @@ from verifold.protocol.agents import Agent
 from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
+    AgentNamed,
     AlarmSet,
+    CoordinatorSet,
     Event,
     LabOpened,
+    OnCallSet,
     PermissionGranted,
     Posted,
     ProfileSet,
@@ -36,6 +39,7 @@ from verifold.server.errors import LabExists
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
+from verifold.society.labels import awaits_model, label
 from verifold.society.lines import question_thread
 from verifold.society.rules import waiting_reruns
 from verifold.store.record_file import RecordFile
@@ -105,10 +109,69 @@ class Lab:
         """The board after every event so far."""
         return self._board
 
-    async def join(self, agent: Agent) -> AgentJoined:
-        """Add an agent to the lab."""
-        board = await self._commit(lambda _, seq, at: AgentJoined(seq=seq, at=at, agent=agent))
-        return board.agents[-1]
+    async def join(self, agent: Agent, *, on_call: bool = False, coordinator: bool = False) -> AgentJoined:
+        """
+        Add an agent to the lab.
+
+        With `on_call`, the person put its seat on call. With `coordinator`, the person made it the lab's
+        coordinator. The record takes both in the same step as the agent.
+        """
+        builds: list[Build] = [lambda _, seq, at: AgentJoined(seq=seq, at=at, agent=agent)]
+        if on_call:
+            builds.append(lambda _, seq, at: OnCallSet(seq=seq, at=at, agent=agent.id, on_call=True))
+        if coordinator:
+            builds.append(lambda _, seq, at: CoordinatorSet(seq=seq, at=at, agent=agent.id, by=PERSON))
+        board = await self._commit(*builds)
+        return next(entry for entry in reversed(board.agents) if entry.agent.id == agent.id)
+
+    async def name_by_model(self, agent_id: AgentId, title: str, model: str) -> str:
+        """
+        Record the name of the model that an agent's harness reported, and return the agent's name after it.
+
+        Only a name that says "default model" for the model of the harness `title` changes, and it changes once.
+        The new name keeps clear of every name that an agent of the lab has or had.
+        """
+        joined = self._board.agent(agent_id)
+        if joined is None or not model.strip() or not awaits_model(joined.agent.name, title):
+            return joined.agent.name if joined else agent_id
+
+        def build(board: Board, seq: int, at: datetime) -> AgentNamed:
+            others = (entry.agent.name for entry in board.agents if entry.agent.id != agent_id)
+            former = (before for _, before in board.renames)
+            return AgentNamed(seq=seq, at=at, agent=agent_id, name=label(title, model, (*others, *former)))
+
+        board = await self._commit(build)
+        return board.renames[-1][0].name
+
+    async def set_on_call(self, agent_id: AgentId, *, on_call: bool) -> None:
+        """
+        Record that the person put an agent's seat on call, or took it off. The same answer again records nothing.
+
+        Raises:
+            RejectedEvent: The agent is not in the lab, left it, or is a blind checker.
+
+        """
+        if self._board.agent(agent_id) and self._board.on_call(agent_id) == on_call:
+            return
+        await self._commit(lambda _, seq, at: OnCallSet(seq=seq, at=at, agent=agent_id, on_call=on_call))
+
+    async def set_coordinator(self, agent_id: AgentId | None, by: AgentId) -> AgentId | None:
+        """
+        Record who holds the lab's coordinator seat, and return the holder after the change.
+
+        `by` is the person, who can give the seat to any agent or clear it with `None`, or an agent, which can take
+        the seat for itself when nobody holds it and give up the seat that it holds. A change that leaves the seat
+        as it is records nothing.
+
+        Raises:
+            RejectedEvent: The change breaks one of these rules.
+
+        """
+        known = agent_id is None or self._board.agent(agent_id)
+        if known and self._board.coordinator == agent_id and by in (PERSON, agent_id):
+            return agent_id
+        board = await self._commit(lambda _, seq, at: CoordinatorSet(seq=seq, at=at, agent=agent_id, by=by))
+        return board.coordinator
 
     async def leave(self, agent_id: AgentId, by: AgentId, reason: str = '') -> AgentLeft:
         """
@@ -242,10 +305,18 @@ class Lab:
         board = await self._commit(build)
         return board.reruns[-1]
 
-    async def start_turn(self, agent_id: AgentId, session: str, seen: int) -> TurnStarted:
-        """Record that a turn of an agent starts, in the harness's conversation `session`, with what it had seen."""
+    async def start_turn(
+        self, agent_id: AgentId, session: str, seen: int, model: str | None = None, model_name: str | None = None
+    ) -> TurnStarted:
+        """
+        Record that a turn of an agent starts, in the harness's conversation `session`, with what it had seen.
+
+        `model` and `model_name` are the model that the harness reported for the session, when it reported one.
+        """
         board = await self._commit(
-            lambda _, seq, at: TurnStarted(seq=seq, at=at, agent=agent_id, session=session, seen=seen)
+            lambda _, seq, at: TurnStarted(
+                seq=seq, at=at, agent=agent_id, session=session, seen=seen, model=model, model_name=model_name
+            )
         )
         return board.starts[-1]
 

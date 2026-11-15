@@ -25,6 +25,7 @@ from verifold.protocol.app import (
     LabView,
     QuestionRequest,
     RerunRequest,
+    SeatChange,
     SettingsChange,
     SettingsView,
     SetupView,
@@ -88,10 +89,18 @@ class Host(Protocol):
         ...
 
     async def add_agents(self, choice: AgentChoice) -> None:
-        """Add agents of one harness to the lab that runs, and start them."""
+        """Add the agents of one seat to the lab that runs, and start them."""
         ...
 
-    async def invite(self, name: str | None = None) -> Invitation:
+    async def change_seat(self, agent_id: AgentId, change: SeatChange) -> None:
+        """Put an agent's seat on call or take it off, and give or take the lab's coordinator seat."""
+        ...
+
+    def ask_harnesses(self) -> None:
+        """Ask the harnesses that Verifold did not ask yet what they offer, in the background."""
+        ...
+
+    async def invite(self, request: InviteRequest | None = None) -> Invitation:
         """Add an agent that runs by itself to the lab that runs, and return its invitation."""
         ...
 
@@ -132,6 +141,12 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     async def setup() -> SetupView:
         return host.setup()
 
+    @api.post('/offers', dependencies=[authorized])
+    async def offers() -> SetupView:
+        # The form that adds an agent to a lab that was served again has no offers until the harnesses are asked.
+        host.ask_harnesses()
+        return host.setup()
+
     @api.post('/labs', dependencies=[authorized])
     async def start(request: StartRequest) -> SetupView:
         await host.start(request)
@@ -154,6 +169,11 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
         await host.add_agents(choice)
         return _lab_view(current().board, activity)
 
+    @api.post('/agents/{agent_id}/seat', dependencies=[authorized])
+    async def change_seat(agent_id: AgentId, change: SeatChange) -> LabView:
+        await host.change_seat(agent_id, change)
+        return _lab_view(current().board, activity)
+
     @api.post('/agents/{agent_id}/start', dependencies=[authorized])
     async def start_again(agent_id: AgentId) -> LabView:
         await host.start_again(agent_id)
@@ -173,7 +193,7 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
 
     @api.post('/invitations', dependencies=[authorized])
     async def invite(request: InviteRequest) -> Invitation:
-        return await host.invite(request.name)
+        return await host.invite(request)
 
     @api.post('/invitations/{agent_id}', dependencies=[authorized])
     async def invite_again(agent_id: AgentId) -> Invitation:
@@ -278,6 +298,8 @@ def _agent_view(board: Board, activity: Activity, agent_id: str, working: dict[A
     return AgentView(
         agent=joined.agent,
         role=role,
+        on_call=board.on_call(agent_id),
+        coordinator=board.coordinator == agent_id,
         status=status,
         thread=working.get(agent_id),
         activity=activity.of(agent_id),

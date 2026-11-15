@@ -299,7 +299,17 @@ class AgentLoop:
         started = time.monotonic()
         self._seen_at_turn = self._member.seen
         # The mark comes before the message. A turn with a mark and no end did not end.
-        mark = await self._lab.start_turn(self._setup.agent.id, session.id, self._seen_at_turn)
+        model = session.model
+        if model:
+            # A name that says "default model" names the model that the harness reported, from the first turn on.
+            await self._lab.name_by_model(self._setup.agent.id, self._setup.harness.title, model.name)
+        mark = await self._lab.start_turn(
+            self._setup.agent.id,
+            session.id,
+            self._seen_at_turn,
+            model.value if model else None,
+            model.name if model else None,
+        )
         self._turn_started, self._in_turn = mark.seq, True
         try:
             async with asyncio.timeout(self._settings.turn_timeout) as limit:

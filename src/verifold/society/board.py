@@ -7,8 +7,11 @@ from verifold.protocol.agents import GUEST
 from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
+    AgentNamed,
     AlarmSet,
+    CoordinatorSet,
     LabOpened,
+    OnCallSet,
     Posted,
     ProfileSet,
     QuestionRevised,
@@ -37,6 +40,13 @@ class Board:
     revisions: tuple[QuestionRevised, ...] = ()
     """The person's revisions of the question, oldest first."""
     agents: tuple[AgentJoined, ...] = ()
+    """Each agent's entry, with the name that the agent has now."""
+    renames: tuple[tuple[AgentNamed, str], ...] = ()
+    """Each new name that an agent got, with the name that it had before, oldest first."""
+    on_calls: tuple[OnCallSet, ...] = ()
+    """Each time that the person put a seat on call or took it off, oldest first."""
+    coordinators: tuple[CoordinatorSet, ...] = ()
+    """Each change of the lab's coordinator, oldest first."""
     left: tuple[AgentLeft, ...] = ()
     """The agents that left the lab or that the person removed, oldest first."""
     threads: tuple[ThreadOpened, ...] = ()
@@ -84,11 +94,32 @@ class Board:
         An agent that Verifold started is. An invited agent is from its first post, because until then nobody knows
         whether it used its invitation. With `before`, only its posts before that event count.
         """
-        if joined.agent.harness != GUEST:
-            return True
-        return any(
-            entry.post.author == joined.agent.id and (before is None or entry.seq < before) for entry in self.posts
-        )
+        return joined.agent.harness != GUEST or self._posted(joined.agent.id, before)
+
+    def counts(self, joined: AgentJoined, before: int | None = None) -> bool:
+        """
+        Return whether an agent counts among the lab's agents when they decide that the lab is done.
+
+        An agent does when it is known to be in the lab. An on-call agent does from its first post, by the rule
+        for an invited agent: until then no post for every agent reached it, so the lab does not wait for its word.
+        """
+        if self.on_call(joined.agent.id):
+            return self._posted(joined.agent.id, before)
+        return self.came(joined, before)
+
+    def _posted(self, agent_id: AgentId, before: int | None) -> bool:
+        return any(entry.post.author == agent_id and (before is None or entry.seq < before) for entry in self.posts)
+
+    def on_call(self, agent_id: AgentId) -> bool:
+        """Return whether the person put an agent's seat on call, and did not take it off since."""
+        latest = next((entry for entry in reversed(self.on_calls) if entry.agent == agent_id), None)
+        return bool(latest and latest.on_call)
+
+    @property
+    def coordinator(self) -> AgentId | None:
+        """The agent that holds the lab's coordinator seat, or `None`. An agent that left the lab holds it no longer."""
+        holder = self.coordinators[-1].agent if self.coordinators else None
+        return holder if holder and not self.gone(holder) else None
 
     def gone(self, agent_id: AgentId) -> AgentLeft | None:
         """Return the entry that says that an agent left the lab, or `None` while it is in the lab."""

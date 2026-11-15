@@ -88,7 +88,8 @@ def _start(args: argparse.Namespace) -> StartRequest:
 
     `verifold run` starts at once, without showing the saved choices, and a project's file can come from someone else.
     So a project's file can make the lab stricter, not looser: it can turn auto mode off and shorten the time limit,
-    and its agents get no modes. Under `--ask-me`, no saved agent gets a mode.
+    and its agents get no modes and no roles, because a role reaches the agents as the person's word. Under
+    `--ask-me`, no saved agent gets a mode.
 
     Raises:
         SetupRejected: No harness that Verifold knows is on this computer.
@@ -108,7 +109,9 @@ def _start(args: argparse.Namespace) -> StartRequest:
             == settings_path(SettingsLevel.ALL, project).resolve()
         )
         from_project = not own and isinstance(saved, dict) and 'agents' in saved
-        agents = _saved_agents(here, catalog_with(files.harnesses), drop_modes=args.ask_me or from_project)
+        agents = _saved_agents(
+            here, catalog_with(files.harnesses), drop_modes=args.ask_me or from_project, drop_roles=from_project
+        )
     shorter = min((minutes for minutes in (everywhere.minutes, here.minutes) if minutes is not None), default=None)
     return StartRequest(
         question=args.question,
@@ -120,15 +123,16 @@ def _start(args: argparse.Namespace) -> StartRequest:
 
 
 def _saved_agents(
-    defaults: SetupDefaults, catalog: Mapping[str, HarnessEntry], *, drop_modes: bool
+    defaults: SetupDefaults, catalog: Mapping[str, HarnessEntry], *, drop_modes: bool, drop_roles: bool
 ) -> tuple[AgentChoice, ...]:
+    dropped = ({'mode': None} if drop_modes else {}) | ({'role': ''} if drop_roles else {})
     kept: list[AgentChoice] = []
     for choice in defaults.agents or ():
         entry = catalog.get(choice.harness)
         if entry is None or not available(entry):
             _say(f'Skipped {choice.harness} from your saved choices for new labs: it is not on this computer.')
             continue
-        kept.append(choice.model_copy(update={'mode': None}) if drop_modes else choice)
+        kept.append(choice.model_copy(update=dropped))
     if kept:
         return tuple(kept)
     found = tuple(AgentChoice(harness=name) for name, entry in catalog.items() if available(entry))[:MAX_AGENTS]
@@ -150,7 +154,15 @@ def _plan(start: StartRequest) -> str:
 def _agent_words(choice: AgentChoice) -> str:
     details = [
         detail
-        for detail in (choice.model, choice.effort and f'{choice.effort} effort', choice.mode and f'{choice.mode} mode')
+        for detail in (
+            choice.model,
+            choice.effort and f'{choice.effort} effort',
+            choice.mode and f'{choice.mode} mode',
+            choice.family and f'{choice.family} family',
+            choice.role and f'role: {choice.role}',
+            choice.coordinator and 'coordinator',
+            choice.on_call and 'on call',
+        )
         if detail
     ]
     agents = f'{choice.count} {choice.harness}'
@@ -278,8 +290,8 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument(
         '--agent',
         action='append',
-        metavar='HARNESS[:MODEL[:EFFORT[:MODE]]]',
-        help=f'Add an agent: {", ".join(CATALOG)}, or a harness from your settings, with an optional model, effort, and mode. Default: your saved choices for new labs, or one agent of each harness that this computer has.',
+        metavar='HARNESS[:MODEL[:EFFORT[:MODE]]][,FACT...]',
+        help=f'Add an agent: {", ".join(CATALOG)}, or a harness from your settings, with an optional model, effort, and mode. You can name a harness more than once. After a comma come the facts of the seat, each optional: role=TEXT, family=TEXT, coordinator, on-call. Example: claude-code:opus,role=driver,coordinator. Default: your saved choices for new labs, or one agent of each harness that this computer has.',
     )
     run.add_argument(
         '--minutes',
@@ -305,7 +317,23 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _agent(value: str) -> AgentChoice:
-    harness, _, rest = value.partition(':')
+    # The facts of the seat come after the first comma, so a role holds no comma here.
+    seat, *facts = value.split(',')
+    harness, _, rest = seat.partition(':')
     model, _, rest = rest.partition(':')
     effort, _, mode = rest.partition(':')
-    return AgentChoice(harness=harness, model=model or None, effort=effort or None, mode=mode or None)
+    given: dict[str, str | bool] = {}
+    for fact in facts:
+        key, _, text = fact.strip().partition('=')
+        if key in ('role', 'family') and text.strip():
+            given[key] = text.strip()
+        elif key in ('coordinator', 'on-call') and not text:
+            given[key.replace('-', '_')] = True
+        else:
+            raise SetupRejected(
+                f'--agent {value}: "{fact.strip()}" is not a fact of a seat. Give role=TEXT, family=TEXT, coordinator, '
+                'or on-call.'
+            )
+    return AgentChoice.model_validate(
+        {'harness': harness, 'model': model or None, 'effort': effort or None, 'mode': mode or None} | given
+    )

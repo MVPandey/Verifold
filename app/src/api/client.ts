@@ -3,9 +3,11 @@ import type {
   AnswerView,
   FileText,
   Invitation,
+  InviteRequest,
   LabView,
   PostRequest,
   PostView,
+  SeatChange,
   SettingsChange,
   SettingsView,
   SetupView,
@@ -45,10 +47,14 @@ export interface Api {
   setTime(minutes: number): Promise<LabView>;
   /** Revise the lab's question. `note` says why, and it can be empty. */
   reviseQuestion(question: string, note: string): Promise<LabView>;
-  /** Add agents of one harness to the lab that runs. */
+  /** Add the agents of one seat to the lab that runs. */
   addAgents(choice: AgentChoice): Promise<LabView>;
+  /** Put an agent's seat on call or take it off, and give or take the lab's coordinator seat. */
+  changeSeat(agentId: string, change: SeatChange): Promise<LabView>;
+  /** Ask the harnesses that Verifold did not ask yet what they offer. The setup shows the answers when they come. */
+  askOffers(): Promise<SetupView>;
   /** Invite an agent that runs by itself. Without a name, it gets the next one, such as "Agent 3". */
-  invite(name?: string): Promise<Invitation>;
+  invite(request?: InviteRequest): Promise<Invitation>;
   /** Give an invited agent a new token, which makes its earlier token void. */
   inviteAgain(agentId: string): Promise<Invitation>;
   /** Remove an agent from the lab, for good. Its posts stay. */
@@ -97,7 +103,10 @@ export function createApi(
         close_among: lab.close_among ?? lab.agents.filter((view) => !view.agent.checks).length,
         agents: lab.agents.map((view) => ({
           ...view,
+          agent: { ...view.agent, given_role: view.agent.given_role ?? '' },
           role: view.role ?? '',
+          on_call: view.on_call ?? false,
+          coordinator: view.coordinator ?? false,
           status: view.status ?? '',
           thread: view.thread ?? null,
           left: view.left ?? null,
@@ -140,7 +149,9 @@ export function createApi(
     setTime: (minutes) => request('/time', { minutes }),
     reviseQuestion: (question, note) => request('/question', { question, note }),
     addAgents: (choice) => request('/agents', choice),
-    invite: (name) => request('/invitations', name ? { name } : {}),
+    changeSeat: (agentId, change) => request(`/agents/${encodeURIComponent(agentId)}/seat`, change),
+    askOffers: () => request('/offers', {}),
+    invite: (invitation) => request('/invitations', invitation ?? {}),
     inviteAgain: (agentId) => request(`/invitations/${encodeURIComponent(agentId)}`, {}),
     removeAgent: (agentId) =>
       request(`/agents/${encodeURIComponent(agentId)}`, undefined, 'DELETE'),

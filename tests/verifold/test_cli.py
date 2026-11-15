@@ -95,6 +95,68 @@ def test_run_starts_a_lab_with_the_given_agents(serves: list[StartRequest | None
     ]
 
 
+def test_run_takes_the_facts_of_a_seat_after_a_comma_and_a_harness_more_than_once(
+    serves: list[StartRequest | None], capsys: pytest.CaptureFixture[str]
+) -> None:
+    main(
+        [
+            'run',
+            'Does it hold?',
+            '--agent',
+            'claude-code:opus,role=driver, coordinator',
+            '--agent',
+            'claude-code:fable:high,role=direction creator,on-call,family=anthropic',
+            '--agent',
+            'codex,on-call',
+        ]
+    )
+
+    assert [start.agents for start in serves if start] == [
+        (
+            AgentChoice(harness='claude-code', model='opus', role='driver', coordinator=True),
+            AgentChoice(
+                harness='claude-code',
+                model='fable',
+                effort='high',
+                role='direction creator',
+                on_call=True,
+                family='anthropic',
+            ),
+            AgentChoice(harness='codex', on_call=True),
+        )
+    ]
+    assert (
+        'Started a lab with 1 claude-code (opus, role: driver, coordinator), 1 claude-code (fable, high effort, '
+        'anthropic family, role: direction creator, on call), 1 codex (on call); auto mode; no time limit.'
+    ) in capsys.readouterr().out
+
+
+@pytest.mark.usefixtures('project')
+@pytest.mark.parametrize('agent', ['codex,driver', 'codex,role=', 'codex,coordinator=yes', 'codex,'])
+def test_run_refuses_a_fact_of_a_seat_that_it_does_not_know(agent: str) -> None:
+    with pytest.raises(SystemExit, match='is not a fact of a seat'):
+        main(['run', 'Does it hold?', '--agent', agent])
+
+
+@pytest.mark.usefixtures('project')
+def test_run_refuses_two_coordinators() -> None:
+    with pytest.raises(SystemExit, match='A lab has one coordinator'):
+        main(['run', 'Does it hold?', '--agent', 'codex,coordinator', '--agent', 'claude-code,coordinator'])
+
+
+def test_a_role_from_a_projects_file_does_not_reach_the_agents_as_the_persons_word(
+    serves: list[StartRequest | None], project: Path
+) -> None:
+    seat = {'harness': 'codex', 'role': 'driver', 'on_call': True, 'family': 'other'}
+    global_settings(project, {'setup': {'agents': [seat]}})
+    main(['run', 'Does it hold?'])
+    project_settings(project, {'setup': {'agents': [seat]}})
+    main(['run', 'Does it hold?'])
+
+    own = AgentChoice(harness='codex', role='driver', on_call=True, family='other')
+    assert [start.agents for start in serves if start] == [(own,), (own.model_copy(update={'role': ''}),)]
+
+
 def test_run_takes_grants_for_every_agent(serves: list[StartRequest | None]) -> None:
     main(['run', 'Does it hold?', '--agent', 'codex', '--allow', './gpu', '--allow', 'make test'])
 

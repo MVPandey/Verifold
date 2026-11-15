@@ -40,6 +40,32 @@ def test_the_start_message_gives_the_question_the_agent_its_peers_and_the_norms(
     ]
 
 
+def test_the_start_message_states_the_role_that_the_person_gave_and_the_seat_as_facts() -> None:
+    record = RecordBuilder().join('ada').join('bo', name='Codex · gpt-6').on_call('ada').coordinator('ada')
+    board = record.board()
+    ada = board.agents[0].agent.model_copy(update={'given_role': 'direction creator'})
+
+    message = start_message(board, ada, Path('LAB.md'))
+    plain = start_message(board, board.agents[1].agent, Path('LAB.md'))
+
+    assert message.splitlines()[2:7] == [
+        f'You are Ada (ada) in a Verifold lab. {SAME_MOMENT}: Codex · gpt-6 (bo, fake).',
+        BOARD,
+        'The person gave your seat this role: direction creator',
+        "You hold the lab's coordinator seat.",
+        (
+            'The person put your seat on call. So Verifold starts you when a post for you arrives: one that names '
+            'you, replies to you, or builds on your post. No post for every agent is for you.'
+        ),
+    ]
+    # An agent with no role from the person and a plain seat reads nothing about either.
+    assert plain.splitlines()[2:] == [
+        f'You are Codex · gpt-6 (bo) in a Verifold lab. {SAME_MOMENT}: Ada (ada, fake).',
+        BOARD,
+        "LAB.md holds the lab's norms, which the person sets.",
+    ]
+
+
 def test_the_start_message_leaves_out_blind_checkers_and_a_question_thread_that_the_lab_does_not_have() -> None:
     record = lab().post(Result(id='p-1', thread='t-1', author='ada', text='x', evidence=(EVIDENCE,)))
     board = record.join('dee', family='openai', checks='p-1').board()

@@ -52,8 +52,9 @@ def start_message(
     that the agent joins a lab that works already. The caller decides it once for the agents that start together,
     so they all read the same sentence.
 
-    The message holds facts only. `brief` says how the board works, the norms file says how the person wants the
-    work done, and the message gives no role.
+    The message holds facts only. `brief` says how the board works, and the norms file says how the person wants
+    the work done. A role that the person gave the agent's seat is one of the facts, in the person's words, and the
+    message says nothing about what to do with it.
     """
     peers = ', '.join(
         f'{entry.agent.name} ({entry.agent.id}, {entry.agent.harness})'
@@ -74,6 +75,15 @@ def start_message(
         f'You are {agent.name} ({agent.id}) in a Verifold lab. {others}',
         BOARD,
     ]
+    if agent.given_role:
+        lines.append(f'The person gave your seat this role: {agent.given_role}')
+    if board.coordinator == agent.id:
+        lines.append("You hold the lab's coordinator seat.")
+    if board.on_call(agent.id):
+        lines.append(
+            'The person put your seat on call. So Verifold starts you when a post for you arrives: one that names '
+            'you, replies to you, or builds on your post. No post for every agent is for you.'
+        )
     if thread := question_thread(board):
         lines.append(f'Thread {thread} on the board holds this question, and every agent watches it.')
     if board.revisions:
@@ -137,7 +147,7 @@ def invitation(start: str, url: str, token: str, folder: Path) -> str:
     Return the text that lets an agent that runs by itself join the lab.
 
     It says where the board is, who the agent is on it, and where its folder is. Then comes `start`, the facts that
-    every agent of the lab gets. Any harness or person can follow it. It holds facts only, and it gives no role.
+    every agent of the lab gets. Any harness or person can follow it. It holds facts only.
     """
     return '\n'.join(
         [

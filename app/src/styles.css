@@ -1627,6 +1627,14 @@ button.btn:disabled {
 .hrow:first-child {
   border-top: 0;
 }
+.hrow.more {
+  border-top: 0;
+  padding-top: 0;
+}
+.hrow .addseat {
+  grid-column: 2 / -1;
+  justify-self: start;
+}
 .hrow .hn {
   font: 600 17px var(--head);
 }
@@ -1710,6 +1718,27 @@ button.btn:disabled {
   padding: 0 10px;
   border: 1px solid var(--line2);
   background: var(--card);
+}
+.modelpick .menu label.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 400;
+  font-size: 13px;
+  color: var(--ink2);
+}
+.modelpick .menu label.check input {
+  width: auto;
+  min-height: 0;
+}
+.modelpick.inline {
+  flex-basis: 100%;
+}
+.modelpick.inline .menu {
+  position: static;
+  width: auto;
+  max-width: none;
+  box-shadow: none;
 }
 .modelpick .menu p {
   margin: 10px 4px 2px;

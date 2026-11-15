@@ -8,9 +8,12 @@ from typing import assert_never
 from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
+    AgentNamed,
     AlarmSet,
+    CoordinatorSet,
     Event,
     LabOpened,
+    OnCallSet,
     PermissionGranted,
     Posted,
     ProfileSet,
@@ -30,7 +33,10 @@ from verifold.society.errors import RejectedEvent
 from verifold.society.rules import (
     check_agent,
     check_alarm,
+    check_coordinator,
     check_left,
+    check_named,
+    check_on_call,
     check_post,
     check_profile,
     check_rerun,
@@ -63,6 +69,14 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
         case AgentJoined(agent=agent):
             check_agent(board, agent)
             return replace(board, seq=event.seq, agents=(*board.agents, event))
+        case AgentNamed():
+            return _named(board, event)
+        case OnCallSet():
+            check_on_call(board, event)
+            return replace(board, seq=event.seq, on_calls=(*board.on_calls, event))
+        case CoordinatorSet():
+            check_coordinator(board, event)
+            return replace(board, seq=event.seq, coordinators=(*board.coordinators, event))
         case AgentLeft():
             check_left(board, event)
             return replace(board, seq=event.seq, left=(*board.left, event))
@@ -106,6 +120,18 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
             return replace(board, seq=event.seq, grants=grants)
         case _:
             assert_never(event)
+
+
+def _named(board: Board, event: AgentNamed) -> Board:
+    # The agent's entry holds its new name from here on, and the board keeps the name from before.
+    before = check_named(board, event)
+    agents = tuple(
+        entry.model_copy(update={'agent': entry.agent.model_copy(update={'name': event.name})})
+        if entry.agent.id == event.agent
+        else entry
+        for entry in board.agents
+    )
+    return replace(board, seq=event.seq, agents=agents, renames=(*board.renames, (event, before)))
 
 
 def fold(events: Iterable[Event]) -> Board:

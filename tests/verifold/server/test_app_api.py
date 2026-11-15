@@ -12,6 +12,8 @@ from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import (
     HarnessOption,
     Invitation,
+    InviteRequest,
+    SeatChange,
     SettingsChange,
     SettingsFileView,
     SettingsView,
@@ -43,6 +45,9 @@ class Host:
         self.started: list[StartRequest] = []
         self.added: list[AgentChoice] = []
         self.invited: list[str | None] = []
+        self.requests: list[InviteRequest] = []
+        self.seats: list[tuple[str, SeatChange]] = []
+        self.asked = 0
 
     def setup(self) -> SetupView:
         harnesses = (HarnessOption(name='fake', title='Fake', family='test', available=True),)
@@ -79,7 +84,18 @@ class Host:
             raise SetupRejected('Unknown harness nope.')
         self.added.append(choice)
 
-    async def invite(self, name: str | None = None) -> Invitation:
+    async def change_seat(self, agent_id: str, change: SeatChange) -> None:
+        if self.lab is None or self.lab.board.agent(agent_id) is None:
+            raise NotFound(f'The lab has no agent with the ID {agent_id}.')
+        self.seats.append((agent_id, change))
+
+    def ask_harnesses(self) -> None:
+        self.asked += 1
+
+    async def invite(self, request: InviteRequest | None = None) -> Invitation:
+        request = request or InviteRequest()
+        name = request.name
+        self.requests.append(request)
         if self.lab is None:
             raise NoLab('This folder has no lab yet. Start one from the setup screen.')
         if name == 'Ada':
@@ -385,6 +401,45 @@ async def test_the_person_adds_an_agent_to_the_lab_that_runs(lab: Lab, activity:
     assert added.status_code == 200
     assert [(choice.harness, choice.count) for choice in host.added] == [('fake', 2)]
     assert (refused.status_code, refused.json()['detail']) == (400, 'Unknown harness nope.')
+
+
+async def test_the_person_adds_a_seat_with_its_facts_changes_a_seat_and_asks_the_harnesses(
+    lab: Lab, activity: Activity
+) -> None:
+    host = Host(lab)
+    seat = {'harness': 'fake', 'model': 'opus', 'role': ' direction\ncreator ', 'on_call': True, 'family': 'other'}
+    async with client_of(host, activity) as client:
+        added = await client.post('/agents', json=seat)
+        two = await client.post('/agents', json={'harness': 'fake', 'count': 2, 'coordinator': True})
+        long = await client.post('/agents', json={'harness': 'fake', 'role': 'r' * 41})
+        changed = await client.post('/agents/ada/seat', json={'on_call': True})
+        missing = await client.post('/agents/nobody/seat', json={'coordinator': True})
+        offers = await client.post('/offers', json={})
+        invited = await client.post('/invitations', json={'role': 'reads', 'family': 'openai', 'coordinator': True})
+
+    assert (added.status_code, two.status_code, long.status_code) == (200, 422, 422)
+    assert 'the seat of the coordinator has one agent' in str(two.json())
+    # A role is one line, like the role that an agent gives itself.
+    assert host.added == [
+        AgentChoice(harness='fake', model='opus', role='direction creator', on_call=True, family='other')
+    ]
+    assert (changed.status_code, missing.status_code) == (200, 404)
+    assert host.seats == [('ada', SeatChange(on_call=True))]
+    assert (offers.status_code, offers.json()['question'], host.asked) == (200, 'Does it hold?', 1)
+    assert invited.status_code == 200
+    assert host.requests == [InviteRequest(role='reads', family='openai', coordinator=True)]
+
+
+async def test_the_lab_view_says_who_is_on_call_who_coordinates_and_which_role_the_person_gave(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    await lab.join(agent('cy').model_copy(update={'given_role': 'driver'}), on_call=True, coordinator=True)
+    await lab.set_profile('cy', 'theory', None)
+
+    ada, _, cy = (await client.get('/lab')).json()['agents']
+
+    assert (ada['on_call'], ada['coordinator'], ada['agent']['given_role']) == (False, False, '')
+    assert (cy['on_call'], cy['coordinator'], cy['agent']['given_role'], cy['role']) == (True, True, 'driver', 'theory')
 
 
 async def test_the_person_invites_an_agent_and_gets_its_invitation(lab: Lab, activity: Activity) -> None:

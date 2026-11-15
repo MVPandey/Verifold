@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, AwareDatetime, Field, JsonValue, StringConstraints
 
-from verifold.protocol.agents import Agent, AgentChoices, Label, ValueId, one_line
+from verifold.protocol.agents import Agent, AgentChoices, Label, Name, SeatFacts, ValueId, one_line
 from verifold.protocol.events import AgentLeft, Note, Question
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, PostId, ThreadId
@@ -38,6 +38,10 @@ class AgentView(Record):
     agent: Agent
     role: str = ''
     """What the agent says that it is to the lab, in its own words."""
+    on_call: bool = False
+    """Whether the person put the agent's seat on call, so that only a post for the agent itself wakes it."""
+    coordinator: bool = False
+    """Whether the agent holds the lab's coordinator seat."""
     status: str = ''
     """What the agent says that it does now."""
     thread: ThreadId | None = None
@@ -86,18 +90,32 @@ class LabView(Record):
     """The settings that the lab follows, such as what happens to the agents' processes when the person stops it."""
 
 
-class InviteRequest(Record):
-    """The person invites an agent that runs by itself."""
+class InviteRequest(SeatFacts):
+    """
+    The person invites an agent that runs by itself, and can state the facts of its seat.
+
+    Verifold does not know the agent's model. With `family`, the person states its model family, so that a blind
+    rerun by another family can hold up its results.
+    """
 
     name: Annotated[str, AfterValidator(one_line), StringConstraints(min_length=1, max_length=40)] | None = None
     """The agent's display name, as one line. `None` gives it the next name, such as "Agent 3"."""
+
+
+class SeatChange(Record):
+    """The person changes an agent's seat in the lab that runs. `None` leaves a part as it is."""
+
+    on_call: bool | None = None
+    """Put the seat on call, or take it off."""
+    coordinator: bool | None = None
+    """Give the agent the lab's coordinator seat, or take the seat from the agent that holds it."""
 
 
 class Invitation(Record):
     """An invited agent, and the text that lets it join. The app shows the text once, and Verifold doesn't keep it."""
 
     agent: AgentId
-    name: Label
+    name: Name
     text: str
     """What the agent needs to join: the board's address, its bearer token, its folder, and the lab's facts."""
 
