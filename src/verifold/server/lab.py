@@ -28,7 +28,7 @@ from verifold.protocol.events import (
 )
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import PostRequest
-from verifold.protocol.posts import MAX_HEADLINE, Answer, Ask, FileEvidence, Mark
+from verifold.protocol.posts import MAX_HEADLINE, Answer, Ask, FileEvidence, Mark, PermissionShown, QuestionShown
 from verifold.protocol.settings import Settings
 from verifold.protocol.threads import QUESTION_TITLE, Thread
 from verifold.server.changes import wait_until
@@ -346,8 +346,8 @@ def _add_post(
         # No field of a request holds a mark, so no agent and no person's post can carry one.
         if isinstance(post, Answer) and mark == 'ends_request':
             post = post.model_copy(update={'ends_request': True})
-        elif isinstance(post, Ask) and mark in ('permission', 'question'):
-            post = post.model_copy(update={'request': mark})
+        elif isinstance(post, Ask) and isinstance(mark, PermissionShown | QuestionShown):
+            post = post.model_copy(update={'request': mark.type, 'shown': mark})
         return Posted(seq=seq, at=at, post=post)
 
     return build

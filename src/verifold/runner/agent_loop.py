@@ -538,7 +538,7 @@ class AgentLoop:
         # Nobody can answer an agent that left.
         if self._left():
             return None
-        async with self._asks(' '.join(question.message.split()) or 'a question'):
+        async with self._asks('a question of its harness'):
             return await ask_the_question(self._member, question, self._turn_over)
 
     @asynccontextmanager

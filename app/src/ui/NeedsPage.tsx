@@ -9,7 +9,7 @@ import { harnessRequest, personAnswer } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { messageOf } from '../api/client.ts';
 import type { PageProps } from './hooks.ts';
-import { Body, FaceView } from './parts.tsx';
+import { Body, FaceView, HarnessAsk } from './parts.tsx';
 
 /** Everything that waits for the person's answer. Requests that pause an agent come first. */
 export function NeedsPage({ api, data, now }: PageProps): ReactElement {
@@ -61,6 +61,8 @@ function NeedCard(props: {
   const request = harnessRequest(post);
   const permission = request === 'permission';
   const choices = post.kind === 'ask' ? post.choices : [];
+  // A request of a harness shows from its recorded data, never from the body's text.
+  const shown = post.kind === 'ask' ? (post.shown ?? null) : null;
   const paused = props.paused;
 
   const send = (): void => {
@@ -89,11 +91,18 @@ function NeedCard(props: {
         <p className="nq">
           {permission ? post.text.replace(/^Permission needed:\s*/, '') : post.text}
         </p>
-        {post.body ? <Body text={post.body} /> : null}
+        {shown ? (
+          <HarnessAsk shown={shown} name={name} />
+        ) : post.body ? (
+          <Body text={post.body} />
+        ) : null}
         {paused ? (
           <p className="blocking">
             <span className="dot wait" /> {name} is paused until you answer.
           </p>
+        ) : null}
+        {choices.length > 0 && request === 'question' ? (
+          <p className="says">The harness’s options:</p>
         ) : null}
         {choices.length > 0 ? (
           <div className="opts">

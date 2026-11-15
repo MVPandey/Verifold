@@ -340,6 +340,8 @@ export type Post =
       readonly choices: readonly string[];
       /** What the ask carries for the author's harness. Verifold sets it, and no agent can. */
       readonly request?: 'permission' | 'question' | null;
+      /** What the harness's request holds. Verifold sets it, and the app shows it in place of the body. */
+      readonly shown?: PermissionShown | QuestionShown | null;
     })
   | (PostBase & {
       readonly kind: 'answer';
@@ -352,6 +354,42 @@ export type Post =
       readonly outcome: 'holds' | 'fails';
       readonly method: 'rerun' | 'code_read' | 'ratings';
     });
+
+/** A fact about a request that Verifold states. The app writes the sentence. */
+export type RequestNote = 'refused' | 'unclear' | 'too_long';
+
+/** What a harness asks a permission for, as Verifold read it, with hidden characters written as code points. */
+export interface PermissionShown {
+  readonly type: 'permission';
+  readonly kind: string;
+  /** The harness's name for the request, when the request runs no command. */
+  readonly title: string;
+  readonly command: string | null;
+  /** What the request holds beside the command, or its whole input, as JSON. */
+  readonly given: string;
+  /** The whole names of the harness's answers, when the choices cannot hold them. */
+  readonly answers: readonly string[];
+  /** The choices that are the harness's own to remember. */
+  readonly remembered: readonly string[];
+  /** The start of the command that the grant choice names. */
+  readonly grant: string | null;
+  readonly notes: readonly RequestNote[];
+  /** With the note `too_long`: how many characters the request has. */
+  readonly size: number;
+}
+
+/** One field of a question that a harness asks its user, as Verifold read it. */
+export interface QuestionShown {
+  readonly type: 'question';
+  readonly message: string;
+  readonly field: string;
+  readonly description: string;
+  readonly kind: 'text' | 'number' | 'integer' | 'boolean' | 'choice' | 'choices';
+  readonly options: readonly string[];
+  readonly optional: boolean;
+  readonly part: number;
+  readonly parts: number;
+}
 
 export interface PostView {
   readonly seq: number;

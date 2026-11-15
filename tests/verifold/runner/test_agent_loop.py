@@ -13,7 +13,7 @@ from fakes import FAKE_HARNESS
 from verifold.protocol.app import AgentState
 from verifold.protocol.events import AlarmSet, TurnSummary
 from verifold.protocol.join import MAX_NEWS, PostRequest
-from verifold.protocol.posts import Ask
+from verifold.protocol.posts import Ask, QuestionShown
 from verifold.protocol.settings import AtTimeLimit, JobSettings, PermissionSettings, Settings, WhileYouDecide
 from verifold.protocol.usage import Usage
 from verifold.runner import agent_loop
@@ -662,7 +662,7 @@ async def test_a_permission_request_waits_for_the_persons_answer_on_the_board(
     finally:
         running.cancel()
 
-    assert asked.text == 'Permission needed: run make'
+    assert asked.text == 'Permission needed: a tool call'
 
 
 NO_WAIT = Settings(permissions=PermissionSettings(while_you_decide=WhileYouDecide.REFUSE))
@@ -711,9 +711,9 @@ async def test_a_question_of_the_harness_waits_for_the_persons_answer_on_the_boa
         running.cancel()
 
     assert isinstance(asked, Ask)
-    assert (asked.text, asked.choices, asked.mentions) == ('Which branch?', ('main', 'dev'), ('person',))
-    assert asked.request == 'question'
-    assert (state.state, state.detail) == ('waiting', 'Asks you: Which branch?')
+    assert (asked.text, asked.choices, asked.mentions) == ('A question from the harness', ('main', 'dev'), ('person',))
+    assert asked.shown == QuestionShown(message='Which branch?', field='Branch', kind='choice')
+    assert (state.state, state.detail) == ('waiting', 'Asks you: a question of its harness')
 
 
 @pytest.mark.usefixtures('log')
@@ -733,7 +733,7 @@ async def test_in_a_lab_with_auto_mode_or_by_the_persons_choice_a_command_is_ref
 
     asks = [entry.post for entry in lab.board.posts if isinstance(entry.post, Ask)]
     assert lab.board.opened.auto_mode
-    assert [ask.text for ask in asks] == ['Permission needed: ./gpu python3 train.py']
+    assert [ask.text for ask in asks] == ['Permission needed: a shell command']
     assert asks[0].choices == ('Allow once', 'Reject', 'Allow `./gpu` for every agent')
     assert [view.post.id for view in needs_person(lab.board)] == [asks[0].id]
 
@@ -1177,7 +1177,7 @@ async def test_the_ask_of_an_agent_that_the_person_removes_while_it_waits_for_a_
     async with asyncio.timeout(30):
         await running
 
-    assert (asked, needs_person(lab.board)) == ('Permission needed: run make', ())
+    assert (asked, needs_person(lab.board)) == ('Permission needed: a tool call', ())
     assert [turn.error for turn in lab.board.turns] == ['The person removed the agent, so Verifold cancelled the turn.']
     assert len(calls(log, 'cancel')) == 1
 

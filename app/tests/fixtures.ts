@@ -3,7 +3,9 @@ import type {
   HarnessOption,
   LabView,
   Offer,
+  PermissionShown,
   Post,
+  QuestionShown,
   SetupDefaults,
   PostView,
   ThreadSummary,
@@ -117,6 +119,7 @@ export function ask(
   author: string,
   choices: readonly string[] = [],
   request: 'permission' | 'question' | null = 'permission',
+  shown: PermissionShown | QuestionShown | null = null,
 ): Post {
   return {
     id,
@@ -132,6 +135,7 @@ export function ask(
     kind: 'ask',
     choices,
     request,
+    shown,
   };
 }
 
