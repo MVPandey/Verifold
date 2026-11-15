@@ -14,7 +14,7 @@ license = "MIT"
 license-files = ["LICENSE", "LICENSING.md"]
 requires-python = ">=3.13"
 dependencies = [
-    "agent-client-protocol>=0.12.1,<0.13",
+    "agent-client-protocol>=0.12.1,<1.1",
     "fastapi>=0.120,<1",
     "mcp>=2.3,<3",
     # Finds the processes that agents start, by the marks in their environment, on macOS and Linux.
