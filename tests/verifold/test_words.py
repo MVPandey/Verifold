@@ -40,7 +40,7 @@ from verifold.runner.messages import (
     start_message,
 )
 from verifold.server.join import INSTRUCTIONS, join_server
-from verifold.server.lab import Lab
+from verifold.server.lab import ACCEPTED, CHANGED, OFFERS_TITLE, REMOVED, STATED, TAKEN_BACK, Lab
 from verifold.server.member import Member
 from verifold.society.lifecycle import no_alarm_line
 
@@ -144,6 +144,20 @@ def messages() -> dict[str, str]:
         'cut short': cut_short_message('The harness stopped: max_tokens.'),
         'start': start,
         'start alone': start_message(RecordBuilder().join('ada').board(), ada, NORMS),
+        'start with deliverables': start_message(
+            RecordBuilder().deliverable('d-1', 'One page.').join('ada').board(), ada, NORMS
+        ),
+        **{
+            f'deliverable {name}': text.format(id='d-1')
+            for name, text in (
+                ('stated', STATED),
+                ('changed', CHANGED),
+                ('removed', REMOVED),
+                ('accepted', ACCEPTED),
+                ('taken back', TAKEN_BACK),
+                ('thread', OFFERS_TITLE),
+            )
+        },
         'start with a seat': start_message(
             seats.board(), ada.model_copy(update={'given_role': 'direction creator'}), NORMS
         ).replace('direction creator', ''),
@@ -230,7 +244,7 @@ async def test_no_tool_of_the_board_describes_itself_or_its_result_with_an_order
     async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
         tools = (await client.list_tools()).tools
 
-    assert len(tools) == 11
+    assert len(tools) == 12
     for tool in tools:
         assert tool.description, tool.name
         assert orders(tool.description) == [], tool.name

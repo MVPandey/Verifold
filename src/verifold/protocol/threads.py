@@ -7,7 +7,10 @@ from pydantic import StringConstraints
 from verifold.protocol.ids import AgentId, ThreadId
 from verifold.protocol.record import Record
 
-type Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+MAX_TITLE = 200
+"""The most characters in a thread's title."""
+
+type Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_TITLE)]
 
 QUESTION_TITLE: Final = 'The question'
 """The title of the thread that a lab opens with. It holds the person's question, the plans, and the lab's answer."""

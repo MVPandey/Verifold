@@ -10,6 +10,8 @@ from verifold.protocol.events import (
     AgentLeft,
     AlarmSet,
     CoordinatorSet,
+    DeliverableDecided,
+    DeliverableSet,
     LabOpened,
     OnCallSet,
     Posted,
@@ -74,6 +76,10 @@ class Board:
     """Each time that the person switched a power of the coordinator on or off, oldest first."""
     answers: tuple[RequestAnswered, ...] = ()
     """The answers to the coordinator's requests for a move, oldest first."""
+    deliverables: tuple[DeliverableSet, ...] = ()
+    """Each time that the person stated, changed, or removed a deliverable, oldest first."""
+    decisions: tuple[DeliverableDecided, ...] = ()
+    """The person's decisions about offers of files for a deliverable, oldest first."""
 
     @property
     def question(self) -> str:

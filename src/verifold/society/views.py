@@ -43,6 +43,7 @@ from verifold.protocol.posts import Ask, Call, Check, Close, Objection, Plan, Pr
 from verifold.society.attention import left_line, watches_thread
 from verifold.society.board import Board
 from verifold.society.coordinator import request_waits
+from verifold.society.deliverables import deliverable_lines
 from verifold.society.errors import NotFound
 from verifold.society.identity import post_line, post_view, seat_label
 from verifold.society.lifecycle import (
@@ -360,6 +361,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
             RevisionLine(at=entry.at, note=entry.note, post=entry.post, by=entry.by, request=entry.request)
             for entry in board.revisions[-MAX_LEADS:]
         ),
+        deliverables=deliverable_lines(board),
         state=lab_state(board),
         close=close_line,
         close_agreed=agreed(board, done) if done else (),

@@ -11,6 +11,8 @@ from verifold.protocol.events import (
     AgentNamed,
     AlarmSet,
     CoordinatorSet,
+    DeliverableDecided,
+    DeliverableSet,
     Event,
     LabOpened,
     OnCallSet,
@@ -33,6 +35,7 @@ from verifold.protocol.events import (
 )
 from verifold.society.board import Board
 from verifold.society.coordinator import check_answered, check_made, check_power
+from verifold.society.deliverables import check_decision, check_deliverable, check_offer
 from verifold.society.errors import RejectedEvent
 from verifold.society.rules import (
     check_agent,
@@ -91,6 +94,7 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
             return replace(board, seq=event.seq, threads=(*board.threads, event))
         case Posted(post=post):
             check_post(board, post)
+            check_offer(board, post)
             return replace(board, seq=event.seq, posts=(*board.posts, event))
         case WatchSet():
             check_watch(board, event)
@@ -135,6 +139,12 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
         case RequestAnswered():
             check_answered(board, event)
             return replace(board, seq=event.seq, answers=(*board.answers, event))
+        case DeliverableSet():
+            check_deliverable(board, event)
+            return replace(board, seq=event.seq, deliverables=(*board.deliverables, event))
+        case DeliverableDecided():
+            check_decision(board, event)
+            return replace(board, seq=event.seq, decisions=(*board.decisions, event))
         case _:
             assert_never(event)
 

@@ -4,7 +4,8 @@ The posts of the board.
 A post's `kind` says what it does in the society, and `builds_on` says which posts it started from, so the record
 shows how an idea moved from one agent's work into another's. A plan says what its author does next, an objection disputes its
 target, an answer can concede an objection, a check tests another agent's post, a proposal puts a choice to the
-lab, a report tells the person where the lab is, and a call offers work that another agent can take. A new kind is one more model in the `Post` union.
+lab, a report tells the person where the lab is, a call offers work that another agent can take, and an offer
+holds files for a deliverable of the person. A new kind is one more model in the `Post` union.
 """
 
 from pathlib import PurePosixPath
@@ -12,7 +13,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, Field, StringConstraints, WithJsonSchema
 
-from verifold.protocol.ids import AgentId, CommitId, PostId, ThreadId
+from verifold.protocol.ids import AgentId, CommitId, DeliverableId, PostId, ThreadId
 from verifold.protocol.moves import Move
 from verifold.protocol.record import Record
 
@@ -59,6 +60,7 @@ type PostKind = Literal[
     'call',
     'close',
     'request',
+    'offer',
 ]
 """The values of `kind` across the `Post` union."""
 type Outcome = Literal['holds', 'fails']
@@ -326,6 +328,25 @@ class MoveRequest(PostBase):
     move: Move
 
 
+MAX_OFFER_FILES = 20
+"""The most files in one offer for a deliverable."""
+
+
+class FileOffer(PostBase):
+    """
+    An agent's offer of files for one deliverable of the person.
+
+    `evidence` holds the files, each pinned to the commit of the author's folder, so the person reads the version
+    that the agent offered. `text` is the author's note in one headline. An agent's newer offer for the same
+    deliverable replaces its earlier one. The person decides what to do with an offer: Verifold reads no file.
+    """
+
+    kind: Literal['offer'] = 'offer'
+    deliverable: DeliverableId
+    evidence: tuple[FileEvidence, ...] = Field(min_length=1, max_length=MAX_OFFER_FILES)
+    reply_to: None = None
+
+
 type Post = Annotated[
     Message
     | Plan
@@ -339,6 +360,7 @@ type Post = Annotated[
     | Report
     | Call
     | Close
-    | MoveRequest,
+    | MoveRequest
+    | FileOffer,
     Field(discriminator='kind'),
 ]

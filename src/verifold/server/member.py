@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 
 from verifold.protocol.agents import GUEST, Picture
 from verifold.protocol.events import AgentLeft, AlarmSet, RerunRequested, WatchSet
-from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
     Brief,
     News,
@@ -21,6 +21,7 @@ from verifold.protocol.posts import FileEvidence
 from verifold.server.errors import BlindCheck, CannotWake, EvidenceRejected, HasLeft, OutOfTime, UnknownAgent
 from verifold.server.lab import Adds, Lab
 from verifold.society.attention import news, update
+from verifold.society.deliverables import live
 from verifold.society.identity import post_view
 from verifold.society.views import brief, profile_result, side_lines, thread_summaries, thread_view, work_threads
 
@@ -124,6 +125,27 @@ class Member:
         # earlier version can post just after a revision, and its answer is then to that earlier version.
         seen = sum(self._seen >= told.seq for revision in board.revisions if (told := board.post(revision.post)))
         posted = await self._lab.post(request, self.agent_id, evidence, seen)
+        return post_view(self._lab.board, posted)
+
+    async def offer(self, deliverable_id: DeliverableId, files: tuple[str, ...], note: str, body: str = '') -> PostView:
+        """
+        Offer files of the agent's folder for a deliverable of the person, and return the offer as it stands.
+
+        Raises:
+            BlindCheck: The agent is a blind checker.
+            EvidenceRejected: This member cannot pin files, or a file is not in the folder.
+            RejectedEvent: The lab has no such deliverable, or the person removed it.
+            OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
+
+        """
+        self._check_not_blind()
+        self._check_in_time()
+        # The folder gets a commit only for an offer that the board can take.
+        live(self._lab.board, deliverable_id)
+        if self._pin is None:
+            raise EvidenceRejected('This lab cannot pin files for you.')
+        evidence = await self._pin(files)
+        posted = await self._lab.offer(self.agent_id, deliverable_id, evidence, note, body)
         return post_view(self._lab.board, posted)
 
     async def request(self, move: Move, text: str, body: str = '') -> PostView:

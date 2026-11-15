@@ -224,6 +224,49 @@ def test_run_takes_grants_for_every_agent(serves: list[StartRequest | None]) -> 
     assert serves[0].allow == ('./gpu', 'make test')
 
 
+@pytest.mark.usefixtures('project')
+def test_run_takes_each_deliverable_as_one_sentence_and_says_how_many(
+    serves: list[StartRequest | None], capsys: pytest.CaptureFixture[str]
+) -> None:
+    main(
+        [
+            'run',
+            'Does it hold?',
+            '--agent',
+            'codex',
+            '--deliverable',
+            ' A one-page\nanswer. ',
+            '--deliverable',
+            'A script.',
+        ]
+    )
+    main(['run', 'Does it hold?', '--agent', 'codex', '--deliverable', 'A script.'])
+    main(['run', 'Does it hold?', '--agent', 'codex'])
+
+    assert [start.deliverables for start in serves if start] == [
+        ('A one-page answer.', 'A script.'),
+        ('A script.',),
+        (),
+    ]
+    printed = capsys.readouterr().out
+    assert 'Started a lab with 1 codex; auto mode; no time limit; 2 deliverables.' in printed
+    assert 'Started a lab with 1 codex; auto mode; no time limit; 1 deliverable.' in printed
+    assert 'Started a lab with 1 codex; auto mode; no time limit.' in printed
+    with pytest.raises(SystemExit, match='holds no text'):
+        main(['run', 'Does it hold?', '--agent', 'codex', '--deliverable', ' '])
+
+
+def test_no_settings_file_states_a_deliverable_for_run(project: Path, serves: list[StartRequest | None]) -> None:
+    # A deliverable is the person's own sentence for one lab, as the question is. The settings hold no such
+    # field, so a file that names one is no valid settings file, and the command starts nothing.
+    project_settings(project, {'setup': {'deliverables': ['A file for somebody else.']}})
+
+    with pytest.raises(SystemExit, match='deliverables'):
+        main(['run', 'Does it hold?', '--agent', 'codex'])
+
+    assert serves == []
+
+
 @pytest.fixture
 def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Run in a project folder of its own, with a home folder of its own, so that no real settings apply."""

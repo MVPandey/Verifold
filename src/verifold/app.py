@@ -519,6 +519,7 @@ class Host:
         for prefix in request.allow:
             await lab.grant(prefix)
         await lab.open_question_thread()
+        await lab.state_deliverables(request.deliverables)
         self._lab = lab
         chosen = [choice for choice in request.agents for _ in range(choice.count)]
         for number, choice in enumerate(chosen, start=1):

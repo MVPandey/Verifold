@@ -712,6 +712,111 @@ async def test_a_folder_with_no_lab_takes_no_revision(activity: Activity) -> Non
     assert refused.status_code == 409
 
 
+async def test_the_person_states_changes_and_removes_deliverables_and_no_other_caller_does(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    none = (await client.get('/lab')).json()['deliverables']
+    added = await client.post('/deliverables', json={'text': ' A one-page\nanswer. '})
+    await client.post('/deliverables', json={'text': 'A script that runs it again.'})
+    changed = await client.post('/deliverables/d-1', json={'text': 'A two-page answer.'})
+    seq = lab.board.seq
+    same = await client.post('/deliverables/d-1', json={'text': 'A two-page answer.'})
+    unchanged = lab.board.seq
+    removed = await client.delete('/deliverables/d-2')
+    empty = await client.post('/deliverables', json={'text': ' \n '})
+    long = await client.post('/deliverables', json={'text': 'x' * 301})
+    unknown = await client.post('/deliverables/d-9', json={'text': 'Something.'})
+    gone = await client.delete('/deliverables/d-2')
+    no_id = await client.delete('/deliverables/first')
+    stranger = await client.post('/deliverables', json={'text': 'Mine.'}, headers={'Authorization': 'Bearer no'})
+
+    assert none == []
+    assert added.json()['deliverables'] == [
+        {'id': 'd-1', 'text': 'A one-page answer.', 'state': 'none', 'decided_at': None, 'thread': None, 'offers': []}
+    ]
+    assert [line['text'] for line in changed.json()['deliverables']] == [
+        'A two-page answer.',
+        'A script that runs it again.',
+    ]
+    # The same sentence again records nothing.
+    assert (same.status_code, unchanged) == (200, seq)
+    assert [line['id'] for line in removed.json()['deliverables']] == ['d-1']
+    assert [reply.status_code for reply in (empty, long, unknown, gone, no_id, stranger)] == [
+        422,
+        422,
+        400,
+        400,
+        422,
+        401,
+    ]
+    assert unknown.json()['detail'] == 'This lab has no deliverable d-9. `brief` lists the deliverables.'
+    # Each change is a post of the person, and the record keeps every sentence.
+    assert [entry.post.author for entry in lab.board.posts[1:]] == ['person'] * 4
+    assert [entry.text for entry in lab.board.deliverables if entry.deliverable == 'd-1'] == [
+        'A one-page answer.',
+        'A two-page answer.',
+    ]
+
+
+async def test_the_person_accepts_an_offer_asks_for_changes_and_takes_an_acceptance_back(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    await client.post('/deliverables', json={'text': 'A one-page answer.'})
+    evidence = (FileEvidence(path='answer.md', commit='c' * 40),)
+    offer = (await lab.offer('ada', 'd-1', evidence, 'The answer.')).post.id
+    offered = (await client.get('/lab')).json()['deliverables'][0]
+
+    wordless = await client.post('/deliverables/d-1/decision', json={'decision': 'ask_changes', 'offer': offer})
+    early = await client.post('/deliverables/d-1/decision', json={'decision': 'take_back', 'offer': offer})
+    asked = await client.post(
+        '/deliverables/d-1/decision', json={'decision': 'ask_changes', 'offer': offer, 'text': ' Add the numbers. '}
+    )
+    accepted = await client.post('/deliverables/d-1/decision', json={'decision': 'accept', 'offer': offer})
+    twice = await client.post('/deliverables/d-1/decision', json={'decision': 'accept', 'offer': offer})
+    other = await client.post('/deliverables/d-1/decision', json={'decision': 'accept', 'offer': 'p-1'})
+    word = await client.post('/deliverables/d-1/decision', json={'decision': 'met', 'offer': offer})
+    back = await client.post('/deliverables/d-1/decision', json={'decision': 'take_back', 'offer': offer})
+
+    assert (offered['state'], offered['thread']) == ('offered', 't-3')
+    assert offered['offers'] == [
+        {
+            'post': offer,
+            'by': 'ada',
+            'at': offered['offers'][0]['at'],
+            'note': 'The answer.',
+            'files': ['answer.md'],
+            'revised': 0,
+            'accepted': False,
+        }
+    ]
+    assert [reply.status_code for reply in (wordless, early, twice, other, word)] == [400, 400, 400, 400, 422]
+    states = [reply.json()['deliverables'][0] for reply in (asked, accepted, back)]
+    assert [line['state'] for line in states] == ['changes_asked', 'accepted', 'offered']
+    assert [line['offers'][0]['accepted'] for line in states] == [False, True, False]
+    assert (states[0]['decided_at'] is not None, states[2]['decided_at']) == (True, None)
+    said = [entry.post for entry in lab.board.posts if entry.post.author == 'person' and entry.post.reply_to == offer]
+    assert [post.text for post in said] == [
+        'Add the numbers.',
+        'The person accepted these files for the deliverable d-1.',
+        'The person took back the acceptance of these files for the deliverable d-1.',
+    ]
+    # The file of an offer opens as the file of any post does.
+    file = await client.get(f'/posts/{offer}/file', params={'path': 'answer.md'})
+    assert file.json()['text'] == '# The answer'
+
+
+async def test_the_setup_takes_deliverables_and_a_folder_with_no_lab_takes_none(activity: Activity) -> None:
+    host = Host(None)
+    async with client_of(host, activity) as client:
+        started = await client.post('/labs', json={**START, 'deliverables': [' A one-page answer. ', 'A script.']})
+        many = await client.post('/labs', json={**START, 'deliverables': ['One more.'] * 21})
+        empty = await client.post('/labs', json={**START, 'deliverables': ['']})
+        refused = await client.post('/deliverables', json={'text': 'A script.'})
+
+    assert [reply.status_code for reply in (started, many, empty, refused)] == [200, 422, 422, 409]
+    assert host.started[0].deliverables == ('A one-page answer.', 'A script.')
+
+
 async def test_the_person_opens_the_agents_folder_and_only_an_agent_of_the_lab_names_one(
     client: httpx2.AsyncClient, lab: Lab, activity: Activity
 ) -> None:

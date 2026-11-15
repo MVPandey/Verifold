@@ -495,6 +495,51 @@ async def state_of(client: httpx2.AsyncClient, agent_id: str) -> str:
     return next(view['activity']['state'] for view in views if view['agent']['id'] == agent_id)
 
 
+async def test_an_agent_offers_files_for_a_deliverable_and_the_person_reads_the_offered_version_and_accepts_it(
+    project: Path, log: Path
+) -> None:
+    start = StartRequest(
+        question='Is it faster?',
+        agents=(AgentChoice(harness='fake'),),
+        deliverables=('A one-page answer.', 'A script that runs it again.'),
+    )
+
+    async with serving(project, start, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
+        invited = (await client.post('/invitations', json={'name': 'Writer'})).json()
+        url, token, folder = invited_parts(invited['text'])
+        async with board_of(url, token) as board:
+            (folder / 'answer.md').write_text('It is 2x faster.\n')
+            offered = await board.call_tool(
+                'offer', {'deliverable': 'd-1', 'files': ['answer.md'], 'note': 'The answer, without the numbers.'}
+            )
+            # The agent goes on with the file. The offer keeps the version that the agent offered.
+            (folder / 'answer.md').write_text('A draft of the next version.\n')
+            assert offered.structured_content is not None
+            offer = offered.structured_content['post']['id']
+            read = (await client.get(f'/posts/{offer}/file', params={'path': 'answer.md'})).json()
+            lab = await client.post('/deliverables/d-1/decision', json={'decision': 'accept', 'offer': offer})
+            heard = await board.call_tool('wait', {'timeout_seconds': 5})
+            brief = await board.call_tool('brief', {})
+
+    types = [event.type for event in record(project)]
+    assert types[: types.index('agent_joined')].count('deliverable_set') == 2
+    first = next(call['text'] for call in calls(log) if call['event'] == 'prompt')
+    assert 'The person stated 2 deliverables: what the person wants to hold at the end of the lab.' in first
+    assert 'The person stated 2 deliverables' in invited['text']
+    assert read['text'] == 'It is 2x faster.\n'
+    assert [(line['id'], line['state']) for line in lab.json()['deliverables']] == [
+        ('d-1', 'accepted'),
+        ('d-2', 'none'),
+    ]
+    assert heard.structured_content is not None
+    assert [entry['post']['text'] for entry in heard.structured_content['posts']] == [
+        'The person accepted these files for the deliverable d-1.'
+    ]
+    assert brief.structured_content is not None
+    assert [line['state'] for line in brief.structured_content['deliverables']] == ['accepted', 'none']
+
+
 async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitation_holds_after_a_restart(
     project: Path, log: Path
 ) -> None:

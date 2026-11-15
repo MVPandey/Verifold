@@ -8,11 +8,14 @@ from datetime import UTC, datetime, timedelta
 import psutil
 
 from verifold.protocol.agents import Agent, ModelSpec, Power
+from verifold.protocol.deliverables import Decision
 from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
     AgentNamed,
     CoordinatorSet,
+    DeliverableDecided,
+    DeliverableSet,
     Event,
     LabOpened,
     OnCallSet,
@@ -32,7 +35,7 @@ from verifold.protocol.events import (
     WatchSet,
 )
 from verifold.protocol.moves import Move
-from verifold.protocol.posts import Ask, Message, MoveRequest, PermissionShown, Post
+from verifold.protocol.posts import Ask, FileEvidence, FileOffer, Message, MoveRequest, PermissionShown, Post
 from verifold.protocol.settings import ReviewerSettings, Settings
 from verifold.protocol.threads import Thread
 from verifold.protocol.usage import Usage
@@ -242,6 +245,55 @@ class RecordBuilder:
     def ran_out(self) -> 'RecordBuilder':
         seq, at = self._stamp()
         self.events.append(TimeRanOut(seq=seq, at=at))
+        return self
+
+    def deliverable(
+        self,
+        deliverable_id: str,
+        text: str,
+        post_id: str | None = None,
+        thread_id: str = 't-1',
+        *,
+        removed: bool = False,
+    ) -> 'RecordBuilder':
+        """Add a deliverable as the person states it now. With `post_id`, the person's post that tells the lab comes first."""
+        if post_id:
+            self.post(Message(id=post_id, thread=thread_id, author='person', text=f'About {deliverable_id}: {text}'))
+        seq, at = self._stamp()
+        self.events.append(
+            DeliverableSet(seq=seq, at=at, deliverable=deliverable_id, text=text, removed=removed, post=post_id)
+        )
+        return self
+
+    def offer(
+        self, post_id: str, author: str, deliverable_id: str, thread_id: str, paths: tuple[str, ...] = ('answer.md',)
+    ) -> 'RecordBuilder':
+        """Add an agent's offer of files for a deliverable. The first one for a deliverable opens `thread_id`."""
+        if not any(isinstance(event, ThreadOpened) and event.thread.id == thread_id for event in self.events):
+            self.thread(thread_id, opened_by=author, title=f'Deliverable {deliverable_id}')
+        evidence = tuple(FileEvidence(path=path, commit='c' * 40) for path in paths)
+        return self.post(
+            FileOffer(
+                id=post_id,
+                thread=thread_id,
+                author=author,
+                text='The files.',
+                deliverable=deliverable_id,
+                evidence=evidence,
+            )
+        )
+
+    def decide(
+        self, deliverable_id: str, decision: Decision, offer_id: str, post_id: str, thread_id: str
+    ) -> 'RecordBuilder':
+        """Add the person's decision about an offer, with the person's reply to the offer first."""
+        self.post(Message(id=post_id, thread=thread_id, author='person', text='Decided.', reply_to=offer_id))
+        seq, at = self._stamp()
+        self.events.append(
+            DeliverableDecided(
+                seq=seq, at=at, deliverable=deliverable_id, decision=decision, offer=offer_id, post=post_id
+            )
+        )
         return self
 
     def board(self) -> Board:
