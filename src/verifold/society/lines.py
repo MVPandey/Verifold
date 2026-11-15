@@ -17,7 +17,8 @@ def lines_of(board: Board) -> dict[AgentId, ThreadId | None]:
     Return where each agent of the lab works now, for every agent that has worked in a line.
 
     An agent works in the thread of its latest plan or result outside the question's thread. Every agent plans in
-    the question's thread, so a plan there moves nobody. A ruled-out lead ends the agent's work in its thread, and
+    the question's thread, so a plan there moves nobody. Nor does a plan or a result in a side thread, which is
+    talk between named agents beside their work: its author keeps its line, its team, and its watch. A ruled-out lead ends the agent's work in its thread, and
     the agent then works nowhere until its next plan or result. A ruled-out lead that withdraws the agent's own
     call ends no work. An agent that left the lab works nowhere.
     """
@@ -25,10 +26,11 @@ def lines_of(board: Board) -> dict[AgentId, ThreadId | None]:
     workers = {
         joined.agent.id for joined in board.agents if not joined.agent.checks and not board.gone(joined.agent.id)
     }
+    beside = {opened.thread.id for opened in board.threads if opened.thread.between} | {question}
     lines: dict[AgentId, ThreadId | None] = {}
     for entry in board.posts:
         post = entry.post
-        if post.author not in workers or post.thread == question:
+        if post.author not in workers or post.thread in beside:
             continue
         if isinstance(post, Plan | Result):
             lines[post.author] = post.thread

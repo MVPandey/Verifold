@@ -956,6 +956,9 @@ details[open] > summary .opened {
 .f-side li > a span {
   overflow-wrap: anywhere;
 }
+.f-side li > a em {
+  font-style: normal;
+}
 .f-side li > a small {
   margin-left: auto;
   color: var(--muted);

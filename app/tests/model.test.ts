@@ -32,7 +32,7 @@ import {
 import { crossedLine, crossLines } from '../src/model/crossings.ts';
 import { href, parseRoute } from '../src/model/route.ts';
 import { hasNew, markSeen, readSeen } from '../src/model/seen.ts';
-import { betweenLine, isSide, sideHeading, sideLines } from '../src/model/side.ts';
+import { betweenLine, isSide, sideHeading, sideLines, sideReplyHint } from '../src/model/side.ts';
 import { AT_EXIT, labelOf, stopLine, valueAt } from '../src/model/settings.ts';
 import {
   agentCount,
@@ -901,6 +901,11 @@ describe('side threads', () => {
     thread: { id: 't-6', title: 'Scoreboard', opened_by: 'agent-1' },
     members: ['agent-1', 'agent-3', 'agent-9'],
     posts: 4,
+    disputed: 1,
+    not_checked: 2,
+    checked: 3,
+    open_asks: 2,
+    open_calls: 1,
   });
 
   it('are the threads that have members', () => {
@@ -910,8 +915,21 @@ describe('side threads', () => {
   it('read as one line each, in the order given: who talks, the title, and the count', () => {
     assert.deepEqual(sideLines([three, work, pair], agents), [
       // An agent that the lab does not list keeps its ID.
-      { id: 't-6', who: 'Agent 1, Agent 3, and agent-9', title: 'Scoreboard', count: '4 posts' },
-      { id: 't-5', who: 'Agent 2 and Agent 1', title: 'Who owns the account?', count: '1 post' },
+      {
+        id: 't-6',
+        who: 'Agent 1, Agent 3, and agent-9',
+        title: 'Scoreboard',
+        count: '4 posts',
+        // The same marks that a card has, and none for what the thread does not have.
+        marks: ['1 disputed', '2 not checked', '2 open asks', 'Needs an agent'],
+      },
+      {
+        id: 't-5',
+        who: 'Agent 2 and Agent 1',
+        title: 'Who owns the account?',
+        count: '1 post',
+        marks: [],
+      },
     ]);
   });
 
@@ -921,6 +939,14 @@ describe('side threads', () => {
     assert.equal(
       betweenLine(pair.members, agents),
       'A side thread between Agent 2 and Agent 1. Every agent and you can read it.',
+    );
+  });
+
+  it('say that a reply reaches the members, and that it does not open a lab that is done', () => {
+    assert.equal(sideReplyHint(false), 'The members of this side thread get your reply.');
+    assert.equal(
+      sideReplyHint(true),
+      'The members of this side thread get your reply. It does not open the lab again. For that, post in another thread.',
     );
   });
 });

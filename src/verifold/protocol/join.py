@@ -188,9 +188,9 @@ class ThreadSummary(Record):
     """How many calls in the thread still need an agent: nobody took them, and their callers did not withdraw them."""
     team: tuple[AgentId, ...] = ()
     """
-    The agents that work in the thread now: each agent whose latest plan or result, outside the question's thread,
-    is here. The agent that opened the thread is in its team until it works in another thread, unless it opened the
-    thread with a call. The question's thread has no team.
+    The agents that work in the thread now: each agent whose latest plan or result, outside the question's thread
+    and the side threads, is here. The agent that opened the thread is in its team until it works in another thread,
+    unless it opened the thread with a call. The question's thread and a side thread have no team.
     """
     builds_on_threads: tuple[ThreadLink, ...] = ()
     """The other threads whose posts, by other agents, this thread builds on most, at most `MAX_LINKS`."""
@@ -249,10 +249,10 @@ class ThreadResult(ThreadView):
 
 class SideLine(Record):
     """
-    A side thread as one line: its title, its members, how many posts it has, and when the last one came.
+    A side thread as one line: its title, its members, its posts, its last activity, and what is open in it.
 
-    A side thread is a thread between named agents. A post in it reaches its members. Every agent can read it, and
-    an agent that posts in it or watches it is a member from then on.
+    A side thread is a thread between named agents. A post in it reaches the members that watch it. Every agent that
+    reads the board can read it, and an agent that posts in it or watches it is a member from then on.
     """
 
     id: ThreadId
@@ -260,6 +260,14 @@ class SideLine(Record):
     members: tuple[AgentId, ...]
     posts: int
     last_at: AwareDatetime
+    open_asks: int = 0
+    """How many asks in the thread have no answer yet. `brief` lists them only for the thread's members."""
+    open_calls: int = 0
+    """How many calls in the thread still need an agent. `brief` lists them only for the thread's members."""
+    disputed: int = 0
+    """How many results in the thread a failed check or a standing objection disputes."""
+    not_checked: int = 0
+    """How many results in the thread nobody has checked yet."""
 
 
 class ThreadList(Record):
@@ -299,7 +307,10 @@ class AgentLine(Record):
     status: str = ''
     """What the agent says that it does now."""
     thread: ThreadId | None = None
-    """The thread where the agent works now: the thread of its latest plan or result outside the question's thread."""
+    """
+    The thread where the agent works now: the thread of its latest plan or result outside the question's thread and
+    the side threads.
+    """
     plan: PostLine | None = None
     latest: PostLine | None = None
     """The agent's latest post, when that is not its plan."""

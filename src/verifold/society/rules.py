@@ -308,6 +308,8 @@ def _check_between(board: Board, thread: Thread) -> None:
             raise RejectedEvent(f'{agent} is a blind checker, which reads nothing but its claim.')
         if board.gone(agent):
             raise RejectedEvent(f'{agent} left this lab, so no post reaches it.')
+        if not board.came(joined):
+            raise RejectedEvent(f'{agent} has an invitation and has not posted yet, so nobody knows whether it came.')
 
 
 def _check_close(board: Board, close: Close) -> None:

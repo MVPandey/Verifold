@@ -7,6 +7,7 @@ import { authorName, called, face, harnessTitle } from '../model/agents.ts';
 import { clock } from '../model/format.ts';
 import { builtOnLabel, standingChip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
+import { sideReplyHint } from '../model/side.ts';
 import { act, isClaim, rows, standingIn } from '../model/turns.ts';
 import { messageOf } from '../api/client.ts';
 import { Body, ChipView, Composer, FaceView, Files, Mark } from './parts.tsx';
@@ -20,6 +21,8 @@ interface Around {
   readonly needs: readonly PostView[];
   /** The ID of the question's thread, or `null` when the lab has none. */
   readonly question: string | null;
+  /** Whether the lab's agents say that it is done, so that a side thread's reply box says what a reply does. */
+  readonly done?: boolean;
   readonly onRerun: (postId: string) => Promise<void>;
 }
 
@@ -57,7 +60,7 @@ export function Turns(
         button="Post"
         hint={
           props.view.members.length > 0
-            ? 'The members of this side thread get your reply.'
+            ? sideReplyHint(props.done ?? false)
             : 'Agents that watch this thread get your reply. When nobody watches it, every agent does.'
         }
         onSend={onSend}

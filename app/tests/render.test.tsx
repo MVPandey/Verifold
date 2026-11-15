@@ -484,6 +484,8 @@ describe('the lab page', () => {
         cardRead={{ ...read, view: read.view && { ...read.view, members: sideTalk.members } }}
       />,
     );
+    // A link to a side thread, or to a post in it, unfolds the group.
+    assert.ok(html.includes('<details class="f-side" open=""><summary>1 side thread</summary>'));
     assert.ok(html.includes('<li><section id="card-t-5" class="f-card c-none open">'));
     assert.ok(html.includes('<p class="f-by">Agent 2 opened it</p>'));
     assert.ok(
@@ -498,6 +500,33 @@ describe('the lab page', () => {
     const other = wall('t-2', none, thread('t-2', 'agent-1', []));
     assert.equal(other.includes('A side thread between'), false);
     assert.ok(other.includes('When nobody watches it, every agent does.'));
+  });
+
+  it('shows on a side thread’s line what is open in it, and says what a reply does in a lab that is done', () => {
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    const busy = { ...sideTalk, open_asks: 1, disputed: 2 };
+    const read = thread('t-5', 'agent-2', []);
+    const render = (open: string | null): string =>
+      renderToStaticMarkup(
+        <Wall
+          api={{} as Api}
+          data={{ ...data, threads: [busy, ...threads], lab: { ...lab, state: 'closed' } }}
+          now={now}
+          open={open}
+          post={null}
+          questionRead={none}
+          cardRead={{ ...read, view: read.view && { ...read.view, members: busy.members } }}
+        />,
+      );
+    assert.ok(
+      render(null).includes(
+        '<span>Who owns the account?</span><em class="f-st fs-ask">2 disputed</em>' +
+          '<em class="f-st fs-ask">Open ask</em><small>2 posts</small>',
+      ),
+    );
+    assert.ok(
+      render('t-5').includes('It does not open the lab again. For that, post in another thread.'),
+    );
   });
 
   it('says nothing of missing threads when the lab has only side threads', () => {

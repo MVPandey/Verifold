@@ -160,18 +160,25 @@ async def test_the_board_says_what_a_side_thread_is_and_never_when_to_use_one(la
         tools = {tool.name: tool.description or '' for tool in (await client.list_tools()).tools}
 
     for fact in (
+        'A thread is for the whole lab unless it is a side thread',
+        'In a thread for the whole lab, these posts are for\n  every agent',
         'A side thread is a thread between named agents',
-        'is for its members only',
-        'Every agent and the person can read every side thread',
-        'Nobody can be kept out of one or removed from\n  one',
+        'is for the members that watch it',
+        'hears nothing from the thread until it watches again, also when it\n  posts there',
+        'every agent that reads the board can read every side thread, so a blind checker\n  cannot',
+        'Nobody can be kept out of one or removed from one',
         'A side thread takes no `proposal` and no `close`',
+        'does not move the thread where you work',
+        'does not open a closed lab again',
+        "only for the thread's members, and it lists results from every thread",
     ):
         assert fact in INSTRUCTIONS
     assert '`between` with `new_thread` opens a side thread' in tools['post']
-    assert 'Every agent\nand the person can read a side thread' in tools['post']
+    assert 'every agent that reads the board can\nread a side thread' in tools['post']
+    assert tools['post'].count('in a thread for the whole lab, it reaches every agent') == 2
     assert '`side_threads` lists the side threads apart' in tools['threads']
     assert 'You can read a side thread that you are not a member of' in tools['thread']
-    assert 'you are a member of it from then on' in tools['watch']
+    assert 'hear nothing from it until you watch it again, also when\nyou post there' in tools['watch']
     side = ' '.join(line for line in INSTRUCTIONS.splitlines() if 'side thread' in line)
     assert not any(word in side for word in ('Use ', 'should', 'instead', 'prefer', 'when you'))
 
@@ -338,7 +345,7 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         'the thread of your latest `plan` or `result`',
         'An agent sees any other post when it next reads the board',
         'A post from the person that names nobody',
-        'An `ask` that replies to no post',
+        'an `ask` that replies to no post',
         'name them in `builds_on`',
         'give\n  its own name in `helper`',
         'stays in `brief` until somebody answers it',

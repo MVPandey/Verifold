@@ -116,9 +116,14 @@ def closing(board: Board) -> Posted | None:
         isinstance(reply.post, RuledOut) and reply.post.author == entry.post.author
         for reply in board.replies(entry.post.id)
     )
-    # The person's new words to the lab open it again: the agents have something to do.
+    # The person's new words to the lab open it again: the agents have something to do. Words in a side thread
+    # reach only its members, so they are not words to the lab.
     steered = any(
-        later.post.author == PERSON and later.post.reply_to is None and later.seq > entry.seq for later in board.posts
+        later.post.author == PERSON
+        and later.post.reply_to is None
+        and later.seq > entry.seq
+        and not board.is_side(later.post.thread)
+        for later in board.posts
     )
     return None if withdrawn or steered else entry
 

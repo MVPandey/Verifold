@@ -3,10 +3,25 @@ from builders import RecordBuilder, lab
 from pydantic import TypeAdapter
 
 from verifold.protocol.events import Event, ThreadOpened
-from verifold.protocol.posts import Ask, Call, Check, Close, FileEvidence, Message, Plan, Post, Proposal, Result
+from verifold.protocol.posts import (
+    Answer,
+    Ask,
+    Call,
+    Check,
+    Close,
+    FileEvidence,
+    Message,
+    Objection,
+    Plan,
+    Post,
+    Proposal,
+    Result,
+    RuledOut,
+)
 from verifold.society.attention import news, wakes, watches_thread
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import fold
+from verifold.society.lifecycle import lab_state
 from verifold.society.lines import lines_of
 from verifold.society.views import brief, side_lines, thread_summaries, thread_view, work_threads
 
@@ -62,14 +77,26 @@ def test_a_post_in_a_side_thread_also_reaches_the_agents_that_it_names_answers_o
     assert record.board().members('t-2') == ('ada', 'bo')
 
 
-def test_the_persons_post_in_a_side_thread_reaches_its_members_only() -> None:
+def test_the_persons_post_in_a_side_thread_reaches_the_members_that_watch_it_only() -> None:
     by_person = Message(id='p-2', thread='t-2', author='person', text='Use the public scoreboard.')
 
     assert woken(side(), by_person) == {'ada', 'bo'}
-    # It reaches a member that stopped watching too, as the person's words do in any thread.
-    assert woken(side().watch('bo', 't-2', watching=False), by_person) == {'ada', 'bo'}
+    # In a thread for the whole lab, the person's words reach every agent. Here they reach no member that stopped.
+    assert woken(side().watch('bo', 't-2', watching=False), by_person) == {'ada'}
     assert woken(side(), by_person.model_copy(update={'mentions': ('cy',)})) == {'ada', 'bo', 'cy'}
     assert side().post(by_person).board().members('t-2') == ('ada', 'bo')
+
+
+def test_the_persons_post_in_a_side_thread_does_not_open_a_closed_lab_again() -> None:
+    record = side().post(Close(id='p-2', thread='t-1', author='ada', text='The lab is done.'))
+    for index, agent in enumerate(('bo', 'cy'), start=3):
+        record.post(Answer(id=f'p-{index}', thread='t-1', author=agent, text='Agreed.', reply_to='p-2', accepts=True))
+    assert lab_state(record.board()) == 'closed'
+
+    record.post(Message(id='p-5', thread='t-2', author='person', text='Thanks for the scoreboard.'))
+    assert lab_state(record.board()) == 'closed'
+    record.post(Message(id='p-6', thread='t-1', author='person', text='Try the private one too.'))
+    assert lab_state(record.board()) == 'open'
 
 
 def test_an_agent_that_posts_in_a_side_thread_or_watches_it_is_a_member_from_then_on() -> None:
@@ -121,28 +148,89 @@ def test_a_side_thread_takes_no_proposal_and_no_close(post: Post) -> None:
     assert lab().post(post.model_copy(update={'thread': 't-1'})).board().posts[-1].post.kind == post.kind
 
 
-def test_agents_work_in_a_side_thread_and_it_counts_as_their_line() -> None:
-    record = side().post(Plan(id='p-2', thread='t-2', author='bo', text='I fetch every round.'))
-    record.post(Plan(id='p-5', thread='t-1', author='ada', text='I score the rounds.'))
+def test_agents_work_in_a_side_thread_and_it_moves_nobody_off_its_line() -> None:
+    record = side().post(Plan(id='p-2', thread='t-1', author='bo', text='I score the rounds.'))
+    before = record.board()
+    record.post(Plan(id='p-3', thread='t-2', author='bo', text='I fetch every round for ada first.'))
     evidence = (FileEvidence(path='rounds.json', commit='a' * 40),)
-    record.post(Result(id='p-3', thread='t-2', author='bo', text='All 12 rounds are in.', evidence=evidence))
-    record.post(
-        Check(
-            id='p-4',
-            thread='t-2',
-            author='ada',
-            text='I counted 12.',
-            reply_to='p-3',
-            outcome='holds',
-            method='code_read',
-        )
-    )
+    record.post(Result(id='p-4', thread='t-2', author='bo', text='All 12 rounds are in.', evidence=evidence))
+    record.post(RuledOut(id='p-5', thread='t-2', author='bo', text='The old scoreboard is gone.'))
     board = record.board()
 
-    assert lines_of(board) == {'bo': 't-2', 'ada': 't-1'}
-    summary = next(summary for summary in thread_summaries(board, 'cy') if summary.thread.id == 't-2')
-    assert (summary.team, summary.checked, summary.members) == (('bo',), 1, ('ada', 'bo'))
-    assert {line.id for line in brief(board, 'cy', news(board, 'cy', 0)).one_agent_threads} == {'t-1', 't-2'}
+    # Bo still works in t-1: it watches that thread and is in its team, as before its plan in the side thread.
+    assert lines_of(board) == lines_of(before) == {'bo': 't-1'}
+    assert watches_thread(board, 'bo', 't-1')
+    summaries = {summary.thread.id: summary for summary in thread_summaries(board, 'cy')}
+    assert (summaries['t-1'].team, summaries['t-2'].team) == (('ada', 'bo'), ())
+    # The side thread is no line, so it is never a thread where one agent works alone. Its result is still work.
+    read = brief(board, 'cy', news(board, 'cy', 0))
+    assert 't-2' not in {line.id for line in read.one_agent_threads}
+    assert next(agent.thread for agent in read.agents if agent.id == 'bo') == 't-1'
+    assert (summaries['t-2'].not_checked, [line.id for line in read.not_checked]) == (1, ['p-4'])
+
+
+def test_a_member_that_stopped_watching_hears_nothing_until_it_watches_again_also_when_it_posts() -> None:
+    record = side().watch('bo', 't-2', watching=False)
+    record.post(Message(id='p-2', thread='t-2', author='bo', text='Here it is.'))
+    board = record.board()
+
+    assert (board.members('t-2'), watches_thread(board, 'bo', 't-2')) == (('ada', 'bo'), False)
+    assert woken(record, Message(id='p-3', thread='t-2', author='ada', text='Thanks.')) == set()
+    # A post that names it or answers it is still for it.
+    assert woken(record, Message(id='p-4', thread='t-2', author='ada', text='One more.', reply_to='p-2')) == {'bo'}
+    record.watch('bo', 't-2')
+    assert woken(record, Message(id='p-5', thread='t-2', author='ada', text='And the last round?')) == {'bo'}
+
+
+def test_a_member_that_left_the_lab_is_not_woken_by_a_post_in_its_side_thread() -> None:
+    record = side().leave('bo')
+
+    assert woken(record, Message(id='p-2', thread='t-2', author='ada', text='Bo, are you there?')) == set()
+    assert record.board().members('t-2') == ('ada', 'bo')
+
+
+def test_a_check_in_a_side_thread_wakes_the_agent_outside_it_that_asked_for_the_rerun() -> None:
+    evidence = (FileEvidence(path='rounds.json', commit='a' * 40),)
+    record = side().post(Result(id='p-2', thread='t-2', author='bo', text='All 12 rounds are in.', evidence=evidence))
+    record.rerun('dee', 'p-2')
+    check = Check(id='p-3', thread='t-2', author='ada', text='12.', reply_to='p-2', outcome='holds', method='rerun')
+
+    assert woken(record, check) == {'bo', 'dee'}
+    assert record.board().members('t-2') == ('ada', 'bo')
+
+
+def test_a_brief_shows_the_results_of_a_side_thread_to_every_agent_and_its_asks_and_calls_to_its_members() -> None:
+    record = side().post(Result(id='p-2', thread='t-2', author='bo', text='All 12 rounds are in.'))
+    record.post(Result(id='p-3', thread='t-2', author='bo', text='Round 12 is the last.'))
+    record.post(Objection(id='p-4', thread='t-2', author='ada', text='Round 13 exists.', reply_to='p-3'))
+    record.post(Ask(id='p-5', thread='t-2', author='ada', text='Which round is the last?'))
+    board = record.post(Call(id='p-6', thread='t-2', author='ada', text='The fetch needs more hands.')).board()
+
+    def lists(agent: str) -> dict[str, list[str]]:
+        read = brief(board, agent, news(board, agent, 0))
+        named = ('not_checked', 'not_built_on', 'disputed', 'open_asks', 'open_calls')
+        return {name: [line.id for line in getattr(read, name)] for name in named}
+
+    work = {'not_checked': ['p-2'], 'not_built_on': ['p-2'], 'disputed': ['p-3']}
+    # A result is work, so an agent outside sees it. An ask or a call there is talk, so only a member does.
+    assert lists('cy') == work | {'open_asks': [], 'open_calls': []}
+    assert lists('dee') == lists('cy')
+    assert lists('bo') == {'not_checked': [], 'not_built_on': [], 'disputed': ['p-3']} | {
+        'open_asks': ['p-5'],
+        'open_calls': ['p-6'],
+    }
+    # The side line counts all of it for every agent.
+    line = brief(board, 'cy', news(board, 'cy', 0)).side_threads[0]
+    assert (line.open_asks, line.open_calls, line.disputed, line.not_checked) == (1, 1, 1, 1)
+
+
+def test_a_side_thread_is_not_between_an_agent_and_an_invited_agent_that_never_came() -> None:
+    record = lab().join('guest', family='unknown', harness='guest')
+
+    with pytest.raises(RejectedEvent, match='guest has an invitation and has not posted yet'):
+        RecordBuilder(list(record.events)).thread('t-2', opened_by='ada', between=('ada', 'guest')).board()
+    record.post(Message(id='p-1', thread='t-1', author='guest', text='I am here.'))
+    assert record.thread('t-2', opened_by='ada', between=('ada', 'guest')).board().members('t-2') == ('ada', 'guest')
 
 
 def test_a_blind_checker_posts_in_a_side_thread_and_is_no_member() -> None:

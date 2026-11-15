@@ -100,6 +100,7 @@ export function Wall(
         harnesses={data.setup?.harnesses ?? []}
         needs={needs}
         question={questionId}
+        done={lab.state !== 'open'}
         onRerun={(postId) => api.rerun(postId)}
         onSend={(text) => send(text, read.view?.thread.id)}
       />
@@ -226,7 +227,8 @@ export function Wall(
           <p className="empty">No threads yet.</p>
         ) : null}
         {side.length > 0 ? (
-          <details className="f-side">
+          // A link into the group opens it. The person folds and unfolds it as they like otherwise.
+          <details className="f-side" open={side.some((summary) => summary.thread.id === open)}>
             <summary>
               {sideHeading(side.length)}
               {side.some((summary) => summary.thread.id !== open && hasNew(summary, seen)) ? (
@@ -253,6 +255,11 @@ export function Wall(
                     <a href={href({ page: 'thread', id: line.id, post: null })}>
                       <b>{line.who}</b>
                       <span>{line.title}</span>
+                      {line.marks.map((mark) => (
+                        <em key={mark} className="f-st fs-ask">
+                          {mark}
+                        </em>
+                      ))}
                       <small>{line.count}</small>
                     </a>
                     {hasNew(summary, seen) ? <New /> : null}

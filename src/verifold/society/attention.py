@@ -13,9 +13,10 @@ names nobody and replies to no post is for every agent. No post is for a blind c
 No post is for an agent that left the lab.
 
 A side thread is a thread between named agents. Its members are those agents and every agent that posted in it or
-started to watch it since. A member watches it until it says otherwise. A post in a side thread is for nobody else,
-whatever its kind and whether it is the thread's first: only a name, a reply, or `builds_on` reaches an agent
-outside. The person's post there that names nobody and replies to no post is for every member.
+started to watch it since. A member watches it until it says otherwise, and then it hears nothing from the thread
+until it watches again, also when it posts there. A post in a side thread is for the members that watch it and for
+nobody else, whatever its kind, whoever wrote it, and whether it is the thread's first: only a name, a reply, or
+`builds_on` reaches another agent. Every other thread is a thread for the whole lab.
 
 An agent that left the lab is news for the agents that wrote to it: the ones whose posts name it or reply to it.
 
@@ -73,13 +74,13 @@ def wakes(
         return False
     if _names(board, agent_id, post):
         return True
+    if board.is_side(post.thread):
+        # A side thread is for the members that watch it. No post in it is for every agent, the person's neither.
+        return watches_thread(board, agent_id, post.thread)
+    if _for_everyone(board, entry):
+        return True
     # The person's words that name nobody are for every agent, whoever watches the thread.
-    to_all = post.author == PERSON and not post.mentions and not post.reply_to
-    members = board.members(post.thread)
-    if members:
-        # A side thread is for its members. No post in it is for every agent.
-        return (to_all and agent_id in members) or watches_thread(board, agent_id, post.thread)
-    if to_all or _for_everyone(board, entry):
+    if post.author == PERSON and not post.mentions and not post.reply_to:
         return True
     working = lines_of(board) if working is None else working
     return watches_thread(board, agent_id, post.thread, working)

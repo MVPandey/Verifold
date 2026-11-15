@@ -81,6 +81,10 @@ def side_lines(summaries: tuple[ThreadSummary, ...], agent_id: AgentId) -> tuple
             members=summary.members,
             posts=summary.posts,
             last_at=summary.last_at,
+            open_asks=summary.open_asks,
+            open_calls=summary.open_calls,
+            disputed=summary.disputed,
+            not_checked=summary.not_checked,
         )
         for summary in summaries
         if summary.thread.between
@@ -132,9 +136,10 @@ def _links(pairs: tuple[Crossing, ...]) -> tuple[ThreadLink, ...]:
 def _team(board: Board, opened: ThreadOpened, lines: dict[AgentId, ThreadId | None]) -> tuple[AgentId, ...]:
     # The lab's agents that work in the thread now. The agent that opened the thread is in its team until it works
     # in another one, unless it opened the thread with a call, which says that the work needs somebody else. The
-    # person, blind checkers, and agents that left are in no team, and the question's thread has none.
+    # person, blind checkers, and agents that left are in no team. The question's thread has none, and neither has a
+    # side thread, where no agent works.
     thread = opened.thread
-    if thread.id == question_thread(board):
+    if thread.between or thread.id == question_thread(board):
         return ()
     workers = tuple(
         joined.agent.id for joined in board.agents if not joined.agent.checks and not board.gone(joined.agent.id)
@@ -215,7 +220,8 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         if joined.agent.id != agent_id and not joined.agent.checks and board.here(joined)
     )
     stands = tuple((entry, standing(board, entry.post.id)) for entry in board.posts)
-    # An ask or a call in a side thread is for the thread's members.
+    # An ask or a call in a side thread is talk for the thread's members, and its side line counts it for the
+    # others. A result is work, so every agent sees it in these lists, whatever thread holds it.
     not_mine = {
         opened.thread.id
         for opened in board.threads
