@@ -112,7 +112,7 @@ def test_the_lab_norms_are_plain_text_for_one_read_and_the_doorbell_is_one_line(
     assert '`' not in NORMS_TEMPLATE
     # Each norm has its reason and what it looks like in practice, so the file is longer than a list of rules.
     # An agent still reads it whole at the start of its work.
-    assert len(NORMS_TEMPLATE) < 16_000
+    assert len(NORMS_TEMPLATE) < 17_000
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -135,7 +135,7 @@ def test_the_lab_norms_are_sections_that_each_say_what_the_person_wants_and_why(
         'Each section says what the person wants, why, and what that looks like in practice.',
         'An example shows a norm and does not limit it.',
         'When a situation fits no norm, act on the reasons.',
-        'When a norm gets in the way of the goal, say so on the board',
+        'When a norm gets in the way of the goal, tell the coordinator, or say so in a post for the person',
     ):
         assert how_to_read in NORMS_TEMPLATE
 
@@ -147,6 +147,7 @@ def test_the_lab_norms_ask_agents_to_plan_together_keep_threads_apart_and_propos
         'The direct path to the goal needs an owner too',
         'Give each line of work its own thread',
         'Post each result when you have it',
+        "Propose the lab's answer as soon as the lab has one that it can defend",
         'The newest proposal is the answer that the person sees',
         'A proposal is a draft. It does not end the work',
         'Another agent can propose a different answer, and any agent can object to a proposal',
@@ -156,12 +157,15 @@ def test_the_lab_norms_ask_agents_to_plan_together_keep_threads_apart_and_propos
 
 def test_the_lab_norms_hold_the_goal_the_obstacle_the_seats_and_the_name() -> None:
     for norm in (
-        'The person wants the goal reached.',
+        'When the question asks for something to be done or made, the person wants it done.',
+        'When the question asks whether something is true, the goal is the answer with evidence that holds, and a no is an answer.',
         'Keep working toward the goal while the lab has time.',
         'A result that says "this does not work" is a finding on the way.',
-        'Take early agreement on "no" as a signal to widen the search',
-        'or when the agents agree that nothing useful is left to try. One of them then posts a close.',
-        'know what brings you back, and set an alarm when nothing else will',
+        'When the lab agrees that nothing works while most of its time is left, it has usually looked in too few places.',
+        'Take that agreement as a signal to widen the search',
+        'An agent that thinks so posts a close, and each other agent agrees or objects.',
+        'A line that closed is no reason to end a turn',
+        'set an alarm if the board gives you one, because a post for you may never come',
         'name the obstacle exactly and ask what would remove it',
         'Remove the defender, and the capture works.',
         'Two things that fail alone can work together.',
@@ -177,7 +181,8 @@ def test_the_lab_norms_hold_the_goal_the_obstacle_the_seats_and_the_name() -> No
         'An agent in a reviewer seat can ask for one of any result.',
         "When the lab has a coordinator, it owns the lab's strategy",
         'The coordinator can ask one agent to take the strategy',
-        'wakes it with a post for the whole lab',
+        'it wakes the lab with a post for the whole lab',
+        'Each agent still chooses its own work, and says why when it chooses differently.',
         'When no agent holds the coordinator seat and it is open, an agent that wants this work can take it.',
         'An agent on call works only when it is asked.',
         'Choose a name, a picture, and an about line of one or two sentences that says the lens you bring',
@@ -201,10 +206,10 @@ def test_the_lab_norms_say_what_a_chain_is_why_the_lab_wants_one_and_how_an_agen
         # A chain is not two results: the links are of any kind and any number.
         'The links can be ideas, approaches, methods, tools, sources, obstacles, and results.',
         'A chain can have any number of links, from any threads and any fields.',
-        'This is what a lab can do and one agent cannot.',
-        'Read the board with that question, before each new piece of work and before you end your turn.',
+        'The lab wants chains because each agent holds a part',
+        'Read the board with that question, before each new piece of work and before you end your turn',
         'Look for a result to build on, and for a problem that you can help with.',
-        'name every post that it builds on',
+        "Name every post that it joins in the post's builds-on field",
         "post it in that agent's thread, also when it comes from another field",
         'When you are stuck, post an ask that says what you tried.',
     ):
@@ -214,7 +219,7 @@ def test_the_lab_norms_say_what_a_chain_is_why_the_lab_wants_one_and_how_an_agen
 
 def test_the_lab_norms_say_when_a_helper_suits_the_work_and_how_its_posts_are_named() -> None:
     for norm in (
-        'Your harness can start helpers, such as subagents. When to use one is your choice.',
+        'Your harness can start helpers, such as subagents.',
         'a literature search, a side experiment, a sweep of variants, a tool that you need, or a second look',
         "Have it give its own name in the post's helper field",
         'or post what it finds yourself',
