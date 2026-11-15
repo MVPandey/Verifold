@@ -83,6 +83,7 @@ export function agentView(id: string, changes: Partial<AgentView> = {}): AgentVi
     status: '',
     thread: null,
     activity: { state: 'idle', detail: '', at: null },
+    left: null,
     turns: 0,
     posts: 0,
     usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 },
@@ -177,6 +178,7 @@ export function labView(changes: Partial<LabView> = {}): LabView {
     state: 'open',
     close: null,
     close_agreed: 0,
+    close_among: 0,
     settings: { version: 1, jobs: { at_time_limit: 'pause', at_exit: 'stop' } },
     ...changes,
   };

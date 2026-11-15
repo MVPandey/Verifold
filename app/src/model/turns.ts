@@ -246,15 +246,17 @@ export function cardStatus(summary: ThreadSummary): CardStatus {
 }
 
 /**
- * Return the line that says that the lab's agents consider it done, or `null` while no agent says so. `members`
- * is how many agents the lab has. The count includes the agent that said it.
+ * Return the line that says that the lab's agents consider it done, or `null` while no agent says so. The count
+ * includes the agent that said it. An agent that stood behind the close and then left still counts.
  */
-export function doneLine(
-  lab: { readonly state: 'open' | 'closing' | 'closed'; readonly close_agreed: number },
-  members: number,
-): string | null {
+export function doneLine(lab: {
+  readonly state: 'open' | 'closing' | 'closed';
+  readonly close_agreed: number;
+  readonly close_among: number;
+}): string | null {
   if (lab.state === 'open') return null;
-  const behind = `${lab.close_agreed + 1} of ${members} ${members === 1 ? 'agent' : 'agents'}`;
+  const among = lab.close_among;
+  const behind = `${lab.close_agreed + 1} of ${among} ${among === 1 ? 'agent' : 'agents'}`;
   return lab.state === 'closed'
     ? `The agents say that the lab is done (${behind}). You can still steer it.`
     : `An agent says that the lab is done (${behind} so far).`;

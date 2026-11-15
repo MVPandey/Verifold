@@ -47,10 +47,13 @@ def takers(board: Board, call_id: PostId) -> tuple[AgentId, ...]:
     """
     Return the agents that took a call, each once, in the order that they took it.
 
-    An agent of the lab takes a call with a plan that replies to it. The caller's own plan takes nothing.
+    An agent of the lab takes a call with a plan that replies to it. The caller's own plan takes nothing. Nor does
+    the plan of an agent that left the lab since, so a call that only such agents took needs an agent again.
     """
     call = board.post(call_id)
-    workers = {joined.agent.id for joined in board.agents if not joined.agent.checks}
+    workers = {
+        joined.agent.id for joined in board.agents if not joined.agent.checks and not board.gone(joined.agent.id)
+    }
     return tuple(
         dict.fromkeys(
             entry.post.author
@@ -121,7 +124,11 @@ def closing(board: Board) -> Posted | None:
 
 
 def agreed(board: Board, close: Posted) -> tuple[AgentId, ...]:
-    """Return the agents of the lab that agreed with a close, each once, in the order that they agreed."""
+    """
+    Return the agents of the lab that agreed with a close, each once, in the order that they agreed.
+
+    An agent that left the lab after it agreed is still among them: the word that it gave is kept.
+    """
     workers = {joined.agent.id for joined in board.agents if not joined.agent.checks}
     return tuple(
         dict.fromkeys(

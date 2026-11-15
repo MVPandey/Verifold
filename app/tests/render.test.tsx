@@ -655,6 +655,49 @@ describe('an invitation', () => {
   });
 });
 
+describe('a member that left', () => {
+  it('shows under the others as left, with no way to remove it or to invite it again', () => {
+    const at = '2026-11-06T14:10:00Z';
+    const guest = agentView('agent-3', {
+      agent: { ...agentView('agent-3').agent, harness: 'guest', name: 'Reader' },
+      left: { at, by: 'agent-3', reason: 'Read <b>it</b> all.' },
+    });
+    const checker = agentView('checker-1');
+    const html = renderToStaticMarkup(
+      <Top
+        folder="~/code/sort-bench"
+        route={{ page: 'lab' }}
+        open={{
+          lab: labView({
+            agents: [
+              agentView('agent-1', { left: { at, by: 'person', reason: '' } }),
+              agentView('agent-2'),
+              guest,
+              { ...checker, agent: { ...checker.agent, checks: 'p-1' } },
+            ],
+          }),
+          threads: [],
+          harnesses: HARNESSES,
+          needs: 0,
+          now: new Date('2026-11-06T14:12:00Z'),
+          api: {} as Api,
+          onChange: () => undefined,
+        }}
+      />,
+    );
+    assert.ok(html.includes('0 of 1 member working'));
+    assert.ok(html.includes('<span class="dot stop"></span> Left, removed by you</p>'));
+    // The reason is the agent's own words, so it reaches the page as text.
+    assert.ok(html.includes('Left by its own choice: Read &lt;b&gt;it&lt;/b&gt; all.'));
+    assert.ok(html.indexOf('<b>Agent 2</b>') < html.indexOf('<b>Agent 1</b>'));
+    assert.ok(html.indexOf('<b>Agent 1</b>') < html.indexOf('<b>Reader</b>'));
+    // Only the member that is in the lab can be removed. The first press asks before anything happens.
+    assert.equal(html.split('>Remove</button>').length, 2);
+    assert.ok(!html.includes('cannot come back'));
+    assert.ok(!html.includes('>Invite again</button>'));
+  });
+});
+
 describe('the setup screen', () => {
   it('offers one agent of each harness that this computer has', () => {
     const api = {} as Api;

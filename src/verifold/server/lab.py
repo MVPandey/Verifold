@@ -8,6 +8,7 @@ from typing import Self
 from verifold.protocol.agents import Agent
 from verifold.protocol.events import (
     AgentJoined,
+    AgentLeft,
     AlarmSet,
     Event,
     LabOpened,
@@ -105,6 +106,17 @@ class Lab:
         """Add an agent to the lab."""
         board = await self._commit(lambda _, seq, at: AgentJoined(seq=seq, at=at, agent=agent))
         return board.agents[-1]
+
+    async def leave(self, agent_id: AgentId, by: AgentId, reason: str = '') -> AgentLeft:
+        """
+        Record that an agent left the lab. `by` is the agent itself, or the person when the person removed it.
+
+        Raises:
+            RejectedEvent: The agent is not in the lab, left already, or is a blind checker.
+
+        """
+        board = await self._commit(lambda _, seq, at: AgentLeft(seq=seq, at=at, agent=agent_id, by=by, reason=reason))
+        return board.left[-1]
 
     async def post(self, request: PostRequest, author: AgentId, evidence: tuple[FileEvidence, ...] = ()) -> Posted:
         """

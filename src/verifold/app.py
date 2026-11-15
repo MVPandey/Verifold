@@ -56,7 +56,7 @@ from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
 from verifold.store.errors import GuestsInvalid, SettingsInvalid
-from verifold.store.guests_file import GUESTS_FILE, Guests, keep_guest, read_guests
+from verifold.store.guests_file import GUESTS_FILE, Guests, drop_guest, keep_guest, read_guests
 from verifold.store.record_file import RecordFile
 from verifold.store.server_file import running_server, server_file
 from verifold.store.settings_file import (
@@ -357,19 +357,40 @@ class Host:
         under_way = bool(lab.board.turns)
         for agent in self._workers(lab):
             await self._run_agent(lab, agent, under_way=under_way)
-        # An invited agent keeps its seat and its token. It runs by itself, so nothing starts here.
+        # An invited agent keeps its seat and its token. It runs by itself, so nothing starts here. One that left
+        # gets no seat.
         digests = _kept(self._guests_file).digests
         for agent in (entry.agent for entry in lab.board.agents if entry.agent.harness == GUEST):
-            await self._seat_guest(lab, agent, digests.get(agent.id))
+            if not lab.board.gone(agent.id):
+                await self._seat_guest(lab, agent, digests.get(agent.id))
+        group.create_task(self._forget_guests(lab))
         group.create_task(Reruns(lab, self._members, self._project, partial(self._crew, lab), self._supervise).run())
 
+    async def _forget_guests(self, lab: Lab) -> None:
+        # Drops the token digest of each invited agent that left, whoever caused it. The board refuses the agent
+        # from the moment that the record says so. Without the digest, a restart gives the agent no seat either.
+        done = 0
+        while True:
+            board = lab.board
+            for left in board.left[done:]:
+                joined = board.agent(left.agent)
+                if joined and joined.agent.harness == GUEST:
+                    # A file that can't change keeps a digest that opens nothing, because the agent gets no seat.
+                    with suppress(GuestsInvalid, OSError):
+                        drop_guest(self._guests_file, left.agent)
+            done = len(board.left)
+            await lab.wait_for_change(board.seq)
+
     def _workers(self, lab: Lab) -> tuple[Agent, ...]:
-        # The lab's agents that Verifold runs: no blind checkers, no invited agents, and no agent of a harness that
-        # this computer lacks.
+        # The lab's agents that Verifold runs: no blind checkers, no invited agents, no agent that left, and no
+        # agent of a harness that this computer lacks.
         return tuple(
             entry.agent
             for entry in lab.board.agents
-            if not entry.agent.checks and entry.agent.harness != GUEST and entry.agent.harness in self._catalog
+            if not entry.agent.checks
+            and entry.agent.harness != GUEST
+            and entry.agent.harness in self._catalog
+            and not lab.board.gone(entry.agent.id)
         )
 
     def _crew(self, lab: Lab) -> Crew:
@@ -405,7 +426,7 @@ class Host:
             raise SetupRejected(f'This computer does not have {entry.title}, so an agent of it cannot start.')
         # One add at a time, so that two requests cannot pass the limit together.
         async with self._adding:
-            members = sum(not joined.agent.checks for joined in lab.board.agents)
+            members = _members(lab.board)
             if members + choice.count > MAX_AGENTS:
                 raise SetupRejected(f'A lab has at most {MAX_AGENTS} agents, and this one has {members}.')
             for _ in range(choice.count):
@@ -435,7 +456,7 @@ class Host:
         lab = self._running()
         # One at a time, with the adds, so that two requests cannot pass the limit or take the same number.
         async with self._adding:
-            members = sum(not joined.agent.checks for joined in lab.board.agents)
+            members = _members(lab.board)
             if members >= MAX_AGENTS:
                 raise SetupRejected(f'A lab has at most {MAX_AGENTS} agents, and this one has {members}.')
             number = _free_number(lab.board)
@@ -460,13 +481,15 @@ class Host:
         Raises:
             NoLab: The folder has no lab.
             NotFound: The lab has no invited agent with that ID.
-            SetupRejected: Verifold can't keep the new token's digest.
+            SetupRejected: The agent left the lab, or Verifold can't keep the new token's digest.
 
         """
         lab = self._running()
         joined = lab.board.agent(agent_id)
         if joined is None or joined.agent.harness != GUEST:
             raise NotFound(f'The lab has no invited agent with the ID {agent_id}.')
+        if lab.board.gone(agent_id):
+            raise SetupRejected(f'{joined.agent.name} left the lab, and an agent that left does not come back.')
         async with self._adding:
             return await self._invitation(lab, joined.agent, joins=False)
 
@@ -712,9 +735,14 @@ def _name_taken(board: Board, name: str) -> bool:
     return folded in used | RESERVED_NAMES or bool(NUMBERED_NAME.fullmatch(folded))
 
 
+def _members(board: Board) -> int:
+    # How many agents the lab has now, for the limit. A blind checker is none, and an agent that left frees its place.
+    return sum(not joined.agent.checks and not board.gone(joined.agent.id) for joined in board.agents)
+
+
 def _free_number(board: Board) -> int:
     # The next agent's number: one whose ID no agent has yet. Only Verifold gives a name such as "Agent 3", and only
-    # to `agent-3`, so the name is free too.
+    # to `agent-3`, so the name is free too. An agent that left keeps its ID and its name, so no number comes back.
     number = 1 + sum(not joined.agent.checks for joined in board.agents)
     while board.agent(f'agent-{number}'):
         number += 1

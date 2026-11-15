@@ -30,17 +30,17 @@ from verifold.protocol.app import (
     StartRequest,
     TimeRequest,
 )
-from verifold.protocol.events import RerunRequested
+from verifold.protocol.events import Reason, RerunRequested
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import AnswerView, FileText, PostLine, PostRequest, PostView, ThreadSummary, ThreadView
 from verifold.protocol.usage import Usage
 from verifold.server.activity import Activity
-from verifold.server.errors import LabExists, NoLab, ServerError
+from verifold.server.errors import LabExists, NoLab, ServerError, SetupRejected
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
-from verifold.society.lifecycle import lab_state
+from verifold.society.lifecycle import close_count, lab_state
 from verifold.society.lines import lines_of
 from verifold.society.standing import agreed, closing
 from verifold.society.views import answer_view, latest_report, needs_person, thread_summaries, thread_view
@@ -141,6 +141,18 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
         await host.add_agents(choice)
         return _lab_view(current().board, activity)
 
+    @api.delete('/agents/{agent_id}', dependencies=[authorized])
+    async def remove_agent(agent_id: AgentId, reason: Reason = '') -> LabView:
+        # The record is all that the removal writes. The agent's loop, its seat, and its token follow the record.
+        running = current()
+        joined = running.board.agent(agent_id)
+        if joined is None:
+            raise NotFound(f'The lab has no agent with the ID {agent_id}.')
+        if running.board.gone(agent_id):
+            raise SetupRejected(f'{joined.agent.name} has left the lab already.')
+        await running.leave(agent_id, PERSON, reason)
+        return _lab_view(running.board, activity)
+
     @api.post('/invitations', dependencies=[authorized])
     async def invite(request: InviteRequest) -> Invitation:
         return await host.invite(request.name)
@@ -216,6 +228,7 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
         state=lab_state(board),
         close=PostLine.of(done) if done else None,
         close_agreed=len(agreed(board, done)) if done else 0,
+        close_among=close_count(board, done)[1] if done else 0,
         question=board.opened.question,
         opened_at=board.opened.at,
         seq=board.seq,
@@ -242,6 +255,7 @@ def _agent_view(board: Board, activity: Activity, agent_id: str, working: dict[A
         status=status,
         thread=working.get(agent_id),
         activity=activity.of(agent_id),
+        left=board.gone(agent_id),
         turns=len(turns),
         posts=sum(entry.post.author == agent_id for entry in board.posts),
         usage=Usage(

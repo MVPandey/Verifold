@@ -7,7 +7,7 @@ from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import FileEvidence
 from verifold.server.activity import Activity
-from verifold.server.errors import UnknownAgent
+from verifold.server.errors import HasLeft, UnknownAgent
 from verifold.server.join import INSTRUCTIONS, Members, join_server, token_digest
 from verifold.server.lab import Lab
 from verifold.server.member import Member
@@ -99,7 +99,7 @@ async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
         threads = await client.call_tool('threads', {})
         news = await client.call_tool('wait', {'timeout_seconds': 0})
 
-    assert tools == {'brief', 'post', 'threads', 'thread', 'watch', 'alarm', 'profile', 'rerun', 'wait'}
+    assert tools == {'brief', 'post', 'threads', 'thread', 'watch', 'alarm', 'profile', 'leave', 'rerun', 'wait'}
     assert posted.structured_content is not None
     assert posted.structured_content['post']['id'] == 'p-2'
     assert watched.structured_content is not None
@@ -333,3 +333,84 @@ async def test_an_alarm_in_a_closed_lab_says_that_it_does_not_ring(lab: Lab) -> 
 
     assert set_.structured_content is not None
     assert set_.structured_content['rings_at'] is None
+
+
+async def test_an_agent_leaves_with_a_reason_and_the_board_then_refuses_its_every_call(lab: Lab) -> None:
+    bo = Member(lab, 'bo')
+    async with Client(join_server(lambda _: bo)) as client:
+        tools = {tool.name: tool.description or '' for tool in (await client.list_tools()).tools}
+        left = await client.call_tool('leave', {'reason': 'My line is ruled out.'})
+        calls = {
+            'post': {'kind': 'message', 'text': 'One more thing.', 'thread': 't-1'},
+            'rerun': {'post': 'p-1'},
+            'watch': {'thread': 't-1'},
+            'profile': {'status': 'Back.'},
+            'alarm': {'minutes': 5},
+            'brief': {},
+            'threads': {},
+            'thread': {'thread': 't-1'},
+            'wait': {'timeout_seconds': 0},
+            'leave': {},
+        }
+        refused = {tool: await client.call_tool(tool, arguments) for tool, arguments in calls.items()}
+    async with Client(join_server(lambda _: Member(lab, 'ada'))) as client:
+        brief = await client.call_tool('brief', {})
+
+    # The tool's text says what leaving means, in facts.
+    assert all(fact in tools['leave'] for fact in ('This is final', 'Your posts stay', 'reads too'))
+    assert left.structured_content is not None
+    assert (left.structured_content['agent'], left.structured_content['by']) == ('bo', 'bo')
+    assert [entry.reason for entry in lab.board.left] == ['My line is ruled out.']
+    for tool, result in refused.items():
+        assert result.is_error, tool
+        assert 'You left this lab, so the board takes no call from you.' in str(result.content), tool
+    assert (len(lab.board.posts), lab.board.watches, lab.board.alarms, lab.board.profiles) == (1, (), (), ())
+    assert brief.structured_content is not None
+    assert brief.structured_content['left'] == [
+        {'id': 'bo', 'name': 'Bo', 'by': 'bo', 'reason': 'My line is ruled out.'}
+    ]
+    assert (brief.structured_content['agents'], 'An agent can leave the lab' in INSTRUCTIONS) == ([], True)
+
+
+async def test_a_removal_ends_an_open_wait_and_a_blind_checker_cannot_leave(lab: Lab) -> None:
+    evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
+    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
+    await lab.join(Agent(id='dee', name='Dee', harness='fake', model=ModelSpec(family='openai'), checks='p-2'))
+    waiting = asyncio.create_task(Member(lab, 'bo').wait(30))
+    await asyncio.sleep(0)
+
+    await lab.leave('bo', 'person')
+    async with Client(join_server(lambda _: Member(lab, 'dee'))) as client:
+        checker = await client.call_tool('leave', {})
+
+    with pytest.raises(HasLeft, match='The person removed you from this lab'):
+        await waiting
+    assert checker.is_error
+    assert 'A blind checker is gone after its one check' in str(checker.content)
+    assert [entry.agent for entry in lab.board.left] == ['bo']
+
+
+async def test_a_departure_reaches_the_agents_that_wrote_to_the_agent_and_ends_their_wait(lab: Lab) -> None:
+    ada = Member(lab, 'ada')
+    await lab.post(PostRequest(kind='ask', text='Which seed?', thread='t-1', mentions=('bo',)), 'ada')
+    ada.news()
+    waiting = asyncio.create_task(ada.wait(30))
+    await asyncio.sleep(0)
+
+    await lab.leave('bo', 'person', 'Off the question.')
+    async with asyncio.timeout(5):
+        woken = await waiting
+    async with Client(join_server(lambda _: ada)) as client:
+        named = await client.call_tool(
+            'post', {'kind': 'message', 'text': 'Is bo still here?', 'thread': 't-1', 'mentions': ['bo']}
+        )
+        plain = await client.call_tool('post', {'kind': 'message', 'text': 'Then I go on.', 'thread': 't-1'})
+
+    line = {'id': 'bo', 'name': 'Bo', 'by': 'person', 'reason': 'Off the question.'}
+    assert (woken.posts, [entry.model_dump() for entry in woken.left]) == ((), [line])
+    # A post that names only an agent that left goes on the board, and its result says that the agent is gone.
+    assert named.structured_content is not None
+    assert plain.structured_content is not None
+    assert (named.is_error, named.structured_content['left'], plain.structured_content['left']) == (False, [line], [])
+    # The agent got the departure in its wait, so its news does not repeat it.
+    assert named.structured_content['news']['left'] == []

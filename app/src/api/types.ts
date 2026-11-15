@@ -66,6 +66,15 @@ export interface Usage {
   readonly output_tokens: number;
 }
 
+/** The record's entry for an agent that left the lab. */
+export interface AgentLeft {
+  readonly at: string;
+  /** Who caused it: the agent's own ID, or `person`. */
+  readonly by: string;
+  /** One line, or empty. */
+  readonly reason: string;
+}
+
 export interface AgentView {
   readonly agent: Agent;
   /** What the agent says that it is to the lab, in its own words. */
@@ -75,6 +84,8 @@ export interface AgentView {
   /** The thread where the agent works now, or `null` when it works in none. */
   readonly thread: string | null;
   readonly activity: AgentActivity;
+  /** `null` while the agent is in the lab. */
+  readonly left: AgentLeft | null;
   readonly turns: number;
   readonly posts: number;
   readonly usage: Usage;
@@ -98,6 +109,8 @@ export interface LabView {
   readonly close: { readonly id: string; readonly thread: string; readonly author: string } | null;
   /** How many other agents agreed with it. */
   readonly close_agreed: number;
+  /** Among how many agents its author and the agents that agreed count. An agent that left can be one of them. */
+  readonly close_among: number;
   /** The settings that the lab follows. */
   readonly settings: Settings;
 }

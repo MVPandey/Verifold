@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from builders import until
-from conftest import ServedBoard
+from conftest import ServedBoard, agent
 from fakes import FAKE_HARNESS
 
 from verifold.protocol.app import AgentState
@@ -17,10 +17,19 @@ from verifold.protocol.usage import Usage
 from verifold.runner import agent_loop
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
 from verifold.runner.git import git
-from verifold.runner.messages import DOORBELL, JOBS_ENDED, alarm_message, cut_short_message, more_time_message
+from verifold.runner.messages import (
+    DEPARTURE,
+    DOORBELL,
+    JOBS_ENDED,
+    alarm_message,
+    cut_short_message,
+    more_time_message,
+)
 from verifold.runner.permissions import GrantAsks
-from verifold.runner.session import AgentSession, TurnResult
+from verifold.runner.session import AgentSession, PermissionChoice, PermissionRequest, TurnResult
 from verifold.server.activity import Activity
+from verifold.society.lifecycle import lab_state
+from verifold.society.views import needs_person
 
 
 @pytest.fixture
@@ -666,3 +675,218 @@ async def test_under_stop_a_stop_while_the_turn_is_recorded_still_reaches_the_ag
 
     stopped = more_time_message(lab.board.ends_at, AtTimeLimit.STOP)
     assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', stopped]
+
+
+async def test_an_agent_that_leaves_ends_its_turn_itself_and_then_its_harness_stops(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_LEAVE', 'bo')
+    lab = served.lab
+    activity = Activity()
+
+    async with asyncio.timeout(30):
+        await loop_for(served, tmp_path, activity).run()
+    # A post for the agent starts nothing, because nothing runs for it any more.
+    await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+
+    left = lab.board.gone('bo')
+    assert left is not None
+    assert (left.by, left.reason) == ('bo', 'Nothing is left for me.')
+    # The turn in which it left ended by its own choice, after the event, and no other turn came.
+    assert [(turn.error, turn.seq > left.seq) for turn in lab.board.turns] == [(None, True)]
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
+    assert (calls(log, 'cancel'), activity.of('bo').state) == ([], 'stopped')
+
+
+async def test_the_persons_removal_stops_the_agents_turn_at_once_and_ends_its_harness(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_SLOW', '1')
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    await until(lambda: bool(calls(log, 'prompt')))
+
+    await lab.leave('bo', 'person')
+    async with asyncio.timeout(30):
+        await running
+
+    assert [turn.error for turn in lab.board.turns] == ['The person removed the agent, so Verifold cancelled the turn.']
+    assert (len(calls(log, 'cancel')), len(calls(log, 'prompt'))) == (1, 1)
+
+
+async def test_an_idle_agent_that_the_person_removes_stops_without_another_turn(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    activity = Activity()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
+    await until(lambda: activity.of('bo').state == 'idle')
+
+    await lab.leave('bo', 'person')
+    async with asyncio.timeout(30):
+        await running
+
+    assert (len(lab.board.turns), len(calls(log, 'prompt'))) == (1, 1)
+
+
+async def test_an_agent_that_the_person_removes_while_the_lab_is_out_of_time_stops_too(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_SLOW', '1')
+    lab = served.lab
+    activity = Activity()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
+    await until(lambda: bool(calls(log, 'prompt')))
+    await lab.set_time_left(timedelta(0))
+    await lab.run_out_of_time()
+    await until(lambda: activity.of('bo').state == 'waiting')
+
+    await lab.leave('bo', 'person')
+    async with asyncio.timeout(30):
+        await running
+    await lab.set_time_left(timedelta(hours=1))
+
+    assert len(calls(log, 'prompt')) == 1
+
+
+async def test_a_harness_that_fails_after_its_agent_left_is_not_started_again(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[bool] = []
+
+    @asynccontextmanager
+    async def open_session(*_: object) -> AsyncGenerator[BlockingSession]:
+        opened.append(True)
+        await served.lab.leave('bo', 'person')
+        raise BrokenPipeError('The harness closed its stdin.')
+        yield BlockingSession()
+
+    monkeypatch.setattr(AgentSession, 'open', open_session)
+
+    # A restart would wait a minute first, and the test would run out of time.
+    async with asyncio.timeout(30):
+        await loop_for(served, tmp_path, retry_after=60).run()
+
+    assert opened == [True]
+    assert [turn.error for turn in served.lab.board.turns] == ['BrokenPipeError: The harness closed its stdin.']
+
+
+async def test_an_agent_whose_turn_runs_on_after_it_left_is_stopped_after_a_moment(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_LEAVE', 'bo')
+    monkeypatch.setenv('FAKE_ACP_SLOW_AFTER_LEAVE', '1')
+
+    async with asyncio.timeout(30):
+        await loop_for(served, tmp_path, leave_grace=0.2).run()
+
+    assert [turn.error for turn in served.lab.board.turns] == [
+        'The agent left the lab and its turn ran on for 0.2 seconds, so Verifold cancelled the turn.'
+    ]
+    assert (len(calls(log, 'cancel')), len(calls(log, 'prompt'))) == (1, 1)
+
+
+async def test_a_permission_request_from_an_agent_that_left_is_refused_and_asks_nobody(
+    served: ServedBoard, tmp_path: Path
+) -> None:
+    lab = served.lab
+    loop = loop_for(served, tmp_path)
+    choices = (
+        PermissionChoice(id='yes', name='Allow once', kind='allow_once'),
+        PermissionChoice(id='no', name='Reject', kind='reject_once'),
+    )
+    await lab.leave('bo', 'bo')
+    posts = len(lab.board.posts)
+
+    chosen = await loop._permission(PermissionRequest(title='run make', choices=choices))
+    cancelled = await loop._permission(PermissionRequest(title='run make', choices=choices[:1]))
+
+    assert (chosen, cancelled, len(lab.board.posts)) == ('no', None, posts)
+
+
+async def test_the_ask_of_an_agent_that_the_person_removes_while_it_waits_for_a_permission_needs_nobody(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_PERMISSION', '1')
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    await until(lambda: bool(needs_person(lab.board)))
+    asked = needs_person(lab.board)[0].post.text
+
+    await lab.leave('bo', 'person')
+    async with asyncio.timeout(30):
+        await running
+
+    assert (asked, needs_person(lab.board)) == ('Permission needed: run make', ())
+    assert [turn.error for turn in lab.board.turns] == ['The person removed the agent, so Verifold cancelled the turn.']
+    assert len(calls(log, 'cancel')) == 1
+
+
+async def test_a_removal_while_a_failed_harness_waits_for_its_restart_ends_the_wait_and_starts_nothing(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[bool] = []
+
+    @asynccontextmanager
+    async def open_session(*_: object) -> AsyncGenerator[BlockingSession]:
+        opened.append(True)
+        raise BrokenPipeError('The harness closed its stdin.')
+        yield BlockingSession()
+
+    monkeypatch.setattr(AgentSession, 'open', open_session)
+    lab = served.lab
+    # The restart would come after a minute.
+    running = asyncio.create_task(loop_for(served, tmp_path, retry_after=60).run())
+    await until(lambda: len(lab.board.turns) == 1)
+    await asyncio.sleep(0.1)
+
+    await lab.leave('bo', 'person')
+    async with asyncio.timeout(30):
+        await running
+
+    assert opened == [True]
+
+
+async def test_no_alarm_rings_after_an_agent_behind_the_close_left_a_closed_lab(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    await lab.join(agent('cy'))
+    await lab.post(PostRequest(kind='close', text='The answer stands.', thread='t-1'), 'ada')
+    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-2', accepts=True), 'cy')
+    activity = Activity()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
+    try:
+        await until(lambda: activity.of('bo').state == 'working')
+        await lab.set_alarm('bo', 0.02, quiet=False)
+        await until(lambda: len(lab.board.turns) == 1)
+        await lab.leave('cy', 'cy')
+        await asyncio.sleep(3)
+    finally:
+        running.cancel()
+
+    assert lab_state(lab.board) == 'closed'
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
+
+
+async def test_an_agent_that_ended_its_turn_wakes_when_an_agent_that_it_wrote_to_leaves_an_open_lab(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    await lab.join(agent('cy'))
+    await lab.post(PostRequest(kind='ask', text='Which seed?', thread='t-1', mentions=('ada',)), 'bo')
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        # Bo wrote nothing to cy, so cy's departure wakes nobody.
+        await lab.leave('cy', 'cy')
+        await asyncio.sleep(0.3)
+        assert len(calls(log, 'prompt')) == 1
+
+        await lab.leave('ada', 'person')
+        await until(lambda: len(lab.board.turns) == 2)
+        await asyncio.sleep(0.3)
+    finally:
+        running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DEPARTURE]

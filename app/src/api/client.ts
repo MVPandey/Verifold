@@ -49,6 +49,8 @@ export interface Api {
   invite(name?: string): Promise<Invitation>;
   /** Give an invited agent a new token, which makes its earlier token void. */
   inviteAgain(agentId: string): Promise<Invitation>;
+  /** Remove an agent from the lab, for good. Its posts stay. */
+  removeAgent(agentId: string): Promise<LabView>;
   settings(): Promise<SettingsView>;
   changeSetting(change: SettingsChange): Promise<SettingsView>;
 }
@@ -60,9 +62,9 @@ export function createApi(
   token: string,
   fetcher: Fetch = (input, init) => fetch(input, init),
 ): Api {
-  async function request<T>(path: string, body?: unknown): Promise<T> {
+  async function request<T>(path: string, body?: unknown, method?: 'DELETE'): Promise<T> {
     const init: RequestInit = {
-      method: body === undefined ? 'GET' : 'POST',
+      method: method ?? (body === undefined ? 'GET' : 'POST'),
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     };
     if (body !== undefined) init.body = JSON.stringify(body);
@@ -87,11 +89,13 @@ export function createApi(
         state: lab.state ?? 'open',
         close: lab.close ?? null,
         close_agreed: lab.close_agreed ?? 0,
+        close_among: lab.close_among ?? lab.agents.filter((view) => !view.agent.checks).length,
         agents: lab.agents.map((view) => ({
           ...view,
           role: view.role ?? '',
           status: view.status ?? '',
           thread: view.thread ?? null,
+          left: view.left ?? null,
         })),
       })),
     threads: () =>
@@ -125,6 +129,8 @@ export function createApi(
     addAgents: (choice) => request('/agents', choice),
     invite: (name) => request('/invitations', name ? { name } : {}),
     inviteAgain: (agentId) => request(`/invitations/${encodeURIComponent(agentId)}`, {}),
+    removeAgent: (agentId) =>
+      request(`/agents/${encodeURIComponent(agentId)}`, undefined, 'DELETE'),
     settings: () => request('/settings'),
     changeSetting: (change) => request('/settings', change),
   };

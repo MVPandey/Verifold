@@ -381,3 +381,44 @@ async def test_the_person_invites_an_agent_and_gets_its_invitation(lab: Lab, act
     assert (empty.status_code, no_lab.status_code) == (422, 409)
     assert again.json()['text'].endswith('new token')
     assert (launched.status_code, launched.json()['detail']) == (404, 'The lab has no invited agent with the ID ada.')
+
+
+async def test_the_person_removes_an_agent_once_and_the_lab_view_shows_who_left(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    await lab.post(PostRequest(kind='plan', text='Sweep the layers.', new_thread='Layers'), 'bo')
+
+    removed = await client.delete('/agents/bo', params={'reason': ' Off\nthe question. '})
+    again = await client.delete('/agents/bo')
+    unknown = await client.delete('/agents/zed')
+    long = await client.delete('/agents/ada', params={'reason': 'x' * 201})
+    ada, bo = removed.json()['agents']
+
+    assert (removed.status_code, ada['left']) == (200, None)
+    assert (bo['left']['by'], bo['left']['reason'], bo['thread'], bo['posts']) == (
+        'person',
+        'Off the question.',
+        None,
+        1,
+    )
+    assert (again.status_code, again.json()['detail']) == (400, 'Bo has left the lab already.')
+    assert (unknown.status_code, unknown.json()['detail']) == (404, 'The lab has no agent with the ID zed.')
+    assert (long.status_code, [entry.agent for entry in lab.board.left]) == (422, ['bo'])
+
+
+async def test_the_lab_view_counts_a_close_among_the_agents_that_keep_their_word_and_drops_the_ask_of_a_gone_agent(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    await lab.post(PostRequest(kind='ask', text='May I use the GPU?', thread='t-1', mentions=('person',)), 'bo')
+    await lab.post(PostRequest(kind='close', text='The answer stands.', thread='t-1'), 'ada')
+    before = (await client.get('/lab')).json()
+
+    await client.delete('/agents/ada')
+    await client.delete('/agents/bo')
+    after = (await client.get('/lab')).json()
+    needs = (await client.get('/needs')).json()
+
+    assert (before['state'], before['close_agreed'], before['close_among'], before['needs_you']) == ('closing', 0, 2, 1)
+    # Ada keeps its word behind the close, and bo gave none, so one of one stands behind it.
+    assert (after['state'], after['close_agreed'], after['close_among'], after['needs_you']) == ('closed', 0, 1, 0)
+    assert needs == []

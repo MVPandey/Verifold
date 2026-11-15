@@ -4,13 +4,21 @@ import type { ReactElement } from 'react';
 import type { Api } from '../api/client.ts';
 import { messageOf } from '../api/client.ts';
 import { GUEST } from '../api/types.ts';
-import type { AgentView, HarnessOption, Invitation, LabView, ThreadSummary } from '../api/types.ts';
+import type {
+  Agent,
+  AgentView,
+  HarnessOption,
+  Invitation,
+  LabView,
+  ThreadSummary,
+} from '../api/types.ts';
 import {
   costLine,
   face,
   harnessTitle,
   labTotal,
-  members,
+  leftLine,
+  listed,
   stateLine,
   workingLine,
 } from '../model/agents.ts';
@@ -133,7 +141,7 @@ function Members(props: {
   const busy = lab.agents.some((view) => view.activity.state === 'working');
   const dot = lab.out_of_time ? 'stop' : busy ? 'live' : 'idle';
   const row = (view: AgentView): ReactElement => {
-    const state = stateLine(view.activity, props.now);
+    const state = view.left ? leftLine(view.left) : stateLine(view.activity, props.now);
     return (
       <>
         <p>
@@ -147,13 +155,16 @@ function Members(props: {
         </p>
         <Where view={view} threads={props.threads} />
         <p className="f-where">{costLine(view)}</p>
-        {view.agent.harness === GUEST ? (
+        {view.agent.harness === GUEST && !view.left ? (
           <InviteAgain
             api={props.api}
             agent={view.agent.id}
             onInvited={props.onInvitation}
             onChange={props.onChange}
           />
+        ) : null}
+        {view.agent.checks === null && !view.left ? (
+          <RemoveAgent api={props.api} agent={view.agent} onChange={props.onChange} />
         ) : null}
       </>
     );
@@ -169,7 +180,7 @@ function Members(props: {
       </summary>
       <div className="f-panel">
         <ul>
-          {members(lab.agents).map((view) => (
+          {listed(lab.agents).map((view) => (
             <li key={view.agent.id}>
               <FaceView face={face(lab.agents, view.agent.id)} />
               <div>{row(view)}</div>
@@ -372,6 +383,74 @@ function InviteAgain(props: {
         title="Makes a new token. The old token stops working."
       >
         Invite again
+      </button>
+      {error ? (
+        <span className="error" role="alert">
+          {' '}
+          {error}
+        </span>
+      ) : null}
+    </p>
+  );
+}
+
+/**
+ * The way to remove one agent from the lab. The first press asks, in the row itself, and the second removes. The
+ * agent's posts stay, and the agent does not come back.
+ */
+function RemoveAgent(props: {
+  readonly api: Api;
+  readonly agent: Agent;
+  readonly onChange: () => void;
+}): ReactElement {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const remove = (): void => {
+    setBusy(true);
+    setError(null);
+    props.api.removeAgent(props.agent.id).then(
+      () => {
+        props.onChange();
+      },
+      (failure: unknown) => {
+        setBusy(false);
+        setError(messageOf(failure));
+      },
+    );
+  };
+  if (!confirming) {
+    return (
+      <p className="f-where">
+        <button
+          className="linkbtn"
+          type="button"
+          onClick={() => {
+            setConfirming(true);
+          }}
+        >
+          Remove
+        </button>
+      </p>
+    );
+  }
+  return (
+    <p className="f-where">
+      Remove {props.agent.name} from the lab? Its posts stay, and it cannot come back. Programs that
+      it started in the background run on until the lab stops.{' '}
+      <button className="btn small danger" type="button" onClick={remove} disabled={busy}>
+        {busy ? 'Removing' : 'Remove'}
+      </button>{' '}
+      <button
+        className="linkbtn"
+        type="button"
+        disabled={busy}
+        onClick={() => {
+          setConfirming(false);
+          setError(null);
+        }}
+      >
+        Keep
       </button>
       {error ? (
         <span className="error" role="alert">

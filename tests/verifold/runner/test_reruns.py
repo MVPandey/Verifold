@@ -176,3 +176,24 @@ async def test_an_error_after_the_check_leaves_a_rerun_that_did_not_fail(
     assert [(turn.error, turn.rerun_failed) for turn in lab.board.turns] == [
         ('RuntimeError: The folder is gone.', False)
     ]
+
+
+async def test_a_rerun_request_in_a_lab_without_a_harness_fails_in_the_open_and_the_agent_can_ask_again(
+    lab: Lab, tmp_path: Path
+) -> None:
+    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', EVIDENCE)
+    running = asyncio.create_task(a_rerun_loop(lab, tmp_path).run())
+    try:
+        await lab.request_rerun('bo', 'p-2')
+        await until(lambda: bool(lab.board.turns))
+        failed = lab.board.turns[0]
+        # The failure freed the request, so the same agent's next request is no repeat.
+        await lab.request_rerun('bo', 'p-2')
+        await until(lambda: len(lab.board.turns) == 2)
+    finally:
+        running.cancel()
+
+    checker = lab.board.agent(failed.agent)
+    assert checker is not None
+    assert (checker.agent.harness, checker.agent.checks, failed.rerun_failed) == ('none', 'p-2', True)
+    assert failed.error == 'NoCrew: The lab has no agent that Verifold started, so no blind checker can start.'

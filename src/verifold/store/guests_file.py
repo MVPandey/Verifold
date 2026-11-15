@@ -57,7 +57,27 @@ def keep_guest(path: Path, agent_id: AgentId, digest: str, port: int | None) -> 
 
     """
     before = read_guests(path)
-    guests = Guests(port=port, digests={**before.digests, agent_id: digest})
+    _write(path, Guests(port=port, digests={**before.digests, agent_id: digest}))
+
+
+def drop_guest(path: Path, agent_id: AgentId) -> None:
+    """
+    Remove an invited agent's token digest from the file, so the agent's token is void after a restart too.
+
+    A file that holds no digest for the agent stays as it is.
+
+    Raises:
+        GuestsInvalid: The file is there and is not valid. It stays as it is.
+        OSError: The file can't be written.
+
+    """
+    before = read_guests(path)
+    if agent_id in before.digests:
+        kept = {agent: digest for agent, digest in before.digests.items() if agent != agent_id}
+        _write(path, before.model_copy(update={'digests': kept}))
+
+
+def _write(path: Path, guests: Guests) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # `mkstemp` makes a file that only its owner can read and write.
     descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f'.{path.name}.', suffix='.new')

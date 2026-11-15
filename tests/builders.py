@@ -10,6 +10,7 @@ import psutil
 from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.events import (
     AgentJoined,
+    AgentLeft,
     Event,
     LabOpened,
     Posted,
@@ -60,6 +61,11 @@ class RecordBuilder:
             checks=checks,
         )
         self.events.append(AgentJoined(seq=seq, at=at, agent=agent))
+        return self
+
+    def leave(self, agent_id: str, by: str | None = None, reason: str = '') -> 'RecordBuilder':
+        seq, at = self._stamp()
+        self.events.append(AgentLeft(seq=seq, at=at, agent=agent_id, by=by or agent_id, reason=reason))
         return self
 
     def thread(self, thread_id: str, opened_by: str, title: str = 'Subject') -> 'RecordBuilder':

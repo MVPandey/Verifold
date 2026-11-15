@@ -9,7 +9,7 @@ import type {
   ThreadLink,
   ThreadSummary,
 } from '../api/types.ts';
-import { authorName, face, members, ownName } from '../model/agents.ts';
+import { authorName, face, ownName } from '../model/agents.ts';
 import type { Face } from '../model/agents.ts';
 import { crossedLine, crossLines } from '../model/crossings.ts';
 import { clock, duration, minutesBetween } from '../model/format.ts';
@@ -114,7 +114,7 @@ export function Wall(
   const chip = answer ? standingChip(answer.post, answer.standing) : null;
   const answerOpen = question !== null && open === questionId;
   const crossing = crossedLine(threads);
-  const done = doneLine(lab, members(lab.agents).length);
+  const done = doneLine(lab);
   const missing = open !== null && !threads.some((summary) => summary.thread.id === open);
 
   return (

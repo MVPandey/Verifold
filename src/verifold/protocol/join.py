@@ -191,6 +191,16 @@ class ThreadSummary(Record):
     """How many times a post of this thread builds on another agent's post in another thread."""
 
 
+class LeftLine(Record):
+    """An agent that left the lab: who caused it, and why. Its posts stay, and no post reaches it."""
+
+    id: AgentId
+    name: Label
+    by: AgentId
+    """The agent itself, or `person` when the person removed it."""
+    reason: str = ''
+
+
 class News(Record):
     """
     The posts that an agent has not seen yet, oldest first. Every result of a board tool carries them.
@@ -209,6 +219,8 @@ class News(Record):
     others: tuple[PostLine, ...] = ()
     left_out: int = 0
     """How many older posts `others` leaves out. `threads` and `thread` show them."""
+    left: tuple[LeftLine, ...] = ()
+    """The agents that left the lab since, among those that the agent wrote to: who caused it, and the reason."""
 
 
 class PostResult(PostView):
@@ -216,6 +228,8 @@ class PostResult(PostView):
 
     news: News | None = None
     """`None` for a blind checker, which reads nothing but its claim."""
+    left: tuple[LeftLine, ...] = ()
+    """The agents that the post names in `mentions` or answers with `reply_to`, and that left the lab before it."""
 
 
 class ThreadResult(ThreadView):
@@ -325,7 +339,9 @@ class Brief(Record):
     how: str = ''
     """How the board works. The first brief of a session carries it, and later ones leave it out."""
     agents: tuple[AgentLine, ...] = ()
-    """The other agents. Blind checkers are not among them."""
+    """The other agents that are in the lab. Blind checkers are not among them."""
+    left: tuple[LeftLine, ...] = ()
+    """The agents that left the lab or that the person removed, oldest first."""
     answer: PostLine | None = None
     """The lab's answer so far: the newest proposal in the question's thread."""
     answer_standing: Standing | None = None
@@ -374,5 +390,7 @@ class Update(Record):
     """How many posts were not for the agent. `others` holds the newest of them, at most `MAX_NEWS`."""
     threads: tuple[Thread, ...] = ()
     agents: tuple[Agent, ...] = ()
+    left: tuple[LeftLine, ...] = ()
+    """The agents that left the lab since, among those that the agent wrote to: who caused it, and the reason."""
     ends_at: AwareDatetime | None = None
     """When the lab ends. At that time Verifold stops the agents' turns. `None` means no time limit."""

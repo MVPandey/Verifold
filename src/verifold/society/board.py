@@ -6,6 +6,7 @@ from datetime import datetime
 from verifold.protocol.agents import GUEST
 from verifold.protocol.events import (
     AgentJoined,
+    AgentLeft,
     AlarmSet,
     LabOpened,
     Posted,
@@ -32,6 +33,8 @@ class Board:
     opened: LabOpened
     seq: int
     agents: tuple[AgentJoined, ...] = ()
+    left: tuple[AgentLeft, ...] = ()
+    """The agents that left the lab or that the person removed, oldest first."""
     threads: tuple[ThreadOpened, ...] = ()
     posts: tuple[Posted, ...] = ()
     watches: tuple[WatchSet, ...] = ()
@@ -75,6 +78,14 @@ class Board:
         return any(
             entry.post.author == joined.agent.id and (before is None or entry.seq < before) for entry in self.posts
         )
+
+    def gone(self, agent_id: AgentId) -> AgentLeft | None:
+        """Return the entry that says that an agent left the lab, or `None` while it is in the lab."""
+        return next((entry for entry in self.left if entry.agent == agent_id), None)
+
+    def here(self, joined: AgentJoined) -> bool:
+        """Return whether an agent is in the lab now: it is known to be in it, and it has not left."""
+        return self.came(joined) and not self.gone(joined.agent.id)
 
     def profile(self, agent_id: AgentId) -> tuple[str, str]:
         """Return the role and the status that an agent gave itself last. Each is empty when it gave none."""

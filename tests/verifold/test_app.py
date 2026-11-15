@@ -386,6 +386,61 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
     assert len([event for event in record(project) if isinstance(event, AgentJoined)]) == 2
 
 
+async def test_an_agent_that_left_stops_for_good_and_an_invited_one_loses_its_token(project: Path) -> None:
+    guests = project / '.verifold' / 'guests.json'
+
+    async with serving(project, TWO_AGENTS) as client:
+        await until(lambda: len(posts(project)) == 2, timeout=60)
+        invited = (await client.post('/invitations', json={'name': 'Reader'})).json()
+        url, token, _ = invited_parts(invited['text'])
+        async with board_of(url, token) as board:
+            await board.call_tool('post', {'kind': 'message', 'text': 'Reader is here.', 'thread': 't-1'})
+            left = await board.call_tool('leave', {'reason': 'Read it all.'})
+            after = await board.call_tool('brief', {})
+        await until(lambda: 'agent-3' not in json.loads(guests.read_text())['digests'])
+        again = await client.post('/invitations/agent-3', json={})
+
+        removed = await client.delete('/agents/agent-2')
+        await until(lambda: len(harness_pids()) == 1)
+        views = {view['agent']['id']: view for view in removed.json()['agents']}
+
+    assert (left.is_error, after.is_error) == (False, True)
+    assert 'You left this lab' in str(after.content)
+    assert (again.status_code, again.json()['detail']) == (
+        400,
+        'Reader left the lab, and an agent that left does not come back.',
+    )
+    assert views['agent-1']['left'] is None
+    assert (views['agent-2']['left']['by'], views['agent-3']['left']['by']) == ('person', 'agent-3')
+    assert views['agent-3']['left']['reason'] == 'Read it all.'
+
+    # After a restart, Verifold starts only the agent that is still in the lab, and the old token opens nothing.
+    async with serving(project) as client:
+        await until(lambda: len([post for post in posts(project) if post.post.author == 'agent-1']) == 2, timeout=60)
+        async with board_of(url, token) as board:
+            void = await board.call_tool('brief', {})
+        running = len(harness_pids())
+
+    assert (void.is_error, running) == (True, 1)
+    assert 'no valid agent token' in str(void.content)
+    assert [post.post.author for post in posts(project)].count('agent-2') == 1
+
+
+async def test_an_agent_that_left_frees_a_place_in_a_full_lab_but_its_number_never_comes_back(tmp_path: Path) -> None:
+    full = tmp_path / 'full'
+    await asyncio.to_thread(lab_of, full, 20)
+
+    async with serving(full) as client:
+        too_many = await client.post('/invitations', json={})
+        await client.delete('/agents/agent-7')
+        invited = await client.post('/invitations', json={})
+        full_again = await client.post('/agents', json={'harness': 'fake'})
+
+    assert (too_many.status_code, invited.status_code, full_again.status_code) == (400, 200, 400)
+    assert (invited.json()['agent'], invited.json()['name']) == ('agent-21', 'Agent 21')
+    assert 'this one has 20' in full_again.json()['detail']
+
+
 def lab_of(project: Path, agents: int, harness: str = 'gone', first: int = 1) -> None:
     """Write the record of a lab whose agents this computer cannot start, so that a server only serves it."""
     with RecordFile(project / '.verifold' / 'record.jsonl') as file:
