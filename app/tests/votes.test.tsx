@@ -353,7 +353,6 @@ describe('the lab page with votes and badges', () => {
         by: 'agent-3',
         reason: 'It gives the size.',
         at: '2026-11-06T14:14:00Z',
-        coordinator_can_second: true,
       },
     ],
     breakthrough_threads: ['t-3'],

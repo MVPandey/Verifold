@@ -110,8 +110,3 @@ class ProposalLine(Record):
     """The agent that proposed it."""
     reason: str
     at: AwareDatetime
-    coordinator_can_second: bool = False
-    """
-    Whether the agent that holds the coordinator seat now can second it: an agent holds the seat, and it neither
-    proposed the badge nor wrote the post. The person can second it in any case.
-    """

@@ -316,8 +316,6 @@ export interface ProposalLine {
   readonly by: string;
   readonly reason: string;
   readonly at: string;
-  /** Whether the agent that holds the coordinator seat can second it. The person can in any case. */
-  readonly coordinator_can_second: boolean;
 }
 
 /** The person's change to a badge on a post. */

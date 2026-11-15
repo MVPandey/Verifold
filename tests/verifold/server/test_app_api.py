@@ -1106,11 +1106,8 @@ async def test_the_person_votes_gives_promising_seconds_and_declines_through_the
     after = (await client.get('/lab')).json()
     thread = (await client.get('/threads/t-1')).json()
 
-    # A proposal that waits is in the lab view with whether a coordinator can second it. It is none of the waits.
-    assert [(wait['post'], wait['by'], wait['coordinator_can_second']) for wait in waiting['proposals']] == [
-        ('p-1', 'bo', False),
-        ('p-2', 'cy', False),
-    ]
+    # A proposal that waits is in the lab view. It is none of the waits.
+    assert [(wait['post'], wait['by']) for wait in waiting['proposals']] == [('p-1', 'bo'), ('p-2', 'cy')]
     assert (waiting['needs_you'], waiting['waits'], waiting['breakthrough_threads']) == (0, [], [])
     assert (voted.status_code, voted.json()['up'], voted.json()['votes'][0]['by']) == (200, 1, 'person')
     assert (bare.status_code, bare.json()['detail']) == (

@@ -180,22 +180,14 @@ def breakthrough_threads(board: Board) -> tuple[ThreadId, ...]:
 
 
 def proposals(board: Board) -> tuple[ProposalLine, ...]:
-    """Return each `breakthrough` that waits for its second, oldest first, with whether the coordinator can second it."""
+    """Return each `breakthrough` that waits for its second, oldest first."""
     posts = _badges.of(board.badges)
     waiting = sorted(
         (entry.given for changes in posts.values() for entry in _held(changes).values() if not entry.stands),
         key=lambda change: change.seq,
     )
-    holder = board.coordinator
     return tuple(
-        ProposalLine(
-            post=change.post,
-            thread=target.post.thread,
-            by=change.by,
-            reason=change.reason,
-            at=change.at,
-            coordinator_can_second=holder is not None and holder not in (change.by, target.post.author),
-        )
+        ProposalLine(post=change.post, thread=target.post.thread, by=change.by, reason=change.reason, at=change.at)
         for change in waiting
         if (target := board.post(change.post))
     )

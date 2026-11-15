@@ -297,9 +297,7 @@ def test_a_breakthrough_stands_only_after_the_second_of_the_coordinator_or_the_p
     waiting = proposal(board, 'p-1')
     assert waiting is not None
     assert (waiting.by, breakthrough_threads(board)) == ('bo', ())
-    assert [(wait.post, wait.thread, wait.by, wait.coordinator_can_second) for wait in proposals(board)] == [
-        ('p-1', 't-1', 'bo', True)
-    ]
+    assert [(wait.post, wait.thread, wait.by) for wait in proposals(board)] == [('p-1', 't-1', 'bo')]
 
     seconded = record.copy().badge('cy', 'p-1', 'breakthrough', 'second', giver='bo', reason='It does.').board()
     (line,) = badge_lines(seconded, 'p-1')
@@ -334,7 +332,6 @@ def test_only_the_coordinator_and_the_person_second_and_never_for_their_own_prop
     own = record.copy().badge('cy', 'p-1', 'breakthrough')
     with pytest.raises(RejectedEvent, match='You proposed the `breakthrough` badge for post p-1'):
         own.copy().badge('cy', 'p-1', 'breakthrough', 'second', giver='cy').board()
-    assert [wait.coordinator_can_second for wait in proposals(own.board())] == [False]
     assert marks(own.copy().badge('person', 'p-1', 'breakthrough', 'second', giver='cy').board(), 'p-1')[2] == (
         'breakthrough',
     )
@@ -344,12 +341,10 @@ def test_only_the_coordinator_and_the_person_second_and_never_for_their_own_prop
     )
     with pytest.raises(RejectedEvent, match='Post p-2 is your own'):
         theirs.copy().badge('cy', 'p-2', 'breakthrough', 'second', giver='bo').board()
-    assert [wait.coordinator_can_second for wait in proposals(theirs.board())] == [False]
     # In a lab without a coordinator, only the person seconds.
     none = voted().badge('bo', 'p-1', 'breakthrough')
     with pytest.raises(RejectedEvent, match='Only the agent that holds the coordinator seat and the person second'):
         none.copy().badge('cy', 'p-1', 'breakthrough', 'second', giver='bo').board()
-    assert [wait.coordinator_can_second for wait in proposals(none.board())] == [False]
     assert marks(none.badge('person', 'p-1', 'breakthrough', 'second', giver='bo').board(), 'p-1')[2] == (
         'breakthrough',
     )
