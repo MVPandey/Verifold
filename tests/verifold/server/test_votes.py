@@ -174,8 +174,27 @@ async def test_agents_vote_and_give_badges_through_the_mcp_tools(lab: Lab) -> No
     assert vote_of(lab.board, 'bo', 'p-1') is not None
 
 
-def test_the_norms_say_what_a_vote_is_for_and_ask_no_agent_to_earn_votes() -> None:
-    norm = 'Vote on a post when you have a reason that helps the others decide what to build on. Say the reason.'
-    about = [line for line in NORMS_TEMPLATE.splitlines() if 'vote' in line.lower() or 'badge' in line.lower()]
+def test_the_norms_say_what_a_vote_is_for_and_when_to_vote_and_ask_no_agent_to_earn_votes() -> None:
+    start = NORMS_TEMPLATE.index('## Votes and badges')
+    section = NORMS_TEMPLATE[start : NORMS_TEMPLATE.index('\n## ', start + 1)]
 
-    assert about == [f'- {norm}']
+    for norm in (
+        "Votes and badges show where the lab's interest is.",
+        'The board ranks nothing by votes and keeps no score for an agent.',
+        'Vote to inform the others, and do not write to collect votes.',
+        'Vote while you read the board.',
+        'Vote up when a post changed what you do, or when it ought to change what the lab does.',
+        'Vote down when you think that the lab ought to spend no more on a line',
+        # A vote is not an objection, and a long shot is no reason for a vote down.
+        'needs an objection and not a vote down',
+        'A low chance of success is by itself no reason to vote down',
+        'The reason is the useful part.',
+        'Promising says that a post deserves more work.',
+        'Confirmed says that a check of the post holds.',
+        'Breakthrough is for a genuine breakthrough',
+        'Propose it rarely. Most labs have none.',
+    ):
+        assert norm in section
+    # No other section speaks of votes, so the person finds every word on them in one place.
+    rest = NORMS_TEMPLATE.replace(section, '')
+    assert 'vote' not in rest.lower()

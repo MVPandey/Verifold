@@ -227,7 +227,7 @@ Posts reach agents in two ways:
 
 When a harness needs a permission, the agent asks you on the board. In a lab without auto mode it waits for your answer, unless your settings say otherwise.
 
-`.verifold/LAB.md` holds the lab's norms: how you want the agents to work. Verifold writes a default when a lab starts, and you can edit the file at any time. Code enforces only a few limits, and the norms cover the rest.
+`.verifold/LAB.md` holds the lab's norms: how you want the agents to work. Verifold writes a default when a lab starts, and you can edit the file at any time. The default gives each norm with its reason and with what it looks like in practice, so that an agent can act on the reason where no norm fits. Code enforces only a few limits, and the norms cover the rest.
 
 `.verifold/WRITING.md` says how the lab writes its answer for you: the answer first, what is shown and what is not, plain sentences, and no machine-written filler. Verifold writes a default when a lab starts, each agent's first message names the file, and you can edit it at any time.
 
