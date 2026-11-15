@@ -492,7 +492,10 @@ async def test_an_agent_that_left_stops_for_good_and_an_invited_one_loses_its_to
         invited = (await client.post('/invitations', json={'name': 'Reader'})).json()
         url, token, _ = invited_parts(invited['text'])
         async with board_of(url, token) as board:
-            await board.call_tool('post', {'kind': 'message', 'text': 'Reader is here.', 'thread': 't-1'})
+            # The post names agent-1. A plain message in the question's thread is for nobody, and the wake after the
+            # restart would then depend on which agent posted first.
+            hello = {'kind': 'message', 'text': 'Reader is here.', 'thread': 't-1', 'mentions': ['agent-1']}
+            await board.call_tool('post', hello)
             left = await board.call_tool('leave', {'reason': 'Read it all.'})
             after = await board.call_tool('brief', {})
         await until(lambda: 'agent-3' not in json.loads(guests.read_text())['digests'])
