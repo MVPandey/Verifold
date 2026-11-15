@@ -33,7 +33,7 @@ GIT_SECONDS = 300.0
 SETTLE_SECONDS = 1.0
 """
 How long Verifold waits for what follows the end of a Git process: its last output, which a program that Git
-started can hold open, and its exit after Verifold ended it.
+started can hold open. It is also how long a Git that Verifold ends has to end by itself, before Verifold kills it.
 """
 
 GIT_ENVIRONMENT: Mapping[str, str] = MappingProxyType(
@@ -113,8 +113,9 @@ async def git(
 
     Git runs in a process group of its own. When this call ends while Git still runs, at the limit or because
     its caller was cancelled, Verifold ends the whole group, so the programs that Git started end with it,
-    unless one left the group. Verifold waits for Git's own end and never for a program that Git started: such
-    a program can hold Git's output open for good.
+    unless one left the group. The group gets SIGTERM first, so that Git removes its locks and what it made
+    half, and SIGKILL after `SETTLE_SECONDS`. Verifold waits for Git's own end and never for a program that Git
+    started: such a program can hold Git's output open for good.
 
     Raises:
         GitTimeout: Git did not end in its time limit, and Verifold ended it.
@@ -143,16 +144,36 @@ async def git(
         await asyncio.wait([ran.closed], timeout=SETTLE_SECONDS)
     finally:
         if transport.get_returncode() is None:
-            # The group can be gone already. macOS also refuses a group whose last members are still exiting.
-            with suppress(ProcessLookupError, PermissionError):
-                os.killpg(transport.get_pid(), signal.SIGKILL)
-            await asyncio.wait([ran.ended], timeout=SETTLE_SECONDS)
+            await _end(transport, ran)
         transport.close()
     if transport.get_returncode():
         raise GitError(f'git {" ".join(args)} failed: {bytes(ran.wrote[2]).decode(errors="replace").strip()}')
     # A file's name can hold bytes that are no UTF-8. Such a name stays a name, as it does for `os.fsdecode`.
     text = bytes(ran.wrote[1]).decode(errors='surrogateescape')
     return text.strip() if strip else text
+
+
+async def _end(transport: asyncio.SubprocessTransport, ran: _Git) -> None:
+    """
+    End a Git process that still runs, with its process group.
+
+    SIGTERM comes first. Git then removes its locks and what it made half, which it cannot do when it is killed:
+    a lock that stays at a branch or a ref stops every later command there. After `SETTLE_SECONDS`, or when this
+    wait is cancelled, the whole group gets SIGKILL. It gets that also when Git itself ended, because a program
+    that Git started can run on.
+    """
+    try:
+        _signal(transport, signal.SIGTERM)
+        await asyncio.wait([ran.ended], timeout=SETTLE_SECONDS)
+    finally:
+        _signal(transport, signal.SIGKILL)
+    await asyncio.wait([ran.ended], timeout=SETTLE_SECONDS)
+
+
+def _signal(transport: asyncio.SubprocessTransport, sent: signal.Signals) -> None:
+    # The group can be gone already. macOS also refuses a group whose last members are still exiting.
+    with suppress(ProcessLookupError, PermissionError):
+        os.killpg(transport.get_pid(), sent)
 
 
 async def commit_of(folder: Path, ref: str) -> str | None:

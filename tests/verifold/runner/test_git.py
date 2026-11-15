@@ -6,10 +6,9 @@ import stat
 import sys
 from pathlib import Path
 
-import psutil
 import pytest
 from builders import alive, until
-from plants import process_ids, stand_in_git
+from plants import move_clock, process_ids, stand_in_git
 
 from verifold.runner.git import MAX_SMALL_FILE, GitError, GitTimeout, git, own_repository, small_text
 
@@ -124,36 +123,51 @@ def a_git_with_a_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple
     return itself, child
 
 
-async def test_a_git_that_does_not_end_is_ended_at_the_time_limit_with_what_it_started(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize('cut', ['by a cancel', 'at the time limit'])
+async def test_git_ends_with_what_it_started_when_verifold_cuts_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cut: str
 ) -> None:
-    started = a_git_with_a_child(tmp_path, monkeypatch)
-    monkeypatch.setattr('verifold.runner.git.GIT_SECONDS', 0.05)
-
-    with pytest.raises(GitTimeout, match=r'git status did not end in 0\.05 seconds, so Verifold ended it'):
-        await git('status', cwd=tmp_path)
-    # A caller can name another limit.
-    with pytest.raises(GitTimeout, match=r'did not end in 0\.02 seconds'):
-        await git('status', cwd=tmp_path, seconds=0.02)
-
-    # The error came at the limit, and not when the program that the stand-in started closed its output. The
-    # stand-in is gone, and so is that program when the stand-in got as far as its start.
-    assert not [one for one in psutil.Process().children(recursive=True) if 'bin/git' in ' '.join(one.cmdline())]
-    await until(lambda: not any(alive(pid) for pid in process_ids(*started)))
-
-
-async def test_a_cancel_ends_git_and_what_it_started(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     itself, child = a_git_with_a_child(tmp_path, monkeypatch)
     running = asyncio.create_task(git('status', cwd=tmp_path))
     await until(lambda: len(process_ids(itself, child)) == 2)
     both = process_ids(itself, child)
     assert all(alive(pid) for pid in both)
 
+    if cut == 'by a cancel':
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+    else:
+        # The limit's time comes now. The error comes with it, and not when the program closes the output.
+        move_clock(monkeypatch, 300)
+        with pytest.raises(GitTimeout, match=r'git status did not end in 300 seconds, so Verifold ended it'):
+            await running
+
+    await until(lambda: not any(alive(pid) for pid in both))
+
+
+@pytest.mark.parametrize('stand_in', ['ends when it is asked to', 'goes on when it is asked to end'])
+async def test_git_is_asked_to_end_first_and_is_killed_when_it_goes_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stand_in: str
+) -> None:
+    # A stand-in for Git that leaves a file when it gets SIGTERM, as Git removes its locks then.
+    itself, asked = tmp_path / 'git.pid', tmp_path / 'asked'
+    then = 'exit 0' if stand_in == 'ends when it is asked to' else ':'
+    script = f'trap \'touch "{asked}"; {then}\' TERM\necho $$ > "{itself}"\nwhile :; do sleep 0.01; done'
+    stand_in_git(tmp_path, script, monkeypatch)
+    # The one that ends has a minute for it, so the file is there when Verifold asked. The other has a moment.
+    monkeypatch.setattr('verifold.runner.git.SETTLE_SECONDS', 60 if then == 'exit 0' else 0.05)
+    running = asyncio.create_task(git('status', cwd=tmp_path))
+    await until(lambda: bool(process_ids(itself)))
+    (pid,) = process_ids(itself)
+
     running.cancel()
     with pytest.raises(asyncio.CancelledError):
         await running
 
-    await until(lambda: not any(alive(pid) for pid in both))
+    await until(lambda: not alive(pid))
+    if then == 'exit 0':
+        assert asked.exists()
 
 
 async def test_git_does_not_wait_for_a_program_that_holds_its_output_after_it_ended(

@@ -120,6 +120,18 @@ def stand_in_git(folder: Path, script: str, monkeypatch: pytest.MonkeyPatch) -> 
     return stand_in
 
 
+def move_clock(monkeypatch: pytest.MonkeyPatch, seconds: float) -> None:
+    """
+    Move the clock of the running event loop on by `seconds`.
+
+    A time limit that a task of the loop waits for then comes at once, so a test waits for no limit and still
+    knows what ran before the limit came.
+    """
+    loop = asyncio.get_running_loop()
+    now = loop.time
+    monkeypatch.setattr(loop, 'time', lambda: now() + seconds)
+
+
 def process_ids(*files: Path) -> list[int]:
     """Return the process IDs that programs of a test wrote into files, of the files that hold one."""
     return [int(text) for file in files if file.exists() and (text := file.read_text().strip())]
