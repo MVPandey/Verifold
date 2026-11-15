@@ -18,6 +18,8 @@ class ServerProcess(Record):
 
     pid: int
     started: float
+    opens: bool = False
+    """Whether the process opens the lab in the browser when it gets the open signal. An older server would stop."""
 
 
 @contextmanager
@@ -41,3 +43,20 @@ def running_server(path: Path) -> psutil.Process | None:
     except (OSError, ValidationError, psutil.Error):
         return None
     return process if same else None
+
+
+def mark_opens(path: Path) -> None:
+    """Note in `path` that this server opens the lab on the open signal. Without the file, do nothing."""
+    try:
+        named = ServerProcess.model_validate_json(path.read_text())
+    except (OSError, ValidationError):
+        return
+    path.write_text(named.model_copy(update={'opens': True}).model_dump_json())
+
+
+def named_server(path: Path) -> ServerProcess | None:
+    """Return what `path` says about the server, or `None` when there is no such file."""
+    try:
+        return ServerProcess.model_validate_json(path.read_text())
+    except (OSError, ValidationError):
+        return None
