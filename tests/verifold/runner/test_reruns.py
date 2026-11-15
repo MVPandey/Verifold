@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import hashlib
 import os
 import shutil
@@ -8,7 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-from builders import START
+from builders import START, until
 
 from verifold.protocol.events import Posted
 from verifold.protocol.posts import FileEvidence, Result
@@ -411,6 +412,8 @@ async def test_a_copy_is_checked_at_every_take_and_one_that_differs_is_made_agai
         elif change == 'a folder':
             file.unlink()
             file.mkdir()
+        elif change == 'open to all':
+            place.chmod(0o777)
         elif change == 'the copy is a link':
             shutil.rmtree(place)
             place.symlink_to(outside)
@@ -419,7 +422,7 @@ async def test_a_copy_is_checked_at_every_take_and_one_that_differs_is_made_agai
             made.listing.write_text('planted')
 
     for change in (
-        'rewritten', 'writable', 'one more file', 'a file less', 'a link', 'a pipe', 'a folder',
+        'rewritten', 'writable', 'one more file', 'a file less', 'a link', 'a pipe', 'a folder', 'open to all',
         'the copy is a link', 'the manifest',
     ):  # fmt: skip
         spoil(change)
@@ -493,19 +496,107 @@ async def test_a_swap_of_the_posts_folder_while_the_copy_is_made_moves_no_write(
     assert everything(copy) == FILES
 
 
+async def test_a_file_mode_of_old_git_is_a_plain_file_and_a_submodules_name_is_checked_too(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    project.mkdir()
+    author = await agent_folder(project, 'ada')
+    blob = await git('hash-object', '-w', '--stdin', cwd=author)
+    claim = await hand_made(author, [('100664', 'result.txt', blob), ('160000', 'module', 'ab' * 20)])
+
+    copy = await clean_copy(project, claim)
+
+    # Old versions of Git wrote this mode for a file that its group can write. A submodule has no files.
+    assert sorted(path.name for path in copy.iterdir()) == ['result.txt']
+    assert stat.S_IMODE((copy / 'result.txt').stat().st_mode) == 0o444
+    for name in ('n' * 300, '..', 'result.TXT'):
+        entries = [('100644', 'result.txt', blob), ('160000', name, 'ab' * 20)]
+        with pytest.raises(NoCleanCopy, match='an entry that Verifold does not write'):
+            await clean_copy(project, await hand_made(author, entries))
+
+
+async def test_listings_that_are_named_many_times_stop_at_a_budget_of_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / 'project'
+    project.mkdir()
+    author = await agent_folder(project, 'ada')
+    blob = await git('hash-object', '-w', '--stdin', cwd=author)
+    # One listing of some size, which its parent names forty times.
+    large = _tree_object(author, [('100644', f'file-{number:04}', blob) for number in range(40)])
+    claim = await hand_made(author, [('40000', f'd{number}', large) for number in range(40)])
+    monkeypatch.setattr(reruns, 'MAX_LISTED_BYTES', 10_000)
+
+    with pytest.raises(NoCleanCopy, match='listings of more than 10,000 bytes in all'):
+        await clean_copy(project, claim)
+
+
+async def test_what_earlier_exports_left_behind_goes_at_the_next_take(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    claim = await a_claim(project)
+    home = project / '.verifold' / 'reruns' / 'p-4'
+    home.mkdir(parents=True)
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'precious').write_text('x')
+    # A manifest that was cut off, a copy that was half made, and a discarded copy with a folder that nobody opens.
+    (home / '.writing-1').write_text('half')
+    (home / '.making-1' / 'out').mkdir(parents=True)
+    (home / '.making-1' / 'out' / 'a.txt').write_text('a')
+    (home / '.discarded-1' / 'closed' / 'deep').mkdir(parents=True)
+    (home / '.discarded-1' / 'closed' / 'deep' / 'b.txt').write_text('b')
+    (home / '.discarded-1' / 'link').symlink_to(outside)
+    (home / '.discarded-1' / 'closed').chmod(0)
+
+    made = await CleanCopies(project)(claim)
+
+    assert sorted(path.name for path in home.iterdir()) == [made.folder.name, made.listing.name]
+    assert everything(outside) == {'precious': 'x'}
+
+
+async def test_a_server_that_stops_ends_an_export_and_a_caller_that_went_away_leaves_no_loose_error(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / 'project'
+    claim = await a_claim(project)
+    author = project / '.verifold' / 'agents' / 'ada'
+    blob = await git('rev-parse', f'{claim.post.evidence[0].commit}:result.txt', cwd=author)
+    loose(author, blob).unlink()
+    os.mkfifo(author / '.git' / 'objects' / blob[:2] / blob[2:])
+    loose_errors: list[dict[str, object]] = []
+    asyncio.get_running_loop().set_exception_handler(lambda _, context: loose_errors.append(context))
+    # Git waits at the pipe for as long as its time limit, which is far away.
+    lab = CleanCopies(project, seconds=600)
+    alone = asyncio.create_task(lab(claim))
+    await until(lambda: any((project / '.verifold' / 'reruns' / 'p-4').glob('.making-*')))
+
+    # The only caller goes away, and then the server stops.
+    alone.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await alone
+    lab.stop()
+    await until(lambda: not lab._making)
+
+    # An export that starts after the stop ends at once too.
+    with pytest.raises(NoCleanCopy, match='did not answer in time'):
+        await lab(claim)
+    gc.collect()
+    await asyncio.sleep(0)
+    assert loose_errors == []
+
+
 async def test_an_older_git_reads_no_repository_that_an_agent_can_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     assert fetches_nothing()
     monkeypatch.setattr(reruns, 'FETCHES_NOTHING_FROM', (99, 0))
     assert not fetches_nothing()
-    # In a project without Git commits, the pinned files are in the author's own repository.
+    # An agent can write its own repository, and the project's own through its worktree. So an older Git reads
+    # neither: in a project without Git commits, and in one with them.
     plain = tmp_path / 'plain'
-    with pytest.raises(NoCleanCopy, match=r'Verifold reads it only with Git 99\.0 or later'):
-        await clean_copy(plain, await a_claim(plain))
-    # In a project with Git commits, they are in the project's own repository, which Verifold still reads.
     project = await committed(tmp_path / 'project')
-    assert everything(await clean_copy(project, await a_claim(project)))['result.txt'] == '11.8'
+    for folder in (plain, project):
+        with pytest.raises(NoCleanCopy, match=r'reads the pinned files only with Git 99\.0 or later'):
+            await clean_copy(folder, await a_claim(folder))
     # A computer without Git reads none.
     monkeypatch.setenv('PATH', str(tmp_path))
     assert not fetches_nothing()
