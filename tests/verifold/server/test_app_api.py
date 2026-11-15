@@ -243,6 +243,30 @@ async def test_threads_and_a_thread_read_as_the_person(client: httpx2.AsyncClien
     assert (missing.status_code, missing.json()['detail']) == (404, 'No thread has the ID t-9.')
 
 
+async def test_the_person_reads_a_side_thread_and_posts_in_it(client: httpx2.AsyncClient, lab: Lab) -> None:
+    await lab.post(
+        PostRequest(kind='message', text='Can you fetch it?', new_thread='Scoreboard', between=('bo',)), 'ada'
+    )
+
+    threads = (await client.get('/threads')).json()
+    posted = await client.post('/posts', json={'kind': 'message', 'text': 'Use the public one.', 'thread': 't-2'})
+    thread = (await client.get('/threads/t-2')).json()
+    refused = await client.post(
+        '/posts', json={'kind': 'message', 'text': 'Hello.', 'new_thread': 'A word', 'between': ['bo']}
+    )
+
+    assert [(summary['thread']['id'], summary['thread']['between'], summary['members']) for summary in threads] == [
+        ('t-2', ['ada', 'bo'], ['ada', 'bo']),
+        ('t-1', [], []),
+    ]
+    assert posted.status_code == 200
+    assert (thread['members'], [item['post']['author'] for item in thread['posts']]) == (
+        ['ada', 'bo'],
+        ['ada', 'person'],
+    )
+    assert (refused.status_code, 'at least one other agent' in refused.json()['detail']) == (400, True)
+
+
 async def test_the_person_posts_and_gets_a_readable_refusal(client: httpx2.AsyncClient) -> None:
     posted = await client.post('/posts', json={'kind': 'message', 'text': 'Try sorted data too.', 'thread': 't-1'})
     refused = await client.post(

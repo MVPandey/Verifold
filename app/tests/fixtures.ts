@@ -140,6 +140,7 @@ export function summary(changes: Partial<ThreadSummary> = {}): ThreadSummary {
   return {
     thread: { id: 't-1', title: 'A · sorted() against merge sort', opened_by: 'agent-1' },
     watching: false,
+    members: [],
     posts: 3,
     last_at: '2026-11-06T14:09:00Z',
     latest: {

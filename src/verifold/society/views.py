@@ -13,6 +13,7 @@ from verifold.protocol.join import (
     News,
     PostLine,
     PostView,
+    SideLine,
     ThreadLine,
     ThreadLink,
     ThreadSummary,
@@ -53,16 +54,42 @@ def thread_view(board: Board, agent_id: AgentId, thread_id: ThreadId) -> ThreadV
     return ThreadView(
         thread=opened.thread,
         watching=watches_thread(board, agent_id, thread_id),
+        members=board.members(thread_id),
         posts=tuple(post_view(board, entry) for entry in board.posts if entry.post.thread == thread_id),
     )
 
 
 def thread_summaries(board: Board, agent_id: AgentId) -> tuple[ThreadSummary, ...]:
-    """Return one summary for each thread, the most recently active first."""
+    """Return one summary for each thread, side threads among them, the most recently active first."""
     crossed = crossings(board)
     lines = lines_of(board)
     summaries = (_summary(board, agent_id, opened, crossed, lines) for opened in board.threads)
     return tuple(sorted(summaries, key=lambda summary: summary.last_at, reverse=True))
+
+
+def work_threads(summaries: tuple[ThreadSummary, ...]) -> tuple[ThreadSummary, ...]:
+    """Return the summaries of the threads that are not side threads, in the order given."""
+    return tuple(summary for summary in summaries if not summary.thread.between)
+
+
+def side_lines(summaries: tuple[ThreadSummary, ...], agent_id: AgentId) -> tuple[SideLine, ...]:
+    """Return one line for each side thread: first the ones that an agent is a member of, then in the order given."""
+    lines = tuple(
+        SideLine(
+            id=summary.thread.id,
+            title=summary.thread.title,
+            members=summary.members,
+            posts=summary.posts,
+            last_at=summary.last_at,
+            open_asks=summary.open_asks,
+            open_calls=summary.open_calls,
+            disputed=summary.disputed,
+            not_checked=summary.not_checked,
+        )
+        for summary in summaries
+        if summary.thread.between
+    )
+    return tuple(sorted(lines, key=lambda line: agent_id not in line.members))
 
 
 type Crossing = tuple[Posted, Posted]
@@ -109,9 +136,10 @@ def _links(pairs: tuple[Crossing, ...]) -> tuple[ThreadLink, ...]:
 def _team(board: Board, opened: ThreadOpened, lines: dict[AgentId, ThreadId | None]) -> tuple[AgentId, ...]:
     # The lab's agents that work in the thread now. The agent that opened the thread is in its team until it works
     # in another one, unless it opened the thread with a call, which says that the work needs somebody else. The
-    # person, blind checkers, and agents that left are in no team, and the question's thread has none.
+    # person, blind checkers, and agents that left are in no team. The question's thread has none, and neither has a
+    # side thread, where no agent works.
     thread = opened.thread
-    if thread.id == question_thread(board):
+    if thread.between or thread.id == question_thread(board):
         return ()
     workers = tuple(
         joined.agent.id for joined in board.agents if not joined.agent.checks and not board.gone(joined.agent.id)
@@ -136,6 +164,7 @@ def _summary(
     return ThreadSummary(
         thread=opened.thread,
         watching=watches_thread(board, agent_id, opened.thread.id, lines),
+        members=board.members(opened.thread.id),
         posts=len(entries),
         last_at=latest.at if latest else opened.at,
         latest=PostLine.of(latest) if latest else None,
@@ -181,8 +210,8 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
     It holds the agent's own line and the other agents with their latest plans, and then where the agent's work is
     of use: the calls that
     need an agent, the threads where one agent works alone, the results that nobody has built on, the asks that
-    nobody has answered, the results that nobody has checked, and the disputed posts. Then come the newest threads
-    and the agent's `news`. `how` says how the board works.
+    nobody has answered, the results that nobody has checked, and the disputed posts. Then come the newest threads,
+    one line for each side thread, and the agent's `news`. `how` says how the board works.
     """
     # An invited agent that has not posted may never come, so no agent reads it as a peer to ask or wait for. An
     # agent that left is no peer either, and the brief lists it apart.
@@ -192,6 +221,13 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         if joined.agent.id != agent_id and not joined.agent.checks and board.here(joined)
     )
     stands = tuple((entry, standing(board, entry.post.id)) for entry in board.posts)
+    # An ask or a call in a side thread is talk for the thread's members, and its side line counts it for the
+    # others. A result is work, so every agent sees it in these lists, whatever thread holds it.
+    not_mine = {
+        opened.thread.id
+        for opened in board.threads
+        if opened.thread.between and agent_id not in board.members(opened.thread.id)
+    }
     not_checked = tuple(
         PostLine.of(entry)
         for entry, state in stands
@@ -204,21 +240,26 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         if isinstance(entry.post, Ask)
         and entry.post.author != agent_id
         and entry.post.mentions != (PERSON,)
+        and entry.post.thread not in not_mine
         and not is_answered(board, entry.post.id)
         and not board.gone(entry.post.author)
     )
     open_calls = tuple(
         PostLine.of(entry)
         for entry in board.posts
-        if isinstance(entry.post, Call) and entry.post.author != agent_id and is_open_call(board, entry.post.id)
+        if isinstance(entry.post, Call)
+        and entry.post.author != agent_id
+        and entry.post.thread not in not_mine
+        and is_open_call(board, entry.post.id)
     )
-    summaries = thread_summaries(board, agent_id)
+    every = thread_summaries(board, agent_id)
+    summaries, side = work_threads(every), side_lines(every, agent_id)
     # A thread counts when an agent's latest plan or result is in it, so a thread that holds only notes is no line.
     working = lines_of(board)
     busy = set(working.values())
     alone = tuple(
         ThreadLine(id=summary.thread.id, title=summary.thread.title, team=summary.team)
-        for summary in summaries
+        for summary in every
         if len(summary.team) == 1 and agent_id not in summary.team and summary.thread.id in busy
     )
     not_built_on = tuple(
@@ -251,6 +292,8 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         disputed=disputed[-MAX_NEWS:],
         threads=summaries[:MAX_NEWS],
         more_threads=max(len(summaries) - MAX_NEWS, 0),
+        side_threads=side[:MAX_NEWS],
+        more_side_threads=max(len(side) - MAX_NEWS, 0),
         news=news,
         ends_at=board.ends_at,
     )

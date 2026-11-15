@@ -101,6 +101,31 @@ class Board:
         """Return the entry of a thread, or `None`."""
         return next((entry for entry in self.threads if entry.thread.id == thread_id), None)
 
+    def is_side(self, thread_id: ThreadId) -> bool:
+        """Return whether a thread is a side thread: a thread between named agents, and not one for the whole lab."""
+        opened = self.thread(thread_id)
+        return bool(opened and opened.thread.between)
+
+    def members(self, thread_id: ThreadId) -> tuple[AgentId, ...]:
+        """
+        Return the members of a side thread, in the order that they came. A thread that is no side thread has none.
+
+        The agents that the thread opened between come first. Then comes each agent that posted in the thread or
+        started to watch it. Nobody leaves the list: an agent that stops watching stays a member and hears nothing
+        from the thread until it watches again, and an agent that left the lab stays in the list too. The person and blind checkers post in a side thread without being members.
+        """
+        opened = self.thread(thread_id)
+        if opened is None or not opened.thread.between:
+            return ()
+        came = sorted(
+            (
+                *((entry.seq, entry.post.author) for entry in self.posts if entry.post.thread == thread_id),
+                *((watch.seq, watch.agent) for watch in self.watches if watch.thread == thread_id and watch.watching),
+            )
+        )
+        agents = {joined.agent.id for joined in self.agents if not joined.agent.checks}
+        return tuple(dict.fromkeys((*opened.thread.between, *(agent for _, agent in came if agent in agents))))
+
     def post(self, post_id: PostId) -> Posted | None:
         """Return the entry of a post, or `None`."""
         return next((entry for entry in self.posts if entry.post.id == post_id), None)

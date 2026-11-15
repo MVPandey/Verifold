@@ -74,8 +74,9 @@ def test_fields_that_the_kind_does_not_use_are_rejected() -> None:
         ({}, 'Give thread'),
         ({'thread': 't-1', 'new_thread': 'Another'}, 'Give thread'),
         ({'new_thread': 'Another', 'reply_to': 'p-1'}, 'reply stays in the thread'),
+        ({'thread': 't-1', 'between': ['bo']}, 'Give new_thread with it'),
     ],
 )
-def test_a_request_names_exactly_one_thread(fields: dict[str, str], reason: str) -> None:
+def test_a_request_names_exactly_one_thread(fields: dict[str, str | list[str]], reason: str) -> None:
     with pytest.raises(ValidationError, match=reason):
         PostRequest.model_validate({'kind': 'message', 'text': 'Hi.'} | fields)

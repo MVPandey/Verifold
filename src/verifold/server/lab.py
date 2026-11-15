@@ -123,12 +123,14 @@ class Lab:
         """
         Add a post with the next free post ID. With `new_thread`, open its thread in the same step.
 
+        With `between` too, that thread is a side thread between the author and the agents that `between` names.
+
         Raises:
             RejectedEvent: The post breaks a rule of the record.
             pydantic.ValidationError: The request does not describe a valid post of its kind.
 
         """
-        opens = (_open_thread(request.new_thread, author),) if request.new_thread else ()
+        opens = (_open_thread(request.new_thread, author, request.between),) if request.new_thread else ()
         board = await self._commit(*opens, _add_post(request, author, evidence))
         return board.posts[-1]
 
@@ -254,9 +256,12 @@ class Lab:
             return board
 
 
-def _open_thread(title: str, opened_by: AgentId) -> Build:
+def _open_thread(title: str, opened_by: AgentId, between: tuple[AgentId, ...] = ()) -> Build:
+    # The author is always in its own side thread, and comes first. An agent that names itself changes nothing.
+    members = tuple(dict.fromkeys((opened_by, *between))) if between else ()
+
     def build(board: Board, seq: int, at: datetime) -> ThreadOpened:
-        thread = Thread(id=f't-{len(board.threads) + 1}', title=title, opened_by=opened_by)
+        thread = Thread(id=f't-{len(board.threads) + 1}', title=title, opened_by=opened_by, between=members)
         return ThreadOpened(seq=seq, at=at, thread=thread)
 
     return build

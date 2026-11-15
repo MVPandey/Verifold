@@ -20,7 +20,7 @@ from verifold.protocol.events import (
     WatchSet,
 )
 from verifold.protocol.ids import PERSON, AgentId, PostId
-from verifold.protocol.posts import Answer, Check, Close, Objection, Post
+from verifold.protocol.posts import Answer, Check, Close, Objection, Post, Proposal
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
@@ -74,13 +74,15 @@ def check_thread(board: Board, thread: Thread) -> None:
     Check that a thread can open on the board.
 
     Raises:
-        RejectedEvent: The ID is taken, or the author is not in the lab.
+        RejectedEvent: The ID is taken, the author is not in the lab, or a side thread names somebody that it cannot.
 
     """
     if board.thread(thread.id):
         raise RejectedEvent(f'Thread {thread.id} exists already.')
     _check_member(board, thread.opened_by)
     _check_here(board, thread.opened_by)
+    if thread.between:
+        _check_between(board, thread)
 
 
 def check_post(board: Board, post: Post) -> None:
@@ -98,11 +100,17 @@ def check_post(board: Board, post: Post) -> None:
     _check_blind(board, post)
     for mention in post.mentions:
         _check_member(board, mention)
-    if not board.thread(post.thread):
+    opened = board.thread(post.thread)
+    if not opened:
         raise RejectedEvent(f'Thread {post.thread} does not exist. Open a thread first.')
     for built_on in post.builds_on:
         if not board.post(built_on):
             raise RejectedEvent(f'Post {built_on} does not exist, so no post can build on it.')
+    if isinstance(post, Proposal | Close) and opened.thread.between:
+        raise RejectedEvent(
+            f'Thread {post.thread} is a side thread, and a {post.kind} is for the whole lab. Post it in a thread '
+            'that is not a side thread.'
+        )
     if isinstance(post, Close):
         _check_close(board, post)
     if post.reply_to is None:
@@ -286,6 +294,23 @@ def _check_here(board: Board, agent_id: AgentId) -> None:
     # and check them, and the turn that it was in still ends.
     if board.gone(agent_id):
         raise RejectedEvent(f'{agent_id} left this lab, so the board takes no post and no other change from it.')
+
+
+def _check_between(board: Board, thread: Thread) -> None:
+    # A side thread is between agents of the lab that can hear it. The person can post in any thread already.
+    others = tuple(agent for agent in thread.between if agent != thread.opened_by)
+    if thread.opened_by == PERSON or thread.between[0] != thread.opened_by or not others:
+        raise RejectedEvent('A side thread is between the agent that opens it and at least one other agent.')
+    for agent in others:
+        joined = board.agent(agent)
+        if not joined:
+            raise RejectedEvent(f'{agent} is not an agent in this lab, so no side thread is between you and it.')
+        if joined.agent.checks:
+            raise RejectedEvent(f'{agent} is a blind checker, which reads nothing but its claim.')
+        if board.gone(agent):
+            raise RejectedEvent(f'{agent} left this lab, so no post reaches it.')
+        if not board.came(joined):
+            raise RejectedEvent(f'{agent} has an invitation and has not posted yet, so nobody knows whether it came.')
 
 
 def _check_close(board: Board, close: Close) -> None:

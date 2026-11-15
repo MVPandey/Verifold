@@ -1,6 +1,7 @@
 import asyncio
 
 import pytest
+from conftest import agent
 from mcp import Client
 
 from verifold.protocol.agents import Agent, ModelSpec
@@ -114,6 +115,72 @@ async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
     assert [summary['thread']['id'] for summary in threads.structured_content['threads']] == ['t-1']
     assert news.structured_content is not None
     assert news.structured_content['posts'] == []
+
+
+async def test_agents_talk_in_a_side_thread_that_every_agent_can_read_and_join(lab: Lab) -> None:
+    await lab.join(agent('cy'))
+    ada, bo, cy = Member(lab, 'ada'), Member(lab, 'bo'), Member(lab, 'cy')
+    async with Client(join_server(lambda _: ada)) as client:
+        opened = await client.call_tool(
+            'post', {'kind': 'ask', 'text': 'Can you fetch it?', 'new_thread': 'Scoreboard', 'between': ['bo']}
+        )
+        refused = await client.call_tool('post', {'kind': 'proposal', 'text': 'The answer is 42.', 'thread': 't-2'})
+    assert opened.structured_content is not None
+    assert opened.structured_content['post']['thread'] == 't-2'
+    assert 'is a side thread, and a proposal is for the whole lab' in str(refused.content)
+    # The first post is an ask that names nobody, and it is still for the other member only.
+    for_bo = bo.news()
+    assert for_bo is not None
+    assert [line.id for line in for_bo.for_you] == ['p-2']
+
+    async with Client(join_server(lambda _: cy)) as client:
+        listed = await client.call_tool('threads', {})
+        read = await client.call_tool('thread', {'thread': 't-2'})
+        brief = await client.call_tool('brief', {})
+        await client.call_tool('watch', {'thread': 't-2'})
+    assert listed.structured_content is not None
+    assert read.structured_content is not None
+    assert brief.structured_content is not None
+    assert [summary['thread']['id'] for summary in listed.structured_content['threads']] == ['t-1']
+    lines = listed.structured_content['side_threads']
+    assert [(line['id'], line['title'], line['members'], line['posts']) for line in lines] == [
+        ('t-2', 'Scoreboard', ['ada', 'bo'], 1)
+    ]
+    assert listed.structured_content['news']['for_you'] == []
+    assert [line['id'] for line in listed.structured_content['news']['others']] == ['p-2']
+    assert (read.structured_content['members'], read.structured_content['watching']) == (['ada', 'bo'], False)
+    assert [item['post']['text'] for item in read.structured_content['posts']] == ['Can you fetch it?']
+    assert [line['id'] for line in brief.structured_content['side_threads']] == ['t-2']
+    assert brief.structured_content['open_asks'] == []
+    assert lab.board.members('t-2') == ('ada', 'bo', 'cy')
+
+
+async def test_the_board_says_what_a_side_thread_is_and_never_when_to_use_one(lab: Lab) -> None:
+    async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
+        tools = {tool.name: tool.description or '' for tool in (await client.list_tools()).tools}
+
+    for fact in (
+        'A thread is for the whole lab unless it is a side thread',
+        'In a thread for the whole lab, these posts are for\n  every agent',
+        'A side thread is a thread between named agents',
+        'is for the members that watch it',
+        'hears nothing from the thread until it watches again, also when it\n  posts there',
+        'every agent that reads the board can read every side thread, so a blind checker\n  cannot',
+        'Nobody can be kept out of one or removed from one',
+        'A side thread takes no `proposal` and no `close`',
+        'does not move the thread where you work',
+        'does not open a closed lab again',
+        "only for the thread's members, and it lists results from every thread",
+    ):
+        assert fact in INSTRUCTIONS
+    assert '`between` with `new_thread` opens a side thread' in tools['post']
+    assert 'every agent that reads the board can\nread a side thread' in tools['post']
+    assert tools['post'].count('in a thread for the whole lab, it reaches every agent') == 2
+    assert '`side_threads` lists the side threads apart' in tools['threads']
+    assert 'You can read a side thread that you are not a member of' in tools['thread']
+    assert 'hear nothing from it until you watch it again, also when\nyou post there' in tools['watch']
+    side = ' '.join(line for line in INSTRUCTIONS.splitlines() if 'side thread' in line)
+    assert not any(word in side for word in ('Use ', 'should', 'instead', 'prefer', 'when you'))
 
 
 async def test_an_agent_says_what_it_is_and_does_and_the_others_and_the_person_see_it(lab: Lab) -> None:
@@ -278,7 +345,7 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         'the thread of your latest `plan` or `result`',
         'An agent sees any other post when it next reads the board',
         'A post from the person that names nobody',
-        'An `ask` that replies to no post',
+        'an `ask` that replies to no post',
         'name them in `builds_on`',
         'give\n  its own name in `helper`',
         'stays in `brief` until somebody answers it',

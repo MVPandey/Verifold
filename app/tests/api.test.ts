@@ -99,6 +99,20 @@ describe('the API client', () => {
     }
   });
 
+  it('reads threads from a server from before side threads as threads without members', async () => {
+    const summaries =
+      '[{"thread": {"id": "t-1", "title": "A", "opened_by": "agent-1"}, "posts": 2}]';
+    const threads = await createApi('secret', serverThatAnswers(200, summaries).fetcher).threads();
+    const view = '{"thread": {"id": "t-1", "title": "A", "opened_by": "agent-1"}, "posts": []}';
+    const thread = await createApi('secret', serverThatAnswers(200, view).fetcher).thread('t-1');
+    const side =
+      '{"thread": {"id": "t-2", "title": "B", "opened_by": "agent-1"}, "members": ["agent-1"]}';
+    const kept = await createApi('secret', serverThatAnswers(200, side).fetcher).thread('t-2');
+
+    assert.deepEqual([threads[0]?.members, thread.members], [[], []]);
+    assert.deepEqual(kept.members, ['agent-1']);
+  });
+
   it('escapes thread IDs in the path', async () => {
     const server = serverThatAnswers(200, '{}');
     await createApi('secret', server.fetcher).thread('t-1/../../x');

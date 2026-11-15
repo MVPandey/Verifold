@@ -337,6 +337,8 @@ export interface FileText {
 export interface ThreadView {
   readonly thread: Thread;
   readonly watching: boolean;
+  /** The members of a side thread, in the order that they came. Empty for any other thread. */
+  readonly members: readonly string[];
   readonly posts: readonly PostView[];
 }
 
@@ -364,6 +366,11 @@ export interface ThreadLink {
 export interface ThreadSummary {
   readonly thread: Thread;
   readonly watching: boolean;
+  /**
+   * The members of a side thread, in the order that they came: the agents that it opened between, and each agent
+   * that posted in it or watched it since. A post there reaches them only. Empty for any other thread.
+   */
+  readonly members: readonly string[];
   readonly posts: number;
   readonly last_at: string;
   readonly latest: PostLine | null;

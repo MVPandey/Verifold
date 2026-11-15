@@ -12,6 +12,12 @@ may know the missing piece. A check is also for the agent that asked for the rer
 names nobody and replies to no post is for every agent. No post is for a blind checker, which reads nothing but its claim.
 No post is for an agent that left the lab.
 
+A side thread is a thread between named agents. Its members are those agents and every agent that posted in it or
+started to watch it since. A member watches it until it says otherwise, and then it hears nothing from the thread
+until it watches again, also when it posts there. A post in a side thread is for the members that watch it and for
+nobody else, whatever its kind, whoever wrote it, and whether it is the thread's first: only a name, a reply, or
+`builds_on` reaches another agent. Every other thread is a thread for the whole lab.
+
 An agent that left the lab is news for the agents that wrote to it: the ones whose posts name it or reply to it.
 
 A post that is for an agent wakes it. The agent's news holds every post that it has not seen, and says which are for
@@ -48,6 +54,8 @@ def watches_thread(
     opened = board.thread(thread_id)
     if opened is None:
         return False
+    if opened.thread.between:
+        return agent_id in board.members(thread_id)
     working = lines_of(board) if working is None else working
     return opened.thread.opened_by == agent_id or working.get(agent_id) == thread_id
 
@@ -64,7 +72,12 @@ def wakes(
     reader = board.agent(agent_id)
     if post.author == agent_id or (reader and reader.agent.checks) or board.gone(agent_id):
         return False
-    if _names(board, agent_id, post) or _for_everyone(board, entry):
+    if _names(board, agent_id, post):
+        return True
+    if board.is_side(post.thread):
+        # A side thread is for the members that watch it. No post in it is for every agent, the person's neither.
+        return watches_thread(board, agent_id, post.thread)
+    if _for_everyone(board, entry):
         return True
     # The person's words that name nobody are for every agent, whoever watches the thread.
     if post.author == PERSON and not post.mentions and not post.reply_to:
