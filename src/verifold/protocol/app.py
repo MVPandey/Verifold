@@ -136,8 +136,9 @@ class AgentView(Record):
     """The agent's one status."""
     in_turn: bool = False
     """
-    Whether a turn of the agent runs now, by its harness's live updates. A turn in which the harness waits for the
-    person's answer runs. An agent that waits for more time or for its own process is in no turn.
+    Whether a turn of the agent runs now or is about to, by its harness's live updates. A turn in which the
+    harness waits for the person's answer runs, and a harness that Verifold starts now counts. An agent that waits
+    for more time or for its own process is in no turn.
     """
     about_by: AgentId | None = None
     """Who wrote the about line: the agent itself, or the coordinator that rewrote it. `None` without one."""

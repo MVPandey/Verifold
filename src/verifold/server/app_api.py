@@ -363,7 +363,7 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
     waiting = waits(board)
     became = all_outcomes(board)
     needs = {
-        entry.agent.id: agent_need(board, activity.of(entry.agent.id), entry.agent.id, waiting)
+        entry.agent.id: agent_need(board, activity.shown(entry.agent.id), entry.agent.id, waiting)
         for entry in board.agents
     }
     around = _Around(working=working, needs=needs, became=became)
@@ -426,7 +426,7 @@ def _agent_view(
         flag=flag.flag or '' if flag else '',
         edits=profile_edits(board, agent_id),
         need=lab.needs[agent_id],
-        in_turn=in_turn(activity.of(agent_id)),
+        in_turn=in_turn(activity.shown(agent_id)),
         about_by=board.about_by(agent_id),
         outcomes=lab.became.get(agent_id, Outcomes()),
         turns_started=sum(start.agent == agent_id for start in board.starts),
@@ -435,7 +435,7 @@ def _agent_view(
         coordinator=board.coordinator == agent_id,
         status=status,
         thread=lab.working.get(agent_id),
-        activity=activity.of(agent_id),
+        activity=activity.shown(agent_id),
         left=board.gone(agent_id),
         # The record says so until the agent's next turn starts. The person's new start shows at once.
         stopped=before(board, agent_id).stopped and activity.of(agent_id).state == 'stopped',

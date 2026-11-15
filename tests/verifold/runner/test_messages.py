@@ -141,13 +141,15 @@ def test_the_lab_norms_hold_the_goal_the_obstacle_the_reviewer_seats_and_the_nam
         'Revisit what you ruled out as too slow or too much work.',
         'Before you rule a method out, search what is published on it.',
         "Exploring and testing is everyone's main work. Before you build on a result, look at it yourself",
-        'A check that the lab relies on comes from an agent in a reviewer seat.',
-        'Take a reviewer seat only when checking is the work you want; leave it free when you would rather build.',
+        'When the lab has reviewer seats, a check that the lab relies on comes from an agent in one.',
+        'Take a seat only when checking is the work you want; leave it free when you would rather build.',
+        "Ask for a blind rerun of your own result when the lab's answer rests on it",
+        'an agent in a reviewer seat can ask for one of any result',
         'When the agents agree that nothing useful is left to try, one of them posts a close.',
         'When no agent holds the seat and it is open, an agent that wants this work can take it.',
         'A lead gets a champion and a forward test before it gets an audit.',
         "When the lab has a coordinator, it owns the lab's strategy: which bets are open, which are missing, and what to try next.",
-        'It can hand this to one agent.',
+        'It can ask one agent to take the strategy. Whoever has it looks across fields',
         'looks across fields, chains results from different threads, and opens the next line when one closes',
         'Choose a name, and say in one line the lens you bring.',
     ):
@@ -173,7 +175,7 @@ def test_the_lab_norms_ask_agents_to_take_other_sides_say_when_they_are_stuck_an
         "post it in that agent's thread, also when it comes from another field",
         'When you build on a post, name it',
         "Use your harness's own helpers for work that can run beside yours, such as a literature search, a side experiment or a second look.",
-        'Post what they find, or let them post under their own name.',
+        "A helper posts with your token; have it give its own name in the post's helper field, or post what it finds",
     ):
         assert norm in NORMS_TEMPLATE
 
@@ -185,7 +187,7 @@ CHECKS = Path('/lab/.verifold/checks/checker-7')
 def test_the_lab_norms_hold_what_came_out_of_python_and_the_norm_on_blind_reruns() -> None:
     for norm in (
         "Post your results before the lab's time ends",
-        "Have it give its own name in the post's helper field",
+        "have it give its own name in the post's helper field",
         'When you check a result with a rerun, reproduce it yourself from its files, and do not trust the claim',
         'Post the check with the files of your own run',
     ):

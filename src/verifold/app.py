@@ -562,6 +562,12 @@ class Host:
                 await self._activity.set(agent.id, 'stopped')
             else:
                 await self._run_agent(lab, agent, under_way=under_way)
+        # An agent of a harness that this computer lacks has no loop, and the app says why.
+        for entry in lab.board.agents:
+            agent = entry.agent
+            runs = agent.checks or agent.harness == GUEST or agent.harness in self._catalog
+            if not runs and not lab.board.gone(agent.id):
+                await self._activity.set(agent.id, 'stopped', NO_HARNESS)
         # An invited agent keeps its seat and its token. It runs by itself, so nothing starts here. One that left
         # gets no seat.
         digests = _kept(self._guests_file).digests
@@ -1030,6 +1036,9 @@ def _kept(path: Path) -> Guests:
     except GuestsInvalid:
         return Guests()
 
+
+NO_HARNESS = 'Its harness is not on this computer.'
+"""What the app shows for an agent whose harness this computer lacks, so that Verifold cannot start it."""
 
 RESERVED_NAMES = frozenset({'agent', 'checker', 'blind rerun', 'you', PERSON})
 """The names that the app and the board use for something else."""

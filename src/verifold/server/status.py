@@ -49,12 +49,14 @@ def _what(ask: Ask) -> str:
 
 def in_turn(activity: AgentActivity) -> bool:
     """
-    Return whether a turn of an agent runs now, by its harness's live updates.
+    Return whether a turn of an agent runs now or is about to, by its harness's live updates.
 
-    A turn in which the harness waits for the person's answer runs. An agent that waits for more time for the lab,
-    or for a process that it left running, is in no turn.
+    A turn in which the harness waits for the person's answer runs. A harness that Verifold starts now is about to
+    run a turn, so it counts, and every part of the app then agrees on it. An agent that waits for more time for
+    the lab, or for a process that it left running, is in no turn.
     """
-    return activity.state == 'working' or (activity.state == 'waiting' and activity.waits_for in ('person', None))
+    waits_in_turn = activity.state == 'waiting' and activity.waits_for in ('person', None)
+    return activity.state in ('working', 'starting') or waits_in_turn
 
 
 def agent_need(board: Board, activity: AgentActivity, agent_id: AgentId, waiting: tuple[Wait, ...]) -> Need:
@@ -65,8 +67,7 @@ def agent_need(board: Board, activity: AgentActivity, agent_id: AgentId, waiting
             return kind
     if board.gone(agent_id):
         return 'left'
-    # A harness that starts is about to run a turn, so it does not show as idle.
-    if in_turn(activity) or activity.state == 'starting':
+    if in_turn(activity):
         return 'working'
     if activity.state in ('stopped', 'void'):
         return 'stopped'
@@ -85,15 +86,17 @@ def _waits_on(board: Board, ask: Posted) -> bool:
     """
     Return whether an ask still waits for an agent that it names.
 
-    The wait ends when a named agent replies to the ask or builds on it, when every named agent left the lab, and
-    when the asker's own answer or ruled-out lead replies to the ask.
+    The wait ends when anybody answers the ask, when a named agent replies to it or builds on it, when every named
+    agent left the lab, and when the asker withdraws it with a ruled-out lead.
     """
     named = {agent for agent in ask.post.mentions if agent != PERSON}
     if not any(not board.gone(agent) for agent in named):
         return False
     replies = board.replies(ask.post.id)
-    own = any(entry.post.author == ask.post.author and isinstance(entry.post, Answer | RuledOut) for entry in replies)
-    return not own and not any(entry.post.author in named for entry in (*replies, *board.built_on(ask.post.id)))
+    answered = any(isinstance(entry.post, Answer) for entry in replies)
+    withdrawn = any(entry.post.author == ask.post.author and isinstance(entry.post, RuledOut) for entry in replies)
+    heard = any(entry.post.author in named for entry in (*replies, *board.built_on(ask.post.id)))
+    return not (answered or withdrawn or heard)
 
 
 def thread_needs(board: Board, needs: dict[AgentId, Need], waiting: tuple[Wait, ...]) -> dict[ThreadId, Need]:

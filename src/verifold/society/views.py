@@ -404,9 +404,7 @@ def _agent_line(board: Board, agent: Agent, working: dict[AgentId, ThreadId | No
         name=agent.name,
         seat='' if seat == agent.name else seat,
         harness=agent.harness,
-        former_names=tuple(name for holder, name in board.chosen_names() if holder == agent.id and name != agent.name)[
-            -MAX_FORMER_NAMES:
-        ],
+        former_names=_former_names(board, agent),
         about=board.about(agent.id),
         about_by=board.about_by(agent.id),
         role=role,
@@ -422,6 +420,14 @@ def _agent_line(board: Board, agent: Agent, working: dict[AgentId, ThreadId | No
         latest=_own_line(board, posts[-1], seat) if posts and posts[-1] is not plan else None,
         error=_reason(board.failure(agent.id)),
     )
+
+
+def _former_names(board: Board, agent: Agent) -> tuple[str, ...]:
+    # The names that the agent chose and held last before its name of now, newest last. A name that it took
+    # again counts where it held it last.
+    held = tuple(entry.name for entry in board.profiles if entry.agent == agent.id and entry.name)
+    last = dict.fromkeys(name for name in reversed(held) if name != agent.name)
+    return tuple(reversed(tuple(last)))[-MAX_FORMER_NAMES:]
 
 
 def _own_line(board: Board, entry: Posted, seat: str) -> PostLine:

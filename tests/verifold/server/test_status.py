@@ -56,7 +56,7 @@ async def test_what_waits_for_the_person_is_the_approvals_then_the_answers_in_ve
 
 
 async def test_an_agent_has_the_first_status_that_applies_in_the_order_of_who_needs_the_person(lab: Lab) -> None:
-    for name in ('cy', 'dee', 'eve', 'fay', 'gus'):
+    for name in ('cy', 'dee', 'eve', 'fay', 'gus'):  # hal joins and leaves below
         await lab.join(agent(name))
     await lab.post(
         ask('Permission needed: ls', None, new_thread='Permission requests'), 'ada', mark=PermissionShown(command='ls')
@@ -64,7 +64,8 @@ async def test_an_agent_has_the_first_status_that_applies_in_the_order_of_who_ne
     await lab.post(ask('May we?'), 'bo')
     await lab.post(PostRequest(kind='ask', text='Dee, do you know?', thread='t-1', mentions=('dee',)), 'eve')
     await lab.post(PostRequest(kind='ask', text='Anybody?', thread='t-1'), 'fay')
-    await lab.leave('gus', 'gus')
+    await lab.join(agent('hal'))
+    await lab.leave('hal', 'hal')
     waiting = waits(lab.board)
 
     def need(name: str, state: str) -> str:
@@ -97,9 +98,10 @@ async def test_an_agent_has_the_first_status_that_applies_in_the_order_of_who_ne
         'working',
         'waiting',
     )
+    # A harness that starts counts as in a turn, so that the list, the cards, the count, and the band agree.
     assert [in_turn(AgentActivity.model_validate({'state': state})) for state in ('working', 'starting', 'idle')] == [
         True,
-        False,
+        True,
         False,
     ]
     # An ask that names an agent waits on that agent, an ask for every agent does not, and an open `wait` call does.
@@ -110,7 +112,7 @@ async def test_an_agent_has_the_first_status_that_applies_in_the_order_of_who_ne
         'idle',
         'idle',
     )
-    assert (need('gus', 'working'), need('gus', 'idle')) == ('left', 'left')
+    assert (need('hal', 'working'), need('hal', 'idle')) == ('left', 'left')
     # The wait ends when the named agent replies to the ask or builds on it, whatever the kind of its post.
     await lab.post(PostRequest(kind='answer', text='No.', thread='t-1', reply_to='p-4'), 'dee')
     assert need('eve', 'idle') == 'idle'
@@ -133,6 +135,13 @@ async def test_an_agent_has_the_first_status_that_applies_in_the_order_of_who_ne
         PostRequest(kind='message', text='Not me.', thread='t-1', reply_to=lab.board.posts[-1].post.id), 'bo'
     )
     assert need('fay', 'idle') == 'waiting'
+    # An answer from anybody ends the wait, as it ends the ask.
+    await lab.post(PostRequest(kind='ask', text='Dee?', thread='t-1', mentions=('dee',)), 'gus')
+    assert need('gus', 'idle') == 'waiting'
+    await lab.post(
+        PostRequest(kind='answer', text='It is 3.', thread='t-1', reply_to=lab.board.posts[-1].post.id), 'bo'
+    )
+    assert need('gus', 'idle') == 'idle'
     await lab.leave('cy', 'person')
     assert need('fay', 'idle') == 'waiting'
     await lab.leave('dee', 'dee')

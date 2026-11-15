@@ -120,7 +120,8 @@ export function stateLine(activity: AgentActivity, now: Date): StateLine {
     case 'starting':
       return { text: 'Starting', dot: 'idle' };
     case 'stopped':
-      return { text: 'Stopped', dot: 'stop' };
+      // The server says why an agent with no loop is stopped, such as a harness that this computer lacks.
+      return { text: activity.detail || 'Stopped', dot: 'stop' };
     case 'invited':
       return { text: 'Invited, not joined yet', dot: 'idle' };
     case 'void':

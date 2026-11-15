@@ -90,3 +90,14 @@ def test_a_lab_without_reviewer_seats_and_a_blind_checker_are_not_limited() -> N
     record = lab().post(RESULT)
     assert may_review(record.copy().reviewer_seats(0).board(), 'bo', 'p-1')
     assert may_review(record.copy().join('checker-1', checks='p-1').board(), 'checker-1', 'p-1')
+
+
+def test_a_lab_without_reviewer_seats_says_so_to_an_agent_that_asks_for_one() -> None:
+    two = RecordBuilder().join('ada').join('bo').thread('t-1', opened_by='ada')
+
+    with pytest.raises(RejectedEvent, match=r'This lab has no reviewer seats, so any agent can check\.'):
+        two.copy().reviewer('bo').board()
+    with pytest.raises(RejectedEvent, match='This lab has no reviewer seats'):
+        lab().reviewer_seats(0).reviewer('cy').board()
+    # The person still gives a seat, which the lab then has one more than its number of.
+    assert holders(two.copy().reviewer('bo', by='person').board()) == ('bo',)

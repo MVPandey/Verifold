@@ -78,9 +78,9 @@ async def test_the_board_refuses_a_name_that_is_taken_or_reserved_and_a_picture_
     await call(lab, 'bo', 'profile', {'name': 'Tessel'})
 
     for name, why in (
-        ('tessel', 'Another agent has or had'),
-        ('Coordinator', 'word that the board uses'),
-        ('fake', 'harness or a model'),
+        ('tessel', 'tessel reads as Tessel, a name that another agent has or had'),
+        ('Coordinator', 'is made of the word "coordinator"'),
+        ('fake', 'name of a harness or a model in this lab (fake)'),
     ):
         refusal = await call(lab, 'ada', 'profile', {'name': name})
         assert (refusal.is_error, why in error(refusal)) == (True, True), error(refusal)
@@ -200,7 +200,7 @@ async def test_a_check_and_a_rerun_request_take_a_reviewer_seat_and_an_objection
     check = PostRequest(kind='check', text='Holds.', reply_to='p-1', thread='t-1', outcome='holds', method='code_read')
     fact = (
         "another agent's post takes a reviewer seat. The lab has 1: held by nobody; 1 is free. An objection needs "
-        'no seat.'
+        'no seat, and an author can ask for a blind rerun of its own post.'
     )
 
     with pytest.raises(RejectedEvent, match=f'A check on {fact}'):

@@ -51,6 +51,7 @@ from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
 from verifold.society.labels import awaits_model, is_numbered, label, plain
 from verifold.society.lines import question_thread
+from verifold.society.names import check_name
 from verifold.society.reviewers import check_review
 from verifold.society.rules import waiting_reruns
 from verifold.store.record_file import RecordFile
@@ -324,10 +325,15 @@ class Lab:
             'picture': None if picture == board.picture(agent_id) else picture,
         }
         builds: list[Build] = []
+
+        def profile(board: Board, seq: int, at: datetime) -> ProfileSet:
+            # The name's rules are here and not in the record's rules, so a record keeps every name that it holds.
+            if fresh['name'] and board.agent(agent_id):
+                check_name(board, agent_id, str(fresh['name']))
+            return ProfileSet.model_validate({'seq': seq, 'at': at, 'agent': agent_id} | fresh)
+
         if not board.agent(agent_id) or any(value is not None for value in fresh.values()):
-            builds.append(
-                lambda _, seq, at: ProfileSet.model_validate({'seq': seq, 'at': at, 'agent': agent_id} | fresh)
-            )
+            builds.append(profile)
         holder = agent_id if coordinator else None
         # An agent that gives up a seat that it does not hold gets the reason.
         if coordinator is not None and not (coordinator and board.coordinator == agent_id):

@@ -27,6 +27,15 @@ class Activity:
         """Return what an agent is doing now."""
         return self._by_agent.get(agent_id, AgentActivity())
 
+    def shown(self, agent_id: AgentId) -> AgentActivity:
+        """
+        Return what the app shows that an agent is doing now.
+
+        An agent that nothing reported for is idle: no loop runs it. So `starting` shows only for an agent whose
+        harness Verifold starts now, and every part of the app reads the same state.
+        """
+        return self._by_agent.get(agent_id, AgentActivity(state='idle'))
+
     async def set(
         self, agent_id: AgentId, state: AgentState, detail: str = '', waits_for: WaitsFor | None = None
     ) -> None:

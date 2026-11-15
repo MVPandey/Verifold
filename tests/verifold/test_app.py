@@ -1222,6 +1222,21 @@ async def test_a_projects_file_says_whether_agents_wait_in_a_lab_that_starts_wit
     assert kept == [value]
 
 
+async def test_an_agent_whose_harness_this_computer_lacks_shows_as_stopped_with_the_reason(project: Path) -> None:
+    async with serving(project, ONE_AGENT, catalog={'fake': FAKE_HARNESS}):
+        await until(lambda: len(posts(project)) == 1)
+
+    # The folder is served again on a computer without the harness, so no loop runs the agent.
+    async with serving(project, catalog={}) as client:
+        (view,) = (await client.get('/lab')).json()['agents']
+
+    assert (view['activity']['state'], view['activity']['detail']) == (
+        'stopped',
+        'Its harness is not on this computer.',
+    )
+    assert (view['need'], view['in_turn']) == ('stopped', False)
+
+
 async def test_a_lab_starts_with_its_reviewer_seats_and_the_settings_page_changes_them(project: Path) -> None:
     folder = project / '.verifold'
     folder.mkdir(exist_ok=True)

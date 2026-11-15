@@ -26,15 +26,18 @@ from verifold.protocol.app import (
     SetupView,
     StartRequest,
 )
-from verifold.protocol.events import TurnSummary
+from verifold.protocol.events import Posted, TurnSummary
 from verifold.protocol.join import FileText, PostRequest
 from verifold.protocol.posts import Ask, FileEvidence, Objection, PermissionShown, Result
 from verifold.protocol.settings import Settings
 from verifold.protocol.usage import Usage
+from verifold.server import status as status_module
 from verifold.server.activity import Activity
 from verifold.server.app_api import _changes, _lab_view, app_api
 from verifold.server.errors import LabExists, NoLab, SetupRejected
 from verifold.server.lab import Lab
+from verifold.society import board as board_module
+from verifold.society.board import Board
 from verifold.society.errors import NotFound
 from verifold.store.errors import (
     NormsChanged,
@@ -317,7 +320,11 @@ async def test_the_lab_view_shows_each_agents_activity_and_cost(
     )
     assert ada['usage'] == {'input_tokens': 200, 'cached_input_tokens': 120, 'output_tokens': 14}
     assert ada['cost_usd'] == pytest.approx(0.75)
-    assert (bo['activity']['state'], bo['cost_usd']) == ('starting', None)
+    # Nothing reported for bo, so no loop runs it: it shows as idle, not as starting.
+    assert (bo['activity']['state'], bo['need'], bo['in_turn'], bo['cost_usd']) == ('idle', 'idle', False, None)
+    await activity.set('bo', 'starting')
+    (started,) = [view for view in (await client.get('/lab')).json()['agents'] if view['agent']['id'] == 'bo']
+    assert (started['activity']['state'], started['need'], started['in_turn']) == ('starting', 'working', True)
     # Ada opened the lab's thread with a result, so that is where she works.
     assert (ada['role'], ada['status'], ada['thread']) == ('theory', 'Deriving the bound.', 't-1')
     assert (bo['role'], bo['status'], bo['thread']) == ('', '', None)
@@ -880,12 +887,8 @@ async def test_the_person_takes_back_the_name_of_an_agent_that_left_and_the_view
     )
 
 
-async def test_the_lab_view_of_a_long_record_takes_time_that_grows_with_the_record_and_not_with_its_square(
-    activity: Activity,
-) -> None:
-    # Fourteen agents and 3,000 events: results that build on each other, objections, and asks. The view took 0.3
-    # seconds on such a board when it scanned every post for each result, and takes about 0.02 seconds with the
-    # board's index. The bound is a hundred times that, so that only a scan of that kind fails it, on any machine.
+def long_record(events: int) -> Board:
+    """Return a board of fourteen agents with `events` events: results that build on each other, objections, and asks."""
     record = RecordBuilder()
     names = [f'agent-{number}' for number in range(1, 15)]
     for name in names:
@@ -893,7 +896,7 @@ async def test_the_lab_view_of_a_long_record_takes_time_that_grows_with_the_reco
     record.thread('t-1', opened_by='agent-1')
     results: list[str] = []
     authors: dict[str, str] = {}
-    for number in range(1, 2_985):
+    for number in range(1, events - 15):
         author, post = names[number % 14], f'p-{number}'
         if number % 3 == 0 and results:
             target = results[(number * 2_654_435_761 >> 7) % len(results)]
@@ -906,12 +909,47 @@ async def test_the_lab_view_of_a_long_record_takes_time_that_grows_with_the_reco
         else:
             record.post(Ask(id=post, thread='t-1', author=author, text='Who?', mentions=(names[(number + 3) % 14],)))
     board = record.board()
-    assert board.seq == 3_000
+    assert board.seq == events
+    return board
 
-    started = time.perf_counter()
-    view = _lab_view(board, activity)
-    taken = time.perf_counter() - started
 
-    assert len(view.agents) == 14
-    assert sum(len(agent.outcomes.refuted) for agent in view.agents) > 100
-    assert taken < 2.0, f'The lab view of 3,000 events took {taken:.2f} seconds.'
+def test_the_lab_view_of_a_long_record_does_work_that_grows_with_the_record_and_not_with_its_square(
+    activity: Activity, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The view once scanned every post for each result, and asked where each result stands twice: 0.31 seconds for
+    # 3,000 events and 2.78 for 9,000. With the board's index it takes 0.02 and 0.11 seconds. A time on a shared
+    # machine says little, so the test counts the work: how often the view builds the index of a board's posts,
+    # and how often it asks where a post stands. Both counts grow with the record and not with its square.
+    built: list[int] = []
+    asked: list[str] = []
+    index, stands = board_module._index, status_module.standing
+
+    def counted_index(posts: tuple[Posted, ...]) -> object:
+        before = len(board_module._indexes), board_module._indexes[-1:] if board_module._indexes else None
+        found = index(posts)
+        if (len(board_module._indexes), board_module._indexes[-1:]) != before:
+            built.append(len(posts))
+        return found
+
+    def counted_standing(board: Board, post_id: str) -> str:
+        asked.append(post_id)
+        return stands(board, post_id)
+
+    monkeypatch.setattr(board_module, '_index', counted_index)
+    monkeypatch.setattr(status_module, 'standing', counted_standing)
+    counts = []
+    for events in (2_000, 6_000):
+        board = long_record(events)
+        built.clear()
+        asked.clear()
+        started = time.perf_counter()
+        view = _lab_view(board, activity)
+        taken = time.perf_counter() - started
+        results = sum(isinstance(entry.post, Result) for entry in board.posts)
+        assert sum(len(agent.outcomes.refuted) for agent in view.agents) > events // 40
+        # One index for the board, and one question for each result.
+        assert (built, len(asked)) == ([len(board.posts)], results)
+        counts.append(len(asked))
+        # A loose bound on the time too: the scan of every post for each result took seconds here.
+        assert taken < 3.0, f'The lab view of {events} events took {taken:.2f} seconds.'
+    assert counts[1] < 3.1 * counts[0]

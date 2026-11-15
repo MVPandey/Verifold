@@ -465,6 +465,13 @@ describe('agents', () => {
       text: 'Stopped',
       dot: 'stop',
     });
+    // The server gives the reason for an agent that no loop runs.
+    const lacks = {
+      state: 'stopped',
+      detail: 'Its harness is not on this computer.',
+      at: null,
+    } as const;
+    assert.equal(stateLine(lacks, now).text, 'Its harness is not on this computer.');
     const priced = agentView('agent-1', { turns: 4, cost_usd: 0.37 });
     const unpriced = agentView('agent-2', {
       turns: 3,
