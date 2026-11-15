@@ -31,6 +31,7 @@ import {
   undoLabel,
   yesLabel,
 } from '../src/model/coordinator.ts';
+import { leftLine } from '../src/model/agents.ts';
 import { newSeat, seatChoice, setupChoices, startRequest } from '../src/model/setup.ts';
 import { act } from '../src/model/turns.ts';
 import { CoordinatorSeat, ForYou, OpenedForYou, Panel } from '../src/ui/Coordinator.tsx';
@@ -270,6 +271,11 @@ describe('the coordinator’s moves in words', () => {
     assert.equal(coordinatorOf([TESSEL]), null);
     const left = { at: since, by: 'person', reason: '' };
     assert.equal(coordinatorOf([{ ...MAREN, left }]), null);
+    assert.equal(leftLine(left).text, 'Left, removed by you');
+    assert.equal(
+      leftLine({ ...left, through: 'agent-1', reason: 'No line.' }).text,
+      'Left, removed by the coordinator with your power: No line.',
+    );
   });
 
   it('says who answered a permission request through a request of the coordinator', () => {

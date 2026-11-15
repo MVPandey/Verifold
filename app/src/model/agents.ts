@@ -36,7 +36,10 @@ export function listed(agents: readonly AgentView[]): readonly AgentView[] {
 
 /** Return the state of a member that left: who caused it, and the reason when it has one. */
 export function leftLine(left: AgentLeft): StateLine {
-  const how = left.by === PERSON ? 'Left, removed by you' : 'Left by its own choice';
+  const removed = left.through
+    ? 'Left, removed by the coordinator with your power'
+    : 'Left, removed by you';
+  const how = left.by === PERSON ? removed : 'Left by its own choice';
   return { text: left.reason ? `${how}: ${left.reason}` : how, dot: 'stop' };
 }
 
