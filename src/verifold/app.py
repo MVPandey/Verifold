@@ -59,7 +59,7 @@ from verifold.server.activity import Activity
 from verifold.server.app_api import app_api, new_person_token
 from verifold.server.errors import LabExists, NoLab, SetupRejected
 from verifold.server.join import Members, join_server, token_digest
-from verifold.server.lab import Lab
+from verifold.server.lab import Build, Lab
 from verifold.server.member import Member
 from verifold.server.timekeeper import keep_time
 from verifold.server.web import WEB_FOLDER, web_app
@@ -521,11 +521,13 @@ class Host:
             await self._join(lab, number, choice, auto_mode=request.auto_mode)
         await self._launch()
 
-    async def _join(self, lab: Lab, number: int, choice: AgentChoice, *, auto_mode: bool) -> Agent:
+    async def _join(
+        self, lab: Lab, number: int, choice: AgentChoice, *, auto_mode: bool, first: tuple[Build, ...] = ()
+    ) -> Agent:
         # Add one agent of a seat to the record, with its name and the facts that the person gave the seat.
         harness = self._catalog[choice.harness]
         agent = _agent(number, harness, choice, self._offers.get(harness.name), _names(lab.board), auto_mode=auto_mode)
-        await lab.join(agent, on_call=choice.on_call, coordinator=choice.coordinator)
+        await lab.join(agent, on_call=choice.on_call, coordinator=choice.coordinator, powers=choice.powers, first=first)
         return agent
 
     async def resume(self) -> None:
@@ -678,9 +680,12 @@ class Host:
                 raise SetupRejected(f'Verifold did not stop {agent.name}, so it needs no new start.')
             await self._run_agent(lab, agent, under_way=True)
 
-    async def add_agents(self, choice: AgentChoice) -> None:
+    async def add_agents(self, choice: AgentChoice, first: tuple[Build, ...] = ()) -> None:
         """
         Add agents of one harness to the lab that runs, and start them.
+
+        `first` are events that the record takes in the same step as the first agent, before it: the yes to the
+        coordinator's request that asked for the agent.
 
         Raises:
             NoLab: The folder has no lab.
@@ -707,7 +712,8 @@ class Host:
                     await agent_folder(self._project, f'agent-{number}')
                 except (GitError, OSError) as error:
                     raise SetupRejected(f"Can't make the folder of agent-{number}: {error}") from error
-                agent = await self._join(lab, number, choice, auto_mode=lab.board.opened.auto_mode)
+                agent = await self._join(lab, number, choice, auto_mode=lab.board.opened.auto_mode, first=first)
+                first = ()
                 await self._run_agent(lab, agent, under_way=True)
 
     async def change_seat(self, agent_id: AgentId, change: SeatChange) -> None:
@@ -810,7 +816,7 @@ class Host:
         except (GitError, OSError, GuestsInvalid) as error:
             raise SetupRejected(f"Can't invite {agent.name}: {error}") from error
         if joins:
-            await lab.join(agent, on_call=joins.on_call, coordinator=joins.coordinator)
+            await lab.join(agent, on_call=joins.on_call, coordinator=joins.coordinator, powers=joins.powers)
         await self._seat_guest(lab, agent, digest)
         start = self._start_message(lab, agent, under_way=True)
         return Invitation(agent=agent.id, name=agent.name, text=invitation(start, url, token, folder))
@@ -829,7 +835,9 @@ class Host:
         # a restart or a new invitation makes still brings what came since.
         own = any(entry.post.author == agent.id for entry in board.posts)
         folder = await agent_folder(self._project, agent.id)
-        member = Member(lab, agent.id, pin=partial(pin, folder, agent.id), seen=before(board, agent.id).seen)
+        member = Member(
+            lab, agent.id, pin=partial(pin, folder, agent.id), seen=before(board, agent.id).seen, adds=self.add_agents
+        )
         self._members.add_guest(member, digest)
         # A `brief` leaves no mark on the record, so an agent that only read the board shows as invited again.
         called = own or any(
@@ -852,7 +860,8 @@ class Host:
         folder = await agent_folder(self._project, agent.id)
         # The seat starts at what the record says that the agent had seen. So after a restart, the posts for the
         # agent that came since reach it by the usual rules.
-        member = Member(lab, agent.id, pin=partial(pin, folder, agent.id), seen=before(lab.board, agent.id).seen)
+        seen = before(lab.board, agent.id).seen
+        member = Member(lab, agent.id, pin=partial(pin, folder, agent.id), seen=seen, adds=self.add_agents)
         setup = AgentSetup(
             agent=agent,
             harness=self._catalog[agent.harness],

@@ -1339,7 +1339,15 @@ async def test_saved_choices_for_new_labs_fill_the_setup_and_leave_a_running_lab
     assert changed['project']['values'] == {'setup': written}
     # The setup names the file that its first choices come from, which here is the project's own.
     assert setup['defaults_from'] == changed['project']['path']
-    unset = {'effort': None, 'mode': None, 'role': '', 'on_call': False, 'coordinator': False, 'family': None}
+    unset = {
+        'effort': None,
+        'mode': None,
+        'role': '',
+        'on_call': False,
+        'coordinator': False,
+        'powers': [],
+        'family': None,
+    }
     assert changed['project']['defaults'] == {**written, 'agents': [{**written['agents'][0], **unset}]}
     assert setup['defaults'] == changed['project']['defaults']
     assert wrong.status_code == 400

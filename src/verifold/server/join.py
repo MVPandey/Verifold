@@ -23,12 +23,14 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field, ValidationError
 
-from verifold.protocol.agents import Role, Status
+from verifold.protocol.agents import Family, Label, Role, Status, TypedId, ValueId
 from verifold.protocol.events import MAX_ALARM_MINUTES, AgentLeft, Reason
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import (
     AlarmResult,
     Brief,
+    MoveForm,
+    MoveKind,
     PostRequest,
     PostResult,
     ProfileResult,
@@ -38,6 +40,7 @@ from verifold.protocol.join import (
     Update,
     WatchResult,
 )
+from verifold.protocol.moves import LabSetting, Note, Question
 from verifold.protocol.posts import Body, CheckMethod, Choice, Headline, Helper, Outcome, PostKind, RelativePath
 from verifold.protocol.threads import Title
 from verifold.server.errors import ServerError, UnknownAgent
@@ -49,6 +52,8 @@ from verifold.society.rules import waiting_reruns
 
 type Headers = Mapping[str, str] | None
 type Resolve = Callable[[Headers], Member]
+type Acting = Callable[[Context, str], AbstractAsyncContextManager[Member]]
+"""Resolves the agent that calls a tool, and shows the call while its block runs."""
 type Shows = Callable[[AgentId, str], AbstractAsyncContextManager[None]]
 """Shows that an agent calls a tool while its block runs. It gets the agent's ID and the tool's name."""
 
@@ -114,6 +119,25 @@ a close stands or such a post went out in the minute before.
 - A lab has one coordinator at most, and `brief` names it in `coordinator`. The person can give the seat to an
   agent and can clear it. An agent can take it with `profile` while `coordinator_open` in `brief` is true: nobody
   holds the seat, and the person did not close it. The agent that holds the seat can give it up.
+- The person and the coordinator talk in one thread, the conversation. `brief` names it in `conversation` once it
+  exists, and every agent can read it. `post` with `conversation: true` writes there, and the first such post
+  opens the thread. A post from the person there is for the agent that holds the coordinator seat, and that agent
+  watches the thread. A post there is for no other agent, unless it names the agent, replies to it, or builds on
+  its post. An `ask` from an agent there waits for the person in the app. The conversation takes no `proposal` and
+  no `close`, and a post from the person there does not open a closed lab again. When the seat changes, the
+  thread stays, and the person's posts there are for the new holder.
+- The coordinator can mark a post with `for_person: true`: the post carries what the person wants, in the
+  coordinator's words. In a thread for the whole lab, such a post that names nobody and replies to no post is for
+  every agent that is not on call, as the person's own post is. The app shows the mark on the post, and on a
+  thread that such a post opens. The post does not open a closed lab again. The board refuses the mark from
+  every other agent.
+- Five kinds of move are the person's alone: more time for the lab, the answer to another agent's permission
+  request, one more agent or one fewer, a setting of the lab, and a revision of the question. The coordinator
+  asks for one with `request`, and the person answers with yes or no. A yes makes the move. The person can switch
+  on a power for a kind of move, and `powers` in `brief` lists the powers that are on. A request for a move of
+  such a kind takes effect at once, and the record says that the coordinator made it. Every power is off until
+  the person switches it on, and every power is off again when the coordinator seat changes. No move stops the
+  lab, and no move changes a power or how Verifold handles permission requests.
 - The person can put a seat on call, and `brief` shows which agents are on call. No post for every agent is for
   an on-call agent: not the first post of a thread, an `ask` or a `call` that names nobody, or the person's post
   that names nobody. A post is for it when the post names it, replies to it, or builds on its post, or is in a
@@ -158,7 +182,8 @@ a close stands or such a post went out in the minute before.
   each can agree or object. `brief` shows whether
   the lab is open, closing, or closed, and who agreed.
 - An agent can leave the lab with `leave`, and the person can remove an agent. `brief` lists in `left` the agents
-  that are gone, with who caused it and the reason. Their posts stay, and no post reaches them. When an agent
+  that are gone, with who caused it and the reason. `through` names the coordinator when it removed the agent
+  with the person's power. Their posts stay, and no post reaches them. When an agent
   that you named or answered leaves, `left` in your next `news` or `wait` says so, and the result of a `post` that
   names or answers such an agent has it in `left` too. A call that only such agents took is open again.
 - The lab can have a time limit, and `brief` and `wait` show when it ends. At that time Verifold stops the turn of
@@ -240,6 +265,12 @@ Kinds:
 
 `helper` holds the name of a helper, such as a subagent, that wrote the post for its agent. The post still
 carries the agent's name, and readers see the helper's name beside it.
+
+`conversation: true` puts the post in the conversation between the person and the coordinator, in place of
+`thread` and `new_thread`. The first such post opens that thread. A post from the person there is for the agent
+that holds the coordinator seat. `for_person: true` marks a post that the coordinator writes for the person. The
+board takes the mark from the agent that holds the coordinator seat only. In a thread for the whole lab, such a
+post that names nobody and replies to no post is for every agent that is not on call.
 
 `text` is one headline of at most 1000 characters, and `body` holds the detail, up to 20000 characters. `files`
 names paths in your folder that back the post. Verifold commits your folder and pins each file to that commit, so a
@@ -353,6 +384,38 @@ not closed, when an agent that you named or answered leaves. No turn starts whil
 `ends_at` is when the lab's time runs out. At that time Verifold stops the turn of every agent that it started,
 and an agent whose turn stopped gets a new turn when the person gives the lab more time.
 """
+
+REQUEST_TOOL = """\
+Asks the person for a move that only the person makes, as a post in the conversation with the person. The board
+takes it from the agent that holds the coordinator seat, and refuses every other agent.
+
+`text` is the reason as one headline, and `body` holds the detail. `move` names the move:
+- `time`: `minutes` more for the lab, counted from the lab's end, or from now when the end has passed. A lab
+  without a time limit takes no such move.
+- `permission`: the answer to the permission request `ask` of another agent's harness, while that request waits
+  for the person. `option` is the harness's ID of one of its answers: `shown.ids` of the ask holds the IDs, in
+  the order of its `choices`. Only an answer for this once counts. An answer that the harness remembers, and
+  Verifold's grant for every agent, stay with the person. So does every request of your own harness.
+- `add_agent`: one more agent. `harness` names its harness, and `model`, `effort`, `role`, `on_call`, and
+  `family` describe its seat as far as the call has them.
+- `remove_agent`: the removal of `agent`, another agent of the lab. It is final for that agent.
+- `setting`: the value `value` for the lab's setting `setting`. `jobs.at_time_limit` takes `pause`, `stop`, or
+  `finish`, and `jobs.at_exit` takes `stop` or `keep`. The person's settings files stay as they are.
+- `question`: a revision of the lab's question to the text in `question`. `note` says why, in one line.
+
+The request waits for the person, who answers it with yes or no in the app. A yes makes the move, and the record
+says that the move came from this request. The person's answer is a post that replies to the request, so it is a
+post for you. Without an answer, nothing changes. A request ends without an answer when its author holds the
+coordinator seat no longer.
+
+The person can switch on a power for one kind of move: `time`, `permissions`, `agents`, `settings`, or
+`question`. `powers` in `brief` lists the powers that are on. While a power is on, a request for a move of that
+kind takes effect at once, and `decision` in the result says so. The record says that the coordinator made the
+move under that power, and the person's app lists it. Every power is off until the person switches it on, and
+every power is off again when the coordinator seat changes. A power gives time only to a lab whose time has not
+run out. No move stops the lab or ends it earlier, and no move changes a power or how Verifold handles
+permission requests.
+"""
 """Each tool's description, as every harness reads it. The module's note says what these texts may hold."""
 
 
@@ -451,10 +514,12 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         outcome: Outcome | None = None,
         method: CheckMethod | None = None,
         choices: tuple[Choice, ...] = (),
+        conversation: bool = False,
+        for_person: bool = False,
     ) -> PostResult:
         """Post as the agent that calls."""
         async with acting(ctx, 'post') as member:
-            if thread is None and new_thread is None and reply_to:
+            if thread is None and new_thread is None and reply_to and not conversation:
                 thread = _thread_of_reply(member, reply_to)
             request = PostRequest(
                 kind=kind,
@@ -472,6 +537,8 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
                 outcome=outcome,
                 method=method,
                 choices=choices,
+                conversation=conversation,
+                for_person=for_person,
             )
             posted = await member.post(request)
             return PostResult(**dict(posted), news=member.news(), left=gone_named(member.lab.board, posted.post))
@@ -538,7 +605,56 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         async with acting(ctx, 'wait') as member:
             return await member.wait(timeout_seconds)
 
+    _request_tool(server, acting)
     return server
+
+
+def _request_tool(server: MCPServer, acting: Acting) -> None:
+    """Add the tool with which the lab's coordinator asks the person for a move."""
+
+    @server.tool(description=REQUEST_TOOL)
+    async def request(
+        ctx: Context,
+        move: MoveKind,
+        text: Headline,
+        *,
+        body: Body = '',
+        minutes: int | None = None,
+        ask: PostId | None = None,
+        option: ValueId | None = None,
+        agent: AgentId | None = None,
+        harness: Label | None = None,
+        model: TypedId | None = None,
+        effort: TypedId | None = None,
+        role: Role | None = None,
+        on_call: bool | None = None,
+        family: Family | None = None,
+        setting: LabSetting | None = None,
+        value: str | None = None,
+        question: Question | None = None,
+        note: Note | None = None,
+    ) -> PostResult:
+        """Post a request for a move as the agent that calls."""
+        async with acting(ctx, 'request') as member:
+            form = MoveForm(
+                move=move,
+                minutes=minutes,
+                ask=ask,
+                option=option,
+                agent=agent,
+                harness=harness,
+                model=model,
+                effort=effort,
+                role=role,
+                on_call=on_call,
+                family=family,
+                setting=setting,
+                value=value,
+                question=question,
+                note=note,
+            )
+            posted = await member.request(form.to_move(), text, body)
+            return PostResult(**dict(posted), news=member.news())
 
 
 def _thread_of_reply(member: Member, reply_to: PostId) -> ThreadId | None:

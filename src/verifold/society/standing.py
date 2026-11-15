@@ -41,10 +41,13 @@ def waits_for_person(board: Board, post_id: PostId) -> bool:
     Return whether an ask still waits for the person: the person gave no answer, and Verifold did not end it.
 
     Verifold ends an ask that carries a request of a harness when the request ends without the person, as when the
-    agent's turn ends. An agent's own answer ends nothing, because no agent can mark it so.
+    agent's turn ends. An agent's own answer ends nothing, because no agent can mark it so. The answer that
+    carries out a coordinator's request for a move ends the wait: the person said yes to that request, or switched
+    on the coordinator's power to answer permission requests.
     """
     replies = [entry.post for entry in board.replies(post_id) if isinstance(entry.post, Answer)]
-    return not any(reply.author == PERSON or reply.ends_request for reply in replies)
+    # An answer that carries out a request of the coordinator decides the ask, with the person's yes or power.
+    return not any(reply.author == PERSON or reply.ends_request or reply.request for reply in replies)
 
 
 def is_answered(board: Board, post_id: PostId, by: AgentId | None = None) -> bool:
@@ -129,12 +132,13 @@ def closing(board: Board) -> Posted | None:
         for reply in board.replies(entry.post.id)
     )
     # The person's new words to the lab open it again: the agents have something to do. Words in a side thread
-    # reach only its members, so they are not words to the lab.
+    # reach only its members, and words in the conversation reach the coordinator, so they are not words to the lab.
     steered = any(
         later.post.author == PERSON
         and later.post.reply_to is None
         and later.seq > entry.seq
         and not board.is_side(later.post.thread)
+        and later.post.thread != board.conversation
         for later in board.posts
     )
     return None if withdrawn or steered else entry

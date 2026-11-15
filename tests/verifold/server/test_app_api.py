@@ -32,7 +32,7 @@ from verifold.protocol.usage import Usage
 from verifold.server.activity import Activity
 from verifold.server.app_api import _changes, app_api
 from verifold.server.errors import LabExists, NoLab, SetupRejected
-from verifold.server.lab import Lab
+from verifold.server.lab import Build, Lab
 from verifold.society.errors import NotFound
 from verifold.store.errors import (
     NormsChanged,
@@ -104,7 +104,8 @@ class Host:
         self.norms_text = change.text
         return self.norms().model_copy(update={'told': 'p-9'})
 
-    async def add_agents(self, choice: AgentChoice) -> None:
+    async def add_agents(self, choice: AgentChoice, first: tuple[Build, ...] = ()) -> None:
+        assert first == ()
         if choice.harness != 'fake':
             raise SetupRejected('Unknown harness nope.')
         self.added.append(choice)

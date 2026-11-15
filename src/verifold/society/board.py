@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from verifold.protocol.agents import GUEST
+from verifold.protocol.agents import GUEST, Power
 from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
@@ -13,8 +13,10 @@ from verifold.protocol.events import (
     LabOpened,
     OnCallSet,
     Posted,
+    PowerSet,
     ProfileSet,
     QuestionRevised,
+    RequestAnswered,
     RerunRequested,
     ThreadOpened,
     TimeRanOut,
@@ -65,6 +67,10 @@ class Board:
     """The person's settings for the lab: the latest that the record holds, or the defaults."""
     grants: tuple[str, ...] = ()
     """The starts of the commands that the person lets every agent run."""
+    power_sets: tuple[PowerSet, ...] = ()
+    """Each time that the person switched a power of the coordinator on or off, oldest first."""
+    answers: tuple[RequestAnswered, ...] = ()
+    """The answers to the coordinator's requests for a move, oldest first."""
 
     @property
     def question(self) -> str:
@@ -151,6 +157,31 @@ class Board:
             return last.by != PERSON or last.open
         left = self.gone(last.agent)
         return left is not None and left.by == last.agent
+
+    @property
+    def powers(self) -> frozenset[Power]:
+        """
+        The powers that the agent that holds the coordinator seat has now.
+
+        A power is on when the person switched it on for this holder after the seat last changed, and did not
+        switch it off since. So no power outlives a change of the seat, and an agent that takes the seat by itself
+        starts with none.
+        """
+        holder = self.coordinator
+        if holder is None:
+            return frozenset()
+        since = self.coordinators[-1].seq
+        switches = {entry.power: entry.on for entry in self.power_sets if entry.seq > since and entry.agent == holder}
+        return frozenset(power for power, on in switches.items() if on)
+
+    @property
+    def conversation(self) -> ThreadId | None:
+        """The thread where the person and the lab's coordinator talk, or `None` while the lab has none."""
+        return next((entry.thread.id for entry in self.threads if entry.thread.conversation), None)
+
+    def answer_to(self, request_id: PostId) -> RequestAnswered | None:
+        """Return the answer to a coordinator's request for a move, or `None` while it has none."""
+        return next((entry for entry in self.answers if entry.request == request_id), None)
 
     def gone(self, agent_id: AgentId) -> AgentLeft | None:
         """Return the entry that says that an agent left the lab, or `None` while it is in the lab."""

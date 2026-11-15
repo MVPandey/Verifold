@@ -163,7 +163,7 @@ def test_run_refuses_two_coordinators() -> None:
 def test_a_projects_file_gives_a_seat_only_its_harness_count_model_and_effort(
     serves: list[StartRequest | None], project: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    facts = {'role': 'driver', 'family': 'other', 'mode': 'plan'}
+    facts: dict[str, str] = {'role': 'driver', 'family': 'other', 'mode': 'plan'}
     seats = [
         {'harness': 'codex', 'model': 'mini', 'effort': 'low', 'count': 2, 'on_call': True, **facts},
         {'harness': 'codex', 'coordinator': True, 'on_call': True, 'family': 'other'},
@@ -176,7 +176,16 @@ def test_a_projects_file_gives_a_seat_only_its_harness_count_model_and_effort(
     cloned = capsys.readouterr().out
 
     mine = (
-        AgentChoice(harness='codex', model='mini', effort='low', count=2, on_call=True, **facts),
+        AgentChoice(
+            harness='codex',
+            model='mini',
+            effort='low',
+            count=2,
+            on_call=True,
+            role='driver',
+            family='other',
+            mode='plan',
+        ),
         AgentChoice(harness='codex', coordinator=True, on_call=True, family='other'),
     )
     # A project's file can come from someone else. A family from it would make a rerun by the same model count as

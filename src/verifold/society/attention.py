@@ -24,6 +24,13 @@ until it watches again, also when it posts there. A post in a side thread is for
 nobody else, whatever its kind, whoever wrote it, and whether it is the thread's first: only a name, a reply, or
 `builds_on` reaches another agent. Every other thread is a thread for the whole lab.
 
+The conversation is the thread where the person and the lab's coordinator talk. A post of the person there is for
+the agent that holds the coordinator seat. That agent watches the thread until it says otherwise, and no other agent
+does unless it said so with `watch`. So a post of the coordinator there is for no other agent, unless it names the
+agent, replies to it, or builds on its post. The coordinator can mark a post as one for the person. In a thread
+for the whole lab, such a post that names nobody and replies to no post is for every agent that is not on call, as
+the person's own post is.
+
 An agent that left the lab is news for the agents that wrote to it: the ones whose posts name it or reply to it.
 
 A post that is for an agent wakes it. The agent's news holds every post that it has not seen, and says which are for
@@ -64,6 +71,8 @@ def watches_thread(
         return False
     if opened.thread.between:
         return agent_id in board.members(thread_id)
+    if opened.thread.conversation:
+        return agent_id == board.coordinator
     if board.on_call(agent_id):
         # An on-call agent watches a thread only by its own word, so its own work does not make every post in a
         # thread wake it.
@@ -86,15 +95,21 @@ def wakes(
         return False
     if _names(board, agent_id, post):
         return True
-    if board.is_side(post.thread):
+    talk = post.thread == board.conversation
+    if talk or board.is_side(post.thread):
         # A side thread is for the members that watch it. No post in it is for every agent, the person's neither.
-        return watches_thread(board, agent_id, post.thread)
+        # The same holds for the conversation, where the person's words are for the coordinator, whatever it watches.
+        told = talk and post.author == PERSON and agent_id == board.coordinator
+        return told or watches_thread(board, agent_id, post.thread)
     if reader and board.on_call(agent_id):
         # No post for every agent is for an on-call agent, but a close is once the agent counts for it.
         if isinstance(post, Close) and board.counts(reader, before=entry.seq):
             return True
-    elif _for_everyone(board, entry) or (post.author == PERSON and not post.mentions and not post.reply_to):
-        # The person's words that name nobody are for every agent, whoever watches the thread.
+    elif _for_everyone(board, entry) or (
+        (post.author == PERSON or post.for_person) and not post.mentions and not post.reply_to
+    ):
+        # The person's words that name nobody are for every agent, whoever watches the thread. So are the words
+        # that the coordinator posts for the person.
         return True
     working = lines_of(board) if working is None else working
     return watches_thread(board, agent_id, post.thread, working)
@@ -154,7 +169,8 @@ def news(board: Board, agent_id: AgentId, after: int) -> News:
 def left_line(board: Board, left: AgentLeft) -> LeftLine:
     """Return an agent that left as one line: who it is, who caused it, and the reason."""
     joined = board.agent(left.agent)
-    return LeftLine(id=left.agent, name=joined.agent.name if joined else left.agent, by=left.by, reason=left.reason)
+    name = joined.agent.name if joined else left.agent
+    return LeftLine(id=left.agent, name=name, by=left.by, reason=left.reason, through=left.through)
 
 
 def departures(board: Board, agent_id: AgentId, after: int, reach: int) -> tuple[LeftLine, ...]:

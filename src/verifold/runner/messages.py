@@ -114,14 +114,14 @@ def start_message(
         lines.append(f'Thread {thread} on the board holds this question.')
     if board.revisions:
         lines.append(
-            f'The person revised the question, last at {_utc(board.revisions[-1].at)}. The text above is the '
+            f'The question was revised, last at {_utc(board.revisions[-1].at)}. The text above is the '
             'current one, and `brief` lists the posts that hold the revisions.'
         )
     lines.append(f"{norms} holds the lab's norms, which the person sets and can change while the lab runs.")
     if writing:
         lines.append(f'{writing} says how the lab writes its answer for the person.')
     if board.ends_at:
-        lines.append(f'The lab ends at {_utc(board.ends_at)}, unless the person gives it more time.')
+        lines.append(f'The lab ends at {_utc(board.ends_at)}, unless it gets more time.')
     return '\n'.join(lines)
 
 

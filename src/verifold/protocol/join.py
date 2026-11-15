@@ -4,9 +4,10 @@ from typing import Literal, Self
 
 from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
 
-from verifold.protocol.agents import Agent, Label, Name
-from verifold.protocol.events import Note, Posted, Question
+from verifold.protocol.agents import Agent, Family, Label, Name, Power, Role, TypedId, ValueId
+from verifold.protocol.events import Note, Posted, Question, RequestAnswered
 from verifold.protocol.ids import AgentId, PostId, ThreadId
+from verifold.protocol.moves import LabSetting, Move
 from verifold.protocol.posts import (
     MAX_BUILDS_ON,
     MAX_CHOICES,
@@ -34,6 +35,10 @@ MAX_NEWS = 20
 """The most posts in each list of an agent's news or update, and the most threads in a brief."""
 
 _posts: TypeAdapter[Post] = TypeAdapter(Post)
+_moves: TypeAdapter[Move] = TypeAdapter(Move)
+
+type MoveKind = Literal['time', 'permission', 'add_agent', 'remove_agent', 'setting', 'question']
+"""The kinds of move that the coordinator can ask the person for."""
 
 
 class PostRequest(Record):
@@ -69,9 +74,22 @@ class PostRequest(Record):
     choices: tuple[Choice, ...] = Field(default=(), max_length=MAX_CHOICES)
     choice: Choice | None = None
     """On an answer: the choice of the ask that the author picked. The person's app sends it for a press."""
+    conversation: bool = False
+    """
+    Whether the post goes in the conversation between the person and the lab's coordinator, in place of `thread`
+    and `new_thread`. The lab opens that thread with the first such post.
+    """
+    for_person: bool = False
+    """Whether the coordinator posts this for the person. With `new_thread`, the thread is one for the person too."""
 
     @model_validator(mode='after')
     def _one_thread(self) -> Self:
+        if self.kind == 'request':
+            raise ValueError('A request for a move of the person goes through the `request` tool.')
+        if self.conversation:
+            if self.thread or self.new_thread or self.for_person:
+                raise ValueError('`conversation` stands alone: without thread, new_thread, and for_person.')
+            return self
         if (self.thread is None) == (self.new_thread is None):
             raise ValueError('Give thread to post in a thread, or new_thread to open one.')
         if self.new_thread and self.reply_to:
@@ -99,7 +117,8 @@ class PostRequest(Record):
         """
         # `accepts=False` and empty `choices` mean the same as leaving them out. Only an answer takes `accepts`, and
         # only an ask takes `choices`.
-        unused = {'thread', 'new_thread', 'between', 'files'} | (set() if self.accepts else {'accepts'})
+        unused = {'thread', 'new_thread', 'between', 'files', 'conversation'}
+        unused |= set() if self.accepts else {'accepts'}
         unused |= set() if self.choices else {'choices'}
         fields = self.model_dump(exclude=unused, exclude_none=True)
         if self.kind == 'proposal' and question_seen is not None:
@@ -107,6 +126,45 @@ class PostRequest(Record):
         return _posts.validate_python(
             fields | {'id': post_id, 'thread': thread_id, 'author': author, 'evidence': evidence}
         )
+
+
+class MoveForm(Record):
+    """
+    A move as the coordinator names it in the `request` tool: its kind, and the fields of that kind.
+
+    The form is one flat object, as `PostRequest` is, because harnesses fill a flat tool schema more reliably than
+    a `oneOf`. `to_move` validates it against the `Move` union, so a field that the kind does not use is refused.
+    """
+
+    move: MoveKind
+    minutes: int | None = None
+    ask: PostId | None = None
+    option: ValueId | None = None
+    agent: AgentId | None = None
+    harness: Label | None = None
+    model: TypedId | None = None
+    effort: TypedId | None = None
+    role: Role | None = None
+    on_call: bool | None = None
+    family: Family | None = None
+    setting: LabSetting | None = None
+    value: str | None = None
+    question: Question | None = None
+    note: Note | None = None
+
+    def to_move(self) -> Move:
+        """
+        Return the move that this form describes.
+
+        Raises:
+            pydantic.ValidationError: The kind does not take a field of the form, or misses one that it needs.
+
+        """
+        seat_names = {'harness', 'model', 'effort', 'role', 'on_call', 'family'}
+        given = self.model_dump(exclude={'move'}, exclude_none=True)
+        seat = {name: value for name, value in given.items() if name in seat_names}
+        fields = {('key' if name == 'setting' else name): value for name, value in given.items() if name not in seat}
+        return _moves.validate_python({'type': self.move, **fields, **({'seat': seat} if seat else {})})
 
 
 class PostView(Record):
@@ -118,6 +176,10 @@ class PostView(Record):
     standing: Standing
     built_on_by: tuple[PostId, ...] = ()
     """The posts that name this one in `builds_on`, oldest first."""
+    decision: RequestAnswered | None = None
+    """For a request for a move: its answer, with who gave it and when. `None` while it has none."""
+    waits: bool = False
+    """For a request for a move: whether it waits for the person's answer."""
 
 
 class ThreadView(Record):
@@ -235,6 +297,8 @@ class LeftLine(Record):
     by: AgentId
     """The agent itself, or `person` when the person removed it."""
     reason: str = ''
+    through: AgentId | None = None
+    """With `by` the person: the coordinator, when it removed the agent with the power that the person switched on."""
 
 
 class AlarmLine(Record):
@@ -510,6 +574,13 @@ class Brief(Record):
     """The agent that holds the lab's coordinator seat, or `None` when nobody does."""
     coordinator_open: bool = True
     """Whether an agent may take the seat with `profile`: nobody holds it, and the person did not close it."""
+    conversation: ThreadId | None = None
+    """The thread where the person and the coordinator talk, which every agent can read. `None` while the lab has none."""
+    powers: tuple[Power, ...] = ()
+    """
+    The kinds of move for which the person switched on a power of the coordinator. A request of the coordinator
+    for such a move takes effect at once. Every other request waits for the person's answer.
+    """
     left: tuple[LeftLine, ...] = ()
     """The agents that left the lab or that the person removed, oldest first."""
     answer: PostLine | None = None

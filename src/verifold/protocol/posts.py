@@ -13,6 +13,7 @@ from typing import Annotated, Literal
 from pydantic import AfterValidator, Field, StringConstraints, WithJsonSchema
 
 from verifold.protocol.ids import AgentId, CommitId, PostId, ThreadId
+from verifold.protocol.moves import Move
 from verifold.protocol.record import Record
 
 MAX_HEADLINE = 1_000
@@ -57,6 +58,7 @@ type PostKind = Literal[
     'report',
     'call',
     'close',
+    'request',
 ]
 """The values of `kind` across the `Post` union."""
 type Outcome = Literal['holds', 'fails']
@@ -115,6 +117,12 @@ class PostBase(Record):
     builds_on: tuple[PostId, ...] = Field(default=(), max_length=MAX_BUILDS_ON)
     """The posts that this one builds on, in any thread. Each of their authors hears about it."""
     evidence: tuple[FileEvidence, ...] = ()
+    for_person: bool = False
+    """
+    Whether the lab's coordinator posted this for the person. Only the agent that holds the coordinator seat can
+    mark a post so. In a thread for the whole lab, such a post that names nobody and replies to no post reaches
+    every agent that is not on call, as the person's own post does. It does not open a closed lab again.
+    """
 
 
 class Message(PostBase):
@@ -223,6 +231,12 @@ class Answer(PostBase):
     Whether Verifold ended the harness's request that the ask carries, without the person's answer. Verifold sets
     it, and no agent can. The ask then waits for nobody.
     """
+    request: PostId | None = None
+    """
+    The coordinator's request that this answer carries out. The answer then decides the permission request that it
+    replies to: its author is the person, who said yes to the request, or the coordinator, whose power decided it.
+    Verifold sets it, and no agent can.
+    """
 
 
 class Objection(PostBase):
@@ -291,7 +305,33 @@ class Close(PostBase):
     kind: Literal['close'] = 'close'
 
 
+class MoveRequest(PostBase):
+    """
+    The coordinator's request to the person for a move that only the person makes.
+
+    `move` names the move, and `text` and `body` hold the coordinator's reason in its own words. The request is a
+    post in the conversation between the person and the coordinator. The person answers it with yes or no. A yes
+    makes the move, and the record says that the move came from this request. When the person switched on the
+    power for this kind of move, the move takes effect with the request.
+    """
+
+    kind: Literal['request'] = 'request'
+    move: Move
+
+
 type Post = Annotated[
-    Message | Plan | Result | Ask | Answer | Objection | Proposal | Check | RuledOut | Report | Call | Close,
+    Message
+    | Plan
+    | Result
+    | Ask
+    | Answer
+    | Objection
+    | Proposal
+    | Check
+    | RuledOut
+    | Report
+    | Call
+    | Close
+    | MoveRequest,
     Field(discriminator='kind'),
 ]

@@ -16,8 +16,10 @@ from verifold.protocol.events import (
     OnCallSet,
     PermissionGranted,
     Posted,
+    PowerSet,
     ProfileSet,
     QuestionRevised,
+    RequestAnswered,
     RerunRequested,
     SettingsSet,
     ThreadOpened,
@@ -29,6 +31,7 @@ from verifold.protocol.events import (
     WentQuiet,
 )
 from verifold.society.board import Board
+from verifold.society.coordinator import check_answered, check_power
 from verifold.society.errors import RejectedEvent
 from verifold.society.rules import (
     check_agent,
@@ -118,6 +121,12 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
         case PermissionGranted(prefix=prefix):
             grants = board.grants if prefix in board.grants else (*board.grants, prefix)
             return replace(board, seq=event.seq, grants=grants)
+        case PowerSet():
+            check_power(board, event)
+            return replace(board, seq=event.seq, power_sets=(*board.power_sets, event))
+        case RequestAnswered():
+            check_answered(board, event)
+            return replace(board, seq=event.seq, answers=(*board.answers, event))
         case _:
             assert_never(event)
 

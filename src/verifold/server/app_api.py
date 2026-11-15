@@ -20,6 +20,7 @@ from sse_starlette import EventSourceResponse
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import (
     AgentView,
+    ConversationView,
     CoordinatorSeat,
     FolderRequest,
     FolderView,
@@ -28,7 +29,9 @@ from verifold.protocol.app import (
     LabView,
     NormsChange,
     NormsView,
+    PowerChange,
     QuestionRequest,
+    RequestAnswer,
     RerunRequest,
     SeatChange,
     SettingsChange,
@@ -42,8 +45,9 @@ from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import AnswerView, FileText, PostLine, PostRequest, PostView, ThreadSummary, ThreadView
 from verifold.protocol.usage import Usage
 from verifold.server.activity import Activity
+from verifold.server.conversation import conversation_view
 from verifold.server.errors import LabExists, NoLab, ServerError, SetupRejected
-from verifold.server.lab import Lab
+from verifold.server.lab import Build, Lab
 from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
@@ -111,8 +115,8 @@ class Host(Protocol):
         """Open the folder where the lab's agents work, or one agent's folder, and return where it is."""
         ...
 
-    async def add_agents(self, choice: AgentChoice) -> None:
-        """Add the agents of one seat to the lab that runs, and start them."""
+    async def add_agents(self, choice: AgentChoice, first: tuple[Build, ...] = ()) -> None:
+        """Add the agents of one seat to the lab that runs, and start them. The record takes `first` with the first one."""
         ...
 
     async def change_seat(self, agent_id: AgentId, change: SeatChange) -> None:
@@ -280,6 +284,33 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     return api
 
 
+def _coordinator_routes(api: FastAPI, host: Host, authorized: params.Depends) -> None:
+    """Add what the person reads and does in the panel for the coordinator: the conversation, powers, and requests."""
+
+    @api.get('/conversation', dependencies=[authorized])
+    async def conversation() -> ConversationView:
+        return conversation_view(_lab(host).board)
+
+    @api.post('/powers', dependencies=[authorized])
+    async def power(change: PowerChange) -> ConversationView:
+        lab = _lab(host)
+        await lab.set_power(change.power, on=change.on)
+        return conversation_view(lab.board)
+
+    @api.post('/requests/{post_id}', dependencies=[authorized])
+    async def answer_request(post_id: PostId, answer: RequestAnswer) -> ConversationView:
+        # A yes makes the move as the person's own: the same events that the person's own move records.
+        lab = _lab(host)
+        await lab.answer_request(post_id, yes=answer.yes, minutes=answer.minutes, adds=host.add_agents)
+        return conversation_view(lab.board)
+
+    @api.post('/requests/{post_id}/minutes', dependencies=[authorized])
+    async def take_minutes_back(post_id: PostId) -> ConversationView:
+        lab = _lab(host)
+        await lab.take_minutes_back(post_id)
+        return conversation_view(lab.board)
+
+
 def _seat_routes(api: FastAPI, host: Host, activity: Activity, authorized: params.Depends) -> None:
     """Add the person's actions on seats: what the harnesses offer, one agent's seat, and the coordinator seat."""
 
@@ -299,6 +330,8 @@ def _seat_routes(api: FastAPI, host: Host, activity: Activity, authorized: param
         lab = _lab(host)
         await lab.set_coordinator(None, PERSON, free=seat.open)
         return _lab_view(lab.board, activity)
+
+    _coordinator_routes(api, host, authorized)
 
 
 def _lab(host: Host) -> Lab:

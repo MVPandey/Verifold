@@ -9,16 +9,15 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, AwareDatetime, Field, StringConstraints
 
-from verifold.protocol.agents import Agent, Name, Role, Status, ValueId, one_line
+from verifold.protocol.agents import Agent, Name, Power, Role, Status, ValueId, one_line
 from verifold.protocol.grants import Grant
-from verifold.protocol.ids import AgentId, CommitId, PostId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, CommitId, PostId, ThreadId
+from verifold.protocol.moves import Note, Question
 from verifold.protocol.posts import Post
 from verifold.protocol.record import Record
-from verifold.protocol.settings import Settings
+from verifold.protocol.settings import MAX_MINUTES, Settings
 from verifold.protocol.threads import Thread
 from verifold.protocol.usage import Usage
-
-type Question = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4_000)]
 
 
 class EventBase(Record):
@@ -40,22 +39,23 @@ class LabOpened(EventBase):
     """When the agents stop, unless the person gives the lab more time. `None` means no time limit."""
 
 
-type Note = Annotated[str, AfterValidator(one_line), StringConstraints(max_length=200)]
-"""Why the person revised the question, as one line. It can be empty."""
-
-
 class QuestionRevised(EventBase):
     """
     The person revised the lab's question. The lab works on the newest text, and the record keeps every version.
 
-    `post` is the person's post that tells the lab, which comes just before this event. No agent tool records a
-    revision.
+    `post` is the post that tells the lab, which comes just before this event: the person's own, or the
+    coordinator's post for the person when `by` names the coordinator. No agent tool records a revision by itself.
     """
 
     type: Literal['question_revised'] = 'question_revised'
     question: Question
     note: Note = ''
     post: PostId
+    by: AgentId = PERSON
+    """
+    Who revised the question: the person, or the lab's coordinator while the person's power to revise the question
+    is on. The person's is the default, and it is what a record from before this field holds.
+    """
 
 
 class AgentJoined(EventBase):
@@ -132,6 +132,11 @@ class AgentLeft(EventBase):
     by: AgentId
     """Who caused it: the agent itself, or the person."""
     reason: Reason = ''
+    through: AgentId | None = None
+    """
+    With `by` the person: the lab's coordinator, when it removed the agent with the power that the person switched
+    on. `None` when the person removed the agent, also with a yes to a request of the coordinator.
+    """
 
 
 class ThreadOpened(EventBase):
@@ -206,7 +211,12 @@ class RerunRequested(EventBase):
 
 
 class TimeSet(EventBase):
-    """The person set when the lab ends. At `ends_at`, the agents stop until the person gives the lab more time."""
+    """
+    A new end of the lab. At `ends_at`, the agents stop until the lab gets more time.
+
+    The person sets it. The coordinator's request for more time sets it too: with the person's yes, or at once
+    while the person's power for more time is on.
+    """
 
     type: Literal['time_set'] = 'time_set'
     ends_at: AwareDatetime
@@ -319,6 +329,40 @@ class PermissionGranted(EventBase):
     prefix: Grant
 
 
+class PowerSet(EventBase):
+    """
+    The person switched a power of the lab's coordinator on or off.
+
+    A power is one kind of move that only the person makes otherwise. While it is on, a request of the coordinator
+    for a move of that kind takes effect at once. Every power is off until the person switches it on, and all of
+    them are off again when the coordinator seat changes: when the person gives it to another agent or clears it,
+    and when its holder gives it up or leaves the lab. No agent tool records this event.
+    """
+
+    type: Literal['power_set'] = 'power_set'
+    power: Power
+    on: bool
+    agent: AgentId
+    """The agent that holds the coordinator seat, which the power is for."""
+
+
+class RequestAnswered(EventBase):
+    """
+    The answer to a coordinator's request for a move: the person's yes or no, or the yes of a power that is on.
+
+    With a yes, the events that make the move follow this one in the record, so the record says that the move came
+    from the request. Without this event, a request changes nothing.
+    """
+
+    type: Literal['request_answered'] = 'request_answered'
+    request: PostId
+    yes: bool
+    by: AgentId = PERSON
+    """Who answered: the person, or the coordinator itself while the person's power for this kind of move is on."""
+    minutes: int | None = Field(default=None, ge=1, le=MAX_MINUTES)
+    """With the person's yes to more time: the minutes that the person gave, when not the minutes of the request."""
+
+
 type Event = Annotated[
     LabOpened
     | QuestionRevised
@@ -339,6 +383,8 @@ type Event = Annotated[
     | TimeRanOut
     | WentQuiet
     | SettingsSet
-    | PermissionGranted,
+    | PermissionGranted
+    | PowerSet
+    | RequestAnswered,
     Field(discriminator='type'),
 ]
