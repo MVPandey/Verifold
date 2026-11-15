@@ -4,13 +4,13 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, AwareDatetime, Field, JsonValue, StringConstraints
 
-from verifold.protocol.agents import Agent, AgentChoices, Label, Name, SeatFacts, ValueId, one_line
+from verifold.protocol.agents import Agent, AgentChoices, Label, Name, Picture, Role, SeatFacts, ValueId, one_line
 from verifold.protocol.events import AgentLeft, Note, Question
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import AlarmLine, LabState, PostLine, QuestionVersion
 from verifold.protocol.record import Record
-from verifold.protocol.settings import MAX_MINUTES, Settings, SettingsLevel, SetupDefaults
+from verifold.protocol.settings import MAX_MINUTES, MAX_REVIEWER_SEATS, Settings, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
 
 type AgentState = Literal['starting', 'working', 'waiting', 'idle', 'stopped', 'invited', 'here', 'listening', 'void']
@@ -32,10 +32,98 @@ class AgentActivity(Record):
     at: AwareDatetime | None = None
 
 
+type Need = Literal['approval', 'answer', 'working', 'waiting', 'idle', 'stopped', 'left']
+"""
+The one status of an agent or a thread, in the order of who needs the person. The first that applies is the status.
+
+- `approval`: a permission request of the agent's harness waits for the person.
+- `answer`: another ask of the agent to the person waits.
+- `working`: the agent is in a turn, by its harness's live updates.
+- `waiting`: the agent is in no turn, and it waits for another agent: an ask of it that names an agent has no
+  answer, or its `wait` call is open.
+- `idle`: the agent is in no turn and waits for nobody.
+- `stopped`: Verifold stopped the agent, or its harness is not running and cannot start.
+- `left`: the agent left the lab.
+
+A thread has the first status that applies to an ask in it that waits for the person or to an agent of its team.
+"""
+
+NEEDS: tuple[Need, ...] = ('approval', 'answer', 'working', 'waiting', 'idle', 'stopped', 'left')
+"""The statuses in their order."""
+
+
+class Wait(Record):
+    """One thing that waits for the person: an approval or an answer, with who asks, what, and since when."""
+
+    kind: Literal['approval', 'answer']
+    agent: AgentId
+    what: str
+    """
+    What waits, in one line. For a request of a harness, the words are Verifold's own, so no text of a harness
+    stands here. For an agent's own ask, it is the ask's headline.
+    """
+    since: AwareDatetime
+    post: PostId
+    thread: ThreadId
+
+
+class PostRef(Record):
+    """A post by its ID and its thread, so that the app can link to it."""
+
+    id: PostId
+    thread: ThreadId
+
+
+class Outcomes(Record):
+    """What became of an agent's posts, as lists of posts. It is no score and ranks nobody."""
+
+    built_on: tuple[PostRef, ...] = ()
+    """The agent's results that another agent built on."""
+    held: tuple[PostRef, ...] = ()
+    """The agent's results that a check holds up."""
+    refuted: tuple[PostRef, ...] = ()
+    """The agent's results that are disputed or conceded, and the leads that it ruled out."""
+    open_asks: tuple[PostRef, ...] = ()
+    """The agent's asks that have no answer yet."""
+
+
+class ProfileEdit(Record):
+    """One change that the person or a coordinator made to an agent's profile, with the text from before."""
+
+    at: AwareDatetime
+    by: AgentId
+    part: Literal['name', 'about', 'picture', 'role', 'flag']
+    before: str = ''
+    """The text that the part held before the change. For a picture, its three parts in words."""
+    after: str = ''
+
+
 class AgentView(Record):
     """One agent as the person sees it: who it is, what it is doing, and what it has cost so far."""
 
     agent: Agent
+    """The agent as the record has it. Its `name` is the name that it chose, or else the label of its seat."""
+    seat: str = ''
+    """The label of the agent's seat: its harness's title and its model's name, or what stands for an invited agent."""
+    about: str = ''
+    """What lens the agent brings, in its own words."""
+    picture: Picture | None = None
+    """The picture that the agent chose, or `None`."""
+    given_role: str = ''
+    """The role that somebody gave the agent's seat."""
+    given_by: AgentId | None = None
+    """Who gave it: `person`, or the agent that held the coordinator seat. `None` without a given role."""
+    reviewer: bool = False
+    """Whether the agent holds a reviewer seat."""
+    flag: str = ''
+    """The reason of the coordinator's flag on the agent's profile, while one stands."""
+    edits: tuple[ProfileEdit, ...] = ()
+    """The changes that the person or a coordinator made to the agent's profile, oldest first."""
+    need: Need = 'idle'
+    """The agent's one status."""
+    outcomes: Outcomes = Outcomes()
+    turns_started: int = 0
+    """How many turns of the agent started. It is above `turns` while a turn runs."""
     role: str = ''
     """What the agent says that it is to the lab, in its own words."""
     on_call: bool = False
@@ -82,6 +170,14 @@ class LabView(Record):
     threads: int
     posts: int
     needs_you: int
+    waits: tuple[Wait, ...] = ()
+    """What waits for the person: the approvals first, then the answers, and in each the one that waits longest first."""
+    thread_needs: dict[ThreadId, Need] = Field(default_factory=dict)
+    """The one status of each thread."""
+    reviewer_seats: int = 0
+    """How many reviewer seats the lab has."""
+    reviewer_seats_set: int | None = None
+    """The number that the person set, or `None` while the number follows the size of the lab."""
     ends_at: AwareDatetime | None = None
     """When the agents stop. `None` means no time limit."""
     out_of_time: bool = False
@@ -117,6 +213,26 @@ class SeatChange(Record):
     """Put the seat on call, or take it off."""
     coordinator: bool | None = None
     """Give the agent the lab's coordinator seat, or take the seat from the agent that holds it."""
+    reviewer: bool | None = None
+    """Give the agent a reviewer seat, or take the seat that it holds."""
+
+
+class ProfileChange(Record):
+    """The person changes an agent's profile: takes back what the agent chose, or gives its seat a role."""
+
+    reset_name: bool = False
+    """Take the agent's chosen name back, so that its seat's label is its name again."""
+    reset_about: bool = False
+    reset_picture: bool = False
+    role: Role | None = None
+    """The role that the person gives the seat. An empty text takes it back, and `None` leaves it as it is."""
+
+
+class ReviewerSeats(Record):
+    """The person sets how many reviewer seats the lab has."""
+
+    seats: int | None = Field(default=None, ge=0, le=MAX_REVIEWER_SEATS)
+    """The number of seats. `None` follows the size of the lab again."""
 
 
 class CoordinatorSeat(Record):
@@ -221,6 +337,8 @@ class StartRequest(Record):
     """How long the agents may work. `None` means no time limit."""
     allow: tuple[Grant, ...] = ()
     """The starts of the commands that every agent may run from the first minute, such as `./gpu`."""
+    reviewer_seats: int | None = Field(default=None, ge=0, le=MAX_REVIEWER_SEATS)
+    """How many reviewer seats the lab has. `None` takes the number from the person's settings files."""
 
 
 class SettingsFileView(Record):
@@ -245,7 +363,9 @@ class SettingsView(Record):
     """The settings that the folder's lab follows, or `None` before a lab starts."""
 
 
-type SettingKey = Literal['jobs.at_time_limit', 'jobs.at_exit', 'permissions.while_you_decide', 'setup']
+type SettingKey = Literal[
+    'jobs.at_time_limit', 'jobs.at_exit', 'permissions.while_you_decide', 'reviewers.seats', 'setup'
+]
 """The settings that the app changes. Harness commands are not among them, so the app can't change what a lab runs."""
 
 
@@ -261,7 +381,7 @@ class SettingsChange(Record):
 
     level: SettingsLevel
     key: SettingKey
-    value: str | SetupDefaults | None = None
+    value: int | str | SetupDefaults | None = None
     """
     The new value: the answer of a job or permission setting, or the choices for new labs. `None` removes the setting, so the one for
     all projects, or Verifold's default, applies.

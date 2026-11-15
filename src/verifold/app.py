@@ -510,6 +510,9 @@ class Host:
         time_left = timedelta(minutes=request.minutes) if request.minutes else None
         # A broken settings file must refuse the start before the record holds anything.
         settings = load_settings(self._project).lab_settings()
+        if request.reviewer_seats is not None:
+            reviewers = settings.reviewers.model_copy(update={'seats': request.reviewer_seats})
+            settings = settings.model_copy(update={'reviewers': reviewers})
         lab = Lab.create(self._record, request.question, auto_mode=request.auto_mode, time_left=time_left)
         await lab.set_settings(settings)
         for prefix in request.allow:
@@ -712,7 +715,7 @@ class Host:
 
     async def change_seat(self, agent_id: AgentId, change: SeatChange) -> None:
         """
-        Change an agent's seat as the person says: put it on call or take it off, and give or take the coordinator seat.
+        Change an agent's seat as the person says: on call or not, the coordinator seat, and a reviewer seat.
 
         An on-call agent that never worked starts when its seat comes off call.
 
@@ -731,6 +734,8 @@ class Host:
             await lab.set_coordinator(agent_id, PERSON)
         elif change.coordinator is False and lab.board.coordinator == agent_id:
             await lab.set_coordinator(None, PERSON)
+        if change.reviewer is not None:
+            await lab.set_reviewer(agent_id, PERSON, reviewer=change.reviewer)
 
     async def invite(self, request: InviteRequest | None = None) -> Invitation:
         """
@@ -1097,7 +1102,7 @@ def _model_name(offer: Offer | None, model: str | None) -> str | None:
 
 def _names(board: Board) -> tuple[str, ...]:
     # Every name that an agent of the lab has or had, so that a new name matches none of them.
-    return (*(joined.agent.name for joined in board.agents), *(before for _, before in board.renames))
+    return tuple(name for _, name in board.names())
 
 
 def _options(agent: Agent, harness: HarnessEntry, *, auto_mode: bool) -> SessionOptions:
@@ -1136,7 +1141,7 @@ def _crew(
     )
 
 
-def _written(value: str | SetupDefaults | None) -> JsonValue:
+def _written(value: int | str | SetupDefaults | None) -> JsonValue:
     # The choices for new labs go into the file in full, so that a project's choices never take a part from the ones
     # for all projects. Each agent leaves out what it doesn't set.
     if not isinstance(value, SetupDefaults):

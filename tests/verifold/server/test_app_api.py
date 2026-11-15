@@ -8,7 +8,7 @@ import pytest
 from conftest import agent
 from pydantic import SecretStr
 
-from verifold.protocol.agents import AgentChoice
+from verifold.protocol.agents import Agent, AgentChoice, ModelSpec, Picture
 from verifold.protocol.app import (
     FolderView,
     HarnessOption,
@@ -26,7 +26,7 @@ from verifold.protocol.app import (
 )
 from verifold.protocol.events import TurnSummary
 from verifold.protocol.join import FileText, PostRequest
-from verifold.protocol.posts import FileEvidence
+from verifold.protocol.posts import FileEvidence, PermissionShown
 from verifold.protocol.settings import Settings
 from verifold.protocol.usage import Usage
 from verifold.server.activity import Activity
@@ -222,6 +222,7 @@ async def test_settings_pass_through_and_refusals_say_why(client: httpx2.AsyncCl
         'version': 1,
         'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'},
         'permissions': {'while_you_decide': 'auto'},
+        'reviewers': {'seats': None},
     }
     assert view['project']['path'] == '.verifold/settings.json'
     assert changed.status_code == 200
@@ -715,3 +716,111 @@ async def test_the_person_opens_the_agents_folder_and_only_an_agent_of_the_lab_n
     assert (unknown.status_code, unknown.json()['detail']) == (404, 'The lab has no agent with the ID zed.')
     # An agent's ID has no slash and no dot, and the request has no field for a path.
     assert (path.status_code, extra.status_code, refused.status_code) == (422, 422, 401)
+
+
+async def test_the_lab_view_holds_each_agents_identity_status_and_what_waits_for_the_person(
+    client: httpx2.AsyncClient, lab: Lab, activity: Activity
+) -> None:
+    await lab.join(Agent(id='agent-3', name='Sorrel', harness='guest', model=ModelSpec(family='unknown')))
+    await lab.set_profile('bo', role='builder', name='Tessel', about='I run a number twice.')
+    await lab.set_profile('bo', picture=Picture(shape='hex', color='#f08c3a', symbol='orbit'))
+    await lab.set_reviewer('bo', 'person', reviewer=True)
+    await lab.start_turn('ada', 'session-1', 0, model_name='Opus 5.5')
+    await activity.set('ada', 'working', 'Run pytest')
+    await activity.set('bo', 'idle')
+    await lab.post(
+        PostRequest(kind='ask', text='Permission needed', new_thread='Permission requests', mentions=('person',)),
+        'ada',
+        mark=PermissionShown(command='ls'),
+    )
+    await lab.post(PostRequest(kind='ask', text='May we read it?', thread='t-1', mentions=('person',)), 'bo')
+
+    view = (await client.get('/lab')).json()
+
+    ada, bo, guest = view['agents']
+    assert (ada['agent']['name'], ada['seat'], ada['picture'], ada['need'], ada['turns'], ada['turns_started']) == (
+        'Ada',
+        'Ada',
+        None,
+        'approval',
+        0,
+        1,
+    )
+    assert (bo['agent']['name'], bo['seat'], bo['about'], bo['reviewer'], bo['need']) == (
+        'Tessel',
+        'Bo',
+        'I run a number twice.',
+        True,
+        'answer',
+    )
+    assert bo['picture'] == {'shape': 'hex', 'color': '#f08c3a', 'symbol': 'orbit'}
+    assert (guest['agent']['name'], guest['seat'], guest['need']) == (
+        'Sorrel',
+        'Own harness · model not reported',
+        'idle',
+    )
+    assert [(wait['kind'], wait['agent'], wait['what'], wait['post'], wait['thread']) for wait in view['waits']] == [
+        ('approval', 'ada', 'Asks to run a command', 'p-2', 't-2'),
+        ('answer', 'bo', 'May we read it?', 'p-3', 't-1'),
+    ]
+    assert (view['needs_you'], view['thread_needs']) == (2, {'t-1': 'approval', 't-2': 'approval'})
+    assert (view['reviewer_seats'], view['reviewer_seats_set']) == (0, None)
+    assert bo['outcomes'] == {'built_on': [], 'held': [], 'refuted': [], 'open_asks': [{'id': 'p-3', 'thread': 't-1'}]}
+    # A post in a thread shows who wrote it, with the seat's label when it is not the name.
+    posts = (await client.get('/threads/t-1')).json()['posts']
+    assert [post['by'] for post in posts] == [
+        {'name': 'Ada', 'seat': '', 'marks': [], 'role': ''},
+        {'name': 'Tessel', 'seat': 'Bo', 'marks': ['reviewer'], 'role': 'builder'},
+    ]
+
+
+async def test_the_person_takes_back_what_an_agent_chose_and_gives_its_seat_a_role(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    await lab.set_profile(
+        'bo', name='Tessel', about='A lens.', picture=Picture(shape='hex', color='#f08c3a', symbol='orbit')
+    )
+
+    role = await client.post('/agents/bo/profile', json={'role': 'driver'})
+    reset = await client.post(
+        '/agents/bo/profile', json={'reset_name': True, 'reset_about': True, 'reset_picture': True, 'role': 'scout'}
+    )
+    missing = await client.post('/agents/nobody/profile', json={'role': 'driver'})
+    long = await client.post('/agents/bo/profile', json={'role': 'x' * 41})
+
+    assert (role.status_code, reset.status_code, missing.status_code, long.status_code) == (200, 200, 404, 422)
+    (given,) = [view for view in role.json()['agents'] if view['agent']['id'] == 'bo']
+    assert (given['given_role'], given['given_by'], given['agent']['name']) == ('driver', 'person', 'Tessel')
+    (bo,) = [view for view in reset.json()['agents'] if view['agent']['id'] == 'bo']
+    assert (bo['agent']['name'], bo['about'], bo['picture'], bo['given_role']) == ('Bo', '', None, 'scout')
+    assert [(edit['by'], edit['part'], edit['before'], edit['after']) for edit in bo['edits']] == [
+        ('person', 'role', '', 'driver'),
+        ('person', 'name', 'Tessel', ''),
+        ('person', 'about', 'A lens.', ''),
+        ('person', 'picture', 'hex, #f08c3a, orbit', ''),
+        ('person', 'role', 'driver', 'scout'),
+    ]
+
+
+async def test_the_person_sets_the_number_of_reviewer_seats_of_the_lab(client: httpx2.AsyncClient, lab: Lab) -> None:
+    for name in ('cy', 'dee'):
+        await lab.join(Agent(id=name, name=name.title(), harness='fake', model=ModelSpec(family='anthropic')))
+    before = (await client.get('/lab')).json()
+    seq = lab.board.seq
+
+    three = await client.post('/reviewers', json={'seats': 3})
+    same = await client.post('/reviewers', json={'seats': 3})
+    after = lab.board.seq
+    back = await client.post('/reviewers', json={'seats': None})
+    many = await client.post('/reviewers', json={'seats': 21})
+
+    assert (before['reviewer_seats'], before['reviewer_seats_set']) == (1, None)
+    assert (three.json()['reviewer_seats'], three.json()['reviewer_seats_set'], after) == (3, 3, seq + 1)
+    assert (same.json()['reviewer_seats'], back.json()['reviewer_seats'], back.json()['reviewer_seats_set']) == (
+        3,
+        1,
+        None,
+    )
+    assert many.status_code == 422
+    # The other settings of the lab stay as they are.
+    assert lab.board.settings.jobs == Settings().jobs

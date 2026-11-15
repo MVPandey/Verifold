@@ -1,10 +1,10 @@
 from datetime import timedelta
 
 import pytest
-from builders import RecordBuilder
+from builders import RecordBuilder, lab
 
 from verifold.protocol.events import AlarmSet
-from verifold.protocol.join import MAX_LINE, MAX_NEWS, QUIET_MINUTES, Brief, News, PostLine, ThreadLine, ThreadLink
+from verifold.protocol.join import MAX_LINE, MAX_NEWS, QUIET_MINUTES, Brief, News, ThreadLine, ThreadLink
 from verifold.protocol.posts import (
     Answer,
     Ask,
@@ -22,6 +22,7 @@ from verifold.protocol.posts import (
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.society.attention import news
 from verifold.society.errors import NotFound
+from verifold.society.identity import post_line
 from verifold.society.standing import is_open_call, takers
 from verifold.society.views import (
     answer_view,
@@ -150,7 +151,7 @@ def test_a_brief_lists_the_disputed_posts_the_agents_own_among_them(record: Reco
 
     view = brief(record.board(), 'ada', News(seq=0))
 
-    assert [(line.id, line.author) for line in view.disputed] == [('p-1', 'ada'), ('p-3', 'cy')]
+    assert [entry.id for entry in view.disputed] == ['p-1', 'p-3']
     assert view.not_checked == ()
 
 
@@ -367,7 +368,7 @@ def test_the_answer_is_the_newest_proposal_in_any_thread_with_what_it_builds_on(
     asked = answer_view(record.board())
     assert asked is not None
     assert (asked.answer.post.id, asked.answer.post.thread) == ('p-6', 't-2')
-    assert brief(record.board(), 'ada', News(seq=0)).answer == PostLine.of(record.board().posts[-1])
+    assert brief(record.board(), 'ada', News(seq=0)).answer == post_line(record.board(), record.board().posts[-1])
     record.post(Proposal(id='p-7', thread='t-1', author='bo', text='Yes.', builds_on=('p-1', 'p-2', 'p-3')))
 
     view = answer_view(record.board())
@@ -489,9 +490,84 @@ def test_a_line_cuts_a_long_headline_and_says_so_and_the_thread_keeps_all_of_it(
     record.post(Result(id='p-2', thread='t-1', author='ada', text='y' * MAX_LINE))
     board = record.board()
 
-    cut, whole = brief(board, 'bo', News(seq=0)).not_checked
+    view = brief(board, 'bo', News(seq=0))
+    cut, whole = view.not_built_on
 
-    assert cut.text == f'{"x" * MAX_LINE}… [cut: the headline has 1000 characters, and `thread` shows all of it]'
-    assert whole.text == 'y' * MAX_LINE
-    assert news(board, 'bo', 0).for_you[0].text == cut.text
+    assert cut.line is not None
+    assert cut.line.text == f'{"x" * MAX_LINE}… [cut: 1000 characters, `thread` shows all of it]'
+    # The brief holds the line of ada's latest post already, in its list of agents.
+    assert (whole.id, whole.line, view.agents[0].latest.text if view.agents[0].latest else '') == (
+        'p-2',
+        None,
+        'y' * MAX_LINE,
+    )
+    assert news(board, 'bo', 0).for_you[0].text == cut.line.text
     assert thread_view(board, 'bo', 't-1').posts[0].post.text == long
+
+
+def test_a_brief_holds_the_line_of_a_post_once_and_then_its_id_alone() -> None:
+    record = lab().post(Result(id='p-1', thread='t-1', author='ada', text='First.'))
+    record.post(Result(id='p-2', thread='t-1', author='ada', text='Second.'))
+    record.post(Objection(id='p-3', thread='t-1', author='cy', text='No.', reply_to='p-1'))
+    record.post(Ask(id='p-4', thread='t-1', author='cy', text='Which seed?'))
+    board = record.board()
+
+    seen = brief(board, 'bo', news(board, 'bo', 0))
+    # The news holds every post, so each list has IDs alone.
+    assert sorted(line.id for line in (*seen.news.for_you, *seen.news.others)) == ['p-1', 'p-2', 'p-3', 'p-4']
+    lists = (seen.disputed, seen.not_built_on, seen.not_checked, seen.open_asks)
+    assert [[(entry.id, entry.line) for entry in entries] for entries in lists] == [
+        [('p-1', None)],
+        [('p-2', None)],
+        [('p-2', None)],
+        [('p-4', None)],
+    ]
+    # Without news, a post has its line in the first list that names it, and its ID alone after that. The line of
+    # an agent's latest post is in the list of agents.
+    later = brief(board, 'bo', News(seq=board.seq))
+    assert [entry.line.text if entry.line else None for entry in later.disputed] == ['First.']
+    assert [(entry.id, entry.line is None) for entry in later.not_built_on] == [('p-2', True)]
+    assert [(entry.id, entry.line is None) for entry in later.not_checked] == [('p-2', True)]
+    assert [(entry.id, entry.line is None) for entry in later.open_asks] == [('p-4', True)]
+
+
+def test_the_largest_brief_is_no_larger_than_before_agents_had_profiles() -> None:
+    # Twenty agents with the longest name, about line, role, and status, a long label, and every seat mark, in
+    # twenty threads with every list full and headlines of 1,000 characters. Before profiles, the brief of this
+    # board without the profiles had 107,984 characters, and its news 20,857.
+    record = RecordBuilder()
+    for number in range(20):
+        record.join(f'a{number}', name=f'Claude Code · {"m" * 40} {number + 2}')
+    record.reviewer_seats(20).thread('t-1', opened_by='a0')
+    posts = (f'p-{number}' for number in range(1, 1_000))
+    long = 'x' * 1000
+    for number in range(1, 20):
+        thread, author, other = f't-{number + 1}', f'a{number}', f'a{number % 19 + 1}'
+        record.thread(thread, opened_by=author)
+        record.post(Plan(id=next(posts), thread=thread, author=author, text=long))
+        record.post(Result(id=next(posts), thread=thread, author=author, text=long))
+        disputed = next(posts)
+        record.post(Result(id=disputed, thread=thread, author=author, text=long))
+        record.post(Objection(id=next(posts), thread=thread, author=other, text=long, reply_to=disputed))
+        record.post(Ask(id=next(posts), thread=thread, author=author, text=long))
+        record.post(Call(id=next(posts), thread=thread, author=author, text=long))
+    record.post(Proposal(id=next(posts), thread='t-1', author='a1', text=long))
+    for number in range(20):
+        agent = f'a{number}'
+        record.profile(agent, name=f'{"N" * 21}{number:03d}', about='a' * 240, role='r' * 40, status='s' * 140)
+        record.reviewer(agent, by='person')
+        if number:
+            record.on_call(agent)
+    board = record.coordinator('a1').board()
+
+    unseen = news(board, 'a0', 0)
+    view = brief(board, 'a0', unseen)
+
+    assert (len(unseen.for_you), len(unseen.others), len(view.agents), len(view.threads)) == (20, 20, 19, 20)
+    assert [len(entries) for entries in (view.disputed, view.not_built_on, view.not_checked)] == [19, 10, 19]
+    assert [len(entries) for entries in (view.open_asks, view.open_calls)] == [19, 19]
+    assert len(view.model_dump_json()) < 106_000
+    assert len(unseen.model_dump_json()) < 28_000
+    # Each author's name, seat, seat marks, and role stand once in the list of agents, and in each line of the news.
+    assert all(line.by is not None and line.by.marks for line in (*unseen.for_you, *unseen.others))
+    assert all(agent.plan is not None and agent.plan.by is None for agent in view.agents)

@@ -289,6 +289,40 @@ def test_a_projects_saved_choices_make_run_stricter_but_never_looser(
     assert printed.index('Started a lab') < printed.index('Open the lab')
 
 
+@pytest.mark.parametrize(
+    ('mine', 'theirs', 'agents', 'seats'),
+    [
+        # A project's file lowers the number, and a higher number counts as the person's own.
+        (2, 1, 1, 1),
+        (2, 5, 1, 2),
+        (0, 3, 1, 0),
+        # Without a number from the person, a higher number counts as the number for the lab's size.
+        (None, 5, 10, 2),
+        (None, 5, 2, 0),
+        (None, 1, 10, 1),
+        # Without a number in the project's file, the start gives none, and the lab follows the person's file.
+        (3, None, 1, None),
+        (None, None, 1, None),
+    ],
+)
+def test_a_projects_file_lowers_the_reviewer_seats_of_run_and_never_raises_them(
+    serves: list[StartRequest | None],
+    project: Path,
+    mine: int | None,
+    theirs: int | None,
+    agents: int,
+    seats: int | None,
+) -> None:
+    global_settings(project, {} if mine is None else {'reviewers': {'seats': mine}})
+    project_settings(project, {} if theirs is None else {'reviewers': {'seats': theirs}})
+
+    main(['run', 'Does it hold?', *(['--agent', 'codex:mini'] * agents)])
+
+    (started,) = serves
+    assert started is not None
+    assert (started.reviewer_seats, sum(agent.count for agent in started.agents)) == (seats, agents)
+
+
 def test_saved_modes_come_only_from_the_file_for_all_projects_and_not_under_ask_me(
     serves: list[StartRequest | None], project: Path
 ) -> None:

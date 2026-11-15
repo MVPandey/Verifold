@@ -19,6 +19,7 @@ from verifold.protocol.events import (
     ProfileSet,
     QuestionRevised,
     RerunRequested,
+    ReviewerSet,
     SettingsSet,
     ThreadOpened,
     TimeRanOut,
@@ -40,6 +41,7 @@ from verifold.society.rules import (
     check_post,
     check_profile,
     check_rerun,
+    check_reviewer,
     check_revision,
     check_thread,
     check_time,
@@ -68,7 +70,8 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
             return replace(board, seq=event.seq, revisions=(*board.revisions, event))
         case AgentJoined(agent=agent):
             check_agent(board, agent)
-            return replace(board, seq=event.seq, agents=(*board.agents, event))
+            labels = (*board.labels, (event.seq, agent.id, agent.name))
+            return replace(board, seq=event.seq, agents=(*board.agents, event), labels=labels)
         case AgentNamed():
             return _named(board, event)
         case OnCallSet():
@@ -94,7 +97,10 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
             return replace(board, seq=event.seq, alarms=(*board.alarms, event))
         case ProfileSet():
             check_profile(board, event)
-            return replace(board, seq=event.seq, profiles=(*board.profiles, event))
+            return _profiled(board, event)
+        case ReviewerSet():
+            check_reviewer(board, event)
+            return replace(board, seq=event.seq, reviewers=(*board.reviewers, event))
         case TurnStarted():
             check_turn(board, event)
             return replace(board, seq=event.seq, starts=(*board.starts, event))
@@ -123,15 +129,31 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
 
 
 def _named(board: Board, event: AgentNamed) -> Board:
-    # The agent's entry holds its new name from here on, and the board keeps the name from before.
-    before = check_named(board, event)
-    agents = tuple(
-        entry.model_copy(update={'agent': entry.agent.model_copy(update={'name': event.name})})
-        if entry.agent.id == event.agent
+    # The seat has its new label from here on, and the board keeps the label from before. The label is the agent's
+    # name unless the agent chose one.
+    check_named(board, event)
+    labels = (*board.labels, (event.seq, event.agent, event.name))
+    agents = board.agents if board.chosen_name(event.agent) else _with_name(board, event.agent, event.name)
+    return replace(board, seq=event.seq, agents=agents, labels=labels)
+
+
+def _profiled(board: Board, event: ProfileSet) -> Board:
+    # A name that the agent chose is its name from here on. An empty name takes the chosen name back, so the seat's
+    # label is the name again. The profile events keep every name that the agent chose.
+    profiles = (*board.profiles, event)
+    if event.name is None:
+        return replace(board, seq=event.seq, profiles=profiles)
+    name = event.name or board.label(event.agent)
+    return replace(board, seq=event.seq, profiles=profiles, agents=_with_name(board, event.agent, name))
+
+
+def _with_name(board: Board, agent_id: str, name: str) -> tuple[AgentJoined, ...]:
+    return tuple(
+        entry.model_copy(update={'agent': entry.agent.model_copy(update={'name': name})})
+        if entry.agent.id == agent_id
         else entry
         for entry in board.agents
     )
-    return replace(board, seq=event.seq, agents=agents, renames=(*board.renames, (event, before)))
 
 
 def fold(events: Iterable[Event]) -> Board:

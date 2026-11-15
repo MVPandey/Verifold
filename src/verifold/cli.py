@@ -25,9 +25,10 @@ from verifold.runner.errors import NoAgentFolder, NoFileManager, RunnerError
 from verifold.runner.folders import LAB_FOLDER, agents_folder, open_folder, real_folder
 from verifold.runner.jobs import Job, Sweep
 from verifold.server.errors import ServerError, SetupRejected
+from verifold.society.reviewers import default_seats
 from verifold.store.errors import SettingsInvalid, StoreError
 from verifold.store.server_file import mark_opens, named_server, running_server
-from verifold.store.settings_file import read_settings_file, settings_of, settings_path
+from verifold.store.settings_file import SettingsValues, read_settings_file, settings_of, settings_path
 
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 """Ctrl+C, a plain `kill`, and a closed terminal. Each one stops the lab in the same way."""
@@ -93,7 +94,8 @@ def _start(args: argparse.Namespace) -> StartRequest:
     Return what `verifold run` starts: the command line's choices, and the saved choices for new labs for the rest.
 
     `verifold run` starts at once, without showing the saved choices, and a project's file can come from someone else.
-    So a project's file can make the lab stricter, not looser: it can turn auto mode off and shorten the time limit,
+    So a project's file can make the lab stricter, not looser: it can turn auto mode off, shorten the time limit, and
+    lower the number of reviewer seats,
     and each of its seats gives only a harness, a count, a model, and an effort. Its modes, roles, families,
     coordinator, and on-call marks are not used, and the command says so. Under `--ask-me`, no saved agent gets a mode.
 
@@ -105,15 +107,12 @@ def _start(args: argparse.Namespace) -> StartRequest:
     values = {level: read_settings_file(settings_path(level, project), level)[0] for level in SettingsLevel}
     files = settings_of(values)
     everywhere, here = settings_of({SettingsLevel.ALL: values[SettingsLevel.ALL]}).setup, files.setup
+    # In the home folder, the project's file is the person's own file for all projects.
+    own = settings_path(SettingsLevel.PROJECT, project).resolve() == settings_path(SettingsLevel.ALL, project).resolve()
     if args.agent:
         agents = tuple(_agent(value) for value in args.agent)
     else:
         saved = values[SettingsLevel.PROJECT].get('setup')
-        # In the home folder, the project's file is the person's own file for all projects.
-        own = (
-            settings_path(SettingsLevel.PROJECT, project).resolve()
-            == settings_path(SettingsLevel.ALL, project).resolve()
-        )
         from_project = not own and isinstance(saved, dict) and 'agents' in saved
         agents = _saved_agents(here, catalog_with(files.harnesses), drop_modes=args.ask_me, from_project=from_project)
     shorter = min((minutes for minutes in (everywhere.minutes, here.minutes) if minutes is not None), default=None)
@@ -123,7 +122,23 @@ def _start(args: argparse.Namespace) -> StartRequest:
         auto_mode=everywhere.auto_mode and here.auto_mode and not args.ask_me,
         minutes=shorter if args.minutes is None else args.minutes,
         allow=tuple(args.allow or ()),
+        reviewer_seats=_reviewer_seats(values, sum(agent.count for agent in agents), own=own),
     )
+
+
+def _reviewer_seats(values: Mapping[SettingsLevel, SettingsValues], agents: int, *, own: bool) -> int | None:
+    """
+    Return the number of reviewer seats that `verifold run` starts with, or `None` for what the files add up to.
+
+    A project's file can lower the number and cannot raise it: a number above the person's own, or above the
+    number for the lab's size when the person set none, counts as that number.
+    """
+    theirs = settings_of(values).reviewers.seats
+    project = values[SettingsLevel.PROJECT].get('reviewers')
+    if own or theirs is None or not (isinstance(project, dict) and 'seats' in project):
+        return None
+    mine = settings_of({SettingsLevel.ALL: values[SettingsLevel.ALL]}).reviewers.seats
+    return min(theirs, default_seats(agents) if mine is None else mine)
 
 
 def _saved_agents(

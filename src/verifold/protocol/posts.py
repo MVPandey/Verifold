@@ -115,6 +115,12 @@ class PostBase(Record):
     builds_on: tuple[PostId, ...] = Field(default=(), max_length=MAX_BUILDS_ON)
     """The posts that this one builds on, in any thread. Each of their authors hears about it."""
     evidence: tuple[FileEvidence, ...] = ()
+    to_lab: bool = False
+    """
+    Whether the post is for the whole lab: it then reaches every agent that is not on call, as the person's post
+    that names nobody does. Only the lab's coordinator and the person can mark a post so, in a thread for the whole
+    lab, on a post that names nobody and replies to no post. It does not open a closed lab again.
+    """
 
 
 class Message(PostBase):

@@ -8,7 +8,7 @@ from verifold.protocol.join import PostRequest
 from verifold.server.join import INSTRUCTIONS, join_server
 from verifold.server.lab import Lab
 from verifold.server.member import Member
-from verifold.society.attention import _names
+from verifold.society.attention import _named
 from verifold.society.errors import RejectedEvent
 from verifold.society.labels import label
 from verifold.store.record_file import RecordFile
@@ -111,7 +111,7 @@ async def test_a_name_that_an_agent_has_held_is_never_given_to_another_agent(lab
     )
 
     def named_by(entry: Posted) -> set[str]:
-        return {agent for agent in ('agent-1', 'agent-2', 'agent-3') if _names(lab.board, agent, entry.post)}
+        return {agent for agent in ('agent-1', 'agent-2', 'agent-3') if _named(lab.board, agent, entry.post)}
 
     before = (named_by(to_three), named_by(to_two))
     seq = lab.board.seq
@@ -131,7 +131,7 @@ async def test_a_name_that_an_agent_has_held_is_never_given_to_another_agent(lab
     assert await lab.name_by_model('agent-1', 'Claude Code', 'Opus 6') == late
     again = Lab.load(record_file).board
     assert [joined.agent.name for joined in again.agents] == [joined.agent.name for joined in lab.board.agents]
-    assert again.renames == lab.board.renames
+    assert again.names() == lab.board.names()
 
 
 async def test_a_name_with_the_id_of_a_chosen_model_gets_the_name_that_the_harness_shows(lab: Lab) -> None:
@@ -153,9 +153,7 @@ async def test_a_name_with_the_id_of_a_chosen_model_gets_the_name_that_the_harne
         'Claude Code · Opus 5.5 2',
     ]
     # A new agent does not get a name that an agent had before either.
-    assert label(
-        'Claude Code', 'opus', (*(j.agent.name for j in lab.board.agents), *(b for _, b in lab.board.renames))
-    ) == ('Claude Code · opus 3')
+    assert label('Claude Code', 'opus', tuple(name for _, name in lab.board.names())) == ('Claude Code · opus 3')
 
 
 async def test_only_a_name_that_verifold_built_before_the_model_was_known_changes(lab: Lab) -> None:
@@ -252,18 +250,36 @@ async def test_an_on_call_agent_gets_only_the_posts_for_it_from_wait_and_news(la
 
 
 def test_the_instructions_state_the_seats_as_facts_and_tell_no_agent_how_to_act_in_a_role() -> None:
+    flat = ' '.join(INSTRUCTIONS.split())
     seats = ' '.join(
         line
         for line in INSTRUCTIONS.splitlines()
-        if any(word in line for word in ('on call', 'on-call', 'coordinator'))
+        if any(word in line for word in ('on call', 'on-call', 'coordinator', 'reviewer'))
     )
 
-    assert 'For an agent that Verifold started, the name is built from' in INSTRUCTIONS
+    for fact in (
+        "The seat's label is its harness's title and its model's name",
+        'it says "default model" until the harness names the model',
+        "The label is the agent's name until the agent chooses a name with `profile`",
+        'An invited agent that is on call runs by itself',
+        'The person can give a seat a role and change it at any time.',
+        '`brief` names it in `coordinator`',
+        'No post for every agent is for an on-call agent',
+        'A name in a `plan`, a `message`, a `result`, or another post that is no `ask` and no `call` is not for it',
+        'an `ask` or a `call` that names the agent',
+        'the check of a rerun that the agent asked for',
+        '`mentions` names an agent by its ID, such as `agent-2`',
+        'its name, or the full label of its seat in the text of a post also reaches that agent',
+        "A `check` of another agent's post and a `rerun` request take a reviewer seat.",
+        'An `objection` takes no seat.',
+        'In a lab with zero reviewer seats, a check and a rerun request take none.',
+        'The coordinator and the person can mark a post with `to_lab`.',
+        'It does not open a closed lab again.',
+        '`about` in a profile says what lens the agent brings: its field and how it approaches a problem.',
+        'Verifold acts on no text of a profile.',
+    ):
+        assert fact in flat, fact
     assert "An agent's name holds its harness and its model." not in INSTRUCTIONS
-    assert 'Verifold starts an\n  on-call agent' not in INSTRUCTIONS
-    assert 'An invited agent that is on\n  call runs by itself' in INSTRUCTIONS
-    assert 'The person can give a seat a role.' in INSTRUCTIONS
-    assert '`brief` names it in `coordinator`' in INSTRUCTIONS
-    assert 'No post for every agent is for\n  an on-call agent' in INSTRUCTIONS
-    assert '`mentions` names an agent by its ID, such as `agent-2`' in INSTRUCTIONS
+    assert 'Verifold starts an on-call agent' not in flat
+    assert 'A post is for it when the post names it' not in flat
     assert not any(word in seats for word in ('should', 'must', 'Use ', 'prefer', 'instead'))

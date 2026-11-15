@@ -3,11 +3,10 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from verifold.protocol.agents import GUEST
+from verifold.protocol.agents import GUEST, Picture
 from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
-    AgentNamed,
     AlarmSet,
     CoordinatorSet,
     LabOpened,
@@ -16,6 +15,7 @@ from verifold.protocol.events import (
     ProfileSet,
     QuestionRevised,
     RerunRequested,
+    ReviewerSet,
     ThreadOpened,
     TimeRanOut,
     TimeSet,
@@ -41,8 +41,10 @@ class Board:
     """The person's revisions of the question, oldest first."""
     agents: tuple[AgentJoined, ...] = ()
     """Each agent's entry, with the name that the agent has now."""
-    renames: tuple[tuple[AgentNamed, str], ...] = ()
-    """Each new name that an agent got, with the name that it had before, oldest first."""
+    labels: tuple[tuple[int, AgentId, str], ...] = ()
+    """Each label that a seat got, with the sequence number of the event that gave it, oldest first."""
+    reviewers: tuple[ReviewerSet, ...] = ()
+    """Each time that an agent took, got, gave up, or lost a reviewer seat, oldest first."""
     on_calls: tuple[OnCallSet, ...] = ()
     """Each time that the person put a seat on call or took it off, oldest first."""
     coordinators: tuple[CoordinatorSet, ...] = ()
@@ -159,6 +161,94 @@ class Board:
     def here(self, joined: AgentJoined) -> bool:
         """Return whether an agent is in the lab now: it is known to be in it, and it has not left."""
         return self.came(joined) and not self.gone(joined.agent.id)
+
+    def label(self, agent_id: AgentId, before: int | None = None) -> str:
+        """
+        Return the label of an agent's seat.
+
+        It is the name that Verifold built from the harness's title and the model's name, or the name that the
+        person gave an invited agent.
+
+        With `before`, return the label that the seat had just before that event. An agent that joined later has
+        its first label.
+        """
+        mine = tuple((seq, text) for seq, agent, text in self.labels if agent == agent_id)
+        past = tuple(text for seq, text in mine if before is None or seq < before)
+        return past[-1] if past else mine[0][1] if mine else agent_id
+
+    def names(self) -> tuple[tuple[AgentId, str], ...]:
+        """
+        Return every name that an agent of the lab has or had, each with its agent, oldest first.
+
+        An agent's names are each label that its seat had and each name that it chose. A name stays its agent's
+        for ever, so a name in an older post means the same agent.
+        """
+        labels = ((seq, agent, text) for seq, agent, text in self.labels)
+        chosen = ((entry.seq, entry.agent, entry.name) for entry in self.profiles if entry.name)
+        return tuple(dict.fromkeys((agent, text) for _, agent, text in sorted((*labels, *chosen))))
+
+    def chosen_name(self, agent_id: AgentId) -> str:
+        """Return the name that an agent chose and still has, or an empty text when its seat's label is its name."""
+        return next(
+            (entry.name for entry in reversed(self.profiles) if entry.agent == agent_id and entry.name is not None), ''
+        )
+
+    def about(self, agent_id: AgentId) -> str:
+        """Return an agent's about line as it is now. It is empty when the agent has none."""
+        return next(
+            (entry.about for entry in reversed(self.profiles) if entry.agent == agent_id and entry.about is not None),
+            '',
+        )
+
+    def picture(self, agent_id: AgentId) -> Picture | None:
+        """Return the picture that an agent chose and still has, or `None`."""
+        latest = next(
+            (
+                entry
+                for entry in reversed(self.profiles)
+                if entry.agent == agent_id and (entry.picture or entry.no_picture)
+            ),
+            None,
+        )
+        return latest.picture if latest and not latest.no_picture else None
+
+    def given_role(self, agent_id: AgentId) -> tuple[str, AgentId]:
+        """
+        Return the role that somebody gave an agent's seat, and who gave it: the person, or a coordinator.
+
+        The text is empty when nobody gave one. The role that the person gave the seat when the agent joined stands
+        until a later change.
+        """
+        given = next(
+            (entry for entry in reversed(self.profiles) if entry.agent == agent_id and entry.given_role is not None),
+            None,
+        )
+        if given and given.given_role is not None:
+            return given.given_role, given.by or PERSON
+        joined = self.agent(agent_id)
+        return (joined.agent.given_role if joined else ''), PERSON
+
+    def flag(self, agent_id: AgentId) -> ProfileSet | None:
+        """
+        Return the coordinator's flag on an agent's profile, or `None`.
+
+        A flag stands until the coordinator takes it back, or until the agent changes its name, its about line, or
+        its picture.
+        """
+        for entry in reversed(self.profiles):
+            if entry.agent != agent_id:
+                continue
+            if entry.flag is not None:
+                return entry if entry.flag else None
+            own = entry.by is None and (entry.name is not None or entry.about is not None or entry.picture is not None)
+            if own:
+                return None
+        return None
+
+    def reviewer(self, agent_id: AgentId) -> bool:
+        """Return whether an agent holds a reviewer seat. An agent that left the lab holds none."""
+        latest = next((entry for entry in reversed(self.reviewers) if entry.agent == agent_id), None)
+        return bool(latest and latest.reviewer and not self.gone(agent_id))
 
     def profile(self, agent_id: AgentId) -> tuple[str, str]:
         """Return the role and the status that an agent gave itself last. Each is empty when it gave none."""

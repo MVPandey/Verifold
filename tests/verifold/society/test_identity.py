@@ -1,0 +1,347 @@
+import pytest
+from builders import START, RecordBuilder, lab
+from pydantic import ValidationError
+
+from verifold.protocol.events import ProfileSet
+from verifold.protocol.posts import Message, Result
+from verifold.society.attention import news, update
+from verifold.society.board import Board
+from verifold.society.errors import RejectedEvent
+from verifold.society.identity import GUEST_LABEL, byline, post_line, seat_label
+from verifold.society.views import brief, profile_result, thread_view
+
+RESULT = Result(id='p-1', thread='t-1', author='ada', text='Holds.')
+
+
+def name_of(board: Board, agent_id: str) -> str:
+    joined = board.agent(agent_id)
+    assert joined is not None
+    return joined.agent.name
+
+
+PICTURE = {'shape': 'hex', 'color': '#f08c3a', 'symbol': 'orbit'}
+
+
+def seats() -> RecordBuilder:
+    """Two Codex seats of one model and one Claude Code seat, with thread t-1."""
+    record = RecordBuilder().join('agent-1', name='Codex · gpt-6.1-sol').join('agent-2', name='Codex · gpt-6.1-sol 2')
+    return record.join('agent-3', name='Claude Code · Opus 5.5', family='anthropic').thread('t-1', opened_by='agent-1')
+
+
+def test_a_record_from_before_profiles_has_the_seats_label_as_each_name_and_no_picture() -> None:
+    board = lab().post(RESULT).profile('ada', role='theory', status='Reads.').board()
+
+    assert (name_of(board, 'ada'), board.label('ada'), board.chosen_name('ada')) == ('Ada', 'Ada', '')
+    assert (board.about('ada'), board.picture('ada'), board.flag('ada')) == ('', None, None)
+    assert board.profile('ada') == ('theory', 'Reads.')
+    assert board.given_role('ada') == ('', 'person')
+    line = post_line(board, board.posts[0])
+    assert line.by is not None
+    assert (line.by.name, line.by.seat, line.by.marks, line.by.role) == ('Ada', '', (), 'theory')
+
+
+def test_an_agent_chooses_a_name_an_about_line_and_a_picture_and_the_seats_label_stays_a_fact() -> None:
+    record = seats().profile('agent-2', name='Tessel', about='I run a number twice.', picture=PICTURE)
+    board = record.board()
+
+    assert name_of(board, 'agent-2') == 'Tessel'
+    assert (board.label('agent-2'), board.chosen_name('agent-2')) == ('Codex · gpt-6.1-sol 2', 'Tessel')
+    assert board.about('agent-2') == 'I run a number twice.'
+    picture = board.picture('agent-2')
+    assert picture is not None
+    assert (picture.shape, picture.color, picture.symbol) == ('hex', '#f08c3a', 'orbit')
+    # An empty name takes the chosen name back, and the name that the agent had stays its own.
+    back = record.copy().profile('agent-2', name='').board()
+    assert (name_of(back, 'agent-2'), back.chosen_name('agent-2')) == ('Codex · gpt-6.1-sol 2', '')
+    assert ('agent-2', 'Tessel') in back.names()
+
+
+@pytest.mark.parametrize('name', ['T', 'x' * 25, 'Te_ssel', 'Tessel!', 'Codex · mine', '-Tessel'])
+def test_a_name_is_two_to_24_letters_and_digits_with_single_spaces_hyphens_and_apostrophes(name: str) -> None:
+    with pytest.raises(ValidationError):
+        ProfileSet(seq=9, at=START, agent='ada', name=name)
+
+
+def test_a_name_and_an_about_line_are_one_printable_line_and_a_picture_takes_only_the_listed_parts() -> None:
+    cleaned = ProfileSet(seq=9, at=START, agent='ada', name=" Ada\u200b  O'Neil-2 ", about='One\nline.')
+    assert (cleaned.name, cleaned.about) == ("Ada O'Neil-2", 'One line.')
+    with pytest.raises(ValidationError):
+        ProfileSet(seq=9, at=START, agent='ada', about='x' * 241)
+    for part in ({'shape': 'star'}, {'color': '#000000'}, {'symbol': 'face'}):
+        with pytest.raises(ValidationError):
+            ProfileSet.model_validate({'seq': 9, 'at': START, 'agent': 'ada', 'picture': PICTURE | part})
+
+
+@pytest.mark.parametrize(
+    'name',
+    [
+        'you',
+        'Person',
+        'COORDINATOR',
+        'Verifold',
+        'agent',
+        'Checker',
+        'agent-2',
+        'Agent 7',
+        'checker 12',
+        'Codex',
+        'claude code',
+        'gpt-7',
+        'fake',
+        'Anthropic',
+        'Sonnet 5',
+    ],
+)
+def test_no_agent_takes_a_word_of_the_board_an_agent_id_a_harness_or_a_model_as_its_name(name: str) -> None:
+    record = seats().join('agent-4', name='Codex · gpt-7').start('agent-3', seen=1, model_name='Sonnet 5')
+
+    with pytest.raises(RejectedEvent, match=r'word that the board uses|name of a harness or a model'):
+        record.copy().profile('agent-1', name=name).board()
+
+
+def test_a_name_that_an_agent_has_or_had_is_never_another_agents_name() -> None:
+    record = seats().profile('agent-1', name='Maren').profile('agent-1', name='Tessel')
+
+    for taken in ('maren', 'TESSEL'):
+        with pytest.raises(RejectedEvent, match='Another agent has or had the name'):
+            record.copy().profile('agent-2', name=taken).board()
+    # The agent itself takes a name again that it had.
+    assert name_of(record.copy().profile('agent-1', name='Maren').board(), 'agent-1') == 'Maren'
+    # A seat's new label keeps clear of a chosen name too, and a label that changes leaves a chosen name alone.
+    board = record.copy().named('agent-1', 'Codex · gpt-7').board()
+    assert (name_of(board, 'agent-1'), board.label('agent-1')) == ('Tessel', 'Codex · gpt-7')
+    with pytest.raises(RejectedEvent, match='Another agent has or had the name Tessel'):
+        record.copy().named('agent-2', 'Tessel').board()
+
+
+def test_a_post_shows_the_seats_label_as_it_was_when_the_post_was_written() -> None:
+    record = RecordBuilder().join('agent-1', name='Codex · default model').thread('t-1', opened_by='agent-1')
+    record.post(RESULT.model_copy(update={'author': 'agent-1'})).named('agent-1', 'Codex · gpt-6.1-sol')
+    record.start('agent-1', seen=1, model_name='gpt-6.1-sol')
+    record.post(Message(id='p-2', thread='t-1', author='agent-1', text='Second.'))
+    # Another model takes the seat over: the harness reports it when a later turn starts.
+    record.start('agent-1', seen=1, model_name='gpt-7').profile('agent-1', name='Tessel')
+    record.post(Message(id='p-3', thread='t-1', author='agent-1', text='Third.'))
+    board = record.board()
+
+    first, second, third = (byline(board, entry) for entry in board.posts)
+    assert first is not None
+    assert second is not None
+    assert third is not None
+    assert (first.name, first.seat) == ('Tessel', 'Codex · default model')
+    assert (second.name, second.seat) == ('Tessel', 'Codex · gpt-6.1-sol')
+    assert (third.name, third.seat) == ('Tessel', 'Codex · gpt-7')
+    # The seat keeps its label in the record, and the label of now names the model that the harness reported last.
+    assert (board.label('agent-1'), seat_label(board, 'agent-1')) == ('Codex · gpt-6.1-sol', 'Codex · gpt-7')
+
+
+def test_a_numbered_seat_keeps_its_number_when_the_harness_reports_the_same_model() -> None:
+    record = seats().start('agent-2', seen=1, model_name='gpt-6.1-sol')
+    record.post(Message(id='p-1', thread='t-1', author='agent-2', text='Hello.'))
+    board = record.board()
+
+    line = byline(board, board.posts[0])
+    # The label is the agent's name, so the line does not repeat it.
+    assert line is not None
+    assert (line.name, line.seat, seat_label(board, 'agent-2')) == (
+        'Codex · gpt-6.1-sol 2',
+        '',
+        'Codex · gpt-6.1-sol 2',
+    )
+
+
+def test_an_invited_agent_keeps_the_name_that_the_person_gave_it_and_its_seat_says_what_verifold_knows() -> None:
+    record = seats().join('agent-4', harness='guest', name='Sorrel')
+    record.post(Message(id='p-1', thread='t-1', author='agent-4', text='Hello.')).profile('agent-4', name='Scout')
+    board = record.board()
+
+    line = byline(board, board.posts[0])
+    assert line is not None
+    assert (line.name, line.seat) == ('Scout', GUEST_LABEL)
+    assert name_of(record.copy().profile('agent-4', name='').board(), 'agent-4') == 'Sorrel'
+
+
+def test_a_line_of_a_post_carries_the_authors_name_seat_marks_and_role_within_a_bound() -> None:
+    long = f'Codex · {"m" * 60}'
+    record = (
+        RecordBuilder()
+        .join('agent-1', name=long)
+        .join('agent-2', name='Codex · gpt-6')
+        .thread('t-1', opened_by='agent-1')
+    )
+    record.coordinator('agent-1').reviewer('agent-1', by='person').on_call('agent-1')
+    record.profile('agent-1', name='Maren', role='keeps the map').profile('agent-2', by='person', given_role='driver')
+    record.post(RESULT.model_copy(update={'author': 'agent-1'}))
+    record.post(Message(id='p-2', thread='t-1', author='agent-2', text='Seen.'))
+    record.post(Message(id='p-3', thread='t-1', author='person', text='Go on.'))
+    board = record.board()
+
+    unseen = news(board, 'agent-9', 0)
+    mine, theirs, persons = sorted((*unseen.for_you, *unseen.others), key=lambda line: line.id)
+    assert mine.by is not None
+    assert theirs.by is not None
+    assert (mine.by.name, mine.by.marks, mine.by.role) == (
+        'Maren',
+        ('coordinator', 'reviewer', 'on_call'),
+        'keeps the map',
+    )
+    # A long label is cut in a line, and a thread shows all of it.
+    assert (len(mine.by.seat), mine.by.seat[-1]) == (40, '…')
+    whole = thread_view(board, 'agent-2', 't-1').posts[0].by
+    assert whole is not None
+    assert whole.seat == long
+    # A role that somebody gave the seat stands where the agent gave itself none. The person's post has no byline.
+    assert (theirs.by.name, theirs.by.seat, theirs.by.role, persons.by) == ('Codex · gpt-6', '', 'driver', None)
+    # `wait` returns each post for the agent with the same facts.
+    waited = update(board, 'agent-2', 0).posts
+    assert [(view.post.id, view.by.name if view.by else None) for view in waited] == [('p-1', 'Maren'), ('p-3', None)]
+
+
+def test_the_brief_shows_each_agents_name_seat_about_line_and_seats() -> None:
+    record = seats().profile('agent-2', name='Tessel', about='I run a number twice.', role='builder')
+    record.coordinator('agent-2').reviewer('agent-3').profile('agent-3', by='agent-2', given_role='second reader')
+    board = record.board()
+
+    view = brief(board, 'agent-1', news(board, 'agent-1', 0))
+    tessel, third = view.agents
+    assert (tessel.name, tessel.seat, tessel.about) == ('Tessel', 'Codex · gpt-6.1-sol 2', 'I run a number twice.')
+    assert (tessel.role, tessel.coordinator, tessel.reviewer) == ('builder', True, False)
+    assert (third.name, third.seat, third.reviewer) == ('Claude Code · Opus 5.5', '', True)
+    assert (third.given_role, third.given_by) == ('second reader', 'agent-2')
+    assert view.your_line is not None
+    assert (view.your_line.name, view.your_line.given_by) == ('Codex · gpt-6.1-sol', None)
+    assert (view.reviewers, view.reviewer_seats, view.reviewer_seats_free) == (('agent-3',), 1, 0)
+
+
+def test_a_chosen_name_and_the_seats_label_in_a_text_both_reach_the_agent() -> None:
+    record = seats().profile('agent-2', name='Tessel').profile('agent-2', name='Quill')
+    old = Message(id='p-1', thread='t-1', author='agent-3', text='Tessel, is the bound tight?')
+    new = Message(id='p-2', thread='t-1', author='agent-3', text='And Quill? Not Quillon or tessellate.')
+    label = Message(id='p-3', thread='t-1', author='agent-3', text='Ask Codex · gpt-6.1-sol 2 about it.')
+    other = Message(id='p-4', thread='t-1', author='agent-3', text='Quillon and tessellate name nobody.')
+    board = record.post(old).post(new).post(label).post(other).board()
+
+    assert [line.id for line in news(board, 'agent-2', 0).for_you] == ['p-1', 'p-2', 'p-3']
+
+
+def test_the_person_takes_back_what_an_agent_chose_and_gives_its_seat_a_role_at_any_time() -> None:
+    record = seats().profile('agent-2', name='Tessel', about='A lens.', picture=PICTURE)
+    record.profile('agent-2', by='person', name='', about='', no_picture=True, given_role='driver')
+    board = record.board()
+
+    assert (name_of(board, 'agent-2'), board.about('agent-2'), board.picture('agent-2')) == (
+        'Codex · gpt-6.1-sol 2',
+        '',
+        None,
+    )
+    assert board.given_role('agent-2') == ('driver', 'person')
+    assert record.copy().profile('agent-2', by='person', given_role='scout').board().given_role('agent-2') == (
+        'scout',
+        'person',
+    )
+    # The agent can choose again afterwards, and its news says what the person changed.
+    again = record.copy().profile('agent-2', name='Tessel', picture=PICTURE).board()
+    assert (name_of(again, 'agent-2'), again.picture('agent-2') is not None) == ('Tessel', True)
+    (note,) = news(board, 'agent-2', 0).profile
+    assert (note.by, note.name_taken_back, note.about, note.picture_taken_back, note.given_role) == (
+        'person',
+        True,
+        '',
+        True,
+        'driver',
+    )
+    assert news(board, 'agent-1', 0).profile == ()
+    # The person writes no name, no about line, and no flag for an agent.
+    for fields in ({'name': 'Mine'}, {'about': 'Written by the person.'}, {'flag': 'Why.'}, {'role': 'theory'}):
+        with pytest.raises(RejectedEvent):
+            record.copy().profile('agent-2', by='person', **fields).board()
+
+
+def test_the_coordinator_flags_a_profile_rewrites_its_about_line_and_takes_its_name_back() -> None:
+    record = seats().coordinator('agent-1').profile('agent-2', name='Tessel', about='I am the best model.')
+    record.profile('agent-2', by='agent-1', flag='It ranks itself.', about='Runs numbers twice.', name='')
+    board = record.board()
+
+    flag = board.flag('agent-2')
+    assert flag is not None
+    assert (flag.flag, flag.by, board.about('agent-2')) == ('It ranks itself.', 'agent-1', 'Runs numbers twice.')
+    assert name_of(board, 'agent-2') == 'Codex · gpt-6.1-sol 2'
+    # The record keeps the earlier text.
+    assert [entry.about for entry in board.profiles if entry.agent == 'agent-2'] == [
+        'I am the best model.',
+        'Runs numbers twice.',
+    ]
+    (note,) = update(board, 'agent-2', 0).profile
+    assert (note.by, note.flag, note.about, note.name_taken_back) == (
+        'agent-1',
+        'It ranks itself.',
+        'Runs numbers twice.',
+        True,
+    )
+    # The agent edits again, and its own change of the flagged text ends the flag.
+    assert record.copy().profile('agent-2', status='Working.').board().flag('agent-2') is not None
+    assert record.copy().profile('agent-2', about='I run a number twice.').board().flag('agent-2') is None
+    # The coordinator takes its flag back with an empty reason.
+    assert record.copy().profile('agent-2', by='agent-1', flag='').board().flag('agent-2') is None
+
+
+def test_only_the_coordinator_and_the_person_change_the_profile_of_another_agent() -> None:
+    record = seats().coordinator('agent-1').profile('agent-2', name='Tessel', picture=PICTURE)
+
+    with pytest.raises(RejectedEvent, match="Only the person and the lab's coordinator"):
+        record.copy().profile('agent-2', by='agent-3', flag='No.').board()
+    for fields in ({'name': 'Mine'}, {'role': 'theory'}, {'status': 'Idle.'}, {'picture': PICTURE}):
+        with pytest.raises(RejectedEvent, match='are its own'):
+            record.copy().profile('agent-2', by='agent-1', **fields).board()
+    with pytest.raises(RejectedEvent, match='Only the person takes a picture back'):
+        record.copy().profile('agent-2', by='agent-1', no_picture=True).board()
+    # An agent gives itself no role for its seat and flags nothing of its own.
+    for fields in ({'given_role': 'driver'}, {'flag': 'Mine.'}, {'no_picture': True}):
+        with pytest.raises(RejectedEvent, match='Only the person or the coordinator'):
+            record.copy().profile('agent-2', **fields).board()
+    with pytest.raises(RejectedEvent, match='changes nothing'):
+        record.copy().profile('agent-2').board()
+    with pytest.raises(RejectedEvent, match='not both'):
+        record.copy().profile('agent-2', by='person', picture=PICTURE, no_picture=True).board()
+
+
+def test_the_coordinator_gives_a_role_only_where_the_person_gave_none() -> None:
+    record = seats().coordinator('agent-1').profile('agent-2', by='agent-1', given_role='second reader')
+
+    assert record.board().given_role('agent-2') == ('second reader', 'agent-1')
+    assert (
+        record.copy().profile('agent-2', by='agent-1', given_role='builder').board().given_role('agent-2')[0]
+        == 'builder'
+    )
+    # The person's role wins, and from then on only the person changes it.
+    given = record.profile('agent-2', by='person', given_role='driver')
+    with pytest.raises(RejectedEvent, match='only the person changes it'):
+        given.copy().profile('agent-2', by='agent-1', given_role='builder').board()
+    # A role from the setup is the person's too. Once the person takes the role back, the coordinator can give one.
+    board = (
+        given.copy()
+        .profile('agent-2', by='person', given_role='')
+        .profile('agent-2', by='agent-1', given_role='x')
+        .board()
+    )
+    assert board.given_role('agent-2') == ('x', 'agent-1')
+
+
+def test_a_profile_result_holds_the_profile_and_the_labs_seats() -> None:
+    record = seats().profile('agent-2', name='Tessel', about='A lens.', picture=PICTURE, role='builder')
+    board = record.coordinator('agent-1').profile('agent-2', by='agent-1', flag='Why.').reviewer('agent-2').board()
+
+    result = profile_result(board, 'agent-2')
+    assert (result.agent, result.name, result.seat, result.about) == (
+        'agent-2',
+        'Tessel',
+        'Codex · gpt-6.1-sol 2',
+        'A lens.',
+    )
+    assert (result.role, result.flag, result.coordinator, result.picture is not None) == (
+        'builder',
+        'Why.',
+        'agent-1',
+        True,
+    )
+    assert (result.reviewers, result.reviewer_seats, result.reviewer_seats_free) == (('agent-2',), 1, 0)

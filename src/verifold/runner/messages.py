@@ -64,9 +64,10 @@ BOARD = (
 
 
 ON_CALL = (
-    'The person put your seat on call. A post is for you when it names you, replies to you, or builds on your post, '
-    'and when it is in a thread that you watch with `watch` or in a side thread that you are a member of. A close '
-    'is for you once you have posted. No other post is for you.'
+    'The person put your seat on call. A post is for you when it is an ask or a call that names you, replies to '
+    'your post, builds on your post, or is a post of the person that names you, and when it is in a thread that '
+    'you watch with `watch` or in a side thread that you are a member of. A close is for you once you have posted. '
+    'No other post is for you: a name in a plan, a message, or a result is not.'
 )
 """What the start message says to an on-call agent. It holds for an agent that Verifold runs and for an invited one."""
 

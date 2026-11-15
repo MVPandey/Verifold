@@ -26,10 +26,13 @@ from verifold.protocol.app import (
     Invitation,
     InviteRequest,
     LabView,
+    Need,
     NormsChange,
     NormsView,
+    ProfileChange,
     QuestionRequest,
     RerunRequest,
+    ReviewerSeats,
     SeatChange,
     SettingsChange,
     SettingsView,
@@ -39,16 +42,19 @@ from verifold.protocol.app import (
 )
 from verifold.protocol.events import Reason, RerunRequested
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
-from verifold.protocol.join import AnswerView, FileText, PostLine, PostRequest, PostView, ThreadSummary, ThreadView
+from verifold.protocol.join import AnswerView, FileText, PostRequest, PostView, ThreadSummary, ThreadView
 from verifold.protocol.usage import Usage
 from verifold.server.activity import Activity
 from verifold.server.errors import LabExists, NoLab, ServerError, SetupRejected
 from verifold.server.lab import Lab
 from verifold.server.member import Member
+from verifold.server.status import agent_need, outcomes, profile_edits, thread_needs, waits
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
+from verifold.society.identity import post_line, seat_label
 from verifold.society.lifecycle import alarm_line, close_count, lab_state
 from verifold.society.lines import lines_of
+from verifold.society.reviewers import seats
 from verifold.society.standing import agreed, closing
 from verifold.society.turns import before
 from verifold.society.views import (
@@ -293,6 +299,32 @@ def _seat_routes(api: FastAPI, host: Host, activity: Activity, authorized: param
         await host.change_seat(agent_id, change)
         return _lab_view(_lab(host).board, activity)
 
+    @api.post('/agents/{agent_id}/profile', dependencies=[authorized])
+    async def change_profile(agent_id: AgentId, change: ProfileChange) -> LabView:
+        # The person takes back what an agent chose, or gives its seat a role. The record keeps the earlier text.
+        lab = _lab(host)
+        if lab.board.agent(agent_id) is None:
+            raise NotFound(f'The lab has no agent with the ID {agent_id}.')
+        await lab.change_profile(
+            agent_id,
+            PERSON,
+            reset_name=change.reset_name,
+            about='' if change.reset_about else None,
+            reset_picture=change.reset_picture,
+            given_role=change.role,
+        )
+        return _lab_view(lab.board, activity)
+
+    @api.post('/reviewers', dependencies=[authorized])
+    async def reviewer_seats(request: ReviewerSeats) -> LabView:
+        # The number is the lab's own. The settings files keep what new labs start with.
+        lab = _lab(host)
+        settings = lab.board.settings
+        if settings.reviewers.seats != request.seats:
+            reviewers = settings.reviewers.model_copy(update={'seats': request.seats})
+            await lab.set_settings(settings.model_copy(update={'reviewers': reviewers}))
+        return _lab_view(lab.board, activity)
+
     @api.post('/coordinator', dependencies=[authorized])
     async def coordinator(seat: CoordinatorSeat) -> LabView:
         # The seat has no holder after this. A seat that the person closes stays free until the person gives it.
@@ -326,9 +358,14 @@ def _authorize(person_token: SecretStr) -> Callable[[Request, str | None], None]
 def _lab_view(board: Board, activity: Activity) -> LabView:
     working = lines_of(board)
     done = closing(board)
+    waiting = waits(board)
+    needs = {
+        entry.agent.id: agent_need(board, activity.of(entry.agent.id), entry.agent.id, waiting)
+        for entry in board.agents
+    }
     return LabView(
         state=lab_state(board),
-        close=PostLine.of(done) if done else None,
+        close=post_line(board, done) if done else None,
         close_agreed=len(agreed(board, done)) if done else 0,
         close_among=close_count(board, done)[1] if done else 0,
         question=board.question,
@@ -336,25 +373,48 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
         versions=versions(board),
         opened_at=board.opened.at,
         seq=board.seq,
-        agents=tuple(_agent_view(board, activity, entry.agent.id, working) for entry in board.agents),
+        agents=tuple(_agent_view(board, activity, entry.agent.id, working, needs) for entry in board.agents),
         threads=len(board.threads),
         posts=len(board.posts),
-        needs_you=len(needs_person(board)),
+        needs_you=len(waiting),
+        waits=waiting,
+        thread_needs=thread_needs(board, needs, waiting),
+        reviewer_seats=seats(board),
+        reviewer_seats_set=board.settings.reviewers.seats,
         ends_at=board.ends_at,
         out_of_time=board.out_of_time,
         settings=board.settings,
     )
 
 
-def _agent_view(board: Board, activity: Activity, agent_id: str, working: dict[AgentId, ThreadId | None]) -> AgentView:
+def _agent_view(
+    board: Board,
+    activity: Activity,
+    agent_id: str,
+    working: dict[AgentId, ThreadId | None],
+    needs: dict[AgentId, Need],
+) -> AgentView:
     joined = board.agent(agent_id)
     if joined is None:
         raise NotFound(f'No agent has the ID {agent_id}.')
     turns = tuple(turn for turn in board.turns if turn.agent == agent_id)
     costs = tuple(turn.cost_usd for turn in turns if turn.cost_usd is not None)
     role, status = board.profile(agent_id)
+    given, giver = board.given_role(agent_id)
+    flag = board.flag(agent_id)
     return AgentView(
         agent=joined.agent,
+        seat=seat_label(board, agent_id),
+        about=board.about(agent_id),
+        picture=board.picture(agent_id),
+        given_role=given,
+        given_by=giver if given else None,
+        reviewer=board.reviewer(agent_id),
+        flag=flag.flag or '' if flag else '',
+        edits=profile_edits(board, agent_id),
+        need=needs[agent_id],
+        outcomes=outcomes(board, agent_id),
+        turns_started=sum(start.agent == agent_id for start in board.starts),
         role=role,
         on_call=board.on_call(agent_id),
         coordinator=board.coordinator == agent_id,
