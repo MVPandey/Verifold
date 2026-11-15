@@ -1,26 +1,33 @@
 """
 Snapshots of agents' folders, as commits in a Git directory of Verifold's own.
 
-A snapshot commits everything in an agent's folder that Git does not ignore, onto `refs/verifold/agents/<agent ID>`
+A snapshot commits the files in an agent's folder that Git does not ignore, onto `refs/verifold/agents/<agent ID>`
 in `.verifold/snapshots.git`. Agents cannot always commit from inside their harness's sandbox, so Verifold commits
 for them, and evidence always points at a stable commit.
 
-Every Git command for a snapshot names that directory, names the agent's folder as the work tree, and runs from
-Verifold's own folder. So Git finds no repository from the agent's folder, and it reads no configuration, hook,
-filter, or ref of the agent's repository or of the project's. It reads the agent's files, and its `.gitignore` and
-`.gitattributes` files, as data: an attribute can name a filter, and no configuration that Git reads has one. Git
-reads no configuration of the person or the system either, so the person's filters and signing do not run. A
-snapshot writes nothing in the agent's folder, and nothing in a repository of the lab.
+Every Git command for a snapshot names that directory and starts in Verifold's own folder. The one that reads the
+agent's files, `git add`, names the agent's folder as its work tree and works there. So Git finds no repository
+from the agent's folder, and it uses no configuration, hook, or filter of the folder's own repository or of the
+project's. Nothing in the folder can name a program that runs. Git reads the agent's files, and its `.gitignore`
+and `.gitattributes` files, as data: an attribute can ask for a filter, and no configuration that Git reads names
+a program for one. An attribute can also ask Git to store other bytes than the file's: other line ends, another
+encoding, or a short `$Id$` line. Git records a repository inside the folder as that repository's one commit,
+without its files. For that it reads the repository's HEAD and its format settings, also through a `.git` file
+there that names another Git directory. Git reads no configuration of the person or the system either, so the
+person's filters and signing do not run. A snapshot writes nothing in the agent's folder, and nothing in a
+repository of the lab.
 """
 
+import asyncio
 import tempfile
+from contextlib import suppress
 from pathlib import Path, PurePosixPath
 
 from verifold.protocol.ids import AgentId, CommitId
 from verifold.protocol.posts import FileEvidence
 from verifold.runner.errors import RunnerError
 from verifold.runner.folders import LAB_FOLDER, real_folder
-from verifold.runner.git import GitError, git, own_git, own_repository
+from verifold.runner.git import GitError, GitTimeout, git, own_git, own_repository, small_text
 from verifold.server.errors import EvidenceRejected
 
 _AUTHOR = {
@@ -43,6 +50,9 @@ async def snapshot(project: Path, agent_id: AgentId) -> CommitId:
     The folder is the one that Verifold made for the agent in the lab of `project`. Verifold first checks that it
     is a real folder at its own place in the lab's folder, so a link there makes Verifold commit no other folder.
 
+    When Verifold ends a Git command of the snapshot, at its time limit or because the caller was cancelled, the
+    snapshot leaves nothing that stops a later one: its index goes, and so does the lock that Git left at the ref.
+
     Raises:
         NoAgentFolder: The agent's folder is not there, or it is a link or lies behind one.
         GitError: Verifold's own Git directory is not a folder of this user's, or Git failed or did not end in time.
@@ -51,8 +61,10 @@ async def snapshot(project: Path, agent_id: AgentId) -> CommitId:
     folder = real_folder(project, agent_id)
     lab = project.resolve() / LAB_FOLDER
     ignored = await _ignore_list(lab)
-    # The index is a new one in Verifold's own directory, so no index of the agent's is read or written.
-    with tempfile.TemporaryDirectory(dir=own_repository(lab), prefix='index-') as temporary:
+    # The index is a new one in Verifold's own directory, so no index of the agent's is read or written. The
+    # folder that holds it goes when this block ends, in whatever way.
+    own = own_repository(lab)
+    with tempfile.TemporaryDirectory(dir=own, prefix='index-') as temporary:
         index = {'GIT_INDEX_FILE': str(Path(temporary) / 'index')}
         await own_git(lab, *ignored, f'--work-tree={folder}', 'add', '--all', env=index)
         tree = await own_git(lab, 'write-tree', env=index)
@@ -65,8 +77,24 @@ async def snapshot(project: Path, agent_id: AgentId) -> CommitId:
     commit = await own_git(
         lab, 'commit-tree', tree, *(('-p', parent) if parent else ()), '-m', f'Snapshot of {agent_id}', env=_AUTHOR
     )
-    await own_git(lab, 'update-ref', ref, commit)
+    try:
+        await own_git(lab, 'update-ref', ref, commit)
+    except (GitTimeout, asyncio.CancelledError):
+        _unlock(own / f'{ref}.lock', commit)
+        raise
     return commit
+
+
+def _unlock(lock: Path, commit: CommitId) -> None:
+    """
+    Remove the lock that a Git command of Verifold's own left at an agent's ref, after Verifold ended that command.
+
+    With the lock there, no later snapshot could move the ref. Git writes the new commit's ID into the lock, so
+    a lock with another ID is the lock of another snapshot that runs now, and it stays.
+    """
+    with suppress(GitError, OSError):
+        if (small_text(lock) or '').strip() in ('', commit):
+            lock.unlink(missing_ok=True)
 
 
 async def _ignore_list(lab: Path) -> tuple[str, ...]:
@@ -91,24 +119,40 @@ async def pin(project: Path, agent_id: AgentId, paths: tuple[str, ...]) -> tuple
     Snapshot an agent's folder and pin each path to the snapshot.
 
     Raises:
-        EvidenceRejected: A path is not a file in the folder, Git ignores it, or Verifold could not commit the
-            folder: the folder is a link or is gone, or Git failed.
+        EvidenceRejected: A path is no UTF-8 text or is not a file in the folder, the file is in a repository
+            inside the folder, Git ignores it, or Verifold could not commit the folder: the folder is a link or
+            is gone, or Git failed.
 
     """
     # Git names a file by its plain path, so `out/./a.md` is pinned as `out/a.md`.
     paths = tuple(str(PurePosixPath(path)) for path in paths)
+    # The record and the board hold UTF-8 text, and a name with other bytes arrives here as a surrogate.
+    not_text = [path for path in paths if any('\ud800' <= sign <= '\udfff' for sign in path)]
+    if not_text:
+        shown = ', '.join(path.encode(errors='backslashreplace').decode() for path in not_text)
+        raise EvidenceRejected(f'These file names are not UTF-8, so the files cannot be evidence: {shown}.')
     try:
         folder = real_folder(project, agent_id)
         missing = [path for path in paths if not (folder / PurePosixPath(path)).is_file()]
         if missing:
             raise EvidenceRejected(f'These files are not in your folder: {", ".join(missing)}.')
         commit = await snapshot(project, agent_id)
-        listed = await own_git(project.resolve() / LAB_FOLDER, 'ls-tree', '-r', '--name-only', commit)
+        # Each entry ends with a zero byte, so Git writes each name as it is, also one that is not ASCII.
+        listed = await own_git(project.resolve() / LAB_FOLDER, 'ls-tree', '-r', '-z', commit)
     except RunnerError as error:
         # The agent reads this, so the failure comes back as one that the board's tools pass on.
         raise EvidenceRejected(f'Verifold could not commit your folder, so it pinned no file: {error}') from error
-    tracked = set(listed.splitlines())
-    ignored = [path for path in paths if path not in tracked]
+    entries = [entry.partition('\t') for entry in listed.split('\0') if entry]
+    # Git records a repository inside the folder as one entry with that repository's commit.
+    repositories = {name for about, _, name in entries if about.startswith('160000 ')}
+    held = {name for _, _, name in entries} - repositories
+    inside = [path for path in paths if any(str(above) in repositories for above in PurePosixPath(path).parents)]
+    if inside:
+        raise EvidenceRejected(
+            'These files are in a repository inside your folder. A snapshot records such a repository as its one '
+            f'commit, without its files, so they cannot be evidence: {", ".join(inside)}.'
+        )
+    ignored = [path for path in paths if path not in held]
     if ignored:
         raise EvidenceRejected(f'Git ignores these files, so they cannot be evidence: {", ".join(ignored)}.')
     return tuple(FileEvidence(path=path, commit=commit) for path in paths)

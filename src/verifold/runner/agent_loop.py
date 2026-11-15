@@ -244,6 +244,10 @@ class AgentLoop:
                 # While the lab stops, the harness's cleanup can fail too. That error ends the agent and restarts nothing.
                 if (task := asyncio.current_task()) and task.cancelling():
                     raise asyncio.CancelledError from error
+                if self._left() and not self._in_turn:
+                    # The agent left the lab and its last turn has its end in the record. Its harness can fail on
+                    # the way out, and that is no failure of a turn and starts nothing again.
+                    return
                 failures += 1
                 in_turn, ends = await self._failed(error, failures)
                 if ends:

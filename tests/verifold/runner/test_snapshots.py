@@ -1,9 +1,13 @@
+import asyncio
 import os
 import shutil
+from contextlib import suppress
 from pathlib import Path
 
+import psutil
 import pytest
-from plants import markers, old_snapshot, plain_git, program
+from builders import alive, until
+from plants import markers, old_snapshot, plain_git, program, stand_in_git
 
 from verifold.runner.errors import NoAgentFolder
 from verifold.runner.folders import agent_folder
@@ -50,6 +54,18 @@ def on_disk(folder: Path) -> list[str]:
     """Return the path of every file in a folder, but for the `.git` at its top."""
     paths = (path.relative_to(folder) for path in folder.rglob('*') if path.is_file())
     return sorted(str(path) for path in paths if path.parts[0] != '.git')
+
+
+def adding(folder: Path) -> list[int]:
+    """Return the Git processes of this test that read an agent's folder for a snapshot."""
+
+    def words(process: psutil.Process) -> list[str]:
+        # A process can end while this looks at it.
+        with suppress(psutil.Error):
+            return process.cmdline()
+        return []
+
+    return [one.pid for one in psutil.Process().children(recursive=True) if f'--work-tree={folder}' in words(one)]
 
 
 def everything(root: Path, but: Path | None = None) -> dict[str, bytes]:
@@ -357,3 +373,156 @@ async def test_a_file_in_verifolds_own_directory_that_names_another_directory_mo
     assert not (own / 'commondir').exists()
     assert (own / 'objects' / second[:2] / second[2:]).is_file()
     assert await own_git(lab, 'rev-parse', f'{second}^') == first
+
+
+async def test_a_cancel_of_a_snapshot_ends_its_git_and_leaves_no_index(project: Path) -> None:
+    folder, own = folder_of(project), project / '.verifold' / 'snapshots.git'
+    # A pipe where Git expects the list of ignored files, so the Git that reads the folder never ends.
+    (folder / '.gitignore').unlink()
+    os.mkfifo(folder / '.gitignore')
+    running = asyncio.create_task(snapshot(project, 'ada'))
+    await until(lambda: bool(adding(folder)))
+    (reader,) = adding(folder)
+
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    await until(lambda: not alive(reader))
+    assert list(own.glob('index-*')) == []
+    # The next snapshot is whole.
+    (folder / '.gitignore').unlink()
+    assert await files_of(project, await snapshot(project, 'ada')) == ['data.csv']
+
+
+@pytest.mark.parametrize('holds', ['the commit of this snapshot', 'another commit'])
+async def test_a_snapshot_that_is_cut_at_its_ref_removes_the_lock_that_its_own_git_left(
+    project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, holds: str
+) -> None:
+    folder, lab = folder_of(project), project / '.verifold'
+    first = await snapshot(project, 'ada')
+    lock = lab / 'snapshots.git' / 'refs' / 'verifold' / 'agents' / 'ada.lock'
+    # A stand-in for Git that is Git itself, but for the command that moves the ref. That one writes its lock
+    # with the new commit, as Git does, and then never ends. `commit` is the command's last word.
+    written = '$commit' if holds == 'the commit of this snapshot' else 'f' * 40
+    script = (
+        'for word in "$@"; do\n'
+        '  if [ "$word" = update-ref ]; then\n'
+        '    for commit in "$@"; do :; done\n'
+        f'    echo "{written}" > "{lock}"\n'
+        '    exec sleep 600\n'
+        '  fi\n'
+        'done\n'
+        f'exec "{shutil.which("git")}" "$@"'
+    )
+    (folder / 'more.txt').write_text('more')
+    with monkeypatch.context() as patched:
+        stand_in_git(tmp_path, script, patched)
+        running = asyncio.create_task(snapshot(project, 'ada'))
+        await until(lambda: lock.exists() and bool(lock.read_text()))
+
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+
+    if holds == 'another commit':
+        # That lock is the one of another snapshot that runs at the same time, so it stays.
+        assert lock.read_text() == f'{"f" * 40}\n'
+    else:
+        assert not lock.exists()
+        # So the next snapshot moves the ref.
+        second = await snapshot(project, 'ada')
+        assert await own_git(lab, 'rev-parse', f'{second}^', snapshot_ref('ada')) == f'{first}\n{second}'
+
+
+async def test_a_file_that_somebody_put_into_verifolds_own_directory_changes_no_snapshot(
+    project: Path, tmp_path: Path
+) -> None:
+    folder, lab = folder_of(project), project / '.verifold'
+    (folder / 'result.txt').write_bytes(b'11.8\r\n')
+    await snapshot(project, 'ada')
+    own = lab / 'snapshots.git'
+    # Somebody writes into the own directory a list of ignored files, attributes, and the name of another
+    # object store.
+    (own / 'info').mkdir()
+    (own / 'objects' / 'info').mkdir()
+    (own / 'info' / 'exclude').write_text('result.txt\n')
+    (own / 'info' / 'attributes').write_text('*.csv text eol=crlf\n')
+    (own / 'objects' / 'info' / 'alternates').write_text(f'{tmp_path}\n')
+    (folder / 'data.csv').write_bytes(b'x\r\n1\r\n')
+    # Git itself then leaves the file out and stores other bytes for the other file.
+    index = {'GIT_INDEX_FILE': str(tmp_path / 'index')}
+    await plain_git(f'--git-dir={own}', f'--work-tree={folder}', 'add', '--all', cwd=lab, env=index)
+    plain = await plain_git(f'--git-dir={own}', 'write-tree', cwd=lab, env=index)
+    assert await plain_git(f'--git-dir={own}', 'ls-tree', '--name-only', plain, cwd=lab) == '.gitignore\ndata.csv'
+    assert await plain_git(f'--git-dir={own}', 'cat-file', '-p', f'{plain}:data.csv', cwd=lab) == 'x\n1'
+
+    commit = await snapshot(project, 'ada')
+
+    # The snapshot holds both files as they are, and the three files are gone.
+    assert await files_of(project, commit) == ['.gitignore', 'data.csv', 'result.txt']
+    assert await own_git(lab, 'cat-file', '-p', f'{commit}:data.csv') == 'x\r\n1'
+    assert sorted(path.name for path in own.rglob('*') if path.name in ('exclude', 'attributes', 'alternates')) == []
+
+
+@pytest.mark.parametrize('name', ['objects', 'refs'])
+async def test_a_link_where_the_objects_or_the_refs_of_verifolds_own_directory_belong_stops_a_snapshot(
+    project: Path, tmp_path: Path, name: str
+) -> None:
+    folder, lab = folder_of(project), project / '.verifold'
+    (folder / 'result.txt').write_text('11.8')
+    first = await snapshot(project, 'ada')
+    own, outside = lab / 'snapshots.git', tmp_path / 'outside'
+    # Somebody moves the folder away and puts a link to it in its place.
+    (own / name).rename(outside)
+    (own / name).symlink_to(outside, target_is_directory=True)
+    # Git itself then writes through the link: an object for a new file, or a ref.
+    before = everything(outside)
+    (folder / 'more.txt').write_text('more')
+    index = {'GIT_INDEX_FILE': str(tmp_path / 'index')}
+    await plain_git(f'--git-dir={own}', f'--work-tree={folder}', 'add', '--all', cwd=lab, env=index)
+    await plain_git(f'--git-dir={own}', 'update-ref', 'refs/verifold/agents/bo', first, cwd=lab)
+    assert everything(outside) != before
+    before = everything(outside)
+    (folder / 'still-more.txt').write_text('still more')
+
+    with pytest.raises(GitError, match=f'{name} is no folder, so Verifold does not use'):
+        await snapshot(project, 'ada')
+    with pytest.raises(EvidenceRejected, match='Verifold could not commit your folder, so it pinned no file'):
+        await pin(project, 'ada', ('result.txt',))
+
+    assert everything(outside) == before
+
+
+async def test_a_file_whose_name_is_not_ascii_is_pinned_and_a_name_that_is_not_utf8_is_refused(project: Path) -> None:
+    folder, lab = folder_of(project), project / '.verifold'
+    (folder / 'résumé.md').write_text('Vita.')
+    # A file system that takes any bytes as a name holds a name that is no UTF-8. Others refuse to make it.
+    with suppress(OSError):
+        (folder / 'caf\udce9.txt').write_text('x')
+
+    evidence = await pin(project, 'ada', ('résumé.md',))
+
+    assert [item.path for item in evidence] == ['résumé.md']
+    assert await own_git(lab, 'show', f'{evidence[0].commit}:résumé.md') == 'Vita.'
+    # The record holds UTF-8 text, so a name with other bytes cannot be in it. The refusal shows the name's code.
+    with pytest.raises(EvidenceRejected) as refused:
+        await pin(project, 'ada', ('résumé.md', 'caf\udce9.txt'))
+    assert str(refused.value) == 'These file names are not UTF-8, so the files cannot be evidence: caf\\udce9.txt.'
+
+
+async def test_a_file_in_a_repository_inside_the_folder_cannot_be_evidence_and_the_refusal_says_why(
+    project: Path,
+) -> None:
+    folder = folder_of(project)
+    await committed(folder / 'module')
+    (folder / 'module' / 'deep').mkdir()
+    (folder / 'module' / 'deep' / 'more.txt').write_text('more')
+
+    refused = (
+        'These files are in a repository inside your folder. A snapshot records such a repository as its one '
+        'commit, without its files, so they cannot be evidence: module/data.csv, module/deep/more.txt.'
+    )
+    with pytest.raises(EvidenceRejected) as said:
+        await pin(project, 'ada', ('data.csv', 'module/data.csv', 'module/deep/more.txt'))
+    assert str(said.value) == refused

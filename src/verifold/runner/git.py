@@ -3,12 +3,14 @@
 import asyncio
 import os
 import secrets
+import signal
 import stat
-from asyncio.subprocess import PIPE
+from asyncio.subprocess import DEVNULL, PIPE
 from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
 from types import MappingProxyType
+from typing import override
 
 from verifold.runner.environment import clean_environment
 from verifold.runner.errors import RunnerError
@@ -26,7 +28,13 @@ Such a command reads its configuration from that directory, so no repository of 
 """
 
 GIT_SECONDS = 300.0
-"""How long one Git command may run before Verifold ends it."""
+"""How long one Git command may run before Verifold ends it, when its caller names no other limit."""
+
+SETTLE_SECONDS = 1.0
+"""
+How long Verifold waits for what follows the end of a Git process: its last output, which a program that Git
+started can hold open, and its exit after Verifold ended it.
+"""
 
 GIT_ENVIRONMENT: Mapping[str, str] = MappingProxyType(
     {
@@ -55,43 +63,95 @@ _OWN_FILES: Mapping[str, str] = MappingProxyType(
 )
 """The files that make Verifold's own Git directory a bare repository, with the whole text of each."""
 
+_NOT_OWN = (('.', ('commondir',)), ('info', ('exclude', 'attributes')), ('objects/info', ('alternates',)))
+"""
+The files that Git would read from Verifold's own Git directory and that Verifold never writes there, each with
+its folder. One names another directory for the refs, two change what a snapshot holds, and one names another
+object store.
+"""
+
 
 class GitError(RunnerError):
     """A Git command failed, or Verifold does not read what a repository holds. The message says which."""
 
 
-async def git(*args: str, cwd: Path, env: Mapping[str, str] | None = None, strip: bool = True) -> str:
+class GitTimeout(GitError):
+    """A Git command did not end in its time limit, and Verifold ended it."""
+
+
+class _Git(asyncio.SubprocessProtocol):
+    """One Git process: what it wrote, when it ended, and when its output closed."""
+
+    def __init__(self) -> None:
+        """Start with no output."""
+        loop = asyncio.get_running_loop()
+        self.wrote = {1: bytearray(), 2: bytearray()}
+        self.ended: asyncio.Future[None] = loop.create_future()
+        self.closed: asyncio.Future[None] = loop.create_future()
+
+    @override
+    def pipe_data_received(self, fd: int, data: bytes) -> None:
+        self.wrote[fd] += data
+
+    @override
+    def process_exited(self) -> None:
+        self.ended.set_result(None)
+
+    @override
+    def connection_lost(self, exc: Exception | None) -> None:
+        self.closed.set_result(None)
+
+
+async def git(
+    *args: str, cwd: Path, env: Mapping[str, str] | None = None, strip: bool = True, seconds: float | None = None
+) -> str:
     """
     Run `git` with `args` in `cwd`, and return its standard output, stripped unless `strip` is false.
 
     Every command has hooks and the file watcher off. `env` adds variables to the clean environment, such as a
-    temporary `GIT_INDEX_FILE`.
+    temporary `GIT_INDEX_FILE`. Git may run for `seconds`, or for `GIT_SECONDS` when the caller names no limit.
+
+    Git runs in a process group of its own. When this call ends while Git still runs, at the limit or because
+    its caller was cancelled, Verifold ends the whole group, so the programs that Git started end with it,
+    unless one left the group. Verifold waits for Git's own end and never for a program that Git started: such
+    a program can hold Git's output open for good.
 
     Raises:
-        GitError: Git exited with an error, or it did not end in `GIT_SECONDS` and Verifold ended it.
+        GitTimeout: Git did not end in its time limit, and Verifold ended it.
+        GitError: Git exited with an error.
 
     """
-    process = await asyncio.create_subprocess_exec(
+    limit = GIT_SECONDS if seconds is None else seconds
+    transport, ran = await asyncio.get_running_loop().subprocess_exec(
+        _Git,
         'git',
         *HOOKS_OFF,
         *args,
         cwd=cwd,
         env=clean_environment() | dict(env or {}),
-        stdin=asyncio.subprocess.DEVNULL,
+        stdin=DEVNULL,
         stdout=PIPE,
         stderr=PIPE,
+        start_new_session=True,
     )
     try:
-        output, errors = await asyncio.wait_for(process.communicate(), GIT_SECONDS)
-    except TimeoutError:
-        # Git waits for ever for a pipe where it expects a file, such as an agent's `.gitignore`.
-        with suppress(ProcessLookupError):
-            process.kill()
-        await process.wait()
-        raise GitError(f'git {" ".join(args)} did not end in {GIT_SECONDS:g} seconds, so Verifold ended it.') from None
-    if process.returncode:
-        raise GitError(f'git {" ".join(args)} failed: {errors.decode(errors="replace").strip()}')
-    text = output.decode()
+        ended, _ = await asyncio.wait([ran.ended], timeout=limit)
+        if not ended:
+            # Git waits for ever for a pipe where it expects a file, such as an agent's `.gitignore`.
+            raise GitTimeout(f'git {" ".join(args)} did not end in {limit:g} seconds, so Verifold ended it.')
+        # What Git wrote ends with Git, unless a program that Git started holds the output open.
+        await asyncio.wait([ran.closed], timeout=SETTLE_SECONDS)
+    finally:
+        if transport.get_returncode() is None:
+            # The group can be gone already. macOS also refuses a group whose last members are still exiting.
+            with suppress(ProcessLookupError, PermissionError):
+                os.killpg(transport.get_pid(), signal.SIGKILL)
+            await asyncio.wait([ran.ended], timeout=SETTLE_SECONDS)
+        transport.close()
+    if transport.get_returncode():
+        raise GitError(f'git {" ".join(args)} failed: {bytes(ran.wrote[2]).decode(errors="replace").strip()}')
+    # A file's name can hold bytes that are no UTF-8. Such a name stays a name, as it does for `os.fsdecode`.
+    text = bytes(ran.wrote[1]).decode(errors='surrogateescape')
     return text.strip() if strip else text
 
 
@@ -105,14 +165,15 @@ async def commit_of(folder: Path, ref: str) -> str | None:
 
 async def own_git(lab: Path, *args: str, env: Mapping[str, str] | None = None) -> str:
     """
-    Run `git` with `args` on the Git directory of Verifold's own, from the lab's folder, and return its output.
+    Run `git` with `args` on the Git directory of Verifold's own, and return its output.
 
-    Git reads the configuration that Verifold wrote there, and none of the person, of the system, or of a
-    repository of the lab. `GIT_COMMON_DIR` keeps it there also when a file in the directory names another one.
-    Git uses no transport, fetches no object, and replaces none.
+    Git starts in the lab's folder. It reads the configuration that Verifold wrote in that directory, and none
+    of the person, of the system, or of a repository of the lab. `GIT_COMMON_DIR` keeps it there also when a
+    file in the directory names another one. Git uses no transport, fetches no object, and replaces none.
 
     Raises:
-        GitError: The directory is not a folder of this user's, Git exited with an error, or it did not end in time.
+        GitTimeout: Git did not end in time, and Verifold ended it.
+        GitError: The directory is not a folder of this user's, or Git exited with an error.
 
     """
     own = own_repository(lab)
@@ -131,12 +192,14 @@ def own_repository(lab: Path) -> Path:
 
     Verifold writes the directory itself, so Git reads no template and no configuration of the person to make it.
     Each call checks `HEAD` and `config`, and writes one again when it is not the text that Verifold wrote. It
-    removes a `commondir` file: Git keeps its refs in the directory that such a file names, whatever
-    `GIT_COMMON_DIR` says.
+    checks that `objects` and `refs` are folders and no links, so that Git writes a snapshot nowhere else. It
+    removes the files that Git would read there and that Verifold never writes: `commondir`, `info/exclude`,
+    `info/attributes`, and `objects/info/alternates`. Git keeps its refs in the directory that a `commondir`
+    file names, whatever `GIT_COMMON_DIR` says.
 
     Raises:
-        GitError: The path holds a link or something that is no folder, the folder is not this user's, or Verifold
-            cannot write one of its files.
+        GitError: The path holds a link or something that is no folder, the folder is not this user's, `objects`
+            or `refs` in it is no folder, or Verifold cannot write or remove one of its files.
 
     """
     home = lab / OWN_REPOSITORY
@@ -154,11 +217,13 @@ def own_repository(lab: Path) -> Path:
         for name in ('objects', 'refs'):
             with suppress(FileExistsError):
                 os.mkdir(name, 0o700, dir_fd=handle)
+            if not stat.S_ISDIR(os.lstat(name, dir_fd=handle).st_mode):
+                raise GitError(f'{home / name} is no folder, so Verifold does not use {home} as its Git directory.')
         for name, wanted in _OWN_FILES.items():
             if _own_text(handle, name) != wanted:
                 _write_own(handle, name, wanted)
-        with suppress(FileNotFoundError):
-            os.unlink('commondir', dir_fd=handle)
+        for folder, names in _NOT_OWN:
+            _remove_own(handle, folder, names)
     except OSError as error:
         raise GitError(f'Verifold cannot write its own Git directory {home}: {error}') from error
     finally:
@@ -194,6 +259,24 @@ def small_text(path: Path | str, inside: int | None = None) -> str | None:
         raise GitError(refused) from error
     finally:
         os.close(file)
+
+
+def _remove_own(home: int, folder: str, names: tuple[str, ...]) -> None:
+    # Remove files from a folder of Verifold's own Git directory. A link or a file where the folder belongs goes
+    # as what it is, and nothing behind a link is touched.
+    try:
+        inside = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=home)
+    except FileNotFoundError:
+        return
+    except OSError:
+        os.unlink(folder, dir_fd=home)
+        return
+    try:
+        for name in names:
+            with suppress(FileNotFoundError):
+                os.unlink(name, dir_fd=inside)
+    finally:
+        os.close(inside)
 
 
 def _own_text(home: int, name: str) -> str | None:

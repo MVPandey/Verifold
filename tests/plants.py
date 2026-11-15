@@ -105,6 +105,26 @@ def program(path: Path, marker: Path) -> Path:
     return path
 
 
+def stand_in_git(folder: Path, script: str, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """
+    Put a shell script named `git` first on the path, and return the script.
+
+    The script's own path can hold a space, as a checkout's path can, so the script names no program in its
+    first line but the shell.
+    """
+    stand_in = folder / 'bin' / 'git'
+    stand_in.parent.mkdir()
+    stand_in.write_text(f'#!/bin/sh\n{script}\n')
+    stand_in.chmod(0o755)
+    monkeypatch.setenv('PATH', f'{stand_in.parent}{os.pathsep}{os.environ["PATH"]}')
+    return stand_in
+
+
+def process_ids(*files: Path) -> list[int]:
+    """Return the process IDs that programs of a test wrote into files, of the files that hold one."""
+    return [int(text) for file in files if file.exists() and (text := file.read_text().strip())]
+
+
 def markers(folder: Path) -> list[str]:
     """Return the names of the markers that planted programs left in `folder`, and remove them."""
     found = sorted(folder.glob('ran*'))

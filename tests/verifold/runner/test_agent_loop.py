@@ -813,6 +813,25 @@ async def test_each_turn_records_a_snapshot_of_the_agents_folder(served: ServedB
     assert not (folder_of(tmp_path) / '.git').exists()
 
 
+@pytest.mark.usefixtures('log')
+async def test_a_turn_of_an_agent_whose_folder_became_a_link_ends_without_a_snapshot(
+    served: ServedBoard, tmp_path: Path
+) -> None:
+    loop = loop_for(served, tmp_path)
+    # The agent's folder is moved away, and a link to it takes its place.
+    folder_of(tmp_path).rename(tmp_path / 'elsewhere')
+    folder_of(tmp_path).symlink_to(tmp_path / 'elsewhere', target_is_directory=True)
+    running = asyncio.create_task(loop.run())
+    try:
+        await until(lambda: len(served.lab.board.turns) == 1)
+    finally:
+        running.cancel()
+
+    # Verifold commits no folder through a link, and the turn still has its end in the record.
+    assert (served.lab.board.turns[0].snapshot, served.lab.board.turns[0].error) == (None, None)
+    assert not (tmp_path / '.verifold' / 'snapshots.git').exists()
+
+
 class Recorded(Activity):
     """An activity store that keeps every change, in order."""
 
@@ -1119,7 +1138,8 @@ async def test_a_harness_that_fails_after_its_agent_left_is_not_started_again(
         await loop_for(served, tmp_path, retry_after=60).run()
 
     assert opened == [True]
-    assert [turn.error for turn in served.lab.board.turns] == ['BrokenPipeError: The harness closed its stdin.']
+    # The agent had left when its harness failed, and no turn of it was open. So the record holds no failure.
+    assert [turn.error for turn in served.lab.board.turns] == []
 
 
 async def test_an_agent_whose_turn_runs_on_after_it_left_is_stopped_after_a_moment(
@@ -1155,10 +1175,17 @@ async def test_a_permission_request_from_an_agent_that_left_is_refused_and_asks_
     assert (chosen, cancelled, len(lab.board.posts)) == ('no', None, posts)
 
 
+@pytest.mark.parametrize('snapshot', ['takes its time', 'returns at once'])
 async def test_the_ask_of_an_agent_that_the_person_removes_while_it_waits_for_a_permission_needs_nobody(
-    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch, snapshot: str
 ) -> None:
     monkeypatch.setenv('FAKE_ACP_PERMISSION', '1')
+    if snapshot == 'returns at once':
+        # The loop then leaves the harness while it still ends its turn, and the harness fails on the way out.
+        async def at_once(*_: object) -> None:
+            return None
+
+        monkeypatch.setattr(agent_loop, 'snapshot', at_once)
     lab = served.lab
     running = asyncio.create_task(loop_for(served, tmp_path).run())
     await until(lambda: bool(needs_person(lab.board)))

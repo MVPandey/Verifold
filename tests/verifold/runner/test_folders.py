@@ -1,13 +1,16 @@
+import asyncio
 import shutil
 import sys
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
-from plants import markers, plain_git, program
+from builders import alive, until
+from plants import markers, plain_git, plant, process_ids, program, stand_in_git
 
 from verifold.runner.errors import NoAgentFolder, NoFileManager
-from verifold.runner.folders import agent_folder, open_folder, real_folder, tracked_lab_files
-from verifold.runner.git import GitError, commit_of, git
+from verifold.runner.folders import PARTIAL_CLONE, agent_folder, open_folder, real_folder, tracked_lab_files
+from verifold.runner.git import GitError, GitTimeout, commit_of, git
 
 
 async def committed_project(path: Path) -> Path:
@@ -118,6 +121,124 @@ async def test_the_persons_own_checkout_filter_still_runs_for_an_agents_worktree
     folder = await agent_folder(project, 'ada')
 
     assert (folder / 'data.csv').read_text() == 'X,Y\n'
+
+
+@pytest.mark.parametrize('cut', ['by a cancel', 'at the time limit'])
+async def test_a_worktree_that_git_did_not_finish_leaves_no_folder_and_no_entry_in_the_project(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch, cut: str
+) -> None:
+    # The person's own filter for a checkout never ends, so Git never finishes the worktree.
+    filter_id = tmp_path / 'filter.pid'
+    (home / '.gitconfig').write_text(f'[filter "slow"]\n\tsmudge = "echo $$ > {filter_id}; exec sleep 600"\n')
+    project = tmp_path / 'project'
+    project.mkdir()
+    (project / '.gitattributes').write_text('*.csv filter=slow\n')
+    (project / 'data.csv').write_text('x,y\n')
+    await git('init', '--quiet', '--initial-branch=main', cwd=project)
+    await git('add', '.', cwd=project)
+    await git(
+        '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--quiet', '-m', 'Start', cwd=project
+    )
+    folder, entries = project / '.verifold' / 'agents' / 'ada', project / '.git' / 'worktrees'
+
+    if cut == 'by a cancel':
+        adding = asyncio.create_task(agent_folder(project, 'ada'))
+        await until(lambda: bool(process_ids(filter_id)))
+        # Git is in the middle of the checkout: the folder is there, and so is the worktree's entry.
+        assert (folder.is_dir(), [entry.name for entry in entries.iterdir()]) == (True, ['ada'])
+        adding.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await adding
+    else:
+        with monkeypatch.context() as shorter:
+            shorter.setattr('verifold.runner.folders.WORKTREE_SECONDS', 0.05)
+            with pytest.raises(GitTimeout, match=r'worktree add .* did not end in 0\.05 seconds, so Verifold ended'):
+                await agent_folder(project, 'ada')
+
+    # Git and the filter that it started are gone, and nothing of the worktree is left.
+    await until(lambda: not any(alive(pid) for pid in process_ids(filter_id)))
+    assert not folder.exists()
+    assert not entries.exists() or list(entries.iterdir()) == []
+    assert len((await git('worktree', 'list', cwd=project)).splitlines()) == 1
+    # So a later call makes the folder anew, and returns it only when it is whole.
+    (home / '.gitconfig').unlink()
+    assert await agent_folder(project, 'ada') == folder
+    assert (folder / 'data.csv').read_text() == 'x,y\n'
+
+
+async def test_a_new_repository_that_git_could_not_make_leaves_no_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / 'project'
+    project.mkdir()
+    # A stand-in for Git that fails.
+    stand_in_git(tmp_path, 'exit 1', monkeypatch)
+
+    with pytest.raises(GitError, match='git init --quiet failed'):
+        await agent_folder(project, 'ada')
+
+    assert not (project / '.verifold' / 'agents' / 'ada').exists()
+
+
+async def test_git_fetches_no_object_that_the_project_lacks_when_it_makes_an_agents_folder(tmp_path: Path) -> None:
+    project = await committed_project(tmp_path / 'project')
+    blob = await git('rev-parse', 'HEAD:data.csv', cwd=project)
+    ran = tmp_path / 'ran'
+    # The project's repository names a remote for the objects that it lacks, over a transport that runs a
+    # command, and it lost a file of its last commit.
+    store = plant(project / '.git', 'plain', ran, tmp_path / 'aside.git')
+    (store / blob[:2] / blob[2:]).unlink()
+    # Git itself, in a copy of the project, asks the remote for the file when it adds a worktree.
+    unguarded = tmp_path / 'unguarded'
+    shutil.copytree(project, unguarded)
+    with suppress(GitError):
+        await plain_git('worktree', 'add', '--quiet', '-b', 'verifold/ada', str(tmp_path / 'out'), cwd=unguarded)
+    assert markers(tmp_path) == ['ran']
+
+    with pytest.raises(GitError, match=r'git worktree add .* failed') as refused:
+        await agent_folder(project, 'ada')
+
+    # Verifold's Git asked nobody. The error says what to do, and no folder is left.
+    assert markers(tmp_path) == []
+    assert str(refused.value).endswith(f'\n{PARTIAL_CLONE}')
+    assert not (project / '.verifold' / 'agents' / 'ada').exists()
+
+
+async def test_a_worktree_that_git_refuses_in_an_ordinary_project_gives_gits_own_error_and_leaves_no_folder(
+    tmp_path: Path,
+) -> None:
+    project = await committed_project(tmp_path / 'project')
+    # The agent's branch is checked out in another worktree already, so Git refuses a second one.
+    await git('worktree', 'add', '--quiet', '-b', 'verifold/ada', str(tmp_path / 'other'), cwd=project)
+
+    with pytest.raises(GitError, match=r'git worktree add .* failed') as refused:
+        await agent_folder(project, 'ada')
+
+    assert PARTIAL_CLONE not in str(refused.value)
+    assert not (project / '.verifold' / 'agents' / 'ada').exists()
+    # The other worktree is as it was.
+    assert (tmp_path / 'other' / 'data.csv').read_text() == 'x,y\n1,2\n'
+    assert len((await git('worktree', 'list', cwd=project)).splitlines()) == 2
+
+
+async def test_in_a_partial_clone_the_error_names_a_command_that_fetches_what_the_folder_needs(tmp_path: Path) -> None:
+    origin = await committed_project(tmp_path / 'origin')
+    await git('config', 'uploadpack.allowFilter', 'true', cwd=origin)
+    # A clone without the files of its commits, and without a checkout that would have fetched them.
+    project = tmp_path / 'project'
+    await plain_git(
+        'clone', '--quiet', '--filter=blob:none', '--no-checkout', f'file://{origin}', str(project), cwd=tmp_path
+    )
+
+    with pytest.raises(GitError) as refused:
+        await agent_folder(project, 'ada')
+    assert '`git backfill --no-sparse`' in str(refused.value)
+    assert str(refused.value).endswith(PARTIAL_CLONE)
+    # The person runs that command, and the folder then gets its files.
+    await plain_git('backfill', '--no-sparse', cwd=project)
+    folder = await agent_folder(project, 'ada')
+
+    assert (folder / 'data.csv').read_text() == 'x,y\n1,2\n'
 
 
 async def track(project: Path, name: str) -> None:

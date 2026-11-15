@@ -450,13 +450,16 @@ async def test_the_next_store_gets_its_turn_when_one_fails_in_any_way(
     if before == "Verifold's own":
         # Verifold's own store comes first. It never had the commit, and now it does not answer for it either.
         store = own_repository(project / '.verifold') / 'objects'
-        (store / 'info').mkdir()
     else:
         # The project becomes a repository after the author's folder. Its store comes before the author's and
         # does not give the commit.
         await git('init', '--quiet', cwd=project)
         store = project / '.git' / 'objects'
-    if form != 'no commit':
+    if (before, form) == ("Verifold's own", 'a pipe'):
+        # Verifold removes a list of other stores from its own store, so the pipe is where the commit's file belongs.
+        (store / pinned.commit[:2]).mkdir()
+        os.mkfifo(store / pinned.commit[:2] / pinned.commit[2:])
+    elif form != 'no commit':
         spoil(store, form, pinned.commit)
     if form == 'a pipe':
         # Git waits in that store for its share of the time, which is a few hundredths of a second here.
