@@ -32,7 +32,13 @@ from verifold.server.app_api import _changes, app_api
 from verifold.server.errors import LabExists, NoLab, SetupRejected
 from verifold.server.lab import Lab
 from verifold.society.errors import NotFound
-from verifold.store.errors import NormsUnreadable, SettingsChanged, SettingsInvalid, SettingsUnwritable
+from verifold.store.errors import (
+    NormsChanged,
+    NormsUnreadable,
+    SettingsChanged,
+    SettingsInvalid,
+    SettingsUnwritable,
+)
 from verifold.store.record_file import RecordFile
 
 TOKEN = 'person-secret'
@@ -82,10 +88,12 @@ class Host:
     def norms(self) -> NormsView:
         if self.norms_text == 'a link':
             raise NormsUnreadable('.verifold/LAB.md is a link. Verifold reads only a regular file here.')
-        file = NormsFile(name='LAB.md', path='.verifold/LAB.md', text=self.norms_text, saved=True)
+        file = NormsFile(name='LAB.md', path='.verifold/LAB.md', text=self.norms_text, saved=True, revision='r1')
         return NormsView(files=(file,))
 
     async def change_norms(self, change: NormsChange) -> NormsView:
+        if change.revision != 'r1':
+            raise NormsChanged('.verifold/LAB.md changed since you opened it. This is its new text.')
         if change.text == 'full':
             raise SettingsUnwritable("Can't write .verifold/LAB.md: No space left on device")
         self.norms_text = change.text
@@ -208,18 +216,35 @@ async def test_the_person_reads_and_saves_the_norms_by_name_and_never_by_path(ac
     host = Host(None)
     async with client_of(host, activity) as client:
         read = await client.get('/norms')
-        saved = await client.post('/norms', json={'name': 'LAB.md', 'text': '# Ours'})
-        other = await client.post('/norms', json={'name': '../settings.json', 'text': '{}'})
-        path = await client.post('/norms', json={'name': 'LAB.md', 'path': '/etc/passwd', 'text': 'x'})
-        large = await client.post('/norms', json={'name': 'WRITING.md', 'text': 'x' * 100_001})
-        full = await client.post('/norms', json={'name': 'LAB.md', 'text': 'full'})
+        saved = await client.post('/norms', json={'name': 'LAB.md', 'text': '# Ours', 'revision': 'r1'})
+        stale = await client.post('/norms', json={'name': 'LAB.md', 'text': '# Ours', 'revision': 'r0'})
+        unnamed = await client.post('/norms', json={'name': 'LAB.md', 'text': '# Ours'})
+        other = await client.post('/norms', json={'name': '../settings.json', 'text': '{}', 'revision': 'r1'})
+        path = await client.post(
+            '/norms', json={'name': 'LAB.md', 'path': '/etc/passwd', 'text': 'x', 'revision': 'r1'}
+        )
+        large = await client.post('/norms', json={'name': 'WRITING.md', 'text': 'x' * 100_001, 'revision': 'r1'})
+        full = await client.post('/norms', json={'name': 'LAB.md', 'text': 'full', 'revision': 'r1'})
         host.norms_text = 'a link'
         link = await client.get('/norms')
 
-    assert read.json() == {
-        'files': [{'name': 'LAB.md', 'path': '.verifold/LAB.md', 'text': '# Norms', 'saved': True}],
-        'told': None,
-    }
+    assert read.json()['files'] == [
+        {
+            'name': 'LAB.md',
+            'path': '.verifold/LAB.md',
+            'text': '# Norms',
+            'saved': True,
+            'revision': 'r1',
+            'error': None,
+            'changed_at': None,
+            'changed_by': None,
+            'missing': [],
+        }
+    ]
+    assert (read.json()['told'], read.json()['no_post']) == (None, None)
+    # A save names the revision that the person read. One from an older read is refused, and so is one with none.
+    assert (stale.status_code, unnamed.status_code) == (409, 422)
+    assert 'changed since you opened it' in stale.json()['detail']
     assert (saved.status_code, saved.json()['told'], saved.json()['files'][0]['text']) == (200, 'p-9', '# Ours')
     # The request names one of two files. Another name, a path, or a text that is too long changes nothing.
     assert (other.status_code, path.status_code, large.status_code) == (422, 422, 422)
@@ -241,7 +266,7 @@ async def test_every_request_needs_the_persons_token(lab: Lab, activity: Activit
         refused = await anonymous.get('/lab')
         wrong = await anonymous.get('/lab', headers={'Authorization': 'Bearer nope'})
         by_query = await anonymous.get('/lab', params={'token': TOKEN})
-        norms = await anonymous.post('/norms', json={'name': 'LAB.md', 'text': '# Theirs'})
+        norms = await anonymous.post('/norms', json={'name': 'LAB.md', 'text': '# Theirs', 'revision': 'r1'})
 
     assert (refused.status_code, wrong.status_code, by_query.status_code) == (401, 401, 200)
     assert norms.status_code == 401

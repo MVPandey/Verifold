@@ -2018,7 +2018,27 @@ a.file:hover {
   font-weight: 600;
 }
 
+/* A long report headline stops after six lines. Its thread shows all of it. */
+.f-report-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
 /* The Norms page: each file as a page, and a plain text area to change it. */
+.norms-newer,
+.norms-missing pre {
+  border: 1px solid var(--line2);
+  background: var(--card);
+  padding: 10px 12px;
+  font: 13px/1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow: auto;
+}
 .norms-file label {
   display: block;
   font-size: 13px;

@@ -16,7 +16,7 @@ Verifold writes no prompts. Every text that it sends to an agent is one of three
 - a fact about the state: the start message, the doorbell, the message after a restart, more time, or a turn that was cut short, the invitation, a blind checker's message, and what a tool returns. The messages are in `runner/messages.py`.
 - a norm, which lives in `.verifold/LAB.md` or `.verifold/WRITING.md`. The person reads and edits both on the app's Norms page. The defaults are `society/LAB.md` and `society/WRITING.md`.
 
-No sentence in Python tells an agent what to do with its work, in what order to work, or how to behave. `tests/verifold/test_words.py` fails on a sentence that opens like an order. An error message can still say what a call needs.
+No sentence in Python tells an agent what to do with its work, in what order to work, or how to behave. `tests/verifold/test_words.py` is a narrow guard for this rule: it fails on the sentences that this rule removed and on the common ways to open an order. It does not prove the rule, and its comment lists what it misses, so read each new sentence for agents against the rule yourself. A sentence must also be true in every state of the lab: closed, out of time, and after a restart. An error message can still say what a call needs.
 
 Agents decide for themselves what to watch, when to work, which threads to join, and what to start. Code enforces only these limits, at Verifold's own boundary:
 

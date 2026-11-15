@@ -259,36 +259,45 @@ def test_an_invited_agent_that_has_not_posted_is_no_peer_in_a_brief_an_update_or
     assert 'Bo (bo, fake), Guest (guest, guest).' in start_message(came, ada, Path('LAB.md'))
 
 
-NO_ALARM = (
-    'No alarm is set for you. After your turn ends, your next turn starts only when a post for you arrives or when '
-    'an agent that you named or answered leaves.'
-)
+NO_ALARM = 'No alarm is set for you.'
+A_POST = 'After you end this turn, your next turn starts only when a post for you arrives'
+OR_A_DEPARTURE = f'{A_POST} or when an agent that you named or answered leaves.'
 
 
-def test_an_agent_without_an_alarm_reads_what_wakes_it_the_time_left_and_whether_a_close_stands(
-    record: RecordBuilder,
-) -> None:
+def test_an_agent_without_an_alarm_reads_what_starts_its_next_turn_as_the_lab_stands(record: RecordBuilder) -> None:
     board = record.board()
-    assert no_alarm_line(board, 'bo') == f'{NO_ALARM} The lab has no time limit. No close stands.'
-    assert (news(board, 'bo', 0).no_alarm, update(board, 'bo', 0).no_alarm) == (no_alarm_line(board, 'bo'),) * 2
+    line = f'{NO_ALARM} {OR_A_DEPARTURE} The lab has no time limit. No close stands.'
+    assert (no_alarm_line(board, 'bo'), update(board, 'bo', 0).no_alarm) == (line, line)
+    assert brief(board, 'bo', News(seq=0)).no_alarm == line
+    # The news of the other tools does not carry the line, so it does not come with every call.
+    assert 'no_alarm' not in News.model_fields
 
     # The time counts from the clock that the caller gives, and from the newest post without one.
     record.post(Close(id='p-1', thread='t-1', author='ada', text='Done.'))
     ends_at = record.at(len(record.events)) + timedelta(hours=2)
     board = record.time_set(ends_at).board()
     stands = 'A close stands: p-1 by ada. 1 of 3 agents stand behind it, so the lab is closing.'
-    assert no_alarm_line(board, 'bo') == (
-        f'{NO_ALARM} The lab ends at 2026-11-06 14:05 UTC, 120 minutes from now. {stands}'
+    ends = 'The lab ends at 2026-11-06 14:05 UTC'
+    assert no_alarm_line(board, 'bo') == f'{NO_ALARM} {OR_A_DEPARTURE} {ends}, 120 minutes from now. {stands}'
+    assert [
+        no_alarm_line(board, 'bo', ends_at - timedelta(seconds=seconds)).split(' UTC, ')[1].split(' from now')[0]
+        for seconds in (440, 119, 60, 59, 1)
+    ] == ['7 minutes', '1 minute', '1 minute', 'less than a minute', 'less than a minute']
+    assert update(board, 'bo', 0, ends_at - timedelta(minutes=7)).no_alarm == (
+        f'{NO_ALARM} {OR_A_DEPARTURE} {ends}, 7 minutes from now. {stands}'
     )
-    late = no_alarm_line(board, 'bo', ends_at - timedelta(minutes=7, seconds=20))
-    assert late == f'{NO_ALARM} The lab ends at 2026-11-06 14:05 UTC, 7 minutes from now. {stands}'
-    assert news(board, 'bo', 0, ends_at - timedelta(minutes=7, seconds=20)).no_alarm == late
 
+    # In a closed lab the leaving of an agent starts no turn, so the line does not name it.
     record.post(Answer(id='p-2', thread='t-1', author='bo', text='Agreed.', reply_to='p-1', accepts=True))
-    closed = record.time_set(record.at(len(record.events) + 1)).ran_out().board()
-    assert no_alarm_line(closed, 'cy') == (
-        f'{NO_ALARM} The lab is out of time. '
-        'A close stands: p-1 by ada. 2 of 3 agents stand behind it, so the lab is closed.'
+    closed = 'A close stands: p-1 by ada. 2 of 3 agents stand behind it, so the lab is closed.'
+    assert no_alarm_line(record.board(), 'cy') == f'{NO_ALARM} {A_POST}. {ends}, 118 minutes from now. {closed}'
+
+    # While the lab is out of time no post starts a turn. The turn that reads the line stops, and more time
+    # starts the next one.
+    out = record.time_set(record.at(len(record.events) + 1)).ran_out().board()
+    assert no_alarm_line(out, 'cy') == (
+        f'{NO_ALARM} The lab is out of time, so Verifold stops this turn. Your next turn starts when the person '
+        f'gives the lab more time. {closed}'
     )
 
 
@@ -300,8 +309,8 @@ def test_the_line_is_empty_while_an_alarm_waits_and_for_an_agent_that_verifold_c
     record.join('guest', harness='guest').join('dee', family='other', checks='p-1').leave('cy')
     board = record.board()
 
-    # The news shows the alarm that waits, so it needs no second line.
-    assert (news(board, 'bo', 0).alarm is not None, news(board, 'bo', 0).no_alarm) == (True, '')
+    # The result shows the alarm that waits, so it needs no second line.
+    assert (update(board, 'bo', 0).alarm is not None, update(board, 'bo', 0).no_alarm) == (True, '')
     assert [no_alarm_line(board, agent) for agent in ('guest', 'dee', 'cy', 'nobody')] == ['', '', '', '']
     assert no_alarm_line(board, 'ada').startswith(NO_ALARM)
     # The line states facts and gives no advice.

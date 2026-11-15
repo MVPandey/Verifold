@@ -117,7 +117,7 @@ class Member:
         return brief(self._lab.board, self.agent_id, self._unseen(), how if first else '', now=self._lab.now())
 
     def _unseen(self) -> News:
-        unseen = news(self._lab.board, self.agent_id, self._seen, self._lab.now())
+        unseen = news(self._lab.board, self.agent_id, self._seen)
         self._seen = unseen.seq
         return unseen
 

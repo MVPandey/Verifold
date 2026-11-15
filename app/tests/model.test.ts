@@ -28,6 +28,7 @@ import {
   isPermission,
   personAnswer,
   personMessage,
+  clip,
   split,
   standingChip,
   titleOf,
@@ -144,9 +145,16 @@ describe('posts', () => {
       headline: 'Try sorted input.',
       body: 'Also reversed.',
     });
-    const long = split('x'.repeat(400));
-    assert.equal(long.headline.length, 300);
-    assert.equal(long.body, 'x'.repeat(400));
+    // A first line of 400 characters is a headline, as it is for an agent. The server takes 1,000.
+    assert.deepEqual(split('x'.repeat(400)), { headline: 'x'.repeat(400), body: '' });
+    const long = split('x'.repeat(1200));
+    assert.equal(long.headline.length, 1000);
+    assert.equal(long.body, 'x'.repeat(1200));
+  });
+
+  it('clips a long headline where the page lists posts', () => {
+    assert.equal(clip('Short.'), 'Short.');
+    assert.equal(clip('x'.repeat(300)), `${'x'.repeat(199)}…`);
   });
 
   it('opens a new thread for a message to all agents, and posts in a thread for a reply', () => {

@@ -67,8 +67,12 @@ export interface Api {
   changeSetting(change: SettingsChange): Promise<SettingsView>;
   /** The lab's norms files, or before a lab starts the defaults that the new lab gets. */
   norms(): Promise<NormsView>;
-  /** Save a new text for one norms file. In a lab, a post from the person tells the agents of the change. */
-  saveNorms(name: NormsName, text: string): Promise<NormsView>;
+  /**
+   * Save a new text for one norms file. `revision` is the file's revision when the person read it, and the server
+   * refuses the save with status 409 when the file changed since. In a lab, a post from the person tells the
+   * agents of the change.
+   */
+  saveNorms(name: NormsName, text: string, revision: string): Promise<NormsView>;
 }
 
 type Fetch = (input: string, init: RequestInit) => Promise<Response>;
@@ -161,7 +165,7 @@ export function createApi(
     settings: () => request('/settings'),
     changeSetting: (change) => request('/settings', change),
     norms: () => request('/norms'),
-    saveNorms: (name, text) => request('/norms', { name, text }),
+    saveNorms: (name, text, revision) => request('/norms', { name, text, revision }),
   };
 }
 

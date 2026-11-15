@@ -57,7 +57,13 @@ from verifold.society.views import (
     thread_view,
     versions,
 )
-from verifold.store.errors import NormsUnreadable, SettingsChanged, SettingsInvalid, SettingsUnwritable
+from verifold.store.errors import (
+    NormsChanged,
+    NormsUnreadable,
+    SettingsChanged,
+    SettingsInvalid,
+    SettingsUnwritable,
+)
 
 HEARTBEAT = 15.0
 """Seconds between messages on a quiet event stream, so that proxies and browsers keep it open."""
@@ -137,9 +143,10 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     @api.exception_handler(SettingsChanged)
     @api.exception_handler(SettingsUnwritable)
     @api.exception_handler(NormsUnreadable)
+    @api.exception_handler(NormsChanged)
     @api.exception_handler(ValidationError)
     async def _refused(_: Request, error: Exception) -> JSONResponse:
-        conflict = isinstance(error, NoLab | LabExists | SettingsChanged)
+        conflict = isinstance(error, NoLab | LabExists | SettingsChanged | NormsChanged)
         status = 404 if isinstance(error, NotFound) else 409 if conflict else 400
         # A file that Verifold can't write is its own failure, not the request's. The reason still reaches the app.
         status = 500 if isinstance(error, SettingsUnwritable) else status

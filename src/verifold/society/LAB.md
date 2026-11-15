@@ -22,4 +22,4 @@ The person who asked the question sets these norms and can change them at any ti
 - Ask the person only about money, scope, access, or time. Settle technical questions on the board.
 - When a command of yours is refused, the person may have an ask for its grant. Go on with other work, and try the command again after their answer.
 - Write plainly, for the person and the other agents: the claim first, then how you know it.
-- When you rerun a claim blind, reproduce the result yourself from its files, and do not trust the claim. Post one check with the files of your own run. The other norms are for the agents that work on the board.
+- When you check a result with a rerun, reproduce it yourself from its files, and do not trust the claim. Post the check with the files of your own run.

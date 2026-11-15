@@ -97,14 +97,30 @@ def minutes_left(board: Board, now: datetime) -> float | None:
     return max((board.ends_at - now).total_seconds() / 60, 0)
 
 
+def _minutes(left: float) -> str:
+    whole = int(left)
+    if whole == 0:
+        return 'less than a minute'
+    return '1 minute' if whole == 1 else f'{whole} minutes'
+
+
 def no_alarm_line(board: Board, agent_id: AgentId, now: datetime | None = None) -> str:
     """
-    Return the facts for an agent that Verifold started and that has no alarm: what starts its next turn, and the lab.
+    Return the facts for an agent that Verifold started and that has no alarm, as the lab stands now.
 
-    The line says that no alarm is set, what then starts the agent's next turn, how much time the lab has left,
-    and whether a close stands. It gives no advice. It is empty while an alarm waits, because the news shows that
-    alarm, and for an agent that Verifold cannot wake: an invited agent, a blind checker, or an agent that left.
-    Without `now`, time counts from the board's newest post.
+    The line says that no alarm is set, what starts the agent's next turn in the lab's present state, how much time
+    the lab has left, and whether a close stands. It names only what does start a turn in that state:
+
+    - While the lab is out of time, Verifold stops the turn that reads this, and the next turn starts when the
+      person gives the lab more time.
+    - In a closed lab, a post for the agent starts it. The leaving of another agent does not.
+    - In any other lab, a post for the agent starts it, and so does the leaving of an agent that it named or
+      answered.
+
+    The line speaks of a turn that the agent ends itself, because Verifold resumes once a turn that it or the
+    harness cut short. It gives no advice. It is empty while an alarm waits, because the result shows that alarm,
+    and for an agent that Verifold cannot wake: an invited agent, a blind checker, or an agent that left. Without
+    `now`, time counts from the board's newest post.
     """
     joined = board.agent(agent_id)
     if joined is None or joined.agent.harness == GUEST or joined.agent.checks or board.gone(agent_id):
@@ -112,12 +128,19 @@ def no_alarm_line(board: Board, agent_id: AgentId, now: datetime | None = None) 
     if pending_alarm(board, agent_id):
         return ''
     left = minutes_left(board, now or latest_time(board))
-    if left is None:
-        time = 'The lab has no time limit.'
-    elif left == 0 or board.ends_at is None:
-        time = 'The lab is out of time.'
+    state = lab_state(board)
+    if left == 0:
+        starts = (
+            'The lab is out of time, so Verifold stops this turn. Your next turn starts when the person gives the '
+            'lab more time.'
+        )
     else:
-        time = f'The lab ends at {utc(board.ends_at)}, {left:.0f} minutes from now.'
+        also = '' if state == 'closed' else ' or when an agent that you named or answered leaves'
+        starts = f'After you end this turn, your next turn starts only when a post for you arrives{also}.'
+        if left is None or board.ends_at is None:
+            starts += ' The lab has no time limit.'
+        else:
+            starts += f' The lab ends at {utc(board.ends_at)}, {_minutes(left)} from now.'
     close = closing(board)
     if close is None:
         stands = 'No close stands.'
@@ -125,12 +148,9 @@ def no_alarm_line(board: Board, agent_id: AgentId, now: datetime | None = None) 
         behind, among = close_count(board, close)
         stands = (
             f'A close stands: {close.post.id} by {close.post.author}. {behind} of {among} agents stand behind it, '
-            f'so the lab is {lab_state(board)}.'
+            f'so the lab is {state}.'
         )
-    return (
-        'No alarm is set for you. After your turn ends, your next turn starts only when a post for you arrives or '
-        f'when an agent that you named or answered leaves. {time} {stands}'
-    )
+    return f'No alarm is set for you. {starts} {stands}'
 
 
 def rings_at(board: Board, alarm: AlarmSet) -> datetime:

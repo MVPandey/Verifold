@@ -26,7 +26,11 @@ class SettingsUnwritable(StoreError):
 
 
 class NormsUnreadable(StoreError):
-    """A norms file is a link, is not text, or is too large to show."""
+    """A norms file is not a regular file, is not text, or is too large to show."""
+
+
+class NormsChanged(StoreError):
+    """A norms file changed since the person read it, so a save could write over a text that they didn't see."""
 
 
 class SettingsChanged(StoreError):

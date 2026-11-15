@@ -5,7 +5,8 @@ Every message here holds facts only: what happened, what the record shows, and w
 an agent what to do with its work or how to behave. Such a sentence is a norm, and norms live in the lab's
 `LAB.md` and `WRITING.md`, which the person reads and edits. A message names those files. How to get the board's
 state is a fact that an agent with a new conversation needs, so a message says what `brief` gives and orders no
-call. `tests/verifold/test_words.py` fails on a sentence that opens like an order.
+call. `tests/verifold/test_words.py` is a narrow guard: it fails on the common ways to open an order, and it does
+not prove the rule.
 """
 
 from datetime import datetime
@@ -216,12 +217,13 @@ def time_facts(ends_at: datetime | None, jobs: AtTimeLimit) -> str:
     return f'The person gave the lab more time.{until}{JOBS_AFTER_TIME[jobs]}'
 
 
-def rerun_message(post: Post, checker: Agent, folder: Path, norms: Path) -> str:
+def rerun_message(post: Post, checker: Agent, folder: Path) -> str:
     """
     Return a blind checker's first message: the claim, its files, where they are, and the post that a check answers.
 
-    It holds facts only, and nothing from the claim's thread. How a checker reruns a claim is a norm in the lab's
-    norms file, which the message names.
+    It holds facts only, and nothing from the claim's thread. It names no norms file: the claim's author can write
+    that file, so it could carry a hint to the checker. What the checker's one move means is protocol, so the
+    message says what a `check` with the method `rerun` records.
     """
     files = ', '.join(item.path for item in post.evidence)
     return '\n'.join(
@@ -242,9 +244,9 @@ def rerun_message(post: Post, checker: Agent, folder: Path, norms: Path) -> str:
             (
                 f'The `post` tool of the MCP server `verifold` takes one `check` from you, in thread {post.thread}, '
                 f'as a reply to {post.id}. A `check` records `outcome`, which is `holds` or `fails`, `method`, '
-                'which is `rerun` for a rerun, and in `files` the files of your folder that back it. The check '
-                'ends your part in the lab.'
+                'and in `files` the files of your folder that back it. With the `method` `rerun`, a check '
+                'records that its author ran the files of the claim itself and compared the outcome with the '
+                'claim, without the thread. The check ends your part in the lab.'
             ),
-            f"{norms} holds the lab's norms, which the person sets. One norm is about blind reruns.",
         ]
     )

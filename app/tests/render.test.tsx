@@ -8,11 +8,13 @@ import type {
   AnswerView,
   HarnessOption,
   LabView,
+  NoPost,
+  NormsFile,
   Post,
   SettingsView,
   ThreadView,
 } from '../src/api/types.ts';
-import { clock } from '../src/model/format.ts';
+import { clock, dayClock } from '../src/model/format.ts';
 import type { ThreadRead } from '../src/ui/hooks.ts';
 import { LabPage, QuestionForm, Wall } from '../src/ui/LabPage.tsx';
 import { Failed } from '../src/ui/App.tsx';
@@ -1433,36 +1435,60 @@ describe('the settings page', () => {
 });
 
 describe('the norms page', () => {
-  const file = {
+  const now = new Date('2026-11-06T14:12:00Z');
+  const file: NormsFile = {
     name: 'LAB.md',
     path: '~/code/sort-bench/.verifold/LAB.md',
     text: "# The lab's norms\n\n- You work as a group.\n- <img src=x onerror=alert(1)>",
     saved: true,
-  } as const;
-  const form = (editing: boolean, saved = true): string =>
+    revision: 'r1',
+    error: null,
+    changed_at: '2026-11-06T14:02:00Z',
+    changed_by: 'page',
+    missing: [],
+  };
+  const form = (change: Partial<NormsFile> = {}, draft?: string, stale = false): string =>
     renderToStaticMarkup(
       <NormsForm
-        file={{ ...file, saved }}
-        labOpen
-        editing={editing}
-        onSave={() => Promise.resolve(null)}
+        file={{ ...file, ...change }}
+        now={now}
+        {...(draft === undefined ? {} : { draft })}
+        stale={stale}
+        onSave={() => Promise.resolve({ told: null, noPost: null })}
+        onStale={() => Promise.resolve()}
       />,
     );
 
-  it('shows a norms file as a page, with its path and Edit', () => {
-    const html = form(false);
+  it('shows a norms file as a page, with its path, its last change, and Edit', () => {
+    const html = form();
 
     assert.ok(html.includes('How the agents work'));
     assert.ok(html.includes('<code>~/code/sort-bench/.verifold/LAB.md</code>'));
+    assert.ok(
+      html.includes(`Last changed ${dayClock(file.changed_at ?? '', now)}, from this page.`),
+    );
     assert.ok(html.includes('<li>You work as a group.</li>'));
     assert.ok(html.includes('<button type="button" class="btn">Edit</button>'));
     // The file's text is the person's own, and it still shows as text, never as HTML.
     assert.equal(html.includes('<img'), false);
     assert.equal(html.includes('<textarea'), false);
+    assert.equal(html.includes('The default norms have'), false);
+  });
+
+  it('says when somebody changed the file outside the page, and says nothing when the server cannot tell', () => {
+    assert.ok(form({ changed_by: 'outside' }).includes('Changed outside this page.'));
+    const unknown = form({ changed_by: null });
+    assert.equal(unknown.includes('outside this page'), false);
+    assert.equal(unknown.includes('from this page'), false);
+    assert.ok(
+      form({ saved: false, changed_at: null }).includes(
+        'does not exist yet. This is the text that a new lab gets.',
+      ),
+    );
   });
 
   it('edits the text in a plain text area with Save and Cancel, and Save is off until the text changes', () => {
-    const html = form(true);
+    const html = form({}, file.text);
 
     assert.ok(html.includes('<textarea'));
     assert.ok(html.includes('- You work as a group.'));
@@ -1470,18 +1496,45 @@ describe('the norms page', () => {
     assert.ok(html.includes('<button type="submit" class="btn" disabled="">Save</button>'));
   });
 
-  it('says that a file which does not exist yet shows the text that a new lab gets', () => {
-    assert.ok(
-      form(false, false).includes('does not exist yet. This is the text that a new lab gets.'),
-    );
+  it('keeps the draft and shows the newer text beside it after a save that the server refused', () => {
+    const html = form({ text: '# Their text' }, '# My text', true);
+
+    assert.ok(html.includes('The file changed after you opened it, so nothing was saved.'));
+    assert.ok(html.includes('<pre class="norms-newer"># Their text</pre>'));
+    assert.ok(html.includes('# My text</textarea>'));
+    assert.ok(html.includes('<button type="submit" class="btn">Save</button>'));
   });
 
-  it('says after a save whether the agents heard of the change', () => {
-    assert.equal(savedLine(false, null), 'Saved. The lab that you start gets this text.');
+  it('lists the lines of the default norms that the file lacks, to read and to copy', () => {
+    const html = form({ missing: ['- Post your results.', '- Name your helper.'] });
+
+    assert.ok(html.includes('The default norms have 2 lines that this file does not have.'));
+    assert.ok(html.includes('Show them'));
+    assert.ok(html.includes('<pre>- Post your results.\n- Name your helper.</pre>'));
+    assert.ok(html.includes('Verifold does not add them.'));
+    assert.ok(form({ missing: ['- One.'] }).includes('The default norms have 1 line that'));
+  });
+
+  it('shows the error of a file that the server cannot read, and no text area for it', () => {
+    const html = form({ error: 'LAB.md is a link.', text: '', saved: false, changed_at: null });
+
+    assert.ok(html.includes('LAB.md is a link.'));
+    assert.equal(html.includes('Edit</button>'), false);
+    assert.equal(html.includes('does not exist yet'), false);
+  });
+
+  it('says after a save whether a post told the agents, and each reason why none went out', () => {
+    const line = (noPost: NoPost | null, told: string | null = null): string =>
+      savedLine({ told, noPost });
     assert.match(
-      savedLine(true, 'p-9'),
+      line(null, 'p-9'),
       /A post from you in the thread of the question tells the agents/,
     );
-    assert.match(savedLine(true, null), /No post went to the agents/);
+    assert.equal(line('no_lab'), 'Saved. The lab that you start gets this text.');
+    assert.match(line('same'), /has this text already/);
+    assert.match(line('no_thread'), /no thread for the question/);
+    assert.match(line('close'), /a close stands/);
+    assert.match(line('told_already', 'p-9'), /less than a minute ago/);
+    assert.match(line('refused'), /did not take the post/);
   });
 });

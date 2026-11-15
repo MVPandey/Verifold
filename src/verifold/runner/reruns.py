@@ -147,7 +147,7 @@ class Reruns:
             log=self._project / LAB_FOLDER / 'logs' / f'{checker_id}.log',
             token=self._members.add(member),
             options=options,
-            start=rerun_message(target.post, checker, folder, self._project / LAB_FOLDER / 'LAB.md'),
+            start=rerun_message(target.post, checker, folder),
         )
         await self._supervise(member, setup, partial(_checked, agent_id=checker_id, post_id=request.post))
 

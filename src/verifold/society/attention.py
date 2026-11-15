@@ -119,13 +119,12 @@ def update(board: Board, agent_id: AgentId, after: int, now: datetime | None = N
     )
 
 
-def news(board: Board, agent_id: AgentId, after: int, now: datetime | None = None) -> News:
+def news(board: Board, agent_id: AgentId, after: int) -> News:
     """
     Return one line for each post after event `after` that an agent did not write.
 
     It holds at most `MAX_NEWS` posts for the agent, the oldest first, and reaches as far as `update` does. So a post
-    for the agent is never left out. Of the other posts it holds the newest. `now` dates the time that the lab has
-    left.
+    for the agent is never left out. Of the other posts it holds the newest.
     """
     woken, rest = _unseen(board, agent_id, after)
     shown, others, reach = _page(woken, rest, board.seq)
@@ -137,7 +136,6 @@ def news(board: Board, agent_id: AgentId, after: int, now: datetime | None = Non
         left_out=max(len(others) - MAX_NEWS, 0),
         left=departures(board, agent_id, after, reach),
         alarm=alarm_line(board, agent_id),
-        no_alarm=no_alarm_line(board, agent_id, now),
     )
 
 

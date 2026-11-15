@@ -33,7 +33,14 @@ from verifold.protocol.posts import Ask, Call, Check, Close, Objection, Plan, Pr
 from verifold.society.attention import left_line, watches_thread
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
-from verifold.society.lifecycle import alarm_line, lab_state, latest_time, minutes_left, pending_alarm
+from verifold.society.lifecycle import (
+    alarm_line,
+    lab_state,
+    latest_time,
+    minutes_left,
+    no_alarm_line,
+    pending_alarm,
+)
 from verifold.society.lines import lines_of, question_thread
 from verifold.society.rules import blind_checks
 from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing
@@ -286,6 +293,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
             if summary.thread.id != question_thread(board) and now - summary.last_at >= timedelta(minutes=QUIET_MINUTES)
         ),
         key=lambda summary: summary.last_at,
+        reverse=True,
     )
     # The agents that Verifold runs. An invited agent has no turns in the record, and a blind checker is no agent
     # of the lab.
@@ -309,6 +317,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         you=agent_id,
         your_line=_agent_line(board, you.agent, working) if you else None,
         your_alarm=alarm_line(board, agent_id),
+        no_alarm=no_alarm_line(board, agent_id, now),
         how=how,
         question=board.question,
         revisions=tuple(
@@ -335,6 +344,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
             ThreadLine(id=summary.thread.id, title=summary.thread.title, team=summary.team, last_at=summary.last_at)
             for summary in quiet[:MAX_LEADS]
         ),
+        more_quiet_threads=max(len(quiet) - MAX_LEADS, 0),
         disputed=disputed[-MAX_NEWS:],
         not_built_on=not_built_on[-MAX_LEADS:],
         not_checked=not_checked[-MAX_NEWS:],

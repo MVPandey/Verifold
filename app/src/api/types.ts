@@ -457,11 +457,26 @@ export interface NormsFile {
   readonly text: string;
   /** `false` when the folder has no such file yet, so `text` is the default that a new lab gets. */
   readonly saved: boolean;
+  /** A hash of `text`. A save names it, so that it can't write over a text that the person didn't see. */
+  readonly revision: string;
+  /** Why the server can't read the file. The page then shows no text for it. */
+  readonly error: string | null;
+  /** When the file last changed, or `null` when the folder has no such file. */
+  readonly changed_at: string | null;
+  /** Who wrote the file's text: this page, or somebody outside it. `null` when the server can't tell. */
+  readonly changed_by: 'page' | 'outside' | null;
+  /** The lines of the current default norms that the file does not have. */
+  readonly missing: readonly string[];
 }
+
+/** Why a save put no post on the board. */
+export type NoPost = 'same' | 'no_lab' | 'no_thread' | 'close' | 'told_already' | 'refused';
 
 /** The lab's norms: how the person wants the work done, and how the lab writes its answer. */
 export interface NormsView {
   readonly files: readonly NormsFile[];
-  /** After a change: the person's post that told the agents of it, or `null` when no post went out. */
+  /** After a save: the person's post that tells the agents of the change, also when an earlier save posted it. */
   readonly told: string | null;
+  /** After a save that put no post on the board: why. */
+  readonly no_post: NoPost | null;
 }

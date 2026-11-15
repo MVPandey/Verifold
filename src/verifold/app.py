@@ -7,7 +7,7 @@ import socket
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import override
@@ -21,11 +21,14 @@ from verifold.harnesses.catalog import CATALOG, NPX_PROJECT, HarnessEntry, avail
 from verifold.protocol.agents import GUEST, MAX_AGENTS, UNKNOWN_FAMILY, Agent, AgentChoice, ModelSpec
 from verifold.protocol.app import (
     NORMS_NAMES,
+    NORMS_POST_SECONDS,
     FolderView,
     HarnessOption,
     Invitation,
+    NoPost,
     NormsChange,
     NormsFile,
+    NormsName,
     NormsView,
     Offer,
     SettingsChange,
@@ -59,13 +62,20 @@ from verifold.server.member import Member
 from verifold.server.timekeeper import keep_time
 from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.board import Board
-from verifold.society.errors import NotFound
+from verifold.society.errors import NotFound, SocietyError
 from verifold.society.lines import question_thread
 from verifold.society.standing import closing
 from verifold.society.turns import before
-from verifold.store.errors import GuestsInvalid, SettingsInvalid
+from verifold.store.errors import GuestsInvalid, NormsChanged, NormsUnreadable, SettingsInvalid, StoreError
 from verifold.store.guests_file import GUESTS_FILE, Guests, drop_guest, keep_guest, read_guests
-from verifold.store.norms_file import DEFAULTS, read_norms, write_norms
+from verifold.store.norms_file import (
+    DEFAULTS,
+    missing_lines,
+    read_norms,
+    revision,
+    write_missing_norms,
+    write_norms,
+)
 from verifold.store.record_file import RecordFile
 from verifold.store.server_file import running_server, server_file
 from verifold.store.settings_file import (
@@ -173,6 +183,10 @@ class Host:
         self._grant_asks: GrantAsks | None = None
         self._probing: set[str] = set()
         self._adding = asyncio.Lock()
+        self._norms_saved: dict[NormsName, str] = {}
+        """The revision of the last text of each norms file that the person saved from the app, in this process."""
+        self._norms_told: tuple[datetime, PostId] | None = None
+        """When the last post told the lab of a change to its norms, and which post it was."""
         self._loops: dict[AgentId, asyncio.Task[None]] = {}
         """The task that supervises each agent that Verifold started."""
 
@@ -305,24 +319,34 @@ class Host:
                 opened = True
         return FolderView(path=str(folder), opened=opened)
 
-    def norms(self, told: PostId | None = None) -> NormsView:
+    def norms(self, told: PostId | None = None, no_post: NoPost | None = None) -> NormsView:
         """
         Return the lab's two norms files as they are in the lab folder.
 
-        Before a lab starts, a file that the folder lacks shows Verifold's default, which the new lab gets.
-
-        Raises:
-            NormsUnreadable: A file is a link, is not text, or is too large.
-
+        Before a lab starts, a file that the folder lacks shows Verifold's default, which the new lab gets. Each
+        file is read by itself: one that Verifold can't read shows its own error, and the other stays as it is.
         """
+        return NormsView(files=tuple(self._norms_file(name) for name in NORMS_NAMES), told=told, no_post=no_post)
+
+    def _norms_file(self, name: NormsName) -> NormsFile:
         folder = self._project / LAB_FOLDER
-        read = {name: read_norms(folder, name) for name in NORMS_NAMES}
-        return NormsView(
-            files=tuple(
-                NormsFile(name=name, path=_shown(folder / name), text=text, saved=saved)
-                for name, (text, saved) in read.items()
-            ),
-            told=told,
+        path = _shown(folder / name)
+        try:
+            read = read_norms(folder, name)
+        except NormsUnreadable as error:
+            return NormsFile(name=name, path=path, error=str(error))
+        now = revision(read.text)
+        mine = self._norms_saved.get(name)
+        return NormsFile(
+            name=name,
+            path=path,
+            text=read.text,
+            saved=read.saved,
+            revision=now,
+            changed_at=read.changed_at,
+            # Without a save from the page in this process, nothing says who wrote the file.
+            changed_by=None if mine is None or not read.saved else 'page' if mine == now else 'outside',
+            missing=missing_lines(name, read.text),
         )
 
     async def change_norms(self, change: NormsChange) -> NormsView:
@@ -331,29 +355,51 @@ class Host:
 
         The file's name is one of two fixed names in the lab folder, so no request reaches another path. Before a
         lab starts, the saved file is what the new lab gets, because a lab writes only the files that are missing.
+        The save names the revision that the person read. When the file changed since, for example because an
+        agent wrote it, the save is refused, so that it writes over nothing that the person didn't see.
 
         In a lab, a post of the person in the question's thread says that the file changed and where it is. It
-        names nobody, so it reaches every agent once, by the path that the person's other words take. No post goes
-        out when the text is the same, when the lab has no question thread, or when a close stands: a post of the
-        person would open that lab again, and the person did not ask for that.
+        names nobody, so it reaches the agents by the path that the person's other words take. No post goes out
+        when the text is the same, when the lab has no question thread, when a close stands, because a post of the
+        person would open that lab again, or when such a post went out less than `NORMS_POST_SECONDS` ago. After
+        the file is written, nothing here raises: a post that the board refuses leaves a saved file and no post.
 
         Raises:
-            NormsUnreadable: The file is a link, is not text, or is too large.
+            NormsUnreadable: The path holds something that Verifold does not read.
+            NormsChanged: The file changed since the person read it.
             SettingsUnwritable: The file is a link, or it can't be written.
 
         """
         folder = self._project / LAB_FOLDER
-        before_text, saved = read_norms(folder, change.name)
-        if saved and before_text == change.text:
-            return self.norms()
+        read = read_norms(folder, change.name)
+        if revision(read.text) != change.revision:
+            raise NormsChanged(f'{_shown(folder / change.name)} changed since you opened it. This is its new text.')
+        if read.saved and read.text == change.text:
+            return self.norms(no_post='same')
         write_norms(folder, change.name, change.text)
+        self._norms_saved[change.name] = revision(change.text)
+        told, no_post = await self._tell_of_norms(change.name)
+        return self.norms(told, no_post)
+
+    async def _tell_of_norms(self, name: NormsName) -> tuple[PostId | None, NoPost | None]:
+        # Post that a norms file changed. Return the post, or why none went out.
         lab = self._lab
-        thread = question_thread(lab.board) if lab else None
-        if lab is None or thread is None or closing(lab.board):
-            return self.norms()
-        text = NORMS_CHANGED[change.name].format(path=folder / change.name)
-        posted = await lab.post(PostRequest(kind='message', text=text, thread=thread), PERSON)
-        return self.norms(told=posted.post.id)
+        if lab is None:
+            return None, 'no_lab'
+        thread = question_thread(lab.board)
+        if thread is None:
+            return None, 'no_thread'
+        if closing(lab.board):
+            return None, 'close'
+        if self._norms_told and (lab.now() - self._norms_told[0]).total_seconds() < NORMS_POST_SECONDS:
+            return self._norms_told[1], 'told_already'
+        text = NORMS_CHANGED[name].format(path=self._project / LAB_FOLDER / name)
+        try:
+            posted = await lab.post(PostRequest(kind='message', text=text, thread=thread), PERSON)
+        except (SocietyError, StoreError, OSError):
+            return None, 'refused'
+        self._norms_told = (lab.now(), posted.post.id)
+        return posted.post.id, None
 
     async def change_settings(self, change: SettingsChange) -> SettingsView:
         """
@@ -457,12 +503,8 @@ class Host:
         lab, group, settings = self._lab, self._group, self._settings
         if lab is None or group is None or settings is None:
             raise SetupRejected('Attach the host to the server before a lab starts.')
-        norms = self._project / LAB_FOLDER / 'LAB.md'
-        if not norms.exists():
-            norms.write_text(NORMS_TEMPLATE)
-        writing = self._project / LAB_FOLDER / 'WRITING.md'
-        if not writing.exists():
-            writing.write_text(WRITING_TEMPLATE)
+        # A path that holds anything stays as it is, also a link that leads nowhere.
+        write_missing_norms(self._project / LAB_FOLDER)
         group.create_task(keep_time(lab))
         group.create_task(keep_jobs(lab, self._project, self._swept))
         self._grant_asks = GrantAsks(lab)

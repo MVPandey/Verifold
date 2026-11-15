@@ -18,7 +18,7 @@ from mcp import Client
 from verifold.app import NORMS_CHANGED, NORMS_TEMPLATE
 from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.events import AlarmSet
-from verifold.protocol.posts import Close, FileEvidence, Result
+from verifold.protocol.posts import Answer, Close, FileEvidence, Result
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.runner.messages import (
@@ -44,34 +44,60 @@ from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.lifecycle import no_alarm_line
 
-OPENER = re.compile(
+VERBS = (
     r"Add|Agree|Always|Answer|Ask|Avoid|Back|Be|Build|Call|Change|Check|Choose|Consider|Do|Don't|End|Ensure|First"
     r'|Follow|Get|Give|Go|Have|Join|Keep|Last|Leave|Let|List|Look|Make|Name|Never|Next|Note|Object|Open|Please'
     r'|Post|Prefer|Propose|Put|Read|Remember|Reply|Report|Reproduce|Rerun|Return|Run|Say|Search|Send|Set|Sleep'
-    r'|Start|Stop|Take|Tell|Then|Trust|Try|Use|Wait|Wake|Watch|Withdraw|Write',
+    r'|Start|Stop|Take|Tell|Then|Trust|Try|Use|Wait|Wake|Watch|Withdraw|Write'
+)
+OPENER = re.compile(
+    # A verb in its base form, or a word that ranks work, as the first word of a sentence.
+    rf'(?:{VERBS})\b'
+    # The same verb in backticks before its object, such as "`post` your result". "`post` writes to it" is a fact.
+    rf'|`(?:{VERBS})` (?:a|again|an|each|every|first|it|one|that|the|them|this|your)\b',
     re.IGNORECASE,
 )
 """
-The words that open an order, or that rank work: a verb in its base form, or "First", "Then", "Next", "Last".
+How an order opens, or a ranking of work: a verb in its base form, or "First", "Then", "Next", "Last".
 
-A fact about a tool opens with the tool's name in backticks or with a verb in the third person, such as "Returns",
-so none of these words opens a fact. The list has no exceptions: when a fact needs one of these words first, the
-sentence gets another shape.
+A fact about a tool opens with the tool's name in backticks or with a verb in the third person, such as "Returns".
 """
 
+NOT_AN_ORDER = re.compile(
+    # A post that the sentence names by its kind and ID, such as "Post p-4 is your own."
+    r'(?:Answer|Ask|Call|Check|Close|Message|Objection|Plan|Post|Proposal|Report|Result|Thread) [pt]-\d+\b'
+    # A label of one or two words before a colon, such as "Last post: 12:04."
+    r"|[\w'`]+(?: [\w'`]+)?:(?: |$)"
+)
+"""How a fact can open with one of the words above."""
+
 INSIDE = re.compile(
-    r"\b(?:you should|you must|you need to|you have to|make sure|be sure|remember to|please|do not|don't)\b"
+    r'\b(?:should|must|it is best to|(?:is|are) to be|you need to|you have to|make sure|be sure|remember to)\b'
+    r"|\b(?:please|do not|don't)\b"
     r'|\b(?:so|then) (?:ask|call|check|give|go|keep|open|post|put|read|run|try|use|wait)\b'
-    r'|, (?:and |or |then )?(?:ask|call|give|go|keep|post|put|read|run|try|use|wait)\b'
+    r'|[,:] (?:and |or |then )?(?:ask|call|give|go|keep|post|put|read|run|try|use|wait)\b'
     r'|\b(?:reply to it with|name them in)\b',
     re.IGNORECASE,
 )
 """
-An order inside a sentence: after "so" or "then", such as "so post your results before then", or after a comma,
-such as "when your harness refuses a command, run it plain". A word in backticks is a tool's name and never matches.
-The two phrases at the end are orders that the board once gave after a clause, which no general pattern finds
-without also finding facts such as "the posts that name you, reply to you, or are in a thread that you watch".
+An order inside a sentence: a word of duty such as "should" or "must", an order after "so" or "then", such as "so
+post your results before then", or after a comma or a colon, such as "when your harness refuses a command, run it
+plain". A word in backticks is a tool's name and never matches. The two phrases at the end are orders that the
+board once gave after a clause, which no general pattern finds without also finding facts such as "the posts that
+name you, reply to you, or are in a thread that you watch".
 """
+
+# This check is a narrow guard. It stops the sentences that this change removed, and the common ways to open an
+# order, from coming back. It does not prove that a text holds only facts. It still misses:
+# - an order that opens with a verb that is not in `VERBS`, such as "Verify the claim."
+# - an order after a clause, with a verb that the comma pattern leaves out because facts use it there, such as
+#   "When you are stuck, open a thread." or "After the run, check the numbers."
+# - an order in the passive or as a statement of what agents do, such as "Results are posted before the time
+#   ends." or "An agent reads the board before each piece of work."
+# - advice without an order's grammar, such as "It helps to post early." or "A good plan names its risks."
+# - a ranking that uses no ranking word, such as a list whose order the text calls a priority
+# - an order behind a label of one or two words, such as "Note: post early." when the verb is not in the pattern
+# - a text that is true in one state of the lab and false in another, which only a reader finds
 
 CLAIM = Result(
     id='p-4',
@@ -89,11 +115,11 @@ def orders(text: str) -> list[str]:
     """Return the sentences of a text that open like an order, or that hold one."""
     # A blank line or a list item starts a sentence. Any other line break only wraps one.
     flat = re.sub(r'\n\s*(?:\n|- )', '. ', text).replace('\n', ' ')
-    sentences = (part.strip(' -"\'(') for part in re.split(r'(?<=[.:!?])\s+', flat))
+    sentences = (part.strip(' -"\'(') for part in re.split(r'(?<=[.!?])\s+', flat))
     return [
         sentence
         for sentence in sentences
-        if sentence and (OPENER.fullmatch(sentence.split(maxsplit=1)[0].rstrip(',:.')) or INSIDE.search(sentence))
+        if sentence and ((OPENER.match(sentence) and not NOT_AN_ORDER.match(sentence)) or INSIDE.search(sentence))
     ]
 
 
@@ -123,10 +149,16 @@ def messages() -> dict[str, str]:
         },
         'invitation': invitation(start, 'http://127.0.0.1:8123/mcp', 'the-token', FOLDER),
         **{f'more time {jobs}': more_time_message(START, jobs) for jobs in AtTimeLimit},
-        'rerun': rerun_message(CLAIM, CHECKER, FOLDER, NORMS),
+        'rerun': rerun_message(CLAIM, CHECKER, FOLDER),
         **{f'norms changed {name}': text.format(path=NORMS) for name, text in NORMS_CHANGED.items()},
         'no alarm': no_alarm_line(board, 'ada', START),
         'no alarm, a close stands': no_alarm_line(closing.board(), 'bo'),
+        'no alarm, a closed lab': no_alarm_line(
+            closing.post(
+                Answer(id='p-2', thread='t-1', author='bo', text='Yes.', reply_to='p-1', accepts=True)
+            ).board(),
+            'bo',
+        ),
         'no alarm, no time': no_alarm_line(
             closing.time_set(closing.at(len(closing.events) + 1)).ran_out().board(), 'bo'
         ),
@@ -159,6 +191,12 @@ def test_the_check_finds_the_orders_that_the_board_once_gave() -> None:
         'To take a call, reply to it with a `plan`.',
         'When your post builds on other posts, in any thread, name them in `builds_on`.',
         'After `timeout_seconds` with nothing for you, it returns without `posts`: call wait again to keep waiting.',
+        'An agent should post its results early.',
+        'Results must be posted before the time ends.',
+        'It is best to read the board first.',
+        'Plans are to be posted in the thread of the question.',
+        '`post` your result before the time ends.',
+        'Read one thread: every post, oldest first.',
         '- `call`: work that needs an agent. To take a call, reply to it with a `plan`, and then post your result.',
     ):
         assert orders(order), order
@@ -171,6 +209,10 @@ def test_the_check_finds_the_orders_that_the_board_once_gave() -> None:
         'You can read a side thread that you are not a member of.',
         'A finding that other agents can object to or check.',
         'The other agents can still reply to them, build on them, and check them.',
+        'Post p-4 exists already.',
+        'Check p-8 holds, and its method is a rerun.',
+        'Last post: 2026-11-06 14:00 UTC.',
+        '`post` writes to the board, and `post` opens one with `new_thread`.',
         'No alarm is set for you. After your turn ends, your next turn starts only when a post for you arrives.',
     ):
         assert not orders(fact), fact

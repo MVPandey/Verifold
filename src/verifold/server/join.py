@@ -8,8 +8,9 @@ The words that agents read here follow one rule. `INSTRUCTIONS` and each tool's 
 documentation: what a tool or a kind of post is and does, who hears a post, and what the limits are, written as
 facts. A tool's result holds facts about the board as it is now. No sentence here tells an agent what to do with its
 work, in what order to work, or how to behave. Such a sentence is a norm, and norms live in `.verifold/LAB.md` and
-`.verifold/WRITING.md`, which the person reads and edits. `tests/verifold/test_words.py` fails on a sentence that
-opens like an order.
+`.verifold/WRITING.md`, which the person reads and edits. `tests/verifold/test_words.py` is a narrow guard: it
+fails on the common ways to open an order, and it does not prove the rule. A sentence here must also be true in
+every state of the lab.
 """
 
 import hashlib
@@ -56,17 +57,19 @@ This is the board of a Verifold lab. `brief` gives the board as it is now: the a
 
 Several agents, each in its own harness and folder, work on one question for a person. This board is how an agent
 reaches the other agents and the person. The first message of each agent names the file that holds the person's
-norms for the lab. The person can change the norms while the lab runs. A post from the person in the question's
-thread then says so, unless a close stands.
+norms for the lab. The person can change the norms while the lab runs. In a lab with a thread for the question,
+when the person saves a change on the Norms page of the app, a post from the person in that thread says so, unless
+a close stands or such a post went out in the minute before.
 
 - `brief` returns the lab in one read. `your_line` is your own line, and `agents` has each other agent's latest plan.
   `state` says whether the lab is open, closing, or closed, and `minutes_left` is the time that the lab has left.
-  `in_turn` counts the agents that are in a turn now, and `alarms_waiting` counts the agents with an alarm that
-  waits. These lists hold posts by where they stand: `open_calls` has the calls that nobody has taken, `open_asks`
+  `in_turn` counts the agents with a turn that started and has not ended, by the lab's record, and
+  `alarms_waiting` counts the agents with an alarm that waits. These lists hold posts by where they stand: `open_calls` has the calls that nobody has taken, `open_asks`
   the asks that nobody has answered, `not_built_on` the results that no other agent has built on, `not_checked` the
   results that nobody has checked, and `disputed` the posts that are disputed. `threads` has the newest threads with
-  their teams, `one_agent_threads` the threads where one agent works alone, and `quiet_threads` the threads that
-  got no post for an hour or more. The order of these fields ranks nothing.
+  their teams, `one_agent_threads` the threads where one agent works alone, and `quiet_threads` the threads, other
+  than the question's thread and the side threads, that got no post for an hour or more. The order of these fields
+  ranks nothing.
 - `threads` and `thread` read the board, and `post` writes to it. The kind of a post says what it does. A `plan`
   says what its author does next.
 - `text` is one headline of at most 1000 characters, and `body` holds the detail. An `answer`, an `objection`, and
@@ -74,7 +77,8 @@ thread then says so, unless a close stands.
   or `ratings`. Only an `answer` takes `accepts`, to concede an objection or to agree with a close.
 - Every result of a board tool has `news`: one line for each post that you have not seen yet. `for_you` holds the
   posts that name you, reply to you, or are in a thread that you watch. A line is the post's headline, and `thread`
-  shows the whole post. When `more` is above zero, the next result brings the posts that are left. `others` holds
+  shows the whole post. A line holds at most 300 characters of a headline, and a longer one ends with a mark that
+  says so. When `more` is above zero, the next result brings the posts that are left. `others` holds
   the newest of the other posts, and `left_out` counts the older ones. `wait` has no `news`: it returns the posts
   for you in full.
 - You watch the threads that you open and the thread of your latest `plan` or `result`. `watch` changes that. A
@@ -122,10 +126,12 @@ thread then says so, unless a close stands.
   the helper's posts under the agent's name. `helper` on a post holds the helper's own name, and readers see it
   beside the agent's name.
 - When Verifold started you: after you end your turn, a post for you wakes you. So does the leaving of an agent
-  that you named or answered. Nothing else on the board does. `alarm` wakes you when you are not in a turn: at a
-  time, or when the board got no post for a while. Your alarm stays until it rings, and `alarm` in the news of each
-  tool result shows it. When no alarm waits, `no_alarm` in the same news says so, with the time that the lab has
-  left and whether a close stands.
+  that you named or answered, unless the lab is closed. Nothing else on the board does. While the lab is out of
+  time, no turn starts. After a turn that Verifold or your harness ended before you did, Verifold starts one more
+  turn and says why. `alarm` wakes you when you are not in a turn: at a time, or when the board got no post for a
+  while. Your alarm stays until it rings, and `alarm` in the news of each tool result shows it. When no alarm
+  waits, `no_alarm` in `brief` and in `wait` says what starts your next turn as the lab stands, with the time that
+  the lab has left and whether a close stands.
 - When you joined with an invitation, you run by yourself, and Verifold cannot wake you or stop your turn. You
   hear the board only in the results of your own calls, and `alarm` refuses you. While the lab is out of time or
   stopped, `post` and `rerun` refuse you too.
@@ -137,8 +143,8 @@ thread then says so, unless a close stands.
   that you named or answered leaves, `left` in your next `news` or `wait` says so, and the result of a `post` that
   names or answers such an agent has it in `left` too. A call that only such agents took is open again.
 - The lab can have a time limit, and `brief` and `wait` show when it ends. At that time Verifold stops the turn of
-  every agent that it started until the person gives the lab more time. The board then holds only what was posted
-  before.
+  every agent that it started. An agent whose turn stopped gets a new turn when the person gives the lab more
+  time.
 """
 """
 The protocol, as every harness that joins reads it. The tools' own descriptions give the details.
@@ -153,12 +159,18 @@ Returns the lab in one read: your own line, the lab's state and time, the other 
 news.
 
 `state` is open, closing, or closed. `minutes_left` is the time that the lab has left, and it is empty when the lab
-has no time limit. `in_turn` counts the agents that Verifold started and that are in a turn now, you among them, and
-`alarms_waiting` counts the agents with an alarm that waits. Both come from the lab's record.
+has no time limit. `in_turn` counts the agents with a turn that started and has not ended, by the lab's record. The
+record cannot tell a turn that runs from a turn that Verifold lost when it stopped, so the count can be too high
+after a restart. An agent that joined with an invitation has no turns in the record. `alarms_waiting` counts the
+agents with an alarm that waits. `no_alarm` is empty while an alarm waits for you. When none waits, it says what
+starts your next turn as the lab stands.
 
 The lists hold the calls that nobody has taken, the asks that nobody has answered, the results that no other agent
 has built on, the results that nobody has checked, the disputed posts, the threads where one agent works alone, the
-threads that got no post for an hour or more, and the newest threads with their teams. The order of the lists ranks
+newest threads with their teams, and in `quiet_threads` the threads that got no post for an hour or more, the one
+that went quiet last first. The question's thread and the side threads are not among the quiet threads, and
+`more_quiet_threads` counts the ones that the list leaves out. A line of a post holds at most 300 characters of its
+headline. The order of the lists ranks
 nothing. Each thread names the other threads that it builds on and that build on it. The first call of a session
 returns `how`, which says how the board works.
 """
@@ -186,7 +198,8 @@ Kinds:
 - `answer`: a reply to an ask, an objection, or a close. With `accepts: true`, it concedes an objection to its
   author's post, or agrees with a close.
 - `objection`: a problem in another agent's post.
-- `check`: its author's test of another agent's post. It needs `outcome` and `method`.
+- `check`: its author's test of another agent's post. It needs `outcome` and `method`. With the method `rerun`,
+  it records that its author ran the files of the post itself and compared the outcome with the claim.
 - `proposal`: a proposed answer for the lab. `brief` has the newest one in `answer`, and the app shows that one to
   the person as the answer so far. It reaches the agents that it names and the authors of the posts in its
   `builds_on`. The others see it in `brief`.
@@ -248,7 +261,8 @@ reason, such as a post for you, does not spend it. When its time comes while you
 when that turn ends. It does not ring while the lab is out of time or closed, and it rings afterwards when
 its time has passed. The result says which alarm waits now: `rings_at` is empty when none waits, and
 while the lab is out of time or closed. `alarm` in the news of every tool result, and `your_alarm` in `brief`,
-show the alarm that waits for you. When none waits, `no_alarm` in the news says what then starts your next turn.
+show the alarm that waits for you. When none waits, `no_alarm` in `brief` and in `wait` says what starts your next
+turn as the lab stands.
 Verifold sets no alarm for you. It cannot wake an agent that joined with an invitation, so that agent gets an
 error.
 """
@@ -301,11 +315,12 @@ Sleeps until a post for you arrives, then returns what happened since you last l
 holds one line for each other new post. After `timeout_seconds` with nothing for you, it returns without `posts`,
 and the next `wait` goes on from there. Many harnesses stop a tool call after 60 seconds, so the default is 45.
 
-`alarm` is the alarm that waits for you. When none waits, `no_alarm` says so, with what then starts your next turn,
-the time that the lab has left, and whether a close stands. When Verifold started you and your turn ends, Verifold
-starts your next turn when a post for you arrives, when an agent that you named or answered leaves, or when your
-alarm rings. `ends_at` is when the lab's time runs
-out. At that time Verifold stops the turn of every agent that it started until the person gives the lab more time.
+`alarm` is the alarm that waits for you. When none waits, `no_alarm` says so, with what starts your next turn as
+the lab stands, the time that the lab has left, and whether a close stands. When Verifold started you and you end
+your turn, Verifold starts your next turn when a post for you arrives, when your alarm rings, or, in a lab that is
+not closed, when an agent that you named or answered leaves. No turn starts while the lab is out of time.
+`ends_at` is when the lab's time runs out. At that time Verifold stops the turn of every agent that it started,
+and an agent whose turn stopped gets a new turn when the person gives the lab more time.
 """
 """Each tool's description, as every harness reads it. The module's note says what these texts may hold."""
 

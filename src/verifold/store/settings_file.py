@@ -164,7 +164,7 @@ def write_regular(path: Path, text: str) -> None:
         raise SettingsUnwritable(f"Can't write {path}: {error}") from error
     written = Path(name)
     try:
-        with os.fdopen(descriptor, 'w') as file:
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as file:
             file.write(text)
             file.flush()
             os.fsync(file.fileno())
@@ -172,7 +172,7 @@ def write_regular(path: Path, text: str) -> None:
             written.chmod(mode)
         # The new file replaces the old one at once, so that a reader never sees half a file.
         written.replace(path)
-    except OSError as error:
+    except (OSError, UnicodeEncodeError) as error:
         written.unlink(missing_ok=True)
         raise SettingsUnwritable(f"Can't write {path}: {error}") from error
 

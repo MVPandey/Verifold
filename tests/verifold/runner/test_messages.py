@@ -109,7 +109,6 @@ def test_the_lab_norms_ask_agents_to_take_other_sides_say_when_they_are_stuck_an
 
 CHECKER = Agent(id='checker-7', name='Checker 7', harness='fake', model=ModelSpec(family='openai'), checks='p-4')
 CHECKS = Path('/lab/.verifold/checks/checker-7')
-NORMS = Path('/lab/.verifold/LAB.md')
 
 
 def test_the_lab_norms_hold_what_came_out_of_python_and_the_norm_on_blind_reruns() -> None:
@@ -117,8 +116,8 @@ def test_the_lab_norms_hold_what_came_out_of_python_and_the_norm_on_blind_reruns
         "Post your results before the lab's time ends",
         "Have it give its own name in the post's helper field",
         'Go on with other work, and try the command again after their answer',
-        'reproduce the result yourself from its files, and do not trust the claim',
-        'Post one check with the files of your own run',
+        'When you check a result with a rerun, reproduce it yourself from its files, and do not trust the claim',
+        'Post the check with the files of your own run',
     ):
         assert norm in NORMS_TEMPLATE
 
@@ -133,7 +132,7 @@ def test_a_rerun_message_gives_the_claim_its_files_and_where_to_check_but_not_th
         evidence=(FileEvidence(path='bench.py', commit='c' * 40), FileEvidence(path='out.json', commit='c' * 40)),
     )
 
-    message = rerun_message(post, CHECKER, CHECKS, NORMS)
+    message = rerun_message(post, CHECKER, CHECKS)
 
     assert message.splitlines() == [
         (
@@ -151,13 +150,16 @@ def test_a_rerun_message_gives_the_claim_its_files_and_where_to_check_but_not_th
         ),
         (
             'The `post` tool of the MCP server `verifold` takes one `check` from you, in thread t-2, as a reply to '
-            'p-4. A `check` records `outcome`, which is `holds` or `fails`, `method`, which is `rerun` for a rerun, '
-            'and in `files` the files of your folder that back it. The check ends your part in the lab.'
+            'p-4. A `check` records `outcome`, which is `holds` or `fails`, `method`, and in `files` the files of '
+            'your folder that back it. With the `method` `rerun`, a check records that its author ran the files of '
+            'the claim itself and compared the outcome with the claim, without the thread. The check ends your part '
+            'in the lab.'
         ),
-        "/lab/.verifold/LAB.md holds the lab's norms, which the person sets. One norm is about blind reruns.",
     ]
-    # How to rerun is the person's norm, so the message holds none of it, and nothing of the author's reasoning.
+    # The message says what the checker's move means, as protocol. It gives no order and names no file that the
+    # claim's author can write, and it holds nothing of the author's reasoning.
     assert 'reasoning' not in message
+    assert 'LAB.md' not in message
     assert 'Reproduce' not in message
     assert 'trust' not in message
 
@@ -260,4 +262,4 @@ def test_an_agent_that_starts_after_a_revision_gets_the_current_question_and_a_c
             '`brief` lists the posts that hold the revisions.'
         ),
     ]
-    assert 'Does it hold' not in rerun_message(board.posts[0].post, CHECKER, CHECKS, NORMS)
+    assert 'Does it hold' not in rerun_message(board.posts[0].post, CHECKER, CHECKS)

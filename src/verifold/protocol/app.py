@@ -260,9 +260,32 @@ class NormsFile(Record):
     name: NormsName
     path: str
     """Where the file is, with `~` for the home folder."""
-    text: str
-    saved: bool
+    text: str = ''
+    saved: bool = False
     """`False` when the folder has no such file yet, so `text` is the default that a new lab gets."""
+    revision: str = ''
+    """A hash of `text`. A save names it, so that it can't write over a text that the person didn't see."""
+    error: str | None = None
+    """Why Verifold can't read the file, such as that it is a link. The page then shows no text for it."""
+    changed_at: AwareDatetime | None = None
+    """When the file last changed, or `None` when the folder has no such file."""
+    changed_by: Literal['page', 'outside'] | None = None
+    """
+    Whether the file holds the last text that this server saved from the Norms page, or another text, which
+    somebody wrote outside the page. `None` when this server saved nothing from the page yet, so it can't tell.
+    """
+    missing: tuple[str, ...] = ()
+    """The lines of Verifold's current default that the file does not have. Verifold never adds them itself."""
+
+
+type NoPost = Literal['same', 'no_lab', 'no_thread', 'close', 'told_already', 'refused']
+"""
+Why a save put no post on the board: the text is the same, no lab runs, the lab has no thread for the question, a
+close stands, a post told the lab of a change less than `NORMS_POST_SECONDS` ago, or the board refused the post.
+"""
+
+NORMS_POST_SECONDS = 60
+"""After a post that tells the lab of a change to the norms, a save within this time puts no other post on the board."""
 
 
 class NormsView(Record):
@@ -270,7 +293,9 @@ class NormsView(Record):
 
     files: tuple[NormsFile, ...]
     told: PostId | None = None
-    """After a change: the person's post that told the agents of it, or `None` when no post went out."""
+    """After a save: the person's post that tells the agents of the change, also when an earlier save posted it."""
+    no_post: NoPost | None = None
+    """After a save that put no post on the board: why."""
 
 
 class NormsChange(Record):
@@ -278,6 +303,8 @@ class NormsChange(Record):
 
     name: NormsName
     text: Annotated[str, StringConstraints(max_length=MAX_NORMS)]
+    revision: str
+    """The revision of the file when the person read it. The save is refused when the file changed since."""
 
 
 class QuestionRequest(Record):

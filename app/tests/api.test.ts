@@ -49,14 +49,14 @@ describe('the API client', () => {
     const api = createApi('secret', server.fetcher);
 
     await api.norms();
-    const saved = await api.saveNorms('LAB.md', '# Norms');
+    const saved = await api.saveNorms('LAB.md', '# Norms', 'r1');
 
     assert.equal(saved.told, 'p-4');
     assert.deepEqual(
       server.calls.map((call) => [call.input, call.init.method, call.init.body]),
       [
         ['/api/norms', 'GET', undefined],
-        ['/api/norms', 'POST', '{"name":"LAB.md","text":"# Norms"}'],
+        ['/api/norms', 'POST', '{"name":"LAB.md","text":"# Norms","revision":"r1"}'],
       ],
     );
   });

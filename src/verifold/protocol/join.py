@@ -128,8 +128,24 @@ class ThreadView(Record):
     posts: tuple[PostView, ...]
 
 
+MAX_LINE = 300
+"""The most characters of a headline that a post's line shows. A longer headline is cut, and `thread` shows all of it."""
+
+
+def line_text(text: str) -> str:
+    """Return a headline as a post's line shows it: whole, or cut to `MAX_LINE` characters with a mark that says so."""
+    if len(text) <= MAX_LINE:
+        return text
+    return f'{text[:MAX_LINE]}… [cut: the headline has {len(text)} characters, and `thread` shows all of it]'
+
+
 class PostLine(Record):
-    """One post as a single line: where it is, who wrote it, what kind it is, and its headline."""
+    """
+    One post as a single line: where it is, who wrote it, what kind it is, and its headline.
+
+    A headline of more than `MAX_LINE` characters is cut and ends with a mark that says so. So the lists of a brief
+    and of the news stay within what a harness takes as one tool result. `thread` shows the whole headline.
+    """
 
     id: PostId
     thread: ThreadId
@@ -152,7 +168,7 @@ class PostLine(Record):
             author=post.author,
             helper=post.helper,
             kind=post.kind,
-            text=post.text,
+            text=line_text(post.text),
             reply_to=post.reply_to,
             builds_on=post.builds_on,
             seq=entry.seq,
@@ -261,13 +277,7 @@ class News(Record):
     left: tuple[LeftLine, ...] = ()
     """The agents that left the lab since, among those that the agent wrote to: who caused it, and the reason."""
     alarm: AlarmLine | None = None
-    """The alarm that waits for the agent. `None` means that no alarm waits, so only a post for the agent wakes it."""
-    no_alarm: str = ''
-    """
-    The facts for an agent that Verifold started and that has no alarm: that none is set, what then starts its next
-    turn, how much time the lab has left, and whether a close stands. Empty while an alarm waits, and for an agent
-    that Verifold cannot wake.
-    """
+    """The alarm that waits for the agent. `None` means that no alarm waits."""
 
 
 class PostResult(PostView):
@@ -443,7 +453,9 @@ class Brief(Record):
     your_line: AgentLine | None = None
     """What the board holds about you: your role and status, the thread where you work, and your latest plan and post."""
     your_alarm: AlarmLine | None = None
-    """The alarm that waits for you. `None` means that no alarm waits, so only a post for you wakes you."""
+    """The alarm that waits for you. `None` means that no alarm waits, and `no_alarm` then says what starts your next turn."""
+    no_alarm: str = ''
+    """The same line as `no_alarm` in the result of `wait`. Empty while an alarm waits."""
     how: str = ''
     """How the board works. The first brief of a session carries it, and later ones leave it out."""
     question: Question
@@ -462,9 +474,10 @@ class Brief(Record):
     """How many minutes the lab has left. Zero when the lab is out of time, and `None` without a time limit."""
     in_turn: int = 0
     """
-    How many agents are in a turn now, the reader among them: the record has the start of the agent's latest turn
-    and not its end. The count comes from the record, so a turn that Verifold lost in a stop counts until the
-    agent's next turn. An invited agent has no turns in the record and never counts.
+    How many agents are in a turn by the record: the agents with a turn that started and has not ended. The record
+    cannot tell a turn that runs from a turn that Verifold lost when it stopped, so after a restart the count can
+    be too high until each such agent starts its next turn. An invited agent has no turns in the record and never
+    counts. The person's app shows the live activity instead.
     """
     alarms_waiting: int = 0
     """How many agents of the lab have an alarm that waits, the reader among them."""
@@ -490,9 +503,11 @@ class Brief(Record):
     """The threads where one other agent works alone, the most recently active first, at most `MAX_LEADS`."""
     quiet_threads: tuple[ThreadLine, ...] = ()
     """
-    The threads for the whole lab that got no post for `QUIET_MINUTES` or more, the longest quiet first, at most
-    `MAX_LEADS`. The question's thread is not among them.
+    The threads that got no post for `QUIET_MINUTES` or more, the one that went quiet last first, at most
+    `MAX_LEADS`. The question's thread and the side threads are not among them.
     """
+    more_quiet_threads: int = 0
+    """How many quiet threads the list leaves out."""
     disputed: tuple[PostLine, ...] = ()
     """The posts that a failed check or a standing objection disputes, the agent's own among them, newest last."""
     not_built_on: tuple[PostLine, ...] = ()
@@ -529,8 +544,12 @@ class Update(Record):
     left: tuple[LeftLine, ...] = ()
     """The agents that left the lab since, among those that the agent wrote to: who caused it, and the reason."""
     alarm: AlarmLine | None = None
-    """The alarm that waits for the agent. `None` means that no alarm waits, so only a post for the agent wakes it."""
+    """The alarm that waits for the agent. `None` means that no alarm waits."""
     no_alarm: str = ''
-    """The same facts as `no_alarm` in the news of the other tools. Empty while an alarm waits."""
+    """
+    For an agent that Verifold started and that has no alarm: that none is set, what starts its next turn as the
+    lab stands now, how much time the lab has left, and whether a close stands. Empty while an alarm waits, and for
+    an agent that Verifold cannot wake.
+    """
     ends_at: AwareDatetime | None = None
     """When the lab ends. At that time Verifold stops the agents' turns. `None` means no time limit."""

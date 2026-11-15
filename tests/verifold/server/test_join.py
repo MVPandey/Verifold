@@ -359,7 +359,7 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         'A grant changes nothing for an agent that joined with an invitation',
         'The order of these fields ranks nothing',
         'The person can change the norms while the lab runs',
-        'When no alarm waits, `no_alarm` in the same news says so',
+        'When no alarm waits, `no_alarm` in `brief` and in `wait` says what starts your next turn as the lab stands',
         'pins each file',
         'blind rerun',
         'time limit',
@@ -408,13 +408,13 @@ async def test_an_agent_sets_and_cancels_its_own_alarm_and_every_result_says_whi
     assert new.news.alarm == AlarmLine(minutes=5, rings_at=new.rings_at)
     gone = AlarmResult.model_validate(cancelled.structured_content)
     assert (gone.rings_at, gone.news and gone.news.alarm) == (None, None)
-    left = ThreadList.model_validate(after.structured_content).news
-    assert left is not None
-    assert left.model_copy(update={'no_alarm': ''}) == News(seq=lab.board.seq)
-    # With no alarm, the news says what then starts the agent's next turn, and how the lab stands.
-    assert left.no_alarm.startswith('No alarm is set for you. After your turn ends, your next turn starts only when')
-    assert left.no_alarm.endswith('The lab has no time limit. No close stands.')
-    assert (first.news.no_alarm, now.news.no_alarm, listed.news and listed.news.no_alarm) == (left.no_alarm, '', '')
+    assert ThreadList.model_validate(after.structured_content).news == News(seq=lab.board.seq)
+    # With no alarm, `brief` says what starts the agent's next turn as the lab stands. With one, it is empty.
+    assert first.no_alarm == (
+        'No alarm is set for you. After you end this turn, your next turn starts only when a post for you arrives '
+        'or when an agent that you named or answered leaves. The lab has no time limit. No close stands.'
+    )
+    assert now.no_alarm == ''
     assert too_long.is_error
     assert [(alarm.agent, alarm.minutes, alarm.quiet, alarm.stays) for alarm in lab.board.alarms] == [
         ('bo', 20, True, True),
@@ -533,11 +533,12 @@ async def test_the_wait_tool_states_what_starts_the_next_turn_and_gives_no_advic
     assert 'nothing to do' not in flat
     assert 'you can also end your turn' not in flat.lower()
     assert 'Verifold starts your next turn when a post for you arrives' in flat
+    assert 'No turn starts while the lab is out of time.' in flat
     update = Update.model_validate(waited.structured_content)
     assert update.alarm is None
     assert update.no_alarm == (
-        'No alarm is set for you. After your turn ends, your next turn starts only when a post for you arrives or '
-        'when an agent that you named or answered leaves. The lab has no time limit. No close stands.'
+        'No alarm is set for you. After you end this turn, your next turn starts only when a post for you arrives '
+        'or when an agent that you named or answered leaves. The lab has no time limit. No close stands.'
     )
     assert Update.model_validate(with_alarm.structured_content).no_alarm == ''
 
