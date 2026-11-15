@@ -3,7 +3,7 @@ import type { ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
 import { messageOf } from '../api/client.ts';
-import type { AgentView, HarnessOption, LabView, ThreadSummary } from '../api/types.ts';
+import type { AgentView, HarnessOption, Invitation, LabView, ThreadSummary } from '../api/types.ts';
 import {
   costLine,
   face,
@@ -190,6 +190,7 @@ function Members(props: {
           </span>
         </p>
         <AddAgent api={props.api} harnesses={props.harnesses} onChange={props.onChange} />
+        <InviteAgent api={props.api} onChange={props.onChange} />
       </div>
     </details>
   );
@@ -246,6 +247,95 @@ function AddAgent(props: {
       {error ? (
         <span className="error" role="alert">
           {error}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The way to invite an agent that the person runs themselves, in any harness that speaks MCP. Verifold starts
+ * nothing for it. The invitation shows once, here, because it holds the agent's token.
+ */
+function InviteAgent(props: { readonly api: Api; readonly onChange: () => void }): ReactElement {
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [invitation, setInvitation] = useState<Invitation | null>(null);
+  const invite = (): void => {
+    setBusy(true);
+    setError(null);
+    props.api.invite(name.trim() || undefined).then(
+      (made) => {
+        setBusy(false);
+        setName('');
+        setInvitation(made);
+        props.onChange();
+      },
+      (failure: unknown) => {
+        setBusy(false);
+        setError(messageOf(failure));
+      },
+    );
+  };
+  return (
+    <div className="f-add f-invite">
+      <label>
+        Invite an agent
+        <input
+          value={name}
+          maxLength={40}
+          placeholder="Name, if you want one"
+          onChange={(event) => {
+            setName(event.target.value);
+          }}
+        />
+      </label>
+      <button type="button" onClick={invite} disabled={busy}>
+        {busy ? 'Inviting' : 'Invite'}
+      </button>
+      <p className="f-where">
+        For an agent that you run yourself. Verifold does not start it or stop it.
+      </p>
+      {error ? (
+        <span className="error" role="alert">
+          {error}
+        </span>
+      ) : null}
+      {invitation ? <InvitationText key={invitation.agent} invitation={invitation} /> : null}
+    </div>
+  );
+}
+
+/** An invitation, as text to copy. It holds the agent's token, and Verifold does not show it again. */
+export function InvitationText(props: { readonly invitation: Invitation }): ReactElement {
+  const { invitation } = props;
+  const [copied, setCopied] = useState<boolean | null>(null);
+  const copy = (): void => {
+    navigator.clipboard.writeText(invitation.text).then(
+      () => {
+        setCopied(true);
+      },
+      () => {
+        setCopied(false);
+      },
+    );
+  };
+  return (
+    <div className="f-invitation">
+      <p>
+        <b>Invitation for {invitation.name}</b>
+      </p>
+      <p className="f-where">
+        Give this text to the agent. It holds the agent’s token, and it shows only this once.
+      </p>
+      <textarea readOnly rows={8} value={invitation.text} aria-label="Invitation text" />
+      <button type="button" onClick={copy}>
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+      {copied === false ? (
+        <span className="error" role="alert">
+          The browser did not copy the text. Select it and copy it yourself.
         </span>
       ) : null}
     </div>

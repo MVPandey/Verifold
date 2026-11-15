@@ -11,6 +11,7 @@ from pydantic import SecretStr
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import (
     HarnessOption,
+    Invitation,
     SettingsChange,
     SettingsFileView,
     SettingsView,
@@ -24,7 +25,7 @@ from verifold.protocol.settings import Settings
 from verifold.protocol.usage import Usage
 from verifold.server.activity import Activity
 from verifold.server.app_api import _changes, app_api
-from verifold.server.errors import LabExists, SetupRejected
+from verifold.server.errors import LabExists, NoLab, SetupRejected
 from verifold.server.lab import Lab
 from verifold.society.errors import NotFound
 from verifold.store.errors import SettingsChanged, SettingsInvalid, SettingsUnwritable
@@ -41,6 +42,7 @@ class Host:
         self.lab = lab
         self.started: list[StartRequest] = []
         self.added: list[AgentChoice] = []
+        self.invited: list[str | None] = []
 
     def setup(self) -> SetupView:
         harnesses = (HarnessOption(name='fake', title='Fake', family='test', available=True),)
@@ -76,6 +78,14 @@ class Host:
         if choice.harness != 'fake':
             raise SetupRejected('Unknown harness nope.')
         self.added.append(choice)
+
+    async def invite(self, name: str | None = None) -> Invitation:
+        if self.lab is None:
+            raise NoLab('This folder has no lab yet. Start one from the setup screen.')
+        if name == 'Ada':
+            raise SetupRejected('The lab has the name Ada already. Choose another name.')
+        self.invited.append(name)
+        return Invitation(agent='agent-3', name=name or 'Agent 3', text='URL: http://127.0.0.1:1/mcp')
 
     async def file_text(self, post_id: str, path: str) -> FileText:
         if path != 'answer.md':
@@ -342,3 +352,23 @@ async def test_the_person_adds_an_agent_to_the_lab_that_runs(lab: Lab, activity:
     assert added.status_code == 200
     assert [(choice.harness, choice.count) for choice in host.added] == [('fake', 2)]
     assert (refused.status_code, refused.json()['detail']) == (400, 'Unknown harness nope.')
+
+
+async def test_the_person_invites_an_agent_and_gets_its_invitation(lab: Lab, activity: Activity) -> None:
+    host = Host(lab)
+    async with client_of(host, activity) as client:
+        plain = await client.post('/invitations', json={})
+        named = await client.post('/invitations', json={'name': ' The\nreader '})
+        taken = await client.post('/invitations', json={'name': 'Ada'})
+        empty = await client.post('/invitations', json={'name': '  '})
+    async with client_of(Host(None), activity) as client:
+        no_lab = await client.post('/invitations', json={})
+
+    assert plain.json() == {'agent': 'agent-3', 'name': 'Agent 3', 'text': 'URL: http://127.0.0.1:1/mcp'}
+    # A name is one line.
+    assert (named.json()['name'], host.invited) == ('The reader', [None, 'The reader'])
+    assert (taken.status_code, taken.json()['detail']) == (
+        400,
+        'The lab has the name Ada already. Choose another name.',
+    )
+    assert (empty.status_code, no_lab.status_code) == (422, 409)

@@ -133,3 +133,26 @@ def test_a_close_is_no_work_in_a_thread_and_builds_on_nothing(record: RecordBuil
 
     assert lines_of(board) == {'ada': 't-2'}
     assert [line.id for line in brief(board, 'cy', News(seq=0)).not_built_on] == ['p-1']
+
+
+def test_an_invited_agent_counts_toward_a_close_only_from_its_first_post() -> None:
+    # Two agents, and two invitations that nobody used yet.
+    record = RecordBuilder().join('ada').join('bo').thread('t-1', opened_by='ada')
+    record.join('guest', family='unknown', harness='guest').join('late', family='unknown', harness='guest')
+    record.post(Close(id='p-1', thread='t-1', author='ada', text='The answer stands.'))
+    assert lab_state(record.board()) == 'closing'
+
+    record.post(Answer(id='p-2', thread='t-1', author='bo', text='Agreed.', reply_to='p-1', accepts=True))
+    assert lab_state(record.board()) == 'closed'
+
+    # A guest that posts is an agent of the lab, so two of three is still more than half, and two of four is not.
+    record.post(Message(id='p-3', thread='t-1', author='guest', text='I read the thread.'))
+    assert lab_state(record.board()) == 'closed'
+    record.post(Message(id='p-4', thread='t-1', author='late', text='So did I.'))
+    assert lab_state(record.board()) == 'closing'
+
+    record.post(Answer(id='p-5', thread='t-1', author='late', text='Agreed.', reply_to='p-1', accepts=True))
+    closed = record.board()
+    done = closing(closed)
+    assert done is not None
+    assert (lab_state(closed), agreed(closed, done)) == ('closed', ('bo', 'late'))

@@ -1,7 +1,8 @@
 """What each agent is doing now. The runner writes it from the harnesses' live updates, and the app reads it."""
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
+from contextlib import asynccontextmanager
 from datetime import datetime
 
 from verifold.protocol.app import AgentActivity, AgentState
@@ -17,6 +18,7 @@ class Activity:
         """Start with no activity."""
         self._clock = clock
         self._by_agent: dict[AgentId, AgentActivity] = {}
+        self._guests: set[AgentId] = set()
         self._changed = asyncio.Condition()
         self.version = 0
 
@@ -30,6 +32,36 @@ class Activity:
             self._by_agent[agent_id] = AgentActivity(state=state, detail=detail[:200], at=self._clock())
             self.version += 1
             self._changed.notify_all()
+
+    async def invite(self, agent_id: AgentId, *, joined: bool) -> None:
+        """
+        Show an agent as a guest from now on: an agent that runs by itself, which Verifold sees only in its calls.
+
+        It is `invited` until its first call. With `joined`, the record shows that it called before this server
+        started, so it is `here`, with no time for a call that this server did not see.
+        """
+        async with self._changed:
+            self._guests.add(agent_id)
+            self._by_agent[agent_id] = AgentActivity(state='here' if joined else 'invited')
+            self.version += 1
+            self._changed.notify_all()
+
+    @asynccontextmanager
+    async def call(self, agent_id: AgentId, tool: str) -> AsyncGenerator[None]:
+        """
+        Show a guest's board call while the block runs: `listening` during a `wait`, and `here` for any other call.
+
+        A call of an agent that Verifold started changes nothing, because its harness reports what it does.
+        """
+        if agent_id not in self._guests:
+            yield
+            return
+        await self.set(agent_id, 'listening' if tool == 'wait' else 'here')
+        try:
+            yield
+        finally:
+            if tool == 'wait':
+                await self.set(agent_id, 'here')
 
     async def wait_for_change(self, after: int, timeout: float | None) -> None:
         """Return once `version` passes `after`, or after `timeout` seconds when given."""

@@ -3,11 +3,12 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 
+from verifold.protocol.agents import GUEST
 from verifold.protocol.events import AlarmSet, RerunRequested, WatchSet
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import Brief, News, PostRequest, PostView, ThreadSummary, ThreadView, Update
 from verifold.protocol.posts import FileEvidence
-from verifold.server.errors import BlindCheck, EvidenceRejected
+from verifold.server.errors import BlindCheck, CannotWake, EvidenceRejected
 from verifold.server.lab import Lab
 from verifold.society.attention import news, update
 from verifold.society.views import brief, post_view, thread_summaries, thread_view
@@ -119,8 +120,21 @@ class Member:
             raise BlindCheck(f'You rerun {target} blind, so you cannot read the board.')
 
     async def set_alarm(self, minutes: float, *, quiet: bool) -> AlarmSet:
-        """Ask Verifold to wake the agent after its turn ends, when no post for it wakes it first."""
+        """
+        Ask Verifold to wake the agent after its turn ends, when no post for it wakes it first.
+
+        Raises:
+            CannotWake: The agent joined with an invitation, so Verifold cannot wake it.
+
+        """
         self._check_not_blind()
+        joined = self._lab.board.agent(self.agent_id)
+        if joined and joined.agent.harness == GUEST:
+            # An alarm that never rings would tell the agent a time that means nothing.
+            raise CannotWake(
+                'You joined with an invitation, so Verifold cannot wake you and sets no alarm. `wait` returns when '
+                'a post for you arrives.'
+            )
         return await self._lab.set_alarm(self.agent_id, minutes, quiet=quiet)
 
     async def set_profile(self, role: str | None, status: str | None) -> tuple[str, str]:

@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta
 
+from verifold.protocol.agents import GUEST
 from verifold.protocol.events import AlarmSet
 from verifold.protocol.ids import AgentId
 from verifold.protocol.join import LabState
@@ -15,11 +16,18 @@ def lab_state(board: Board) -> LabState:
 
     It is closing while a close stands, and closed once more than half of the lab's agents stand behind it: its
     author and the agents that agreed. A new objection to the close opens the lab again.
+
+    An invited agent counts among the lab's agents from its first post. Until then nobody knows whether it came, and
+    an invitation that nobody used must not keep the lab open.
     """
     close = closing(board)
     if close is None:
         return 'open'
-    workers = sum(not joined.agent.checks for joined in board.agents)
+    authors = {entry.post.author for entry in board.posts}
+    workers = sum(
+        not joined.agent.checks and (joined.agent.harness != GUEST or joined.agent.id in authors)
+        for joined in board.agents
+    )
     return 'closed' if (1 + len(agreed(board, close))) * 2 > workers else 'closing'
 
 

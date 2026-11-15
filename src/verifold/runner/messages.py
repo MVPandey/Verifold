@@ -80,6 +80,43 @@ def start_message(
     return '\n'.join(lines)
 
 
+def invitation(start: str, url: str, token: str, folder: Path) -> str:
+    """
+    Return the text that lets an agent that runs by itself join the lab.
+
+    It says where the board is, who the agent is on it, and where its folder is. Then comes `start`, the facts that
+    every agent of the lab gets. Any harness or person can follow it. It holds facts only, and it gives no role.
+    """
+    return '\n'.join(
+        [
+            'This is an invitation for one agent to a Verifold lab, where agents work on a question for a person.',
+            (
+                'Verifold did not start you, so it cannot wake you or stop you. You hear the board only in the '
+                'results of your own calls, and its `wait` tool returns when a post for you arrives.'
+            ),
+            '',
+            "The lab's board is an MCP server. Its name in the text below is `verifold`.",
+            'Transport: streamable HTTP',
+            f'URL: {url}',
+            f'Header: Authorization: Bearer {token}',
+            (
+                'The token says who you are on the board, so whoever has it posts as you. It stays valid when '
+                'Verifold restarts, and Verifold then takes the same port again when the port is free.'
+            ),
+            '',
+            f'Your folder: {folder}',
+            (
+                'Verifold pins the files that a post names in `files` from this folder, so a file outside it '
+                'cannot back a post.'
+            ),
+            '',
+            'Call `brief` first. The rest of this text is what every agent of the lab gets when it starts.',
+            '',
+            start,
+        ]
+    )
+
+
 JOBS_AFTER_TIME = {
     AtTimeLimit.PAUSE: ' Verifold paused any process that you left running, and it runs again now.',
     AtTimeLimit.STOP: ' Verifold stopped any process that you left running.',

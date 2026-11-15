@@ -1,6 +1,8 @@
 """Runs Verifold in a project folder: the server, the setup screen, and the folder's lab once it starts."""
 
 import asyncio
+import secrets
+import socket
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -9,15 +11,17 @@ from functools import partial
 from importlib.resources import files
 from pathlib import Path
 from typing import override
+from urllib.parse import urlsplit
 
 import psutil
 import uvicorn
 from pydantic import Field, JsonValue
 
 from verifold.harnesses.catalog import CATALOG, NPX_PROJECT, HarnessEntry, available, catalog_with
-from verifold.protocol.agents import MAX_AGENTS, Agent, AgentChoice, ModelSpec
+from verifold.protocol.agents import GUEST, MAX_AGENTS, UNKNOWN_FAMILY, Agent, AgentChoice, ModelSpec
 from verifold.protocol.app import (
     HarnessOption,
+    Invitation,
     Offer,
     SettingsChange,
     SettingsFileView,
@@ -26,7 +30,7 @@ from verifold.protocol.app import (
     StartRequest,
 )
 from verifold.protocol.events import TurnSummary
-from verifold.protocol.ids import PostId
+from verifold.protocol.ids import PERSON, PostId
 from verifold.protocol.join import FileText
 from verifold.protocol.record import Record
 from verifold.protocol.settings import AtExit, SettingsLevel, SetupDefaults
@@ -35,7 +39,7 @@ from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shar
 from verifold.runner.folders import LAB_FOLDER, agent_folder, agents_folder, tracked_lab_files
 from verifold.runner.git import GitError, git
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, running_jobs, sweep
-from verifold.runner.messages import start_message
+from verifold.runner.messages import invitation, start_message
 from verifold.runner.permissions import GrantAsks
 from verifold.runner.reruns import Crew, Reruns
 from verifold.runner.session import Place, SessionOptions, offer_of
@@ -43,7 +47,7 @@ from verifold.runner.snapshots import pin
 from verifold.server.activity import Activity
 from verifold.server.app_api import app_api, new_person_token
 from verifold.server.errors import LabExists, NoLab, SetupRejected
-from verifold.server.join import Members, join_server
+from verifold.server.join import Members, join_server, token_digest
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.server.timekeeper import keep_time
@@ -51,6 +55,7 @@ from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
 from verifold.store.errors import SettingsInvalid
+from verifold.store.guests_file import GUESTS_FILE, keep_guest, read_guests
 from verifold.store.record_file import RecordFile
 from verifold.store.server_file import running_server, server_file
 from verifold.store.settings_file import (
@@ -139,7 +144,8 @@ class Host:
         """Prepare a host for the folder at `project`. Call `attach` before a lab starts."""
         self._project = project
         self._record = record
-        self._catalog = catalog
+        # `guest` is the harness of an invited agent, which Verifold never starts. So no harness has that name.
+        self._catalog = {name: entry for name, entry in catalog.items() if name != GUEST}
         self._members = members
         self._activity = activity
         self._lab: Lab | None = None
@@ -351,10 +357,16 @@ class Host:
         under_way = bool(lab.board.turns)
         for agent in self._workers(lab):
             await self._run_agent(lab, agent, under_way=under_way)
+        # An invited agent keeps its seat and its token. It runs by itself, so nothing starts here.
+        digests = read_guests(self._guests_file).digests
+        authors = {entry.post.author for entry in lab.board.posts}
+        for agent in (entry.agent for entry in lab.board.agents if entry.agent.harness == GUEST):
+            await self._seat_guest(lab, agent, digests.get(agent.id), joined=agent.id in authors)
         group.create_task(Reruns(lab, self._members, self._project, partial(self._crew, lab), self._supervise).run())
 
     def _workers(self, lab: Lab) -> tuple[Agent, ...]:
-        # The lab's agents that Verifold runs: no blind checkers, and no agent of a harness that this computer lacks.
+        # The lab's agents that Verifold runs: no blind checkers, no invited agents, which have no harness in the
+        # catalog, and no agent of a harness that this computer lacks.
         return tuple(
             entry.agent for entry in lab.board.agents if not entry.agent.checks and entry.agent.harness in self._catalog
         )
@@ -396,10 +408,7 @@ class Host:
             if members + choice.count > MAX_AGENTS:
                 raise SetupRejected(f'A lab has at most {MAX_AGENTS} agents, and this one has {members}.')
             for _ in range(choice.count):
-                number = 1 + sum(not joined.agent.checks for joined in lab.board.agents)
-                while lab.board.agent(f'agent-{number}'):
-                    number += 1
-                agent = _agent(number, entry, choice)
+                agent = _agent(_free_number(lab.board), entry, choice)
                 # The folder comes first. An agent that the record holds and that has no folder could never start.
                 try:
                     await agent_folder(self._project, agent.id)
@@ -407,6 +416,66 @@ class Host:
                     raise SetupRejected(f"Can't make the folder of {agent.name}: {error}") from error
                 await lab.join(agent)
                 await self._run_agent(lab, agent, under_way=True)
+
+    async def invite(self, name: str | None = None) -> Invitation:
+        """
+        Add an agent that runs by itself to the lab that runs, and return its invitation, which holds its token.
+
+        Verifold starts nothing for it. The agent joins when its own harness connects to the board with the token,
+        and it uses the board's `wait` tool to hear the lab. The token is in the invitation and nowhere else:
+        Verifold keeps a digest of it, so the invitation still works after a restart.
+
+        Raises:
+            NoLab: The folder has no lab.
+            SetupRejected: The lab would have more than `MAX_AGENTS` agents, an agent has the name already, or
+                Verifold can't make the agent's folder or keep its token's digest.
+
+        """
+        lab, settings = self._lab, self._settings
+        if lab is None or settings is None:
+            raise NoLab('This folder has no lab yet. Start one from the setup screen.')
+        # One at a time, with the adds, so that two requests cannot pass the limit or take the same number.
+        async with self._adding:
+            members = sum(not joined.agent.checks for joined in lab.board.agents)
+            if members >= MAX_AGENTS:
+                raise SetupRejected(f'A lab has at most {MAX_AGENTS} agents, and this one has {members}.')
+            # A name in the text of a post reaches its agent, so two agents cannot share one. The app calls the
+            # person "You".
+            if name and name.casefold() in _names(lab.board) | {'you', PERSON}:
+                raise SetupRejected(f'The lab has the name {name} already. Choose another name.')
+            number = _free_number(lab.board)
+            agent = Agent(
+                id=f'agent-{number}',
+                name=name or f'Agent {number}',
+                harness=GUEST,
+                model=ModelSpec(family=UNKNOWN_FAMILY),
+            )
+            token = secrets.token_urlsafe(32)
+            digest = token_digest(token)
+            # The folder and the digest come first. An agent that the record holds and that has neither could never
+            # join. A digest without an agent opens nothing, and the next invitation replaces it.
+            try:
+                folder = await agent_folder(self._project, agent.id)
+                keep_guest(self._guests_file, agent.id, digest, urlsplit(settings.mcp_url).port)
+            except (GitError, OSError) as error:
+                raise SetupRejected(f"Can't invite {agent.name}: {error}") from error
+            await lab.join(agent)
+            await self._seat_guest(lab, agent, digest, joined=False)
+        norms = self._project / LAB_FOLDER / 'LAB.md'
+        writing = self._project / LAB_FOLDER / 'WRITING.md'
+        start = start_message(lab.board, agent, norms, writing, under_way=True)
+        return Invitation(agent=agent.id, name=agent.name, text=invitation(start, settings.mcp_url, token, folder))
+
+    @property
+    def _guests_file(self) -> Path:
+        return self._project / LAB_FOLDER / GUESTS_FILE
+
+    async def _seat_guest(self, lab: Lab, agent: Agent, digest: str | None, *, joined: bool) -> None:
+        # Without a digest, such as after the person removed the file, the agent has no seat and its token is void.
+        if digest:
+            folder = await agent_folder(self._project, agent.id)
+            self._members.add_guest(Member(lab, agent.id, pin=partial(pin, folder, agent.id)), digest)
+        await self._activity.invite(agent.id, joined=joined)
 
     def _shared(self) -> Shared:
         return Shared(activity=self._activity, grant_asks=self._grant_asks, has_jobs=self._has_jobs)
@@ -496,11 +565,14 @@ async def serve(
             hooks.swept(leftovers.model_copy(update={'earlier_run': True}))
         members, activity, person_token = Members(), Activity(), new_person_token()
         host = Host(project, record, catalog, members, activity)
-        http = join_server(members.resolve).streamable_http_app(host='127.0.0.1')
+        http = join_server(members.resolve, activity.call).streamable_http_app(host='127.0.0.1')
         http.mount('/api', app_api(host, activity, person_token))
         http.mount('/', web_app(options.web))
+        # An invitation names the board's address. So a lab with invited agents takes its last port again when it can.
+        kept = read_guests(project / LAB_FOLDER / GUESTS_FILE).port
+        port = options.port or (kept if kept and _is_free(kept) else 0)
         server = WebServer(
-            uvicorn.Config(http, host='127.0.0.1', port=options.port, log_level='warning', timeout_graceful_shutdown=5)
+            uvicorn.Config(http, host='127.0.0.1', port=port, log_level='warning', timeout_graceful_shutdown=5)
         )
         serving = asyncio.create_task(server.serve())
         try:
@@ -571,6 +643,30 @@ async def _closed(serving: asyncio.Task[None]) -> None:
 def _stopped_checker(checker: str, error: str, *, checked: bool, seconds: float = 0) -> TurnSummary:
     # The rerun failed only when the checker stopped before it posted its check.
     return TurnSummary(agent=checker, seconds=seconds, usage=Usage(), error=error, rerun_failed=not checked)
+
+
+def _names(board: Board) -> set[str]:
+    # The names of the lab's agents, without their capitals.
+    return {joined.agent.name.casefold() for joined in board.agents}
+
+
+def _free_number(board: Board) -> int:
+    # The next agent's number: one whose ID and whose name, such as "Agent 3", no agent has yet.
+    number = 1 + sum(not joined.agent.checks for joined in board.agents)
+    while board.agent(f'agent-{number}') or f'agent {number}' in _names(board):
+        number += 1
+    return number
+
+
+def _is_free(port: int) -> bool:
+    # Whether this process can listen on the port now.
+    with socket.socket() as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(('127.0.0.1', port))
+        except OSError:
+            return False
+    return True
 
 
 def _agent(number: int, harness: HarnessEntry, choice: AgentChoice) -> Agent:

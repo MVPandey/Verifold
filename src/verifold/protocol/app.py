@@ -1,20 +1,25 @@
 """The app protocol: what the person's UI reads from a lab, and what it sends."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, Field, JsonValue
+from pydantic import AfterValidator, AwareDatetime, Field, JsonValue, StringConstraints
 
-from verifold.protocol.agents import Agent, AgentChoices, Label, ValueId
+from verifold.protocol.agents import Agent, AgentChoices, Label, ValueId, one_line
 from verifold.protocol.events import Question
 from verifold.protocol.grants import Grant
-from verifold.protocol.ids import PostId, ThreadId
+from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import LabState, PostLine
 from verifold.protocol.record import Record
 from verifold.protocol.settings import MAX_MINUTES, Settings, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
 
-type AgentState = Literal['starting', 'working', 'waiting', 'idle', 'stopped']
-"""`waiting` means that the harness waits for the person, for example for a permission answer."""
+type AgentState = Literal['starting', 'working', 'waiting', 'idle', 'stopped', 'invited', 'here', 'listening']
+"""
+`waiting` means that the harness waits for the person, for example for a permission answer.
+
+The last three are for an invited agent, which Verifold sees only through its board calls: `invited` until its
+first call, `listening` while its `wait` call is open, and `here` after any other call.
+"""
 
 
 class AgentActivity(Record):
@@ -66,6 +71,22 @@ class LabView(Record):
     """How many other agents agreed with it."""
     settings: Settings = Settings()
     """The settings that the lab follows, such as what happens to the agents' processes when the person stops it."""
+
+
+class InviteRequest(Record):
+    """The person invites an agent that runs by itself."""
+
+    name: Annotated[str, AfterValidator(one_line), StringConstraints(min_length=1, max_length=40)] | None = None
+    """The agent's display name, as one line. `None` gives it the next name, such as "Agent 3"."""
+
+
+class Invitation(Record):
+    """An invited agent, and the text that lets it join. The app shows the text once, and Verifold doesn't keep it."""
+
+    agent: AgentId
+    name: Label
+    text: str
+    """What the agent needs to join: the board's address, its bearer token, its folder, and the lab's facts."""
 
 
 class RerunRequest(Record):

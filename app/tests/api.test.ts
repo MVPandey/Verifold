@@ -44,6 +44,23 @@ describe('the API client', () => {
     assert.equal(read?.init.method, 'GET');
   });
 
+  it('asks for an invitation with a name, or with none', async () => {
+    const server = serverThatAnswers(200, '{"agent": "agent-3", "name": "Reader", "text": "URL"}');
+    const api = createApi('secret', server.fetcher);
+
+    const invitation = await api.invite('Reader');
+    await api.invite();
+
+    assert.deepEqual(invitation, { agent: 'agent-3', name: 'Reader', text: 'URL' });
+    assert.deepEqual(
+      server.calls.map((call) => [call.input, call.init.body]),
+      [
+        ['/api/invitations', '{"name":"Reader"}'],
+        ['/api/invitations', '{}'],
+      ],
+    );
+  });
+
   it('turns a refusal into an error with the server reason', async () => {
     const refusals = [
       [409, '{"detail": "This folder has a lab already."}', 'This folder has a lab already.'],

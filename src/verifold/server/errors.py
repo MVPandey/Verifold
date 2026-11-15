@@ -27,3 +27,7 @@ class NoLab(ServerError):
 
 class SetupRejected(ServerError):
     """The person's setup cannot start a lab. The message says what to change."""
+
+
+class CannotWake(ServerError):
+    """An invited agent asked Verifold to wake it. Verifold did not start it, so it has no way to."""

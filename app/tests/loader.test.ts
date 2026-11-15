@@ -50,6 +50,7 @@ function slowServer(): {
     rerun: () => Promise.reject(new Error('unused')),
     setTime: () => Promise.reject(new Error('unused')),
     addAgents: () => Promise.reject(new Error('unused')),
+    invite: () => Promise.reject(new Error('unused')),
     settings: () => Promise.reject(new Error('unused')),
     changeSetting: () => Promise.reject(new Error('unused')),
   };
