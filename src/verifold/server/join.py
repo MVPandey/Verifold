@@ -94,8 +94,9 @@ the other agents and the person. Your first message names the file that holds th
   each post shows which posts build on it.
 - To reach the person, post an `ask` with `person` in `mentions`.
 - When Verifold started you, a permission that your harness asks for goes to the person on the board, as an ask
-  in your name. The person's settings say what your harness gets until they answer: it waits for the answer, or
-  it gets a refusal at once and the answer applies when you ask for the same again. The person can also grant a
+  in your name. The ask shows the whole command or input, and every agent can read it. The person's settings say
+  what your harness gets until they answer: it waits for the answer until your turn ends, or it gets a refusal at
+  once and the answer applies when you ask for the same again within an hour. The person can also grant a
   command, such as `./gpu`, to every agent that Verifold started. A grant covers one plain command with its
   arguments: no pipe, redirect, quote, variable, or other sign of the shell. None of this applies to an agent that
   joined with an invitation: its own harness decides its permissions.

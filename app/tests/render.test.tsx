@@ -198,7 +198,7 @@ describe('the lab page', () => {
     summary({ thread: { id: 't-2', title: 'Sorted input', opened_by: 'agent-1' }, checked: 1 }),
     summary({ thread: { id: 't-1', title: 'The question', opened_by: 'person' } }),
   ];
-  const needs = [postView({ ...ask('p-8', 'agent-2'), text: 'Which seed counts?' })];
+  const needs = [postView({ ...ask('p-8', 'agent-2', [], null), text: 'Which seed counts?' })];
   const setup = {
     folder: '~/code/sort-bench',
     harnesses: HARNESSES,
@@ -1110,6 +1110,8 @@ describe('the settings page', () => {
     assert.ok(html.includes('<button type="button" aria-pressed="true"><b>Pause them</b>'));
     assert.ok(html.includes('<button type="button" aria-pressed="true"><b>Stop them</b>'));
     assert.ok(html.includes('<button type="button" aria-pressed="true"><b>The agent goes on</b>'));
+    assert.ok(html.includes('<b>As auto mode</b>'));
+    assert.ok(html.includes('In a lab with auto mode the agent goes on.'));
     assert.ok(
       html.includes('Its harness waits for your answer, as it does when you run it yourself.'),
     );

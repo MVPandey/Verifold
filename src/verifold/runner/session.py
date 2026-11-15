@@ -45,8 +45,12 @@ class PermissionRequest(Record):
     """The shell command that the action runs, when the harness reports one."""
     board: bool = False
     """Whether the action is a call to the lab's board, which Verifold itself gave the harness."""
-    detail: str = ''
-    """The action's input as the harness reports it, for a request that has no command to show."""
+    kind: str = ''
+    """The harness's kind of tool, such as `execute` or `edit`, when it reports one."""
+    given: str = ''
+    """The action's whole input as the harness reports it, as JSON. Empty when the harness reports none."""
+    rest: str = ''
+    """What the input holds beside the command, as JSON, such as the folder that the command runs in."""
 
 
 class FieldOption(Record):
@@ -62,6 +66,8 @@ class QuestionField(Record):
     name: str
     title: str
     description: str = ''
+    required: bool = True
+    """Whether the harness needs an answer for the field. The user can leave out any other field."""
     kind: Literal['text', 'number', 'integer', 'boolean', 'choice', 'choices']
     """`choice` takes one of `options`, and `choices` takes any number of them."""
     options: tuple[FieldOption, ...] = ()
@@ -92,9 +98,6 @@ type Permissions = Callable[[PermissionRequest], Awaitable[str | None]]
 
 type Questions = Callable[[Question], Awaitable[Answers | None]]
 """Answers a harness's question: a value for each field, or `None` when the user gives no answer."""
-
-MAX_DETAIL = 2_000
-"""The most characters of an action's input that a permission request carries."""
 
 _SHELLS = frozenset({'bash', 'sh', 'zsh'})
 
@@ -174,7 +177,7 @@ class _Client(acp.Client):
     ) -> schema.RequestPermissionResponse:
         call = self._calls.get(tool_call.tool_call_id, _Call()).updated(tool_call)
         # Only a call that runs a command has one. Another tool's `command` field is not a shell command.
-        command = _command(call.given) if call.kind == 'execute' else None
+        command, key = _command(call.given) if call.kind == 'execute' else (None, None)
         named = _field(call.given, 'server') == BOARD_SERVER and _field(call.given, 'tool') is not None
         request = PermissionRequest(
             title=command or call.title or 'an action',
@@ -184,8 +187,12 @@ class _Client(acp.Client):
             command=command,
             # A shell command is never a call to the board, whatever its text says.
             board=self._names_mcp_server and command is None and named,
-            # Without a command, the person reads the input in the harness's own shape.
-            detail='' if command else _shown(call.given),
+            kind=call.kind or '',
+            given=_json(call.given),
+            # The person reads the command, and what the input holds beside it.
+            rest=_json({name: value for name, value in call.given.items() if name != key} or None)
+            if key and isinstance(call.given, dict)
+            else '',
         )
         chosen = await self._hooks.permissions(request)
         outcome = (
@@ -307,39 +314,40 @@ def _field(given: object, name: str) -> str | None:
     return value.strip() or None if isinstance(value, str) else None
 
 
-def _command(given: object) -> str | None:
+def _command(given: object) -> tuple[str, str] | tuple[None, None]:
     """
-    Return the shell command in a tool call's input, or `None` when Verifold finds none.
+    Return the shell command in a tool call's input and the field that holds it, or `None` when Verifold finds none.
 
     A harness reports it as text or as a list of arguments, under `command` or `cmd`. A list that starts a shell
     with one script, such as `bash -lc 'make test'`, runs that script, so the script is the command.
     """
-    found = next((given[key] for key in ('command', 'cmd') if key in given), None) if isinstance(given, dict) else None
+    key = next((key for key in ('command', 'cmd') if key in given), None) if isinstance(given, dict) else None
+    found = given[key] if key and isinstance(given, dict) else None
     if isinstance(found, list) and found and all(isinstance(word, str) for word in found):
         match [str(word) for word in found]:
             case [shell, '-c' | '-lc', script] if Path(shell).name in _SHELLS:
                 found = script
             case words:
                 found = shlex.join(words)
-    return found.strip() or None if isinstance(found, str) else None
+    return (found.strip(), key) if key and isinstance(found, str) and found.strip() else (None, None)
 
 
-def _shown(given: object) -> str:
-    if given is None:
-        return ''
-    return json.dumps(given, indent=2, ensure_ascii=False, default=str)[:MAX_DETAIL]
+def _json(given: object) -> str:
+    return '' if given is None else json.dumps(given, indent=2, ensure_ascii=False, default=str, sort_keys=True)
 
 
 def _question(message: str, mode: schema.ElicitationMode) -> Question | None:
     """Return the harness's question in Verifold's own shape, or `None` when it holds what the board cannot show."""
     if not isinstance(mode, schema.ElicitationFormSessionMode | schema.ElicitationFormRequestMode):
         return None
-    fields = [_question_field(name, asked) for name, asked in (mode.requested_schema.properties or {}).items()]
+    asked = mode.requested_schema
+    needed = set(asked.required or ())
+    fields = [_question_field(name, each, required=name in needed) for name, each in (asked.properties or {}).items()]
     known = tuple(field for field in fields if field)
     return Question(message=message, fields=known) if known and len(known) == len(fields) else None
 
 
-def _question_field(name: str, asked: object) -> QuestionField | None:
+def _question_field(name: str, asked: object, *, required: bool) -> QuestionField | None:
     title, description = getattr(asked, 'title', None) or name, getattr(asked, 'description', None) or ''
     if isinstance(asked, schema.ElicitationStringPropertySchema):
         titled = [FieldOption(value=option.const, name=option.title) for option in asked.one_of or []]
@@ -362,7 +370,7 @@ def _question_field(name: str, asked: object) -> QuestionField | None:
         options, kind = (), 'number'
     else:
         return None
-    return QuestionField(name=name, title=title, description=description, kind=kind, options=options)
+    return QuestionField(name=name, title=title, description=description, required=required, kind=kind, options=options)
 
 
 def _unsupported(method: str) -> NoReturn:

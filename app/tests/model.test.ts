@@ -23,6 +23,7 @@ import { orderNeeds, pauses } from '../src/model/needs.ts';
 import { isRevision, revisedLine } from '../src/model/question.ts';
 import {
   builtOnLabel,
+  harnessRequest,
   isPermission,
   personAnswer,
   personMessage,
@@ -191,6 +192,12 @@ describe('posts', () => {
     assert.equal(builtOnLabel(['p-4', 'p-9']), 'Built on by 2 posts');
     assert.equal(isPermission(ask('p-1', 'agent-1')), true);
     assert.equal(isPermission(result('p-1')), false);
+    // Only the field that Verifold records makes a permission request. An agent's own ask with the same words is none.
+    const lookalike = ask('p-1', 'agent-1', [], null);
+    assert.equal(lookalike.text.startsWith('Permission needed:'), true);
+    assert.equal(isPermission(lookalike), false);
+    assert.equal(harnessRequest(lookalike), null);
+    assert.equal(harnessRequest(ask('p-1', 'agent-1', [], 'question')), 'question');
   });
 });
 
@@ -595,8 +602,8 @@ describe('turns', () => {
 describe('needs', () => {
   const waiting = { state: 'waiting', detail: '', at: null } as const;
   const needs = [
-    postView({ ...ask('p-1', 'agent-1'), text: 'Which seed counts?' }),
-    postView(ask('p-2', 'agent-2')),
+    postView({ ...ask('p-1', 'agent-1', [], null), text: 'Permission needed: which seed?' }),
+    postView({ ...ask('p-2', 'agent-2', [], 'question'), text: 'Which branch?' }),
     postView(ask('p-3', 'agent-3')),
   ];
   const ids = (items: readonly PostView[]): readonly string[] => items.map((item) => item.post.id);

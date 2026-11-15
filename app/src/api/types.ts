@@ -142,7 +142,7 @@ export interface JobSettings {
 }
 
 /** What an agent's harness gets while its permission request waits for the person's answer on the board. */
-export type WhileYouDecide = 'wait' | 'refuse';
+export type WhileYouDecide = 'auto' | 'wait' | 'refuse';
 
 export interface PermissionSettings {
   readonly while_you_decide: WhileYouDecide;
@@ -322,8 +322,18 @@ export type Post =
         | 'call'
         | 'close';
     })
-  | (PostBase & { readonly kind: 'ask'; readonly choices: readonly string[] })
-  | (PostBase & { readonly kind: 'answer'; readonly accepts: boolean })
+  | (PostBase & {
+      readonly kind: 'ask';
+      readonly choices: readonly string[];
+      /** What the ask carries for the author's harness. Verifold sets it, and no agent can. */
+      readonly request?: 'permission' | 'question' | null;
+    })
+  | (PostBase & {
+      readonly kind: 'answer';
+      readonly accepts: boolean;
+      /** Whether Verifold ended the harness's request that the ask carries, without the person's answer. */
+      readonly ends_request?: boolean;
+    })
   | (PostBase & {
       readonly kind: 'check';
       readonly outcome: 'holds' | 'fails';

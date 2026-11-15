@@ -239,7 +239,8 @@ class FakeAgent(acp.Agent):
         if os.environ.get('FAKE_ACP_QUESTION') and self._client:
             branch = schema.ElicitationStringPropertySchema(type='string', title='Branch', enum=['main', 'dev'])
             form = schema.ElicitationFormSessionMode(
-                session_id=session_id, requested_schema=schema.ElicitationSchema(properties={'branch': branch})
+                session_id=session_id,
+                requested_schema=schema.ElicitationSchema(properties={'branch': branch}, required=['branch']),
             )
             answered = await self._client.create_elicitation(message='Which branch?', mode=form)
             given = answered.content if isinstance(answered, schema.AcceptElicitationResponse) else None

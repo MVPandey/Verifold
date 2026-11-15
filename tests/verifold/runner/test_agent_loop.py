@@ -456,14 +456,16 @@ async def test_a_permission_request_waits_for_the_persons_answer_on_the_board(
 
 
 NO_WAIT = Settings(permissions=PermissionSettings(while_you_decide=WhileYouDecide.REFUSE))
+WAIT = Settings(permissions=PermissionSettings(while_you_decide=WhileYouDecide.WAIT))
 
 
 @pytest.mark.usefixtures('log')
-async def test_a_command_that_no_grant_can_cover_waits_for_the_persons_answer_too(
+async def test_when_the_person_chose_that_agents_wait_a_command_that_no_grant_can_cover_waits_for_the_answer(
     served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv('FAKE_ACP_COMMAND', 'git commit -m "x"')
     lab = served.lab
+    await lab.set_settings(WAIT)
     running = asyncio.create_task(loop_for(served, tmp_path, refusals=Refusals(lab)).run())
     try:
         await until(lambda: any(entry.post.kind == 'ask' for entry in lab.board.posts))
@@ -474,9 +476,10 @@ async def test_a_command_that_no_grant_can_cover_waits_for_the_persons_answer_to
     finally:
         running.cancel()
 
-    assert (lab.board.opened.auto_mode, asked.text) == (True, 'Permission needed: git commit -m "x"')
+    assert (lab.board.opened.auto_mode, asked.text) == (True, 'Permission needed: a shell command')
     assert isinstance(asked, Ask)
-    assert asked.choices == ('Allow once', 'Reject')
+    assert (asked.choices, asked.request) == (('Allow once', 'Reject'), 'permission')
+    assert 'The command:\n\n```\ngit commit -m "x"\n```' in asked.body
     assert all(not text.startswith('Permission:') for text in waited)
 
 
@@ -499,24 +502,107 @@ async def test_a_question_of_the_harness_waits_for_the_persons_answer_on_the_boa
 
     assert isinstance(asked, Ask)
     assert (asked.text, asked.choices, asked.mentions) == ('Which branch?', ('main', 'dev'), ('person',))
+    assert asked.request == 'question'
     assert (state.state, state.detail) == ('waiting', 'Asks you: Which branch?')
 
 
 @pytest.mark.usefixtures('log')
-async def test_when_the_person_chose_that_no_agent_waits_a_command_is_refused_at_once_and_the_ask_stays(
-    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize('settings', [NO_WAIT, None])
+async def test_in_a_lab_with_auto_mode_or_by_the_persons_choice_a_command_is_refused_at_once_and_the_ask_stays(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings | None
 ) -> None:
     monkeypatch.setenv('FAKE_ACP_COMMAND', './gpu python3 train.py')
     lab = served.lab
-    await lab.set_settings(NO_WAIT)
+    if settings:
+        await lab.set_settings(settings)
     running = asyncio.create_task(loop_for(served, tmp_path, refusals=Refusals(lab)).run())
     try:
         await until(lambda: 'Permission: no.' in posts_by(served, 'bo'))
     finally:
         running.cancel()
 
-    asks = [entry.post for entry in lab.board.posts if entry.post.kind == 'ask']
-    assert [ask.text for ask in asks] == ['Refused without a grant: ./gpu python3 train.py']
+    asks = [entry.post for entry in lab.board.posts if isinstance(entry.post, Ask)]
+    assert lab.board.opened.auto_mode
+    assert [ask.text for ask in asks] == ['Permission needed: ./gpu python3 train.py']
+    assert asks[0].choices == ('Allow once', 'Reject', 'Allow `./gpu` for every agent')
+    assert [view.post.id for view in needs_person(lab.board)] == [asks[0].id]
+
+
+@pytest.mark.usefixtures('log')
+async def test_a_request_that_waits_ends_with_its_turn_and_the_agents_next_request_is_the_live_one(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_PERMISSION', '1')
+    lab = served.lab
+
+    def asks() -> list[Ask]:
+        return [entry.post for entry in lab.board.posts if isinstance(entry.post, Ask)]
+
+    running = asyncio.create_task(loop_for(served, tmp_path, turn_timeout=0.5).run())
+    try:
+        # The turn runs past its time while the request waits. The agent goes on, and its harness asks again.
+        await until(lambda: len(asks()) == 2)
+        old, live = asks()
+        await until(lambda: [view.post.id for view in needs_person(lab.board)] == [live.id])
+        await lab.post(PostRequest(kind='answer', text='Allow once', thread=old.thread, reply_to=old.id), 'person')
+        await asyncio.sleep(0.2)
+        late = [text for text in posts_by(served, 'bo') if text == 'Permission: yes.']
+        await lab.post(PostRequest(kind='answer', text='Allow once', thread=live.thread, reply_to=live.id), 'person')
+        await until(lambda: 'Permission: yes.' in posts_by(served, 'bo'))
+    finally:
+        running.cancel()
+
+    ended = [entry.post for entry in lab.board.replies(old.id) if entry.post.author == 'bo']
+    assert [post.text for post in ended] == [
+        "This request ended with the agent's turn. An answer to it decides nothing."
+    ]
+    assert (late, 'Permission: cancelled.' in posts_by(served, 'bo')) == ([], True)
+
+
+MAKE = PermissionRequest(
+    title='run make',
+    choices=(
+        PermissionChoice(id='yes', name='Allow once', kind='allow_once'),
+        PermissionChoice(id='no', name='Reject', kind='reject_once'),
+    ),
+)
+
+
+async def test_an_agent_with_two_requests_shows_as_waiting_until_the_last_one_has_its_answer(
+    served: ServedBoard, tmp_path: Path
+) -> None:
+    lab = served.lab
+    activity = Activity()
+    loop = loop_for(served, tmp_path, activity)
+    loop._turn_over.clear()
+    other = MAKE.model_copy(update={'title': 'run tests'})
+
+    async def answer(number: int) -> None:
+        asked = [entry.post for entry in lab.board.posts if isinstance(entry.post, Ask)][number]
+        await lab.post(PostRequest(kind='answer', text='Allow once', thread=asked.thread, reply_to=asked.id), 'person')
+
+    first, second = asyncio.create_task(loop._permission(MAKE)), asyncio.create_task(loop._permission(other))
+    await until(lambda: len(needs_person(lab.board)) == 2)
+    await answer(0)
+    one = await first
+    between = activity.of('bo').state
+    await answer(1)
+    two = await second
+
+    assert (one, two, between, activity.of('bo').state) == ('yes', 'yes', 'waiting', 'working')
+
+
+async def test_an_agent_whose_turn_ended_while_it_waited_does_not_show_as_working(
+    served: ServedBoard, tmp_path: Path
+) -> None:
+    activity = Activity()
+    loop = loop_for(served, tmp_path, activity)
+    loop._turn_over.clear()
+    asking = asyncio.create_task(loop._permission(MAKE))
+    await until(lambda: bool(needs_person(served.lab.board)))
+    loop._turn_over.set()
+
+    assert (await asking, activity.of('bo').state, needs_person(served.lab.board)) == (None, 'waiting', ())
 
 
 @pytest.mark.usefixtures('log')

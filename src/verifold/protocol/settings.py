@@ -47,6 +47,8 @@ class JobSettings(Record):
 class WhileYouDecide(StrEnum):
     """What an agent's harness gets while its permission request waits for the person's answer on the board."""
 
+    AUTO = 'auto'
+    """As the lab's auto mode: `refuse` in a lab that the person started in auto mode, and `wait` in any other."""
     WAIT = 'wait'
     """The request waits for the answer, as it does when the person runs the harness by hand."""
     REFUSE = 'refuse'
@@ -56,7 +58,7 @@ class WhileYouDecide(StrEnum):
 class PermissionSettings(Record):
     """What Verifold does with a permission request of a harness that the person has to decide."""
 
-    while_you_decide: WhileYouDecide = WhileYouDecide.WAIT
+    while_you_decide: WhileYouDecide = WhileYouDecide.AUTO
 
 
 class Settings(Record):

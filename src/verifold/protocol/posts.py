@@ -20,7 +20,8 @@ MAX_CHOICES = 10
 MAX_BUILDS_ON = 10
 
 type Headline = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_HEADLINE)]
-type Body = Annotated[str, StringConstraints(max_length=20_000)]
+MAX_BODY = 20_000
+type Body = Annotated[str, StringConstraints(max_length=MAX_BODY)]
 type PostKind = Literal[
     'message',
     'plan',
@@ -40,6 +41,10 @@ type Outcome = Literal['holds', 'fails']
 type CheckMethod = Literal['rerun', 'code_read', 'ratings']
 type Helper = Annotated[str, StringConstraints(strip_whitespace=True, max_length=40)]
 """The name of a helper that an agent's harness started, such as a subagent."""
+type HarnessRequest = Literal['permission', 'question']
+"""What a harness wants from its user: a permission for an action, or the answer to a question."""
+type Mark = HarnessRequest | Literal['ends_request']
+"""What Verifold marks on a post of its own: an ask that carries a harness's request, or the answer that ends one."""
 MAX_CHOICE = 100
 type Choice = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_CHOICE)]
 """An answer that an ask offers."""
@@ -107,6 +112,11 @@ class Ask(PostBase):
 
     kind: Literal['ask'] = 'ask'
     choices: tuple[Choice, ...] = Field(default=(), max_length=MAX_CHOICES)
+    request: HarnessRequest | None = None
+    """
+    What the ask carries for the author's harness: a permission request, or a question to its user. Verifold sets
+    it, and no agent can. `None` for an agent's own ask, and in a record from before Verifold kept it.
+    """
 
 
 class Answer(PostBase):
@@ -119,6 +129,11 @@ class Answer(PostBase):
     kind: Literal['answer'] = 'answer'
     reply_to: PostId
     accepts: bool = False
+    ends_request: bool = False
+    """
+    Whether Verifold ended the harness's request that the ask carries, without the person's answer. Verifold sets
+    it, and no agent can. The ask then waits for nobody.
+    """
 
 
 class Objection(PostBase):

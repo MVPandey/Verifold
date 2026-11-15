@@ -174,7 +174,7 @@ async def test_settings_pass_through_and_refusals_say_why(client: httpx2.AsyncCl
     assert view['lab'] == {
         'version': 1,
         'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'},
-        'permissions': {'while_you_decide': 'wait'},
+        'permissions': {'while_you_decide': 'auto'},
     }
     assert view['project']['path'] == '.verifold/settings.json'
     assert changed.status_code == 200

@@ -369,8 +369,8 @@ async def test_a_call_gets_what_the_harness_adds_after_its_start() -> None:
 async def test_only_a_call_that_runs_a_command_has_one() -> None:
     remote = await Asked().after(started('remote.exec', {'host': 'a', 'command': './gpu x'}, kind='other'))
 
-    assert (remote.title, remote.command) == ('remote.exec', None)
-    assert json.loads(remote.detail) == {'host': 'a', 'command': './gpu x'}
+    assert (remote.title, remote.command, remote.kind, remote.rest) == ('remote.exec', None, 'other', '')
+    assert json.loads(remote.given) == {'host': 'a', 'command': './gpu x'}
 
 
 @pytest.mark.parametrize(
@@ -389,7 +389,8 @@ async def test_a_command_is_text_or_a_list_of_arguments_and_a_shell_with_one_scr
 ) -> None:
     request = await Asked().after(started('Terminal', given))
 
-    assert (request.title, request.command, request.detail) == (command, command, '')
+    assert (request.title, request.command, request.kind, request.rest) == (command, command, 'execute', '')
+    assert json.loads(request.given) == given
 
 
 @pytest.mark.parametrize('given', [{'command': ['./gpu', 7]}, {'command': []}, {'argv': './gpu x'}, {'script': 'x'}])
@@ -398,15 +399,20 @@ async def test_a_command_in_a_shape_that_verifold_does_not_know_keeps_the_harnes
 ) -> None:
     request = await Asked().after(started('Run the trainer', given))
 
-    assert (request.title, request.command) == ('Run the trainer', None)
-    assert json.loads(request.detail) == given
+    assert (request.title, request.command, request.rest) == ('Run the trainer', None, '')
+    assert json.loads(request.given) == given
 
 
-async def test_a_long_input_is_cut_and_one_that_is_not_json_is_still_shown() -> None:
-    long = await Asked().after(started('Write', {'text': 'x' * 5_000}, kind='edit'))
+async def test_a_request_carries_its_whole_input_and_what_it_holds_beside_the_command() -> None:
+    long = await Asked().after(started('Write', {'text': 'x' * 50_000}, kind='edit'))
     odd = await Asked().after(started('Write', {'path': Path('notes.md')}, kind='edit'))
+    beside = await Asked().after(started('sh', {'cmd': './gpu x', 'cwd': '/tmp', 'timeout': 5}))
+    nothing = await Asked().after()
 
-    assert (len(long.detail), 'notes.md' in odd.detail) == (2_000, True)
+    assert (json.loads(long.given), 'notes.md' in odd.given) == ({'text': 'x' * 50_000}, True)
+    assert (beside.command, json.loads(beside.rest)) == ('./gpu x', {'cwd': '/tmp', 'timeout': 5})
+    assert json.loads(beside.given) == {'cmd': './gpu x', 'cwd': '/tmp', 'timeout': 5}
+    assert (nothing.given, nothing.rest, nothing.kind) == ('', '', '')
 
 
 BRANCH = schema.ElicitationStringPropertySchema(
@@ -434,7 +440,7 @@ FIELDS: dict[str, object] = {
 
 
 def form(properties: dict[str, object]) -> schema.ElicitationFormSessionMode:
-    asked = schema.ElicitationSchema.model_validate({'properties': properties})
+    asked = schema.ElicitationSchema.model_validate({'properties': properties, 'required': ['name', 'branch']})
     return schema.ElicitationFormSessionMode(session_id='s', requested_schema=asked)
 
 
@@ -479,6 +485,7 @@ async def test_a_form_of_the_harness_reaches_its_user_field_by_field_and_the_ans
         [('a', 'Alpha')],
     ]
     assert question.fields[2].description == 'Where the work goes.'
+    assert [field.name for field in question.fields if field.required] == ['name', 'branch']
     assert isinstance(response, schema.AcceptElicitationResponse)
     assert response.content == {'name': 'Run 7', 'dry': True}
 

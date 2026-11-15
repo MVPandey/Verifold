@@ -5,7 +5,7 @@ import type { AgentView, HarnessOption, PostView } from '../api/types.ts';
 import { face, harnessTitle, ownName } from '../model/agents.ts';
 import { duration, minutesBetween } from '../model/format.ts';
 import { orderNeeds, pauses } from '../model/needs.ts';
-import { isPermission, personAnswer } from '../model/posts.ts';
+import { harnessRequest, personAnswer } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { messageOf } from '../api/client.ts';
 import type { PageProps } from './hooks.ts';
@@ -58,7 +58,8 @@ function NeedCard(props: {
   // Two checkers can ask at once, so each keeps its own name here.
   const name = ownName(props.agents, post.author);
   const agent = props.agents.find((view) => view.agent.id === post.author);
-  const permission = isPermission(post);
+  const request = harnessRequest(post);
+  const permission = request === 'permission';
   const choices = post.kind === 'ask' ? post.choices : [];
   const paused = props.paused;
 
@@ -79,7 +80,9 @@ function NeedCard(props: {
         {agent ? (
           <span className="f-tag">{harnessTitle(props.harnesses, agent.agent.harness)}</span>
         ) : null}
-        <span className="kind">{permission ? 'Permission request' : 'Asks you'}</span>
+        <span className="kind">
+          {permission ? 'Permission request' : request ? 'Question from its harness' : 'Asks you'}
+        </span>
         <span className="wait">Waiting {duration(minutesBetween(at, props.now))}</span>
       </div>
       <div className="nbody">
@@ -119,8 +122,8 @@ function NeedCard(props: {
           {permission ? (
             <p className="note">
               Your words go to {name} with the option you pick. Without an option, Verifold reads
-              your words: naming an option picks it, a yes allows once, and a no or anything unclear
-              rejects.
+              your words: the name of an option picks it, a plain “yes” allows once, and a “no”
+              rejects. Any other answer leaves the request open.
             </p>
           ) : null}
         </div>

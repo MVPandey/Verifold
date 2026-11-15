@@ -985,6 +985,23 @@ async def test_a_lab_follows_the_settings_from_when_it_opened(project: Path) -> 
     assert kept == [AtTimeLimit.STOP]
 
 
+@pytest.mark.parametrize('value', ['wait', 'refuse'])
+async def test_a_projects_file_says_whether_agents_wait_in_a_lab_that_starts_without_the_setup_screen(
+    project: Path, value: str
+) -> None:
+    # `verifold run` starts a lab like this one, without showing the saved choices. A project's file can still hold
+    # either value, because neither lets an answer allow more: a typed yes allows once under both.
+    folder = project / '.verifold'
+    folder.mkdir(exist_ok=True)
+    (folder / 'settings.json').write_text(json.dumps({'permissions': {'while_you_decide': value}}))
+
+    async with serving(project, ONE_AGENT):
+        await until(lambda: any(isinstance(event, SettingsSet) for event in record(project)))
+
+    kept = [event.settings.permissions.while_you_decide for event in record(project) if isinstance(event, SettingsSet)]
+    assert kept == [value]
+
+
 async def test_the_persons_change_applies_to_the_running_lab_but_an_agents_edit_does_not(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1012,7 +1029,7 @@ async def test_the_persons_change_applies_to_the_running_lab_but_an_agents_edit_
         'settings': {
             'version': 1,
             'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'},
-            'permissions': {'while_you_decide': 'wait'},
+            'permissions': {'while_you_decide': 'auto'},
         },
         'defaults': {'agents': None, 'auto_mode': True, 'minutes': None},
     }
@@ -1043,7 +1060,7 @@ async def test_the_persons_choice_for_permission_requests_applies_to_the_running
         }
         after = (await client.post('/settings', json=change)).json()
 
-    assert before['lab']['permissions'] == {'while_you_decide': 'wait'}
+    assert before['lab']['permissions'] == {'while_you_decide': 'auto'}
     assert after['all_projects']['values'] == {'permissions': {'while_you_decide': 'refuse'}}
     assert after['lab']['permissions'] == {'while_you_decide': 'refuse'}
     assert after['lab']['jobs'] == before['lab']['jobs']

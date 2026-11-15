@@ -27,6 +27,11 @@ export const AT_EXIT: readonly Choice<AtExit>[] = [
 /** The answers to `permissions.while_you_decide`. */
 export const WHILE_YOU_DECIDE: readonly Choice<WhileYouDecide>[] = [
   {
+    value: 'auto',
+    label: 'As auto mode',
+    detail: 'In a lab with auto mode the agent goes on. In a lab without it the agent waits.',
+  },
+  {
     value: 'wait',
     label: 'The agent waits',
     detail: 'Its harness waits for your answer, as it does when you run it yourself.',
@@ -34,7 +39,8 @@ export const WHILE_YOU_DECIDE: readonly Choice<WhileYouDecide>[] = [
   {
     value: 'refuse',
     label: 'The agent goes on',
-    detail: 'Its harness gets a no at once. Your answer applies when the agent asks again.',
+    detail:
+      'Its harness gets a no at once. Your answer applies when the agent asks for the same again within an hour.',
   },
 ];
 

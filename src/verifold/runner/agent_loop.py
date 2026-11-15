@@ -14,8 +14,8 @@ blind checker has no board and one job, so it starts its rerun again.
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
-from contextlib import suppress
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,7 +27,7 @@ from verifold.protocol.app import AgentState
 from verifold.protocol.events import TimeRanOut, TurnSummary
 from verifold.protocol.ids import PERSON
 from verifold.protocol.record import Record
-from verifold.protocol.settings import AtExit, AtTimeLimit, WhileYouDecide
+from verifold.protocol.settings import AtExit, AtTimeLimit
 from verifold.protocol.usage import Usage
 from verifold.runner.git import GitError
 from verifold.runner.messages import (
@@ -43,7 +43,7 @@ from verifold.runner.messages import (
     more_time_message,
     time_facts,
 )
-from verifold.runner.permissions import Refusals, ask_the_person, ask_the_question, refusal, settled
+from verifold.runner.permissions import Refusals, ask_the_person, ask_the_question, named, refusal, settled
 from verifold.runner.session import (
     AgentSession,
     Answers,
@@ -59,6 +59,7 @@ from verifold.server.activity import Activity
 from verifold.server.member import Member
 from verifold.society.attention import update
 from verifold.society.board import Board
+from verifold.society.grants import agent_waits
 from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
 from verifold.society.turns import Before, before
 
@@ -143,6 +144,11 @@ class AgentLoop:
         """
         shared = shared or Shared()
         self._refusals = shared.refusals
+        self._turn_over = asyncio.Event()
+        """Set while the agent has no turn. A request of the harness that waits for the person ends with the turn."""
+        self._turn_over.set()
+        self._asking = 0
+        """How many requests of the harness wait for the person now."""
         self._has_jobs = shared.has_jobs
         self._done = done
         self._activity = shared.activity
@@ -306,10 +312,13 @@ class AgentLoop:
         try:
             async with asyncio.timeout(self._settings.turn_timeout) as limit:
                 stopper = asyncio.create_task(self._stop_when_out_of_time(limit))
+                self._turn_over.clear()
                 try:
                     result = await session.send(message)
                 finally:
                     stopper.cancel()
+                    # However the turn ends, a request that still waits for the person ends with it.
+                    self._turn_over.set()
         except TimeoutError:
             await session.cancel()
             if left := self._lab.board.gone(self._setup.agent.id):
@@ -482,22 +491,31 @@ class AgentLoop:
             return refusal(request)
         if allowed := settled(board, request):
             return allowed
-        # The person's setting says whether the request waits for their answer, as in a harness run by hand.
-        if self._refusals and board.settings.permissions.while_you_decide is WhileYouDecide.REFUSE:
+        # The person's setting, or else their choice of auto mode, says whether the request waits for their answer.
+        if self._refusals and not agent_waits(board):
             return await self._refusals.decide(self._member, request)
-        await self._report('waiting', f'Asks you: {request.title}')
-        chosen = await ask_the_person(self._member, request)
-        await self._report('working')
-        return chosen
+        async with self._asks(named(request)):
+            return await ask_the_person(self._member, request, self._turn_over)
 
     async def _question(self, question: Question) -> Answers | None:
         # Nobody can answer an agent that left.
         if self._left():
             return None
-        await self._report('waiting', f'Asks you: {question.message}')
-        answers = await ask_the_question(self._member, question)
-        await self._report('working')
-        return answers
+        async with self._asks(' '.join(question.message.split()) or 'a question'):
+            return await ask_the_question(self._member, question, self._turn_over)
+
+    @asynccontextmanager
+    async def _asks(self, what: str) -> AsyncGenerator[None]:
+        """Show the agent as waiting for the person while the block runs, and while another request of it waits."""
+        self._asking += 1
+        await self._report('waiting', f'Asks you: {what}')
+        try:
+            yield
+        finally:
+            self._asking -= 1
+            # An agent whose turn ended is not at work, and the end of the turn reports what it does next.
+            if not self._asking and not self._turn_over.is_set():
+                await self._report('working')
 
     async def _step(self, title: str) -> None:
         await self._report('working', title)

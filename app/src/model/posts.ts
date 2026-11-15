@@ -77,7 +77,16 @@ export function personAnswer(ask: Post, choice: string | null, words: string): P
   return { kind: 'answer', thread: ask.thread, reply_to: ask.id, text, ...(body ? { body } : {}) };
 }
 
-/** Return whether an ask is a harness's permission request, which pauses its agent until the person answers. */
+/**
+ * Return what an ask carries for its author's harness: a permission request, a question to its user, or nothing.
+ *
+ * Verifold records it on the ask, and no agent can. So an agent's own ask that only looks like one carries nothing.
+ */
+export function harnessRequest(post: Post): 'permission' | 'question' | null {
+  return post.kind === 'ask' ? (post.request ?? null) : null;
+}
+
+/** Return whether an ask is a harness's permission request. */
 export function isPermission(post: Post): boolean {
-  return post.kind === 'ask' && post.text.startsWith('Permission needed:');
+  return harnessRequest(post) === 'permission';
 }

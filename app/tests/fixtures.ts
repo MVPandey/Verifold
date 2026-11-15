@@ -110,7 +110,12 @@ export function result(id: string, changes: Partial<Post> = {}): Post {
   } as Post;
 }
 
-export function ask(id: string, author: string, choices: readonly string[] = []): Post {
+export function ask(
+  id: string,
+  author: string,
+  choices: readonly string[] = [],
+  request: 'permission' | 'question' | null = 'permission',
+): Post {
   return {
     id,
     thread: 't-2',
@@ -124,6 +129,7 @@ export function ask(id: string, author: string, choices: readonly string[] = [])
     evidence: [],
     kind: 'ask',
     choices,
+    request,
   };
 }
 
@@ -185,7 +191,7 @@ export function labView(changes: Partial<LabView> = {}): LabView {
     settings: {
       version: 1,
       jobs: { at_time_limit: 'pause', at_exit: 'stop' },
-      permissions: { while_you_decide: 'wait' },
+      permissions: { while_you_decide: 'auto' },
     },
     ...changes,
   };

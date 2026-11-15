@@ -39,8 +39,8 @@ def test_without_files_a_lab_gets_the_defaults(tmp_path: Path) -> None:
     assert settings.harnesses == {}
     assert settings.jobs.at_time_limit is AtTimeLimit.PAUSE
     assert settings.jobs.at_exit is AtExit.STOP
-    # A harness that the person runs by hand waits for their answer, so a lab's agents do too.
-    assert settings.lab_settings().permissions.while_you_decide is WhileYouDecide.WAIT
+    # Without a setting, a lab follows the person's choice of auto mode.
+    assert settings.lab_settings().permissions.while_you_decide is WhileYouDecide.AUTO
 
 
 def test_a_projects_settings_win_over_the_global_ones_setting_by_setting(tmp_path: Path) -> None:
