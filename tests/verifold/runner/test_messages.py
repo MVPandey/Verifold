@@ -7,7 +7,7 @@ from verifold.app import NORMS_TEMPLATE
 from verifold.protocol.posts import FileEvidence, Result
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.threads import QUESTION_TITLE
-from verifold.runner.messages import DOORBELL, more_time_message, rerun_message, start_message
+from verifold.runner.messages import DOORBELL, invitation, more_time_message, rerun_message, start_message
 
 EVIDENCE = FileEvidence(path='bench.py', commit='c' * 40)
 SAME_MOMENT = 'The other agents got this question at the same moment'
@@ -138,3 +138,27 @@ def test_an_agent_that_joins_a_lab_under_way_reads_that_and_agents_that_start_to
     assert 'The lab is under way, and these agents work in it: Ada (ada, fake), Cy (cy, fake).' in joined
     # A turn that ended while the lab's first agents were seated changes nothing for the ones seated after it.
     assert 'The other agents got this question at the same moment: Ada (ada, fake), Cy (cy, fake).' in together
+
+
+def test_an_invitation_gives_the_address_the_token_the_folder_and_the_facts_and_no_role() -> None:
+    text = invitation('Does it hold?\n\nYou are Agent 3.', 'http://127.0.0.1:8123/mcp', 'the-token', Path('/lab/a3'))
+
+    lines = text.splitlines()
+    assert lines[0].startswith('This is an invitation for one agent to a Verifold lab')
+    assert 'Verifold did not start you, so it cannot wake you or stop you.' in lines[1]
+    assert lines[3:8] == [
+        "The lab's board is an MCP server. Its name in the text below is `verifold`.",
+        'Transport: streamable HTTP',
+        'URL: http://127.0.0.1:8123/mcp',
+        'Header: Authorization: Bearer the-token',
+        lines[7],
+    ]
+    assert 'whoever has it posts as you' in lines[7]
+    assert 'After a restart, call `brief` again' in lines[7]
+    assert lines[9] == 'Your folder: /lab/a3'
+    assert lines[11].startswith('Keep the token and your MCP settings outside this folder.')
+    assert 'a blind checker gets a copy of it' in lines[11]
+    assert lines[13].startswith('Call `brief` first.')
+    assert lines[-3:] == ['Does it hold?', '', 'You are Agent 3.']
+    assert text.count('the-token') == 1
+    assert 'role' not in text.lower()

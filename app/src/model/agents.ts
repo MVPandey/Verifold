@@ -1,4 +1,4 @@
-import { PERSON } from '../api/types.ts';
+import { GUEST, PERSON } from '../api/types.ts';
 import type { AgentActivity, AgentView, HarnessOption } from '../api/types.ts';
 import { duration, minutesBetween, money, tokens } from './format.ts';
 
@@ -60,8 +60,9 @@ export function called(agents: readonly AgentView[], authorId: string): string {
   return name === 'Blind rerun' ? 'the blind rerun' : name;
 }
 
-/** Return the title of a harness, such as "Claude Code". */
+/** Return the title of a harness, such as "Claude Code". An invited agent runs in a harness that Verifold does not know. */
 export function harnessTitle(harnesses: readonly HarnessOption[], name: string): string {
+  if (name === GUEST) return 'Own harness';
   return harnesses.find((option) => option.name === name)?.title ?? name;
 }
 
@@ -80,11 +81,25 @@ export function stateLine(activity: AgentActivity, now: Date): StateLine {
       return { text: 'Starting', dot: 'idle' };
     case 'stopped':
       return { text: 'Stopped', dot: 'stop' };
+    case 'invited':
+      return { text: 'Invited, not joined yet', dot: 'idle' };
+    case 'void':
+      return { text: 'Invitation is void. Invite again.', dot: 'stop' };
+    case 'listening':
+      return { text: `Waits for a post${since}`, dot: 'idle' };
+    case 'here':
+      // Without a time, the agent joined before this server started, and nobody saw its last call.
+      if (!activity.at) return { text: 'Joined', dot: 'idle' };
+      return {
+        text: `Last board call ${minutes > 0 ? `${duration(minutes)} ago` : 'just now'}`,
+        dot: 'idle',
+      };
   }
 }
 
 /** Return what an agent has cost: its price when the harness gives one, or else its tokens. */
 export function costLine(view: AgentView): string {
+  if (view.agent.harness === GUEST) return 'Runs by itself, so Verifold sees no turns and no cost.';
   if (view.turns === 0) return 'No turns yet';
   const turns = `${view.turns} ${view.turns === 1 ? 'turn' : 'turns'}`;
   if (view.cost_usd !== null) return `${money(view.cost_usd)} over ${turns}`;
@@ -92,9 +107,12 @@ export function costLine(view: AgentView): string {
   return `${tokens(input)} tokens in, ${tokens(output)} out over ${turns}. No price.`;
 }
 
-/** Return how many members work now, such as "3 of 4 members working, 2 blind reruns". */
+/**
+ * Return how many members work now, such as "3 of 4 members working, 2 blind reruns". An invited agent counts
+ * from its first post, because until then nobody knows whether it came.
+ */
 export function workingLine(agents: readonly AgentView[]): string {
-  const all = members(agents);
+  const all = members(agents).filter((view) => view.agent.harness !== GUEST || view.posts > 0);
   const busy = (view: AgentView): boolean => view.activity.state === 'working';
   const reruns = agents.filter((view) => view.agent.checks !== null && busy(view)).length;
   const line = `${all.filter(busy).length} of ${all.length} ${all.length === 1 ? 'member' : 'members'} working`;

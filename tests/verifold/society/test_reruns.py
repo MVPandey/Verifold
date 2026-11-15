@@ -50,6 +50,22 @@ def test_only_an_independent_rerun_that_holds_counts(family: str, outcome: str, 
     assert standing(checked_by(family, outcome, method).board(), 'p-1') == expected
 
 
+def test_a_blind_rerun_never_holds_up_the_post_of_an_invited_agent_whose_model_nobody_knows() -> None:
+    record = lab().join('guest', family='unknown', harness='guest')
+    record.post(RESULT.model_copy(update={'author': 'guest'})).rerun('bo', 'p-1')
+    record.join('dee', family='openai', checks='p-1').post(rerun_check('dee'))
+
+    assert standing(record.board(), 'p-1') == 'checked'
+
+
+def test_a_harness_of_the_person_whose_family_is_called_unknown_is_no_invited_agent() -> None:
+    record = lab().join('own', family='unknown', harness='my-harness')
+    record.post(RESULT.model_copy(update={'author': 'own'})).rerun('bo', 'p-1')
+    record.join('dee', family='openai', checks='p-1').post(rerun_check('dee'))
+
+    assert standing(record.board(), 'p-1') == 'held_up'
+
+
 def test_a_standing_objection_outweighs_a_held_up_rerun() -> None:
     record = checked_by('openai').post(
         Objection(id='p-3', thread='t-1', author='cy', text='The data has ties.', reply_to='p-1')

@@ -7,6 +7,7 @@ import {
   authorName,
   called,
   costLine,
+  harnessTitle,
   face,
   labTotal,
   members,
@@ -260,6 +261,34 @@ describe('agents', () => {
     assert.equal(costLine(priced), '$0.37 over 4 turns');
     assert.equal(costLine(unpriced), '461k tokens in, 2k out over 3 turns. No price.');
     assert.equal(costLine(agentView('agent-3')), 'No turns yet');
+    // An invited agent runs by itself. Verifold sees its board calls and nothing else.
+    const guest = agentView('agent-4', {
+      agent: { ...agentView('agent-4').agent, harness: 'guest' },
+    });
+    assert.equal(costLine(guest), 'Runs by itself, so Verifold sees no turns and no cost.');
+    assert.equal(harnessTitle([], 'guest'), 'Own harness');
+    const at = '2026-11-06T14:10:00Z';
+    assert.deepEqual(
+      (['invited', 'listening', 'here'] as const).map(
+        (state) => stateLine({ state, detail: '', at }, now).text,
+      ),
+      ['Invited, not joined yet', 'Waits for a post, 2 min', 'Last board call 2 min ago'],
+    );
+    assert.equal(stateLine({ state: 'here', detail: '', at: null }, now).text, 'Joined');
+    assert.deepEqual(stateLine({ state: 'void', detail: '', at: null }, now), {
+      text: 'Invitation is void. Invite again.',
+      dot: 'stop',
+    });
+    // Nobody knows whether an invited agent came until its first post, so it is no member in the count before.
+    assert.equal(workingLine([agentView('agent-1'), guest]), '0 of 1 member working');
+    assert.equal(
+      workingLine([agentView('agent-1'), { ...guest, posts: 1 }]),
+      '0 of 2 members working',
+    );
+    assert.equal(
+      stateLine({ state: 'here', detail: '', at: '2026-11-06T14:11:30Z' }, now).text,
+      'Last board call just now',
+    );
     assert.equal(labTotal([priced, unpriced]), '$0.37 and 463k tokens');
     assert.equal(labTotal([priced]), '$0.37');
   });

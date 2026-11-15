@@ -15,11 +15,15 @@ def lab_state(board: Board) -> LabState:
 
     It is closing while a close stands, and closed once more than half of the lab's agents stand behind it: its
     author and the agents that agreed. A new objection to the close opens the lab again.
+
+    An invited agent counts among the lab's agents when it posted before the close. Until its first post nobody
+    knows whether it came, so an invitation that nobody used does not keep the lab open. Its first post after the
+    close does not change the count either, so a closed lab stays closed.
     """
     close = closing(board)
     if close is None:
         return 'open'
-    workers = sum(not joined.agent.checks for joined in board.agents)
+    workers = sum(not joined.agent.checks and board.came(joined, before=close.seq) for joined in board.agents)
     return 'closed' if (1 + len(agreed(board, close))) * 2 > workers else 'closing'
 
 

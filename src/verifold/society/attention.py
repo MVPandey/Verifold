@@ -84,8 +84,11 @@ def update(board: Board, agent_id: AgentId, after: int) -> Update:
         threads=tuple(
             entry.thread for entry in board.threads if after < entry.seq <= reach and entry.thread.opened_by != agent_id
         ),
+        # An invited agent that has not posted may never come. Its first post announces it.
         agents=tuple(
-            entry.agent for entry in board.agents if after < entry.seq <= reach and entry.agent.id != agent_id
+            entry.agent
+            for entry in board.agents
+            if after < entry.seq <= reach and entry.agent.id != agent_id and board.came(entry)
         ),
         ends_at=board.ends_at,
     )

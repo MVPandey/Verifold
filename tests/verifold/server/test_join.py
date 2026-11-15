@@ -1,11 +1,14 @@
+import asyncio
+
 import pytest
 from mcp import Client
 
 from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import FileEvidence
+from verifold.server.activity import Activity
 from verifold.server.errors import UnknownAgent
-from verifold.server.join import INSTRUCTIONS, Members, join_server
+from verifold.server.join import INSTRUCTIONS, Members, join_server, token_digest
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 
@@ -26,6 +29,52 @@ def test_a_request_without_a_valid_token_is_refused(lab: Lab, headers: dict[str,
 
     with pytest.raises(UnknownAgent, match='no valid agent token'):
         members.resolve(headers)
+
+
+def test_a_guest_is_found_by_the_digest_of_its_token_and_no_digest_is_a_token(lab: Lab) -> None:
+    members = Members()
+    guest = Member(lab, 'bo')
+    members.add_guest(guest, token_digest('the-token'))
+
+    assert members.resolve({'Authorization': 'Bearer the-token'}) is guest
+    with pytest.raises(UnknownAgent):
+        members.resolve({'Authorization': f'Bearer {token_digest("the-token")}'})
+
+
+async def test_a_new_token_for_a_guest_makes_the_old_one_void_and_ends_its_open_wait(lab: Lab) -> None:
+    members = Members()
+    old, new, other = Member(lab, 'bo'), Member(lab, 'bo'), Member(lab, 'ada')
+    members.add_guest(old, token_digest('old-token'))
+    members.add_guest(other, token_digest('ada-token'))
+    waiting = asyncio.create_task(old.wait(30))
+    await asyncio.sleep(0)
+
+    members.add_guest(new, token_digest('new-token'))
+    # The next post for the agent would end the old wait. It must not go to the holder of the old token.
+    await lab.post(PostRequest(kind='message', text='For Bo only.', thread='t-1', mentions=('bo',)), 'ada')
+
+    with pytest.raises(UnknownAgent, match='no valid agent token'):
+        members.resolve({'Authorization': 'Bearer old-token'})
+    with pytest.raises(UnknownAgent, match='got a new invitation'):
+        await waiting
+    assert members.resolve({'Authorization': 'Bearer new-token'}) is new
+    assert members.resolve({'Authorization': 'Bearer ada-token'}) is other
+
+
+async def test_the_board_shows_a_guests_calls_and_cannot_set_an_alarm_for_it(lab: Lab) -> None:
+    await lab.join(Agent(id='guest', name='Guest', harness='guest', model=ModelSpec(family='unknown')))
+    activity = Activity()
+    await activity.invite('guest', 'invited')
+    async with Client(join_server(lambda _: Member(lab, 'guest'), activity.call)) as client:
+        before = activity.of('guest').state
+        await client.call_tool('brief', {})
+        after = activity.of('guest').state
+        alarm = await client.call_tool('alarm', {'minutes': 5})
+
+    assert (before, after) == ('invited', 'here')
+    assert alarm.is_error
+    assert 'Verifold cannot wake you' in str(alarm.content)
+    assert lab.board.alarms == ()
 
 
 async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
@@ -226,8 +275,11 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         'give\n  its own name in `helper`',
         'stays in `brief` until somebody answers it',
         '`person` in `mentions`',
-        'After you end your turn, a post for you wakes you',
-        'you choose when to look',
+        'When Verifold started you: after you end your turn, a post for you wakes you',
+        'When you joined with an invitation, you run by yourself',
+        '`post` and `rerun` refuse you too',
+        'A grant changes\n  nothing for an agent that joined with an invitation',
+        'So you choose when to\n  look at the board again',
         'pins each file',
         'blind rerun',
         'time limit',

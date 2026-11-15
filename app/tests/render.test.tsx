@@ -17,7 +17,7 @@ import { Markdown } from '../src/ui/Markdown.tsx';
 import { SettingsForm } from '../src/ui/SettingsPage.tsx';
 import { SetupPage } from '../src/ui/SetupPage.tsx';
 import { Turns } from '../src/ui/Thread.tsx';
-import { Top } from '../src/ui/Top.tsx';
+import { InvitationText, Top } from '../src/ui/Top.tsx';
 import {
   DEFAULTS,
   HARNESSES,
@@ -591,12 +591,67 @@ describe('the lab page', () => {
     // The person can add an agent of a harness that this computer has.
     assert.ok(html.includes('Add an agent'));
     assert.ok(html.includes('<button type="button">Add</button>'));
+    // The person can also invite an agent that they run themselves. No invitation shows before they ask for one.
+    assert.ok(html.includes('Invite an agent'));
+    assert.ok(html.includes('<button type="button">Invite</button>'));
+    assert.ok(html.includes('Verifold does not start it or stop it.'));
+    assert.ok(!html.includes('Invitation for'));
     assert.ok(html.includes('26 min of 1 h'));
     assert.ok(html.includes('30 more min'));
     assert.ok(html.includes('Stop the lab'));
     assert.ok(html.includes('<a href="#/needs">Needs you<span class="count">1</span></a>'));
     assert.ok(html.includes('<a href="#/settings">Settings</a>'));
     assert.ok(html.includes('<a href="#/" aria-current="page">Lab</a>'));
+  });
+});
+
+describe('an invitation', () => {
+  it('shows its text once, as text to copy, and says so', () => {
+    const text = 'URL: http://127.0.0.1:8123/mcp\nHeader: Authorization: Bearer <b>secret</b>';
+    const html = renderToStaticMarkup(
+      <InvitationText
+        invitation={{ agent: 'agent-3', name: 'Reader', text }}
+        onClose={() => undefined}
+      />,
+    );
+    assert.ok(html.includes('<b>Invitation for Reader</b>'));
+    assert.ok(html.includes('it shows only until you close'));
+    assert.ok(html.includes('If you lose it, use Invite again.'));
+    assert.ok(html.includes('<button class="linkbtn" type="button">Close</button>'));
+    assert.ok(html.includes('<textarea readOnly="" rows="8" aria-label="Invitation text">'));
+    // The text reaches the page as text.
+    assert.ok(html.includes('Bearer &lt;b&gt;secret&lt;/b&gt;'));
+    assert.ok(html.includes('<button type="button">Copy</button>'));
+    assert.ok(!html.includes('did not copy'));
+  });
+
+  it('shows an invited agent by its own calls, with no turns and no cost', () => {
+    const guest = agentView('agent-3', {
+      agent: { ...agentView('agent-3').agent, harness: 'guest' },
+      activity: { state: 'invited', detail: '', at: null },
+    });
+    const html = renderToStaticMarkup(
+      <Top
+        folder="~/code/sort-bench"
+        route={{ page: 'lab' }}
+        open={{
+          lab: labView({ agents: [agentView('agent-1'), guest] }),
+          threads: [],
+          harnesses: HARNESSES,
+          needs: 0,
+          now: new Date('2026-11-06T14:12:00Z'),
+          api: {} as Api,
+          onChange: () => undefined,
+        }}
+      />,
+    );
+    assert.ok(html.includes('<span class="f-tag">Own harness</span>'));
+    assert.ok(html.includes('Invited, not joined yet'));
+    assert.ok(html.includes('Runs by itself, so Verifold sees no turns and no cost.'));
+    assert.ok(!html.includes('Starting'));
+    // Only an invited agent has the way to a new invitation, and it is no member in the count before it posts.
+    assert.equal(html.split('>Invite again</button>').length, 2);
+    assert.ok(html.includes('0 of 1 member working'));
   });
 });
 

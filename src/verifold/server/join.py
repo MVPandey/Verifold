@@ -2,11 +2,13 @@
 The join endpoint: the MCP tools that agents use to work in their lab.
 
 Any harness that speaks MCP can join. Each agent gets its own bearer token, and the token decides who the agent is.
+An agent that Verifold starts gets a new token at each start. An agent that the person invites keeps its token.
 """
 
+import hashlib
 import secrets
-from collections.abc import Callable, Generator, Mapping
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, Callable, Generator, Mapping
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from typing import Annotated
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -38,6 +40,8 @@ from verifold.society.rules import waiting_reruns
 
 type Headers = Mapping[str, str] | None
 type Resolve = Callable[[Headers], Member]
+type Shows = Callable[[AgentId, str], AbstractAsyncContextManager[None]]
+"""Shows that an agent calls a tool while its block runs. It gets the agent's ID and the tool's name."""
 
 INSTRUCTIONS = """\
 You are one agent in a Verifold lab. Call `brief` first. It shows the other agents, their plans, and the threads.
@@ -75,23 +79,28 @@ the other agents and the person. Your first message names the file that holds th
 - When your post builds on other posts, in any thread, name them in `builds_on`. Their authors hear about it, and
   each post shows which posts build on it.
 - To reach the person, post an `ask` with `person` in `mentions`.
-- The person can grant a command to every agent, such as `./gpu`. A grant covers one plain command with its
-  arguments: no pipe, redirect, quote, variable, or other sign of the shell. When your harness refuses a command that
-  needs a permission, run it plain, on its own. If it is still refused, the person has an ask for the grant, so go on
-  with other work and try again after their answer.
+- The person can grant a command, such as `./gpu`, to every agent that Verifold started. A grant covers one plain
+  command with its arguments: no pipe, redirect, quote, variable, or other sign of the shell. When Verifold started
+  you and your harness refuses a command that needs a permission, run it plain, on its own. If it is still refused,
+  the person has an ask for the grant, so go on with other work and try again after their answer. A grant changes
+  nothing for an agent that joined with an invitation: its own harness decides its permissions.
 - Back a result with `files` from your folder. Verifold commits your folder and pins each file, so that others can
   check the exact version. `rerun` asks for a blind rerun by a checker from another model family.
 - The newest `proposal` in the question's thread is the lab's answer so far. `brief` shows it. The app shows it to
   the person with its `files`, and opens each file as a page.
 - A helper that you start, such as a subagent, can use this board too. Its posts carry your name, so ask it to give
   its own name in `helper`.
-- After you end your turn, a post for you wakes you. Nothing else on the board does. `wait` sleeps inside your
-  turn for the time that you give it, and returns earlier for a post for you. `alarm` wakes you after your turn:
-  at a time, or when the board got no post for a while. So you choose when to look at the board again.
+- When Verifold started you: after you end your turn, a post for you wakes you. Nothing else on the board does.
+  `alarm` wakes you after your turn: at a time, or when the board got no post for a while. So you choose when to
+  look at the board again.
+- When you joined with an invitation, you run by yourself, and Verifold cannot wake you or stop your turn. You
+  hear the board only in the results of your own calls, and `alarm` refuses you. While the lab is out of time or
+  stopped, `post` and `rerun` refuse you too.
+- `wait` sleeps inside your turn for the time that you give it, and returns earlier for a post for you.
 - A `close` says that the lab is done. It reaches every agent, and each can agree or object. `brief` shows whether
   the lab is open, closing, or closed, and who agreed.
-- The lab can have a time limit, and `brief` and `wait` show when it ends. At that time Verifold stops every turn
-  until the person gives the lab more time, so post your results before then.
+- The lab can have a time limit, and `brief` and `wait` show when it ends. At that time Verifold stops the turn of
+  every agent that it started until the person gives the lab more time, so post your results before then.
 """
 """
 The protocol, as every harness that joins reads it. The tools' own descriptions give the details.
@@ -107,12 +116,26 @@ class Members:
     def __init__(self) -> None:
         """Start with no members."""
         self._by_token: dict[str, Member] = {}
+        self._by_digest: dict[str, Member] = {}
 
     def add(self, member: Member) -> str:
         """Seat a member and return its new bearer token."""
         token = secrets.token_urlsafe(32)
         self._by_token[token] = member
         return token
+
+    def add_guest(self, member: Member, digest: str) -> None:
+        """
+        Seat an invited agent, whose bearer token has the SHA-256 digest `digest`.
+
+        Verifold keeps the digest and not the token, so the invitation works after a restart and the lab's files
+        hold nothing that posts as the agent. An earlier seat of the same agent ends, so its token is void.
+        """
+        for old, seated in tuple(self._by_digest.items()):
+            if seated.agent_id == member.agent_id:
+                seated.void = True
+                del self._by_digest[old]
+        self._by_digest[digest] = member
 
     def resolve(self, headers: Headers) -> Member:
         """
@@ -124,15 +147,37 @@ class Members:
         """
         header = next((value for name, value in (headers or {}).items() if name.lower() == 'authorization'), '')
         scheme, _, token = header.partition(' ')
-        member = self._by_token.get(token) if scheme.lower() == 'bearer' else None
+        bearer = scheme.lower() == 'bearer'
+        member = (self._by_token.get(token) or self._by_digest.get(token_digest(token))) if bearer else None
         if member is None:
             raise UnknownAgent('The request has no valid agent token. Use the MCP settings that Verifold gave you.')
         return member
 
 
-def join_server(resolve: Resolve) -> MCPServer:
-    """Return the MCP server whose tools act as the agent that `resolve` finds for each request."""
+def token_digest(token: str) -> str:
+    """Return the SHA-256 digest of a bearer token, in hexadecimal."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+@asynccontextmanager
+async def _shows_nothing(_agent: AgentId, _tool: str) -> AsyncGenerator[None]:
+    yield
+
+
+def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
+    """
+    Return the MCP server whose tools act as the agent that `resolve` finds for each request.
+
+    Each tool call runs inside `shows`, so the app can show the calls of an agent that runs by itself.
+    """
     server = MCPServer(name='verifold', instructions=INSTRUCTIONS)
+
+    @asynccontextmanager
+    async def acting(ctx: Context, tool: str) -> AsyncGenerator[Member]:
+        with _told_to_agent():
+            member = resolve(ctx.headers)
+            async with shows(member.agent_id, tool):
+                yield member
 
     @server.tool()
     async def brief(ctx: Context) -> Brief:
@@ -145,8 +190,8 @@ def join_server(resolve: Resolve) -> MCPServer:
         Each thread names the other threads that it builds on and that build on it. The first call returns `how`,
         which says how the board works.
         """
-        with _told_to_agent():
-            return resolve(ctx.headers).brief(INSTRUCTIONS)
+        async with acting(ctx, 'brief') as member:
+            return member.brief(INSTRUCTIONS)
 
     @server.tool()
     async def post(
@@ -202,7 +247,7 @@ def join_server(resolve: Resolve) -> MCPServer:
         Verifold commits your folder and pins each file to that commit, so others can check it. The result has
         `news`: the posts that you have not seen yet.
         """
-        with _told_to_agent():
+        async with acting(ctx, 'post') as member:
             request = PostRequest(
                 kind=kind,
                 text=text,
@@ -219,7 +264,6 @@ def join_server(resolve: Resolve) -> MCPServer:
                 method=method,
                 choices=choices,
             )
-            member = resolve(ctx.headers)
             posted = await member.post(request)
             return PostResult(**dict(posted), news=member.news())
 
@@ -232,15 +276,13 @@ def join_server(resolve: Resolve) -> MCPServer:
         agent. `builds_on_threads` and `built_on_by_threads` show where agents built on each other's work: the other
         threads whose posts a thread builds on, and the threads where other agents build on it.
         """
-        with _told_to_agent():
-            member = resolve(ctx.headers)
+        async with acting(ctx, 'threads') as member:
             return ThreadList(threads=member.threads(), news=member.news())
 
     @server.tool()
     async def thread(thread: ThreadId, ctx: Context) -> ThreadResult:
         """Read one thread: every post, oldest first, and where each post stands."""
-        with _told_to_agent():
-            member = resolve(ctx.headers)
+        async with acting(ctx, 'thread') as member:
             return ThreadResult(**dict(member.thread(thread)), news=member.news())
 
     @server.tool()
@@ -250,8 +292,7 @@ def join_server(resolve: Resolve) -> MCPServer:
 
         You watch the threads that you open and the thread of your latest plan or result.
         """
-        with _told_to_agent():
-            member = resolve(ctx.headers)
+        async with acting(ctx, 'watch') as member:
             watched = await member.watch(thread, watching=watching)
             return WatchResult(thread=watched.thread, watching=watched.watching, news=member.news())
 
@@ -265,10 +306,10 @@ def join_server(resolve: Resolve) -> MCPServer:
         `minutes` is a whole number. Without `quiet`, the alarm rings `minutes` from now. With `quiet`, it rings
         when the board got no post for `minutes`. You have one alarm: a new one replaces it, and zero minutes
         cancels it. The alarm is spent when your next turn starts, whatever started it. It does not ring while the
-        lab is out of time or closed, and `rings_at` is empty in a closed lab. Verifold sets no alarm for you.
+        lab is out of time or closed, and `rings_at` is empty in a closed lab. Verifold sets no alarm for you. It
+        cannot wake an agent that joined with an invitation, so that agent gets an error.
         """
-        with _told_to_agent():
-            member = resolve(ctx.headers)
+        async with acting(ctx, 'alarm') as member:
             set_ = await member.set_alarm(minutes, quiet=quiet)
             board = member.lab.board
             rings = rings_at(board, set_) if set_.minutes > 0 and lab_state(board) != 'closed' else None
@@ -285,8 +326,7 @@ def join_server(resolve: Resolve) -> MCPServer:
         status as they are. The other agents see both in `brief`, and the person sees them beside your name in the
         member list and on your posts. Verifold never acts on them.
         """
-        with _told_to_agent():
-            member = resolve(ctx.headers)
+        async with acting(ctx, 'profile') as member:
             now = await member.set_profile(role, status)
             return ProfileResult(role=now[0], status=now[1], news=member.news())
 
@@ -301,8 +341,7 @@ def join_server(resolve: Resolve) -> MCPServer:
         `joins` names who asked first. When the checker fails, no check comes, and you can ask again. A post gets two
         blind reruns and four checkers at most.
         """
-        with _told_to_agent():
-            member = resolve(ctx.headers)
+        async with acting(ctx, 'rerun') as member:
             requested = await member.rerun(post)
             # The first request that still waits for the post's checker is this one, or the one that it joins.
             first = next(iter(waiting_reruns(member.lab.board, requested.post)), requested)
@@ -319,12 +358,12 @@ def join_server(resolve: Resolve) -> MCPServer:
         for you, it returns without `posts`: call wait again to keep waiting. Many harnesses stop a tool call after
         60 seconds, so the default is 45.
 
-        You can also end your turn when you have nothing to do. Verifold wakes you when a post for you arrives.
-        `ends_at` is when the lab's time runs out. At that time Verifold stops every turn until the person gives the
-        lab more time, so post your results before then.
+        When Verifold started you, you can also end your turn when you have nothing to do: Verifold wakes you when a
+        post for you arrives. `ends_at` is when the lab's time runs out. At that time Verifold stops the turn of
+        every agent that it started until the person gives the lab more time, so post your results before then.
         """
-        with _told_to_agent():
-            return await resolve(ctx.headers).wait(timeout_seconds)
+        async with acting(ctx, 'wait') as member:
+            return await member.wait(timeout_seconds)
 
     return server
 

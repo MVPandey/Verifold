@@ -20,6 +20,8 @@ from sse_starlette import EventSourceResponse
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import (
     AgentView,
+    Invitation,
+    InviteRequest,
     LabView,
     RerunRequest,
     SettingsChange,
@@ -80,6 +82,14 @@ class Host(Protocol):
         """Add agents of one harness to the lab that runs, and start them."""
         ...
 
+    async def invite(self, name: str | None = None) -> Invitation:
+        """Add an agent that runs by itself to the lab that runs, and return its invitation."""
+        ...
+
+    async def invite_again(self, agent_id: AgentId) -> Invitation:
+        """Give an invited agent a new token, which makes its earlier one void, and return its new invitation."""
+        ...
+
 
 def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     """Return the app API for the folder's lab. It acts as the person who holds `person_token`."""
@@ -130,6 +140,14 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     async def add_agents(choice: AgentChoice) -> LabView:
         await host.add_agents(choice)
         return _lab_view(current().board, activity)
+
+    @api.post('/invitations', dependencies=[authorized])
+    async def invite(request: InviteRequest) -> Invitation:
+        return await host.invite(request.name)
+
+    @api.post('/invitations/{agent_id}', dependencies=[authorized])
+    async def invite_again(agent_id: AgentId) -> Invitation:
+        return await host.invite_again(agent_id)
 
     @api.post('/time', dependencies=[authorized])
     async def time(request: TimeRequest) -> LabView:

@@ -3,7 +3,21 @@
  * and `protocol/posts.py`. Field names stay in the server's snake case, so a payload needs no translation.
  */
 
-export type AgentState = 'starting' | 'working' | 'waiting' | 'idle' | 'stopped';
+/**
+ * What an agent does now. The last four are for an invited agent, which Verifold sees only in its board calls:
+ * `invited` until its first call, `listening` while its `wait` call is open, `here` after any other call, and
+ * `void` when Verifold holds no digest of its token, so only a new invitation lets it join.
+ */
+export type AgentState =
+  | 'starting'
+  | 'working'
+  | 'waiting'
+  | 'idle'
+  | 'stopped'
+  | 'invited'
+  | 'here'
+  | 'listening'
+  | 'void';
 export type PostKind =
   | 'message'
   | 'plan'
@@ -366,3 +380,13 @@ export interface PostRequest {
 
 /** The person's own author ID on the board. */
 export const PERSON = 'person';
+
+/** The harness of an agent that the person invited. It runs by itself, and Verifold starts nothing for it. */
+export const GUEST = 'guest';
+
+/** An invited agent, and the text that lets it join. The text holds the agent's token, and no later read returns it. */
+export interface Invitation {
+  readonly agent: string;
+  readonly name: string;
+  readonly text: string;
+}

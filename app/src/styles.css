@@ -451,6 +451,29 @@ details[open] > summary .opened {
   align-items: center;
   gap: 8px;
 }
+.f-invite input {
+  width: 170px;
+}
+.f-invite .f-where {
+  flex-basis: 100%;
+  margin-top: 0;
+}
+.f-invitation {
+  margin-top: 12px;
+  font-size: 13px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.f-invitation p {
+  flex-basis: 100%;
+}
+.f-invitation textarea {
+  flex-basis: 100%;
+  font: 12px/1.45 var(--mono);
+  resize: vertical;
+}
 .f-members .f-own {
   margin-top: 4px;
   font-size: 14.5px;

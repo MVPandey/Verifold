@@ -1,7 +1,10 @@
 import asyncio
 import json
 import os
+import re
 import signal
+import socket
+import stat
 import subprocess
 import sys
 from collections.abc import AsyncGenerator, Iterator, Mapping
@@ -15,11 +18,13 @@ import pytest
 import uvicorn
 from builders import SLEEP, alive, start_orphan, until
 from fakes import FAKE_HARNESS
+from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
 from pydantic import TypeAdapter
 
 from verifold.app import WRITING_TEMPLATE, ServeHooks, ServeOptions, WebServer, serve
 from verifold.harnesses.catalog import HarnessEntry
-from verifold.protocol.agents import AgentChoice
+from verifold.protocol.agents import Agent, AgentChoice, ModelSpec
 from verifold.protocol.app import StartRequest
 from verifold.protocol.events import AgentJoined, Event, Posted, RerunRequested, SettingsSet, TimeRanOut, TurnEnded
 from verifold.protocol.settings import AtExit, AtTimeLimit
@@ -257,6 +262,211 @@ async def test_the_person_adds_an_agent_to_a_lab_that_runs_and_it_starts_like_th
     # A refused add leaves no agent on the record.
     assert len([event for event in record(project) if isinstance(event, AgentJoined)]) == 2
     assert 'at most 20 agents' in too_many.json()['detail']
+
+
+def invited_parts(text: str) -> tuple[str, str, Path]:
+    """Return the board's address, the token, and the folder that an invitation names."""
+    url, token, folder = (
+        re.findall(rf'^{label} (.+)$', text, re.MULTILINE)[0]
+        for label in ('URL:', 'Header: Authorization: Bearer', 'Your folder:')
+    )
+    return url, token, Path(folder)
+
+
+@asynccontextmanager
+async def board_of(url: str, token: str) -> AsyncGenerator[Client]:
+    """Connect to the lab's board the way that an invited agent's harness does."""
+    headers = {'Authorization': f'Bearer {token}'}
+    async with (
+        httpx2.AsyncClient(headers=headers) as http,
+        Client(streamable_http_client(url, http_client=http)) as board,
+    ):
+        yield board
+
+
+async def state_of(client: httpx2.AsyncClient, agent_id: str) -> str:
+    views = (await client.get('/lab')).json()['agents']
+    return next(view['activity']['state'] for view in views if view['agent']['id'] == agent_id)
+
+
+async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitation_holds_after_a_restart(
+    project: Path, log: Path
+) -> None:
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),))
+
+    async with serving(project, start, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
+        invited = (await client.post('/invitations', json={'name': 'Reader'})).json()
+        url, token, folder = invited_parts(invited['text'])
+        before = await state_of(client, 'agent-2')
+        async with board_of(url, token) as board:
+            brief = await board.call_tool('brief', {})
+            waiting = asyncio.create_task(board.call_tool('wait', {'timeout_seconds': 2}))
+            listening = False
+            while not waiting.done():
+                listening = listening or await state_of(client, 'agent-2') == 'listening'
+                await asyncio.sleep(0.05)
+            (folder / 'notes.md').write_text('It is faster.\n')
+            posted = await board.call_tool(
+                'post', {'kind': 'result', 'text': 'It is faster.', 'thread': 't-1', 'files': ['notes.md']}
+            )
+            alarm = await board.call_tool('alarm', {'minutes': 5})
+        after = await state_of(client, 'agent-2')
+        view = next(view for view in (await client.get('/lab')).json()['agents'] if view['agent']['id'] == 'agent-2')
+        # The person writes to the lab while the invited agent is not connected.
+        await client.post('/posts', json={'kind': 'message', 'text': 'Go on with the tail.', 'thread': 't-1'})
+
+    assert (invited['agent'], invited['name']) == ('agent-2', 'Reader')
+    assert 'The lab is under way, and these agents work in it: Agent 1 (agent-1, fake).' in invited['text']
+    assert f"{project / '.verifold' / 'LAB.md'} holds the lab's norms" in invited['text']
+    assert folder == project / '.verifold' / 'agents' / 'agent-2'
+    assert 'Keep the token and your MCP settings outside this folder.' in invited['text']
+    assert brief.structured_content is not None
+    assert brief.structured_content['you'] == 'agent-2'
+    assert (before, listening, after) == ('invited', True, 'here')
+    assert posted.structured_content is not None
+    assert posted.structured_content['post']['evidence'][0]['path'] == 'notes.md'
+    assert alarm.is_error
+    # Verifold knows no model and no cost of the agent, and it started no harness for it.
+    assert (view['agent']['harness'], view['agent']['model']['family']) == ('guest', 'unknown')
+    assert (view['turns'], view['posts'], view['cost_usd']) == (0, 1, None)
+    assert {call['agent'] for call in calls(log)} == {'agent-1'}
+    assert len([event for event in record(project) if isinstance(event, AgentJoined)]) == 2
+    # The lab's files hold a digest of the token and not the token, and only the person reads the file.
+    guests = project / '.verifold' / 'guests.json'
+    assert stat.S_IMODE(guests.stat().st_mode) == 0o600
+    assert all(token not in path.read_text(errors='replace') for path in (project / '.verifold').glob('*.json*'))
+
+    async with serving(project, catalog={'fake': FAKE_HARNESS}) as client:
+        resumed = await state_of(client, 'agent-2')
+        async with board_of(url, token) as board:
+            since = await board.call_tool('wait', {'timeout_seconds': 0})
+            again = await board.call_tool('brief', {})
+        async with board_of(url, f'{token}x') as board:
+            wrong = await board.call_tool('brief', {})
+        # A new invitation gives the agent a new token, and the old one opens nothing.
+        renewed = (await client.post('/invitations/agent-2', json={})).json()
+        _, new_token, _ = invited_parts(renewed['text'])
+        launched = await client.post('/invitations/agent-1', json={})
+        async with board_of(url, token) as board:
+            old = await board.call_tool('brief', {})
+        async with board_of(url, new_token) as board:
+            new = await board.call_tool('brief', {})
+
+    assert resumed == 'here'
+    assert again.structured_content is not None
+    assert again.structured_content['you'] == 'agent-2'
+    # The agent gets what the board got after its own last post, also across the restart.
+    assert since.structured_content is not None
+    assert 'Go on with the tail.' in [entry['post']['text'] for entry in since.structured_content['posts']]
+    assert wrong.is_error
+    assert (renewed['agent'], renewed['name'], new_token != token) == ('agent-2', 'Reader', True)
+    assert (launched.status_code, old.is_error, new.is_error) == (404, True, False)
+    assert {call['agent'] for call in calls(log)} == {'agent-1'}
+
+    # A file that is not valid makes the invitations void for this run, and a new invitation does not overwrite it.
+    guests.write_text('{"version": 9}')
+    async with serving(project, catalog={'fake': FAKE_HARNESS}) as client:
+        shown = await state_of(client, 'agent-2')
+        base = str(client.base_url).removesuffix('/api/').removesuffix('/api')
+        async with board_of(f'{base}/mcp', new_token) as board:
+            void = await board.call_tool('brief', {})
+        refused = await client.post('/invitations', json={})
+        refused_again = await client.post('/invitations/agent-2', json={})
+        kept = guests.read_text()
+        # The person deletes the file and invites the agent again.
+        guests.unlink()
+        back = await client.post('/invitations/agent-2', json={})
+        state = await state_of(client, 'agent-2')
+
+    assert (shown, void.is_error) == ('void', True)
+    assert (refused.status_code, refused_again.status_code, kept) == (400, 400, '{"version": 9}')
+    assert 'is not a valid file of invitations' in refused.json()['detail']
+    assert (back.status_code, state) == (200, 'here')
+    assert len([event for event in record(project) if isinstance(event, AgentJoined)]) == 2
+
+
+def lab_of(project: Path, agents: int, harness: str = 'gone', first: int = 1) -> None:
+    """Write the record of a lab whose agents this computer cannot start, so that a server only serves it."""
+    with RecordFile(project / '.verifold' / 'record.jsonl') as file:
+        lab = Lab.create(file, 'Does it hold?')
+        for number in range(first, first + agents):
+            agent = Agent(id=f'agent-{number}', name=f'Agent {number}', harness=harness, model=ModelSpec(family='x'))
+            asyncio.run(lab.join(agent))
+
+
+async def test_an_invitation_is_refused_in_a_full_lab_without_a_lab_and_when_its_token_cannot_be_kept(
+    project: Path, tmp_path: Path
+) -> None:
+    async with serving(project) as client:
+        no_lab = await client.post('/invitations', json={})
+
+    full = tmp_path / 'full'
+    await asyncio.to_thread(lab_of, full, 20)
+    async with serving(full) as client:
+        too_many = await client.post('/invitations', json={})
+
+    # Verifold starts nothing for an invited agent, also when a catalog has a harness with that name.
+    blocked = tmp_path / 'blocked'
+    await asyncio.to_thread(lab_of, blocked, 1, 'guest')
+    (blocked / '.verifold' / 'guests.json').mkdir()
+    async with serving(blocked, catalog={'guest': FAKE_HARNESS}) as client:
+        unkept = await client.post('/invitations', json={})
+        state = await state_of(client, 'agent-1')
+
+    assert (no_lab.status_code, too_many.status_code, unkept.status_code) == (409, 400, 400)
+    assert 'at most 20 agents' in too_many.json()['detail']
+    assert unkept.json()['detail'].startswith("Can't invite Agent 2:")
+    # Verifold holds no digest for the agent that the record has, so only a new invitation lets it join.
+    assert state == 'void'
+    assert len([event for event in record(blocked) if isinstance(event, AgentJoined)]) == 1
+
+
+async def test_an_invited_agents_name_cannot_read_as_another_member_or_as_a_name_that_verifold_gives(
+    project: Path,
+) -> None:
+    await asyncio.to_thread(lab_of, project, 2)
+    taken = [
+        'agent 1', 'AGENT-2', 'Agent', 'checker', 'Blind rerun', 'You', 'person',
+        'Agent 7', 'agent-7', 'agent7', 'Checker 3', 'checker-12',
+    ]  # fmt: skip
+
+    async with serving(project) as client:
+        refused = [(await client.post('/invitations', json={'name': name})).status_code for name in taken]
+        reader = (await client.post('/invitations', json={'name': 'Reader'})).json()
+        again = [(await client.post('/invitations', json={'name': name})).status_code for name in ('reader', 'READER')]
+        # The name that Verifold gives next is free, also when the person types it.
+        typed = (await client.post('/invitations', json={'name': 'Agent 4'})).json()
+        plain = (await client.post('/invitations', json={})).json()
+
+    assert refused == [400] * len(taken)
+    assert again == [400, 400]
+    assert [(made['agent'], made['name']) for made in (reader, typed, plain)] == [
+        ('agent-3', 'Reader'),
+        ('agent-4', 'Agent 4'),
+        ('agent-5', 'Agent 5'),
+    ]
+
+
+async def test_a_lab_with_an_invitation_takes_its_port_again_only_when_the_port_is_free(project: Path) -> None:
+    # The lab's one agent has the ID that the count of agents would give the next one.
+    await asyncio.to_thread(lab_of, project, 1, first=2)
+    async with serving(project) as client:
+        next_one = (await client.post('/invitations', json={})).json()
+        url, _, _ = invited_parts(next_one['text'])
+    port = int(url.rsplit(':', 1)[1].removesuffix('/mcp'))
+
+    async with serving(project) as client:
+        again = client.base_url.port
+    with socket.socket() as taken:
+        taken.bind(('127.0.0.1', port))
+        taken.listen()
+        async with serving(project) as client:
+            other = client.base_url.port
+
+    assert (next_one['agent'], next_one['name']) == ('agent-3', 'Agent 3')
+    assert again == port
+    assert other != port
 
 
 @pytest.mark.usefixtures('log')

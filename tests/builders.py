@@ -43,13 +43,18 @@ class RecordBuilder:
         return seq, self.at(seq)
 
     def join(
-        self, agent_id: str, family: str = 'anthropic', recruited_by: str | None = None, checks: str | None = None
+        self,
+        agent_id: str,
+        family: str = 'anthropic',
+        recruited_by: str | None = None,
+        checks: str | None = None,
+        harness: str = 'fake',
     ) -> 'RecordBuilder':
         seq, at = self._stamp()
         agent = Agent(
             id=agent_id,
             name=agent_id.title(),
-            harness='fake',
+            harness=harness,
             model=ModelSpec(family=family),
             recruited_by=recruited_by,
             checks=checks,

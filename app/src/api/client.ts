@@ -2,6 +2,7 @@ import type {
   AgentChoice,
   AnswerView,
   FileText,
+  Invitation,
   LabView,
   PostRequest,
   PostView,
@@ -44,6 +45,10 @@ export interface Api {
   setTime(minutes: number): Promise<LabView>;
   /** Add agents of one harness to the lab that runs. */
   addAgents(choice: AgentChoice): Promise<LabView>;
+  /** Invite an agent that runs by itself. Without a name, it gets the next one, such as "Agent 3". */
+  invite(name?: string): Promise<Invitation>;
+  /** Give an invited agent a new token, which makes its earlier token void. */
+  inviteAgain(agentId: string): Promise<Invitation>;
   settings(): Promise<SettingsView>;
   changeSetting(change: SettingsChange): Promise<SettingsView>;
 }
@@ -118,6 +123,8 @@ export function createApi(
     },
     setTime: (minutes) => request('/time', { minutes }),
     addAgents: (choice) => request('/agents', choice),
+    invite: (name) => request('/invitations', name ? { name } : {}),
+    inviteAgain: (agentId) => request(`/invitations/${encodeURIComponent(agentId)}`, {}),
     settings: () => request('/settings'),
     changeSetting: (change) => request('/settings', change),
   };
