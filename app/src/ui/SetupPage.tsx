@@ -136,8 +136,8 @@ export function SetupPage(props: {
         <h2 id="setup-deliverables">What do you want to hold at the end?</h2>
         <p className="sub">
           Optional. One sentence on each line, such as “A one-page answer” or “A script that runs
-          the result again”. The agents read the list and offer files for each one. You accept them,
-          and you can change the list while the lab runs.
+          the result again”. The agents read the list, and an agent can offer files for each one.
+          You accept an offer or ask for changes, and you can change the list while the lab runs.
         </p>
         <textarea
           className="d-setup"

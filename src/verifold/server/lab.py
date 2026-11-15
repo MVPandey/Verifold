@@ -328,8 +328,8 @@ class Lab:
             RejectedEvent: The lab has too many deliverables.
 
         """
-        told = _told_lab(self._board, lambda board: f'{STATED.format(id=_next_deliverable(board))}{text}')
-        board = await self._commit(*told, _deliverable(None, text))
+        said = f'{STATED.format(id=_next_deliverable(self._board))}{text}'
+        board = await self._commit(*_told_lab(self._board, said), _deliverable(None, text))
         return board.deliverables[-1]
 
     async def change_deliverable(self, deliverable_id: DeliverableId, text: str) -> None:
@@ -345,7 +345,7 @@ class Lab:
         if live(self._board, deliverable_id).text == text:
             return
         said = f'{CHANGED.format(id=deliverable_id)}{text}'
-        await self._commit(*_told_lab(self._board, lambda _: said), _deliverable(deliverable_id, text))
+        await self._commit(*_told_lab(self._board, said), _deliverable(deliverable_id, text))
 
     async def remove_deliverable(self, deliverable_id: DeliverableId) -> None:
         """
@@ -358,7 +358,7 @@ class Lab:
         text = live(self._board, deliverable_id).text
         said = f'{REMOVED.format(id=deliverable_id)}{text}'
         gone = _deliverable(deliverable_id, text, removed=True)
-        await self._commit(*_told_lab(self._board, lambda _: said), gone)
+        await self._commit(*_told_lab(self._board, said), gone)
 
     async def offer(
         self,
@@ -828,7 +828,7 @@ def _deliverable(deliverable_id: DeliverableId | None, text: str, *, removed: bo
     )
 
 
-def _told_lab(board: Board, said: Callable[[Board], str]) -> tuple[Build, ...]:
+def _told_lab(board: Board, said: str) -> tuple[Build, ...]:
     # The person's post that tells the lab of a deliverable, in the question's thread. A lab from before the
     # question had a thread gets one thread for these posts.
     thread = question_thread(board) or next(
@@ -840,14 +840,8 @@ def _told_lab(board: Board, said: Callable[[Board], str]) -> tuple[Build, ...]:
         None,
     )
     opens = () if thread else (_open_thread(DELIVERABLES_TITLE, PERSON),)
-
-    def post(board: Board, seq: int, at: datetime) -> Event:
-        request = PostRequest(
-            kind='message', text=said(board), thread=thread, new_thread=None if thread else DELIVERABLES_TITLE
-        )
-        return _add_post(request, PERSON, ())(board, seq, at)
-
-    return (*opens, post)
+    request = PostRequest(kind='message', text=said, thread=thread, new_thread=None if thread else DELIVERABLES_TITLE)
+    return (*opens, _add_post(request, PERSON, ()))
 
 
 def _offer_title(stated: DeliverableSet) -> Title:
