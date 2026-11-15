@@ -17,6 +17,7 @@ import { orderNeeds } from '../model/needs.ts';
 import { isPermission, personMessage, standingChip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { hasNew, markSeen, readSeen } from '../model/seen.ts';
+import { betweenLine, isSide, sideHeading, sideLines } from '../model/side.ts';
 import { answerSoFar, cardStatus, doneLine, headClaim, questionThread } from '../model/turns.ts';
 import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
@@ -75,7 +76,7 @@ export function LabPage(props: PageProps & Place): ReactElement {
 
 /**
  * The lab as a wall: the question and the answer so far, the box that steers the lab, the newest report, and one
- * card for each thread. `questionRead` is the question's thread, and `cardRead` is the thread of the open card.
+ * card for each thread. The side threads come after the cards as one folded group, one line each. `questionRead` is the question's thread, and `cardRead` is the thread of the open card.
  */
 export function Wall(
   props: PageProps & Place & { readonly questionRead: ThreadRead; readonly cardRead: ThreadRead },
@@ -108,8 +109,9 @@ export function Wall(
       </p>
     );
   const cards = threads
-    .filter((summary) => summary !== question)
+    .filter((summary) => summary !== question && !isSide(summary))
     .sort((first, second) => number(first) - number(second));
+  const side = threads.filter(isSide);
   const answer = questionRead.view ? answerSoFar(questionRead.view.posts) : null;
   const chip = answer ? standingChip(answer.post, answer.standing) : null;
   const answerOpen = question !== null && open === questionId;
@@ -220,9 +222,46 @@ export function Wall(
               />
             ))}
           </div>
-        ) : (
+        ) : side.length === 0 ? (
           <p className="empty">No threads yet.</p>
-        )}
+        ) : null}
+        {side.length > 0 ? (
+          <details className="f-side">
+            <summary>
+              {sideHeading(side.length)}
+              {side.some((summary) => summary.thread.id !== open && hasNew(summary, seen)) ? (
+                <New />
+              ) : null}
+            </summary>
+            <ul>
+              {sideLines(side, lab.agents).map((line, index) => {
+                const summary = side[index];
+                if (summary === undefined) return null;
+                return line.id === open ? (
+                  <li key={line.id}>
+                    <Card
+                      summary={summary}
+                      threads={threads}
+                      agents={lab.agents}
+                      fresh={false}
+                      read={cardRead}
+                      turns={turns}
+                    />
+                  </li>
+                ) : (
+                  <li key={line.id}>
+                    <a href={href({ page: 'thread', id: line.id, post: null })}>
+                      <b>{line.who}</b>
+                      <span>{line.title}</span>
+                      <small>{line.count}</small>
+                    </a>
+                    {hasNew(summary, seen) ? <New /> : null}
+                  </li>
+                );
+              })}
+            </ul>
+          </details>
+        ) : null}
       </div>
     </>
   );
@@ -399,8 +438,8 @@ function Need(props: {
 }
 
 /**
- * One thread on the wall. Closed, it shows the title, a status, a mark for new posts, the faces of its team, the time of the latest post, and the threads that it builds on and that build on it. Open, it takes
- * the full width and shows who opened the thread, the
+ * One thread on the wall, or an opened side thread. Closed, it shows the title, a status, a mark for new posts, the faces of its team, the time of the latest post, and the threads that it builds on and that build on it. Open, it takes
+ * the full width and shows who opened the thread, who a side thread is between, the
  * result that it stands on, and its turns.
  */
 function Card(props: {
@@ -446,6 +485,9 @@ function Card(props: {
           {props.fresh && !open ? <New /> : null}
         </div>
         {open ? <p className="f-by">{authorName(props.agents, opener)} opened it</p> : null}
+        {open && isSide(summary) ? (
+          <p className="f-by">{betweenLine(summary.members, props.agents)}</p>
+        ) : null}
         <div className="f-card-st">
           {chip ? (
             <ChipView chip={chip} />

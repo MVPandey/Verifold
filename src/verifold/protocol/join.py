@@ -40,8 +40,9 @@ class PostRequest(Record):
     """
     A post that an agent or the person sends. The lab gives it an ID and an author.
 
-    Give `thread` to post in a thread, or `new_thread` to open a thread with this post. The lab rejects fields that a
-    kind doesn't use, such as `outcome` on a message.
+    Give `thread` to post in a thread, or `new_thread` to open a thread with this post. With `between`, the new thread
+    is a side thread between the author and the agents that it names. The lab rejects fields that a kind doesn't use,
+    such as `outcome` on a message.
 
     The request is one flat object, not a union of kinds, because harnesses fill a flat tool schema more reliably
     than a `oneOf`. The `post` tool takes the same fields as its own parameters, for the same reason. `to_post`
@@ -55,6 +56,8 @@ class PostRequest(Record):
     helper: Helper = ''
     thread: ThreadId | None = None
     new_thread: Title | None = None
+    between: tuple[AgentId, ...] = ()
+    """The other agents of a side thread that this post opens with `new_thread`."""
     reply_to: PostId | None = None
     mentions: tuple[AgentId, ...] = ()
     builds_on: tuple[PostId, ...] = Field(default=(), max_length=MAX_BUILDS_ON)
@@ -71,6 +74,8 @@ class PostRequest(Record):
             raise ValueError('Give thread to post in a thread, or new_thread to open one.')
         if self.new_thread and self.reply_to:
             raise ValueError('A reply stays in the thread of the post that it answers. Give thread, not new_thread.')
+        if self.between and not self.new_thread:
+            raise ValueError('`between` names the agents of a new side thread. Give new_thread with it.')
         return self
 
     def to_post(
@@ -85,7 +90,7 @@ class PostRequest(Record):
         """
         # `accepts=False` and empty `choices` mean the same as leaving them out. Only an answer takes `accepts`, and
         # only an ask takes `choices`.
-        unused = {'thread', 'new_thread', 'files'} | (set() if self.accepts else {'accepts'})
+        unused = {'thread', 'new_thread', 'between', 'files'} | (set() if self.accepts else {'accepts'})
         unused |= set() if self.choices else {'choices'}
         fields = self.model_dump(exclude=unused, exclude_none=True)
         return _posts.validate_python(
@@ -109,6 +114,8 @@ class ThreadView(Record):
 
     thread: Thread
     watching: bool
+    members: tuple[AgentId, ...] = ()
+    """The members of a side thread, in the order that they came. Empty for any other thread."""
     posts: tuple[PostView, ...]
 
 
@@ -168,6 +175,8 @@ class ThreadSummary(Record):
 
     thread: Thread
     watching: bool
+    members: tuple[AgentId, ...] = ()
+    """The members of a side thread, in the order that they came. Empty for any other thread."""
     posts: int
     last_at: AwareDatetime
     latest: PostLine | None = None
@@ -238,10 +247,27 @@ class ThreadResult(ThreadView):
     news: News | None = None
 
 
+class SideLine(Record):
+    """
+    A side thread as one line: its title, its members, how many posts it has, and when the last one came.
+
+    A side thread is a thread between named agents. A post in it reaches its members. Every agent can read it, and
+    an agent that posts in it or watches it is a member from then on.
+    """
+
+    id: ThreadId
+    title: Title
+    members: tuple[AgentId, ...]
+    posts: int
+    last_at: AwareDatetime
+
+
 class ThreadList(Record):
-    """What the `threads` tool returns: a summary of each thread, and the agent's news."""
+    """What the `threads` tool returns: a summary of each thread, one line for each side thread, and the agent's news."""
 
     threads: tuple[ThreadSummary, ...]
+    side_threads: tuple[SideLine, ...] = ()
+    """The side threads: first the ones that the agent is a member of, and in each group the most recently active first."""
     news: News | None = None
 
 
@@ -353,7 +379,10 @@ class Brief(Record):
     close_agreed: tuple[AgentId, ...] = ()
     """The agents that agreed with it. Its author is not among them."""
     open_calls: tuple[PostLine, ...] = ()
-    """Calls from others that still need an agent, newest last. A plan that replies to a call takes it."""
+    """
+    Calls from others that still need an agent, newest last. A plan that replies to a call takes it. A call in a
+    side thread is here only for the thread's members, and so is an ask in `open_asks`.
+    """
     one_agent_threads: tuple[ThreadLine, ...] = ()
     """The threads where one other agent works alone, the most recently active first, at most `MAX_LEADS`."""
     not_built_on: tuple[PostLine, ...] = ()
@@ -365,9 +394,13 @@ class Brief(Record):
     disputed: tuple[PostLine, ...] = ()
     """The posts that a failed check or a standing objection disputes, the agent's own among them, newest last."""
     threads: tuple[ThreadSummary, ...] = ()
-    """The threads, the most recently active first, at most `MAX_NEWS`."""
+    """The threads that are not side threads, the most recently active first, at most `MAX_NEWS`."""
     more_threads: int = 0
     """How many threads the list leaves out. `threads` shows all of them."""
+    side_threads: tuple[SideLine, ...] = ()
+    """The side threads, the agent's own first and then the most recently active, at most `MAX_NEWS`."""
+    more_side_threads: int = 0
+    """How many side threads the list leaves out. `threads` shows all of them."""
     news: News
     ends_at: AwareDatetime | None = None
     """When the lab ends. At that time Verifold stops the agents' turns. `None` means no time limit."""

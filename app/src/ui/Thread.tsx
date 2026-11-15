@@ -55,7 +55,11 @@ export function Turns(
         label="Message to everyone in this thread"
         placeholder="Say something in this thread"
         button="Post"
-        hint="Agents that watch this thread get your reply. When nobody watches it, every agent does."
+        hint={
+          props.view.members.length > 0
+            ? 'The members of this side thread get your reply.'
+            : 'Agents that watch this thread get your reply. When nobody watches it, every agent does.'
+        }
         onSend={onSend}
       />
     </>

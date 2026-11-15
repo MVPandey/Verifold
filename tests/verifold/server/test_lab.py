@@ -29,6 +29,25 @@ async def test_a_post_can_open_its_thread_in_one_step(lab: Lab) -> None:
     assert posted.seq == board.seq == 7
 
 
+async def test_a_post_opens_a_side_thread_between_its_author_and_the_agents_that_it_names(
+    lab: Lab, record_file: RecordFile
+) -> None:
+    request = PostRequest(kind='message', text='Can you fetch it?', new_thread='Scoreboard', between=('ada', 'bo'))
+    posted = await lab.post(request, 'bo')
+
+    # The author comes first, whether it names itself or not, and the post itself holds no `between`.
+    assert lab.board.threads[-1].thread.between == ('bo', 'ada')
+    assert lab.board.members(posted.post.thread) == ('bo', 'ada')
+    assert 'between' not in posted.post.model_dump()
+    with pytest.raises(RejectedEvent, match='at least one other agent'):
+        await lab.post(request.model_copy(update={'between': ('bo',)}), 'bo')
+    with pytest.raises(RejectedEvent, match='at least one other agent'):
+        await lab.post(request, 'person')
+    # A lab that loads the record again has the same side thread.
+    assert Lab.load(record_file).board.members('t-2') == ('bo', 'ada')
+    assert len(lab.board.threads) == 2
+
+
 async def test_a_rejected_post_leaves_no_trace(lab: Lab, record_file: RecordFile) -> None:
     before = lab.board.seq
 

@@ -32,6 +32,7 @@ import {
 import { crossedLine, crossLines } from '../src/model/crossings.ts';
 import { href, parseRoute } from '../src/model/route.ts';
 import { hasNew, markSeen, readSeen } from '../src/model/seen.ts';
+import { betweenLine, isSide, sideHeading, sideLines } from '../src/model/side.ts';
 import { AT_EXIT, labelOf, stopLine, valueAt } from '../src/model/settings.ts';
 import {
   agentCount,
@@ -884,6 +885,42 @@ describe('crossings', () => {
     assert.equal(
       crossedLine([summary({ crossed: 4 }), summary({ crossed: 2 })]),
       '6 posts build on another agent’s work in another thread.',
+    );
+  });
+});
+
+describe('side threads', () => {
+  const agents = [agentView('agent-1'), agentView('agent-2'), agentView('agent-3')];
+  const work = summary({ thread: { id: 't-2', title: 'Baseline', opened_by: 'agent-1' } });
+  const pair = summary({
+    thread: { id: 't-5', title: 'Who owns the account?', opened_by: 'agent-2' },
+    members: ['agent-2', 'agent-1'],
+    posts: 1,
+  });
+  const three = summary({
+    thread: { id: 't-6', title: 'Scoreboard', opened_by: 'agent-1' },
+    members: ['agent-1', 'agent-3', 'agent-9'],
+    posts: 4,
+  });
+
+  it('are the threads that have members', () => {
+    assert.deepEqual([work, pair, three].map(isSide), [false, true, true]);
+  });
+
+  it('read as one line each, in the order given: who talks, the title, and the count', () => {
+    assert.deepEqual(sideLines([three, work, pair], agents), [
+      // An agent that the lab does not list keeps its ID.
+      { id: 't-6', who: 'Agent 1, Agent 3, and agent-9', title: 'Scoreboard', count: '4 posts' },
+      { id: 't-5', who: 'Agent 2 and Agent 1', title: 'Who owns the account?', count: '1 post' },
+    ]);
+  });
+
+  it('have a heading that counts them, and a line that says who they are between', () => {
+    assert.equal(sideHeading(1), '1 side thread');
+    assert.equal(sideHeading(3), '3 side threads');
+    assert.equal(
+      betweenLine(pair.members, agents),
+      'A side thread between Agent 2 and Agent 1. Every agent and you can read it.',
     );
   });
 });

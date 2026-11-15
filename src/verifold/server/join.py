@@ -69,6 +69,12 @@ the other agents and the person. Your first message names the file that holds th
   and the check of a rerun that you asked for. An `ask` that replies to no post, a `call`, and the first post of a
   new thread are for every agent, unless their `mentions` name somebody. A post from the person that names nobody
   and replies to no post is for every agent too. An agent sees any other post when it next reads the board.
+- A side thread is a thread between named agents. `post` opens one with `new_thread` and `between`, which names
+  the other agents. Its members are you, those agents, and each agent that posts in it or watches it later. A post
+  in a side thread is for its members only, whatever its kind, and also for an agent that it names, replies to, or
+  builds on. Every agent and the person can read every side thread. Nobody can be kept out of one or removed from
+  one. A side thread takes no `proposal` and no `close`. `brief` and `threads` list side threads apart from the
+  other threads, one line each, yours first.
 - An `ask` with no `mentions` that replies to no post stays in `brief` until somebody answers it.
 - A `call` says that work needs an agent: a line that nobody builds, a part that you hand over, or more hands for
   your line. For a new line, open a thread with the call. A call with no `mentions` reaches every agent, and it
@@ -209,6 +215,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         helper: Helper = '',
         thread: ThreadId | None = None,
         new_thread: Title | None = None,
+        between: tuple[AgentId, ...] = (),
         reply_to: PostId | None = None,
         mentions: tuple[AgentId, ...] = (),
         builds_on: tuple[PostId, ...] = (),
@@ -222,6 +229,12 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         Post on the board. Give `thread` to post in a thread, or `new_thread` with a specific title to open one.
 
         A post with `reply_to` and no thread goes in the thread of the post that it answers.
+
+        `between` with `new_thread` opens a side thread between you and the agents that `between` names. A post in a
+        side thread is for its members only: the first post, an `ask`, and a `call` reach no other agent. A name in
+        `mentions` or in the text, `reply_to`, and `builds_on` reach an agent outside as in any thread. Every agent
+        and the person can read a side thread. An agent that posts in it or watches it is a member from then on, and
+        no member can be removed. A side thread takes no `proposal` and no `close`.
 
         Kinds:
         - `plan`: what you do next. The other agents read it, so that no two agents do the same work.
@@ -265,6 +278,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
                 helper=helper,
                 thread=thread,
                 new_thread=new_thread,
+                between=between,
                 reply_to=reply_to,
                 mentions=mentions,
                 builds_on=builds_on,
@@ -282,16 +296,23 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         """
         List every thread, the most recently active first, with its latest post and how its results stand.
 
+        `side_threads` lists the side threads apart, one line each: the title, the members, the number of posts, and
+        the time of the last post. The side threads that you are a member of come first. `thread` reads any of them.
+
         `team` names the agents that work in a thread now, and `open_calls` counts its calls that still need an
         agent. `builds_on_threads` and `built_on_by_threads` show where agents built on each other's work: the other
         threads whose posts a thread builds on, and the threads where other agents build on it.
         """
         async with acting(ctx, 'threads') as member:
-            return ThreadList(threads=member.threads(), news=member.news())
+            return member.threads().model_copy(update={'news': member.news()})
 
     @server.tool()
     async def thread(thread: ThreadId, ctx: Context) -> ThreadResult:
-        """Read one thread: every post, oldest first, and where each post stands."""
+        """
+        Read one thread: every post, oldest first, and where each post stands.
+
+        For a side thread, `members` names its members. You can read a side thread that you are not a member of.
+        """
         async with acting(ctx, 'thread') as member:
             return ThreadResult(**dict(member.thread(thread)), news=member.news())
 
@@ -300,7 +321,9 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         """
         Start or stop watching a thread. Every post in a watched thread is for you, and wakes you.
 
-        You watch the threads that you open and the thread of your latest plan or result.
+        You watch the threads that you open and the thread of your latest plan or result. You also watch each
+        side thread that you are a member of. When you watch a side thread, you are a member of it from then on.
+        When you stop, you stay in its list of members, and its posts are no longer for you.
         """
         async with acting(ctx, 'watch') as member:
             watched = await member.watch(thread, watching=watching)
