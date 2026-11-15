@@ -1,9 +1,11 @@
 import type {
   AgentView,
+  AnswerView,
   Badge,
   BadgeLine,
   Given,
   LabView,
+  Post,
   PostView,
   ProposalLine,
   VoteLine,
@@ -24,9 +26,43 @@ export const MAX_WHY = 140;
 
 const LIST = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' });
 
-/** Return the badges that stand on a post. A Breakthrough that waits for its second is none. */
+/**
+ * Return the badges that stand on a post. A Breakthrough that waits for its second is none, and neither is a
+ * Confirmed whose check a later failed check followed.
+ */
 export function standingBadges(item: PostView): readonly BadgeLine[] {
+  return (item.badges ?? []).filter((line) => !line.waits && !line.lapsed);
+}
+
+/** Return the badges that a post's list shows: the ones that stand, and a Confirmed that stands no longer. */
+export function listedBadges(item: PostView): readonly BadgeLine[] {
   return (item.badges ?? []).filter((line) => !line.waits);
+}
+
+/**
+ * Return whether a post takes votes and badges. A request of a harness and a request for a move are no work to
+ * judge, so the server takes none on them.
+ */
+export function takesVotes(post: Post): boolean {
+  return post.kind !== 'request' && !(post.kind === 'ask' && post.request);
+}
+
+/**
+ * Return the name of a count's control, which says what a press does and what the count is, such as "Vote up. 3
+ * up votes, yours among them". Without `press`, it is the count alone.
+ */
+export function countLabel(
+  direction: 'up' | 'down',
+  votes: number,
+  mine: boolean,
+  press: boolean,
+): string {
+  const count =
+    votes === 0
+      ? `No ${direction} votes`
+      : `${votes} ${direction} ${votes === 1 ? 'vote' : 'votes'}`;
+  const whole = mine ? `${count}, yours among them` : count;
+  return press ? `Vote ${direction}. ${whole}` : whole;
 }
 
 /** Return whether a Breakthrough badge stands on a post. */
@@ -76,7 +112,8 @@ export function votesLeftOut(item: PostView): number {
 /** Return whether the person can give a post the Promising badge: another wrote it, and the person has not yet. */
 export function canMarkPromising(item: PostView): boolean {
   const given = (item.badges ?? []).find((line) => line.badge === 'promising')?.given ?? [];
-  return item.post.author !== PERSON && !given.some((one) => one.by === PERSON);
+  const others = item.post.author !== PERSON && takesVotes(item.post);
+  return others && !given.some((one) => one.by === PERSON);
 }
 
 /** Return who gave a badge, such as "Given by you." or "Given by Quill." */
@@ -85,9 +122,23 @@ export function givenBy(given: Given, agents: readonly AgentView[]): string {
 }
 
 /**
- * Return who proposed a Breakthrough badge and who seconded it, such as "Proposed by Quill, seconded by Maren as
- * coordinator." An agent seconds only while it holds the coordinator seat, so the line says so also after the
- * seat changed.
+ * Return what a Confirmed badge's giver said once, when its word confirms the post no longer, such as "Was
+ * confirmed by p-7; a later check failed", or `null` while it does.
+ */
+export function lapsedLine(given: Given, agents: readonly AgentView[]): string | null {
+  if (!given.lapsed) return null;
+  const by = given.proof ?? (given.by === PERSON ? 'you' : ownName(agents, given.by));
+  const why =
+    given.lapsed === 'check_conceded'
+      ? 'the author of that check conceded an objection to it'
+      : 'a later check failed';
+  return `Was confirmed by ${by}; ${why}.`;
+}
+
+/**
+ * Return who proposed a Breakthrough badge and who seconded it, with the seconder's capacity, such as "Proposed
+ * by Quill, seconded by Maren, the coordinator you seated." Only the person and a coordinator to which the
+ * person gave the seat second, so the line says so also after the seat changed.
  */
 export function secondedBy(line: BadgeLine, agents: readonly AgentView[]): string {
   const proposed = LIST.format(line.given.map((given) => ownName(agents, given.by)));
@@ -95,27 +146,26 @@ export function secondedBy(line: BadgeLine, agents: readonly AgentView[]): strin
   if (!second) return `Proposed by ${proposed}.`;
   return second.by === PERSON
     ? `Proposed by ${proposed}, seconded by you.`
-    : `Proposed by ${proposed}, seconded by ${ownName(agents, second.by)} as coordinator.`;
+    : `Proposed by ${proposed}, seconded by ${ownName(agents, second.by)}, the coordinator you seated.`;
 }
 
 /**
- * Return the line of a Breakthrough badge that waits, such as "Proposed as a breakthrough by Quill. Waits for the
- * coordinator or you." The coordinator can second it when an agent holds the seat and neither proposed the badge
- * nor wrote the post.
+ * Return the line of a Breakthrough badge that waits, with who can second it, such as "Proposed as a breakthrough
+ * by Quill. Waits for Maren, the coordinator you seated, or you." Without such a coordinator, it waits for the
+ * person alone.
  */
-export function proposedLine(
-  item: PostView,
-  line: BadgeLine,
-  agents: readonly AgentView[],
-): string {
-  const proposers = line.given.map((given) => given.by);
-  const coordinator = agents.find((view) => view.coordinator && view.left === null)?.agent.id;
-  const can =
-    coordinator !== undefined &&
-    coordinator !== item.post.author &&
-    !proposers.includes(coordinator);
-  const names = LIST.format(proposers.map((id) => ownName(agents, id)));
-  return `Proposed as a breakthrough by ${names}. Waits for ${can ? 'the coordinator or you' : 'you'}.`;
+export function proposedLine(line: BadgeLine, agents: readonly AgentView[]): string {
+  const names = LIST.format(line.given.map((given) => ownName(agents, given.by)));
+  const who = line.seconder
+    ? `${ownName(agents, line.seconder)}, the coordinator you seated, or you`
+    : 'you';
+  return `Proposed as a breakthrough by ${names}. Waits for ${who}.`;
+}
+
+/** Return the post with a Breakthrough badge that the lab's answer builds on, when the answer itself has none. */
+export function breakthroughUnder(view: AnswerView): PostView | null {
+  if (hasBreakthrough(view.answer)) return null;
+  return view.builds_on.find(hasBreakthrough) ?? null;
 }
 
 /** One row of the seat's list for a Breakthrough badge that waits for its second. */

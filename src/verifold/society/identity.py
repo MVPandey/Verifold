@@ -13,6 +13,7 @@ from verifold.protocol.events import Posted
 from verifold.protocol.ids import PERSON, AgentId
 from verifold.protocol.join import MAX_SEAT, Byline, PostLine, PostView
 from verifold.protocol.posts import MoveRequest
+from verifold.protocol.votes import NEWEST_VOTES
 from verifold.society.board import Board
 from verifold.society.coordinator import request_end, request_waits
 from verifold.society.labels import is_numbered, plain
@@ -94,7 +95,7 @@ def post_line(board: Board, entry: Posted) -> PostLine:
     return PostLine.of(entry, byline(board, entry, MAX_SEAT), marks(board, entry.post.id))
 
 
-def post_view(board: Board, entry: Posted) -> PostView:
+def post_view(board: Board, entry: Posted, votes: int = NEWEST_VOTES) -> PostView:
     """Return a post with its time, who wrote it, where it stands, the posts that build on it, its votes, and its badges."""
     up, down, _ = marks(board, entry.post.id)
     return PostView(
@@ -109,6 +110,6 @@ def post_view(board: Board, entry: Posted) -> PostView:
         ended=None if board.answer_to(entry.post.id) else request_end(board, entry),
         up=up,
         down=down,
-        votes=vote_lines(board, entry.post.id),
+        votes=vote_lines(board, entry.post.id, votes),
         badges=badge_lines(board, entry.post.id),
     )

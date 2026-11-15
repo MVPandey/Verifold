@@ -260,7 +260,10 @@ class PostView(Record):
     down: int = 0
     """How many votes down stand on the post."""
     votes: tuple[VoteLine, ...] = ()
-    """The newest standing votes with their reasons, oldest first, at most `MAX_VOTE_LINES`. No order ranks them."""
+    """
+    The newest standing votes with their reasons, oldest first. No order ranks them. An agent's `thread` holds
+    `NEWEST_VOTES` of each post, and `MAX_VOTE_LINES` of the post that the call names in `votes_of`.
+    """
     badges: tuple[BadgeLine, ...] = ()
     """Each badge on the post once, with who gave it and why. A `breakthrough` that waits for its second says so."""
 
@@ -300,7 +303,7 @@ class PostLine(Sparse):
     and of the news stay within what a harness takes as one tool result. `thread` shows the whole headline.
 
     A line leaves out each field that holds nothing, as `Sparse` says: `by`, `helper`, `reply_to`, `builds_on`,
-    `for_person`, `up`, `down`, and `badges`.
+    `for_person`, `up`, `down`, and `badges`. It has `seq` and no time.
     """
 
     id: PostId
@@ -311,7 +314,8 @@ class PostLine(Sparse):
     Who the author is, with its seat's label cut to `MAX_SEAT` characters. `None` for a post of the person. In
     `brief`, the list of agents says who each agent is. So in the brief's lists of posts and in an agent's `plan`
     and `latest`, `by` is `None` for an author that the list of agents holds, unless the label of its seat was
-    another when the post was written. The lines of `news` and of a thread's `latest` always have it.
+    another when the post was written. The same holds for the lines of the news that a brief carries. The lines of
+    `news` in any other result, and of a thread's `latest`, always have it.
     """
     helper: Helper = ''
     kind: PostKind
@@ -330,7 +334,7 @@ class PostLine(Sparse):
     badges: tuple[Badge, ...] = ()
     """The badges that stand on the post, each once. A `breakthrough` is here only after its second."""
     seq: int
-    at: AwareDatetime
+    """The post's place in the record. A line has no time: `thread` has the time of each post."""
 
     @classmethod
     def of(
@@ -353,7 +357,6 @@ class PostLine(Sparse):
             down=marks[1],
             badges=marks[2],
             seq=entry.seq,
-            at=entry.at,
         )
 
 
@@ -542,11 +545,16 @@ class News(Record):
     The votes on the agent's own posts since: who voted, which way, and the reason. A vote wakes nobody. The
     newest `MAX_NOTES` are here, and `thread` shows every vote that stands.
     """
+    votes_left_out: int = 0
+    """How many older votes on the agent's posts `votes` leaves out."""
     badges: tuple[BadgeNote, ...] = ()
     """
     The changes to badges since that concern the agent: on its own posts, on a `breakthrough` that it proposed,
-    and, for the agent that holds the coordinator seat, each `breakthrough` that an agent proposed.
+    and, for the agent that holds the coordinator seat, each `breakthrough` that an agent proposed. The newest
+    `MAX_NOTES` are here.
     """
+    badges_left_out: int = 0
+    """How many older changes to badges `badges` leaves out."""
     alarm: AlarmLine | None = None
     """The alarm that waits for the agent. `None` means that no alarm waits."""
 
@@ -997,8 +1005,12 @@ class Update(Record):
     """The reruns that became wanted since and that the agent can take with `take_rerun`, as in the news."""
     votes: tuple[VoteNote, ...] = ()
     """The votes on the agent's own posts since, as in the news. A vote ends no `wait`."""
+    votes_left_out: int = 0
+    """How many older votes on the agent's posts `votes` leaves out."""
     badges: tuple[BadgeNote, ...] = ()
     """The changes to badges since that concern the agent, as in the news. A badge ends no `wait`."""
+    badges_left_out: int = 0
+    """How many older changes to badges `badges` leaves out."""
     alarm: AlarmLine | None = None
     """The alarm that waits for the agent. `None` means that no alarm waits."""
     no_alarm: str = ''

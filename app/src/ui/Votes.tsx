@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent, ReactElement } from 'react';
 
 import { messageOf } from '../api/client.ts';
@@ -16,11 +16,15 @@ import {
   BADGE_WORDS,
   MAX_WHY,
   canMarkPromising,
+  countLabel,
   givenBy,
+  lapsedLine,
+  listedBadges,
   orderVotes,
   proposedLine,
   secondedBy,
   standingBadges,
+  takesVotes,
   votesLeftOut,
   votesLine,
   waitingProposal,
@@ -81,11 +85,13 @@ export function Votes(props: {
   const [error, setError] = useState<string | null>(null);
   const up = item.up ?? 0;
   const down = item.down ?? 0;
-  const badges = standingBadges(item);
+  const badges = listedBadges(item);
   const proposal = waitingProposal(item);
   const yours = yourVote(item);
   // The person votes on the posts of others. Their own post shows the votes that it got.
   const can = actions !== undefined && post.author !== PERSON;
+  // A request of a harness and a request for a move take no vote and no badge, so they show no row.
+  if (!takesVotes(post)) return null;
   if (!can && up + down === 0 && badges.length === 0 && proposal === null) return null;
 
   const run = (move: Promise<void>): void => {
@@ -96,7 +102,7 @@ export function Votes(props: {
   };
   const count = (direction: 'up' | 'down', votes: number): ReactElement => {
     const mine = yours?.direction === direction;
-    const label = `${votes} ${direction}${mine ? ', with your vote' : ''}`;
+    const label = countLabel(direction, votes, mine, can);
     const body = (
       <>
         <i className={`v-arrow ${direction}`} /> {votes}
@@ -107,7 +113,7 @@ export function Votes(props: {
         type="button"
         className={`v-count${mine ? ' mine' : ''}`}
         aria-label={label}
-        title={direction === 'up' ? 'Vote up' : 'Vote down'}
+        aria-pressed={mine}
         onClick={() => {
           setAsking(direction);
         }}
@@ -192,7 +198,7 @@ export function VoteDetail(props: {
 }): ReactElement {
   const { item, agents, actions, run } = props;
   const { post } = item;
-  const badges = standingBadges(item);
+  const badges = listedBadges(item);
   return (
     <div className="v-detail">
       <ul>
@@ -229,7 +235,8 @@ export function VoteDetail(props: {
       ) : null}
       {badges.map((line) => (
         <p key={line.badge} className="v-badge-line">
-          <BadgeChip badge={line.badge} />
+          {/* A Confirmed that a later failed check followed is no badge: the line says what it was. */}
+          {line.lapsed ? null : <BadgeChip badge={line.badge} />}
           {line.badge === 'breakthrough' ? (
             <Seconded line={line} post={post.id} agents={agents} actions={actions} run={run} />
           ) : (
@@ -269,8 +276,8 @@ function Giver(props: {
   const { given, onBack } = props;
   return (
     <span className="v-giver">
-      {givenBy(given, props.agents)} <q>{given.reason}</q>
-      {given.proof ? ` It names ${given.proof}.` : null}
+      {lapsedLine(given, props.agents) ?? givenBy(given, props.agents)} <q>{given.reason}</q>
+      {given.proof && !given.lapsed ? ` It names ${given.proof}.` : null}
       {onBack ? (
         <button type="button" className="v-more" onClick={onBack}>
           {given.by === PERSON ? 'Take it back' : 'Remove it'}
@@ -350,7 +357,7 @@ function Proposal(props: {
   return (
     <form className="v-proposal" onSubmit={second}>
       <p>
-        {proposedLine(item, line, props.agents)} {proposer ? <q>{proposer.reason}</q> : null}
+        {proposedLine(line, props.agents)} {proposer ? <q>{proposer.reason}</q> : null}
       </p>
       {actions && proposer && item.post.author !== PERSON ? (
         <div className="v-why">
@@ -440,4 +447,20 @@ export function Why(props: {
       ) : null}
     </form>
   );
+}
+
+/** The posts whose Breakthrough ring played in this browser session. The page keeps them in memory only. */
+const rung = new Set<string>();
+
+/**
+ * Return whether the ring of a post's Breakthrough badge plays now. It plays once for a badge in a browser
+ * session: when the post is first drawn with the badge, and not when the thread is opened again.
+ */
+export function useRing(postId: string, breakthrough: boolean): boolean {
+  // Whether the ring had not played when this post was first drawn. A post that is drawn again finds its ID.
+  const [first] = useState(() => !rung.has(postId));
+  useEffect(() => {
+    if (breakthrough) rung.add(postId);
+  }, [postId, breakthrough]);
+  return breakthrough && first;
 }

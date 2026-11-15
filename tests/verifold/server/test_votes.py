@@ -46,7 +46,7 @@ async def test_a_vote_is_recorded_once_and_the_same_vote_again_records_nothing(
 async def test_the_second_of_a_breakthrough_names_the_agent_that_proposed_it(lab: Lab, record_file: RecordFile) -> None:
     await lab.join(agent('cy'), coordinator=True)
     await lab.badge('bo', 'p-1', 'breakthrough', reason='It gives the strategy a size.')
-    with pytest.raises(RejectedEvent, match='Only the agent that holds the coordinator seat and the person second'):
+    with pytest.raises(RejectedEvent, match='Only the person, and the agent to which the person gave'):
         await lab.badge('bo', 'p-1', 'breakthrough', 'second')
 
     seconded = await lab.badge('cy', 'p-1', 'breakthrough', 'second')
@@ -114,6 +114,8 @@ async def test_agents_vote_and_give_badges_through_the_mcp_tools(lab: Lab) -> No
     async with Client(join_server(lambda _: ada)) as client:
         own = await client.call_tool('vote', {'post': 'p-1', 'direction': 'up', 'reason': 'Mine.'})
         thread = await client.call_tool('thread', {'thread': 't-1'})
+        named = await client.call_tool('thread', {'thread': 't-1', 'votes_of': 'p-1'})
+        missing = await client.call_tool('thread', {'thread': 't-1', 'votes_of': 'p-9'})
         later = await client.call_tool('brief', {})
 
     assert up.structured_content is not None
@@ -121,7 +123,7 @@ async def test_agents_vote_and_give_badges_through_the_mcp_tools(lab: Lab) -> No
     for refused, why in (
         (bare, 'A vote down has a reason of one line'),
         (long, 'at most 140 characters'),
-        (own_second, 'Only the agent that holds the coordinator seat and the person second'),
+        (own_second, 'Only the person, and the agent to which the person gave the coordinator seat'),
         (own, 'Post p-1 is your own'),
     ):
         assert refused.is_error
@@ -150,6 +152,10 @@ async def test_agents_vote_and_give_badges_through_the_mcp_tools(lab: Lab) -> No
         ('bo', 'up', 'It matches my run.')
     ]
     assert [line['badge'] for line in post['badges']] == ['promising', 'breakthrough']
+    assert named.structured_content is not None
+    assert [vote['by'] for vote in named.structured_content['posts'][0]['votes']] == ['bo']
+    assert missing.is_error
+    assert 'Thread t-1 has no post with the ID p-9' in str(missing.content)
     news = thread.structured_content['news']
     assert [(note['by'], note['direction'], note['reason']) for note in news['votes']] == [
         ('bo', 'up', 'It matches my run.')

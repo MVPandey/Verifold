@@ -128,6 +128,33 @@ async def test_the_agent_starts_and_the_doorbell_rings_only_for_posts_for_it(
     assert turn.cost_usd == pytest.approx(0.01)
 
 
+async def test_a_vote_and_a_badge_on_an_agents_post_ring_no_doorbell(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        mine = next(entry.post.id for entry in lab.board.posts if entry.post.author == 'bo')
+        await lab.vote('ada', mine, 'down', 'One seed only.')
+        await lab.vote('person', mine, 'up', 'This is what I asked.')
+        await lab.badge('person', mine, 'promising', reason='Go on here.')
+        await lab.badge('ada', mine, 'breakthrough', reason='It gives the size.')
+        await lab.badge('person', mine, 'breakthrough', 'second')
+        # The board changed five times, and nothing of it starts a turn.
+        await asyncio.sleep(0.3)
+        assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
+        assert len(lab.board.starts) == 1
+
+        # A post for the agent still rings, and the result of its next call has the votes and the badges.
+        await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'person')
+        await until(lambda: len(lab.board.turns) == 2)
+    finally:
+        running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL]
+
+
 async def test_a_post_that_the_agent_got_in_a_tool_result_during_its_turn_rings_no_doorbell(
     served: ServedBoard, tmp_path: Path, log: Path
 ) -> None:

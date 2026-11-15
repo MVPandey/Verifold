@@ -6,17 +6,28 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { createApi } from '../src/api/client.ts';
 import type { Api } from '../src/api/client.ts';
-import type { AgentView, AnswerView, BadgeLine, PostView, VoteLine } from '../src/api/types.ts';
+import type {
+  AgentView,
+  AnswerView,
+  BadgeLine,
+  Post,
+  PostView,
+  VoteLine,
+} from '../src/api/types.ts';
 import {
+  breakthroughUnder,
   canMarkPromising,
+  countLabel,
   givenBy,
   hasBreakthrough,
+  lapsedLine,
   orderVotes,
   proposalRows,
   proposalsHeading,
   proposedLine,
   secondedBy,
   standingBadges,
+  takesVotes,
   votesLeftOut,
   votesLine,
   waitingProposal,
@@ -26,7 +37,16 @@ import { Wall } from '../src/ui/LabPage.tsx';
 import { Turns } from '../src/ui/Thread.tsx';
 import { VoteDetail, Why } from '../src/ui/Votes.tsx';
 import type { MarkActions } from '../src/ui/Votes.tsx';
-import { DEFAULTS, HARNESSES, agentView, labView, postView, result, summary } from './fixtures.ts';
+import {
+  DEFAULTS,
+  HARNESSES,
+  agentView,
+  ask,
+  labView,
+  postView,
+  result,
+  summary,
+} from './fixtures.ts';
 
 const named = (id: string, name: string, changes: Partial<AgentView> = {}): AgentView =>
   agentView(id, { agent: { ...agentView(id).agent, name }, ...changes });
@@ -89,7 +109,14 @@ const broke: PostView = {
 /** A result with a Breakthrough badge that Quill proposed and nobody seconded yet. */
 const proposed: PostView = {
   ...postView(result('p-7', { author: 'agent-4', text: 'The floor holds at $40.' }), 7),
-  badges: [{ badge: 'breakthrough', given: [given('agent-3', 'It gives the size.')], waits: true }],
+  badges: [
+    {
+      badge: 'breakthrough',
+      given: [given('agent-3', 'It gives the size.')],
+      waits: true,
+      seconder: 'agent-1',
+    },
+  ],
 };
 const actions: MarkActions = {
   onVote: () => Promise.resolve(),
@@ -148,13 +175,16 @@ describe('the votes of a post', () => {
   it('show under the post as two counts, with the person’s own vote on its count', () => {
     const html = thread([voted], actions);
 
+    // The name of a count says what a press does, and `aria-pressed` says whether the person's vote is on it.
     assert.ok(
       html.includes(
-        '<button type="button" class="v-count mine" aria-label="3 up, with your vote" title="Vote up">',
+        '<button type="button" class="v-count mine" aria-label="Vote up. 3 up votes, yours among them" aria-pressed="true">',
       ),
     );
     assert.ok(
-      html.includes('<button type="button" class="v-count" aria-label="1 down" title="Vote down">'),
+      html.includes(
+        '<button type="button" class="v-count" aria-label="Vote down. 1 down vote" aria-pressed="false">',
+      ),
     );
     assert.ok(
       html.includes('aria-expanded="false">4 votes, yours is up. Show who and why</button>'),
@@ -170,19 +200,23 @@ describe('the votes of a post', () => {
     const html = thread([voted]);
 
     assert.ok(
-      html.includes('<span class="v-count mine" role="img" aria-label="3 up, with your vote">'),
+      html.includes(
+        '<span class="v-count mine" role="img" aria-label="3 up votes, yours among them">',
+      ),
     );
     assert.equal(html.includes('<button type="button" class="v-count'), false);
     const bare = postView(result('p-8', { author: 'agent-2' }), 8);
     assert.equal(thread([bare]).includes('v-box'), false);
     // With moves, a post of another author has its two counts from the start.
-    assert.ok(thread([bare], actions).includes('aria-label="0 up" title="Vote up"'));
+    assert.ok(
+      thread([bare], actions).includes('aria-label="Vote up. No up votes" aria-pressed="false"'),
+    );
     // The person votes on no post of their own. Such a post shows the votes that it got.
     const own = postView(result('p-9', { author: 'person' }), 9);
     assert.equal(thread([own], actions).includes('v-box'), false);
     const liked = { ...own, up: 1, votes: [vote('agent-2', 'up', 'Clear.', 1)] };
     assert.ok(
-      thread([liked], actions).includes('<span class="v-count" role="img" aria-label="1 up">'),
+      thread([liked], actions).includes('<span class="v-count" role="img" aria-label="1 up vote">'),
     );
   });
 
@@ -218,7 +252,7 @@ describe('the votes of a post', () => {
 
     assert.ok(html.includes('Given by Quill. <q>p-9 repeats it.</q> It names p-9.'));
     assert.ok(html.includes('<span class="v-badge rare">Breakthrough</span>'));
-    assert.ok(html.includes('Proposed by Quill, seconded by Maren as coordinator.'));
+    assert.ok(html.includes('Proposed by Quill, seconded by Maren, the coordinator you seated.'));
     assert.equal(html.match(/Remove it/g)?.length, 2);
     assert.equal(html.includes('Take it back'), false);
     assert.equal(givenBy(given('person'), agents), 'Given by you.');
@@ -278,7 +312,7 @@ describe('a badge', () => {
         '<span class="f-st fs-ok">Checked</span><span class="v-badge">Confirmed</span><span class="v-badge rare">Breakthrough</span></p>',
       ),
     );
-    assert.ok(html.includes('<li id="p-6" class="f-turn claim v-break d0">'));
+    assert.ok(html.includes('<li id="p-6" class="f-turn claim v-break v-ring d0">'));
     assert.ok(html.includes('<li id="p-5" class="f-turn claim d0">'));
     assert.deepEqual(
       standingBadges(broke).map((line) => line.badge),
@@ -297,7 +331,7 @@ describe('a badge', () => {
     assert.equal(html.includes('v-badge rare'), false);
     assert.ok(
       html.includes(
-        'Proposed as a breakthrough by Quill. Waits for the coordinator or you. <q>It gives the size.</q>',
+        'Proposed as a breakthrough by Quill. Waits for Maren, the coordinator you seated, or you. <q>It gives the size.</q>',
       ),
     );
     assert.ok(html.includes('placeholder="A line for your second (optional)"'));
@@ -309,25 +343,79 @@ describe('a badge', () => {
     assert.equal(read.includes('Second it'), false);
   });
 
-  it('waits for the person alone when the coordinator proposed it, wrote the post, or is not there', () => {
+  it('waits for the person alone when no coordinator that the person seated can second it', () => {
     const line = waitingProposal(proposed);
     assert.ok(line);
-    const by = (proposer: string): BadgeLine => ({ ...line, given: [given(proposer)] });
 
     assert.equal(
-      proposedLine(proposed, by('agent-1'), agents),
-      'Proposed as a breakthrough by Maren. Waits for you.',
-    );
-    const theirs = { ...proposed, post: { ...proposed.post, author: 'agent-1' } };
-    assert.equal(
-      proposedLine(theirs, line, agents),
+      proposedLine({ ...line, seconder: null }, agents),
       'Proposed as a breakthrough by Quill. Waits for you.',
     );
-    const none = agents.map((view) => ({ ...view, coordinator: false }));
-    assert.equal(
-      proposedLine(proposed, line, none),
-      'Proposed as a breakthrough by Quill. Waits for you.',
+  });
+
+  it('is no badge once a later check of the post failed, and the list says what it was', () => {
+    const lapsed: PostView = {
+      ...broke,
+      badges: [
+        {
+          badge: 'confirmed',
+          lapsed: true,
+          given: [
+            { ...given('agent-3', 'p-9 repeats it.'), proof: 'p-9', lapsed: 'later_check_failed' },
+            { ...given('person', 'I read it.'), lapsed: 'later_check_failed' },
+          ],
+        },
+      ],
+    };
+
+    assert.deepEqual(standingBadges(lapsed), []);
+    assert.equal(thread([lapsed], actions).includes('v-badge'), false);
+    const html = renderToStaticMarkup(
+      <VoteDetail item={lapsed} agents={agents} run={() => undefined} />,
     );
+    assert.equal(html.includes('class="v-badge"'), false);
+    assert.ok(html.includes('Was confirmed by p-9; a later check failed. <q>p-9 repeats it.</q>'));
+    assert.ok(html.includes('Was confirmed by you; a later check failed.'));
+    assert.equal(
+      lapsedLine({ ...given('agent-3'), proof: 'p-9', lapsed: 'check_conceded' }, agents),
+      'Was confirmed by p-9; the author of that check conceded an objection to it.',
+    );
+    assert.equal(lapsedLine(given('agent-3'), agents), null);
+    // One giver's word still confirms the post, so the badge stands, and the list says which word does not.
+    const half: PostView = {
+      ...broke,
+      badges: [
+        {
+          badge: 'confirmed',
+          given: [
+            { ...given('agent-3'), proof: 'p-9', lapsed: 'check_conceded' },
+            given('person', 'I read it.'),
+          ],
+        },
+      ],
+    };
+    assert.deepEqual(
+      standingBadges(half).map((one) => one.badge),
+      ['confirmed'],
+    );
+  });
+
+  it('and a vote go on no request of a harness and no request for a move', () => {
+    const permission = postView(ask('p-11', 'agent-2', ['Allow once']), 11);
+    const own = postView(ask('p-12', 'agent-2', [], null), 12);
+    const move = postView(
+      { ...result('p-13', { author: 'agent-1' }), kind: 'request' } as Post,
+      13,
+    );
+
+    assert.deepEqual(
+      [permission, own, move].map((item) => takesVotes(item.post)),
+      [false, true, false],
+    );
+    assert.equal(thread([permission], actions).includes('v-box'), false);
+    assert.ok(thread([own], actions).includes('v-box'));
+    assert.equal(canMarkPromising(permission), false);
+    assert.equal(countLabel('down', 2, false, false), '2 down votes');
   });
 
   it('is the person’s to give as Promising once, on a post of another author', () => {
@@ -425,37 +513,36 @@ describe('the lab page with votes and badges', () => {
     assert.equal(wall({ lab: { ...lab, proposals: [] } }).includes('o-waits'), false);
   });
 
-  it('marks the answer when it builds on a post with a Breakthrough badge', () => {
+  it('says that the answer builds on a Breakthrough, and shows the badge only on an answer that has it', () => {
     const answer = postView(
-      {
-        ...result('p-10', { thread: 't-1', author: 'agent-1' }),
-        kind: 'proposal',
-      },
+      { ...result('p-10', { thread: 't-1', author: 'agent-1' }), kind: 'proposal' },
       10,
     );
-    const marked = wall({
-      answer: {
-        answer,
-        to_earlier_question: false,
-        builds_on: [broke],
-        results: 1,
-        no_blind_rerun: [],
-      },
+    const view = (changes: Partial<AnswerView>): AnswerView => ({
+      answer,
+      to_earlier_question: false,
+      builds_on: [voted],
+      results: 1,
+      no_blind_rerun: [],
+      ...changes,
     });
-    const plain = wall({
-      answer: {
-        answer,
-        to_earlier_question: false,
-        builds_on: [voted],
-        results: 1,
-        no_blind_rerun: [],
-      },
-    });
-
     const block = (html: string): string =>
       html.slice(html.indexOf('The answer so far'), html.indexOf('f-steer'));
-    assert.ok(block(marked).includes('<span class="v-badge rare">Breakthrough</span>'));
-    assert.equal(block(plain).includes('v-badge'), false);
+
+    const cites = block(wall({ answer: view({ builds_on: [broke] }) }));
+    assert.equal(cites.includes('v-badge'), false);
+    assert.ok(
+      cites.includes(
+        '<p class="f-earlier"><a href="#/thread/t-1/p-6">Builds on a Breakthrough</a></p>',
+      ),
+    );
+    assert.equal(breakthroughUnder(view({ builds_on: [broke] }))?.post.id, 'p-6');
+    assert.equal(block(wall({ answer: view({}) })).includes('Breakthrough'), false);
+    const own = view({ answer: { ...answer, badges: [breakthrough] }, builds_on: [broke] });
+    const marked = block(wall({ answer: own }));
+    assert.ok(marked.includes('<span class="v-badge rare">Breakthrough</span>'));
+    assert.equal(marked.includes('Builds on a Breakthrough'), false);
+    assert.equal(breakthroughUnder(own), null);
   });
 });
 
@@ -523,6 +610,10 @@ describe('the color of a Breakthrough badge', () => {
         selector,
       );
     }
+    // The ring is a class of its own, which the page gives a post once, and a card's badge has no light.
+    assert.ok(css.includes('.f-turn.v-break.v-ring {\n  animation: v-arrive'));
+    assert.ok(css.includes('.f-card-st .v-badge.rare::after {\n  display: none;'));
+    assert.ok(css.includes('.v-why input:focus-visible {'));
     // With reduced motion, only the outline shows.
     assert.ok(
       css.includes(

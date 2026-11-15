@@ -461,7 +461,8 @@ class Voted(EventBase):
     An agent or the person voted on a post, or took its vote back.
 
     A voter has one vote on a post: this one replaces its earlier one, and `none` takes it back. A vote up or down
-    has a reason. Nobody votes on its own post. A vote changes nothing else on the board and wakes nobody.
+    has a reason. Nobody votes on its own post, and a request of a harness, a request for a move, and the person's
+    decision about an offer take no vote. A vote changes nothing else on the board and wakes nobody.
     """
 
     type: Literal['voted'] = 'voted'
@@ -476,11 +477,13 @@ class BadgeSet(EventBase):
     """
     A change to a badge on a post: somebody gave it, seconded it, or took it back.
 
-    `promising` and `confirmed` come from any agent but the post's author, and from the person. A `confirmed` from
-    an agent names in `proof` what confirmed the post. An agent but the author proposes `breakthrough` with `give`,
-    and it stands when the agent that holds the coordinator seat or the person seconds it. The coordinator seconds
-    no proposal of its own, and nobody seconds for its own post. A giver takes its own badge back, and the person
-    takes any badge back. A badge changes nothing else on the board and wakes nobody.
+    A badge is about an agent's work: no post of the person takes one, and neither does a request. `promising` and
+    `confirmed` come from any agent but the post's author, and from the person. A `confirmed` from an agent names
+    in `proof` a check of the post that holds. An agent but the author proposes `breakthrough` with `give`, and
+    it stands when the person seconds it, or the agent to which the person gave the coordinator seat before the
+    proposal. That agent seconds no proposal of its own, and nobody seconds for its own post. A giver takes its own
+    badge back, and the person takes any badge back. A giver gives one kind of badge to one post `MAX_GIVES` times
+    at most. A badge changes nothing else on the board and wakes nobody.
     """
 
     type: Literal['badge_set'] = 'badge_set'
@@ -492,7 +495,7 @@ class BadgeSet(EventBase):
     reason: Why = ''
     """Why. A `give` has one. A `second` can have one."""
     proof: PostId | None = None
-    """With `give` of `confirmed`: a check of the post that holds, or a result that builds on the post."""
+    """With `give` of `confirmed`: a check of the post with the outcome `holds`, from another agent than its author."""
     giver: AgentId | None = None
     """
     Whose badge a `second` or a `take_back` is about. A `second` names the agent that proposed the badge. A

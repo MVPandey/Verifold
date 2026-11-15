@@ -294,18 +294,30 @@ export interface Given {
   readonly by: string;
   readonly reason: string;
   readonly at: string;
-  /** For `confirmed`: the check or the result that the giver named as what confirmed the post. */
+  /** For `confirmed`: the check of the post that holds, which the giver named as what confirmed the post. */
   readonly proof?: string | null;
+  /**
+   * For `confirmed`: why this giver's word confirms the post no longer. A check of the post failed after the
+   * check that confirmed it, or the author of that check conceded an objection to it. `null` while it does.
+   */
+  readonly lapsed?: 'later_check_failed' | 'check_conceded' | null;
 }
 
 /** One badge on a post, once, with every giver. A `breakthrough` has one giver, the agent that proposed it. */
 export interface BadgeLine {
   readonly badge: Badge;
   readonly given: readonly Given[];
-  /** For `breakthrough`: the second of the agent that held the coordinator seat, or of the person. */
+  /** For `breakthrough`: the second of the person, or of the coordinator that the person seated. */
   readonly second?: Given | null;
   /** Whether this is a `breakthrough` that an agent proposed and nobody seconded yet. */
   readonly waits?: boolean;
+  /**
+   * For a `breakthrough` that waits: the coordinator that can second it beside the person. The person gave it the
+   * seat before the proposal, and it neither proposed the badge nor wrote the post. `null` when only the person can.
+   */
+  readonly seconder?: string | null;
+  /** For `confirmed`: whether no giver's word confirms the post any longer, so that the post has no such badge. */
+  readonly lapsed?: boolean;
 }
 
 /** A `breakthrough` that an agent proposed for a post and that nobody seconded yet. */

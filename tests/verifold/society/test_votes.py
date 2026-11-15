@@ -1,19 +1,22 @@
+from datetime import timedelta
+
 import pytest
-from builders import RecordBuilder, lab
+from builders import START, RecordBuilder, lab
 
 from verifold.protocol.agents import Agent
 from verifold.protocol.app import AgentView, LabView, Outcomes
 from verifold.protocol.join import AgentLine, Byline, LeftLine, News, ProfileResult
-from verifold.protocol.posts import Check, Message, Result
-from verifold.protocol.votes import MAX_NOTES, MAX_VOTE_LINES, MAX_WHY, ProposalLine
+from verifold.protocol.moves import TimeMove
+from verifold.protocol.posts import Answer, Ask, Check, Message, Objection, Result
+from verifold.protocol.votes import MAX_GIVES, MAX_NOTES, MAX_VOTE_LINES, MAX_WHY, NEWEST_VOTES, ProposalLine
 from verifold.society.attention import news, update, wakes
 from verifold.society.board import Board
-from verifold.society.errors import RejectedEvent
+from verifold.society.errors import NotFound, RejectedEvent
 from verifold.society.fold import fold
 from verifold.society.identity import post_line, post_view
 from verifold.society.lines import lines_of
 from verifold.society.standing import standing
-from verifold.society.views import answer, brief, thread_summaries
+from verifold.society.views import answer, brief, thread_summaries, thread_view
 from verifold.society.votes import (
     badge_lines,
     breakthrough_threads,
@@ -171,11 +174,42 @@ def test_a_thread_lists_the_newest_votes_of_a_post_and_counts_all_of_them() -> N
     voters = [f'agent-{number}' for number in range(MAX_VOTE_LINES + 3)]
     for voter in voters:
         record.join(voter).vote(voter, 'p-1', 'up', f'Reason of {voter}.')
+    board = record.post(Result(id='p-2', thread='t-1', author='bo', text='Fails.')).vote('ada', 'p-2').board()
+
+    # An agent's thread has the three newest votes of each post, and the counts hold every vote.
+    first, second = thread_view(board, 'cy', 't-1').posts
+    assert (first.up, first.down, [vote.by for vote in first.votes]) == (len(voters), 0, voters[-NEWEST_VOTES:])
+    assert [vote.by for vote in second.votes] == ['ada']
+    # The post that the call names has its newest twenty, and the other posts stay as they are.
+    first, second = thread_view(board, 'cy', 't-1', votes_of='p-1').posts
+    assert ([vote.by for vote in first.votes], len(second.votes)) == (voters[3:], 1)
+    # The person's thread has the longer list for every post.
+    assert len(thread_view(board, 'person', 't-1').posts[0].votes) == MAX_VOTE_LINES
+    for missing in ('p-9', 'p-2'):
+        other = 't-1' if missing == 'p-9' else 't-2'
+        with pytest.raises(NotFound, match=f'Thread {other} has no post with the ID {missing}'):
+            thread_view(record.copy().thread('t-2', opened_by='bo').board(), 'cy', other, votes_of=missing)
+
+
+def test_a_thread_of_three_hundred_posts_with_twenty_voters_each_stays_one_tool_result() -> None:
+    record = RecordBuilder()
+    for number in range(21):
+        record.join(f'a{number}')
+    record.thread('t-1', opened_by='a0')
+    for number in range(1, 301):
+        record.post(Result(id=f'p-{number}', thread='t-1', author='a0', text='x' * 100))
+    plain = len(thread_view(record.board(), 'a1', 't-1').model_dump_json())
+    for number in range(1, 301):
+        for voter in range(1, 21):
+            record.vote(f'a{voter}', f'p-{number}', 'up', 'w' * MAX_WHY)
     board = record.board()
 
-    view = post_view(board, board.posts[0])
-    assert (view.up, view.down, len(view.votes)) == (len(voters), 0, MAX_VOTE_LINES)
-    assert [vote.by for vote in view.votes] == voters[3:]
+    voted_size = len(thread_view(board, 'a1', 't-1').model_dump_json())
+    # Twenty reasons on every post would add 1.2 million characters. Three add at most 3 times a reason of 140
+    # characters with its voter and time, so the thread grows by less than 700 characters a post.
+    assert voted_size - plain < 300 * 700
+    assert all((post.up, len(post.votes)) == (20, NEWEST_VOTES) for post in thread_view(board, 'a1', 't-1').posts)
+    assert len(thread_view(board, 'a1', 't-1', votes_of='p-7').posts[6].votes) == 20
 
 
 def test_the_author_reads_the_votes_on_its_posts_in_its_next_news_and_no_other_agent_does() -> None:
@@ -205,7 +239,7 @@ def test_the_author_reads_the_votes_on_its_posts_in_its_next_news_and_no_other_a
     assert [(note.by, note.direction) for note in news(back, 'ada', board.seq).votes] == [('bo', 'none')]
 
 
-def test_the_news_holds_the_newest_votes_and_badge_changes_up_to_a_limit() -> None:
+def test_the_news_holds_the_newest_votes_and_badge_changes_and_counts_the_rest() -> None:
     record = voted()
     seq = record.board().seq
     voters = [f'agent-{number}' for number in range(MAX_NOTES + 2)]
@@ -213,8 +247,11 @@ def test_the_news_holds_the_newest_votes_and_badge_changes_up_to_a_limit() -> No
         record.join(voter).vote(voter, 'p-1').badge(voter, 'p-1', 'promising')
     mine = news(record.board(), 'ada', seq)
 
-    assert [note.by for note in mine.votes] == voters[2:]
-    assert [note.by for note in mine.badges] == voters[2:]
+    assert ([note.by for note in mine.votes], mine.votes_left_out) == (voters[2:], 2)
+    assert ([note.by for note in mine.badges], mine.badges_left_out) == (voters[2:], 2)
+    later = update(record.board(), 'ada', seq)
+    assert (later.votes_left_out, later.badges_left_out) == (2, 2)
+    assert (news(record.board(), 'bo', seq).votes_left_out, news(record.board(), 'ada', mine.seq).votes) == (0, ())
 
 
 def test_a_post_has_promising_from_several_givers_once_and_each_giver_takes_its_own_back() -> None:
@@ -253,37 +290,98 @@ def test_a_post_has_promising_from_several_givers_once_and_each_giver_takes_its_
     assert marks(both.badge('bo', 'p-1').board(), 'p-1')[2] == ('promising',)
 
 
-def test_a_confirmed_badge_from_an_agent_names_a_check_that_holds_or_a_result_that_builds_on_the_post() -> None:
+def test_a_confirmed_badge_from_an_agent_names_a_check_of_the_post_that_holds() -> None:
     record = (
         voted()
         .post(Check(id='p-2', thread='t-1', author='bo', text='Same.', reply_to='p-1', outcome='holds', method='rerun'))
         .post(Check(id='p-3', thread='t-1', author='cy', text='No.', reply_to='p-1', outcome='fails', method='rerun'))
         .post(Result(id='p-4', thread='t-1', author='cy', text='On 114 pairs too.', builds_on=('p-1',)))
-        .post(Result(id='p-5', thread='t-1', author='ada', text='Again.', builds_on=('p-1',)))
-        .post(Message(id='p-6', thread='t-1', author='bo', text='I agree.', reply_to='p-1'))
+        .post(Message(id='p-5', thread='t-1', author='bo', text='I agree.', reply_to='p-1'))
+        .post(Result(id='p-6', thread='t-1', author='bo', text='Mine.'))
+        .post(Check(id='p-7', thread='t-1', author='ada', text='Yes.', reply_to='p-6', outcome='holds', method='rerun'))
+    )
+    clean = voted().post(
+        Check(id='p-2', thread='t-1', author='bo', text='Same.', reply_to='p-1', outcome='holds', method='rerun')
     )
 
     with pytest.raises(RejectedEvent, match='names in `proof` the post that confirmed it'):
-        record.copy().badge('bo', 'p-1', 'confirmed').board()
+        clean.copy().badge('bo', 'p-1', 'confirmed').board()
     with pytest.raises(RejectedEvent, match='Post p-9 does not exist'):
-        record.copy().badge('bo', 'p-1', 'confirmed', proof='p-9').board()
-    for wrong in ('p-3', 'p-6', 'p-1'):
-        with pytest.raises(RejectedEvent, match=f'Post {wrong} is no check of post p-1 that holds'):
+        clean.copy().badge('bo', 'p-1', 'confirmed', proof='p-9').board()
+    # A failed check, a result that builds on the post, a message, the post itself, and a check of another post
+    # are no proof. So no agent confirms a post with a result that it wrote for that.
+    for wrong in ('p-3', 'p-4', 'p-5', 'p-1', 'p-7'):
+        with pytest.raises(RejectedEvent, match=f'Post {wrong} is no check of post p-1 with the outcome `holds`'):
             record.copy().badge('bo', 'p-1', 'confirmed', proof=wrong).board()
-    with pytest.raises(RejectedEvent, match='ada wrote both post p-1 and post p-5'):
-        record.copy().badge('bo', 'p-1', 'confirmed', proof='p-5').board()
     with pytest.raises(RejectedEvent, match='Post p-1 is your own'):
-        record.copy().badge('ada', 'p-1', 'confirmed', proof='p-2').board()
-    # The proof is a check that holds or a result that builds on the post. Another agent than its author names it too.
-    for giver, proof in (('bo', 'p-2'), ('cy', 'p-4'), ('cy', 'p-2')):
-        board = record.copy().badge(giver, 'p-1', 'confirmed', proof=proof).board()
+        clean.copy().badge('ada', 'p-1', 'confirmed', proof='p-2').board()
+    # The check is another agent's than the post's author. Its own author names it, and so does a third agent.
+    for giver in ('bo', 'cy'):
+        board = clean.copy().badge(giver, 'p-1', 'confirmed', proof='p-2').board()
         (line,) = badge_lines(board, 'p-1')
-        assert (line.badge, line.given[0].by, line.given[0].proof) == ('confirmed', giver, proof)
-    # The person gives it with a post or without one.
-    assert marks(record.copy().badge('person', 'p-1', 'confirmed').board(), 'p-1')[2] == ('confirmed',)
-    assert marks(record.copy().badge('person', 'p-1', 'confirmed', proof='p-4').board(), 'p-1')[2] == ('confirmed',)
-    with pytest.raises(RejectedEvent, match='Post p-6 is no check'):
-        record.copy().badge('person', 'p-1', 'confirmed', proof='p-6').board()
+        assert (line.badge, line.given[0].by, line.given[0].proof, line.lapsed) == ('confirmed', giver, 'p-2', False)
+        assert marks(board, 'p-1')[2] == ('confirmed',)
+    # A check that a failed check followed confirms nothing.
+    with pytest.raises(RejectedEvent, match='A check of post p-1 failed after post p-2'):
+        record.copy().badge('bo', 'p-1', 'confirmed', proof='p-2').board()
+    # The person gives it with a check or without one, and with nothing that is no check.
+    assert marks(clean.copy().badge('person', 'p-1', 'confirmed').board(), 'p-1')[2] == ('confirmed',)
+    assert marks(clean.copy().badge('person', 'p-1', 'confirmed', proof='p-2').board(), 'p-1')[2] == ('confirmed',)
+    with pytest.raises(RejectedEvent, match='Post p-4 is no check'):
+        record.copy().badge('person', 'p-1', 'confirmed', proof='p-4').board()
+
+
+def test_two_agents_do_not_confirm_each_other_through_results() -> None:
+    record = voted().post(Result(id='p-2', thread='t-1', author='bo', text='Ok.', builds_on=('p-1',)))
+
+    with pytest.raises(RejectedEvent, match='Post p-2 is no check of post p-1'):
+        record.copy().badge('bo', 'p-1', 'confirmed', proof='p-2').board()
+    mutual = record.post(Result(id='p-3', thread='t-1', author='ada', text='Ok.', builds_on=('p-2',)))
+    with pytest.raises(RejectedEvent, match='Post p-3 is no check of post p-2'):
+        mutual.badge('ada', 'p-2', 'confirmed', proof='p-3').board()
+
+
+def test_a_confirmed_badge_shows_only_while_no_later_check_of_the_post_fails() -> None:
+    holds = Check(id='p-2', thread='t-1', author='bo', text='Same.', reply_to='p-1', outcome='holds', method='rerun')
+    record = voted().post(holds).badge('bo', 'p-1', 'confirmed', proof='p-2').badge('person', 'p-1', 'confirmed')
+    fails = Check(id='p-3', thread='t-1', author='cy', text='No.', reply_to='p-1', outcome='fails', method='rerun')
+    failed = record.copy().post(fails)
+    board = failed.board()
+
+    # The record keeps both givers' words. No view shows the badge, and the thread says why.
+    assert marks(board, 'p-1')[2] == ()
+    assert post_line(board, board.posts[0]).badges == ()
+    (line,) = badge_lines(board, 'p-1')
+    assert (line.lapsed, [(given.by, given.proof, given.lapsed) for given in line.given]) == (
+        True,
+        [('bo', 'p-2', 'later_check_failed'), ('person', None, 'later_check_failed')],
+    )
+    assert len(board.badges) == 2
+    # A failed check that its author conceded counts for nothing, so the badge shows again.
+    conceded = (
+        failed.copy()
+        .post(Objection(id='p-4', thread='t-1', author='bo', text='Wrong seed.', reply_to='p-3'))
+        .post(Answer(id='p-5', thread='t-1', author='cy', text='Right.', reply_to='p-4', accepts=True))
+        .board()
+    )
+    assert (marks(conceded, 'p-1')[2], badge_lines(conceded, 'p-1')[0].lapsed) == (('confirmed',), False)
+    # The author of the check that confirmed the post concedes an objection to it: that word confirms no longer,
+    # and the person's word, which names no check, still does.
+    taken = (
+        record.copy()
+        .post(Objection(id='p-3', thread='t-1', author='cy', text='You ran another file.', reply_to='p-2'))
+        .post(Answer(id='p-4', thread='t-1', author='bo', text='I did.', reply_to='p-3', accepts=True))
+        .board()
+    )
+    (line,) = badge_lines(taken, 'p-1')
+    assert (line.lapsed, [given.lapsed for given in line.given], marks(taken, 'p-1')[2]) == (
+        False,
+        ['check_conceded', None],
+        ('confirmed',),
+    )
+    # A failed check from before the check that confirmed the post changes nothing.
+    earlier = voted().post(fails.model_copy(update={'id': 'p-2'})).post(holds.model_copy(update={'id': 'p-3'}))
+    assert marks(earlier.badge('bo', 'p-1', 'confirmed', proof='p-3').board(), 'p-1')[2] == ('confirmed',)
 
 
 def test_a_breakthrough_stands_only_after_the_second_of_the_coordinator_or_the_person() -> None:
@@ -317,14 +415,22 @@ def test_a_breakthrough_stands_only_after_the_second_of_the_coordinator_or_the_p
     )[2] == ('breakthrough',)
 
 
-def test_only_the_coordinator_and_the_person_second_and_never_for_their_own_proposal_or_post() -> None:
+SEATED = 'Only the person, and the agent to which the person gave the coordinator seat before the proposal'
+
+
+def test_only_the_person_and_a_coordinator_that_the_person_seated_before_the_proposal_second() -> None:
     record = voted().coordinator('cy')
     proposed = record.copy().badge('bo', 'p-1', 'breakthrough')
 
-    # An agent without the coordinator seat seconds nothing, the author of the post neither.
-    with pytest.raises(RejectedEvent, match='Only the agent that holds the coordinator seat and the person second'):
+    # The coordinator that the person seated seconds, and the thread names it as the one that can.
+    assert badge_lines(proposed.board(), 'p-1')[0].seconder == 'cy'
+    assert marks(proposed.copy().badge('cy', 'p-1', 'breakthrough', 'second', giver='bo').board(), 'p-1')[2] == (
+        'breakthrough',
+    )
+    # An agent without the coordinator seat seconds nothing, and nobody seconds for its own post.
+    with pytest.raises(RejectedEvent, match=SEATED):
         proposed.copy().join('dee').badge('dee', 'p-1', 'breakthrough', 'second', giver='bo').board()
-    with pytest.raises(RejectedEvent, match='Only the agent that holds the coordinator seat and the person second'):
+    with pytest.raises(RejectedEvent, match=SEATED):
         proposed.copy().badge('bo', 'p-1', 'breakthrough', 'second', giver='bo').board()
     with pytest.raises(RejectedEvent, match='Nobody seconds a badge for its own post'):
         proposed.copy().badge('ada', 'p-1', 'breakthrough', 'second', giver='bo').board()
@@ -332,6 +438,7 @@ def test_only_the_coordinator_and_the_person_second_and_never_for_their_own_prop
     own = record.copy().badge('cy', 'p-1', 'breakthrough')
     with pytest.raises(RejectedEvent, match='You proposed the `breakthrough` badge for post p-1'):
         own.copy().badge('cy', 'p-1', 'breakthrough', 'second', giver='cy').board()
+    assert badge_lines(own.board(), 'p-1')[0].seconder is None
     assert marks(own.copy().badge('person', 'p-1', 'breakthrough', 'second', giver='cy').board(), 'p-1')[2] == (
         'breakthrough',
     )
@@ -341,13 +448,52 @@ def test_only_the_coordinator_and_the_person_second_and_never_for_their_own_prop
     )
     with pytest.raises(RejectedEvent, match='Post p-2 is your own'):
         theirs.copy().badge('cy', 'p-2', 'breakthrough', 'second', giver='bo').board()
+    assert badge_lines(theirs.board(), 'p-2')[0].seconder is None
     # In a lab without a coordinator, only the person seconds.
     none = voted().badge('bo', 'p-1', 'breakthrough')
-    with pytest.raises(RejectedEvent, match='Only the agent that holds the coordinator seat and the person second'):
+    with pytest.raises(RejectedEvent, match=SEATED):
         none.copy().badge('cy', 'p-1', 'breakthrough', 'second', giver='bo').board()
+    assert badge_lines(none.board(), 'p-1')[0].seconder is None
     assert marks(none.badge('person', 'p-1', 'breakthrough', 'second', giver='bo').board(), 'p-1')[2] == (
         'breakthrough',
     )
+
+
+def test_an_agent_that_took_the_coordinator_seat_itself_seconds_nothing() -> None:
+    second = ('cy', 'p-1', 'breakthrough', 'second')
+    paths = {
+        # The seat is open, and an agent takes it to second.
+        'an open seat': voted().badge('bo', 'p-1', 'breakthrough').coordinator('cy', by='cy'),
+        # The agent held the seat by its own taking before the proposal.
+        'a seat taken before': voted().coordinator('cy', by='cy').badge('bo', 'p-1', 'breakthrough'),
+        # The author holds the seat, gives it up, and another agent takes it to second.
+        'the author passes the seat': voted()
+        .coordinator('ada', by='ada')
+        .badge('bo', 'p-1', 'breakthrough')
+        .coordinator(None, by='ada')
+        .coordinator('cy', by='cy'),
+        # The proposer holds the seat, gives it up, and another agent takes it to second.
+        'the proposer passes the seat': voted()
+        .coordinator('bo', by='bo')
+        .badge('bo', 'p-1', 'breakthrough')
+        .coordinator(None, by='bo')
+        .coordinator('cy', by='cy'),
+        # The person seats the agent only after the proposal.
+        'seated after the proposal': voted().badge('bo', 'p-1', 'breakthrough').coordinator('cy'),
+        # The person seated the agent, the agent gave the seat up and took it again itself.
+        'given up and taken again': voted()
+        .coordinator('cy')
+        .badge('bo', 'p-1', 'breakthrough')
+        .coordinator(None, by='cy')
+        .coordinator('cy', by='cy'),
+    }
+
+    for name, record in paths.items():
+        assert badge_lines(record.board(), 'p-1')[0].seconder is None, name
+        with pytest.raises(RejectedEvent, match=SEATED):
+            record.copy().badge(*second, giver='bo').board()
+        # The person's second stands on every path.
+        assert marks(record.copy().badge('person', *second[1:], giver='bo').board(), 'p-1')[2] == ('breakthrough',)
 
 
 def test_an_agent_proposes_a_breakthrough_for_another_agents_post_once_at_a_time() -> None:
@@ -370,12 +516,75 @@ def test_an_agent_proposes_a_breakthrough_for_another_agents_post_once_at_a_time
         back = record.copy().badge(by, 'p-1', 'breakthrough', 'take_back', giver='bo')
         assert (badge_lines(back.board(), 'p-1'), proposals(back.board())) == ((), ())
         assert proposals(back.badge('cy', 'p-1', 'breakthrough').board())[0].by == 'cy'
+    # After its own take-back the agent can propose again. After the person's "no", it cannot for that post.
+    own = record.copy().badge('bo', 'p-1', 'breakthrough', 'take_back')
+    assert proposals(own.badge('bo', 'p-1', 'breakthrough').board())[0].by == 'bo'
+    declined = record.copy().badge('person', 'p-1', 'breakthrough', 'take_back', giver='bo')
+    with pytest.raises(RejectedEvent, match='The person took back your `breakthrough` badge for post p-1'):
+        declined.copy().badge('bo', 'p-1', 'breakthrough').board()
+    other = declined.post(Result(id='p-2', thread='t-1', author='ada', text='Next.')).badge('bo', 'p-2', 'breakthrough')
+    assert [wait.post for wait in proposals(other.board())] == ['p-2']
     # The person takes back a badge that stands, and so does its proposer. The seconder does not.
     stands = record.copy().badge('cy', 'p-1', 'breakthrough', 'second', giver='bo')
     with pytest.raises(RejectedEvent, match='Only its giver and the person take a badge back'):
         stands.copy().badge('cy', 'p-1', 'breakthrough', 'take_back', giver='bo').board()
     assert marks(stands.copy().badge('person', 'p-1', 'breakthrough', 'take_back', giver='bo').board(), 'p-1')[2] == ()
     assert marks(stands.copy().badge('bo', 'p-1', 'breakthrough', 'take_back').board(), 'p-1')[2] == ()
+
+
+def test_no_post_of_the_person_takes_a_badge() -> None:
+    record = voted().post(Message(id='p-2', thread='t-1', author='person', text='Look at the fees.'))
+
+    for badge in ('promising', 'confirmed', 'breakthrough'):
+        with pytest.raises(RejectedEvent, match=r"Post p-2 is the person's\. A badge is about an agent's work"):
+            record.copy().badge('bo', 'p-2', badge).board()
+    # An agent still votes on a post of the person.
+    assert marks(record.vote('bo', 'p-2').board(), 'p-2') == (1, 0, ())
+
+
+def test_a_request_and_a_decision_take_no_vote_and_no_badge() -> None:
+    record = (
+        lab()
+        .time_set(START + timedelta(hours=9))
+        .coordinator('ada')
+        .permission('p-1', 'bo')
+        .thread('t-2', opened_by='ada', conversation=True)
+        .request('p-2', 'ada', TimeMove(minutes=30))
+        .deliverable('d-1', 'The answer as one page.', 'p-3')
+        .offer('p-4', 'bo', 'd-1', 't-3')
+        .decide('d-1', 'accepted', 'p-4', 'p-5', 't-3')
+    )
+    kinds = {
+        'p-1': 'a request of a harness',
+        'p-2': 'a request for a move of the person',
+        'p-5': "the person's decision about an offer",
+    }
+
+    for post, kind in kinds.items():
+        with pytest.raises(RejectedEvent, match=f'Post {post} is {kind}, and the board takes no vote on it'):
+            record.copy().vote('cy', post).board()
+    for post in ('p-1', 'p-2'):
+        with pytest.raises(RejectedEvent, match=f'Post {post} is .*, and the board takes no badge on it'):
+            record.copy().badge('cy', post).board()
+    # An offer of files is an agent's work, and an ask of an agent's own is a post like any other.
+    asked = record.post(Ask(id='p-6', thread='t-1', author='bo', text='Which seed?'))
+    assert marks(asked.vote('cy', 'p-4').badge('cy', 'p-4').vote('cy', 'p-6').board(), 'p-4') == (1, 0, ('promising',))
+
+
+def test_a_giver_gives_one_kind_of_badge_to_one_post_three_times_at_most() -> None:
+    record = voted()
+    for _ in range(MAX_GIVES):
+        record.badge('bo', 'p-1').badge('bo', 'p-1', 'promising', 'take_back')
+
+    with pytest.raises(RejectedEvent, match='You gave post p-1 the `promising` badge 3 times and took it back'):
+        record.copy().badge('bo', 'p-1').board()
+    # The bound is for one giver, one kind, and one post.
+    other = record.post(Result(id='p-2', thread='t-1', author='ada', text='Next.'))
+    board = other.badge('bo', 'p-2').badge('cy', 'p-1').badge('person', 'p-1').board()
+    assert (marks(board, 'p-1')[2], marks(board, 'p-2')[2]) == (('promising',), ('promising',))
+    # The board keeps the changes of each post apart, so a rule reads one post's and no scan of the record.
+    assert {post: len(changes) for post, changes in board.badges_on.items()} == {'p-1': 8, 'p-2': 1}
+    assert {post: list(votes) for post, votes in voted().vote('bo', 'p-1').board().votes_on.items()} == {'p-1': ['bo']}
 
 
 def test_the_author_the_proposer_and_the_coordinator_read_the_changes_to_badges_in_their_news() -> None:

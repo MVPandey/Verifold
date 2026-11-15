@@ -18,9 +18,9 @@ type Direction = Literal['up', 'down', 'none']
 
 type Badge = Literal['promising', 'confirmed', 'breakthrough']
 """
-A mark on a post. `promising`: a giver says that the post is worth work. `confirmed`: a giver names the check or the
-result that confirmed it. `breakthrough`: an agent proposed it as a breakthrough for the lab's question, and the
-agent that holds the coordinator seat or the person seconded that.
+A mark on a post of an agent. `promising`: a giver says that the post is worth work. `confirmed`: a giver names the
+check that confirmed it, and no later check of the post failed. `breakthrough`: an agent proposed it as a
+breakthrough for the lab's question, and the person seconded that, or the coordinator that the person seated.
 """
 
 BADGES: tuple[Badge, ...] = ('promising', 'confirmed', 'breakthrough')
@@ -40,6 +40,18 @@ type Why = Annotated[str, StringConstraints(max_length=MAX_WHY), AfterValidator(
 
 MAX_VOTE_LINES = 20
 """The most votes of one post that a view lists with their reasons: the newest ones. The counts hold every vote."""
+
+NEWEST_VOTES = 3
+"""How many votes of each post an agent's `thread` lists with their reasons, unless the call names the post."""
+
+MAX_GIVES = 3
+"""How often one giver can give one kind of badge to one post. A giver that took it back that often gives it no more."""
+
+type Lapsed = Literal['later_check_failed', 'check_conceded']
+"""
+Why a `confirmed` badge shows no longer: a check of the post failed after the check that confirmed it, or the
+author of that check conceded an objection to it.
+"""
 
 MAX_NOTES = 5
 """
@@ -66,7 +78,9 @@ class Given(Record):
     reason: str = ''
     at: AwareDatetime
     proof: PostId | None = None
-    """For `confirmed`: the check or the result that the giver named as what confirmed the post."""
+    """For `confirmed`: the check of the post that holds, which the giver named as what confirmed the post."""
+    lapsed: Lapsed | None = None
+    """For `confirmed`: why this giver's word confirms the post no longer. `None` while it does."""
 
 
 class BadgeLine(Record):
@@ -76,9 +90,17 @@ class BadgeLine(Record):
     given: tuple[Given, ...]
     """Each giver that still holds its word, oldest first."""
     second: Given | None = None
-    """For `breakthrough`: the second of the agent that held the coordinator seat, or of the person."""
+    """For `breakthrough`: the second of the person, or of the coordinator that the person seated."""
     waits: bool = False
     """Whether this is a `breakthrough` that an agent proposed and nobody seconded yet. It is no badge until then."""
+    seconder: AgentId | None = None
+    """
+    For a `breakthrough` that waits: the agent that can second it now. That is the agent to which the person gave
+    the coordinator seat before the proposal, when it neither proposed the badge nor wrote the post. `None` means
+    that only the person can second it.
+    """
+    lapsed: bool = False
+    """For `confirmed`: whether no giver's word confirms the post any longer. The badge is then no badge of the post."""
 
 
 class VoteNote(Record):

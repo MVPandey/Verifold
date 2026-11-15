@@ -17,7 +17,7 @@ import { ForYou } from './Coordinator.tsx';
 import { Detail } from './Markdown.tsx';
 import { ChipView, Composer, HarnessAsk, Mark } from './parts.tsx';
 import { Name, Who } from './Picture.tsx';
-import { Badges, Votes } from './Votes.tsx';
+import { Badges, Votes, useRing } from './Votes.tsx';
 import type { MarkActions } from './Votes.tsx';
 
 /** What every turn of a thread needs from the lab. */
@@ -107,6 +107,8 @@ export function Turn(
   const { by } = props.item;
   const chip = standingChip(post, standing);
   const claim = isClaim(post);
+  const breakthrough = hasBreakthrough(props.item);
+  const ring = useRing(post.id, breakthrough);
   const wanted = props.reruns.filter((line) => line.post === post.id);
   const waits = wantedLine(wanted, { agents, reviewer_seats: props.seats }, props.now);
   // The person can always ask, once: a request of theirs that is still open shows in the line above the button.
@@ -137,7 +139,7 @@ export function Turn(
   return (
     <li
       id={post.id}
-      className={`f-turn${claim ? ' claim' : ''}${hasBreakthrough(props.item) ? ' v-break' : ''} d${props.depth}`}
+      className={`f-turn${claim ? ' claim' : ''}${breakthrough ? ' v-break' : ''}${ring ? ' v-ring' : ''} d${props.depth}`}
     >
       <Who agents={agents} id={post.author} size={36} dot={false} />
       <div>

@@ -16,7 +16,7 @@ from verifold.protocol.events import (
     ThreadOpened,
     TurnEnded,
 )
-from verifold.protocol.ids import PERSON, AgentId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import (
     MAX_FORMER_NAMES,
     MAX_LEADS,
@@ -40,6 +40,7 @@ from verifold.protocol.join import (
     ThreadView,
 )
 from verifold.protocol.posts import Ask, Call, Check, Close, Objection, Plan, Proposal, Report, Result
+from verifold.protocol.votes import MAX_VOTE_LINES, NEWEST_VOTES
 from verifold.society.attention import left_line, watches_thread
 from verifold.society.board import Board
 from verifold.society.coordinator import request_waits
@@ -61,23 +62,34 @@ from verifold.society.standing import agreed, closing, is_answered, is_open_call
 from verifold.society.turns import before
 
 
-def thread_view(board: Board, agent_id: AgentId, thread_id: ThreadId) -> ThreadView:
+def thread_view(board: Board, agent_id: AgentId, thread_id: ThreadId, votes_of: PostId | None = None) -> ThreadView:
     """
     Return a thread and its posts.
 
+    Each post has its counts, its badges, and its newest votes with their reasons: `NEWEST_VOTES` for an agent,
+    so that a long thread with many voters stays one tool result. The post that `votes_of` names has
+    `MAX_VOTE_LINES`, and so has every post for the person.
+
     Raises:
-        NotFound: No thread has this ID.
+        NotFound: No thread has this ID, or the thread has no post with the ID in `votes_of`.
 
     """
     opened = board.thread(thread_id)
     if opened is None:
         raise NotFound(f'No thread has the ID {thread_id}.')
+    named = board.post(votes_of) if votes_of else None
+    if votes_of and (named is None or named.post.thread != thread_id):
+        raise NotFound(f'Thread {thread_id} has no post with the ID {votes_of}.')
+
+    def votes(entry: Posted) -> int:
+        return MAX_VOTE_LINES if agent_id == PERSON or entry.post.id == votes_of else NEWEST_VOTES
+
     return ThreadView(
         thread=opened.thread,
         watching=watches_thread(board, agent_id, thread_id),
         members=board.members(thread_id),
         person_reaches=board.offer_listeners(thread_id) if board.holds_offers(thread_id) else None,
-        posts=tuple(post_view(board, entry) for entry in board.posts if entry.post.thread == thread_id),
+        posts=tuple(post_view(board, entry, votes(entry)) for entry in board.posts if entry.post.thread == thread_id),
     )
 
 
@@ -344,6 +356,11 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         seat = labels.get(entry.post.author)
         return post_line(board, entry) if seat is None else _own_line(board, entry, seat)
 
+    def known(lines: tuple[PostLine, ...]) -> tuple[PostLine, ...]:
+        # The lines of the news that this brief carries follow the same rule, so no author's name, seat, and
+        # role stand in the brief twice.
+        return tuple(line(entry) if (entry := board.post(one.id)) else one for one in lines)
+
     def listed(entries: tuple[Posted, ...]) -> tuple[PostEntry, ...]:
         shown = tuple(
             PostEntry(id=entry.post.id, line=None if entry.post.id in told else line(entry)) for entry in entries
@@ -398,7 +415,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         open_asks=listed(open_asks[-MAX_NEWS:]),
         open_calls=listed(open_calls[-MAX_NEWS:]),
         reruns_wanted=reruns_wanted(board)[-MAX_NEWS:],
-        news=news,
+        news=news.model_copy(update={'for_you': known(news.for_you), 'others': known(news.others)}),
     )
 
 

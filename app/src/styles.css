@@ -3596,13 +3596,16 @@ body.with-panel {
     left: 130%;
   }
 }
-/* A post with a Breakthrough badge has an outline in the badge's color, and a ring spreads from it once. */
+/* A post with a Breakthrough badge has an outline in the badge's color. */
 .f-turn.v-break,
 .f-turn.claim.v-break {
   border: 1.5px solid var(--rare);
   margin-top: 18px;
   padding-top: 20px;
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--rare) 16%, transparent);
+}
+/* The ring plays once for a badge in a browser session, when the page first draws the post with it. */
+.f-turn.v-break.v-ring {
   animation: v-arrive 1.6s ease-out 0.3s both;
 }
 @keyframes v-arrive {
@@ -3624,6 +3627,10 @@ body.with-panel {
 }
 .f-card-st .v-badge {
   margin-left: 4px;
+}
+/* On a card of the wall and in the answer, the badge is still: no light crosses it. */
+.f-card-st .v-badge.rare::after {
+  display: none;
 }
 .v-box {
   margin-top: 14px;
@@ -3717,10 +3724,11 @@ button.v-count:hover {
   color: var(--ink);
   padding: 6px 10px;
   font: 14px var(--body);
-  outline: none;
 }
-.v-why input:focus {
+.v-why input:focus-visible {
   border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .v-detail {
   margin-top: 10px;

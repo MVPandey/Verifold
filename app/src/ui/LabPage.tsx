@@ -27,7 +27,12 @@ import { NEED_WORDS, WAITS_ID, quietBand, waitGroups, wantedLine } from '../mode
 import { betweenLine, isSide, sideHeading, sideLines } from '../model/side.ts';
 import { messageOf } from '../api/client.ts';
 import { cardStatus, doneLine, headClaim, questionThread } from '../model/turns.ts';
-import { hasBreakthrough, proposalRows, proposalsHeading } from '../model/votes.ts';
+import {
+  breakthroughUnder,
+  hasBreakthrough,
+  proposalRows,
+  proposalsHeading,
+} from '../model/votes.ts';
 import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
 import { Detail, Words } from './Markdown.tsx';
@@ -628,6 +633,7 @@ function Answer(props: {
 }): ReactElement {
   const { post, at, standing } = props.view.answer;
   const minutes = minutesBetween(at, props.now);
+  const under = breakthroughUnder(props.view);
   // The answer is the newest proposal in any thread. Outside the question's thread, the block names its thread.
   const elsewhere =
     post.thread === props.question
@@ -638,10 +644,8 @@ function Answer(props: {
       <p className={props.open ? undefined : 'clamp'}>{post.text}</p>
       <div className="f-card-st">
         <ChipView chip={standingChip(post, standing) ?? { label: 'Not checked', tone: 'none' }} />
-        {/* The answer has the mark when it, or a post that it builds on, has a Breakthrough badge. */}
-        {[props.view.answer, ...props.view.builds_on].some(hasBreakthrough) ? (
-          <BadgeChip badge="breakthrough" />
-        ) : null}
+        {/* The answer has the badge only when the proposal itself got it. */}
+        {hasBreakthrough(props.view.answer) ? <BadgeChip badge="breakthrough" /> : null}
         <span className="f-by">
           {authorName(props.agents, post.author)} proposed it{' '}
           <time dateTime={at} title={clock(at)}>
@@ -649,6 +653,14 @@ function Answer(props: {
           </time>
         </span>
       </div>
+      {under ? (
+        // An answer that cites a post with the badge has no badge of its own: the line names what it builds on.
+        <p className="f-earlier">
+          <a href={href({ page: 'thread', id: under.post.thread, post: under.post.id })}>
+            Builds on a Breakthrough
+          </a>
+        </p>
+      ) : null}
       {props.view.to_earlier_question ? (
         <p className="f-earlier">This answer is to an earlier version of the question.</p>
       ) : null}

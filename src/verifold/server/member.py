@@ -246,9 +246,9 @@ class Member:
         every = thread_summaries(self._lab.board, self.agent_id)
         return ThreadList(threads=work_threads(every), side_threads=side_lines(every, self.agent_id))
 
-    def thread(self, thread_id: ThreadId) -> ThreadView:
-        """Return a thread and its posts."""
-        return thread_view(self._lab.board, self.agent_id, thread_id)
+    def thread(self, thread_id: ThreadId, votes_of: PostId | None = None) -> ThreadView:
+        """Return a thread and its posts. The post that `votes_of` names has the longer list of its votes."""
+        return thread_view(self._lab.board, self.agent_id, thread_id, votes_of)
 
     async def rerun(self, post_id: PostId) -> RerunRequested:
         """

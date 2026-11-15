@@ -1085,10 +1085,12 @@ def test_the_lab_view_of_a_long_record_does_work_that_grows_with_the_record_and_
 async def test_the_person_votes_gives_promising_seconds_and_declines_through_the_app(
     client: httpx2.AsyncClient, lab: Lab
 ) -> None:
+    check = PostRequest(kind='check', text='Same.', thread='t-1', reply_to='p-1', outcome='holds', method='rerun')
+    await lab.post(check, 'bo')
     await lab.join(agent('cy'))
     await lab.post(PostRequest(kind='result', text='On 114 pairs too.', thread='t-1', builds_on=('p-1',)), 'bo')
     await lab.badge('bo', 'p-1', 'breakthrough', reason='It gives the strategy a size.')
-    await lab.badge('cy', 'p-2', 'breakthrough', reason='It holds on every pair.')
+    await lab.badge('cy', 'p-3', 'breakthrough', reason='It holds on every pair.')
     waiting = (await client.get('/lab')).json()
 
     voted = await client.post('/votes', json={'post': 'p-1', 'direction': 'up', 'reason': 'This is what I asked.'})
@@ -1098,16 +1100,19 @@ async def test_the_person_votes_gives_promising_seconds_and_declines_through_the
     confirmed = await client.post(
         '/badges', json={'post': 'p-1', 'badge': 'confirmed', 'reason': 'p-2 repeats it.', 'proof': 'p-2'}
     )
+    no_proof = await client.post(
+        '/badges', json={'post': 'p-3', 'badge': 'confirmed', 'reason': 'It builds on it.', 'proof': 'p-1'}
+    )
     seconded = await client.post('/badges', json={'post': 'p-1', 'badge': 'breakthrough', 'action': 'second'})
     declined = await client.post(
-        '/badges', json={'post': 'p-2', 'badge': 'breakthrough', 'action': 'take_back', 'giver': 'cy'}
+        '/badges', json={'post': 'p-3', 'badge': 'breakthrough', 'action': 'take_back', 'giver': 'cy'}
     )
     taken = await client.post('/badges', json={'post': 'p-1', 'badge': 'promising', 'action': 'take_back'})
     after = (await client.get('/lab')).json()
     thread = (await client.get('/threads/t-1')).json()
 
     # A proposal that waits is in the lab view. It is none of the waits.
-    assert [(wait['post'], wait['by']) for wait in waiting['proposals']] == [('p-1', 'bo'), ('p-2', 'cy')]
+    assert [(wait['post'], wait['by']) for wait in waiting['proposals']] == [('p-1', 'bo'), ('p-3', 'cy')]
     assert (waiting['needs_you'], waiting['waits'], waiting['breakthrough_threads']) == (0, [], [])
     assert (voted.status_code, voted.json()['up'], voted.json()['votes'][0]['by']) == (200, 1, 'person')
     assert (bare.status_code, bare.json()['detail']) == (
@@ -1117,6 +1122,10 @@ async def test_the_person_votes_gives_promising_seconds_and_declines_through_the
     assert (back.json()['up'], back.json()['votes']) == (0, [])
     assert [line['badge'] for line in promising.json()['badges']] == ['promising', 'breakthrough']
     assert confirmed.json()['badges'][1]['given'][0]['proof'] == 'p-2'
+    assert (no_proof.status_code, no_proof.json()['detail']) == (
+        400,
+        'Post p-1 is no check of post p-3 with the outcome `holds`.',
+    )
     assert seconded.json()['badges'][2]['second']['by'] == 'person'
     assert (declined.status_code, declined.json()['badges']) == (200, [])
     assert [line['badge'] for line in taken.json()['badges']] == ['confirmed', 'breakthrough']
@@ -1124,4 +1133,4 @@ async def test_the_person_votes_gives_promising_seconds_and_declines_through_the
     # No status of an agent or a thread changed with any of it.
     assert [view['need'] for view in after['agents']] == [view['need'] for view in waiting['agents']]
     assert after['thread_needs'] == waiting['thread_needs']
-    assert [item['post']['id'] for item in thread['posts']] == ['p-1', 'p-2']
+    assert [item['post']['id'] for item in thread['posts']] == ['p-1', 'p-2', 'p-3']

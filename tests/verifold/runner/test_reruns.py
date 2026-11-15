@@ -4,6 +4,7 @@ import hashlib
 import os
 import shutil
 import stat
+import time
 import zlib
 from collections.abc import Sequence
 from pathlib import Path
@@ -16,7 +17,7 @@ from verifold.protocol.posts import FileEvidence, Result
 from verifold.runner import reruns
 from verifold.runner.folders import agent_folder
 from verifold.runner.git import git
-from verifold.runner.reruns import CleanCopies, fetches_nothing
+from verifold.runner.reruns import LEFTOVER_SECONDS, CleanCopies, fetches_nothing
 from verifold.runner.snapshots import pin, snapshot
 from verifold.server.errors import EvidenceRejected, NoCleanCopy
 
@@ -547,10 +548,43 @@ async def test_what_earlier_exports_left_behind_goes_at_the_next_take(tmp_path: 
     (home / '.discarded-1' / 'link').symlink_to(outside)
     (home / '.discarded-1' / 'closed').chmod(0)
 
-    made = await CleanCopies(project)(claim)
+    made = await CleanCopies(project, leftover_seconds=0)(claim)
 
     assert sorted(path.name for path in home.iterdir()) == [made.folder.name, made.listing.name]
     assert everything(outside) == {'precious': 'x'}
+
+
+async def test_an_export_leaves_what_another_export_writes_now_and_removes_only_an_old_leftover(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / 'project'
+    claim = await a_claim(project)
+    home = project / '.verifold' / 'reruns' / 'p-4'
+    home.mkdir(parents=True)
+    # Another server of the same lab is in the middle of its export: its folder and its manifest are new.
+    (home / '.making-live' / 'out').mkdir(parents=True)
+    (home / '.making-live' / 'out' / 'a.txt').write_text('a')
+    (home / '.writing-live').write_text('half')
+    # An export that was cut off long ago left these behind.
+    (home / '.making-old').mkdir()
+    (home / '.writing-old').write_text('half')
+    long_ago = time.time() - LEFTOVER_SECONDS - 60
+    for name in ('.making-old', '.writing-old'):
+        os.utime(home / name, (long_ago, long_ago))
+
+    # Two instances export the same post at the same time, as two servers of one lab do.
+    first, second = await asyncio.gather(CleanCopies(project)(claim), CleanCopies(project)(claim))
+
+    assert first.folder == second.folder
+    assert everything(first.folder) == FILES
+    assert sorted(path.name for path in home.iterdir()) == [
+        '.making-live',
+        '.writing-live',
+        first.folder.name,
+        first.listing.name,
+    ]
+    # The other export can still finish: its folder is whole.
+    assert everything(home / '.making-live') == {'out/a.txt': 'a'}
 
 
 async def test_a_server_that_stops_ends_an_export_and_a_caller_that_went_away_leaves_no_loose_error(
