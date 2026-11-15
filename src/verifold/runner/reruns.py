@@ -16,33 +16,31 @@ itself. A copy that exists already is checked in the same way, file for file, on
 is thrown away and made again. Each take gets a manifest with the SHA-256 of every file, so the taker can check
 what it reads.
 
-Git reads the objects from a repository of the lab by their IDs, with the repository named by `--git-dir` and
-the working directory in Verifold's own folder. Git fetches nothing that is missing, uses no transport, replaces
-no object, runs no hook and no file watcher, and reads no configuration of the person or the system. Every Git
-process ends at a time limit. Verifold reaches its own folders through directory handles that follow no link.
+Git reads the objects through a Git directory of Verifold's own, with the working directory in Verifold's own
+folder, so it reads no configuration of a repository of the lab. Git fetches nothing that is missing, uses no
+transport, replaces no object, runs no hook and no file watcher, and reads no configuration of the person or the
+system. The Git processes of one export end at one time limit. The `objects` module holds this reader. Verifold
+reaches its own folders through directory handles that follow no link.
 """
 
 import asyncio
 import hashlib
 import os
-import re
 import secrets
 import stat
-import subprocess
 import time
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
-from threading import Lock, Timer
-from typing import Protocol
 
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import AgentId, CommitId, PostId
 from verifold.protocol.join import ManifestLine
-from verifold.runner.environment import clean_environment
-from verifold.runner.folders import LAB_FOLDER, agents_folder
+from verifold.runner.folders import LAB_FOLDER
 from verifold.runner.git import GitError
+from verifold.runner.objects import Objects, PinnedCommit, Running, entries, object_hash, read_pinned, whole
 from verifold.server.errors import NoCleanCopy
 from verifold.server.member import MadeCopy
 
@@ -57,13 +55,11 @@ MAX_DEPTH = 64
 """The most folders inside each other."""
 MAX_NAME_BYTES = 255
 """The most bytes of one name in a folder."""
-MAX_TREE_BYTES = 16 * 1024**2
-"""The most bytes of one commit or of one folder's listing, which Verifold reads whole."""
 MAX_LISTED_BYTES = 256 * 1024**2
 """The most bytes of all the folders' listings that Verifold reads for one export, each as often as it is named."""
 
 EXPORT_SECONDS = 300.0
-"""How long one Git process for an export may run before Verifold ends it."""
+"""How long the Git processes of one export may run before Verifold ends them."""
 LEFTOVER_SECONDS = 600.0
 """
 How old a leftover of an export is before another export removes it. An export that runs now can belong to another
@@ -71,27 +67,6 @@ server of the same lab, and its unfinished folder is no leftover. No export runs
 """
 EXPORTS_AT_ONCE = 2
 """How many exports run at the same time. The others wait, so slow ones cannot use up the server's threads."""
-
-FETCHES_NOTHING_FROM = (2, 45)
-"""The first version of Git that fetches no missing object when `GIT_NO_LAZY_FETCH` says so."""
-
-GIT_OPTIONS = ('-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.sshCommand=false', '-c', 'protocol.allow=never')  # fmt: skip
-"""
-Options of every Git command for a rerun: no hook, no file watcher, and no transport. A repository's own
-`protocol.<name>.allow` overrides `protocol.allow`, so that option alone stops no fetch from a repository that an
-agent can write. `GIT_NO_LAZY_FETCH` does. With a Git that does not know it, Verifold reads a repository's
-configuration itself first, and reads no repository whose configuration can make Git fetch.
-"""
-
-GIT_ENVIRONMENT = {
-    'GIT_NO_LAZY_FETCH': '1',
-    'GIT_NO_REPLACE_OBJECTS': '1',
-    'GIT_CONFIG_GLOBAL': os.devnull,
-    'GIT_CONFIG_NOSYSTEM': '1',
-    'GIT_ATTR_NOSYSTEM': '1',
-    'GIT_TERMINAL_PROMPT': '0',
-}
-"""Git fetches no object that a repository lacks, replaces none, and reads no configuration of the person or the system."""
 
 _FILE_MODES = {b'100644': 0o444, b'100664': 0o444, b'100755': 0o555, b'120000': 0o444}
 """
@@ -106,8 +81,6 @@ _FOLDER = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 """How Verifold opens a folder of its own: as a folder, and never through a link."""
 
 _CHUNK = 1024 * 1024
-_HASHES = {40: 'sha1', 64: 'sha256'}
-"""The hash of a repository's object IDs, by the length of an ID."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,57 +96,12 @@ type _Tree = dict[str, '_File | _Tree']
 
 
 @dataclass(frozen=True, slots=True)
-class _Job:
+class _Job(PinnedCommit):
     """One export: the post's pinned commit, where its author's folder is, and the rules for Git."""
 
-    project: Path
     post_id: PostId
-    author: AgentId
-    commit: CommitId
-    seconds: float
-    fetches_nothing: bool
-    running: '_Running'
     leftover: float = LEFTOVER_SECONDS
     """How old an unfinished folder or file of an export is before this export removes it."""
-
-
-class _Running:
-    """The Git processes of the exports that run now, so that a server that stops can end them."""
-
-    def __init__(self) -> None:
-        self._held = Lock()
-        self._processes: set[_Objects] = set()
-        self._stopped = False
-
-    def add(self, objects: '_Objects') -> None:
-        with self._held:
-            self._processes.add(objects)
-            stopped = self._stopped
-        if stopped:
-            objects.kill()
-
-    def remove(self, objects: '_Objects') -> None:
-        with self._held:
-            self._processes.discard(objects)
-
-    def stop(self) -> None:
-        with self._held:
-            self._stopped = True
-            running = tuple(self._processes)
-        for objects in running:
-            objects.kill()
-
-
-class _Digest(Protocol):
-    """A running hash."""
-
-    def update(self, data: bytes, /) -> None: ...
-
-    def hexdigest(self) -> str: ...
-
-
-class _Missing(GitError):
-    """A repository does not have an object."""
 
 
 class _Differs(Exception):
@@ -196,7 +124,7 @@ class CleanCopies:
         leftover_seconds: float = LEFTOVER_SECONDS,
     ) -> None:
         """
-        Prepare the clean copies of the lab in `project`. Each Git process for one may run for `seconds`.
+        Prepare the clean copies of the lab in `project`. The Git processes of one export may run for `seconds`.
 
         An export removes what an earlier export left behind once that is `leftover_seconds` old.
         """
@@ -205,9 +133,7 @@ class CleanCopies:
         self._leftover = leftover_seconds
         self._free = asyncio.Semaphore(at_once)
         self._making: dict[tuple[PostId, CommitId], asyncio.Task[MadeCopy]] = {}
-        self._fetches_nothing: bool | None = None
-        """Whether this computer's Git fetches no missing object when told so. Asked once."""
-        self._running = _Running()
+        self._running = Running()
 
     def stop(self) -> None:
         """
@@ -223,9 +149,9 @@ class CleanCopies:
         Return the clean copy of the files that a post pins, with its manifest, after Verifold verified it.
 
         Raises:
-            NoCleanCopy: The post pins no file, no repository of the lab has the pinned commit, an object is not
-                the one that its ID names, the snapshot is too large or has a name that is not safe to write, Git
-                did not answer in time, or the copy could not be written.
+            NoCleanCopy: The post pins no file, Verifold found no repository of the lab that has the pinned
+                commit, an object is not the one that its ID names, the snapshot is too large or has a name that
+                is not safe to write, Git did not answer in time, or the copy could not be written.
 
         """
         post = claim.post
@@ -243,56 +169,29 @@ class CleanCopies:
             # A caller that goes away leaves the export to the others that wait for it.
             return await asyncio.shield(making)
         except (GitError, OSError, ValueError, IndexError, RecursionError) as error:
-            raise NoCleanCopy(f'Verifold could not make the clean copy of post {post.id}: {error}') from error
+            # The system's own error names the file that it was about, and the post's author chose that name.
+            why = error.strerror if isinstance(error, OSError) and error.strerror else error
+            raise NoCleanCopy(f'Verifold could not make the clean copy of post {post.id}: {why}') from error
 
     async def _make(self, post_id: PostId, author: AgentId, commit: CommitId) -> MadeCopy:
         async with self._free:
-            if self._fetches_nothing is None:
-                self._fetches_nothing = await asyncio.to_thread(fetches_nothing, self._seconds)
             job = _Job(
-                self._project.resolve(),
-                post_id,
-                author,
-                commit,
-                self._seconds,
-                self._fetches_nothing,
-                self._running,
-                self._leftover,
+                project=self._project.resolve(),
+                author=author,
+                commit=commit,
+                seconds=self._seconds,
+                running=self._running,
+                post_id=post_id,
+                leftover=self._leftover,
             )
             return await asyncio.to_thread(_export, job)
-
-
-def fetches_nothing(seconds: float = EXPORT_SECONDS) -> bool:
-    """Return whether this computer's Git is new enough to fetch no missing object when Verifold says so."""
-    try:
-        said = subprocess.run(['git', '--version'], capture_output=True, check=False, timeout=seconds).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    version = re.search(rb'(\d+)\.(\d+)', said)
-    return bool(version) and (int(version[1]), int(version[2])) >= FETCHES_NOTHING_FROM
 
 
 def _export(job: _Job) -> MadeCopy:
     project, post_id, name = job.project, job.post_id, job.commit[:12]
     with _own(project, post_id) as home:
         _sweep(home, job.leftover)
-        objects, tree = _pinned(job)
-        try:
-            folder = _walk(objects, tree, 0, [0, 0])
-            lines = _verified(home, name, folder)
-            if lines is None:
-                try:
-                    lines = _fresh(home, name, folder, objects)
-                except OSError:
-                    # Another server of the same lab can have made the copy in the meantime. It counts only when
-                    # it passes the same check.
-                    lines = _verified(home, name, folder)
-                    if lines is None:
-                        raise
-        finally:
-            job.running.remove(objects)
-            objects.close()
-        lines = tuple(sorted(lines, key=lambda line: line.path))
+        lines = tuple(sorted(read_pinned(job, partial(_copied, home, name)), key=lambda line: line.path))
         listed = ''.join(f'{line.sha256}  {line.path}\n' for line in lines).encode()
         _replace_file(home, f'{name}.manifest', listed)
         # The path that the taker gets must be the folder that Verifold holds, and no link that took its place.
@@ -306,6 +205,23 @@ def _export(job: _Job) -> MadeCopy:
         listing=place / f'{name}.manifest',
         digest=hashlib.sha256(listed).hexdigest(),
     )
+
+
+def _copied(home: int, name: str, objects: Objects, tree: str) -> list[ManifestLine]:
+    # The manifest of the copy of a tree, from the objects of one store: of the copy that stands at its place when
+    # it is exactly that tree's files, and else of a new one.
+    folder = _walk(objects, tree, 0, [0, 0])
+    lines = _verified(home, name, folder)
+    if lines is None:
+        try:
+            lines = _fresh(home, name, folder, objects)
+        except OSError:
+            # Another server of the same lab can have made the copy in the meantime. It counts only when
+            # it passes the same check.
+            lines = _verified(home, name, folder)
+            if lines is None:
+                raise
+    return lines
 
 
 @contextmanager
@@ -342,247 +258,29 @@ def _folder(path: Path, name: str, inside: int | None) -> int:
     return handle
 
 
-class _Objects:
-    """One Git process that gives the objects of one repository by their IDs, and that ends at a time limit."""
-
-    def __init__(self, repository: Path, cwd: Path, seconds: float) -> None:
-        self._process = subprocess.Popen(
-            ['git', *GIT_OPTIONS, f'--git-dir={repository}', 'cat-file', '--batch'],
-            cwd=cwd,
-            env=clean_environment() | GIT_ENVIRONMENT,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-        # A repository can hold a pipe where Git expects a file. Git then waits for ever, and this ends it.
-        self._limit = Timer(seconds, self._process.kill)
-        self._limit.daemon = True
-        self._limit.start()
-
-    def kill(self) -> None:
-        """End the Git process now. Whoever reads from it gets the error of a process that ended."""
-        self._process.kill()
-
-    def close(self) -> None:
-        self._limit.cancel()
-        self._process.kill()
-        for pipe in (self._process.stdin, self._process.stdout):
-            if pipe:
-                with suppress(OSError):
-                    pipe.close()
-        self._process.wait()
-
-    def ask(self, name: str) -> tuple[str, int]:
-        """Ask for an object, and return its kind and its size. Its bytes follow in `read`."""
-        asked, answers = self._process.stdin, self._process.stdout
-        if asked is None or answers is None:
-            raise GitError('Git gave no pipes.')
-        try:
-            asked.write(name.encode() + b'\n')
-            asked.flush()
-        except OSError as error:
-            raise GitError('Git ended before it gave every object, or it did not answer in time.') from error
-        said = answers.readline().split()
-        if len(said) == 2 and said[1] == b'missing':  # noqa: PLR2004
-            raise _Missing(f'The repository does not have the object {name}. Verifold fetches nothing that is missing.')
-        if len(said) != 3:  # noqa: PLR2004
-            raise GitError('Git ended before it gave every object, or it did not answer in time.')
-        return said[1].decode(), int(said[2])
-
-    def read(self, size: int) -> Iterator[bytes]:
-        """Give the bytes of the object that was asked for last, in pieces."""
-        answers = self._process.stdout
-        left = size
-        while left and answers:
-            piece = answers.read(min(left, _CHUNK))
-            if not piece:
-                raise GitError('Git ended before it gave every object, or it did not answer in time.')
-            left -= len(piece)
-            yield piece
-        if answers:
-            answers.read(1)
-
-
-def _object_hash(name: str, kind: str, size: int) -> _Digest:
-    # The hash that gives a Git object's ID: the object's kind and size, a zero byte, and its bytes.
-    if len(name) not in _HASHES:
-        raise GitError(f'{name!r} is no ID of a Git object.')
-    return hashlib.new(_HASHES[len(name)], f'{kind} {size}\0'.encode(), usedforsecurity=False)
-
-
-def _whole(objects: _Objects, name: str, kind: str) -> bytes:
-    # Read a commit or a tree whole, and check that it is the object that its ID names.
-    found, size = objects.ask(name)
-    if found != kind or size > MAX_TREE_BYTES:
-        raise GitError(f'The object {name} is no {kind} that Verifold reads: it is a {found} of {size:,} bytes.')
-    digest = _object_hash(name, kind, size)
-    data = b''.join(objects.read(size))
-    digest.update(data)
-    if digest.hexdigest() != name:
-        raise GitError(f'The {kind} {name} in the repository is not the object that its ID names.')
-    return data
-
-
-def _pinned(job: _Job) -> tuple[_Objects, str]:
-    """
-    Open the repository of the lab that has the pinned commit, and return it with the ID of the commit's tree.
-
-    In a project with Git commits, every agent's folder is a worktree of the project, so the project's own Git
-    directory has the commit. In any other project, the author's folder is a repository of its own. Verifold names
-    that folder's `.git` only when it is a real folder, and follows no file or link that points elsewhere.
-    """
-    project, author, commit, seconds = job.project, job.author, job.commit, job.seconds
-    lab = project / LAB_FOLDER
-    found: list[Path] = []
-    with suppress(OSError, subprocess.SubprocessError):
-        common = subprocess.run(
-            ['git', *GIT_OPTIONS, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
-            cwd=project,
-            env=clean_environment() | GIT_ENVIRONMENT,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            check=True,
-            timeout=seconds,
-        )
-        found.append(Path(common.stdout.decode().strip()))
-    folder = agents_folder(project) / author
-    theirs = folder / '.git'
-    if _is_folder(folder) and _is_folder(theirs):
-        found.append(theirs)
-    for repository in found:
-        if not job.fetches_nothing and (why := fetch_risk(repository)):
-            # An agent of the lab can write its own repository, and the project's own through its worktree.
-            version = '.'.join(map(str, FETCHES_NOTHING_FROM))
-            raise GitError(
-                f'{why} This computer has a Git from before {version}, which can then fetch what the repository '
-                f'lacks from a place that the repository names, so Verifold does not read it. Git {version} or '
-                f'later fetches nothing when Verifold says so, and makes the copy.'
-            )
-        objects = _Objects(repository, lab, seconds)
-        job.running.add(objects)
-        try:
-            said = re.match(rb'tree ([0-9a-f]+)\n', _whole(objects, commit, 'commit'))
-            if said is None or len(said[1]) != len(commit):
-                raise GitError(f'The commit {commit} names no tree.')
-        except _Missing:
-            job.running.remove(objects)
-            objects.close()
-            continue
-        except BaseException:
-            job.running.remove(objects)
-            objects.close()
-            raise
-        return objects, said[1].decode()
-    raise GitError(f'No repository of the lab has the commit {commit}. Verifold fetches nothing that is missing.')
-
-
-MAX_CONFIG_BYTES = 1024**2
-"""The most bytes of a repository's configuration that Verifold reads itself."""
-
-_SECTION = re.compile(r'\[\s*([A-Za-z0-9.-]+)(?:\s+"(?:[^"\\]|\\.)*")?\s*\](.*)')
-_KEY = re.compile(r'([A-Za-z][A-Za-z0-9-]*)\s*(=.*)?')
-
-
-_RISKS = {
-    'unread': 'Verifold cannot read the configuration of the repository {} with confidence.',
-    'includes': 'The configuration of the repository {} takes in other configuration.',
-    'remote': 'The configuration of the repository {} names a remote for objects that it lacks.',
-}
-
-
-def fetch_risk(repository: Path) -> str | None:
-    """
-    Return why a repository's configuration can make an older Git fetch, or `None` when it cannot.
-
-    Verifold reads the file itself, with no Git process: `config` in the Git directory, which for a worktree is
-    the common directory's. The configuration is a risk when it can pull in other configuration, with an
-    `include` or `includeIf` section or with `extensions.worktreeConfig`, and when it names a remote for missing
-    objects, with `extensions.partialClone` or a remote's `promisor` or `partialCloneFilter`. A file that Verifold
-    cannot read, or cannot read with confidence, is a risk too.
-    """
-    text = _config_text(repository)
-    risk = 'unread' if text is None else _risk(text)
-    return _RISKS[risk].format(repository) if risk else None
-
-
-def _config_text(repository: Path) -> str | None:
-    # The text of a repository's own configuration: a plain file of a bounded size, read through no link.
-    try:
-        file = os.open(repository / 'config', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except OSError:
-        return None
-    try:
-        found = os.fstat(file)
-        if not stat.S_ISREG(found.st_mode) or found.st_size > MAX_CONFIG_BYTES:
-            return None
-        return os.read(file, MAX_CONFIG_BYTES + 1).decode()
-    except (OSError, UnicodeDecodeError):
-        return None
-    finally:
-        os.close(file)
-
-
-def _risk(text: str) -> str | None:
-    section, continued = '', False
-    for line in text.splitlines():
-        rest, was_continued = line.strip(), continued
-        continued = rest.endswith('\\')
-        if not rest or rest[0] in '#;' or was_continued:
-            # A line that goes on from the one before is part of a value.
-            continue
-        if header := _SECTION.fullmatch(rest):
-            section, rest = header[1].casefold(), header[2].strip()
-            if section in ('include', 'includeif'):
-                return 'includes'
-            if not rest or rest[0] in '#;':
-                continue
-        key = _KEY.fullmatch(rest)
-        if key is None or '\0' in rest:
-            return 'unread'
-        if risk := _key_risk(section, key[1].casefold()):
-            return risk
-    return None
-
-
-def _key_risk(section: str, name: str) -> str | None:
-    if section == 'extensions':
-        return {'worktreeconfig': 'includes', 'partialclone': 'remote'}.get(name)
-    remote = section == 'remote' or section.startswith('remote.')
-    return 'remote' if remote and name in ('promisor', 'partialclonefilter') else None
-
-
-def _is_folder(path: Path) -> bool:
-    # Whether the path is a folder and no link.
-    try:
-        return stat.S_ISDIR(path.lstat().st_mode)
-    except OSError:
-        return False
-
-
-def _walk(objects: _Objects, tree: str, depth: int, seen: list[int]) -> _Tree:
+def _walk(objects: Objects, tree: str, depth: int, seen: list[int]) -> _Tree:
     # Read a folder's listing as Git stores it, and each folder inside it. `seen` counts every entry so far and
     # the bytes of every listing so far, so a few listings that name each other many times stop at a limit.
+    # An error names a folder by its ID and never an entry by its name: the post's author chose the names, and
+    # the error goes to the agent that takes the rerun.
     if depth > MAX_DEPTH:
         raise GitError(f'The snapshot has more than {MAX_DEPTH} folders inside each other.')
-    data = _whole(objects, tree, 'tree')
+    data = whole(objects, tree, 'tree')
     seen[1] += len(data)
     if seen[1] > MAX_LISTED_BYTES:
         raise GitError(f"The snapshot's folders have listings of more than {MAX_LISTED_BYTES:,} bytes in all.")
-    raw = len(tree) // 2
     folder: _Tree = {}
     names: set[str] = set()
-    at = 0
-    while at < len(data):
-        space = data.index(b' ', at)
-        end = data.index(b'\0', space)
-        mode, name, child = data[at:space], data[space + 1 : end], data[end + 1 : end + 1 + raw].hex()
-        at = end + 1 + raw
+    for mode, name, child in entries(data, len(tree) // 2):
         seen[0] += 1
         if seen[0] > MAX_COPY_FILES:
             raise GitError(f'The snapshot has more than {MAX_COPY_FILES:,} files and folders.')
-        text = _safe_name(name)
+        text = _safe_name(name, tree)
         if len(child) != len(tree) or text.casefold() in names:
-            raise GitError(f'The snapshot has an entry that Verifold does not write: {text!r}.')
+            raise GitError(
+                f'The folder {tree} of the snapshot has an entry that Verifold does not write: the folder has its '
+                f'name twice, also when the capitals differ, or the listing ends inside it.'
+            )
         names.add(text.casefold())
         if mode == b'160000':
             # A submodule has no files here.
@@ -592,15 +290,18 @@ def _walk(objects: _Objects, tree: str, depth: int, seen: list[int]) -> _Tree:
         elif mode in _FILE_MODES:
             folder[text] = _File(blob=child, mode=_FILE_MODES[mode])
         else:
-            raise GitError(f'The snapshot has an entry that Verifold does not write: {text!r}.')
+            raise GitError(
+                f'The folder {tree} of the snapshot has an entry that Verifold does not write: it is no file, '
+                f'folder, link, or submodule.'
+            )
     return folder
 
 
-def _safe_name(name: bytes) -> str:
+def _safe_name(name: bytes, tree: str) -> str:
     try:
         text = name.decode()
-    except UnicodeDecodeError as error:
-        raise GitError(f'The snapshot has a name that is not UTF-8: {name!r}.') from error
+    except UnicodeDecodeError:
+        raise GitError(f'The folder {tree} of the snapshot has a name that is not UTF-8.') from None
     unsafe = (
         text in ('', '.', '..')
         or text.casefold() == '.git'
@@ -608,11 +309,15 @@ def _safe_name(name: bytes) -> str:
         or any(sign in '/\\' or not sign.isprintable() for sign in text)
     )
     if unsafe:
-        raise GitError(f'The snapshot has an entry that Verifold does not write: {text[:80]!r}.')
+        raise GitError(
+            f'The folder {tree} of the snapshot has an entry that Verifold does not write: its name is empty, '
+            f'`.`, `..`, or `.git`, has more than {MAX_NAME_BYTES} bytes, or has a slash, a backslash, or a sign '
+            f'that does not print.'
+        )
     return text
 
 
-def _fresh(home: int, name: str, folder: _Tree, objects: _Objects) -> list[ManifestLine]:
+def _fresh(home: int, name: str, folder: _Tree, objects: Objects) -> list[ManifestLine]:
     # Write the copy into a new folder beside its place, and give it its place when it is whole.
     making = f'.making-{secrets.token_hex(8)}'
     os.mkdir(making, _FOLDER_MODE, dir_fd=home)
@@ -630,7 +335,7 @@ def _fresh(home: int, name: str, folder: _Tree, objects: _Objects) -> list[Manif
     return lines
 
 
-def _write(handle: int, folder: _Tree, prefix: str, objects: _Objects, total: list[int]) -> Iterator[ManifestLine]:
+def _write(handle: int, folder: _Tree, prefix: str, objects: Objects, total: list[int]) -> Iterator[ManifestLine]:
     # Write each file as the bytes that Git stores for it, after a check of those bytes against the file's ID.
     for name, entry in folder.items():
         if isinstance(entry, dict):
@@ -646,10 +351,10 @@ def _write(handle: int, folder: _Tree, prefix: str, objects: _Objects, total: li
         total[0] += size
         if kind != 'blob' or total[0] > MAX_COPY_BYTES:
             raise GitError(
-                f'{prefix}{name} is no file that Verifold copies: it is a {kind}, or the snapshot has more than '
-                f'{MAX_COPY_BYTES:,} bytes.'
+                f'The object {entry.blob} is no file that Verifold copies: it is a {kind}, or the snapshot has '
+                f'more than {MAX_COPY_BYTES:,} bytes.'
             )
-        named, plain = _object_hash(entry.blob, 'blob', size), hashlib.sha256()
+        named, plain = object_hash(entry.blob, 'blob', size), hashlib.sha256()
         file = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, entry.mode, dir_fd=handle)
         try:
             for piece in objects.read(size):
@@ -660,7 +365,7 @@ def _write(handle: int, folder: _Tree, prefix: str, objects: _Objects, total: li
         finally:
             os.close(file)
         if named.hexdigest() != entry.blob:
-            raise GitError(f'The file {prefix}{name} in the repository is not the object that its ID names.')
+            raise GitError(f'The file {entry.blob} in the repository is not the object that its ID names.')
         yield ManifestLine(path=f'{prefix}{name}', size=size, sha256=plain.hexdigest())
 
 
@@ -707,7 +412,7 @@ def _check(handle: int, folder: _Tree, prefix: str, total: list[int]) -> Iterato
                 raise _Differs
             if total[0] > MAX_COPY_BYTES:
                 raise _Differs
-            named, plain = _object_hash(entry.blob, 'blob', found.st_size), hashlib.sha256()
+            named, plain = object_hash(entry.blob, 'blob', found.st_size), hashlib.sha256()
             # The file is read as far as its size and one byte more, so one that grows meanwhile is not read on.
             left = found.st_size + 1
             while left and (piece := os.read(file, min(left, _CHUNK))):

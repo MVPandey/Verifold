@@ -48,10 +48,11 @@ from verifold.protocol.settings import AtExit, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
 from verifold.runner.errors import NoAgentFolder, NoFileManager
-from verifold.runner.folders import LAB_FOLDER, agent_folder, agents_folder, open_folder, real_folder, tracked_lab_files
-from verifold.runner.git import GitError, git
+from verifold.runner.folders import LAB_FOLDER, agent_folder, open_folder, real_folder, tracked_lab_files
+from verifold.runner.git import GitError
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
 from verifold.runner.messages import invitation, start_message
+from verifold.runner.objects import READ_SECONDS, Missing, PinnedCommit, Running, TooLarge, file_bytes
 from verifold.runner.permissions import Refusals
 from verifold.runner.reruns import CleanCopies
 from verifold.runner.session import Place, SessionOptions, offer_of
@@ -118,6 +119,8 @@ WRITING_TEMPLATE = DEFAULTS['WRITING.md']
 """How the lab writes its answer for the person. A lab folder gets a copy, which the person can change."""
 MAX_FILE_BYTES = 1_000_000
 """The largest file that the app shows as text."""
+FILE_READS_AT_ONCE = 4
+"""How many files the app reads at the same time. The others wait, so slow reads cannot use up the server's threads."""
 NORMS_CHANGED = {
     'LAB.md': "The person changed the lab's norms. {path} holds them.",
     'WRITING.md': 'The person changed how the lab writes its answer. {path} holds the text.',
@@ -193,6 +196,9 @@ class Host:
         self._project = project
         self._copies = CleanCopies(project)
         """Gives the clean copies for reruns, each verified against the pinned commit at every take."""
+        self._reads = Running()
+        """The Git processes that read a pinned file for the app now."""
+        self._free_reads = asyncio.Semaphore(FILE_READS_AT_ONCE)
         self._desktop = True
         self._record = record
         self._catalog = catalog
@@ -313,17 +319,29 @@ class Host:
             lab=self._lab.board.settings if self._lab else None,
         )
 
-    def stop_exports(self) -> None:
-        """End every export of a clean copy that runs, as when the server stops. The takes that wait for one fail."""
+    def stop_reads(self) -> None:
+        """
+        End every read of Git objects that runs, as when the server stops.
+
+        Those are the exports of clean copies and the reads of pinned files for the app. The takes that wait for
+        an export fail, and so does a read for the app.
+        """
         self._copies.stop()
+        self._reads.stop()
 
     async def file_text(self, post_id: PostId, path: str) -> FileText:
         """
         Return the text of a file that backs a post, at the commit that the post pins.
 
+        Verifold reads the commit, its folders, and the file as Git objects, and checks each one against its ID,
+        from the commit's ID in the record down. It runs no Git command in the author's folder, and Git reads no
+        configuration that an agent can write.
+
         Raises:
             NoLab: The folder has no lab.
-            NotFound: The post does not name the file, the file is gone, it is too large, or it is not text.
+            NotFound: The post does not name the file, the file is gone, it is too large, or it is not text. Or
+                Verifold does not read it: the path names no plain file, or an object on the way to it is not the
+                one that its ID names.
 
         """
         if self._lab is None:
@@ -332,18 +350,26 @@ class Host:
         file = next((item for item in entry.post.evidence if item.path == path), None) if entry else None
         if entry is None or file is None:
             raise NotFound(f'Post {post_id} names no file {path}.')
-        folder = agents_folder(self._project) / entry.post.author
-        blob = f'{file.commit}:{file.path}'
+        pinned = PinnedCommit(
+            project=self._project.resolve(),
+            author=entry.post.author,
+            commit=file.commit,
+            seconds=READ_SECONDS,
+            running=self._reads,
+        )
         try:
-            size = int(await git('cat-file', '-s', blob, cwd=folder))
-            if size > MAX_FILE_BYTES:
-                raise NotFound(f'{path} is larger than {MAX_FILE_BYTES:,} bytes, so the app does not show it.')
-            text = await git('show', blob, cwd=folder, strip=False)
+            async with self._free_reads:
+                data = await asyncio.to_thread(file_bytes, pinned, file.path, MAX_FILE_BYTES)
+        except TooLarge as error:
+            raise NotFound(f'{path} is larger than {MAX_FILE_BYTES:,} bytes, so the app does not show it.') from error
+        except Missing as error:
+            raise NotFound(f'{path} is not in the folder of {entry.post.author} at {file.commit[:8]}.') from error
+        except (GitError, OSError, ValueError) as error:
+            raise NotFound(f'The app does not show {path} at {file.commit[:8]}: {error}') from error
+        try:
+            return FileText(path=file.path, commit=file.commit, text=data.decode())
         except UnicodeDecodeError as error:
             raise NotFound(f'{path} is not a text file.') from error
-        except (GitError, OSError, ValueError) as error:
-            raise NotFound(f'{path} is not in the folder of {entry.post.author} at {file.commit[:8]}.') from error
-        return FileText(path=file.path, commit=file.commit, text=text)
 
     async def open_folder(self, agent_id: AgentId | None = None) -> FolderView:
         """
@@ -1066,8 +1092,8 @@ async def serve(
                 raise await changed
         finally:
             # The task group has stopped the agents' harnesses. Their processes stop next, and the web server last, also
-            # when the hook fails. An export for a rerun that still runs ends now, so that its thread holds nothing.
-            host.stop_exports()
+            # when the hook fails. A read of Git objects that still runs ends now, so that its thread holds nothing.
+            host.stop_reads()
             try:
                 if (host.lab.board.settings if host.lab else opening).jobs.at_exit is AtExit.STOP:
                     hooks.swept(await asyncio.to_thread(sweep, project))
