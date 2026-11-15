@@ -8,6 +8,7 @@ here.
 
 from verifold.protocol.agents import Agent
 from verifold.protocol.events import (
+    AgentLeft,
     AlarmSet,
     Posted,
     ProfileSet,
@@ -47,6 +48,25 @@ def check_agent(board: Board, agent: Agent) -> None:
         raise RejectedEvent(f'Post {agent.checks} does not exist.')
 
 
+def check_left(board: Board, left: AgentLeft) -> None:
+    """
+    Check that an agent can leave the lab, by its own choice or the person's.
+
+    Raises:
+        RejectedEvent: The agent is not in the lab, left already, or is a blind checker, or somebody other than the
+            agent itself and the person caused it.
+
+    """
+    joined = board.agent(left.agent)
+    if not joined:
+        raise RejectedEvent(f'{left.agent} is not an agent in this lab.')
+    _check_here(board, left.agent)
+    if joined.agent.checks:
+        raise RejectedEvent('A blind checker is gone after its one check, so it does not leave and nobody removes it.')
+    if left.by not in (left.agent, PERSON):
+        raise RejectedEvent(f'Only {left.agent} itself or the person can remove {left.agent} from the lab.')
+
+
 def check_thread(board: Board, thread: Thread) -> None:
     """
     Check that a thread can open on the board.
@@ -58,6 +78,7 @@ def check_thread(board: Board, thread: Thread) -> None:
     if board.thread(thread.id):
         raise RejectedEvent(f'Thread {thread.id} exists already.')
     _check_member(board, thread.opened_by)
+    _check_here(board, thread.opened_by)
 
 
 def check_post(board: Board, post: Post) -> None:
@@ -71,6 +92,7 @@ def check_post(board: Board, post: Post) -> None:
     if board.post(post.id):
         raise RejectedEvent(f'Post {post.id} exists already.')
     _check_member(board, post.author)
+    _check_here(board, post.author)
     _check_blind(board, post)
     for mention in post.mentions:
         _check_member(board, mention)
@@ -105,6 +127,7 @@ def check_watch(board: Board, watch: WatchSet) -> None:
     """
     if not board.agent(watch.agent):
         raise RejectedEvent(f'{watch.agent} is not an agent in this lab.')
+    _check_here(board, watch.agent)
     if not board.thread(watch.thread):
         raise RejectedEvent(f'Thread {watch.thread} does not exist.')
 
@@ -120,6 +143,7 @@ def check_alarm(board: Board, alarm: AlarmSet) -> None:
     joined = board.agent(alarm.agent)
     if not joined:
         raise RejectedEvent(f'{alarm.agent} is not an agent in this lab.')
+    _check_here(board, alarm.agent)
     if joined.agent.checks:
         raise RejectedEvent('A blind checker posts one check and sets no alarm.')
 
@@ -135,6 +159,7 @@ def check_profile(board: Board, profile: ProfileSet) -> None:
     joined = board.agent(profile.agent)
     if not joined:
         raise RejectedEvent(f'{profile.agent} is not an agent in this lab.')
+    _check_here(board, profile.agent)
     if joined.agent.checks:
         raise RejectedEvent('A blind checker has no role and no status.')
     if profile.role is None and profile.status is None:
@@ -166,6 +191,7 @@ def check_rerun(board: Board, rerun: RerunRequested) -> None:
 
     """
     _check_member(board, rerun.by)
+    _check_here(board, rerun.by)
     target = board.post(rerun.post)
     if target is None:
         raise RejectedEvent(f'Post {rerun.post} does not exist.')
@@ -251,6 +277,13 @@ def _check_blind(board: Board, post: Post) -> None:
 def _check_member(board: Board, author: AgentId) -> None:
     if author != PERSON and not board.agent(author):
         raise RejectedEvent(f'{author} is not an agent in this lab.')
+
+
+def _check_here(board: Board, agent_id: AgentId) -> None:
+    # The record takes nothing more from an agent that left. Other agents can still name it, reply to its posts,
+    # and check them, and the turn that it was in still ends.
+    if board.gone(agent_id):
+        raise RejectedEvent(f'{agent_id} left this lab, so the board takes no post and no other change from it.')
 
 
 def _check_close(board: Board, close: Close) -> None:

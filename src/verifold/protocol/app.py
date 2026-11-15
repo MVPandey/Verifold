@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from pydantic import AfterValidator, AwareDatetime, Field, JsonValue, StringConstraints
 
 from verifold.protocol.agents import Agent, AgentChoices, Label, ValueId, one_line
-from verifold.protocol.events import Question
+from verifold.protocol.events import AgentLeft, Question
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import LabState, PostLine
@@ -43,6 +43,8 @@ class AgentView(Record):
     thread: ThreadId | None = None
     """The thread where the agent works now, or `None` when it works in none."""
     activity: AgentActivity
+    left: AgentLeft | None = None
+    """When the agent left the lab, who caused it, and why. `None` while the agent is in the lab."""
     turns: int = Field(ge=0)
     posts: int = Field(ge=0)
     usage: Usage

@@ -1,5 +1,5 @@
 import { GUEST, PERSON } from '../api/types.ts';
-import type { AgentActivity, AgentView, HarnessOption } from '../api/types.ts';
+import type { AgentActivity, AgentLeft, AgentView, HarnessOption } from '../api/types.ts';
 import { duration, minutesBetween, money, tokens } from './format.ts';
 
 /** The dot before an agent's state. */
@@ -22,6 +22,22 @@ export interface Face {
 /** Return the lab's members: its agents without the blind checkers. */
 export function members(agents: readonly AgentView[]): readonly AgentView[] {
   return agents.filter((view) => view.agent.checks === null);
+}
+
+/** Return the members that are in the lab now: the ones that have not left. */
+export function present(agents: readonly AgentView[]): readonly AgentView[] {
+  return members(agents).filter((view) => view.left === null);
+}
+
+/** Return the members in the order of the member list: the ones in the lab, and under them the ones that left. */
+export function listed(agents: readonly AgentView[]): readonly AgentView[] {
+  return [...present(agents), ...members(agents).filter((view) => view.left !== null)];
+}
+
+/** Return the state of a member that left: who caused it, and the reason when it has one. */
+export function leftLine(left: AgentLeft): StateLine {
+  const how = left.by === PERSON ? 'Left, removed by you' : 'Left by its own choice';
+  return { text: left.reason ? `${how}: ${left.reason}` : how, dot: 'stop' };
 }
 
 /**
@@ -109,10 +125,10 @@ export function costLine(view: AgentView): string {
 
 /**
  * Return how many members work now, such as "3 of 4 members working, 2 blind reruns". An invited agent counts
- * from its first post, because until then nobody knows whether it came.
+ * from its first post, because until then nobody knows whether it came. A member that left does not count.
  */
 export function workingLine(agents: readonly AgentView[]): string {
-  const all = members(agents).filter((view) => view.agent.harness !== GUEST || view.posts > 0);
+  const all = present(agents).filter((view) => view.agent.harness !== GUEST || view.posts > 0);
   const busy = (view: AgentView): boolean => view.activity.state === 'working';
   const reruns = agents.filter((view) => view.agent.checks !== null && busy(view)).length;
   const line = `${all.filter(busy).length} of ${all.length} ${all.length === 1 ? 'member' : 'members'} working`;

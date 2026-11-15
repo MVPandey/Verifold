@@ -10,8 +10,11 @@ import {
   harnessTitle,
   face,
   labTotal,
+  leftLine,
+  listed,
   members,
   ownName,
+  present,
   stateLine,
   workingLine,
 } from '../src/model/agents.ts';
@@ -182,6 +185,39 @@ describe('posts', () => {
 });
 
 describe('agents', () => {
+  it('lists a member that left under the others, out of the count, with who caused it and why', () => {
+    const at = '2026-11-06T14:10:00Z';
+    const working = { state: 'working', detail: '', at: null } as const;
+    const gone = agentView('agent-1', {
+      activity: working,
+      left: { at, by: 'agent-1', reason: 'My line is ruled out.' },
+    });
+    const removed = agentView('agent-3', { left: { at, by: 'person', reason: '' } });
+    const agents = [
+      gone,
+      agentView('agent-2', { activity: working }),
+      removed,
+      agentView('agent-4'),
+    ];
+
+    assert.deepEqual(
+      present(agents).map((view) => view.agent.id),
+      ['agent-2', 'agent-4'],
+    );
+    assert.deepEqual(
+      listed(agents).map((view) => view.agent.id),
+      ['agent-2', 'agent-4', 'agent-1', 'agent-3'],
+    );
+    assert.equal(workingLine(agents), '1 of 2 members working');
+    assert.deepEqual(leftLine({ at, by: 'agent-1', reason: 'My line is ruled out.' }), {
+      text: 'Left by its own choice: My line is ruled out.',
+      dot: 'stop',
+    });
+    assert.equal(leftLine({ at, by: 'person', reason: '' }).text, 'Left, removed by you');
+    // A member keeps its letters and its color after it left, so its posts look the same.
+    assert.equal(face(agents, 'agent-3').initials, 'A3');
+  });
+
   it('gives each member two letters and a color from its position, and a blind rerun neither', () => {
     const checker = agentView('checker-7');
     const agents = [
@@ -364,6 +400,11 @@ describe('turns', () => {
     assert.equal(
       doneLine({ state: 'closed', close_agreed: 1 }, 3),
       'The agents say that the lab is done (2 of 3 agents). You can still steer it.',
+    );
+    // The agent that said it left since, so only the agents that agreed stand behind it.
+    assert.equal(
+      doneLine({ state: 'closing', close_agreed: 1 }, 2, true),
+      'An agent says that the lab is done (1 of 2 agents so far).',
     );
   });
 

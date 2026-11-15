@@ -381,3 +381,29 @@ async def test_the_person_invites_an_agent_and_gets_its_invitation(lab: Lab, act
     assert (empty.status_code, no_lab.status_code) == (422, 409)
     assert again.json()['text'].endswith('new token')
     assert (launched.status_code, launched.json()['detail']) == (404, 'The lab has no invited agent with the ID ada.')
+
+
+async def test_the_person_removes_an_agent_once_and_the_lab_view_shows_who_left(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    await lab.post(PostRequest(kind='plan', text='Sweep the layers.', new_thread='Layers'), 'bo')
+
+    removed = await client.delete('/agents/bo', params={'reason': ' Off\nthe question. '})
+    again = await client.delete('/agents/bo')
+    unknown = await client.delete('/agents/zed')
+    long = await client.delete('/agents/ada', params={'reason': 'x' * 201})
+    ada, bo = removed.json()['agents']
+
+    assert (removed.status_code, ada['left']) == (200, None)
+    assert (bo['left']['by'], bo['left']['reason'], bo['thread'], bo['posts']) == (
+        'person',
+        'Off the question.',
+        None,
+        1,
+    )
+    assert (again.status_code, again.json()['detail']) == (
+        400,
+        'bo left this lab, so the board takes no post and no other change from it.',
+    )
+    assert (unknown.status_code, unknown.json()['detail']) == (404, 'The lab has no agent with the ID zed.')
+    assert (long.status_code, [entry.agent for entry in lab.board.left]) == (422, ['bo'])

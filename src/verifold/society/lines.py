@@ -19,10 +19,12 @@ def lines_of(board: Board) -> dict[AgentId, ThreadId | None]:
     An agent works in the thread of its latest plan or result outside the question's thread. Every agent plans in
     the question's thread, so a plan there moves nobody. A ruled-out lead ends the agent's work in its thread, and
     the agent then works nowhere until its next plan or result. A ruled-out lead that withdraws the agent's own
-    call ends no work.
+    call ends no work. An agent that left the lab works nowhere.
     """
     question = question_thread(board)
-    workers = {joined.agent.id for joined in board.agents if not joined.agent.checks}
+    workers = {
+        joined.agent.id for joined in board.agents if not joined.agent.checks and not board.gone(joined.agent.id)
+    }
     lines: dict[AgentId, ThreadId | None] = {}
     for entry in board.posts:
         post = entry.post

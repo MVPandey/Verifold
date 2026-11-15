@@ -55,8 +55,8 @@ def start_message(
     peers = ', '.join(
         f'{entry.agent.name} ({entry.agent.id}, {entry.agent.harness})'
         for entry in board.agents
-        # An invited agent that has not posted may never come, so it is no peer yet.
-        if entry.agent.id != agent.id and not entry.agent.checks and board.came(entry)
+        # An invited agent that has not posted may never come, so it is no peer yet. An agent that left is none.
+        if entry.agent.id != agent.id and not entry.agent.checks and board.here(entry)
     )
     # An agent that the person adds to a lab that runs joins work that is under way.
     lead = (

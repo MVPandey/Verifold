@@ -7,6 +7,7 @@ first, `FAKE_ACP_COMMAND` asks permission for that shell command, which the requ
 same for an agent whose name starts with its value, and `FAKE_ACP_CHILD` starts a
 child that holds the agent's pipes open and writes its process ID to that path. `FAKE_ACP_JOB` starts a job in a
 session of its own, the way that a harness starts a background command, and writes its process ID to that path.
+`FAKE_ACP_LEAVE` makes the agent of that name leave the lab at the end of its first turn.
 `FAKE_ACP_NO_CHECK` makes a blind checker end its turn without a check, and `FAKE_ACP_SLOW_AFTER_CHECK` makes its
 turn take a minute after it posted its check.
 
@@ -221,6 +222,8 @@ class FakeAgent(acp.Agent):
             outcome = response.outcome
             text = f'Permission: {outcome.option_id if isinstance(outcome, schema.AllowedOutcome) else "cancelled"}.'
         await self._call('post', {'kind': 'message', 'text': text, 'new_thread': f'Hello {self._name}'})
+        if os.environ.get('FAKE_ACP_LEAVE') == self._name:
+            await self._call('leave', {'reason': 'Nothing is left for me.'})
 
     async def _post_result(self) -> None:
         (Path.cwd() / 'result.txt').write_text('11.8\n')

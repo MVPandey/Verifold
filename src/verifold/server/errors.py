@@ -33,5 +33,9 @@ class OutOfTime(ServerError):
     """An invited agent tried to post while the lab was out of time or stopped. Verifold cannot stop its turn."""
 
 
+class HasLeft(ServerError):
+    """An agent that left the lab, or that the person removed, called the board."""
+
+
 class CannotWake(ServerError):
     """An invited agent asked Verifold to wake it. Verifold did not start it, so it has no way to."""

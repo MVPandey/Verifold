@@ -19,6 +19,7 @@ from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent
 from verifold.protocol.app import AgentState
 from verifold.protocol.events import TimeRanOut, TurnSummary
+from verifold.protocol.ids import PERSON
 from verifold.protocol.record import Record
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.usage import Usage
@@ -89,7 +90,12 @@ class Shared:
 
 
 class AgentLoop:
-    """Keeps one agent's ACP session open until the agent fails `max_failures` times in a row or the lab stops."""
+    """
+    Keeps one agent's ACP session open until the agent fails `max_failures` times in a row or the lab stops.
+
+    The loop also ends when the agent leaves the lab: after the turn in which the agent left, or at once when the
+    person removed it.
+    """
 
     def __init__(
         self,
@@ -148,6 +154,9 @@ class AgentLoop:
                     resume = session.id
                     while True:
                         await self._while_out_of_time()
+                        # An agent that left gets no other turn. Leaving this block ends its harness.
+                        if self._left():
+                            return
                         stopped = await self._send(session, message)
                         failures = 0
                         if self._done and self._done(self._lab.board):
@@ -186,7 +195,7 @@ class AgentLoop:
                     agent=setup.agent.id, seconds=0, usage=Usage(), error=f'{type(error).__name__}: {error}'
                 )
                 await self._lab.end_turn(failed)
-                if failures >= self._settings.max_failures:
+                if failures >= self._settings.max_failures or self._left():
                     return
                 await asyncio.sleep(self._settings.retry_after * 2 ** (failures - 1))
                 message = DOORBELL if resume else setup.start
@@ -206,6 +215,13 @@ class AgentLoop:
                     stopper.cancel()
         except TimeoutError:
             await session.cancel()
+            if self._removed():
+                # The loop ends next, so nothing resumes this turn.
+                await self._record(
+                    started, Usage(), None, 'The person removed the agent, so Verifold cancelled the turn.'
+                )
+                self._cut_short = ''
+                return False
             out_of_time = self._lab.board.out_of_time
             error = (
                 'The lab ran out of time, so Verifold cancelled the turn.'
@@ -224,17 +240,26 @@ class AgentLoop:
         return False
 
     async def _stop_when_out_of_time(self, limit: asyncio.Timeout) -> None:
+        # The person's removal of the agent stops its turn in the same way. An agent that leaves by itself ends
+        # its own turn.
         lab = self._lab
-        while not lab.board.out_of_time:
+        while not lab.board.out_of_time and not self._removed():
             await lab.wait_for_change(lab.board.seq)
         limit.reschedule(asyncio.get_running_loop().time())
 
+    def _left(self) -> bool:
+        return self._lab.board.gone(self._setup.agent.id) is not None
+
+    def _removed(self) -> bool:
+        left = self._lab.board.gone(self._setup.agent.id)
+        return left is not None and left.by == PERSON
+
     async def _while_out_of_time(self) -> None:
         lab = self._lab
-        if not lab.board.out_of_time:
+        if not lab.board.out_of_time or self._left():
             return
         await self._report('waiting', 'The lab is out of time. The person can give it more.')
-        while lab.board.out_of_time:
+        while lab.board.out_of_time and not self._left():
             await lab.wait_for_change(lab.board.seq)
 
     async def _record(self, started: float, usage: Usage, cost_usd: float | None, error: str | None) -> None:
@@ -290,6 +315,9 @@ class AgentLoop:
         settled = False
         while True:
             board = self._lab.board
+            # No message wakes an agent that left. The loop ends before it sends this one.
+            if board.gone(agent_id):
+                return ''
             stopped = self._jobs_stopped(board)
             posts = bool(update(board, agent_id, max(self._notified, self._member.seen)).posts)
             # A post during a stop waits for the wake after more time, so the doorbell rings then.

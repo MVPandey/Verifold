@@ -666,3 +666,97 @@ async def test_under_stop_a_stop_while_the_turn_is_recorded_still_reaches_the_ag
 
     stopped = more_time_message(lab.board.ends_at, AtTimeLimit.STOP)
     assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', stopped]
+
+
+async def test_an_agent_that_leaves_ends_its_turn_itself_and_then_its_harness_stops(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_LEAVE', 'bo')
+    lab = served.lab
+    activity = Activity()
+
+    async with asyncio.timeout(30):
+        await loop_for(served, tmp_path, activity).run()
+    # A post for the agent starts nothing, because nothing runs for it any more.
+    await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+
+    left = lab.board.gone('bo')
+    assert left is not None
+    assert (left.by, left.reason) == ('bo', 'Nothing is left for me.')
+    # The turn in which it left ended by its own choice, after the event, and no other turn came.
+    assert [(turn.error, turn.seq > left.seq) for turn in lab.board.turns] == [(None, True)]
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
+    assert (calls(log, 'cancel'), activity.of('bo').state) == ([], 'stopped')
+
+
+async def test_the_persons_removal_stops_the_agents_turn_at_once_and_ends_its_harness(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_SLOW', '1')
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    await until(lambda: bool(calls(log, 'prompt')))
+
+    await lab.leave('bo', 'person')
+    async with asyncio.timeout(30):
+        await running
+
+    assert [turn.error for turn in lab.board.turns] == ['The person removed the agent, so Verifold cancelled the turn.']
+    assert (len(calls(log, 'cancel')), len(calls(log, 'prompt'))) == (1, 1)
+
+
+async def test_an_idle_agent_that_the_person_removes_stops_without_another_turn(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    activity = Activity()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
+    await until(lambda: activity.of('bo').state == 'idle')
+
+    await lab.leave('bo', 'person')
+    async with asyncio.timeout(30):
+        await running
+
+    assert (len(lab.board.turns), len(calls(log, 'prompt'))) == (1, 1)
+
+
+async def test_an_agent_that_the_person_removes_while_the_lab_is_out_of_time_stops_too(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_SLOW', '1')
+    lab = served.lab
+    activity = Activity()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
+    await until(lambda: bool(calls(log, 'prompt')))
+    await lab.set_time_left(timedelta(0))
+    await lab.run_out_of_time()
+    await until(lambda: activity.of('bo').state == 'waiting')
+
+    await lab.leave('bo', 'person')
+    async with asyncio.timeout(30):
+        await running
+    await lab.set_time_left(timedelta(hours=1))
+
+    assert len(calls(log, 'prompt')) == 1
+
+
+async def test_a_harness_that_fails_after_its_agent_left_is_not_started_again(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[bool] = []
+
+    @asynccontextmanager
+    async def open_session(*_: object) -> AsyncGenerator[BlockingSession]:
+        opened.append(True)
+        await served.lab.leave('bo', 'person')
+        raise BrokenPipeError('The harness closed its stdin.')
+        yield BlockingSession()
+
+    monkeypatch.setattr(AgentSession, 'open', open_session)
+
+    # A restart would wait a minute first, and the test would run out of time.
+    async with asyncio.timeout(30):
+        await loop_for(served, tmp_path, retry_after=60).run()
+
+    assert opened == [True]
+    assert [turn.error for turn in served.lab.board.turns] == ['BrokenPipeError: The harness closed its stdin.']

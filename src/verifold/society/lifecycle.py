@@ -19,12 +19,22 @@ def lab_state(board: Board) -> LabState:
     An invited agent counts among the lab's agents when it posted before the close. Until its first post nobody
     knows whether it came, so an invitation that nobody used does not keep the lab open. Its first post after the
     close does not change the count either, so a closed lab stays closed.
+
+    An agent that left is not one of the lab's agents, whenever it left. It does not count among them, and its
+    close or its agreement does not count behind the close. The close is the word of the agents that are in the
+    lab: an agent that is gone, or that the person removed, cannot stand behind what the others still work on. So
+    a lab whose remaining agents all stand behind a close is closed. A closed lab goes back to closing when an
+    agent that agreed leaves and the agents behind the close are no longer more than half of the rest.
     """
     close = closing(board)
     if close is None:
         return 'open'
-    workers = sum(not joined.agent.checks and board.came(joined, before=close.seq) for joined in board.agents)
-    return 'closed' if (1 + len(agreed(board, close))) * 2 > workers else 'closing'
+    workers = sum(
+        not joined.agent.checks and board.came(joined, before=close.seq) and not board.gone(joined.agent.id)
+        for joined in board.agents
+    )
+    behind = len(agreed(board, close)) + (not board.gone(close.post.author))
+    return 'closed' if behind * 2 > workers else 'closing'
 
 
 def pending_alarm(board: Board, agent_id: AgentId) -> AlarmSet | None:
@@ -32,8 +42,10 @@ def pending_alarm(board: Board, agent_id: AgentId) -> AlarmSet | None:
     Return the alarm that waits for an agent whose turn has ended, or `None`.
 
     It is the newest alarm that the agent set in its last turn, unless that one cancels. An alarm from an earlier
-    turn is spent.
+    turn is spent. No alarm waits for an agent that left.
     """
+    if board.gone(agent_id):
+        return None
     ends = tuple(turn.seq for turn in board.turns if turn.agent == agent_id)
     before = ends[-2] if len(ends) > 1 else 0
     alarm = next((alarm for alarm in reversed(board.alarms) if alarm.agent == agent_id), None)

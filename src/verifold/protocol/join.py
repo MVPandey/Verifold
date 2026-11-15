@@ -265,6 +265,16 @@ class AgentLine(Record):
     """The agent's latest post, when that is not its plan."""
 
 
+class LeftLine(Record):
+    """An agent that left the lab: who caused it, and why. Its posts stay, and no post reaches it."""
+
+    id: AgentId
+    name: Label
+    by: AgentId
+    """The agent itself, or `person` when the person removed it."""
+    reason: str = ''
+
+
 MAX_LEADS = 10
 """The most entries in each list of a brief that shows where another agent's work can use the reader."""
 
@@ -325,7 +335,9 @@ class Brief(Record):
     how: str = ''
     """How the board works. The first brief of a session carries it, and later ones leave it out."""
     agents: tuple[AgentLine, ...] = ()
-    """The other agents. Blind checkers are not among them."""
+    """The other agents that are in the lab. Blind checkers are not among them."""
+    left: tuple[LeftLine, ...] = ()
+    """The agents that left the lab or that the person removed, oldest first."""
     answer: PostLine | None = None
     """The lab's answer so far: the newest proposal in the question's thread."""
     answer_standing: Standing | None = None

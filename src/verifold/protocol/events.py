@@ -7,9 +7,9 @@ add up to. Events are never changed or removed.
 
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, Field, StringConstraints
+from pydantic import AfterValidator, AwareDatetime, Field, StringConstraints
 
-from verifold.protocol.agents import Agent, Role, Status
+from verifold.protocol.agents import Agent, Role, Status, one_line
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, CommitId, PostId, ThreadId
 from verifold.protocol.posts import Post
@@ -45,6 +45,25 @@ class AgentJoined(EventBase):
 
     type: Literal['agent_joined'] = 'agent_joined'
     agent: Agent
+
+
+type Reason = Annotated[str, AfterValidator(one_line), StringConstraints(max_length=200)]
+"""Why an agent left its lab, as one line. It can be empty."""
+
+
+class AgentLeft(EventBase):
+    """
+    An agent left the lab, or the person removed it. It is final: the agent's ID never comes back.
+
+    The agent's posts stay. From now on the record takes no post and no other change from it, no post reaches it,
+    and it does not count among the lab's agents.
+    """
+
+    type: Literal['agent_left'] = 'agent_left'
+    agent: AgentId
+    by: AgentId
+    """Who caused it: the agent itself, or the person."""
+    reason: Reason = ''
 
 
 class ThreadOpened(EventBase):
@@ -182,6 +201,7 @@ class PermissionGranted(EventBase):
 type Event = Annotated[
     LabOpened
     | AgentJoined
+    | AgentLeft
     | ThreadOpened
     | Posted
     | WatchSet

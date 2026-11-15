@@ -121,8 +121,14 @@ def closing(board: Board) -> Posted | None:
 
 
 def agreed(board: Board, close: Posted) -> tuple[AgentId, ...]:
-    """Return the agents of the lab that agreed with a close, each once, in the order that they agreed."""
-    workers = {joined.agent.id for joined in board.agents if not joined.agent.checks}
+    """
+    Return the agents of the lab that agreed with a close, each once, in the order that they agreed.
+
+    An agent that left the lab is not among them: its agreement counts no longer.
+    """
+    workers = {
+        joined.agent.id for joined in board.agents if not joined.agent.checks and not board.gone(joined.agent.id)
+    }
     return tuple(
         dict.fromkeys(
             reply.post.author

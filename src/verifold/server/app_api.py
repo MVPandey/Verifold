@@ -30,7 +30,7 @@ from verifold.protocol.app import (
     StartRequest,
     TimeRequest,
 )
-from verifold.protocol.events import RerunRequested
+from verifold.protocol.events import Reason, RerunRequested
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import AnswerView, FileText, PostLine, PostRequest, PostView, ThreadSummary, ThreadView
 from verifold.protocol.usage import Usage
@@ -141,6 +141,15 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
         await host.add_agents(choice)
         return _lab_view(current().board, activity)
 
+    @api.delete('/agents/{agent_id}', dependencies=[authorized])
+    async def remove_agent(agent_id: AgentId, reason: Reason = '') -> LabView:
+        # The record is all that the removal writes. The agent's loop, its seat, and its token follow the record.
+        running = current()
+        if running.board.agent(agent_id) is None:
+            raise NotFound(f'The lab has no agent with the ID {agent_id}.')
+        await running.leave(agent_id, PERSON, reason)
+        return _lab_view(running.board, activity)
+
     @api.post('/invitations', dependencies=[authorized])
     async def invite(request: InviteRequest) -> Invitation:
         return await host.invite(request.name)
@@ -242,6 +251,7 @@ def _agent_view(board: Board, activity: Activity, agent_id: str, working: dict[A
         status=status,
         thread=working.get(agent_id),
         activity=activity.of(agent_id),
+        left=board.gone(agent_id),
         turns=len(turns),
         posts=sum(entry.post.author == agent_id for entry in board.posts),
         usage=Usage(

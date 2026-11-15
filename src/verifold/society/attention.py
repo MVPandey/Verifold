@@ -10,6 +10,7 @@ Some posts are for every agent: a close, and an ask, a call, or the first post o
 nobody when its `mentions` are empty and it replies to no post, so an agent that is stuck reaches every agent that
 may know the missing piece. A check is also for the agent that asked for the rerun. The person's words reach the agents by default: a post from the person that
 names nobody and replies to no post is for every agent. No post is for a blind checker, which reads nothing but its claim.
+No post is for an agent that left the lab.
 
 A post that is for an agent wakes it. The agent's news holds every post that it has not seen, and says which are for
 it. So an agent learns of the rest when it reads the board, and not before.
@@ -52,10 +53,14 @@ def watches_thread(
 def wakes(
     board: Board, agent_id: AgentId, entry: Posted, working: dict[AgentId, ThreadId | None] | None = None
 ) -> bool:
-    """Return whether a post is for an agent, so that it wakes the agent. No post is for a blind checker."""
+    """
+    Return whether a post is for an agent, so that it wakes the agent.
+
+    No post is for a blind checker, and none is for an agent that left the lab.
+    """
     post = entry.post
     reader = board.agent(agent_id)
-    if post.author == agent_id or (reader and reader.agent.checks):
+    if post.author == agent_id or (reader and reader.agent.checks) or board.gone(agent_id):
         return False
     if _names(board, agent_id, post) or _for_everyone(board, entry):
         return True
@@ -88,7 +93,7 @@ def update(board: Board, agent_id: AgentId, after: int) -> Update:
         agents=tuple(
             entry.agent
             for entry in board.agents
-            if after < entry.seq <= reach and entry.agent.id != agent_id and board.came(entry)
+            if after < entry.seq <= reach and entry.agent.id != agent_id and board.here(entry)
         ),
         ends_at=board.ends_at,
     )

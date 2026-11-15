@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from verifold.store.errors import GuestsInvalid
-from verifold.store.guests_file import Guests, keep_guest, read_guests
+from verifold.store.guests_file import Guests, drop_guest, keep_guest, read_guests
 
 
 def test_the_file_keeps_each_guests_digest_and_the_port_and_only_the_person_reads_it(tmp_path: Path) -> None:
@@ -57,3 +57,21 @@ def test_a_write_that_fails_leaves_the_old_file_and_no_other_file(
 
     assert read_guests(path).digests == {'agent-2': 'a' * 64}
     assert [item.name for item in tmp_path.iterdir()] == ['guests.json']
+
+
+def test_a_dropped_guest_leaves_the_other_digests_and_the_port_and_a_broken_file_stays(tmp_path: Path) -> None:
+    path = tmp_path / 'guests.json'
+    drop_guest(path, 'agent-2')
+    assert not path.exists()
+
+    keep_guest(path, 'agent-2', 'a' * 64, 8123)
+    keep_guest(path, 'agent-3', 'b' * 64, 8123)
+    drop_guest(path, 'agent-2')
+    drop_guest(path, 'agent-2')
+
+    assert read_guests(path) == Guests(port=8123, digests={'agent-3': 'b' * 64})
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    path.write_text('not json')
+    with pytest.raises(GuestsInvalid):
+        drop_guest(path, 'agent-3')
+    assert path.read_text() == 'not json'

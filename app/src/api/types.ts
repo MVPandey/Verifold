@@ -66,6 +66,15 @@ export interface Usage {
   readonly output_tokens: number;
 }
 
+/** The record's entry for an agent that left the lab. */
+export interface AgentLeft {
+  readonly at: string;
+  /** Who caused it: the agent's own ID, or `person`. */
+  readonly by: string;
+  /** One line, or empty. */
+  readonly reason: string;
+}
+
 export interface AgentView {
   readonly agent: Agent;
   /** What the agent says that it is to the lab, in its own words. */
@@ -75,6 +84,8 @@ export interface AgentView {
   /** The thread where the agent works now, or `null` when it works in none. */
   readonly thread: string | null;
   readonly activity: AgentActivity;
+  /** `null` while the agent is in the lab. */
+  readonly left: AgentLeft | null;
   readonly turns: number;
   readonly posts: number;
   readonly usage: Usage;

@@ -4,11 +4,11 @@ import asyncio
 from collections.abc import Awaitable, Callable
 
 from verifold.protocol.agents import GUEST
-from verifold.protocol.events import AlarmSet, RerunRequested, WatchSet
-from verifold.protocol.ids import AgentId, PostId, ThreadId
+from verifold.protocol.events import AgentLeft, AlarmSet, RerunRequested, WatchSet
+from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import Brief, News, PostRequest, PostView, ThreadSummary, ThreadView, Update
 from verifold.protocol.posts import FileEvidence
-from verifold.server.errors import BlindCheck, CannotWake, EvidenceRejected, OutOfTime, UnknownAgent
+from verifold.server.errors import BlindCheck, CannotWake, EvidenceRejected, HasLeft, OutOfTime, UnknownAgent
 from verifold.server.lab import Lab
 from verifold.society.attention import news, update
 from verifold.society.views import brief, post_view, thread_summaries, thread_view
@@ -50,6 +50,32 @@ class Member:
     def lab(self) -> Lab:
         """The lab that the agent works in."""
         return self._lab
+
+    def check_here(self) -> None:
+        """
+        Check that the agent is still in the lab. The join endpoint calls it before every tool.
+
+        An agent that left gets nothing more from the board: no write, and no read either. So a token that outlives
+        its agent, such as an invited agent's, opens nothing.
+
+        Raises:
+            HasLeft: The agent left the lab, or the person removed it.
+
+        """
+        left = self._lab.board.gone(self.agent_id)
+        if left:
+            how = 'The person removed you from this lab' if left.by == PERSON else 'You left this lab'
+            raise HasLeft(f'{how}, so the board takes no call from you. Your posts stay on it.')
+
+    async def leave(self, reason: str = '') -> AgentLeft:
+        """
+        Leave the lab, for good. The agent's posts stay.
+
+        Raises:
+            RejectedEvent: The agent is a blind checker.
+
+        """
+        return await self._lab.leave(self.agent_id, self.agent_id, reason)
 
     async def post(self, request: PostRequest) -> PostView:
         """
@@ -185,6 +211,8 @@ class Member:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while True:
+            # The person can remove the agent while it waits. The wait then ends with the reason.
+            self.check_here()
             if self.void:
                 raise UnknownAgent('This agent got a new invitation, so the token of this call is void.')
             news = update(self._lab.board, self.agent_id, self._seen)

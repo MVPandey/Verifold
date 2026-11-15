@@ -10,6 +10,7 @@ from verifold.protocol.join import (
     AgentLine,
     AnswerView,
     Brief,
+    LeftLine,
     News,
     PostLine,
     PostView,
@@ -109,11 +110,13 @@ def _links(pairs: tuple[Crossing, ...]) -> tuple[ThreadLink, ...]:
 def _team(board: Board, opened: ThreadOpened, lines: dict[AgentId, ThreadId | None]) -> tuple[AgentId, ...]:
     # The lab's agents that work in the thread now. The agent that opened the thread is in its team until it works
     # in another one, unless it opened the thread with a call, which says that the work needs somebody else. The
-    # person and blind checkers are in no team, and the question's thread has none.
+    # person, blind checkers, and agents that left are in no team, and the question's thread has none.
     thread = opened.thread
     if thread.id == question_thread(board):
         return ()
-    workers = tuple(joined.agent.id for joined in board.agents if not joined.agent.checks)
+    workers = tuple(
+        joined.agent.id for joined in board.agents if not joined.agent.checks and not board.gone(joined.agent.id)
+    )
     first = next((entry.post for entry in board.posts if entry.post.thread == thread.id), None)
     called = isinstance(first, Call) and first.author == thread.opened_by
     opener = () if called or thread.opened_by in lines else (thread.opened_by,)
@@ -177,11 +180,12 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
     nobody has answered, the results that nobody has checked, and the disputed posts. Then come the newest threads
     and the agent's `news`. `how` says how the board works.
     """
-    # An invited agent that has not posted may never come, so no agent reads it as a peer to ask or wait for.
+    # An invited agent that has not posted may never come, so no agent reads it as a peer to ask or wait for. An
+    # agent that left is no peer either, and the brief lists it apart.
     others = tuple(
         joined.agent
         for joined in board.agents
-        if joined.agent.id != agent_id and not joined.agent.checks and board.came(joined)
+        if joined.agent.id != agent_id and not joined.agent.checks and board.here(joined)
     )
     stands = tuple((entry, standing(board, entry.post.id)) for entry in board.posts)
     not_checked = tuple(
@@ -226,6 +230,11 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         you=agent_id,
         how=how,
         agents=tuple(_agent_line(board, agent, working) for agent in others),
+        left=tuple(
+            LeftLine(id=entry.agent, name=joined.agent.name, by=entry.by, reason=entry.reason)
+            for entry in board.left
+            if (joined := board.agent(entry.agent))
+        ),
         answer=PostLine.of(proposed) if proposed else None,
         answer_standing=standing(board, proposed.post.id) if proposed else None,
         state=lab_state(board),

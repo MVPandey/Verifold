@@ -63,6 +63,21 @@ describe('the API client', () => {
     );
   });
 
+  it('removes an agent with a DELETE, and reads a lab from before agents could leave', async () => {
+    const lab = '{"agents": [{"agent": {"id": "agent-1"}}]}';
+    const server = serverThatAnswers(200, lab);
+    const api = createApi('secret', server.fetcher);
+
+    await api.removeAgent('agent 2');
+    const read = await api.lab();
+
+    const [removal] = server.calls;
+    assert.equal(removal?.input, '/api/agents/agent%202');
+    assert.equal(removal?.init.method, 'DELETE');
+    assert.equal(removal?.init.body, undefined);
+    assert.equal(read.agents[0]?.left, null);
+  });
+
   it('turns a refusal into an error with the server reason', async () => {
     const refusals = [
       [409, '{"detail": "This folder has a lab already."}', 'This folder has a lab already.'],
