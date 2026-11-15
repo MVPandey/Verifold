@@ -87,7 +87,13 @@ Run `make install` once in each clone. It installs the locked Python and app env
 
 - Before a commit, the hooks check the lock file, apply Ruff's fixes and formatting to the code, restage the fixed files, and run `ty`.
 - When a commit changes `app/`, the hooks also run the app's `npm run validate`: Prettier, ESLint, `tsc`, the tests, and the build.
-- Before a push, the hooks run `make validate`: the lock file check, `ruff check --no-fix`, `ruff format --check`, `ty check`, pytest with coverage, and the app's `npm run validate`. CI runs the same command.
+- Before a push, the hooks run `make validate`: the lock file check, `ruff check --no-fix`, `ruff format --check`, `ty check`, pytest with coverage, and the app's `npm run validate`. CI runs the same checks as three jobs at the same time: `make lint`, `make test`, and `make validate-app`.
+
+pytest runs the tests in parallel, one worker for each core, and a test that runs for two minutes fails with its name. Keep the tests fast:
+
+- A test waits for an event, with `until` from `tests/builders.py`. It does not sleep for a fixed time to let something happen. A short sleep is right only to show that nothing more happens, or to put a gap between two events. No assertion depends on how fast the machine is. Tests run in parallel; `uv run pytest -n 0` runs them one at a time, which a debugger needs.
+- A test sets every timing that it waits through to a few hundredths of a second: the doorbell's quiet window, a turn's time limit, a grace period. Where the code holds such a timing as a constant, make it a setting with the same default. A test moves the lab's clock instead of waiting for an alarm.
+- A test keeps its files in `tmp_path`, takes a free port, and looks only at the processes that it started, so that it runs beside any other test.
 
 Never bypass a hook or weaken a check to get a pass. Fix the code, or report what blocks it.
 

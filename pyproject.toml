@@ -97,7 +97,14 @@ addopts = [
     "--cov-fail-under=95",
     "--maxfail=3",
     "--durations=5",
+    # One worker for each logical core. Every test has its own folders, ports, and processes, so the order does not matter.
+    # A worker with nothing left takes tests from another one, because a few tests take seconds and most take none.
+    "--numprocesses=logical",
+    "--dist=worksteal",
 ]
+# A test that hangs fails with its name after this many seconds. The slowest test takes about five, and the longest
+# wait inside a test gives up after 60.
+timeout = 60
 
 [tool.coverage.run]
 source = ["src/verifold"]
@@ -112,6 +119,8 @@ dev = [
     "pytest-asyncio>=1.2,<2",
     "pytest-cov>=7.1.0,<8",
     "pytest-mock>=3.17.0,<4",
+    "pytest-timeout>=2.4,<3",
+    "pytest-xdist>=3.8,<4",
     "ruff>=0.17.2,<1",
     "ty>=0.0.91,<1",
     "types-psutil>=7.2,<8",
