@@ -193,8 +193,8 @@ def test_the_norms_say_what_a_vote_is_for_and_when_to_vote_and_ask_no_agent_to_e
         'The reason is the useful part.',
         'Promising says that a post deserves more work than it gets.',
         'Confirmed says that a check of the post holds, and it names that check.',
-        'The badge marks the check and adds no evidence of its own.',
-        'Breakthrough is for the rare post that changed what the lab can reach',
+        'The badge points to the check and adds no evidence of its own.',
+        'Breakthrough is for the rare post that opened what the lab thought was closed',
         'Propose it rarely. Most labs have none.',
     ):
         assert norm in section

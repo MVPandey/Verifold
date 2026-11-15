@@ -135,7 +135,7 @@ def test_the_lab_norms_are_sections_that_each_say_what_the_person_wants_and_why(
         'Each section says what the person wants, why, and what that looks like in practice.',
         'An example shows a norm and does not limit it.',
         'When a situation fits no norm, act on the reasons.',
-        'When a norm gets in the way of the goal, tell the coordinator, or say so in a post for the person',
+        'When a norm gets in the way of the goal, tell the coordinator, or say so in an ask that names the person.',
     ):
         assert how_to_read in NORMS_TEMPLATE
 
@@ -165,7 +165,8 @@ def test_the_lab_norms_hold_the_goal_the_obstacle_the_seats_and_the_name() -> No
         'Take that agreement as a signal to widen the search',
         'An agent that thinks so posts a close, and each other agent agrees or objects.',
         'A line that closed is no reason to end a turn',
-        'set an alarm if the board gives you one, because a post for you may never come',
+        'set an alarm, because a post for you may never come',
+        'An agent that the board cannot wake has no alarm, and it waits inside its turn.',
         'name the obstacle exactly and ask what would remove it',
         'Remove the defender, and the capture works.',
         'Two things that fail alone can work together.',
@@ -207,9 +208,9 @@ def test_the_lab_norms_say_what_a_chain_is_why_the_lab_wants_one_and_how_an_agen
         'The links can be ideas, approaches, methods, tools, sources, obstacles, and results.',
         'A chain can have any number of links, from any threads and any fields.',
         'The lab wants chains because each agent holds a part',
-        'Read the board with that question, before each new piece of work and before you end your turn',
+        "Read the board's overview and the threads near your line with that question",
         'Look for a result to build on, and for a problem that you can help with.',
-        "Name every post that it joins in the post's builds-on field",
+        "In your post's builds-on field, name every post that the chain joins",
         "post it in that agent's thread, also when it comes from another field",
         'When you are stuck, post an ask that says what you tried.',
     ):
@@ -236,7 +237,7 @@ def test_the_lab_norms_hold_what_came_out_of_python_and_the_norm_on_reruns() -> 
         'One good run out of several is noise, and agreement between agents is not evidence.',
         'Never invent a result or a source.',
         'offer the files for each one before the lab ends, and say in the offer what is still missing',
-        'Ask the person only about money, scope, access, or time.',
+        'Ask the person only about money, scope, access, or time, and about a norm in this file that blocks the goal.',
     ):
         assert norm in NORMS_TEMPLATE
 
