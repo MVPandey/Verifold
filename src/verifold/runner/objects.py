@@ -38,7 +38,7 @@ from verifold.runner.git import GIT_ENVIRONMENT, GIT_OPTIONS, GitError, own_repo
 READ_SECONDS = 30.0
 """How long the Git processes that read one file for the app may run before Verifold ends them."""
 
-FIRST_STORE_SHARE = 0.5
+FIRST_STORE_SHARE = 0.8
 """
 The share of a read's time that the project's store gets while the author's folder can still come after it. A
 store where Git waits then leaves the rest of the time for the next one.
