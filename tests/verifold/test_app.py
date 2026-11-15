@@ -483,7 +483,7 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
         before = await state_of(client, 'agent-2')
         async with board_of(url, token) as board:
             brief = await board.call_tool('brief', {})
-            waiting = asyncio.create_task(board.call_tool('wait', {'timeout_seconds': 2}))
+            waiting = asyncio.create_task(board.call_tool('wait', {'timeout_seconds': 1}))
             listening = False
             while not waiting.done():
                 listening = listening or await state_of(client, 'agent-2') == 'listening'
