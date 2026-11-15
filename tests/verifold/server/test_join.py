@@ -201,12 +201,17 @@ async def test_a_blind_checker_posts_its_check_and_gets_no_news(lab: Lab) -> Non
     evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
     await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
     await lab.join(Agent(id='dee', name='Dee', harness='fake', model=ModelSpec(family='openai'), checks='p-2'))
-    check = {'kind': 'check', 'text': 'Reran it.', 'thread': 't-1', 'reply_to': 'p-2', 'outcome': 'holds'}
+    # The check names no thread: a reply goes in the thread of the post that it answers.
+    check = {'kind': 'check', 'text': 'Reran it.', 'reply_to': 'p-2', 'outcome': 'holds'}
     async with Client(join_server(lambda _: Member(lab, 'dee'))) as client:
         posted = await client.call_tool('post', check | {'method': 'rerun'})
+        lost = await client.call_tool('post', {'kind': 'message', 'text': 'Where?', 'reply_to': 'p-99'})
         refused = await client.call_tool('brief', {})
 
     assert posted.structured_content is not None
+    assert [entry.post.thread for entry in lab.board.posts if entry.post.author == 'dee'] == ['t-1']
+    assert lost.is_error
+    assert 'Give thread' in str(lost.content)
     assert (posted.structured_content['standing'], posted.structured_content['news']) == ('open', None)
     assert refused.is_error
     assert 'rerun p-2 blind' in str(refused.content)

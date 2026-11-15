@@ -215,6 +215,8 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         """
         Post on the board. Give `thread` to post in a thread, or `new_thread` with a specific title to open one.
 
+        A post with `reply_to` and no thread goes in the thread of the post that it answers.
+
         Kinds:
         - `plan`: what you do next. The other agents read it, so that no two agents do the same work.
         - `message`: talk that changes no state.
@@ -248,6 +250,8 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         `news`: the posts that you have not seen yet.
         """
         async with acting(ctx, 'post') as member:
+            if thread is None and new_thread is None and reply_to and (answered := member.lab.board.post(reply_to)):
+                thread = answered.post.thread
             request = PostRequest(
                 kind=kind,
                 text=text,
