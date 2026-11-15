@@ -11,13 +11,13 @@ from pathlib import Path
 
 import pytest
 from builders import START, until
+from plants import BEFORE, FORMS, fires, no_fetch_switch, plant
 
 from verifold.protocol.events import Posted
 from verifold.protocol.posts import FileEvidence, Result
-from verifold.runner import objects, reruns
+from verifold.runner import reruns
 from verifold.runner.folders import agent_folder
 from verifold.runner.git import git
-from verifold.runner.objects import fetches_nothing
 from verifold.runner.reruns import LEFTOVER_SECONDS, CleanCopies
 from verifold.runner.snapshots import pin, snapshot
 from verifold.server.errors import EvidenceRejected, NoCleanCopy
@@ -119,31 +119,42 @@ async def test_the_copy_holds_the_bytes_that_git_stores_and_a_link_as_a_plain_fi
 
 async def test_taking_a_rerun_writes_nothing_and_runs_nothing_in_any_agents_folder(tmp_path: Path) -> None:
     project = tmp_path / 'project'
+    project.mkdir()
+    author = await agent_folder(project, 'ada')
+    # The author's files ask Git for a filter, which the author's repository names below.
+    (author / '.gitattributes').write_text('* filter=evil\n')
     claim = await a_claim(project)
-    author = project / '.verifold' / 'agents' / 'ada'
+    commit = claim.post.evidence[0].commit
     taker = await agent_folder(project, 'bo')
     ran = tmp_path / 'ran'
     outside = tmp_path / 'outside'
     (outside / 'p-4').mkdir(parents=True)
     (outside / 'p-4' / 'precious').write_text('x')
     (outside / 'file').write_text('keep')
-    # The author's repository names a command wherever Git's configuration can: a file watcher, hooks, a filter,
-    # a pager, an editor, and a remote for objects that it lacks, over a transport that runs a command.
+    # The author's repository names a command where Git runs one at a checkout: hooks, a file watcher, and a filter.
     hooks = author / '.git' / 'hooks'
     hooks.mkdir(exist_ok=True)
-    for hook in ('reference-transaction', 'post-index-change', 'pre-auto-gc', 'post-checkout'):
-        (hooks / hook).write_text(f'#!/bin/sh\ntouch {ran}-hook\n')
+    for hook in ('reference-transaction', 'post-index-change', 'post-checkout'):
+        (hooks / hook).write_text(f'#!/bin/sh\ntouch {ran}-{hook}\n')
         (hooks / hook).chmod(0o755)
     config = author / '.git' / 'config'
     config.write_text(
         config.read_text()
-        + f'[core]\n\tfsmonitor = touch {ran}-fsmonitor\n\tsshCommand = touch {ran}-ssh; false\n'
-        + f'\tpager = touch {ran}-pager\n\teditor = touch {ran}-editor\n\talternateRefsCommand = touch {ran}-alt\n'
-        + f'[filter "evil"]\n\tclean = touch {ran}-clean; cat\n\tsmudge = touch {ran}-smudge; cat\n'
-        + '[extensions]\n\tpartialClone = evil\n'
-        + f'[remote "evil"]\n\turl = ext::sh -c "touch {ran}-ext"\n\tpromisor = true\n\tpartialclonefilter = blob:none\n'
-        + '[protocol "ext"]\n\tallow = always\n'
+        + f'[core]\n\tfsmonitor = touch {ran}-fsmonitor\n'
+        + f'[filter "evil"]\n\tsmudge = touch {ran}-smudge; cat\n'
     )
+    # Git itself runs each of them when it checks the commit out of a copy of that repository.
+    shutil.copytree(author, tmp_path / 'unguarded', symlinks=True)
+    await git('worktree', 'add', '--detach', str(tmp_path / 'checked-out'), commit, cwd=tmp_path / 'unguarded')
+    assert sorted(path.name for path in tmp_path.glob('ran*')) == [
+        'ran-fsmonitor',
+        'ran-post-checkout',
+        'ran-post-index-change',
+        'ran-reference-transaction',
+        'ran-smudge',
+    ]
+    for marker in tmp_path.glob('ran*'):
+        marker.unlink()
     # The taker's folder holds what took Verifold outside before: links, a pipe, and a hard link where the
     # copies were, and a repository with hooks of its own.
     theirs = taker / '.verifold'
@@ -159,7 +170,7 @@ async def test_taking_a_rerun_writes_nothing_and_runs_nothing_in_any_agents_fold
 
     copy = await clean_copy(project, claim)
 
-    assert everything(copy) == FILES
+    assert everything(copy) == FILES | {'.gitattributes': '* filter=evil\n'}
     assert copy.is_relative_to(project.resolve() / '.verifold' / 'reruns')
     # Nothing in any agent's folder and nothing outside the lab changed, and no command of a repository ran.
     assert everything(agents) == before
@@ -172,12 +183,9 @@ async def test_a_commit_that_the_repository_lacks_is_refused_and_nothing_is_fetc
     claim = await a_claim(project)
     author = project / '.verifold' / 'agents' / 'ada'
     ran = tmp_path / 'ran'
-    config = author / '.git' / 'config'
-    config.write_text(
-        config.read_text()
-        + '[extensions]\n\tpartialClone = evil\n'
-        + f'[remote "evil"]\n\turl = ssh://localhost/x\n\tpromisor = true\n[core]\n\tsshCommand = touch {ran}; false\n'
-    )
+    # The author's repository names a remote for the objects that it lacks. Git itself asks it for the commit.
+    plant(author / '.git', 'plain', ran, tmp_path / 'aside.git')
+    assert await fires(author, 'deadbeef' * 5, ran)
     lost = claim.post.model_copy(update={'evidence': (FileEvidence(path='result.txt', commit='deadbeef' * 5),)})
 
     with pytest.raises(NoCleanCopy, match='No repository of the lab has the commit deadbeef'):
@@ -187,7 +195,7 @@ async def test_a_commit_that_the_repository_lacks_is_refused_and_nothing_is_fetc
     assert not any((project / '.verifold' / 'reruns' / 'p-4').iterdir())
 
 
-async def test_a_copy_that_fails_leaves_nothing_and_never_makes_or_follows_the_authors_folder(
+async def test_a_copy_that_fails_leaves_nothing_and_never_makes_or_changes_the_authors_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project = tmp_path / 'project'
@@ -201,24 +209,32 @@ async def test_a_copy_that_fails_leaves_nothing_and_never_makes_or_follows_the_a
     with pytest.raises(NoCleanCopy, match='The snapshot has more than 1 files and folders'):
         await clean_copy(project, claim)
     monkeypatch.undo()
-    # An author with no folder, with a folder that is a link, and with a `.git` that points elsewhere.
+    # A post without files, and an author with no folder, which is no repository that lacks the commit.
     with pytest.raises(NoCleanCopy, match='pins no file'):
         await clean_copy(project, claim.model_copy(update={'post': claim.post.model_copy(update={'evidence': ()})}))
     gone = claim.model_copy(update={'post': claim.post.model_copy(update={'author': 'zed'})})
-    with pytest.raises(NoCleanCopy, match='No repository of the lab has the commit'):
+    with pytest.raises(NoCleanCopy, match='found no repository of the lab that it can read'):
         await clean_copy(project, gone)
     assert not (agents / 'zed').exists()
+    assert not any((project / '.verifold' / 'reruns' / 'p-4').iterdir())
+    # An author's folder that is a link, and a `.git` that names a directory elsewhere. Verifold reads the objects
+    # where they are, checks each one, and writes nothing there.
     (agents / 'ada').rename(elsewhere / 'ada')
+    before = everything(elsewhere)
     (agents / 'ada').symlink_to(elsewhere / 'ada')
-    with pytest.raises(NoCleanCopy, match='No repository of the lab has the commit'):
-        await clean_copy(project, claim)
+    assert everything(await clean_copy(project, claim)) == FILES
+    shutil.rmtree(project / '.verifold' / 'reruns' / 'p-4')
     (agents / 'ada').unlink()
     (agents / 'ada').mkdir()
     (agents / 'ada' / '.git').write_text(f'gitdir: {elsewhere / "ada" / ".git"}\n')
-    with pytest.raises(NoCleanCopy, match='No repository of the lab has the commit'):
-        await clean_copy(project, claim)
-
-    assert not any((project / '.verifold' / 'reruns' / 'p-4').iterdir())
+    assert everything(await clean_copy(project, claim)) == FILES
+    assert everything(elsewhere) == before
+    # A `.git` that is no small plain file is not read.
+    (agents / 'ada' / '.git').unlink()
+    os.mkfifo(agents / 'ada' / '.git')
+    with pytest.raises(NoCleanCopy, match='is no plain text file of at most 4,096 bytes'):
+        await clean_copy(project, claim.model_copy(update={'post': claim.post.model_copy(update={'id': 'p-5'})}))
+    assert not any((project / '.verifold' / 'reruns' / 'p-5').iterdir())
     # The lab's own folder for the copies must be a real folder too.
     (project / '.verifold' / 'reruns' / 'p-9').symlink_to(elsewhere)
     with pytest.raises(NoCleanCopy, match='is not a folder of yours'):
@@ -313,15 +329,10 @@ async def test_trees_that_git_never_makes_are_refused_before_anything_is_written
         deep = _tree_object(author, [('40000', 'd', deep)])
     with pytest.raises(NoCleanCopy, match='more than 64 folders inside each other'):
         await clean_copy(project, await hand_made(author, [('40000', 'deep', deep)]))
-    # A tree that names a file that the repository lacks, with a remote that would run a command to fetch it.
+    # A tree that names a file that the repository lacks, with a remote that Git itself asks for such a file.
     ran = tmp_path / 'ran'
-    config = author / '.git' / 'config'
-    config.write_text(
-        config.read_text()
-        + '[extensions]\n\tpartialClone = evil\n'
-        + f'[remote "evil"]\n\turl = file://{tmp_path}/none\n\tpromisor = true\n\tuploadpack = touch {ran}; false\n'
-        + '[protocol "file"]\n\tallow = always\n'
-    )
+    plant(author / '.git', 'plain', ran, tmp_path / 'aside.git')
+    assert await fires(author, 'ab' * 20, ran)
     with pytest.raises(NoCleanCopy, match='does not have the object'):
         await clean_copy(project, await hand_made(author, [('100644', 'result.txt', 'ab' * 20)]))
 
@@ -457,9 +468,8 @@ async def test_a_pipe_in_the_authors_repository_ends_at_the_time_limit_and_holds
     with pytest.raises(NoCleanCopy, match='did not answer in time'):
         await hung
     loose_path.unlink()
-    # A pipe where Git expects the repository's configuration.
-    (author / '.git' / 'config').unlink()
-    os.mkfifo(author / '.git' / 'config')
+    # A pipe where Git expects the list of the store's other object stores.
+    os.mkfifo(author / '.git' / 'objects' / 'info' / 'alternates')
     hung = asyncio.create_task(lab(claim))
     again = asyncio.create_task(lab(claim))
     assert everything((await lab(fine)).folder) == {'fine.txt': 'ok'}
@@ -619,72 +629,30 @@ async def test_a_server_that_stops_ends_an_export_and_a_caller_that_went_away_le
     assert loose_errors == []
 
 
-async def test_an_older_git_reads_only_a_repository_whose_configuration_cannot_make_it_fetch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ('with_commits', 'form'), [*((False, form) for form in FORMS), *((True, form) for form in BEFORE)]
+)
+async def test_an_export_asks_no_remote_that_a_repository_names_for_an_object_that_it_lost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, with_commits: bool, form: str
 ) -> None:
-    risky = {
-        '[include]\n\tpath = /tmp/other\n': 'takes in other configuration',
-        '[INCLUDEIF "gitdir:/x/"] path = /tmp/other\n': 'takes in other configuration',
-        '[extensions]\n\tworktreeConfig = true\n': 'takes in other configuration',
-        '[Extensions]\n\tPartialClone = evil\n': 'names a remote for objects that it lacks',
-        '[extensions] partialclone = evil\n': 'names a remote for objects that it lacks',
-        '[remote "evil"]\n\turl = /x\n\tPROMISOR = true\n': 'names a remote for objects that it lacks',
-        '[remote.evil]\n\tpartialCloneFilter = blob:none\n': 'names a remote for objects that it lacks',
-        'not a line of a configuration\n': 'cannot read the configuration',
-        '[core]\n\tname = \xff\n': 'cannot read the configuration',
-    }
-    plain = tmp_path / 'plain'
-    claim = await a_claim(plain)
-    project = await committed(tmp_path / 'project')
-    in_project = await a_claim(project)
-    configs = {plain: plain / '.verifold' / 'agents' / 'ada' / '.git' / 'config', project: project / '.git' / 'config'}
-    kept = {folder: config.read_bytes() for folder, config in configs.items()}
+    project = await committed(tmp_path / 'project') if with_commits else tmp_path / 'project'
+    claim = await a_claim(project)
+    author = project / '.verifold' / 'agents' / 'ada'
+    blob = await git('rev-parse', f'{claim.post.evidence[0].commit}:result.txt', cwd=author)
+    ran = tmp_path / 'ran'
+    # The repository whose configuration Git reads in the author's folder names a remote for the objects that it
+    # lacks, over a transport that runs a command. In a project with commits that is the project's own repository.
+    store = plant(project / '.git' if with_commits else author / '.git', form, ran, tmp_path / 'aside.git')
+    (store / blob[:2] / blob[2:]).unlink()
+    no_fetch_switch(monkeypatch)
 
-    # A Git of today fetches nothing when told so, and Verifold does not look at the configuration.
-    assert fetches_nothing()
-    configs[plain].write_bytes(kept[plain] + b'[include]\n\tpath = /tmp/other\n')
-    assert everything(await clean_copy(plain, claim)) == FILES
-    configs[plain].write_bytes(kept[plain])
+    # Git itself, asked in the author's folder for the lost file, runs the command.
+    assert await fires(author, blob, ran)
+    with pytest.raises(NoCleanCopy, match='does not have the object'):
+        await clean_copy(project, claim)
 
-    monkeypatch.setattr(objects, 'FETCHES_NOTHING_FROM', (99, 0))
-    assert not fetches_nothing()
-    # An older Git with an ordinary configuration makes the copy: in a project without Git commits and with them.
-    assert everything(await clean_copy(plain, claim)) == FILES
-    assert everything(await clean_copy(project, in_project))['result.txt'] == '11.8'
-    # A value that goes on over lines, comments, and a remote of the usual kind are ordinary too.
-    usual = b'# note\n[remote "origin"]\n\turl = /x\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[alias]\n\tx = a \\\n[include]\n'
-    configs[plain].write_bytes(kept[plain] + usual)
-    assert everything(await clean_copy(plain, claim)) == FILES
-    # Each shape that can make it fetch, or that Verifold cannot read with confidence, refuses the copy.
-    for folder, post in ((plain, claim), (project, in_project)):
-        for added, why in risky.items():
-            configs[folder].write_bytes(kept[folder] + added.encode('latin-1'))
-            # Git itself cannot read some of these files, and Verifold then does not find the project's repository.
-            unread = folder == project and why.startswith('cannot read')
-            expected = f'{why}|No repository of the lab has the commit' if unread else why
-            with pytest.raises(NoCleanCopy, match=expected) as refused:
-                await clean_copy(folder, post)
-            assert 'No repository' in str(refused.value) or 'Git 99.0 or later fetches nothing' in str(refused.value)
-        configs[folder].write_bytes(kept[folder])
-    # So does a configuration that is a link, a pipe, too large, or gone.
-    outside = tmp_path / 'config'
-    outside.write_bytes(kept[plain])
-    for shape in ('link', 'pipe', 'large', 'gone'):
-        configs[plain].unlink()
-        if shape == 'link':
-            configs[plain].symlink_to(outside)
-        elif shape == 'pipe':
-            os.mkfifo(configs[plain])
-        elif shape == 'large':
-            configs[plain].write_bytes(kept[plain] + b'#' * (objects.MAX_CONFIG_BYTES + 1))
-        with pytest.raises(NoCleanCopy, match='cannot read the configuration'):
-            await clean_copy(plain, claim)
-        if shape != 'gone':
-            configs[plain].unlink()
-        configs[plain].write_bytes(kept[plain])
-    # A computer without Git reads none.
-    monkeypatch.setenv('PATH', str(tmp_path))
-    assert not fetches_nothing()
+    assert not ran.exists()
+    assert not any((project / '.verifold' / 'reruns' / 'p-4').iterdir())
 
 
 async def test_takes_at_the_same_time_make_one_copy_and_leave_no_other_folder(tmp_path: Path) -> None:

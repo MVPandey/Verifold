@@ -16,11 +16,11 @@ itself. A copy that exists already is checked in the same way, file for file, on
 is thrown away and made again. Each take gets a manifest with the SHA-256 of every file, so the taker can check
 what it reads.
 
-Git reads the objects from a repository of the lab by their IDs, with the repository named by `--git-dir` and
-the working directory in Verifold's own folder. Git fetches nothing that is missing, uses no transport, replaces
-no object, runs no hook and no file watcher, and reads no configuration of the person or the system. Every Git
-process ends at a time limit. The `objects` module holds this reader. Verifold reaches its own folders through
-directory handles that follow no link.
+Git reads the objects through a Git directory of Verifold's own, with the working directory in Verifold's own
+folder, so it reads no configuration of a repository of the lab. Git fetches nothing that is missing, uses no
+transport, replaces no object, runs no hook and no file watcher, and reads no configuration of the person or the
+system. The Git processes of one export end at one time limit. The `objects` module holds this reader. Verifold
+reaches its own folders through directory handles that follow no link.
 """
 
 import asyncio
@@ -39,16 +39,7 @@ from verifold.protocol.ids import AgentId, CommitId, PostId
 from verifold.protocol.join import ManifestLine
 from verifold.runner.folders import LAB_FOLDER
 from verifold.runner.git import GitError
-from verifold.runner.objects import (
-    Objects,
-    PinnedCommit,
-    Running,
-    entries,
-    fetches_nothing,
-    object_hash,
-    reading,
-    whole,
-)
+from verifold.runner.objects import Objects, PinnedCommit, Running, entries, object_hash, reading, whole
 from verifold.server.errors import NoCleanCopy
 from verifold.server.member import MadeCopy
 
@@ -67,7 +58,7 @@ MAX_LISTED_BYTES = 256 * 1024**2
 """The most bytes of all the folders' listings that Verifold reads for one export, each as often as it is named."""
 
 EXPORT_SECONDS = 300.0
-"""How long one Git process for an export may run before Verifold ends it."""
+"""How long the Git processes of one export may run before Verifold ends them."""
 LEFTOVER_SECONDS = 600.0
 """
 How old a leftover of an export is before another export removes it. An export that runs now can belong to another
@@ -132,7 +123,7 @@ class CleanCopies:
         leftover_seconds: float = LEFTOVER_SECONDS,
     ) -> None:
         """
-        Prepare the clean copies of the lab in `project`. Each Git process for one may run for `seconds`.
+        Prepare the clean copies of the lab in `project`. The Git processes of one export may run for `seconds`.
 
         An export removes what an earlier export left behind once that is `leftover_seconds` old.
         """
@@ -141,8 +132,6 @@ class CleanCopies:
         self._leftover = leftover_seconds
         self._free = asyncio.Semaphore(at_once)
         self._making: dict[tuple[PostId, CommitId], asyncio.Task[MadeCopy]] = {}
-        self._fetches_nothing: bool | None = None
-        """Whether this computer's Git fetches no missing object when told so. Asked once."""
         self._running = Running()
 
     def stop(self) -> None:
@@ -159,9 +148,9 @@ class CleanCopies:
         Return the clean copy of the files that a post pins, with its manifest, after Verifold verified it.
 
         Raises:
-            NoCleanCopy: The post pins no file, no repository of the lab has the pinned commit, an object is not
-                the one that its ID names, the snapshot is too large or has a name that is not safe to write, Git
-                did not answer in time, or the copy could not be written.
+            NoCleanCopy: The post pins no file, Verifold found no repository of the lab that has the pinned
+                commit, an object is not the one that its ID names, the snapshot is too large or has a name that
+                is not safe to write, Git did not answer in time, or the copy could not be written.
 
         """
         post = claim.post
@@ -183,14 +172,11 @@ class CleanCopies:
 
     async def _make(self, post_id: PostId, author: AgentId, commit: CommitId) -> MadeCopy:
         async with self._free:
-            if self._fetches_nothing is None:
-                self._fetches_nothing = await asyncio.to_thread(fetches_nothing, self._seconds)
             job = _Job(
                 project=self._project.resolve(),
                 author=author,
                 commit=commit,
                 seconds=self._seconds,
-                fetches_nothing=self._fetches_nothing,
                 running=self._running,
                 post_id=post_id,
                 leftover=self._leftover,

@@ -1,13 +1,18 @@
 import hashlib
+import os
+import re
+import shutil
 import zlib
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from plants import BEFORE, FORMS, fires, no_fetch_switch, plant, remote
 
+from verifold.runner import objects
 from verifold.runner.folders import agent_folder
-from verifold.runner.git import GitError, git
-from verifold.runner.objects import Missing, PinnedCommit, Running, TooLarge, fetches_nothing, file_bytes
+from verifold.runner.git import GIT_ENVIRONMENT, MAX_SMALL_FILE, GitError, git
+from verifold.runner.objects import Missing, NoRepository, PinnedCommit, Running, TooLarge, file_bytes
 from verifold.runner.snapshots import pin, snapshot
 
 LIMIT = 1_000
@@ -23,15 +28,8 @@ async def committed(path: Path) -> Path:
 
 
 def at(project: Path, commit: str) -> PinnedCommit:
-    """Return a commit of ada's as a post pins it, for the Git of this computer."""
-    return PinnedCommit(
-        project=project.resolve(),
-        author='ada',
-        commit=commit,
-        seconds=30,
-        fetches_nothing=fetches_nothing(),
-        running=Running(),
-    )
+    """Return a commit of ada's as a post pins it."""
+    return PinnedCommit(project=project.resolve(), author='ada', commit=commit, seconds=30, running=Running())
 
 
 async def a_pin(project: Path) -> PinnedCommit:
@@ -51,9 +49,9 @@ async def a_pin(project: Path) -> PinnedCommit:
     return at(project, pinned[0].commit)
 
 
-def loose(repository: Path, name: str) -> Path:
-    """Return the file of a loose object, made writable."""
-    path = repository / '.git' / 'objects' / name[:2] / name[2:]
+def loose(store: Path, name: str) -> Path:
+    """Return the file of a loose object in an object store, made writable."""
+    path = store / name[:2] / name[2:]
     path.chmod(0o644)
     return path
 
@@ -84,6 +82,9 @@ async def test_a_file_is_read_at_the_pinned_commit_from_the_projects_repository_
     assert (author / 'result.txt').read_text() == 'changed later'
     if with_commits:
         assert file_bytes(pinned, 'data.csv', LIMIT) == b'x,y\n1,2\n'
+        # The project's repository has the commit also when the author's folder is gone.
+        shutil.rmtree(author)
+        assert file_bytes(pinned, 'result.txt', LIMIT) == b'11.8'
 
 
 async def test_a_file_over_the_limit_and_a_path_that_names_no_plain_file_are_refused(tmp_path: Path) -> None:
@@ -92,7 +93,7 @@ async def test_a_file_over_the_limit_and_a_path_that_names_no_plain_file_are_ref
 
     # A file of exactly the limit is read, and one byte more is too many.
     assert file_bytes(pinned, 'result.txt', 4) == b'11.8'
-    with pytest.raises(TooLarge, match='it is a blob of 4 bytes'):
+    with pytest.raises(TooLarge, match=re.escape('result.txt has 4 bytes, and this read takes at most 3')):
         file_bytes(pinned, 'result.txt', 3)
     # A folder, a link, and a submodule are no files, at the path's end and on the way to it.
     no_files = {
@@ -108,21 +109,26 @@ async def test_a_file_over_the_limit_and_a_path_that_names_no_plain_file_are_ref
         with pytest.raises(GitError, match=f'{why} in the pinned commit') as refused:
             file_bytes(pinned, path, LIMIT)
         assert not isinstance(refused.value, Missing | TooLarge), path
-    # A name that the commit does not have is missing, and so is a commit that no repository of the lab has.
+    # A name that the commit does not have is missing, and so is a commit that the author's repository lacks.
     for path in ('none.txt', 'out/none.json', 'none/a.json', 'out//deep/a.json', '/result.txt', ''):
         with pytest.raises(Missing, match='The pinned commit has no'):
             file_bytes(pinned, path, LIMIT)
     with pytest.raises(Missing, match='No repository of the lab has the commit deadbeef'):
         file_bytes(replace(pinned, commit='deadbeef' * 5), 'result.txt', LIMIT)
-    with pytest.raises(Missing, match='No repository of the lab has the commit'):
+    # An author without a folder has no repository. That is another error than a file that the commit lacks.
+    with pytest.raises(NoRepository, match='found no repository of the lab that it can read') as none:
         file_bytes(replace(pinned, author='zed'), 'result.txt', LIMIT)
+    assert not isinstance(none.value, Missing)
 
 
-async def test_a_listing_that_git_never_makes_is_refused(tmp_path: Path) -> None:
+async def test_a_listing_that_git_never_makes_or_that_is_too_large_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     project = tmp_path / 'project'
     project.mkdir()
     author = await agent_folder(project, 'ada')
     blob = bytes.fromhex(await git('hash-object', '-w', '--stdin', cwd=author))
+    one = b'100644 result.txt\0' + blob
 
     # An entry of a kind that Git does not have, and listings that end inside an ID and inside a name.
     odd = await hand_made(author, b'100000 odd\0' + blob)
@@ -132,12 +138,32 @@ async def test_a_listing_that_git_never_makes_is_refused(tmp_path: Path) -> None
         cut = await hand_made(author, listing)
         with pytest.raises(GitError, match='ends inside an entry'):
             file_bytes(at(project, cut), 'result.txt', LIMIT)
+    # An entry that calls a folder's listing a file.
+    listing = await git('rev-parse', f'{odd}^{{tree}}', cwd=author)
+    wrong = await hand_made(author, b'100644 result.txt\0' + bytes.fromhex(listing))
+    with pytest.raises(GitError, match=f'The object {listing} is a tree, and Verifold reads a blob there'):
+        file_bytes(at(project, wrong), 'result.txt', LIMIT)
+    # One name twice, also when the path asks for another name of that listing.
+    twice = await hand_made(author, one + one + b'100644 other.txt\0' + blob)
+    for path in ('result.txt', 'other.txt'):
+        with pytest.raises(GitError, match='has one name twice'):
+            file_bytes(at(project, twice), path, LIMIT)
+    # A listing over the limit for listings is refused as a listing, and not as a file that is too large.
+    large = await hand_made(author, one + b''.join(b'100644 f%d\0' % number + blob for number in range(40)))
+    assert file_bytes(at(project, large), 'result.txt', LIMIT) == b''
+    monkeypatch.setattr(objects, 'MAX_TREE_BYTES', 500)
+    with pytest.raises(
+        GitError, match=r'The tree [0-9a-f]{40} has 1,[0-9]{3} bytes, and Verifold reads at most 500'
+    ) as big:
+        file_bytes(at(project, large), 'result.txt', LIMIT)
+    assert not isinstance(big.value, TooLarge)
 
 
 async def test_a_replaced_object_is_not_read_and_a_changed_one_is_refused(tmp_path: Path) -> None:
     project = tmp_path / 'project'
     pinned = await a_pin(project)
     author = project / '.verifold' / 'agents' / 'ada'
+    store = author / '.git' / 'objects'
     blob = await git('rev-parse', f'{pinned.commit}:result.txt', cwd=author)
     tree = await git('rev-parse', f'{pinned.commit}^{{tree}}', cwd=author)
     later = await git('rev-parse', 'refs/verifold/agents/ada', cwd=author)
@@ -151,53 +177,156 @@ async def test_a_replaced_object_is_not_read_and_a_changed_one_is_refused(tmp_pa
     assert await git('show', f'{pinned.commit}:result.txt', cwd=author) == 'changed later'
     assert file_bytes(pinned, 'result.txt', LIMIT) == b'11.8'
     # The file's object holds other bytes under the same name.
-    kept = loose(author, blob).read_bytes()
-    loose(author, blob).write_bytes(zlib.compress(b'blob 4\x0099.9'))
+    kept = loose(store, blob).read_bytes()
+    loose(store, blob).write_bytes(zlib.compress(b'blob 4\x0099.9'))
     with pytest.raises(GitError, match=refused):
         file_bytes(pinned, 'result.txt', LIMIT)
-    loose(author, blob).write_bytes(kept)
+    loose(store, blob).write_bytes(kept)
     # The tree's object names the later file under the same name.
-    kept = loose(author, tree).read_bytes()
+    kept = loose(store, tree).read_bytes()
     listing = b'100644 result.txt\0' + bytes.fromhex(changed)
-    loose(author, tree).write_bytes(zlib.compress(b'tree ' + str(len(listing)).encode() + b'\0' + listing))
+    loose(store, tree).write_bytes(zlib.compress(b'tree ' + str(len(listing)).encode() + b'\0' + listing))
     with pytest.raises(GitError, match=refused):
         file_bytes(pinned, 'result.txt', LIMIT)
-    loose(author, tree).write_bytes(kept)
+    loose(store, tree).write_bytes(kept)
 
     assert file_bytes(pinned, 'result.txt', LIMIT) == b'11.8'
 
 
-async def test_a_read_runs_no_command_of_the_repository_and_fetches_no_file_that_it_lacks(tmp_path: Path) -> None:
-    project = tmp_path / 'project'
+@pytest.mark.parametrize(
+    ('with_commits', 'form'), [*((False, form) for form in FORMS), *((True, form) for form in BEFORE)]
+)
+async def test_git_asks_no_remote_that_a_repository_names_for_an_object_that_it_lost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, with_commits: bool, form: str
+) -> None:
+    project = await committed(tmp_path / 'project') if with_commits else tmp_path / 'project'
     pinned = await a_pin(project)
     author = project / '.verifold' / 'agents' / 'ada'
     blob = await git('rev-parse', f'{pinned.commit}:result.txt', cwd=author)
     ran = tmp_path / 'ran'
-    # The author's repository names a command wherever Git's configuration can: a file watcher, hooks, a filter,
-    # a pager, an editor, and a remote for objects that it lacks, over a transport that runs a command.
-    hooks = author / '.git' / 'hooks'
-    hooks.mkdir(exist_ok=True)
-    for hook in ('reference-transaction', 'post-index-change', 'pre-auto-gc', 'post-checkout'):
-        (hooks / hook).write_text(f'#!/bin/sh\ntouch {ran}-hook\n')
-        (hooks / hook).chmod(0o755)
-    config = author / '.git' / 'config'
-    config.write_text(
-        config.read_text()
-        + f'[core]\n\tfsmonitor = touch {ran}-fsmonitor\n\tsshCommand = touch {ran}-ssh; false\n'
-        + f'\tpager = touch {ran}-pager\n\teditor = touch {ran}-editor\n\talternateRefsCommand = touch {ran}-alt\n'
-        + f'[filter "evil"]\n\tclean = touch {ran}-clean; cat\n\tsmudge = touch {ran}-smudge; cat\n'
-        + '[extensions]\n\tpartialClone = evil\n'
-        + f'[remote "evil"]\n\turl = ext::touch {ran}-ext\n\tpromisor = true\n\tpartialclonefilter = blob:none\n'
-        + '[protocol "ext"]\n\tallow = always\n'
-    )
+    # The repository whose configuration Git reads in the author's folder names a remote for the objects that it
+    # lacks, over a transport that runs a command. In a project with commits that is the project's own repository.
+    store = plant(project / '.git' if with_commits else author / '.git', form, ran, tmp_path / 'aside.git')
+    loose(store, blob).unlink()
+    no_fetch_switch(monkeypatch)
 
-    # A file that the repository has is read, and one whose object is gone is missing.
+    # Git itself, asked in the author's folder for the lost file, runs the command.
+    assert await fires(author, blob, ran)
+    # Verifold reads a file that the repository has, and says that the lost one is missing.
     assert file_bytes(pinned, 'out/deep/a.json', LIMIT) == b'{}'
-    loose(author, blob).unlink()
     with pytest.raises(Missing, match='does not have the object'):
         file_bytes(pinned, 'result.txt', LIMIT)
-    # With a Git from before 2.45, Verifold reads no repository whose configuration names such a remote.
-    with pytest.raises(GitError, match='names a remote for objects that it lacks'):
-        file_bytes(replace(pinned, fetches_nothing=False), 'out/deep/a.json', LIMIT)
+    assert not ran.exists()
 
-    assert sorted(path.name for path in tmp_path.glob('ran*')) == []
+
+async def test_a_project_that_git_opens_only_with_the_persons_own_settings_is_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = await committed(tmp_path / 'project')
+    pinned = await a_pin(project)
+    # Git takes every repository that it finds as another user's, as it takes a project that needs the person's
+    # `safe.directory` setting. It then opens no repository in the project.
+    other_owner = {'GIT_TEST_ASSUME_DIFFERENT_OWNER': '1'}
+    with pytest.raises(GitError, match='dubious ownership'):
+        await git('rev-parse', '--git-dir', cwd=project, env=other_owner)
+    monkeypatch.setattr(objects, 'GIT_ENVIRONMENT', {**GIT_ENVIRONMENT, **other_owner})
+
+    assert file_bytes(pinned, 'result.txt', LIMIT) == b'11.8'
+
+
+@pytest.mark.parametrize('name', ['.git', 'commondir'])
+async def test_a_file_that_names_a_git_directory_is_followed_only_when_it_is_a_small_plain_file(
+    tmp_path: Path, name: str
+) -> None:
+    project = tmp_path / 'project'
+    pinned = await a_pin(project)
+    author = project / '.verifold' / 'agents' / 'ada'
+    moved, outside = tmp_path / 'moved.git', tmp_path / 'outside'
+    if name == '.git':
+        # The author's folder names its Git directory in a file, as a worktree does.
+        (author / '.git').rename(moved)
+        file, names = author / '.git', f'gitdir: {moved}\n'
+    else:
+        # The author's Git directory names the directory that has the objects, as a worktree's does.
+        shutil.copytree(author / '.git', moved)
+        shutil.rmtree(author / '.git' / 'objects')
+        file, names = author / '.git' / 'commondir', f'{moved}\n'
+    outside.write_text(names)
+
+    file.write_text(names)
+    assert file_bytes(pinned, 'result.txt', LIMIT) == b'11.8'
+    # A pipe, a link, and a file that is too large are not read, and the read ends at once with the reason.
+    shapes = {
+        'a pipe': os.mkfifo,
+        'a link': lambda path: path.symlink_to(outside),
+        'large': lambda path: path.write_text(names + '#' * MAX_SMALL_FILE),
+    }
+    for make in shapes.values():
+        file.unlink()
+        make(file)
+        why = f'{re.escape(str(file))} is no plain text file of at most 4,096 bytes'
+        with pytest.raises(NoRepository, match=f'found no repository of the lab that it can read .* {why}'):
+            file_bytes(pinned, 'result.txt', LIMIT)
+    # A file that names no Git directory, or a directory without objects.
+    file.unlink()
+    file.write_text('x\n')
+    with pytest.raises(
+        NoRepository, match='names no Git directory' if name == '.git' else 'is no folder of Git objects'
+    ):
+        file_bytes(pinned, 'result.txt', LIMIT)
+
+
+async def test_git_reads_the_configuration_that_verifold_wrote_and_no_other_in_its_own_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / 'project'
+    pinned = await a_pin(project)
+    author = project / '.verifold' / 'agents' / 'ada'
+    blob = await git('rev-parse', f'{pinned.commit}:result.txt', cwd=author)
+    assert file_bytes(pinned, 'result.txt', LIMIT) == b'11.8'
+    own = project / '.verifold' / 'snapshots.git'
+    written = (own / 'config').read_text()
+    ran = tmp_path / 'ran'
+    loose(author / '.git' / 'objects', blob).unlink()
+    no_fetch_switch(monkeypatch)
+
+    # Somebody adds the remote to the configuration of Verifold's own directory. Git itself would then ask it.
+    (own / 'config').write_text(written + remote(ran))
+    assert await fires(own, blob, ran)
+    with pytest.raises(Missing, match='does not have the object'):
+        file_bytes(pinned, 'result.txt', LIMIT)
+    assert (own / 'config').read_text() == written
+    # Somebody makes the own directory name another directory for its configuration, which has the remote.
+    plant(author / '.git', 'plain', ran, tmp_path / 'aside.git')
+    (own / 'commondir').write_text(f'{author / ".git"}\n')
+    assert await fires(own, blob, ran)
+    with pytest.raises(Missing, match='does not have the object'):
+        file_bytes(pinned, 'result.txt', LIMIT)
+    assert not ran.exists()
+    # A link where the own directory belongs is refused, and nothing is written through it.
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+    shutil.rmtree(own)
+    own.symlink_to(elsewhere)
+    with pytest.raises(GitError, match='is not a folder of yours') as refused:
+        file_bytes(pinned, 'out/deep/a.json', LIMIT)
+    assert not isinstance(refused.value, Missing)
+    assert list(elsewhere.iterdir()) == []
+
+
+async def test_a_pipe_in_the_object_store_ends_a_read_at_its_time_limit_and_a_stop_ends_it_at_once(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / 'project'
+    pinned = await a_pin(project)
+    author = project / '.verifold' / 'agents' / 'ada'
+    # A pipe where Git expects the list of the store's other object stores. Git waits there for ever.
+    os.mkfifo(author / '.git' / 'objects' / 'info' / 'alternates')
+
+    with pytest.raises(GitError, match='did not answer in time') as late:
+        file_bytes(replace(pinned, seconds=0.2), 'result.txt', LIMIT)
+    assert not isinstance(late.value, Missing | NoRepository)
+    # After the server stopped, a read ends at once, long before its time limit.
+    pinned.running.stop()
+    with pytest.raises(GitError, match='did not answer in time'):
+        file_bytes(replace(pinned, seconds=600), 'result.txt', LIMIT)

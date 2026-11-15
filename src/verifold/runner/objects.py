@@ -6,17 +6,22 @@ its trees, and its files as objects, and computes the ID of each one itself: the
 record, each tree's the ID that its parent names, and each file's the ID that its tree names. It reads the trees
 itself. Verifold reads the clean copy for a rerun and the file that the app shows in this way.
 
-Git reads the objects from a repository of the lab by their IDs, with the repository named by `--git-dir` and
-the working directory in Verifold's own folder. Git fetches nothing that is missing, uses no transport, replaces
-no object, runs no hook and no file watcher, and reads no configuration of the person or the system. Every Git
-process ends at a time limit. Verifold runs no Git command in an agent's folder to read an object.
+Git reads the objects through a Git directory of Verifold's own, `.verifold/snapshots.git`, with the working
+directory in Verifold's own folder. So Git reads the configuration that Verifold wrote there, and no configuration
+of a repository of the lab. `GIT_OBJECT_DIRECTORY` names the object store of the repository that has the commit.
+Verifold finds that store itself, without Git: from the `.git` of the author's folder or of the project, through
+a `gitdir:` file and a `commondir` file where they are. An agent can write the store of its own folder, and can
+point these files at any other store. Git reads a store's files as data, and Verifold checks the ID of every
+object that it takes from one. Git fetches nothing that is missing, uses no transport, replaces no object, runs no
+hook and no file watcher, and reads no configuration of the person or the system. The Git processes of one read
+end at one time limit, and when the server stops.
 """
 
 import hashlib
 import os
 import re
-import stat
 import subprocess
+import time
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -27,19 +32,13 @@ from typing import Protocol
 from verifold.protocol.ids import AgentId, CommitId
 from verifold.runner.environment import clean_environment
 from verifold.runner.folders import LAB_FOLDER, agents_folder
-from verifold.runner.git import GIT_ENVIRONMENT, GIT_OPTIONS, GitError
+from verifold.runner.git import GIT_ENVIRONMENT, GIT_OPTIONS, GitError, own_repository, small_text
 
 READ_SECONDS = 30.0
-"""How long the Git process that reads one file may run before Verifold ends it."""
+"""How long the Git processes that read one file for the app may run before Verifold ends them."""
 
 MAX_TREE_BYTES = 16 * 1024**2
 """The most bytes of one commit or of one folder's listing, which Verifold reads whole."""
-
-FETCHES_NOTHING_FROM = (2, 45)
-"""The first version of Git that fetches no missing object when `GIT_NO_LAZY_FETCH` says so."""
-
-MAX_CONFIG_BYTES = 1024**2
-"""The most bytes of a repository's configuration that Verifold reads itself."""
 
 _KINDS = {
     b'40000': 'a folder',
@@ -55,15 +54,6 @@ _CHUNK = 1024 * 1024
 _HASHES = {40: 'sha1', 64: 'sha256'}
 """The hash of a repository's object IDs, by the length of an ID."""
 
-_SECTION = re.compile(r'\[\s*([A-Za-z0-9.-]+)(?:\s+"(?:[^"\\]|\\.)*")?\s*\](.*)')
-_KEY = re.compile(r'([A-Za-z][A-Za-z0-9-]*)\s*(=.*)?')
-
-_RISKS = {
-    'unread': 'Verifold cannot read the configuration of the repository {} with confidence.',
-    'includes': 'The configuration of the repository {} takes in other configuration.',
-    'remote': 'The configuration of the repository {} names a remote for objects that it lacks.',
-}
-
 
 class _Digest(Protocol):
     """A running hash."""
@@ -74,7 +64,11 @@ class _Digest(Protocol):
 
 
 class Missing(GitError):
-    """No repository of the lab has an object, or the pinned commit has nothing at a path."""
+    """The repositories of the lab that Verifold read lack an object, or the pinned commit has nothing at a path."""
+
+
+class NoRepository(GitError):
+    """Verifold found no repository of the lab that it can read and that has the pinned commit."""
 
 
 class TooLarge(GitError):
@@ -120,27 +114,35 @@ class PinnedCommit:
     author: AgentId
     commit: CommitId
     seconds: float
-    """How long one Git process may run before Verifold ends it."""
-    fetches_nothing: bool
-    """Whether this computer's Git fetches no missing object when Verifold says so, as `fetches_nothing` tells."""
+    """How long the Git processes of one read may run, all of them together, before Verifold ends them."""
     running: Running
 
 
 class Objects:
-    """One Git process that gives the objects of one repository by their IDs, and that ends at a time limit."""
+    """One Git process that gives the objects of one object store by their IDs, and that ends at a time limit."""
 
-    def __init__(self, repository: Path, cwd: Path, seconds: float) -> None:
-        """Start Git on the Git directory at `repository`, with `cwd` as its working directory."""
+    def __init__(self, own: Path, store: Path, cwd: Path, seconds: float) -> None:
+        """
+        Start Git on Verifold's own Git directory `own`, with `store` as the object store that it reads.
+
+        Git takes its configuration from `own` alone: `GIT_COMMON_DIR` keeps it there also when a file in `own`
+        names another directory.
+        """
         self._process = subprocess.Popen(
-            ['git', *GIT_OPTIONS, f'--git-dir={repository}', 'cat-file', '--batch'],
+            ['git', *GIT_OPTIONS, f'--git-dir={own}', 'cat-file', '--batch'],
             cwd=cwd,
-            env=clean_environment() | GIT_ENVIRONMENT,
+            env={
+                **clean_environment(),
+                **GIT_ENVIRONMENT,
+                'GIT_COMMON_DIR': str(own),
+                'GIT_OBJECT_DIRECTORY': str(store),
+            },
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         )
-        # A repository can hold a pipe where Git expects a file. Git then waits for ever, and this ends it.
-        self._limit = Timer(seconds, self._process.kill)
+        # An object store can hold a pipe where Git expects a file. Git then waits for ever, and this ends it.
+        self._limit = Timer(max(seconds, 0), self._process.kill)
         self._limit.daemon = True
         self._limit.start()
 
@@ -196,19 +198,33 @@ def object_hash(name: str, kind: str, size: int) -> _Digest:
     return hashlib.new(_HASHES[len(name)], f'{kind} {size}\0'.encode(), usedforsecurity=False)
 
 
-def whole(objects: Objects, name: str, kind: str, limit: int = MAX_TREE_BYTES) -> bytes:
+def whole(objects: Objects, name: str, kind: str) -> bytes:
     """
-    Read an object whole, and check that it is the object that its ID names.
+    Read a commit or a folder's listing whole, and check that it is the object that its ID names.
 
     Raises:
-        TooLarge: The object is of this kind, and it has more than `limit` bytes.
-        GitError: The object is of another kind, or it is not the one that its ID names.
+        GitError: The object is of another kind, it has more than `MAX_TREE_BYTES` bytes, or it is not the one
+            that its ID names.
 
     """
+    size = _asked(objects, name, kind)
+    if size > MAX_TREE_BYTES:
+        raise GitError(
+            f'The {kind} {name} has {size:,} bytes, and Verifold reads at most {MAX_TREE_BYTES:,} bytes of one.'
+        )
+    return _checked(objects, name, kind, size)
+
+
+def _asked(objects: Objects, name: str, kind: str) -> int:
+    # Ask for an object of one kind, and return its size.
     found, size = objects.ask(name)
-    if found != kind or size > limit:
-        refused = TooLarge if found == kind else GitError
-        raise refused(f'The object {name} is no {kind} that Verifold reads: it is a {found} of {size:,} bytes.')
+    if found != kind:
+        raise GitError(f'The object {name} is a {found}, and Verifold reads a {kind} there.')
+    return size
+
+
+def _checked(objects: Objects, name: str, kind: str, size: int) -> bytes:
+    # The bytes of the object that was asked for last, after a check that it is the object that its ID names.
     digest = object_hash(name, kind, size)
     data = b''.join(objects.read(size))
     digest.update(data)
@@ -238,46 +254,24 @@ def entries(listing: bytes, id_bytes: int) -> Iterator[tuple[bytes, bytes, str]]
 @contextmanager
 def reading(pinned: PinnedCommit) -> Generator[tuple[Objects, str]]:
     """
-    Open the repository of the lab that has the pinned commit, and give it with the ID of the commit's tree.
+    Open the object store of the lab that has the pinned commit, and give it with the ID of the commit's tree.
 
-    In a project with Git commits, every agent's folder is a worktree of the project, so the project's own Git
-    directory has the commit. In any other project, the author's folder is a repository of its own. Verifold names
-    that folder's `.git` only when it is a real folder, and follows no file or link that points elsewhere.
+    Git reads each store through Verifold's own Git directory, one store after the other, and all of them within
+    the one time limit of the read.
 
     Raises:
-        Missing: No repository of the lab has the commit.
-        GitError: The commit is not the object that its ID names, Git did not answer in time, or this computer's
-            Git is an older one and a repository's configuration can make it fetch.
+        NoRepository: Verifold found no object store, or could not read a file that names one, and no store that
+            it read has the commit.
+        Missing: Verifold read every store of the lab, and none has the commit.
+        GitError: The commit is not the object that its ID names, Git did not answer in time, or Verifold's own
+            Git directory is not a folder that Verifold can write.
 
     """
-    project, commit, seconds = pinned.project, pinned.commit, pinned.seconds
-    lab = project / LAB_FOLDER
-    found: list[Path] = []
-    with suppress(OSError, subprocess.SubprocessError):
-        common = subprocess.run(
-            ['git', *GIT_OPTIONS, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
-            cwd=project,
-            env=clean_environment() | GIT_ENVIRONMENT,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            check=True,
-            timeout=seconds,
-        )
-        found.append(Path(common.stdout.decode().strip()))
-    folder = agents_folder(project) / pinned.author
-    theirs = folder / '.git'
-    if _is_folder(folder) and _is_folder(theirs):
-        found.append(theirs)
-    for repository in found:
-        if not pinned.fetches_nothing and (why := fetch_risk(repository)):
-            # An agent of the lab can write its own repository, and the project's own through its worktree.
-            version = '.'.join(map(str, FETCHES_NOTHING_FROM))
-            raise GitError(
-                f'{why} This computer has a Git from before {version}, which can then fetch what the repository '
-                f'lacks from a place that the repository names, so Verifold does not read it. Git {version} or '
-                f'later fetches nothing when Verifold says so.'
-            )
-        objects = Objects(repository, lab, seconds)
+    ends = time.monotonic() + pinned.seconds
+    commit, lab = pinned.commit, pinned.project / LAB_FOLDER
+    stores, unread = _stores(pinned)
+    for store in stores:
+        objects = Objects(own_repository(lab), store, lab, ends - time.monotonic())
         pinned.running.add(objects)
         try:
             try:
@@ -291,7 +285,63 @@ def reading(pinned: PinnedCommit) -> Generator[tuple[Objects, str]]:
         finally:
             pinned.running.remove(objects)
             objects.close()
+    if unread or not stores:
+        found = f'Verifold found no repository of the lab that it can read and that has the commit {commit}.'
+        raise NoRepository(' '.join((found, *unread)))
     raise Missing(f'No repository of the lab has the commit {commit}. Verifold fetches nothing that is missing.')
+
+
+def _stores(pinned: PinnedCommit) -> tuple[tuple[Path, ...], tuple[str, ...]]:
+    """
+    Return the object stores that can have the pinned commit, and why Verifold could not read a place for one.
+
+    The author's folder comes first, and then the project. In a project with Git commits, every agent's folder is
+    a worktree of the project, so both name the project's store. In any other project, the author's folder is a
+    repository of its own.
+    """
+    project = pinned.project
+    # The project can be a folder inside a repository. Then the nearest `.git` above it counts, as it does for Git.
+    above = next((folder for folder in (project, *project.parents) if os.path.lexists(folder / '.git')), None)
+    stores: dict[Path, None] = {}
+    unread: list[str] = []
+    for folder in (agents_folder(project) / pinned.author, above):
+        try:
+            store = _store(folder) if folder else None
+        except GitError as error:
+            unread.append(str(error))
+        else:
+            if store:
+                stores[store] = None
+    return tuple(stores), tuple(unread)
+
+
+def _store(folder: Path) -> Path | None:
+    """
+    Return the object store of the repository at a folder, or `None` when the folder has no `.git`.
+
+    `.git` is a Git directory, or a file that names one after `gitdir:`. A `commondir` file in the Git directory
+    names the directory that holds the objects, as in a worktree. An agent can point these files at any place.
+    That is safe: Git reads a store's files as data and no configuration from there, and Verifold checks the ID of
+    every object that it takes from a store.
+
+    Raises:
+        GitError: A file on the way is no small plain file, or it leads to no object store.
+
+    """
+    at = folder / '.git'
+    if at.is_dir():
+        home = at
+    elif (pointer := small_text(at)) is None:
+        return None
+    elif pointer.startswith('gitdir:'):
+        home = folder / pointer.removeprefix('gitdir:').strip()
+    else:
+        raise GitError(f'{at} names no Git directory.')
+    common = small_text(home / 'commondir')
+    store = (home if common is None else home / common.strip()) / 'objects'
+    if not store.is_dir():
+        raise GitError(f'{store} is no folder of Git objects.')
+    return store.resolve()
 
 
 def file_bytes(pinned: PinnedCommit, path: str, limit: int) -> bytes:
@@ -302,11 +352,12 @@ def file_bytes(pinned: PinnedCommit, path: str, limit: int) -> bytes:
     against its ID. It reads a plain file only: no folder, no link, and no submodule.
 
     Raises:
-        Missing: No repository of the lab has the commit or an object of the path, or the commit has nothing at
-            the path.
+        NoRepository: Verifold found no repository of the lab that it can read and that has the commit.
+        Missing: The repositories of the lab lack the commit or an object of the path, or the commit has nothing
+            at the path.
         TooLarge: The file has more than `limit` bytes.
-        GitError: The path names no plain file, an object is not the one that its ID names, or Git did not answer
-            in time.
+        GitError: The path names no plain file, a listing on the way is one that Git never makes or is too large,
+            an object is not the one that its ID names, or Git did not answer in time.
 
     """
     *folders, name = path.split('/')
@@ -314,16 +365,24 @@ def file_bytes(pinned: PinnedCommit, path: str, limit: int) -> bytes:
         tree = top
         for folder in folders:
             tree = _entry(objects, tree, folder, 'a folder', path)
-        return whole(objects, _entry(objects, tree, name, 'a file', path), 'blob', limit)
+        blob = _entry(objects, tree, name, 'a file', path)
+        size = _asked(objects, blob, 'blob')
+        if size > limit:
+            raise TooLarge(f'{path} has {size:,} bytes, and this read takes at most {limit:,}.')
+        return _checked(objects, blob, 'blob', size)
 
 
 def _entry(objects: Objects, tree: str, name: str, kind: str, path: str) -> str:
     # The ID that a folder's listing gives a name, when the entry there is of the kind that the path needs.
     listing, wanted = whole(objects, tree, 'tree'), name.encode()
     try:
-        entry = next((entry for entry in entries(listing, len(tree) // 2) if entry[1] == wanted), None)
+        listed = tuple(entries(listing, len(tree) // 2))
     except ValueError as error:
         raise GitError(f'The listing of the folder {tree} ends inside an entry.') from error
+    # Git never lists one name twice. With two, the file that a reader gets would depend on who reads.
+    if len({found for _, found, _ in listed}) != len(listed):
+        raise GitError(f'The listing of the folder {tree} has one name twice.')
+    entry = next((entry for entry in listed if entry[1] == wanted), None)
     if entry is None:
         raise Missing(f'The pinned commit has no {path}.')
     mode, _, child = entry
@@ -332,82 +391,3 @@ def _entry(objects: Objects, tree: str, name: str, kind: str, path: str) -> str:
     if (is_a := _KINDS.get(mode, 'an entry of no kind that Verifold reads')) != kind:
         raise GitError(f'{name} is {is_a} in the pinned commit, so the commit has no file {path} to read.')
     return child
-
-
-def fetches_nothing(seconds: float = READ_SECONDS) -> bool:
-    """Return whether this computer's Git is new enough to fetch no missing object when Verifold says so."""
-    try:
-        said = subprocess.run(['git', '--version'], capture_output=True, check=False, timeout=seconds).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    version = re.search(rb'(\d+)\.(\d+)', said)
-    return bool(version) and (int(version[1]), int(version[2])) >= FETCHES_NOTHING_FROM
-
-
-def fetch_risk(repository: Path) -> str | None:
-    """
-    Return why a repository's configuration can make an older Git fetch, or `None` when it cannot.
-
-    Verifold reads the file itself, with no Git process: `config` in the Git directory, which for a worktree is
-    the common directory's. The configuration is a risk when it can pull in other configuration, with an
-    `include` or `includeIf` section or with `extensions.worktreeConfig`, and when it names a remote for missing
-    objects, with `extensions.partialClone` or a remote's `promisor` or `partialCloneFilter`. A file that Verifold
-    cannot read, or cannot read with confidence, is a risk too.
-    """
-    text = _config_text(repository)
-    risk = 'unread' if text is None else _risk(text)
-    return _RISKS[risk].format(repository) if risk else None
-
-
-def _config_text(repository: Path) -> str | None:
-    # The text of a repository's own configuration: a plain file of a bounded size, read through no link.
-    try:
-        file = os.open(repository / 'config', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except OSError:
-        return None
-    try:
-        found = os.fstat(file)
-        if not stat.S_ISREG(found.st_mode) or found.st_size > MAX_CONFIG_BYTES:
-            return None
-        return os.read(file, MAX_CONFIG_BYTES + 1).decode()
-    except (OSError, UnicodeDecodeError):
-        return None
-    finally:
-        os.close(file)
-
-
-def _risk(text: str) -> str | None:
-    section, continued = '', False
-    for line in text.splitlines():
-        rest, was_continued = line.strip(), continued
-        continued = rest.endswith('\\')
-        if not rest or rest[0] in '#;' or was_continued:
-            # A line that goes on from the one before is part of a value.
-            continue
-        if header := _SECTION.fullmatch(rest):
-            section, rest = header[1].casefold(), header[2].strip()
-            if section in ('include', 'includeif'):
-                return 'includes'
-            if not rest or rest[0] in '#;':
-                continue
-        key = _KEY.fullmatch(rest)
-        if key is None or '\0' in rest:
-            return 'unread'
-        if risk := _key_risk(section, key[1].casefold()):
-            return risk
-    return None
-
-
-def _key_risk(section: str, name: str) -> str | None:
-    if section == 'extensions':
-        return {'worktreeconfig': 'includes', 'partialclone': 'remote'}.get(name)
-    remote = section == 'remote' or section.startswith('remote.')
-    return 'remote' if remote and name in ('promisor', 'partialclonefilter') else None
-
-
-def _is_folder(path: Path) -> bool:
-    # Whether the path is a folder and no link.
-    try:
-        return stat.S_ISDIR(path.lstat().st_mode)
-    except OSError:
-        return False

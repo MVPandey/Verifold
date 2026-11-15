@@ -52,7 +52,7 @@ from verifold.runner.folders import LAB_FOLDER, agent_folder, open_folder, real_
 from verifold.runner.git import GitError
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
 from verifold.runner.messages import invitation, start_message
-from verifold.runner.objects import READ_SECONDS, Missing, PinnedCommit, Running, TooLarge, fetches_nothing, file_bytes
+from verifold.runner.objects import READ_SECONDS, Missing, PinnedCommit, Running, TooLarge, file_bytes
 from verifold.runner.permissions import Refusals
 from verifold.runner.reruns import CleanCopies
 from verifold.runner.session import Place, SessionOptions, offer_of
@@ -112,6 +112,8 @@ WRITING_TEMPLATE = DEFAULTS['WRITING.md']
 """How the lab writes its answer for the person. A lab folder gets a copy, which the person can change."""
 MAX_FILE_BYTES = 1_000_000
 """The largest file that the app shows as text."""
+FILE_READS_AT_ONCE = 4
+"""How many files the app reads at the same time. The others wait, so slow reads cannot use up the server's threads."""
 NORMS_CHANGED = {
     'LAB.md': "The person changed the lab's norms. {path} holds them.",
     'WRITING.md': 'The person changed how the lab writes its answer. {path} holds the text.',
@@ -189,8 +191,7 @@ class Host:
         """Gives the clean copies for reruns, each verified against the pinned commit at every take."""
         self._reads = Running()
         """The Git processes that read a pinned file for the app now."""
-        self._fetches_nothing: bool | None = None
-        """Whether this computer's Git fetches no missing object when told so. Asked once."""
+        self._free_reads = asyncio.Semaphore(FILE_READS_AT_ONCE)
         self._desktop = True
         self._record = record
         self._catalog = catalog
@@ -307,11 +308,12 @@ class Host:
             lab=self._lab.board.settings if self._lab else None,
         )
 
-    def stop_exports(self) -> None:
+    def stop_reads(self) -> None:
         """
-        End every export of a clean copy and every read of a pinned file that runs, as when the server stops.
+        End every read of Git objects that runs, as when the server stops.
 
-        The takes that wait for an export fail, and so does a read.
+        Those are the exports of clean copies and the reads of pinned files for the app. The takes that wait for
+        an export fail, and so does a read for the app.
         """
         self._copies.stop()
         self._reads.stop()
@@ -321,7 +323,8 @@ class Host:
         Return the text of a file that backs a post, at the commit that the post pins.
 
         Verifold reads the commit, its folders, and the file as Git objects, and checks each one against its ID,
-        from the commit's ID in the record down. It runs no Git command in the author's folder.
+        from the commit's ID in the record down. It runs no Git command in the author's folder, and Git reads no
+        configuration that an agent can write.
 
         Raises:
             NoLab: The folder has no lab.
@@ -336,18 +339,16 @@ class Host:
         file = next((item for item in entry.post.evidence if item.path == path), None) if entry else None
         if entry is None or file is None:
             raise NotFound(f'Post {post_id} names no file {path}.')
-        if self._fetches_nothing is None:
-            self._fetches_nothing = await asyncio.to_thread(fetches_nothing)
         pinned = PinnedCommit(
             project=self._project.resolve(),
             author=entry.post.author,
             commit=file.commit,
             seconds=READ_SECONDS,
-            fetches_nothing=self._fetches_nothing,
             running=self._reads,
         )
         try:
-            data = await asyncio.to_thread(file_bytes, pinned, file.path, MAX_FILE_BYTES)
+            async with self._free_reads:
+                data = await asyncio.to_thread(file_bytes, pinned, file.path, MAX_FILE_BYTES)
         except TooLarge as error:
             raise NotFound(f'{path} is larger than {MAX_FILE_BYTES:,} bytes, so the app does not show it.') from error
         except Missing as error:
@@ -1069,8 +1070,8 @@ async def serve(
                 await asyncio.Event().wait()
         finally:
             # The task group has stopped the agents' harnesses. Their processes stop next, and the web server last, also
-            # when the hook fails. An export for a rerun that still runs ends now, so that its thread holds nothing.
-            host.stop_exports()
+            # when the hook fails. A read of Git objects that still runs ends now, so that its thread holds nothing.
+            host.stop_reads()
             try:
                 if (host.lab.board.settings if host.lab else opening).jobs.at_exit is AtExit.STOP:
                     hooks.swept(await asyncio.to_thread(sweep, project))
