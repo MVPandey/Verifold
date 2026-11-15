@@ -263,7 +263,7 @@ class RerunResult(Record):
 
 
 class AgentLine(Record):
-    """Another agent of the lab at a glance: the plan that it posted last, and its latest post."""
+    """An agent of the lab at a glance: the plan that it posted last, and its latest post."""
 
     id: AgentId
     name: Label
@@ -336,6 +336,8 @@ class Brief(Record):
     """
 
     you: AgentId
+    your_line: AgentLine | None = None
+    """What the board holds about you: your role and status, the thread where you work, and your latest plan and post."""
     how: str = ''
     """How the board works. The first brief of a session carries it, and later ones leave it out."""
     agents: tuple[AgentLine, ...] = ()

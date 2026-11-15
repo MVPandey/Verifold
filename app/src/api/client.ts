@@ -51,6 +51,8 @@ export interface Api {
   inviteAgain(agentId: string): Promise<Invitation>;
   /** Remove an agent from the lab, for good. Its posts stay. */
   removeAgent(agentId: string): Promise<LabView>;
+  /** Start an agent that Verifold stopped because its harness failed too often. */
+  startAgain(agentId: string): Promise<LabView>;
   settings(): Promise<SettingsView>;
   changeSetting(change: SettingsChange): Promise<SettingsView>;
 }
@@ -96,6 +98,7 @@ export function createApi(
           status: view.status ?? '',
           thread: view.thread ?? null,
           left: view.left ?? null,
+          stopped: view.stopped ?? false,
         })),
       })),
     threads: () =>
@@ -131,6 +134,7 @@ export function createApi(
     inviteAgain: (agentId) => request(`/invitations/${encodeURIComponent(agentId)}`, {}),
     removeAgent: (agentId) =>
       request(`/agents/${encodeURIComponent(agentId)}`, undefined, 'DELETE'),
+    startAgain: (agentId) => request(`/agents/${encodeURIComponent(agentId)}/start`, {}),
     settings: () => request('/settings'),
     changeSetting: (change) => request('/settings', change),
   };

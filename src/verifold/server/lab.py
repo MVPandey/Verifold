@@ -21,6 +21,7 @@ from verifold.protocol.events import (
     TimeRanOut,
     TimeSet,
     TurnEnded,
+    TurnStarted,
     TurnSummary,
     WatchSet,
 )
@@ -193,6 +194,13 @@ class Lab:
 
         board = await self._commit(build)
         return board.reruns[-1]
+
+    async def start_turn(self, agent_id: AgentId, session: str, seen: int) -> TurnStarted:
+        """Record that a turn of an agent starts, in the harness's conversation `session`, with what it had seen."""
+        board = await self._commit(
+            lambda _, seq, at: TurnStarted(seq=seq, at=at, agent=agent_id, session=session, seen=seen)
+        )
+        return board.starts[-1]
 
     async def end_turn(self, turn: TurnSummary) -> TurnEnded:
         """Record that an agent's harness ended a turn, with what the turn cost and the snapshot after it."""

@@ -55,6 +55,7 @@ from verifold.server.timekeeper import keep_time
 from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
+from verifold.society.turns import before
 from verifold.store.errors import GuestsInvalid, SettingsInvalid
 from verifold.store.guests_file import GUESTS_FILE, Guests, drop_guest, keep_guest, read_guests
 from verifold.store.record_file import RecordFile
@@ -156,6 +157,8 @@ class Host:
         self._grant_asks: GrantAsks | None = None
         self._probing: set[str] = set()
         self._adding = asyncio.Lock()
+        self._loops: dict[AgentId, asyncio.Task[None]] = {}
+        """The task that supervises each agent that Verifold started."""
 
     @property
     def lab(self) -> Lab | None:
@@ -333,7 +336,13 @@ class Host:
         await self._launch()
 
     async def resume(self) -> None:
-        """Serve the lab that the folder's record holds, and start its agents again."""
+        """
+        Serve the lab that the folder's record holds, and start its agents again.
+
+        Each agent goes on from its turns in the record: its harness loads its conversation when it can, and its
+        seat starts at what the agent had seen. An agent that Verifold stopped, because its harness failed too
+        often, stays stopped until the person starts it again.
+        """
         self._lab = Lab.load(self._record)
         if recorded_settings(self._record.read()) is None:
             await self._lab.set_settings(load_settings(self._project).lab_settings())
@@ -354,9 +363,13 @@ class Host:
         self._grant_asks = GrantAsks(lab)
         group.create_task(self._grant_asks.run())
         # A lab that is served again is under way for all of its agents. A new lab is so for none of them.
-        under_way = bool(lab.board.turns)
+        under_way = bool(lab.board.turns or lab.board.starts)
         for agent in self._workers(lab):
-            await self._run_agent(lab, agent, under_way=under_way)
+            if before(lab.board, agent.id).stopped:
+                # The app shows what it showed before the restart. Only the person starts this agent again.
+                await self._activity.set(agent.id, 'stopped')
+            else:
+                await self._run_agent(lab, agent, under_way=under_way)
         # An invited agent keeps its seat and its token. It runs by itself, so nothing starts here. One that left
         # gets no seat.
         digests = _kept(self._guests_file).digests
@@ -405,7 +418,28 @@ class Host:
         start = start_message(lab.board, agent, norms, writing, under_way=under_way)
         member, setup = await self._seat(lab, agent, start)
         await self._activity.set(agent.id, 'starting')
-        group.create_task(AgentLoop(member, setup, settings, shared=self._shared()).run())
+        self._loops[agent.id] = group.create_task(AgentLoop(member, setup, settings, shared=self._shared()).run())
+
+    async def start_again(self, agent_id: AgentId) -> None:
+        """
+        Start an agent that Verifold stopped because its harness failed too often in a row.
+
+        The agent keeps its ID, its folder, and its posts. Its harness loads its conversation again when it can.
+
+        Raises:
+            NoLab: The folder has no lab.
+            NotFound: The lab has no agent with that ID that Verifold runs.
+            SetupRejected: Verifold did not stop the agent, or its harness runs already.
+
+        """
+        lab = self._running()
+        agent = next((worker for worker in self._workers(lab) if worker.id == agent_id), None)
+        if agent is None:
+            raise NotFound(f'The lab has no agent with the ID {agent_id} that Verifold runs.')
+        loop = self._loops.get(agent_id)
+        if not before(lab.board, agent_id).stopped or (loop and not loop.done()):
+            raise SetupRejected(f'Verifold did not stop {agent.name}, so it needs no new start.')
+        await self._run_agent(lab, agent, under_way=True)
 
     async def add_agents(self, choice: AgentChoice) -> None:
         """
@@ -529,13 +563,12 @@ class Host:
             return
         # The agent has read the board up to its own last post, or up to its join when it has none. So a seat that
         # a restart or a new invitation makes still brings what came since.
-        own = [entry.seq for entry in board.posts if entry.post.author == agent.id]
-        joined = next(entry.seq for entry in board.agents if entry.agent.id == agent.id)
+        own = any(entry.post.author == agent.id for entry in board.posts)
         folder = await agent_folder(self._project, agent.id)
-        member = Member(lab, agent.id, pin=partial(pin, folder, agent.id), seen=max(own, default=joined))
+        member = Member(lab, agent.id, pin=partial(pin, folder, agent.id), seen=before(board, agent.id).seen)
         self._members.add_guest(member, digest)
         # A `brief` leaves no mark on the record, so an agent that only read the board shows as invited again.
-        called = bool(own) or any(
+        called = own or any(
             (
                 any(watch.agent == agent.id for watch in board.watches),
                 any(rerun.by == agent.id for rerun in board.reruns),
@@ -552,7 +585,9 @@ class Host:
 
     async def _seat(self, lab: Lab, agent: Agent, start: str) -> tuple[Member, AgentSetup]:
         folder = await agent_folder(self._project, agent.id)
-        member = Member(lab, agent.id, pin=partial(pin, folder, agent.id))
+        # The seat starts at what the record says that the agent had seen. So after a restart, the posts for the
+        # agent that came since reach it by the usual rules.
+        member = Member(lab, agent.id, pin=partial(pin, folder, agent.id), seen=before(lab.board, agent.id).seen)
         setup = AgentSetup(
             agent=agent,
             harness=self._catalog[agent.harness],

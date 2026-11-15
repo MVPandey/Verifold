@@ -84,6 +84,45 @@ def start_message(
     return '\n'.join(lines)
 
 
+RESTARTED = 'Verifold restarted. You worked in this lab before the restart.'
+"""How the message for an agent that comes back opens after a restart of Verifold."""
+
+STARTED_AGAIN = 'The person started you again. Your harness had failed too often in a row, so Verifold had stopped it.'
+"""How that message opens when the person starts an agent that Verifold had stopped."""
+
+HARNESS_FAILED = 'Your harness failed, and Verifold started it again.'
+"""How that message opens when a harness that failed comes back without its conversation."""
+
+
+def back_message(why: str, start: str, folder: Path, *, kept: bool, cut_off: bool = False) -> str:
+    """
+    Return the message for an agent that worked in the lab before and comes back: what happened, and what is left.
+
+    `why` says what happened. `kept` says whether the harness loaded the agent's conversation again, and `cut_off`
+    that the agent's last turn did not end. An agent without its conversation also gets `start`, the facts that
+    every agent gets when it starts. The message holds facts only, and it names the one call that shows the agent
+    its place on the board.
+    """
+    lines = [
+        why,
+        (
+            'Your harness loaded your conversation from before, so you have it.'
+            if kept
+            else 'Your harness did not load your conversation from before, so this conversation is new.'
+        ),
+    ]
+    if cut_off:
+        lines.append('Your last turn did not end: Verifold stopped while it ran.')
+    lines.append(f'Your folder is {folder}.')
+    lines.append(
+        'Call `brief` on the lab board. It shows the board as it is now, with your own role, status, and plan in '
+        '`your_line`, and the posts that you have not seen.'
+    )
+    if not kept:
+        lines += ['', 'The rest of this text is what every agent of the lab gets when it starts.', '', start]
+    return '\n'.join(lines)
+
+
 def invitation(start: str, url: str, token: str, folder: Path) -> str:
     """
     Return the text that lets an agent that runs by itself join the lab.

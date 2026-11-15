@@ -20,6 +20,7 @@ from verifold.protocol.events import (
     TimeRanOut,
     TimeSet,
     TurnEnded,
+    TurnStarted,
     WatchSet,
     WentQuiet,
 )
@@ -75,6 +76,9 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
         case ProfileSet():
             check_profile(board, event)
             return replace(board, seq=event.seq, profiles=(*board.profiles, event))
+        case TurnStarted():
+            check_turn(board, event)
+            return replace(board, seq=event.seq, starts=(*board.starts, event))
         case TurnEnded():
             check_turn(board, event)
             return replace(board, seq=event.seq, turns=(*board.turns, event))

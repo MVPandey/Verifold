@@ -163,6 +163,9 @@ function Members(props: {
             onChange={props.onChange}
           />
         ) : null}
+        {view.stopped && !view.left ? (
+          <StartAgain api={props.api} agent={view.agent.id} onChange={props.onChange} />
+        ) : null}
         {view.agent.checks === null && !view.left ? (
           <RemoveAgent api={props.api} agent={view.agent} onChange={props.onChange} />
         ) : null}
@@ -383,6 +386,47 @@ function InviteAgain(props: {
         title="Makes a new token. The old token stops working."
       >
         Invite again
+      </button>
+      {error ? (
+        <span className="error" role="alert">
+          {' '}
+          {error}
+        </span>
+      ) : null}
+    </p>
+  );
+}
+
+/**
+ * The way to start an agent that Verifold stopped because its harness failed too often in a row. The agent keeps
+ * its name, its folder, and its posts.
+ */
+function StartAgain(props: {
+  readonly api: Api;
+  readonly agent: string;
+  readonly onChange: () => void;
+}): ReactElement {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const again = (): void => {
+    setBusy(true);
+    setError(null);
+    props.api.startAgain(props.agent).then(
+      () => {
+        setBusy(false);
+        props.onChange();
+      },
+      (failure: unknown) => {
+        setBusy(false);
+        setError(messageOf(failure));
+      },
+    );
+  };
+  return (
+    <p className="f-where">
+      Its harness failed too often, so Verifold stopped it.{' '}
+      <button className="linkbtn" type="button" onClick={again} disabled={busy}>
+        Start again
       </button>
       {error ? (
         <span className="error" role="alert">

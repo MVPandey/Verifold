@@ -92,6 +92,10 @@ class Host:
             raise NotFound(f'The lab has no invited agent with the ID {agent_id}.')
         return Invitation(agent=agent_id, name='Agent 3', text='URL: http://127.0.0.1:1/mcp\nnew token')
 
+    async def start_again(self, agent_id: str) -> None:
+        if agent_id != 'bo':
+            raise SetupRejected('Verifold did not stop Ada, so it needs no new start.')
+
     async def file_text(self, post_id: str, path: str) -> FileText:
         if path != 'answer.md':
             raise NotFound(f'Post {post_id} names no file {path}.')
@@ -381,6 +385,22 @@ async def test_the_person_invites_an_agent_and_gets_its_invitation(lab: Lab, act
     assert (empty.status_code, no_lab.status_code) == (422, 409)
     assert again.json()['text'].endswith('new token')
     assert (launched.status_code, launched.json()['detail']) == (404, 'The lab has no invited agent with the ID ada.')
+
+
+async def test_the_person_starts_an_agent_that_verifold_stopped_and_the_lab_view_says_which_agent_stopped(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    await lab.end_turn(TurnSummary(agent='bo', seconds=0, usage=Usage(), error='It broke.', stopped=True))
+
+    started = await client.post('/agents/bo/start')
+    refused = await client.post('/agents/ada/start')
+    ada, bo = started.json()['agents']
+
+    assert (started.status_code, ada['stopped'], bo['stopped']) == (200, False, True)
+    assert (refused.status_code, refused.json()['detail']) == (
+        400,
+        'Verifold did not stop Ada, so it needs no new start.',
+    )
 
 
 async def test_the_person_removes_an_agent_once_and_the_lab_view_shows_who_left(

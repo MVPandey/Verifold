@@ -86,6 +86,8 @@ export interface AgentView {
   readonly activity: AgentActivity;
   /** `null` while the agent is in the lab. */
   readonly left: AgentLeft | null;
+  /** Whether Verifold stopped the agent because its harness failed too often. The person can start it again. */
+  readonly stopped: boolean;
   readonly turns: number;
   readonly posts: number;
   readonly usage: Usage;

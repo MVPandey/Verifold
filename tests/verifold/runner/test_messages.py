@@ -7,7 +7,15 @@ from verifold.app import NORMS_TEMPLATE
 from verifold.protocol.posts import FileEvidence, Result
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.threads import QUESTION_TITLE
-from verifold.runner.messages import DOORBELL, invitation, more_time_message, rerun_message, start_message
+from verifold.runner.messages import (
+    DOORBELL,
+    RESTARTED,
+    back_message,
+    invitation,
+    more_time_message,
+    rerun_message,
+    start_message,
+)
 
 EVIDENCE = FileEvidence(path='bench.py', commit='c' * 40)
 SAME_MOMENT = 'The other agents got this question at the same moment'
@@ -164,3 +172,32 @@ def test_an_invitation_gives_the_address_the_token_the_folder_and_the_facts_and_
     assert lines[-3:] == ['Does it hold?', '', 'You are Agent 3.']
     assert text.count('the-token') == 1
     assert 'role' not in text.lower()
+
+
+def test_the_message_for_an_agent_that_comes_back_holds_facts_and_one_call() -> None:
+    folder = Path('/lab/.verifold/agents/agent-1')
+
+    kept = back_message(RESTARTED, 'Start.', folder, kept=True, cut_off=True)
+    new = back_message(RESTARTED, 'Start.', folder, kept=False)
+
+    assert kept.splitlines() == [
+        'Verifold restarted. You worked in this lab before the restart.',
+        'Your harness loaded your conversation from before, so you have it.',
+        'Your last turn did not end: Verifold stopped while it ran.',
+        'Your folder is /lab/.verifold/agents/agent-1.',
+        (
+            'Call `brief` on the lab board. It shows the board as it is now, with your own role, status, and plan '
+            'in `your_line`, and the posts that you have not seen.'
+        ),
+    ]
+    # An agent with a new conversation knows nothing of the lab, so it also gets what every agent gets at its start.
+    assert (
+        new.splitlines()[1] == 'Your harness did not load your conversation from before, so this conversation is new.'
+    )
+    assert 'did not end' not in new
+    assert new.splitlines()[-4:] == [
+        '',
+        'The rest of this text is what every agent of the lab gets when it starts.',
+        '',
+        'Start.',
+    ]

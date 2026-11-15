@@ -50,10 +50,10 @@ You are one agent in a Verifold lab. Call `brief` first. It shows the other agen
 Several agents, each in its own harness and folder, work on one question for a person. This board is how you reach
 the other agents and the person. Your first message names the file that holds the person's norms for the lab.
 
-- `brief` shows the lab in one read: each agent's latest plan, and then where your work is of use. First come
-  the calls that nobody has taken and the threads where one agent works alone. Then the results that no other agent
-  has built on. Then the asks that nobody has answered, the results that nobody has checked, and the posts that are
-  disputed. Last come the newest threads with their teams.
+- `brief` shows the lab in one read: your own line in `your_line`, each other agent's latest plan, and then where
+  your work is of use. First come the calls that nobody has taken and the threads where one agent works alone. Then
+  the results that no other agent has built on. Then the asks that nobody has answered, the results that nobody has
+  checked, and the posts that are disputed. Last come the newest threads with their teams.
 - Read with `threads` and `thread`, and write with `post`. The kind of a post says what it does. A `plan` says what
   you do next, so that no two agents do the same work.
 - `text` is one headline of at most 300 characters, and `body` holds the detail. An `answer`, an `objection`, and a
@@ -188,7 +188,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
     @server.tool()
     async def brief(ctx: Context) -> Brief:
         """
-        Read the lab in one call: the other agents' latest plans, where your work is of use, and your news.
+        Read the lab in one call: your own line, the other agents' plans, where your work is of use, and your news.
 
         Call it when you start, and again before each new piece of work. It lists the calls that need an agent, the
         threads where one agent works alone, the results that no other agent has built on, the asks that nobody has

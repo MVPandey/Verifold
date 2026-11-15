@@ -63,15 +63,19 @@ describe('the API client', () => {
     );
   });
 
-  it('removes an agent with a DELETE, and reads a lab from before agents could leave', async () => {
+  it('removes an agent with a DELETE, starts one again, and reads a lab from before agents could leave or stop', async () => {
     const lab = '{"agents": [{"agent": {"id": "agent-1"}}]}';
     const server = serverThatAnswers(200, lab);
     const api = createApi('secret', server.fetcher);
 
     await api.removeAgent('agent 2');
     const read = await api.lab();
+    await api.startAgain('agent 2');
 
-    const [removal] = server.calls;
+    const [removal, , start] = server.calls;
+    assert.equal(start?.input, '/api/agents/agent%202/start');
+    assert.equal(start?.init.method, 'POST');
+    assert.equal(read.agents[0]?.stopped, false);
     assert.equal(removal?.input, '/api/agents/agent%202');
     assert.equal(removal?.init.method, 'DELETE');
     assert.equal(removal?.init.body, undefined);

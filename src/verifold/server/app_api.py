@@ -43,6 +43,7 @@ from verifold.society.errors import NotFound, SocietyError
 from verifold.society.lifecycle import close_count, lab_state
 from verifold.society.lines import lines_of
 from verifold.society.standing import agreed, closing
+from verifold.society.turns import before
 from verifold.society.views import answer_view, latest_report, needs_person, thread_summaries, thread_view
 from verifold.store.errors import SettingsChanged, SettingsInvalid, SettingsUnwritable
 
@@ -88,6 +89,10 @@ class Host(Protocol):
 
     async def invite_again(self, agent_id: AgentId) -> Invitation:
         """Give an invited agent a new token, which makes its earlier one void, and return its new invitation."""
+        ...
+
+    async def start_again(self, agent_id: AgentId) -> None:
+        """Start an agent that Verifold stopped because its harness failed too often."""
         ...
 
 
@@ -139,6 +144,11 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     @api.post('/agents', dependencies=[authorized])
     async def add_agents(choice: AgentChoice) -> LabView:
         await host.add_agents(choice)
+        return _lab_view(current().board, activity)
+
+    @api.post('/agents/{agent_id}/start', dependencies=[authorized])
+    async def start_again(agent_id: AgentId) -> LabView:
+        await host.start_again(agent_id)
         return _lab_view(current().board, activity)
 
     @api.delete('/agents/{agent_id}', dependencies=[authorized])
@@ -256,6 +266,7 @@ def _agent_view(board: Board, activity: Activity, agent_id: str, working: dict[A
         thread=working.get(agent_id),
         activity=activity.of(agent_id),
         left=board.gone(agent_id),
+        stopped=before(board, agent_id).stopped,
         turns=len(turns),
         posts=sum(entry.post.author == agent_id for entry in board.posts),
         usage=Usage(

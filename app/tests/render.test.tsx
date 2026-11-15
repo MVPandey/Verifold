@@ -655,6 +655,37 @@ describe('an invitation', () => {
   });
 });
 
+describe('a member that Verifold stopped', () => {
+  it('shows why it stopped and the way to start it again, and no other member does', () => {
+    const html = renderToStaticMarkup(
+      <Top
+        folder="~/code/sort-bench"
+        route={{ page: 'lab' }}
+        open={{
+          lab: labView({
+            agents: [
+              agentView('agent-1', {
+                stopped: true,
+                activity: { state: 'stopped', detail: '', at: null },
+              }),
+              agentView('agent-2'),
+            ],
+          }),
+          threads: [],
+          harnesses: HARNESSES,
+          needs: 0,
+          now: new Date('2026-11-06T14:12:00Z'),
+          api: {} as Api,
+          onChange: () => undefined,
+        }}
+      />,
+    );
+    assert.ok(html.includes('<span class="dot stop"></span> Stopped</p>'));
+    assert.ok(html.includes('Its harness failed too often, so Verifold stopped it.'));
+    assert.equal(html.split('>Start again</button>').length, 2);
+  });
+});
+
 describe('a member that left', () => {
   it('shows under the others as left, with no way to remove it or to invite it again', () => {
     const at = '2026-11-06T14:10:00Z';

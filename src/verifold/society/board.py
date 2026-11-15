@@ -16,6 +16,7 @@ from verifold.protocol.events import (
     TimeRanOut,
     TimeSet,
     TurnEnded,
+    TurnStarted,
     WatchSet,
 )
 from verifold.protocol.ids import AgentId, PostId, ThreadId
@@ -42,6 +43,8 @@ class Board:
     """The alarms that agents set, oldest first."""
     profiles: tuple[ProfileSet, ...] = ()
     """What each agent said about itself, oldest first."""
+    starts: tuple[TurnStarted, ...] = ()
+    """The starts of the agents' turns, oldest first. A record from before Verifold kept them has none."""
     turns: tuple[TurnEnded, ...] = ()
     reruns: tuple[RerunRequested, ...] = ()
     times: tuple[TimeSet | TimeRanOut, ...] = ()

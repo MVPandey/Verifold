@@ -155,6 +155,25 @@ class WentQuiet(EventBase):
     seconds: float = Field(gt=0)
 
 
+type SessionId = Annotated[str, StringConstraints(min_length=1, max_length=200)]
+"""The ID that a harness gave an agent's conversation. With it, the harness can load the conversation again."""
+
+
+class TurnStarted(EventBase):
+    """
+    Verifold sent an agent a message, so a turn of the agent's harness started.
+
+    A turn that has a start and no end did not end: Verifold stopped or failed while the turn ran. `session` lets
+    Verifold load the agent's conversation again after a restart. No view of the board shows it.
+    """
+
+    type: Literal['turn_started'] = 'turn_started'
+    agent: AgentId
+    session: SessionId
+    seen: int = Field(ge=0)
+    """The last event that the agent had got when the turn started."""
+
+
 class TurnSummary(Record):
     """What one agent turn cost, how it ended, and the snapshot of the agent's folder after it."""
 
@@ -167,6 +186,10 @@ class TurnSummary(Record):
     """The commit of the agent's folder after the turn, which other agents and checks can read."""
     rerun_failed: bool = False
     """Whether a blind checker's rerun ended here without a check. The requests that the rerun had get no check."""
+    seen: int | None = Field(default=None, ge=0)
+    """The last event that the agent had got when the turn ended. `None` in a record from before Verifold kept it."""
+    stopped: bool = False
+    """Whether Verifold stopped the agent here, because its harness failed too often in a row."""
 
 
 class TurnEnded(EventBase, TurnSummary):
@@ -207,6 +230,7 @@ type Event = Annotated[
     | WatchSet
     | ProfileSet
     | AlarmSet
+    | TurnStarted
     | TurnEnded
     | RerunRequested
     | TimeSet
