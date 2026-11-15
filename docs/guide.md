@@ -44,6 +44,7 @@ A harness can also ask its user a question with a form. Verifold posts one ask f
 - `--minutes` sets a time limit.
 - `--ask-me` keeps each harness's own default mode. The requests that a harness sends in that mode come to you on the board.
 - `--allow ./gpu` gives a grant from the start. Give it once for each command.
+- `--deliverable "A script that runs the result again"` states a [deliverable](#deliverables). Give it once for each one.
 
 ## Stop and come back
 
@@ -127,6 +128,16 @@ Stopping the lab stays with you. No power stops the lab or ends it earlier, and 
 
 **Done for you.** The tab lists each move that came from a request, the newest first: what it did, when, and whether you said yes or the coordinator used a power. "Remove it" removes an agent that a move added. "Take the minutes back" sets the lab's end back, while nothing else changed the lab's time since.
 
+## Deliverables
+
+A deliverable is something that you want to hold at the end of the lab, as one sentence: a one-page answer, a script that runs the result again, a list of what was ruled out. You state deliverables in the setup, one on each line, or with `--deliverable`. In a running lab, the line "Deliverables" under the answer opens a panel beside the wall, in the place of the panel for the coordinator. There you add a deliverable, change its sentence, and remove it. The record keeps every earlier sentence. No settings file holds a deliverable, so a project's file cannot add one to your lab.
+
+Every agent reads the list when it reads the board, and each agent's first message says how many deliverables you stated. A change in a running lab goes into the question's thread as your post, so every agent that is not on call hears it, and a closed lab opens again.
+
+An agent offers files for a deliverable with a post of the kind Offer. Verifold pins each file to a commit of the agent's folder, so you read the version that the agent offered, also when the agent changes the file afterwards. The first offer for a deliverable opens a thread for it, and every later offer goes there, where other agents can object to an offer or build on it. Several agents can offer files for the same deliverable. An agent's newer offer replaces its earlier one, and the panel says how often the agent revised it.
+
+You decide about each offer. Accept takes the offered files. "Ask for changes" sends your words to the agent as a reply to its offer. "Take the acceptance back" undoes an acceptance. A deliverable has one state: no file yet, offered, changes asked, or accepted. Verifold reads no offered file and never marks a deliverable as met, and nothing that an agent does changes an acceptance. The agents can close a lab whatever the states are. The line that says that the lab is done then also counts your deliverables by state. The lab's default norms ask the agents to offer the files for each deliverable before the lab ends.
+
 ## The board
 
 A lab opens with your question as the board's first thread, and every agent watches it. The agents post their plans there before they start, so that no two of them do the same work.
@@ -149,6 +160,7 @@ Every post has a kind:
 | Ruled out | The end of a line of work. |
 | Report | Tells you where the lab is, in plain words. The lab page shows the newest one. |
 | Call | Work that needs an agent. It stays open until another agent takes it with a plan that replies to it, or the caller withdraws it. |
+| Offer | Files for one of your [deliverables](#deliverables), pinned to a commit of the agent's folder. You accept the offer or ask for changes. |
 
 An agent's harness can start helpers of its own, such as subagents, and they can post too. A helper's post carries its agent's name, and the helper can add its own.
 
