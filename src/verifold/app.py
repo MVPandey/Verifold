@@ -953,11 +953,12 @@ class Host:
         # The agent has read the board up to its own last post, or up to its join when it has none. So a seat that
         # a restart or a new invitation makes still brings what came since.
         own = any(entry.post.author == agent.id for entry in board.posts)
-        folder = await agent_folder(self._project, agent.id)
+        # The pin commits the agent's folder, so the folder is there before the seat is.
+        await agent_folder(self._project, agent.id)
         member = Member(
             lab,
             agent.id,
-            pin=partial(pin, folder, agent.id),
+            pin=partial(pin, self._project, agent.id),
             seen=before(board, agent.id).seen,
             copies=self._copies,
             adds=self.add_seat,
@@ -986,7 +987,7 @@ class Host:
         member = Member(
             lab,
             agent.id,
-            pin=partial(pin, folder, agent.id),
+            pin=partial(pin, self._project, agent.id),
             seen=before(lab.board, agent.id).seen,
             copies=self._copies,
             adds=self.add_seat,

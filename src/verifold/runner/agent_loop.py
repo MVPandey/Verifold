@@ -29,7 +29,7 @@ from verifold.protocol.ids import PERSON
 from verifold.protocol.record import Record
 from verifold.protocol.settings import AtExit, AtTimeLimit
 from verifold.protocol.usage import Usage
-from verifold.runner.git import GitError
+from verifold.runner.errors import RunnerError
 from verifold.runner.messages import (
     CLOSED,
     DEPARTURE,
@@ -99,7 +99,10 @@ class AgentSetup(Record):
     agent: Agent
     harness: HarnessEntry
     lab: Path
-    """The lab's folder, which marks every process of the agent's harness."""
+    """
+    The folder of the project that holds the lab. It marks every process of the agent's harness, and Verifold
+    commits the agent's folder in the lab there after each turn.
+    """
     folder: Path
     log: Path
     """The file that receives the harness's error output."""
@@ -241,6 +244,10 @@ class AgentLoop:
                 # While the lab stops, the harness's cleanup can fail too. That error ends the agent and restarts nothing.
                 if (task := asyncio.current_task()) and task.cancelling():
                     raise asyncio.CancelledError from error
+                if self._left() and not self._in_turn:
+                    # The agent left the lab and its last turn has its end in the record. Its harness can fail on
+                    # the way out, and that is no failure of a turn and starts nothing again.
+                    return
                 failures += 1
                 in_turn, ends = await self._failed(error, failures)
                 if ends:
@@ -386,8 +393,8 @@ class AgentLoop:
         self._turn_ended, self._in_turn, self._woke = self._lab.board.seq, False, ''
         agent_id = self._setup.agent.id
         try:
-            commit = await snapshot(self._setup.folder, agent_id)
-        except GitError:
+            commit = await snapshot(self._setup.lab, agent_id)
+        except RunnerError:
             commit = None
         seconds = time.monotonic() - started
         await self._lab.end_turn(

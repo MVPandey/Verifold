@@ -7,11 +7,24 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from plants import BEFORE, FORMS, SENTENCE, fires, mine, no_fetch_switch, plant, remote, spoil
+from plants import (
+    BEFORE,
+    FORMS,
+    SENTENCE,
+    fires,
+    mine,
+    no_fetch_switch,
+    old_pin,
+    old_snapshot,
+    plain_git,
+    plant,
+    remote,
+    spoil,
+)
 
 from verifold.runner import objects
 from verifold.runner.folders import agent_folder
-from verifold.runner.git import GIT_ENVIRONMENT, MAX_SMALL_FILE, GitError, git
+from verifold.runner.git import GIT_ENVIRONMENT, MAX_SMALL_FILE, GitError, git, own_repository
 from verifold.runner.objects import Missing, NoRepository, Objects, PinnedCommit, Running, TooLarge, file_bytes
 from verifold.runner.snapshots import pin, snapshot
 
@@ -33,7 +46,11 @@ def at(project: Path, commit: str) -> PinnedCommit:
 
 
 async def a_pin(project: Path) -> PinnedCommit:
-    """Give ada files that a post pins, with later work after it, and return the pinned commit."""
+    """
+    Give ada files that a post pinned before Verifold kept the snapshots in its own Git directory, and later work.
+
+    The pinned commit, which this returns, is in the project's repository or in the author's own.
+    """
     project.mkdir(exist_ok=True)
     author = await agent_folder(project, 'ada')
     (author / 'result.txt').write_text('11.8')
@@ -42,10 +59,10 @@ async def a_pin(project: Path) -> PinnedCommit:
     (author / 'link').symlink_to('result.txt')
     # A repository inside the folder, which a snapshot holds as a submodule without its files.
     await committed(author / 'module')
-    pinned = await pin(author, 'ada', ('result.txt',))
+    pinned = await old_pin(author, 'ada', ('result.txt',))
     (author / 'result.txt').write_text('changed later')
     (author / 'out' / 'deep' / 'a.json').write_text('{"later": true}')
-    await snapshot(author, 'ada')
+    await old_snapshot(author, 'ada')
     return at(project, pinned[0].commit)
 
 
@@ -85,6 +102,29 @@ async def test_a_file_is_read_at_the_pinned_commit_from_the_projects_repository_
         # The project's repository has the commit also when the author's folder is gone.
         shutil.rmtree(author)
         assert file_bytes(pinned, 'result.txt', LIMIT) == b'11.8'
+
+
+@pytest.mark.parametrize('with_commits', [True, False])
+async def test_a_file_that_verifold_pinned_in_its_own_directory_is_read_after_the_author_deleted_the_whole_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, with_commits: bool
+) -> None:
+    project = await committed(tmp_path / 'project') if with_commits else tmp_path / 'project'
+    project.mkdir(exist_ok=True)
+    author = await agent_folder(project, 'ada')
+    (author / 'result.txt').write_text('11.8')
+    pinned = await pin(project, 'ada', ('result.txt',))
+    (author / 'result.txt').write_text('changed later')
+    await snapshot(project, 'ada')
+    # No repository of the lab has the commit: Git itself, in the author's folder, does not find it.
+    with pytest.raises(GitError):
+        await plain_git('cat-file', '-e', pinned[0].commit, cwd=author)
+    shutil.rmtree(author)
+    looked: list[Path] = []
+    monkeypatch.setattr(objects, '_store', looked.append)
+
+    # Verifold's own store has the commit, so the read looks for no store of the project or of the author.
+    assert file_bytes(at(project, pinned[0].commit), 'result.txt', LIMIT) == b'11.8'
+    assert looked == []
 
 
 async def test_a_file_over_the_limit_and_a_path_that_names_no_plain_file_are_refused(tmp_path: Path) -> None:
@@ -397,18 +437,32 @@ async def test_a_store_of_the_authors_own_takes_no_commit_away_that_the_projects
     assert file_bytes(replace(pinned, seconds=600), 'result.txt', LIMIT) == b'11.8'
 
 
-@pytest.mark.parametrize('form', ['other bytes', 'a pipe', 'no commit'])
+@pytest.mark.parametrize(
+    ('before', 'form'),
+    [("Verifold's own", 'other bytes'), ("Verifold's own", 'a pipe')]
+    + [("the project's", form) for form in ('other bytes', 'a pipe', 'no commit')],
+)
 async def test_the_next_store_gets_its_turn_when_one_fails_in_any_way(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, form: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, before: str, form: str
 ) -> None:
     project = tmp_path / 'project'
     pinned = await a_pin(project)
-    # The project becomes a repository after the author's folder. Its store comes first and does not give the commit.
-    await git('init', '--quiet', cwd=project)
-    if form != 'no commit':
-        spoil(project / '.git' / 'objects', form, pinned.commit)
+    if before == "Verifold's own":
+        # Verifold's own store comes first. It never had the commit, and now it does not answer for it either.
+        store = own_repository(project / '.verifold') / 'objects'
+    else:
+        # The project becomes a repository after the author's folder. Its store comes before the author's and
+        # does not give the commit.
+        await git('init', '--quiet', cwd=project)
+        store = project / '.git' / 'objects'
+    if (before, form) == ("Verifold's own", 'a pipe'):
+        # Verifold removes a list of other stores from its own store, so the pipe is where the commit's file belongs.
+        (store / pinned.commit[:2]).mkdir()
+        os.mkfifo(store / pinned.commit[:2] / pinned.commit[2:])
+    elif form != 'no commit':
+        spoil(store, form, pinned.commit)
     if form == 'a pipe':
-        # Git waits in the first store for its share of the time, which is a few hundredths of a second here.
+        # Git waits in that store for its share of the time, which is a few hundredths of a second here.
         monkeypatch.setattr(objects, 'FIRST_STORE_SHARE', 0.0001)
 
     # The author's store has the rest of the time, which is long.

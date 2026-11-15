@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import stat
@@ -22,6 +23,7 @@ from builders import SLEEP, RecordBuilder, alive, start_orphan, until
 from fakes import FAKE_HARNESS
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
+from plants import old_pin
 from pydantic import TypeAdapter
 
 from verifold.app import (
@@ -56,7 +58,8 @@ from verifold.protocol.settings import AtExit, AtTimeLimit
 from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentSetup
 from verifold.runner.environment import harness_environment
-from verifold.runner.git import GitError, git
+from verifold.runner.folders import agent_folder
+from verifold.runner.git import GitError, git, own_git
 from verifold.runner.jobs import Sweep, sweep
 from verifold.runner.messages import DOORBELL, RESTARTED, STARTED_AGAIN
 from verifold.runner.messages import ON_CALL as ON_CALL_FACT
@@ -935,10 +938,13 @@ async def test_the_app_shows_a_pinned_file_as_its_commit_holds_it_and_says_why_i
         with monkeypatch.context() as smaller:
             smaller.setattr('verifold.app.MAX_FILE_BYTES', 5)
             large = await read('notes.md')
-        # The repository loses the file's object, and then the folder loses its repository.
-        blob = await git('rev-parse', f'{commit}:notes.md', cwd=folder)
-        (folder / '.git' / 'objects' / blob[:2] / blob[2:]).unlink()
+        # Verifold's own Git directory loses the file's object. Then it loses every object, and the folder
+        # loses its repository.
+        own = project / '.verifold' / 'snapshots.git'
+        blob = await own_git(project / '.verifold', 'rev-parse', f'{commit}:notes.md')
+        (own / 'objects' / blob[:2] / blob[2:]).unlink()
         gone = await read('notes.md')
+        shutil.rmtree(own / 'objects')
         (folder / '.git').rename(folder / 'moved')
         no_repository = await read('notes.md')
 
@@ -952,6 +958,41 @@ async def test_the_app_shows_a_pinned_file_as_its_commit_holds_it_and_says_why_i
     assert no_repository == (404, f'The app does not show notes.md at {commit[:8]}: {none}')
     # Git read the objects through Verifold's own Git directory, which is in the lab's folder and in no agent's.
     assert (project / '.verifold' / 'snapshots.git' / 'config').is_file()
+
+
+async def test_the_app_shows_a_file_that_a_post_pinned_before_verifold_kept_the_snapshots_and_one_from_after(
+    project: Path,
+) -> None:
+    # A lab from before Verifold kept the snapshots in its own Git directory. The commit that its post pins is
+    # in the repository of the author's folder.
+    author = await agent_folder(project, 'agent-1')
+    (author / 'notes.md').write_text('From before.\n')
+    old = RecordBuilder().join('agent-1', family='x', harness='gone')
+    old.thread('t-1', opened_by='agent-1')
+    pinned = await old_pin(author, 'agent-1', ('notes.md',))
+    old.post(Result(id='p-1', thread='t-1', author='agent-1', text='It is faster.', evidence=pinned))
+    (project / '.verifold' / 'record.jsonl').write_text(''.join(f'{event.model_dump_json()}\n' for event in old.events))
+
+    async with serving(project) as client:
+        before = await client.get('/posts/p-1/file', params={'path': 'notes.md'})
+        invited = (await client.post('/invitations', json={'name': 'Writer'})).json()
+        url, token, folder = invited_parts(invited['text'])
+        (folder / 'notes.md').write_text('From after.\n')
+        async with board_of(url, token) as board:
+            posted = await board.call_tool(
+                'post', {'kind': 'result', 'text': 'Still faster.', 'thread': 't-1', 'files': ['notes.md']}
+            )
+        assert posted.structured_content is not None
+        post = posted.structured_content['post']
+        # The agent deletes its whole folder. The app still shows the version that the post pins.
+        shutil.rmtree(folder)
+        after = await client.get(f'/posts/{post["id"]}/file', params={'path': 'notes.md'})
+
+    assert (before.status_code, before.json().get('text')) == (200, 'From before.\n')
+    assert (after.status_code, after.json().get('text')) == (200, 'From after.\n')
+    # The commit of the earlier post is in the author's repository, and the later one in Verifold's own directory.
+    assert await git('cat-file', '-t', pinned[0].commit, cwd=author) == 'commit'
+    assert await own_git(project / '.verifold', 'cat-file', '-t', post['evidence'][0]['commit']) == 'commit'
 
 
 async def test_the_app_reads_a_few_files_at_the_same_time_and_the_others_wait(
