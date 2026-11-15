@@ -224,7 +224,8 @@ class AlarmLine(Record):
     rings_at: AwareDatetime | None = None
     """
     When the alarm rings as the lab stands. A time that passed means that the alarm rings when the agent's turn
-    ends. `None` in a closed lab, where no alarm rings.
+    ends. `None` while the lab is out of time or closed: no alarm rings then, and an alarm whose time passed
+    meanwhile rings when the lab has time again or is open again.
     """
 
 
@@ -373,7 +374,8 @@ class AlarmResult(Record):
     """
     What the `alarm` tool returns: the alarm that waits for the agent after the call.
 
-    `rings_at` is `None` when no alarm waits, which is so after a call with zero minutes, and in a closed lab.
+    `rings_at` is `None` when no alarm waits, which is so after a call with zero minutes, and while the lab is out
+    of time or closed.
     """
 
     rings_at: AwareDatetime | None = None

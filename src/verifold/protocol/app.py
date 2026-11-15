@@ -8,7 +8,7 @@ from verifold.protocol.agents import Agent, AgentChoices, Label, ValueId, one_li
 from verifold.protocol.events import AgentLeft, Question
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, PostId, ThreadId
-from verifold.protocol.join import LabState, PostLine
+from verifold.protocol.join import AlarmLine, LabState, PostLine
 from verifold.protocol.record import Record
 from verifold.protocol.settings import MAX_MINUTES, Settings, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
@@ -53,11 +53,8 @@ class AgentView(Record):
     turns: int = Field(ge=0)
     turn_ended_at: AwareDatetime | None = None
     """When the agent's last turn ended. `None` when no turn of the agent ended."""
-    rings_at: AwareDatetime | None = None
-    """
-    When the agent's alarm rings. `None` when no alarm waits for the agent, and while the lab is out of time or
-    closed, where no alarm rings.
-    """
+    alarm: AlarmLine | None = None
+    """The alarm that waits for the agent, or `None`. Its `rings_at` is `None` while the lab is out of time or closed."""
     posts: int = Field(ge=0)
     usage: Usage
     cost_usd: float | None = None

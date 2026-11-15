@@ -353,8 +353,8 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         another, which replaces it, or until you cancel it with zero minutes. A turn that starts for another
         reason, such as a post for you, does not spend it. When its time comes while you are in a turn, it rings
         when that turn ends. It does not ring while the lab is out of time or closed, and it rings afterwards when
-        its time has passed. The result says which alarm waits now: `rings_at` is empty when none waits, and in a
-        closed lab. `alarm` in the news of every tool result, and `your_alarm` in `brief`, show the alarm that
+        its time has passed. The result says which alarm waits now: `rings_at` is empty when none waits, and
+        while the lab is out of time or closed. `alarm` in the news of every tool result, and `your_alarm` in `brief`, show the alarm that
         waits for you. Verifold sets no alarm for you. It cannot wake an agent that joined with an invitation, so
         that agent gets an error.
         """

@@ -17,6 +17,7 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from pydantic import Field, SecretStr
@@ -31,10 +32,13 @@ from verifold.protocol.settings import AtExit, AtTimeLimit
 from verifold.protocol.usage import Usage
 from verifold.runner.git import GitError
 from verifold.runner.messages import (
+    CLOSED,
     DEPARTURE,
     DOORBELL,
     HARNESS_FAILED,
+    IN_TURN,
     JOBS_ENDED,
+    OUT_OF_TIME,
     RESTARTED,
     STARTED_AGAIN,
     alarm_message,
@@ -169,6 +173,8 @@ class AgentLoop:
         """The board's sequence number when the agent's last turn ended. A stop after it concerns the agent's jobs."""
         self._rang: int | None = None
         """The sequence number of the alarm that rings with the agent's next message, or `None`."""
+        self._woke = ''
+        """The message that carries that ring, until its turn ends. A harness that fails before gets it again."""
         self._cut_short = ''
         """Why the agent's last turn ended without the agent's choice, or empty when the agent ended it."""
 
@@ -248,6 +254,9 @@ class AgentLoop:
                     # loaded, or the harness fails before its last start. The next start opens a new one.
                     resume = None
                 message = DOORBELL if resume else setup.start
+                # When the record says already that the agent's alarm rang, the agent must still hear it.
+                woke = self._woke if resume else f'{message}\n\n{self._woke}'
+                message = woke if self._woke else message
 
     async def _failed(self, error: Exception, failures: int) -> tuple[bool, bool]:
         # Record that the harness failed, for the `failures`-th time in a row. Return whether it failed in a turn,
@@ -371,7 +380,7 @@ class AgentLoop:
 
     async def _record(self, started: float, usage: Usage, cost_usd: float | None, error: str | None) -> None:
         # Mark the end of the turn before the snapshot, which can take seconds in a large folder.
-        self._turn_ended, self._in_turn = self._lab.board.seq, False
+        self._turn_ended, self._in_turn, self._woke = self._lab.board.seq, False, ''
         agent_id = self._setup.agent.id
         try:
             commit = await snapshot(self._setup.folder, agent_id)
@@ -423,15 +432,15 @@ class AgentLoop:
         lab gets more time, and its message says so, followed by the doorbell when posts came meanwhile.
 
         The agent's alarm rings here at its time. An alarm whose time came earlier, while a turn of the agent ran
-        or while the lab was out of time or closed, rings at once. It rings once: a doorbell that rings when the
-        alarm is due carries it.
+        or while the lab was out of time or closed, rings at once, and its message says so. It rings once: a
+        doorbell that rings when the alarm is due carries it.
         """
         agent_id = self._setup.agent.id
         # An agent that read one page of its posts in its turn gets a doorbell for the rest. An agent that read
         # nothing gets no second doorbell for the same posts.
         if self._member.seen > self._seen_at_turn:
             self._notified = min(self._notified, self._member.seen)
-        settled = False
+        settled, held, late = False, '', ''
         while True:
             board = self._lab.board
             # No message wakes an agent that left. The loop ends before it sends this one.
@@ -445,33 +454,50 @@ class AgentLoop:
             # The agent's own alarm. It does not ring in a lab that is out of time or closed.
             alarm = pending_alarm(board, agent_id)
             left = None
-            if alarm and not board.out_of_time and lab_state(board) != 'closed':
-                left = (rings_at(board, alarm) - self._lab.now()).total_seconds()
+            if alarm:
+                rings, closed = rings_at(board, alarm), lab_state(board) == 'closed'
+                ahead = (rings - self._lab.now()).total_seconds()
+                if board.out_of_time or closed:
+                    held = CLOSED if closed else OUT_OF_TIME
+                else:
+                    left = ahead
+                    # An alarm that is due at the first look after the lab had no time or was closed is late for
+                    # that reason.
+                    held = held if left <= 0 else ''
+                    late = IN_TURN if self._rings_in_turn(board, rings) else held
             due = alarm if alarm and left is not None and left <= 0 else None
             # A post during a stop waits for the wake after more time, so the doorbell rings then.
             if stopped and not board.out_of_time:
                 if posts:
                     self._notified = board.seq
                 message = more_time_message(board.ends_at, AtTimeLimit.STOP)
-                return self._ring(f'{message} {DOORBELL}' if posts else message, due)
+                return self._ring(f'{message} {DOORBELL}' if posts else message, due, late)
             if posts and not stopped:
                 if not settled:
                     await self._settle()
                     settled = True
                     continue
                 self._notified = board.seq
-                return self._ring(DOORBELL if news.posts else DEPARTURE, due)
+                return self._ring(DOORBELL if news.posts else DEPARTURE, due, late)
             if due:
-                return self._ring('', due)
+                return self._ring('', due, late)
             await self._lab.wait_for_change(board.seq, left)
 
-    def _ring(self, message: str, due: AlarmSet | None) -> str:
+    def _rings_in_turn(self, board: Board, rings: datetime) -> bool:
+        # Whether the time of the agent's alarm came while the agent's last turn ran.
+        agent_id = self._setup.agent.id
+        started = next((turn for turn in reversed(board.starts) if turn.agent == agent_id), None)
+        ended = next((turn for turn in reversed(board.turns) if turn.agent == agent_id and not turn.no_turn), None)
+        return bool(started and ended and started.seq < ended.seq and started.at <= rings <= ended.at)
+
+    def _ring(self, message: str, due: AlarmSet | None, late: str) -> str:
         # Add the alarm that is due to a message that wakes the agent, so that the alarm rings once. The start of
         # the agent's next turn records that it rang.
         if due is None:
             return message
         self._rang = due.seq
-        return f'{message} {alarm_message(due)}'.strip()
+        self._woke = f'{message} {alarm_message(due, late)}'.strip()
+        return self._woke
 
     async def _settle(self) -> None:
         # Wait until the board has no new event for `quiet` seconds, and for `max_quiet` seconds at most.

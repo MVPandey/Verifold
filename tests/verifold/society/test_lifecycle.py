@@ -113,6 +113,26 @@ def test_an_agent_reads_its_alarm_in_its_brief_and_in_every_news(record: RecordB
     assert news(record.board(), 'bo', 0).alarm == AlarmLine(minutes=15, rings_at=None)
 
 
+def test_an_alarm_has_no_time_while_the_lab_is_out_of_time(record: RecordBuilder) -> None:
+    alarm = set_alarm(record, 15)
+    record.time_set(record.at(len(record.events) + 1)).ran_out()
+    assert record.board().out_of_time
+    assert alarm_line(record.board(), 'bo') == AlarmLine(minutes=15, rings_at=None)
+
+    # With more time, it has its time again.
+    record.time_set(alarm.at + timedelta(hours=2))
+    assert alarm_line(record.board(), 'bo') == AlarmLine(minutes=15, rings_at=alarm.at + timedelta(minutes=15))
+
+
+def test_a_turn_starts_with_the_ring_of_an_alarm_of_its_own_agent_only(record: RecordBuilder) -> None:
+    alarm = set_alarm(record, 15, agent='ada')
+    for agent, rang in (('bo', alarm.seq), ('ada', 1), ('ada', alarm.seq + 5)):
+        with pytest.raises(RejectedEvent, match=f'Event {rang} is no alarm of {agent}'):
+            record.start(agent, seen=0, rang=rang).board()
+        record.events.pop()
+    assert record.start('ada', seen=0, rang=alarm.seq).board().starts[-1].rang == alarm.seq
+
+
 def test_an_alarm_from_an_older_record_keeps_the_rule_of_its_time(record: RecordBuilder) -> None:
     # A record from before Verifold kept alarms across turns says of no alarm that it stays.
     old = AlarmSet.model_validate({'type': 'alarm_set', 'seq': 6, 'at': START, 'agent': 'bo', 'minutes': 10})

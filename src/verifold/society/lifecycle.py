@@ -72,12 +72,9 @@ def alarm_line(board: Board, agent_id: AgentId) -> AlarmLine | None:
     alarm = pending_alarm(board, agent_id)
     if alarm is None:
         return None
-    return AlarmLine(minutes=alarm.minutes, quiet=alarm.quiet, rings_at=due_at(board, alarm))
-
-
-def due_at(board: Board, alarm: AlarmSet) -> datetime | None:
-    """Return when an alarm rings as the lab stands, or `None` in a closed lab, where no alarm rings."""
-    return None if lab_state(board) == 'closed' else rings_at(board, alarm)
+    # No alarm rings while the lab is out of time or closed, so the alarm has no time then.
+    resting = board.out_of_time or lab_state(board) == 'closed'
+    return AlarmLine(minutes=alarm.minutes, quiet=alarm.quiet, rings_at=None if resting else rings_at(board, alarm))
 
 
 def rings_at(board: Board, alarm: AlarmSet) -> datetime:

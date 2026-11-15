@@ -238,7 +238,7 @@ async def test_the_lab_view_says_when_an_agent_ended_its_turn_and_when_its_alarm
 ) -> None:
     async def views() -> tuple[tuple[str | None, str | None], ...]:
         agents = (await client.get('/lab')).json()['agents']
-        return tuple((view['turn_ended_at'], view['rings_at']) for view in agents)
+        return tuple((view['turn_ended_at'], view['alarm'] and view['alarm']['rings_at']) for view in agents)
 
     assert await views() == ((None, None), (None, None))
 
@@ -252,7 +252,8 @@ async def test_the_lab_view_says_when_an_agent_ended_its_turn_and_when_its_alarm
     # No alarm rings while the lab is out of time, or closed.
     await lab.set_time_left(timedelta(0))
     await lab.run_out_of_time()
-    assert (await views())[0][1] is None
+    held = (await client.get('/lab')).json()['agents'][0]['alarm']
+    assert held == {'minutes': 10, 'quiet': False, 'rings_at': None}
     await lab.set_time_left(timedelta(hours=1))
     assert (await views())[0][1] == rings
     await lab.post(PostRequest(kind='close', text='The answer stands.', thread='t-1'), 'ada')

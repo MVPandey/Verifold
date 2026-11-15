@@ -40,7 +40,7 @@ from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
-from verifold.society.lifecycle import close_count, due_at, lab_state, pending_alarm
+from verifold.society.lifecycle import alarm_line, close_count, lab_state
 from verifold.society.lines import lines_of
 from verifold.society.standing import agreed, closing
 from verifold.society.turns import before
@@ -259,7 +259,6 @@ def _agent_view(board: Board, activity: Activity, agent_id: str, working: dict[A
     turns = tuple(turn for turn in board.turns if turn.agent == agent_id)
     costs = tuple(turn.cost_usd for turn in turns if turn.cost_usd is not None)
     role, status = board.profile(agent_id)
-    alarm = pending_alarm(board, agent_id)
     return AgentView(
         agent=joined.agent,
         role=role,
@@ -271,7 +270,7 @@ def _agent_view(board: Board, activity: Activity, agent_id: str, working: dict[A
         stopped=before(board, agent_id).stopped and activity.of(agent_id).state == 'stopped',
         turns=len(turns),
         turn_ended_at=next((turn.at for turn in reversed(turns) if not turn.no_turn), None),
-        rings_at=due_at(board, alarm) if alarm and not board.out_of_time else None,
+        alarm=alarm_line(board, agent_id),
         posts=sum(entry.post.author == agent_id for entry in board.posts),
         usage=Usage(
             input_tokens=sum(turn.usage.input_tokens for turn in turns),

@@ -801,7 +801,11 @@ describe('a member that is in no turn', () => {
   const idle = { state: 'idle', detail: '', at: '2026-11-06T12:37:00Z' } as const;
   const rings = '2026-11-06T14:20:00Z';
   const agents = [
-    agentView('agent-1', { activity: idle, turn_ended_at: idle.at, rings_at: rings }),
+    agentView('agent-1', {
+      activity: idle,
+      turn_ended_at: idle.at,
+      alarm: { minutes: 10, quiet: false, rings_at: rings },
+    }),
     agentView('agent-2', { activity: idle, turn_ended_at: idle.at }),
   ];
   const list = (lab: LabView): string =>
@@ -828,7 +832,7 @@ describe('a member that is in no turn', () => {
     );
     assert.ok(
       html.includes(
-        'Ended its turn 1 h 35 min ago and set no alarm. A post that names it wakes it.</p>',
+        'Its last turn ended 1 h 35 min ago, and no alarm is set. A post for it wakes it.</p>',
       ),
     );
   });

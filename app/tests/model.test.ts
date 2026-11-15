@@ -19,7 +19,7 @@ import {
   stateLine,
   workingLine,
 } from '../src/model/agents.ts';
-import { clock, duration, minutesBetween, money, tokens } from '../src/model/format.ts';
+import { clock, clockOn, duration, minutesBetween, money, tokens } from '../src/model/format.ts';
 import { orderNeeds, pauses } from '../src/model/needs.ts';
 import {
   builtOnLabel,
@@ -286,22 +286,48 @@ describe('agents', () => {
   it('says what wakes a member that is in no turn', () => {
     const now = new Date('2026-11-06T14:12:00Z');
     const rings = '2026-11-06T14:20:00Z';
+    const alarm = { minutes: 10, quiet: false, rings_at: rings };
     const idle = { state: 'idle', detail: '', at: '2026-11-06T12:37:00Z' } as const;
     const rested = agentView('agent-1', { activity: idle, turn_ended_at: '2026-11-06T12:37:00Z' });
-    assert.deepEqual(memberLine({ ...rested, rings_at: rings }, false, now), {
+    assert.deepEqual(memberLine({ ...rested, alarm }, false, now), {
       text: `Waits for its alarm at ${clock(rings)}.`,
       dot: 'idle',
     });
+    // An alarm whose time passed still waits: it rings when the agent's turn ends.
+    const past = '2026-11-06T14:05:00Z';
+    assert.equal(
+      memberLine({ ...rested, alarm: { ...alarm, rings_at: past } }, false, now).text,
+      `Waits for its alarm at ${clock(past)}.`,
+    );
+    // An alarm for another day shows the day.
+    const later = '2026-11-07T13:00:00Z';
+    assert.equal(
+      memberLine({ ...rested, alarm: { ...alarm, rings_at: later } }, false, now).text,
+      `Waits for its alarm at ${clockOn(later, now)}.`,
+    );
+    assert.match(clockOn(later, now), /^[A-Z][a-z]{2} \d{1,2} Nov, \d\d:\d\d$/);
+    assert.equal(clockOn(rings, now), clock(rings));
+    // The time of an alarm for a quiet board moves with each post, so the line gives the rule and no time.
+    const quiet = { minutes: 90, quiet: true, rings_at: rings };
+    assert.equal(
+      memberLine({ ...rested, alarm: quiet }, false, now).text,
+      'Waits for its alarm: rings after 1 h 30 min with no new post.',
+    );
     assert.deepEqual(memberLine(rested, false, now), {
-      text: 'Ended its turn 1 h 35 min ago and set no alarm. A post that names it wakes it.',
+      text: 'Its last turn ended 1 h 35 min ago, and no alarm is set. A post for it wakes it.',
       dot: 'idle',
     });
     assert.equal(
       memberLine({ ...rested, turn_ended_at: '2026-11-06T14:11:40Z' }, false, now).text,
-      'Ended its turn just now and set no alarm. A post that names it wakes it.',
+      'Its last turn ended just now, and no alarm is set. A post for it wakes it.',
     );
     // No alarm rings in a lab that is out of time or closed, so the line names none.
-    assert.equal(memberLine({ ...rested, rings_at: rings }, true, now).text, 'Idle, 1 h 35 min');
+    const held = { ...alarm, rings_at: null };
+    assert.equal(memberLine({ ...rested, alarm: held }, true, now).text, 'Idle, 1 h 35 min');
+    assert.equal(
+      memberLine({ ...rested, alarm: { ...held, quiet: true } }, true, now).text,
+      'Idle, 1 h 35 min',
+    );
     // An agent that waits again after a restart and has no turn in the record keeps the plain line.
     assert.equal(
       memberLine(agentView('agent-1', { activity: idle }), false, now).text,
@@ -310,7 +336,7 @@ describe('agents', () => {
     // A member in a turn, a stopped member, and one that left keep their lines, with an alarm or without.
     const working = { state: 'working', detail: 'Run pytest', at: '2026-11-06T14:10:00Z' } as const;
     assert.equal(
-      memberLine({ ...rested, activity: working, rings_at: rings }, false, now).text,
+      memberLine({ ...rested, activity: working, alarm }, false, now).text,
       'Run pytest, 2 min',
     );
     const stopped = { state: 'stopped', detail: '', at: null } as const;
