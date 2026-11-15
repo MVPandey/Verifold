@@ -11,7 +11,7 @@ import type {
   SettingsView,
 } from '../api/types.ts';
 import { defaultsLine } from '../model/setup.ts';
-import { AT_EXIT, AT_TIME_LIMIT, labelOf, valueAt } from '../model/settings.ts';
+import { AT_EXIT, AT_TIME_LIMIT, WHILE_YOU_DECIDE, labelOf, valueAt } from '../model/settings.ts';
 import type { Choice } from '../model/settings.ts';
 
 const CHANGED =
@@ -123,6 +123,8 @@ export function SettingsForm(props: {
   // What this project adds up to, which a running lab follows once the person chooses it.
   const chosen = props.view.project.settings.jobs;
   const lab = props.view.lab?.jobs ?? null;
+  const waits = props.view.project.settings.permissions.while_you_decide;
+  const labWaits = props.view.lab?.permissions.while_you_decide ?? null;
   const own = (key: SettingKey): boolean =>
     !project && valueAt(props.view.project.values, key) !== undefined;
   return (
@@ -161,6 +163,20 @@ export function SettingsForm(props: {
         lab={lab && lab.at_exit !== chosen.at_exit && !own('jobs.at_exit') ? lab.at_exit : null}
         disabled={props.disabled}
         onChange={(value) => props.onChange('jobs.at_exit', value)}
+      />
+      <Setting
+        title="When an agent needs a permission from you"
+        detail="The request shows in Needs you, with the answers that the agent's harness offers. This is for the time until you answer."
+        choices={WHILE_YOU_DECIDE}
+        written={valueAt(file.values, 'permissions.while_you_decide')}
+        current={file.settings.permissions.while_you_decide}
+        inherited={inherited?.permissions.while_you_decide ?? null}
+        projectOwn={own('permissions.while_you_decide') ? waits : null}
+        lab={
+          labWaits && labWaits !== waits && !own('permissions.while_you_decide') ? labWaits : null
+        }
+        disabled={props.disabled}
+        onChange={(value) => props.onChange('permissions.while_you_decide', value)}
       />
       <NewLabs
         file={file}

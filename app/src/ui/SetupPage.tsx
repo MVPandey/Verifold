@@ -157,7 +157,10 @@ export function SetupPage(props: {
 
       <section className="section">
         <h3>Can your agents run in auto mode?</h3>
-        <p className="sub">If not, their permission requests come to you.</p>
+        <p className="sub">
+          In auto mode each harness decides its own requests, with its own protections. If not, the
+          requests that a harness sends come to you.
+        </p>
         <div className="choice">
           <button type="button" aria-pressed={autoMode} onClick={() => setAutoMode(true)}>
             <b>Yes, use auto mode</b>

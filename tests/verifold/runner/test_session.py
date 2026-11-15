@@ -4,6 +4,7 @@ import os
 from contextlib import suppress
 from pathlib import Path
 
+import acp
 import psutil
 import pytest
 from acp import schema
@@ -15,9 +16,11 @@ from verifold.protocol.usage import Usage
 from verifold.runner.errors import RunnerError
 from verifold.runner.session import (
     AgentSession,
+    Answers,
     BoardAccess,
     PermissionRequest,
     Place,
+    Question,
     SessionHooks,
     SessionOptions,
     _Client,
@@ -402,9 +405,152 @@ async def test_a_call_gets_what_the_harness_adds_after_its_start() -> None:
 
 async def test_only_a_call_that_runs_a_command_has_one() -> None:
     remote = await Asked().after(started('remote.exec', {'host': 'a', 'command': './gpu x'}, kind='other'))
-    listed = await Asked().after(started('sh', {'command': ['./gpu', 'x']}))
 
-    assert (remote.title, remote.command, listed.title, listed.command) == ('remote.exec', None, 'sh', None)
+    assert (remote.title, remote.command, remote.kind, remote.rest) == ('remote.exec', None, 'other', '')
+    assert json.loads(remote.given) == {'host': 'a', 'command': './gpu x'}
+
+
+@pytest.mark.parametrize(
+    ('given', 'command'),
+    [
+        ({'command': ['./gpu', 'x']}, './gpu x'),
+        ({'cmd': './gpu x'}, './gpu x'),
+        ({'command': ['git', 'commit', '-m', 'two words']}, "git commit -m 'two words'"),
+        ({'command': ['/bin/bash', '-lc', './gpu x']}, './gpu x'),
+        ({'cmd': ['sh', '-c', 'make test | tail -1']}, 'make test | tail -1'),
+        ({'command': ['python3', '-c', 'print(1)']}, "python3 -c 'print(1)'"),
+    ],
+)
+async def test_a_command_is_text_or_a_list_of_arguments_and_a_shell_with_one_script_is_that_script(
+    given: object, command: str
+) -> None:
+    request = await Asked().after(started('Terminal', given))
+
+    assert (request.title, request.command, request.kind, request.rest) == (command, command, 'execute', '')
+    assert json.loads(request.given) == given
+
+
+@pytest.mark.parametrize('given', [{'command': ['./gpu', 7]}, {'command': []}, {'argv': './gpu x'}, {'script': 'x'}])
+async def test_a_command_in_a_shape_that_verifold_does_not_know_keeps_the_harnesss_title_and_input(
+    given: object,
+) -> None:
+    request = await Asked().after(started('Run the trainer', given))
+
+    assert (request.title, request.command, request.rest) == ('Run the trainer', None, '')
+    assert json.loads(request.given) == given
+
+
+async def test_a_request_carries_its_whole_input_and_what_it_holds_beside_the_command() -> None:
+    long = await Asked().after(started('Write', {'text': 'x' * 50_000}, kind='edit'))
+    odd = await Asked().after(started('Write', {'path': Path('notes.md')}, kind='edit'))
+    beside = await Asked().after(started('sh', {'cmd': './gpu x', 'cwd': '/tmp', 'timeout': 5}))
+    nothing = await Asked().after()
+
+    assert (json.loads(long.given), 'notes.md' in odd.given) == ({'text': 'x' * 50_000}, True)
+    assert (beside.command, json.loads(beside.rest)) == ('./gpu x', {'cwd': '/tmp', 'timeout': 5})
+    assert json.loads(beside.given) == {'cmd': './gpu x', 'cwd': '/tmp', 'timeout': 5}
+    assert (nothing.given, nothing.rest, nothing.kind) == ('', '', '')
+
+
+BRANCH = schema.ElicitationStringPropertySchema(
+    type='string',
+    title='Branch',
+    description='Where the work goes.',
+    one_of=[schema.EnumOption(const='main', title='Main'), schema.EnumOption(const='dev', title='Dev')],
+)
+SETS = schema.ElicitationMultiSelectPropertySchema(
+    type='array', items=schema.StringMultiSelectItems(type='string', enum=['a', 'b'])
+)
+TITLED = schema.ElicitationMultiSelectPropertySchema(
+    type='array', items=schema.TitledMultiSelectItems(any_of=[schema.EnumOption(const='a', title='Alpha')])
+)
+FIELDS: dict[str, object] = {
+    'name': schema.ElicitationStringPropertySchema(type='string'),
+    'level': schema.ElicitationStringPropertySchema(type='string', enum=['low', 'high']),
+    'branch': BRANCH,
+    'gpus': schema.ElicitationIntegerPropertySchema(type='integer'),
+    'rate': schema.ElicitationNumberPropertySchema(type='number'),
+    'dry': schema.ElicitationBooleanPropertySchema(type='boolean'),
+    'sets': SETS,
+    'titled': TITLED,
+}
+
+
+def form(properties: dict[str, object]) -> schema.ElicitationFormSessionMode:
+    asked = schema.ElicitationSchema.model_validate({'properties': properties, 'required': ['name', 'branch']})
+    return schema.ElicitationFormSessionMode(session_id='s', requested_schema=asked)
+
+
+class Questioned:
+    """A client, with the questions that its handler got and the answer that it gives."""
+
+    def __init__(self, answers: Answers | None) -> None:
+        self.questions: list[Question] = []
+        self._answers = answers
+        self.client = _Client(SessionHooks(permissions=NO_PERMISSION.permissions, questions=self._answer))
+
+    async def _answer(self, question: Question) -> Answers | None:
+        self.questions.append(question)
+        return self._answers
+
+
+async def test_a_form_of_the_harness_reaches_its_user_field_by_field_and_the_answers_go_back() -> None:
+    questioned = Questioned({'name': 'Run 7', 'dry': True})
+
+    response = await questioned.client.create_elicitation('Set up the run', form(FIELDS))
+
+    (question,) = questioned.questions
+    assert question.message == 'Set up the run'
+    assert [(field.name, field.title, field.kind) for field in question.fields] == [
+        ('name', 'name', 'text'),
+        ('level', 'level', 'choice'),
+        ('branch', 'Branch', 'choice'),
+        ('gpus', 'gpus', 'integer'),
+        ('rate', 'rate', 'number'),
+        ('dry', 'dry', 'boolean'),
+        ('sets', 'sets', 'choices'),
+        ('titled', 'titled', 'choices'),
+    ]
+    assert [[(option.value, option.name) for option in field.options] for field in question.fields] == [
+        [],
+        [('low', 'low'), ('high', 'high')],
+        [('main', 'Main'), ('dev', 'Dev')],
+        [],
+        [],
+        [],
+        [('a', 'a'), ('b', 'b')],
+        [('a', 'Alpha')],
+    ]
+    assert question.fields[2].description == 'Where the work goes.'
+    assert [field.name for field in question.fields if field.required] == ['name', 'branch']
+    assert isinstance(response, schema.AcceptElicitationResponse)
+    assert response.content == {'name': 'Run 7', 'dry': True}
+
+
+async def test_a_question_without_an_answer_is_cancelled_and_a_session_without_a_user_answers_none() -> None:
+    cancelled = await Questioned(None).client.create_elicitation('Which?', form({'branch': BRANCH}))
+    alone = await _Client(NO_PERMISSION).create_elicitation('Which?', form({'branch': BRANCH}))
+
+    assert [type(response) for response in (cancelled, alone)] == [schema.CancelElicitationResponse] * 2
+
+
+@pytest.mark.parametrize(
+    'mode',
+    [
+        schema.ElicitationUrlSessionMode(session_id='s', elicitation_id='e-1', url='https://example.com/sign-in'),
+        form({'when': {'type': 'date'}}),
+        form({'sets': {'type': 'array', 'items': {'type': 'number'}}}),
+        form({}),
+    ],
+)
+async def test_a_question_that_the_board_cannot_show_gets_an_error_that_says_so(mode: schema.ElicitationMode) -> None:
+    questioned = Questioned({})
+
+    with pytest.raises(acp.RequestError) as refused:
+        await questioned.client.create_elicitation('Sign in', mode)
+
+    assert (refused.value.code, questioned.questions) == (-32602, [])
+    assert 'It cannot show this.' in str(refused.value.data)
 
 
 async def test_a_call_to_the_labs_board_is_marked_where_the_harness_names_the_server() -> None:

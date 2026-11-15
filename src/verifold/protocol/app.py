@@ -245,7 +245,7 @@ class SettingsView(Record):
     """The settings that the folder's lab follows, or `None` before a lab starts."""
 
 
-type SettingKey = Literal['jobs.at_time_limit', 'jobs.at_exit', 'setup']
+type SettingKey = Literal['jobs.at_time_limit', 'jobs.at_exit', 'permissions.while_you_decide', 'setup']
 """The settings that the app changes. Harness commands are not among them, so the app can't change what a lab runs."""
 
 
@@ -263,7 +263,7 @@ class SettingsChange(Record):
     key: SettingKey
     value: str | SetupDefaults | None = None
     """
-    The new value: a job setting's answer, or the choices for new labs. `None` removes the setting, so the one for
+    The new value: the answer of a job or permission setting, or the choices for new labs. `None` removes the setting, so the one for
     all projects, or Verifold's default, applies.
     """
     revisions: SettingsRevisions

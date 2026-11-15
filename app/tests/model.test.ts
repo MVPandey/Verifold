@@ -25,6 +25,9 @@ import { orderNeeds, pauses } from '../src/model/needs.ts';
 import { isRevision, revisedLine } from '../src/model/question.ts';
 import {
   builtOnLabel,
+  harnessRequest,
+  choiceGroups,
+  gaps,
   isPermission,
   personAnswer,
   personMessage,
@@ -181,6 +184,7 @@ describe('posts', () => {
       reply_to: 'p-4',
       text: 'Allow once',
       body: 'Only this time.',
+      choice: 'Allow once',
     });
     assert.deepEqual(personAnswer(asked, null, 'No, use pure Python.'), {
       kind: 'answer',
@@ -228,6 +232,12 @@ describe('posts', () => {
     assert.equal(builtOnLabel(['p-4', 'p-9']), 'Built on by 2 posts');
     assert.equal(isPermission(ask('p-1', 'agent-1')), true);
     assert.equal(isPermission(result('p-1')), false);
+    // Only the field that Verifold records makes a permission request. An agent's own ask with the same words is none.
+    const lookalike = ask('p-1', 'agent-1', [], null);
+    assert.equal(lookalike.text.startsWith('Permission needed:'), true);
+    assert.equal(isPermission(lookalike), false);
+    assert.equal(harnessRequest(lookalike), null);
+    assert.equal(harnessRequest(ask('p-1', 'agent-1', [], 'question')), 'question');
   });
 });
 
@@ -689,8 +699,8 @@ describe('turns', () => {
 describe('needs', () => {
   const waiting = { state: 'waiting', detail: '', at: null } as const;
   const needs = [
-    postView({ ...ask('p-1', 'agent-1'), text: 'Which seed counts?' }),
-    postView(ask('p-2', 'agent-2')),
+    postView({ ...ask('p-1', 'agent-1', [], null), text: 'Permission needed: which seed?' }),
+    postView({ ...ask('p-2', 'agent-2', [], 'question'), text: 'Which branch?' }),
     postView(ask('p-3', 'agent-3')),
   ];
   const ids = (items: readonly PostView[]): readonly string[] => items.map((item) => item.post.id);
@@ -956,6 +966,43 @@ describe('time', () => {
       30,
     );
     assert.equal(moreTime(labView({ ends_at: '2026-11-20T14:00:00Z' }), 60, now), MAX_MINUTES);
+  });
+});
+
+describe('an answer to an ask', () => {
+  it('names a pressed choice as its choice, and sends typed words as words only', () => {
+    const asked = ask('p-1', 'agent-1', ['Yes', 'No']);
+    assert.deepEqual(personAnswer(asked, 'Yes', ' but not on prod '), {
+      kind: 'answer',
+      thread: 't-2',
+      reply_to: 'p-1',
+      text: 'Yes',
+      body: 'but not on prod',
+      choice: 'Yes',
+    });
+    assert.deepEqual(personAnswer(asked, null, 'Yes\n\nbut wait, not on prod'), {
+      kind: 'answer',
+      thread: 't-2',
+      reply_to: 'p-1',
+      text: 'Yes',
+      body: 'but wait, not on prod',
+    });
+  });
+
+  it('finds the long runs of blank lines in a text and keeps the rest as it is', () => {
+    assert.deepEqual(gaps('a\n\n\nb'), ['a\n\n\nb']);
+    assert.deepEqual(gaps(`a\n${'  \n'.repeat(5)}b\n`), ['a', 5, 'b\n']);
+    assert.deepEqual(gaps(`${'\n'.repeat(6)}tail`), [6, 'tail']);
+    assert.deepEqual(gaps(''), ['']);
+  });
+
+  it('gives each choice a key of its own, also when two have one name', () => {
+    const groups = choiceGroups(['Same', 'Same'], null);
+    assert.deepEqual(
+      groups[0]?.options.map((option) => option.key),
+      ['0:Same', '1:Same'],
+    );
+    assert.deepEqual(choiceGroups([], null), []);
   });
 });
 

@@ -2039,3 +2039,50 @@ a.file:hover {
   background: var(--card);
   font-weight: 600;
 }
+
+/* A harness's request. The harness's text is in boxes of its own, apart from Verifold's sentences. */
+.hask {
+  margin: 10px 0;
+}
+.hask .says {
+  margin: 10px 0 6px;
+  font-size: 14px;
+}
+.exact {
+  margin: 8px 0 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent-ink);
+  background: var(--card);
+}
+.exact figcaption {
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.exact pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font: 12.5px/1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+}
+.exact .gap {
+  margin: 0;
+  padding: 4px 12px;
+  border-top: 1px dashed var(--line);
+  border-bottom: 1px dashed var(--line);
+  font-size: 12px;
+  font-style: italic;
+}
+.exact details {
+  border-top: 1px solid var(--line);
+}
+.exact summary {
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}

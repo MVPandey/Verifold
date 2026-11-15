@@ -38,3 +38,12 @@ def test_the_persons_harnesses_join_the_built_in_ones_and_replace_a_built_in_by_
         'google',
     )
     assert (catalog['codex'].title, catalog['codex'].command) == ('My Codex', ('codex-acp',))
+
+
+def test_a_harness_in_the_persons_settings_says_itself_whether_it_names_the_mcp_server() -> None:
+    mine = HarnessSettings(command=('codex-acp',), family='openai')
+    harnesses = {'codex': mine, 'other': mine.model_copy(update={'names_mcp_server': True})}
+
+    catalog = catalog_with(harnesses)
+
+    assert (catalog['codex'].names_mcp_server, catalog['other'].names_mcp_server) == (False, True)

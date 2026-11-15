@@ -93,6 +93,12 @@ class Agent(Record):
     """
     mode: ValueId | None = None
     """The harness mode that the person chose for the agent. `None` follows the lab's auto mode choice."""
+    auto_mode: ValueId | None = None
+    """
+    The harness's own auto mode at the time the agent joined a lab in auto mode. The agent keeps it for the whole
+    lab, also after Verifold's catalog changes. `None` in a lab without auto mode, for a harness without one, and
+    in a record from before Verifold kept it.
+    """
     recruited_by: AgentId | None = None
     checks: PostId | None = None
     """For a blind checker that Verifold starts: the post that it reruns. It posts one check and reads nothing else."""
