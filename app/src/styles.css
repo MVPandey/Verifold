@@ -500,6 +500,14 @@ details[open] > summary .opened {
   margin-top: 6px;
   font-size: 13px;
 }
+.f-failure {
+  margin: 6px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  font: 12px/1.45 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .f-each summary {
   color: var(--muted);
   text-decoration: underline;

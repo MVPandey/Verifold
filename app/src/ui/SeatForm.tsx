@@ -246,6 +246,12 @@ export function CoordinatorSeat(props: {
   );
 }
 
+/** Return whether a member has neither run a turn nor posted, and runs none now: it never started or never came. */
+function notCome(view: AgentView): boolean {
+  const resting = ['idle', 'invited', 'void', 'stopped'].includes(view.activity.state);
+  return view.turns === 0 && view.posts === 0 && resting;
+}
+
 /**
  * What the member list says about a member's seat, and the person's two switches for it: on call, and the
  * coordinator's seat.
@@ -275,6 +281,9 @@ export function SeatControls(props: {
   return (
     <>
       {view.on_call ? <p className="f-where">On call. A post that names it wakes it.</p> : null}
+      {view.coordinator && notCome(view) ? (
+        <p className="f-where">Holds the coordinator seat and has not come yet.</p>
+      ) : null}
       <p className="f-where">
         <button
           className="linkbtn"

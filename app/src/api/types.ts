@@ -335,6 +335,8 @@ export interface Thread {
   readonly id: string;
   readonly title: string;
   readonly opened_by: string;
+  /** For the thread that Verifold opened for an agent's requests of one kind: that kind. */
+  readonly carries?: 'permission' | 'question' | null;
 }
 
 export interface FileEvidence {

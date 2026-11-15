@@ -212,11 +212,9 @@ def _page(
 
 def _workers(board: Board) -> Names:
     # Each agent with its name, and with each name that it had before, so that an older post still names it.
-    # A name from before that another agent has now is that agent's name only.
     checkers = {joined.agent.id for joined in board.agents if joined.agent.checks}
     now = tuple((joined.agent.id, joined.agent.name) for joined in board.agents)
-    taken = {name for _, name in now}
-    former = tuple((event.agent, before) for event, before in board.renames if before not in taken)
+    former = tuple((event.agent, before) for event, before in board.renames)
     return tuple(pair for pair in (*now, *former) if pair[0] not in checkers)
 
 

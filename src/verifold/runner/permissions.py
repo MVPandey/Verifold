@@ -36,6 +36,7 @@ from verifold.protocol.posts import (
     RequestNote,
 )
 from verifold.protocol.settings import PermissionSettings
+from verifold.protocol.threads import Carries
 from verifold.runner.session import Answers, FieldValue, PermissionChoice, PermissionRequest, Question, QuestionField
 from verifold.server.lab import Lab
 from verifold.server.member import Member
@@ -729,7 +730,7 @@ async def _ask(
 ) -> PostId:
     """Post an ask to the person in the agent's name, marked as the carrier of a request of the agent's harness."""
     about = 'Permission requests' if shown.type == 'permission' else 'Questions'
-    thread = _own_thread(member, about)
+    thread = _own_thread(member, shown.type, about)
     request = PostRequest(
         kind='ask',
         text=text,
@@ -755,17 +756,25 @@ def _thread_title(member: Member, about: str) -> str:
     return f'{about} from {joined.agent.name if joined else member.agent_id}'
 
 
-def _own_thread(member: Member, about: str) -> str | None:
-    # The thread is the agent's own, whatever name the agent had when the thread opened. So an agent whose name
-    # changed keeps one thread for each kind of request.
-    return next(
-        (
-            entry.thread.id
-            for entry in member.lab.board.threads
-            if entry.thread.opened_by == member.agent_id and entry.thread.title.startswith(f'{about} from ')
-        ),
-        None,
+def _own_thread(member: Member, carries: Carries, about: str) -> str | None:
+    """
+    Return the agent's thread for one kind of request, or `None` when it has none yet.
+
+    It is the thread that the record marks as that. A record from before the mark has the thread by its title,
+    with one of the names that the agent has or had. So an agent whose name changed keeps one thread, and an
+    agent's own thread with a like title, such as "Questions from the rerun", gets no tracked ask.
+    """
+    board = member.lab.board
+    joined = board.agent(member.agent_id)
+    names = (
+        *((joined.agent.name,) if joined else ()),
+        *(before for event, before in board.renames if event.agent == member.agent_id),
+        member.agent_id,
     )
+    titles = {f'{about} from {name}' for name in names}
+    own = tuple(entry.thread for entry in board.threads if entry.thread.opened_by == member.agent_id)
+    marked = next((thread.id for thread in own if thread.carries == carries), None)
+    return marked or next((thread.id for thread in own if thread.carries is None and thread.title in titles), None)
 
 
 async def _answer(member: Member, ask_id: PostId, over: asyncio.Event | None) -> _Reply | None:

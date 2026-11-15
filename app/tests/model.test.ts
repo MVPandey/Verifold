@@ -906,6 +906,15 @@ describe('setup', () => {
       'Opus, High effort (your default) · driver, coordinator, on call',
     );
     assert.equal(modelSummary(pick, OFFER), 'Opus, High effort (your default)');
+    // A family that is not the harness's own shows on the closed line, whatever its capitals.
+    assert.equal(
+      modelSummary({ ...pick, family: ' Other ', role: 'driver' }, OFFER, 'anthropic'),
+      'Opus, High effort (your default) · Other family, driver',
+    );
+    assert.equal(
+      modelSummary({ ...pick, family: 'Anthropic' }, OFFER, 'anthropic'),
+      'Opus, High effort (your default)',
+    );
     assert.equal(
       modelSummary({ ...pick, model: 'default' }, OFFER),
       'Default (recommended), default effort',

@@ -260,9 +260,17 @@ export function withModel(pick: Seat, offer: Offer, model: string): Seat {
   return { ...pick, model, typed: false, effort: kept ? pick.effort : '' };
 }
 
-/** Return what a seat's menu says when it is closed: its model with the names that the harness offered, and its facts. */
-export function modelSummary(pick: Seat, offer: Offer | null): string {
+/**
+ * Return what a seat's menu says when it is closed: its model with the names that the harness offered, and its
+ * facts, with its model family when that is not the harness's own.
+ */
+export function modelSummary(pick: Seat, offer: Offer | null, family = ''): string {
+  // A family of the person's own shows, because it decides whether a rerun by this seat's model counts as
+  // independent. `family` is the harness's own.
+  const stated = pick.family.trim();
+  const own = stated !== '' && stated.toLowerCase() !== family.trim().toLowerCase();
   const facts = [
+    own ? `${stated} family` : '',
     pick.role.trim(),
     pick.coordinator ? 'coordinator' : '',
     pick.onCall ? 'on call' : '',

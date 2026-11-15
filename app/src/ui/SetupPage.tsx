@@ -307,7 +307,7 @@ function HarnessSeats(props: {
           </div>
           {option.available ? (
             <details className="modelpick">
-              <summary>{modelSummary(seat, option.offer)}</summary>
+              <summary>{modelSummary(seat, option.offer, option.family)}</summary>
               <div className="menu">
                 <SeatFields
                   option={option}

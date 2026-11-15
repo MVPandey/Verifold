@@ -500,9 +500,12 @@ async def test_the_lab_view_says_why_an_agents_harness_failed_last(client: httpx
     await lab.end_turn(TurnSummary(agent='ada', seconds=1, usage=Usage()))
 
     ada, bo = (await client.get('/lab')).json()['agents']
+    await lab.start_turn('bo', 'session-1', 3)
+    again = (await client.get('/lab')).json()['agents'][1]
 
-    # A turn that ended well after a failure clears it.
-    assert (ada['error'], bo['error']) == (None, refused)
+    # The person reads the harness's own words. A turn that ended well after a failure clears it, and so does
+    # the start of a later turn.
+    assert (ada['error'], bo['error'], again['error']) == (None, refused, None)
 
 
 async def test_the_lab_view_says_who_is_on_call_who_coordinates_and_which_role_the_person_gave(

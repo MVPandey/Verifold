@@ -58,19 +58,21 @@ def check_named(board: Board, named: AgentNamed) -> str:
     """
     Check that an agent can get a new name, and return the name that it has now.
 
-    An agent can get a name that another agent had before: when two agents turn out to run one model, the one
-    that joined first gets the name without a number.
+    A name that an agent has or had is never another agent's name, so that a name in an older post means the
+    same agent for ever.
 
     Raises:
-        RejectedEvent: The agent is not in the lab, or another agent has the name.
+        RejectedEvent: The agent is not in the lab, or another agent has or had the name.
 
     """
     joined = board.agent(named.agent)
     if not joined:
         raise RejectedEvent(f'{named.agent} is not an agent in this lab.')
     folded = named.name.casefold()
-    if any(entry.agent.name.casefold() == folded for entry in board.agents if entry.agent.id != named.agent):
-        raise RejectedEvent(f'Another agent has the name {named.name}.')
+    others = (entry.agent.name for entry in board.agents if entry.agent.id != named.agent)
+    former = (before for event, before in board.renames if event.agent != named.agent)
+    if any(name.casefold() == folded for name in (*others, *former)):
+        raise RejectedEvent(f'Another agent has or had the name {named.name}.')
     return joined.agent.name
 
 

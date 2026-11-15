@@ -33,7 +33,7 @@ from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import MAX_HEADLINE, Answer, Ask, FileEvidence, Mark, PermissionShown, QuestionShown
 from verifold.protocol.settings import Settings
-from verifold.protocol.threads import QUESTION_TITLE, Thread
+from verifold.protocol.threads import QUESTION_TITLE, Carries, Thread
 from verifold.server.changes import wait_until
 from verifold.server.errors import LabExists
 from verifold.society.board import Board
@@ -129,9 +129,10 @@ class Lab:
         Record the name of the model that an agent's harness reported, and return the agent's name after it.
 
         Only a name that Verifold built before the harness named the model changes: one that says "default model",
-        or one that holds the ID of the model that the person chose. Among the agents of the harness that have the
-        same name but for the number, the agent that joined first has no number, whichever one reported its model
-        first. So this step can also give another agent of the harness a new number.
+        or one that holds the ID of the model that the person chose. Only this agent's name changes. The new name
+        keeps clear of every name that an agent of the lab has or had, so a name in an older post never becomes
+        the name of another agent. A number, once given, stays with its agent, so numbers can be out of the order
+        that the agents joined.
         """
         joined = self._board.agent(agent_id)
         if joined is None or not one_line(model):
@@ -139,26 +140,14 @@ class Lab:
         agent, base = joined.agent, plain(title, model)
         if is_numbered(agent.name, base) or not awaits_model(agent.name, title, agent.model.name):
             return agent.name
-        # The agents of the harness that share the new name, in the order that they joined.
-        group = tuple(
-            entry.agent
-            for entry in self._board.agents
-            if entry.agent.harness == agent.harness
-            and (entry.agent.id == agent_id or is_numbered(entry.agent.name, base))
-        )
-        members = {member.id for member in group}
-        taken = [entry.agent.name for entry in self._board.agents if entry.agent.id not in members]
-        builds: list[Build] = []
-        for member in group:
-            name = label(title, model, taken)
-            taken.append(name)
-            if name != member.name:
-                builds.append(_named(member.id, name))
-        # The numbers already rise in the order that the agents joined. So the agents after this one move up by one
-        # name each, the last one first, and no two agents have one name at any event.
-        board = await self._commit(*reversed(builds))
-        renamed = board.agent(agent_id)
-        return renamed.agent.name if renamed else agent_id
+
+        def build(board: Board, seq: int, at: datetime) -> AgentNamed:
+            others = (entry.agent.name for entry in board.agents if entry.agent.id != agent_id)
+            former = (before for event, before in board.renames if event.agent != agent_id)
+            return AgentNamed(seq=seq, at=at, agent=agent_id, name=label(title, model, (*others, *former)))
+
+        board = await self._commit(build)
+        return board.renames[-1][0].name
 
     async def set_on_call(self, agent_id: AgentId, *, on_call: bool) -> None:
         """
@@ -225,7 +214,9 @@ class Lab:
             pydantic.ValidationError: The request does not describe a valid post of its kind.
 
         """
-        opens = (_open_thread(request.new_thread, author, request.between),) if request.new_thread else ()
+        # A thread that opens with an ask of the runner is the agent's thread for that kind of request.
+        carries = mark.type if mark and mark != 'ends_request' else None
+        opens = (_open_thread(request.new_thread, author, request.between, carries),) if request.new_thread else ()
         board = await self._commit(*opens, _add_post(request, author, evidence, question_seen, mark))
         return board.posts[-1]
 
@@ -417,10 +408,6 @@ REVISED_TITLE: Final = 'The question, revised'
 """The title of the thread that holds the revisions in a lab from before the question had a thread."""
 
 
-def _named(agent_id: AgentId, name: str) -> Build:
-    return lambda _, seq, at: AgentNamed(seq=seq, at=at, agent=agent_id, name=name)
-
-
 def _headline(text: str) -> str:
     # The first line with text, cut to a headline. A question can start with a separator that `splitlines` breaks
     # on and the schema's strip keeps.
@@ -428,12 +415,16 @@ def _headline(text: str) -> str:
     return first if len(first) <= MAX_HEADLINE else f'{first[: MAX_HEADLINE - 1]}…'
 
 
-def _open_thread(title: str, opened_by: AgentId, between: tuple[AgentId, ...] = ()) -> Build:
+def _open_thread(
+    title: str, opened_by: AgentId, between: tuple[AgentId, ...] = (), carries: Carries | None = None
+) -> Build:
     # The author is always in its own side thread, and comes first. An agent that names itself changes nothing.
     members = tuple(dict.fromkeys((opened_by, *between))) if between else ()
 
     def build(board: Board, seq: int, at: datetime) -> ThreadOpened:
-        thread = Thread(id=f't-{len(board.threads) + 1}', title=title, opened_by=opened_by, between=members)
+        thread = Thread(
+            id=f't-{len(board.threads) + 1}', title=title, opened_by=opened_by, between=members, carries=carries
+        )
         return ThreadOpened(seq=seq, at=at, thread=thread)
 
     return build

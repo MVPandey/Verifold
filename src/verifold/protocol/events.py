@@ -280,6 +280,16 @@ class TurnSummary(Record):
     """
 
 
+ERROR_MODEL_REFUSED = 'ModelRefused'
+"""How the error of a harness that refused the model that the lab set starts."""
+
+ERROR_OUT_OF_TIME = 'The lab ran out of time'
+"""How the error of a turn that Verifold cancelled at the lab's end starts."""
+
+ERROR_RAN_PAST = 'The turn ran past'
+"""How the error of a turn that Verifold cancelled at the limit for one turn starts."""
+
+
 class TurnEnded(EventBase, TurnSummary):
     """An agent's harness ended a turn. The record keeps what the turn cost and why it failed, if it did."""
 

@@ -1517,6 +1517,31 @@ async def test_an_on_call_agent_that_a_post_names_while_the_lab_is_out_of_time_s
     assert [out_of_time for agent, out_of_time in seated if agent == 'agent-2'] == [False]
 
 
+async def test_an_on_call_agent_whose_name_changed_while_it_waited_starts_with_its_name_of_now(
+    project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    labs: list[Lab] = []
+    seated: list[str] = []
+    seat = Host._seat
+
+    async def watched(host: Host, lab: Lab, agent: Agent, start: str) -> tuple[Member, AgentSetup]:
+        labs.append(lab)
+        seated.append(agent.name)
+        return await seat(host, lab, agent, start)
+
+    monkeypatch.setattr(Host, '_seat', watched)
+    async with serving(project, ON_CALL, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: turns_of(project, 'agent-1') == 1, timeout=60)
+        # The record gives the waiting agent a new name before any post calls it.
+        renamed = await labs[0].name_by_model('agent-2', 'Fake', 'Small v2')
+        ask = {'kind': 'ask', 'text': 'A hard one.', 'thread': 't-1', 'mentions': ['agent-2']}
+        await client.post('/posts', json=ask)
+        await until(lambda: turns_of(project, 'agent-2') == 1, timeout=60)
+
+    assert (renamed, seated[-1]) == ('Fake · Small v2', 'Fake · Small v2')
+    assert 'You are Fake · Small v2 (agent-2) in a Verifold lab.' in prompts_of(log, 'agent-2')[0]
+
+
 async def test_an_on_call_agent_that_cannot_start_does_not_stop_the_lab_and_the_person_starts_it_again(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

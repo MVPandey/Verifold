@@ -531,6 +531,9 @@ class Host:
             if called and not board.out_of_time:
                 break
             await lab.wait_for_change(board.seq)
+        # The agent can have a new name by now, so its seat and its first message take it from the board.
+        joined = lab.board.agent(agent.id)
+        agent = joined.agent if joined else agent
         try:
             member, setup = await self._seat(lab, agent, self._start_message(lab, agent, under_way=True))
         except (GitError, OSError) as error:

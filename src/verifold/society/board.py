@@ -103,8 +103,11 @@ class Board:
         An agent does when it is known to be in the lab. An on-call agent does from its first post, by the rule
         for an invited agent: until then no post for every agent reached it, so the lab does not wait for its word.
         With `before`, the seat counts as it was at that event. So a switch of the seat after a close changes
-        neither who counted for the close nor whether the lab is closed.
+        neither who counted for the close nor whether the lab is closed. An agent that joined after that event
+        does not count, whatever its seat: a seat that the person adds to a closed lab leaves it closed.
         """
+        if before is not None and joined.seq > before:
+            return False
         if self.on_call(joined.agent.id, before):
             return self._posted(joined.agent.id, before)
         return self.came(joined, before)
@@ -164,10 +167,17 @@ class Board:
         status = next((entry.status for entry in reversed(mine) if entry.status is not None), '')
         return role, status
 
-    def failure(self, agent_id: AgentId) -> str | None:
-        """Return why an agent's latest turn, or the latest start of its harness, failed, or `None` when it did not."""
+    def failure(self, agent_id: AgentId) -> TurnEnded | None:
+        """
+        Return the entry of an agent's latest turn, or of the latest start of its harness, when that failed.
+
+        A failure shows no longer once a turn of the agent started after it, or a later turn ended well.
+        """
         latest = next((turn for turn in reversed(self.turns) if turn.agent == agent_id), None)
-        return latest.error if latest else None
+        if latest is None or latest.error is None:
+            return None
+        again = any(start.agent == agent_id and start.seq > latest.seq for start in self.starts)
+        return None if again else latest
 
     def thread(self, thread_id: ThreadId) -> ThreadOpened | None:
         """Return the entry of a thread, or `None`."""

@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { Api } from '../src/api/client.ts';
 import type {
+  AgentView,
   AnswerView,
   HarnessOption,
   LabView,
@@ -1143,6 +1144,41 @@ describe('the lab page', () => {
         1,
       1,
     );
+  });
+
+  it('shows the start of a long failure as text, with the whole of it to open, and a coordinator that has not come', () => {
+    const [first, second] = lab.agents;
+    assert.ok(first && second);
+    const error = `GitError: <b>fatal</b>\n${'x'.repeat(400)} the end`;
+    const list = (agents: readonly AgentView[]): string =>
+      renderToStaticMarkup(
+        <Top
+          folder="~/code/sort-bench"
+          route={{ page: 'lab' }}
+          open={{
+            lab: { ...lab, agents },
+            threads: [summary()],
+            harnesses: HARNESSES,
+            needs: 0,
+            now,
+            api: {} as Api,
+            onChange: () => undefined,
+          }}
+        />,
+      );
+    const html = list([
+      { ...first, coordinator: true },
+      { ...second, error },
+    ]);
+
+    // The harness's text is text, never markup, and the row holds only its start until the person opens it.
+    assert.ok(html.includes('<summary>Last failure: GitError: &lt;b&gt;fatal&lt;/b&gt; xxx'));
+    assert.ok(html.includes('the end</pre>'));
+    assert.equal(html.includes('<b>fatal</b>'), false);
+    // The first agent has turns in the record, so it came. Only an agent with no turn and no post has not.
+    assert.equal(html.includes('has not come yet'), false);
+    const waiting = list([first, { ...second, coordinator: true, on_call: true }]);
+    assert.equal(waiting.split('Holds the coordinator seat and has not come yet.').length - 1, 1);
   });
 
   it('keeps the members, their state and cost, the lab total, and the time in the top bar', () => {

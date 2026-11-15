@@ -1,7 +1,14 @@
 """The board as one agent, or the person, sees it."""
 
 from verifold.protocol.agents import Agent
-from verifold.protocol.events import Posted, ThreadOpened
+from verifold.protocol.events import (
+    ERROR_MODEL_REFUSED,
+    ERROR_OUT_OF_TIME,
+    ERROR_RAN_PAST,
+    Posted,
+    ThreadOpened,
+    TurnEnded,
+)
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.join import (
     MAX_LEADS,
@@ -325,8 +332,23 @@ def _agent_line(board: Board, agent: Agent, working: dict[AgentId, ThreadId | No
         thread=working.get(agent.id),
         plan=PostLine.of(plan) if plan else None,
         latest=PostLine.of(posts[-1]) if posts and posts[-1] is not plan else None,
-        error=board.failure(agent.id),
+        error=_reason(board.failure(agent.id)),
     )
+
+
+def _reason(failed: TurnEnded | None) -> str | None:
+    """
+    Return why an agent's harness failed last, for the other agents, as one of Verifold's own short sentences.
+
+    The harness's own error text stays with the person: it can hold paths, commands, and text that an agent wrote.
+    """
+    if failed is None or failed.error is None:
+        return None
+    if failed.error.startswith(ERROR_MODEL_REFUSED):
+        return 'Its harness refused the model.'
+    if failed.error.startswith((ERROR_OUT_OF_TIME, ERROR_RAN_PAST)):
+        return 'Verifold stopped its turn at the time limit.'
+    return 'Its harness failed to start.' if failed.no_turn else 'Its last turn ended with an error.'
 
 
 def needs_person(board: Board) -> tuple[PostView, ...]:

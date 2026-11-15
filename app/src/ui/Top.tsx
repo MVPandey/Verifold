@@ -171,7 +171,7 @@ function Members(props: {
           <SeatControls api={props.api} view={view} onChange={props.onChange} />
         ) : null}
         <p className="f-where">{costLine(view)}</p>
-        {view.error && !view.left ? <p className="f-where">Last failure: {view.error}</p> : null}
+        {view.error && !view.left ? <Failure error={view.error} /> : null}
         {view.agent.harness === GUEST && !view.left ? (
           <InviteAgain
             api={props.api}
@@ -260,6 +260,24 @@ function Members(props: {
   );
 }
 
+/** The most characters of a harness's error that a member's row shows before the person opens it. */
+const FAILURE_SHOWN = 160;
+
+/**
+ * Why a member's harness failed last, in the harness's own words, as text. A long error shows its start, and the
+ * person opens it to read it whole.
+ */
+function Failure(props: { readonly error: string }): ReactElement {
+  const line = props.error.replace(/\s+/g, ' ').trim();
+  if (line.length <= FAILURE_SHOWN) return <p className="f-where">Last failure: {line}</p>;
+  return (
+    <details className="f-each">
+      <summary>Last failure: {line.slice(0, FAILURE_SHOWN)}…</summary>
+      <pre className="f-failure">{props.error}</pre>
+    </details>
+  );
+}
+
 /** Milliseconds between reads of the setup while Verifold asks the harnesses what they offer. */
 const OFFER_POLL = 1000;
 
@@ -336,7 +354,7 @@ function AddAgent(props: {
           ask(event.currentTarget.open);
         }}
       >
-        <summary>{modelSummary(seat, option.offer)}</summary>
+        <summary>{modelSummary(seat, option.offer, option.family)}</summary>
         <div className="menu">
           <SeatFields option={option} seat={seat} onSeat={setSeat} />
         </div>

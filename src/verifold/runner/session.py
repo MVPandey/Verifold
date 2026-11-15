@@ -22,7 +22,7 @@ from verifold.protocol.ids import AgentId
 from verifold.protocol.record import Record
 from verifold.protocol.usage import Usage
 from verifold.runner.environment import harness_environment
-from verifold.runner.errors import RunnerError
+from verifold.runner.errors import ModelRefused, RunnerError
 from verifold.runner.processes import STOP_GRACE, start, stop
 
 
@@ -554,7 +554,13 @@ async def _begin(
     for category, value in (('model', options.model), ('thought_level', options.effort)):
         if value:
             option = _option_id(offered or [], category, harness)
-            changed = await connection.set_config_option(session_id=session_id, config_id=option, value=value)
+            try:
+                changed = await connection.set_config_option(session_id=session_id, config_id=option, value=value)
+            except acp.RequestError as error:
+                if category != 'model':
+                    raise
+                # The record keeps this cause apart, so that the lab can say that the model was refused.
+                raise ModelRefused(f'{harness.title} refused the model {value}: {error}') from error
             # A model can have its own effort levels. ACP answers a change with the full set of options, so a later
             # option comes from that answer. An empty answer says nothing, so the options from before stay.
             silent = silent or (category == 'model' and not changed.config_options)

@@ -347,7 +347,7 @@ def _agent_view(board: Board, activity: Activity, agent_id: str, working: dict[A
             output_tokens=sum(turn.usage.output_tokens for turn in turns),
         ),
         cost_usd=sum(costs) if costs else None,
-        error=board.failure(agent_id),
+        error=failed.error if (failed := board.failure(agent_id)) else None,
     )
 
 

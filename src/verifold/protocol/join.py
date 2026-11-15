@@ -358,7 +358,10 @@ class AgentLine(Record):
     latest: PostLine | None = None
     """The agent's latest post, when that is not its plan."""
     error: str | None = None
-    """Why the agent's latest turn, or the latest start of its harness, failed. `None` when it did not fail."""
+    """
+    Why the agent's latest turn, or the latest start of its harness, failed, as one short sentence of Verifold.
+    `None` when it did not fail, and once a later turn of the agent started.
+    """
 
 
 MAX_LEADS = 10
