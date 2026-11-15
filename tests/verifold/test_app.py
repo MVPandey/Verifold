@@ -206,14 +206,19 @@ async def test_a_resumed_lab_keeps_its_agents_and_the_persons_edits_to_its_norms
     norms = project / '.verifold' / 'LAB.md'
     norms.write_text('# Our own rules\n')
 
+    def modes() -> list[dict[str, str]]:
+        return [call for call in calls(log) if call['event'] == 'mode']
+
     async with serving(project) as client:
-        await until(lambda: len(posts(project)) == 4)
+        # Each harness that starts again gets its mode. An agent posts again only when the stop cut its turn off,
+        # so the test does not wait for a post.
+        await until(lambda: len(modes()) == 4)
         setup = (await client.get('/setup')).json()
 
     assert setup['question'] == 'Does it hold?'
     assert sum(isinstance(event, AgentJoined) for event in record(project)) == 2
     assert norms.read_text() == '# Our own rules\n'
-    resumed = [call for call in calls(log) if call['event'] == 'mode'][2:]
+    resumed = modes()[2:]
     assert sorted(call['agent'] for call in resumed) == ['agent-1', 'agent-2']
 
 
