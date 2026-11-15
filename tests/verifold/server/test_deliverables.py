@@ -363,7 +363,16 @@ async def test_an_agent_reads_the_deliverables_in_its_brief_and_offers_files_wit
 
     assert before.structured_content is not None
     assert before.structured_content['deliverables'] == [
-        {'id': 'd-1', 'text': ANSWER, 'state': 'none', 'decided_at': None, 'thread': None, 'offers': []}
+        {
+            'id': 'd-1',
+            'text': ANSWER,
+            'state': 'none',
+            'decided_at': None,
+            'thread': None,
+            'offers': [],
+            'disputed': [],
+            'open_asks': [],
+        }
     ]
     assert offered.structured_content is not None
     post = offered.structured_content['post']
@@ -462,3 +471,16 @@ async def test_an_offer_takes_each_path_once_and_the_name_of_a_helper(asked: Lab
     post = offered.structured_content['post']
     assert ([file['path'] for file in post['evidence']], post['helper']) == (['answer.md', 'data.csv'], 'writer')
     assert deliverable_lines(asked.board)[0].offers[0].files == ('answer.md', 'data.csv')
+
+
+async def test_the_board_refuses_a_request_for_changes_to_an_offer_whose_author_left(asked: Lab) -> None:
+    offered = await asked.offer('ada', 'd-1', await pin(('answer.md',)), 'The answer.')
+    await asked.leave('ada', 'ada')
+    seq = asked.board.seq
+
+    with pytest.raises(RejectedEvent, match='left the lab, so nobody hears a request for changes'):
+        await asked.decide('d-1', 'changes_asked', offered.post.id, 'Shorter.')
+
+    assert asked.board.seq == seq
+    await asked.decide('d-1', 'accepted', offered.post.id)
+    assert states(asked) == [('d-1', 'accepted')]

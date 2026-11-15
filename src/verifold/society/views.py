@@ -76,6 +76,7 @@ def thread_view(board: Board, agent_id: AgentId, thread_id: ThreadId) -> ThreadV
         thread=opened.thread,
         watching=watches_thread(board, agent_id, thread_id),
         members=board.members(thread_id),
+        person_reaches=board.offer_listeners(thread_id) if board.holds_offers(thread_id) else None,
         posts=tuple(post_view(board, entry) for entry in board.posts if entry.post.thread == thread_id),
     )
 

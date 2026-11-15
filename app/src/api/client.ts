@@ -158,6 +158,7 @@ export function createApi(
         reviewer_seats: lab.reviewer_seats ?? 0,
         reviewer_seats_set: lab.reviewer_seats_set ?? null,
         deliverables: lab.deliverables ?? [],
+        removed_deliverables: lab.removed_deliverables ?? [],
         deliverables_told_at: lab.deliverables_told_at ?? null,
         agents: lab.agents.map((view) => ({
           ...view,

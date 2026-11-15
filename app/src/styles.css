@@ -3513,3 +3513,37 @@ body.with-panel {
   border-color: var(--accent);
   outline: 0;
 }
+.d-work {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  font-size: 13px;
+  color: var(--ink2);
+}
+.d-work li + li {
+  margin-top: 4px;
+}
+.d-work a,
+.d-gone a {
+  color: var(--ink2);
+  text-underline-offset: 3px;
+}
+.d-gone summary {
+  font-size: 13.5px;
+  color: var(--ink2);
+  cursor: pointer;
+}
+.d-gone summary u {
+  margin-left: 8px;
+  color: var(--muted);
+  text-underline-offset: 3px;
+}
+.d-gone details[open] .closed,
+.d-gone details:not([open]) .opened {
+  display: none;
+}
+.d-gone ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}

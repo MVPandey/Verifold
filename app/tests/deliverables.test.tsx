@@ -17,8 +17,12 @@ import {
   isNewSentence,
   offerLine,
   offerState,
+  offersReplyHint,
+  removeQuestion,
+  removedHeading,
   rerunFact,
   stateLine,
+  threadFacts,
 } from '../src/model/deliverables.ts';
 import { clock } from '../src/model/format.ts';
 import { sentences, startRequest } from '../src/model/setup.ts';
@@ -52,6 +56,7 @@ function offer(
     decided_at: null,
     standing: 'open',
     disputed_by: null,
+    conceded_to: null,
     ...changes,
   };
 }
@@ -64,6 +69,8 @@ function deliverable(id: string, changes: Partial<Deliverable> = {}): Deliverabl
     decided_at: null,
     thread: null,
     offers: [],
+    disputed: [],
+    open_asks: [],
     ...changes,
   };
 }
@@ -90,11 +97,9 @@ const ACCEPTED = deliverable('d-2', {
 const NONE = deliverable('d-3', { text: 'A list of what was ruled out, with the numbers.' });
 const LIST = [OFFERED, ACCEPTED, NONE];
 
-const OPEN_LAB = { close: null, deliverables_told_at: null };
-const CLOSED_LAB = {
-  close: { id: 'p-9', thread: 't-1', author: 'agent-1' },
-  deliverables_told_at: null,
-};
+const OPEN_LAB = { state: 'open', out_of_time: false, deliverables_told_at: null } as const;
+const CLOSING_LAB = { ...OPEN_LAB, state: 'closing' } as const;
+const CLOSED_LAB = { ...OPEN_LAB, state: 'closed' } as const;
 
 function panel(list: readonly Deliverable[], agents = AGENTS): string {
   return renderToStaticMarkup(
@@ -372,6 +377,96 @@ describe('the deliverables panel', () => {
     );
   });
 
+  it('says when the author of an offer accepted an objection to it, and makes no primary action of accepting it', () => {
+    const html = panel([
+      {
+        ...OFFERED,
+        offers: [offer('p-5', 'agent-1', { standing: 'conceded', conceded_to: 'p-8' })],
+      },
+    ]);
+    assert.ok(
+      html.includes(
+        '<span class="d-disputed">Its author accepted an objection to it <a href="#/thread/t-4/p-8">Read why</a></span>',
+      ),
+    );
+    assert.ok(
+      html.includes('<button type="button" aria-label="Accept the offer by Maren">Accept</button>'),
+    );
+    const disputed = panel([
+      {
+        ...OFFERED,
+        offers: [offer('p-5', 'agent-1', { standing: 'disputed', disputed_by: 'p-8' })],
+      },
+    ]);
+    assert.equal(disputed.includes('class="go"'), false);
+  });
+
+  it('shows under a deliverable the other work in its thread that is open, each with a link', () => {
+    const wanted = {
+      post: 'p-11',
+      thread: 't-4',
+      asked_by: ['agent-2'],
+      asked_at: '2026-11-06T14:12:00Z',
+      taken_by: [] as string[],
+      open_to: 'reviewer' as const,
+    };
+    const item = { ...OFFERED, disputed: ['p-9'], open_asks: ['p-10'] };
+    assert.deepEqual(
+      threadFacts(item, [wanted, { ...wanted, post: 'p-5' }, { ...wanted, thread: 't-9' }]),
+      [
+        { text: 'An agent disputes a post in the thread', post: 'p-9' },
+        { text: 'A question in the thread has no answer', post: 'p-10' },
+        { text: 'A rerun of a post in the thread is wanted', post: 'p-11' },
+      ],
+    );
+    assert.deepEqual(threadFacts(item, [{ ...wanted, taken_by: ['agent-2'] }]).at(-1), {
+      text: 'An agent took the rerun of a post in the thread',
+      post: 'p-11',
+    });
+    assert.deepEqual(threadFacts(OFFERED, []), []);
+    const html = panel([item]);
+    assert.ok(
+      html.includes(
+        '<ul class="d-work"><li>An agent disputes a post in the thread <a href="#/thread/t-4/p-9">Read it</a></li>' +
+          '<li>A question in the thread has no answer <a href="#/thread/t-4/p-10">Read it</a></li></ul>',
+      ),
+    );
+  });
+
+  it('lists the removed deliverables that have offers in one folded line, each with the link to its thread', () => {
+    const removed = {
+      id: 'd-4',
+      text: 'A chart of the fees.',
+      removed_at: '2026-11-06T14:22:00Z',
+      thread: 't-7',
+      active: false,
+    };
+    const html = renderToStaticMarkup(
+      <Deliverables
+        api={{} as Api}
+        list={[NONE]}
+        removed={[removed]}
+        lab={OPEN_LAB}
+        agents={AGENTS}
+        now={NOW}
+        reload={() => undefined}
+        onClose={() => undefined}
+      />,
+    );
+    assert.equal(removedHeading(1), '1 removed deliverable with offers');
+    assert.equal(removedHeading(2), '2 removed deliverables with offers');
+    assert.ok(
+      html.includes('<li class="d-gone"><details><summary>1 removed deliverable with offers '),
+    );
+    assert.ok(html.includes('<p class="d-note">A chart of the fees.</p>'));
+    assert.ok(
+      html.includes(
+        `Removed at ${clock('2026-11-06T14:22:00Z')}. <a href="#/thread/t-7">Open the thread with its offers</a>`,
+      ),
+    );
+    assert.equal(panel([NONE]).includes('d-gone'), false);
+  });
+
   it('says when an agent disputes an offer, with a link to the objection', () => {
     const html = panel([
       {
@@ -422,33 +517,89 @@ describe('the deliverables panel', () => {
 describe('what a change to the list does, in words', () => {
   const now = new Date('2026-11-06T14:30:00Z');
 
-  it('says that a new deliverable and a request for changes open a closed lab again', () => {
+  it('says what a new deliverable and a request for changes do to a close, by the state of the lab', () => {
     assert.equal(addHint(OPEN_LAB), 'The agents get a post about it.');
     assert.equal(
+      addHint(CLOSING_LAB),
+      'An agent says that the lab is done. Adding this ends that close, and the lab goes on.',
+    );
+    assert.equal(
       addHint(CLOSED_LAB),
-      'The agents said the lab is done. Adding this opens the lab again.',
+      'The agents closed the lab. Adding this opens the lab again.',
     );
     assert.equal(askHint(OPEN_LAB), 'The agent gets it as a reply to its offer.');
     assert.equal(
+      askHint(CLOSING_LAB),
+      'An agent says that the lab is done. Asking for changes ends that close, and the lab goes on.',
+    );
+    assert.equal(
       askHint(CLOSED_LAB),
-      'The agents said the lab is done. Asking for changes opens the lab again.',
+      'The agents closed the lab. Asking for changes opens the lab again.',
     );
   });
 
   it('says when a new sentence or a removal sends no post', () => {
     assert.ok(changeHint(OPEN_LAB, now).startsWith('The agents get a post about the change.'));
     assert.ok(
-      changeHint(CLOSED_LAB, now).startsWith(
-        'The agents said the lab is done, so this change sends no post and the lab stays closed.',
+      changeHint(CLOSING_LAB, now).startsWith(
+        'An agent says that the lab is done, so this change sends no post, and that close stands.',
       ),
     );
-    const told = (at: string): string => changeHint({ close: null, deliverables_told_at: at }, now);
+    assert.ok(
+      changeHint(CLOSED_LAB, now).startsWith(
+        'The agents closed the lab, so this change sends no post, and the lab stays closed.',
+      ),
+    );
+    const told = (at: string): string => changeHint({ ...OPEN_LAB, deliverables_told_at: at }, now);
     assert.ok(
       told('2026-11-06T14:29:01Z').startsWith(
         'The agents were told of a change in the last minute',
       ),
     );
     assert.ok(told('2026-11-06T14:29:00Z').startsWith('The agents get a post about the change.'));
+  });
+
+  it('says in a lab that is out of time that the agents get a post when the lab has time again', () => {
+    const late = { ...OPEN_LAB, out_of_time: true };
+    const later = ' The lab is out of time: the agents get the post when the lab has time again.';
+    assert.ok(addHint(late).endsWith(later));
+    assert.ok(askHint(late).endsWith(later));
+    assert.ok(changeHint(late, now).endsWith(later));
+    assert.ok(
+      addHint({ ...CLOSED_LAB, out_of_time: true }).endsWith(`opens the lab again.${later}`),
+    );
+    // A change that sends no post says nothing about when a post comes.
+    assert.equal(
+      changeHint({ ...CLOSED_LAB, out_of_time: true }, now).includes('out of time'),
+      false,
+    );
+  });
+
+  it('names a standing acceptance before it removes a deliverable', () => {
+    assert.equal(removeQuestion(NONE), 'Remove this deliverable? Its offers stay as posts.');
+    assert.equal(
+      removeQuestion(ACCEPTED),
+      'Remove this deliverable? You accepted an offer for it. Its offers stay as posts.',
+    );
+  });
+
+  it('says who gets the person’s post in the thread of a deliverable’s offers', () => {
+    const some = offersReplyHint(['agent-1', 'agent-2'], AGENTS, 'open');
+    assert.equal(
+      some,
+      'Your post goes to Maren, Agent 2: the agents that offered files here or watch this thread.',
+    );
+    assert.ok(offersReplyHint(['agent-1'], AGENTS, 'closed').endsWith(' The lab stays closed.'));
+    assert.ok(offersReplyHint(['agent-1'], AGENTS, 'closing').endsWith(' The close stands.'));
+    const none = offersReplyHint([], AGENTS, 'open');
+    assert.equal(
+      none,
+      'No agent that offered files here or watches this thread is in the lab, so every agent that is not on call gets your post.',
+    );
+    assert.ok(offersReplyHint([], AGENTS, 'closed').endsWith(' It opens the lab again.'));
+    assert.ok(
+      offersReplyHint([], AGENTS, 'closing').endsWith(' It ends the close, and the lab goes on.'),
+    );
   });
 
   it('says what the person decided about one offer', () => {
@@ -565,6 +716,40 @@ describe('the deliverables on the lab page', () => {
           post={null}
         />,
       );
+    const surfaced = renderToStaticMarkup(
+      <LabPage
+        api={{} as Api}
+        data={{
+          setup: null,
+          lab: labView({
+            agents: AGENTS,
+            removed_deliverables: [
+              {
+                id: 'd-1',
+                text: 'A one-page answer.',
+                removed_at: '2026-11-06T14:22:00Z',
+                thread: 't-4',
+                active: true,
+              },
+            ],
+          }),
+          threads: [...threads, work, offers],
+          needs: [],
+          report: null,
+          answer: null,
+          conversation: null,
+          version: 1,
+          error: null,
+          reload: () => undefined,
+        }}
+        now={NOW}
+        open={null}
+        post={null}
+      />,
+    );
+    // The thread of a removed deliverable is a normal card once a post came there after the removal.
+    assert.ok(surfaced.includes('id="card-t-4"'));
+    assert.ok(surfaced.slice(surfaced.indexOf('id="card-t-4"')).includes('No result yet'));
     const wall = render(null);
     assert.ok(wall.includes('id="card-t-2"'));
     assert.equal(wall.includes('id="card-t-4"'), false);

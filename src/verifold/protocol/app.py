@@ -16,7 +16,7 @@ from verifold.protocol.agents import (
     ValueId,
     one_line,
 )
-from verifold.protocol.deliverables import MAX_DELIVERABLES, DeliverableLine, Sentence
+from verifold.protocol.deliverables import MAX_DELIVERABLES, DeliverableLine, RemovedDeliverable, Sentence
 from verifold.protocol.events import AgentLeft, Note, Question
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, PostId, ThreadId
@@ -238,6 +238,8 @@ class LabView(Record):
     """The settings that the lab follows, such as what happens to the agents' processes when the person stops it."""
     deliverables: tuple[DeliverableLine, ...] = ()
     """What the person wants to hold at the end of the lab, each with its state and the files that agents offered."""
+    removed_deliverables: tuple[RemovedDeliverable, ...] = ()
+    """The deliverables that the person removed after agents offered files for them, with the thread of the offers."""
     deliverables_told_at: AwareDatetime | None = None
     """
     When a post of the person last told the lab of a new sentence or a removal. For a minute after it, and while

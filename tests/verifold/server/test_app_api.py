@@ -732,7 +732,16 @@ async def test_the_person_states_changes_and_removes_deliverables_and_no_other_c
 
     assert none == []
     assert added.json()['deliverables'] == [
-        {'id': 'd-1', 'text': 'A one-page answer.', 'state': 'none', 'decided_at': None, 'thread': None, 'offers': []}
+        {
+            'id': 'd-1',
+            'text': 'A one-page answer.',
+            'state': 'none',
+            'decided_at': None,
+            'thread': None,
+            'offers': [],
+            'disputed': [],
+            'open_asks': [],
+        }
     ]
     assert [line['text'] for line in changed.json()['deliverables']] == [
         'A two-page answer.',
@@ -741,6 +750,8 @@ async def test_the_person_states_changes_and_removes_deliverables_and_no_other_c
     # The same sentence again records nothing.
     assert (same.status_code, unchanged) == (200, seq)
     assert [line['id'] for line in removed.json()['deliverables']] == ['d-1']
+    # A removed deliverable without offers has no thread to keep in reach.
+    assert removed.json()['removed_deliverables'] == []
     assert [reply.status_code for reply in (empty, long, unknown, gone, no_id, stranger)] == [
         422,
         422,
@@ -793,6 +804,7 @@ async def test_the_person_accepts_an_offer_asks_for_changes_and_takes_an_accepta
             'decided_at': None,
             'standing': 'open',
             'disputed_by': None,
+            'conceded_to': None,
         }
     ]
     assert [reply.status_code for reply in (wordless, early, twice, other, word)] == [400, 400, 400, 400, 422]

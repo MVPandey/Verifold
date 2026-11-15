@@ -245,6 +245,12 @@ class ThreadView(Record):
     watching: bool
     members: tuple[AgentId, ...] = ()
     """The members of a side thread, in the order that they came. Empty for any other thread."""
+    person_reaches: tuple[AgentId, ...] | None = None
+    """
+    For the thread of the offers for a deliverable: the agents that a post of the person there reaches when it
+    names nobody and replies to no post. They offered files there or said that they watch the thread. When the
+    list is empty, such a post is for every agent that is not on call. `None` for any other thread.
+    """
     posts: tuple[PostView, ...]
 
 

@@ -5,10 +5,21 @@ from pydantic import ValidationError
 from verifold.protocol.deliverables import MAX_DELIVERABLES, MAX_SENTENCE, DeliverableLine
 from verifold.protocol.events import DeliverableDecided, DeliverableSet, Event, Posted, ThreadOpened
 from verifold.protocol.join import News
-from verifold.protocol.posts import Answer, Check, Close, FileEvidence, FileOffer, Message, Objection, Proposal
+from verifold.protocol.posts import (
+    Answer,
+    Ask,
+    Check,
+    Close,
+    FileEvidence,
+    FileOffer,
+    Message,
+    Objection,
+    Proposal,
+    Result,
+)
 from verifold.protocol.threads import QUESTION_TITLE, Thread
 from verifold.society.attention import news, wakes
-from verifold.society.deliverables import told_at
+from verifold.society.deliverables import removed_lines, told_at
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply
 from verifold.society.lifecycle import lab_state
@@ -501,3 +512,121 @@ def test_a_rerun_of_an_offer_is_wanted_and_taken_as_for_any_post_with_files() ->
     assert [(offer.standing, offer.disputed_by) for offer in lines(failed)[0].offers] == [('disputed', 'p-3')]
     # A check decides nothing for the person: the offer waits as before.
     assert [offer.state for offer in lines(held)[0].offers] == ['waiting']
+
+
+def test_the_persons_own_post_in_an_offers_thread_is_for_the_agents_that_offered_there_or_watch_it() -> None:
+    record = asked().join('dee').on_call('cy').offer('p-2', 'ada', 'd-1', 't-2').offer('p-3', 'cy', 'd-1', 't-2')
+    record.watch('bo', 't-2').post(Message(id='p-4', thread='t-2', author='person', text='Which one is newer?'))
+    board = record.board()
+
+    # An on-call agent that offered files there hears it too, and an agent that did neither does not.
+    assert board.offer_listeners('t-2') == ('ada', 'cy', 'bo')
+    assert [agent for agent in ('ada', 'bo', 'cy', 'dee') if wakes(board, agent, board.posts[-1])] == [
+        'ada',
+        'bo',
+        'cy',
+    ]
+    assert thread_view(board, 'dee', 't-2').person_reaches == ('ada', 'cy', 'bo')
+    assert thread_view(board, 'dee', 't-1').person_reaches is None
+    # An agent that stopped watching and an agent that left are no listeners.
+    record.watch('bo', 't-2', watching=False).leave('cy')
+    assert record.board().offer_listeners('t-2') == ('ada',)
+
+
+def test_the_persons_post_in_an_offers_thread_reaches_the_whole_lab_when_no_listener_is_in_the_lab() -> None:
+    record = asked().on_call('cy').offer('p-2', 'ada', 'd-1', 't-2')
+    record.post(Close(id='p-3', thread='t-1', author='ada', text='Nothing is left.'))
+    record.post(Answer(id='p-4', thread='t-1', author='bo', text='Agreed.', reply_to='p-3', accepts=True))
+
+    # While the agent that offered is in the lab, the person's words are for it, and the lab stays closed.
+    heard = record.copy().post(Message(id='p-5', thread='t-2', author='person', text='Is this the last one?'))
+    board = heard.board()
+    assert [agent for agent in ('ada', 'bo', 'cy') if wakes(board, agent, board.posts[-1])] == ['ada']
+    assert lab_state(board) == 'closed'
+    # The agent leaves afterwards: the lab stays closed, because the words reached it when they came.
+    assert lab_state(heard.leave('ada').board()) == 'closed'
+
+    # After it left, nobody listens there, so the words are for every agent that is not on call and open the lab.
+    record.leave('ada')
+    named = record.copy().post(
+        Message(id='p-5', thread='t-2', author='person', text='Bo, can you redo this?', mentions=('bo',))
+    )
+    assert lab_state(named.board()) == 'closed'
+    record.post(Message(id='p-5', thread='t-2', author='person', text='Anyone, redo this?'))
+    board = record.board()
+    assert thread_view(board, 'bo', 't-2').person_reaches == ()
+    assert [agent for agent in ('ada', 'bo', 'cy') if wakes(board, agent, board.posts[-1])] == ['bo']
+    assert lab_state(board) == 'open'
+
+
+def test_a_request_for_changes_to_an_offer_whose_author_left_is_refused() -> None:
+    record = asked().offer('p-2', 'ada', 'd-1', 't-2').leave('ada')
+    record.post(Message(id='p-3', thread='t-2', author='person', text='Shorter.', reply_to='p-2'))
+
+    refused(
+        record, decided(record, 'changes_asked', 'p-2', 'p-3'), 'left the lab, so nobody hears a request for changes'
+    )
+    # The person can still accept what the agent left.
+    record.events.append(decided(record, 'accepted', 'p-2', 'p-3'))
+    assert states(record) == ['accepted']
+
+
+def test_an_offer_names_the_dispute_that_still_stands_and_the_objection_that_its_author_accepted() -> None:
+    record = asked().offer('p-2', 'ada', 'd-1', 't-2')
+    record.post(Objection(id='p-3', thread='t-2', author='cy', text='One day of data.', reply_to='p-2'))
+    record.post(Objection(id='p-4', thread='t-2', author='bo', text='The fees are wrong.', reply_to='p-2'))
+    # Bo's objection is the newest. Ada objects to it, and bo accepts that: the objection is conceded.
+    record.post(Objection(id='p-5', thread='t-2', author='ada', text='The fees are right.', reply_to='p-4'))
+    record.post(Answer(id='p-6', thread='t-2', author='bo', text='True.', reply_to='p-5', accepts=True))
+
+    (offer,) = lines(record)[0].offers
+    assert (offer.standing, offer.disputed_by, offer.conceded_to) == ('disputed', 'p-3', None)
+
+    # A later check that holds overrules cy's objection, so nothing disputes the offer.
+    overruled = record.copy().post(
+        Check(
+            id='p-7', thread='t-2', author='bo', text='It holds.', reply_to='p-2', outcome='holds', method='code_read'
+        )
+    )
+    (offer,) = lines(overruled)[0].offers
+    assert (offer.standing, offer.disputed_by) == ('checked', None)
+
+    # Ada accepts cy's objection: the offer is conceded, and the line names that objection.
+    record.post(Answer(id='p-7', thread='t-2', author='ada', text='You are right.', reply_to='p-3', accepts=True))
+    (offer,) = lines(record)[0].offers
+    assert (offer.standing, offer.disputed_by, offer.conceded_to) == ('conceded', None, 'p-3')
+
+
+def test_a_deliverable_names_the_other_work_in_its_thread_that_is_open() -> None:
+    record = asked().offer('p-2', 'ada', 'd-1', 't-2')
+    assert [(line.disputed, line.open_asks) for line in lines(record)] == [((), ())]
+
+    record.post(Objection(id='p-3', thread='t-2', author='bo', text='Page two is missing.', reply_to='p-2'))
+    record.offer('p-4', 'ada', 'd-1', 't-2')
+    record.post(Ask(id='p-5', thread='t-2', author='bo', text='Which fee table?'))
+    record.post(Result(id='p-6', thread='t-2', author='cy', text='A table of fees.'))
+    record.post(Objection(id='p-7', thread='t-2', author='bo', text='It is from 2024.', reply_to='p-6'))
+
+    # The earlier offer is not among the offers that show, so its dispute is in this list.
+    (line,) = lines(record)
+    assert ([offer.post for offer in line.offers], line.disputed, line.open_asks) == (['p-4'], ('p-2', 'p-6'), ('p-5',))
+    record.post(Answer(id='p-8', thread='t-2', author='ada', text='The one of November.', reply_to='p-5'))
+    assert lines(record)[0].open_asks == ()
+
+
+def test_a_removed_deliverable_with_offers_keeps_its_thread_and_says_when_a_post_comes_there() -> None:
+    record = asked().deliverable('d-2', SCRIPT, 'p-2').offer('p-3', 'ada', 'd-1', 't-2')
+    assert removed_lines(record.board()) == ()
+
+    record.deliverable('d-1', ANSWER, 'p-4', removed=True).deliverable('d-2', SCRIPT, removed=True)
+    # A removed deliverable without offers has no thread, so the list leaves it out.
+    (gone,) = removed_lines(record.board())
+    assert (gone.id, gone.text, gone.removed_at, gone.thread, gone.active) == (
+        'd-1',
+        ANSWER,
+        record.at(len(record.events) - 1),
+        't-2',
+        False,
+    )
+    record.post(Message(id='p-5', thread='t-2', author='bo', text='I still use this file.'))
+    assert [line.active for line in removed_lines(record.board())] == [True]

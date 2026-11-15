@@ -14,14 +14,15 @@ from verifold.protocol.deliverables import (
     DeliverableState,
     OfferLine,
     OfferState,
+    RemovedDeliverable,
 )
 from verifold.protocol.events import DeliverableDecided, DeliverableSet, Posted
 from verifold.protocol.ids import PERSON, DeliverableId, PostId
-from verifold.protocol.posts import Check, Close, FileOffer, Objection, Post, Proposal
+from verifold.protocol.posts import Ask, Close, FileOffer, Post, Proposal
 from verifold.protocol.threads import MAX_TITLE, Thread, Title
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
-from verifold.society.standing import standing
+from verifold.society.standing import conceded_to, disputes, is_answered, standing
 
 OFFERS_TITLE = 'Deliverable {id}: '
 """How the title of the thread with the offers for a deliverable starts. The deliverable's sentence follows it."""
@@ -127,6 +128,8 @@ def _line(board: Board, entry: DeliverableSet) -> DeliverableLine:
         earlier[post.author] = earlier.get(post.author, 0) + 1
     current = tuple(line for line in lines if line.post in newest.values())
     asked = tuple(line.decided_at for line in current if line.state == 'changes_asked' and line.decided_at)
+    thread = board.offers_thread(entry.deliverable)
+    others = board.thread_posts(thread) if thread else ()
     state: DeliverableState = 'none'
     at = None
     if took:
@@ -140,8 +143,36 @@ def _line(board: Board, entry: DeliverableSet) -> DeliverableLine:
         text=entry.text,
         state=state,
         decided_at=at,
-        thread=board.offers_thread(entry.deliverable),
+        thread=thread,
         offers=tuple(lines),
+        disputed=tuple(
+            other.post.id
+            for other in others
+            if other.post.id not in shown and standing(board, other.post.id) == 'disputed'
+        ),
+        open_asks=tuple(
+            other.post.id for other in others if isinstance(other.post, Ask) and not is_answered(board, other.post.id)
+        ),
+    )
+
+
+def removed_lines(board: Board) -> tuple[RemovedDeliverable, ...]:
+    """
+    Return the deliverables that the person removed after agents offered files for them, oldest first.
+
+    The thread of such a deliverable stays on the board with its offers. It takes no new offer.
+    """
+    latest = {entry.deliverable: entry for entry in board.deliverables}
+    return tuple(
+        RemovedDeliverable(
+            id=entry.deliverable,
+            text=entry.text,
+            removed_at=entry.at,
+            thread=thread,
+            active=any(said.seq > entry.seq for said in board.thread_posts(thread)),
+        )
+        for entry in latest.values()
+        if entry.removed and (thread := board.offers_thread(entry.deliverable))
     )
 
 
@@ -155,11 +186,7 @@ def _offer_line(
     elif decided and decided.decision == 'changes_asked':
         state = 'changes_asked'
     stands = standing(board, post.id)
-    disputes = (
-        reply.post.id
-        for reply in reversed(board.replies(post.id))
-        if isinstance(reply.post, Objection) or (isinstance(reply.post, Check) and reply.post.outcome == 'fails')
-    )
+    against = disputes(board, post.id) if stands == 'disputed' else ()
     return OfferLine(
         post=post.id,
         by=post.author,
@@ -170,7 +197,8 @@ def _offer_line(
         state=state,
         decided_at=decided.at if decided and state != 'waiting' else None,
         standing=stands,
-        disputed_by=next(disputes, None) if stands == 'disputed' else None,
+        disputed_by=against[-1].post.id if against else None,
+        conceded_to=conceded_to(board, post.id) if stands == 'conceded' else None,
     )
 
 
@@ -262,6 +290,10 @@ def check_decidable(board: Board, deliverable_id: DeliverableId, decision: Decis
             '' if decision == 'accepted' else ' A request for changes to it comes after the acceptance is taken back.'
         )
         raise RejectedEvent(f'The person accepted the offer {offer_id} already.{after}')
+    if decision == 'changes_asked' and board.gone(entry.post.author):
+        raise RejectedEvent(
+            f'The author of the offer {offer_id} left the lab, so nobody hears a request for changes to it.'
+        )
     newest = newest_offer(board, entry.post)
     if newest != offer_id:
         raise RejectedEvent(

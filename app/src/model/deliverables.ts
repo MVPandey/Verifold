@@ -101,8 +101,11 @@ export function authorLeft(offer: DeliverableOffer, agents: readonly AgentView[]
   return agents.some((view) => view.agent.id === offer.by && view.left !== null);
 }
 
-/** What a form needs from the lab to say what its change does: whether a close stands, and the last post about a change. */
-export type LabNow = Pick<LabView, 'close' | 'deliverables_told_at'> & {
+/**
+ * What a form needs from the lab to say what its change does: whether an agent says that the lab is done or the
+ * agents closed it, whether it is out of time, and the last post about a change.
+ */
+export type LabNow = Pick<LabView, 'state' | 'out_of_time' | 'deliverables_told_at'> & {
   /** The reruns that are wanted in the lab. An offer has files, so an agent can rerun it as any result. */
   readonly reruns_wanted?: readonly RerunLine[];
 };
@@ -110,11 +113,21 @@ export type LabNow = Pick<LabView, 'close' | 'deliverables_told_at'> & {
 /** How long after a post about a new sentence or a removal the next such change sends no post, as `TOLD_WINDOW` in the server. */
 const TOLD_WINDOW_MS = 60_000;
 
-/** Return what a new deliverable does to the lab. In a lab that the agents closed, it opens the lab again. */
+/** What a hint adds for a post in a lab that is out of time: no turn starts until the lab has time. */
+const LATER = ' The lab is out of time: the agents get the post when the lab has time again.';
+
+/**
+ * Return what a new deliverable does to the lab. It is new work, so it ends a close that one agent posted, and it
+ * opens a lab that the agents closed.
+ */
 export function addHint(lab: LabNow): string {
-  return lab.close
-    ? 'The agents said the lab is done. Adding this opens the lab again.'
-    : 'The agents get a post about it.';
+  const later = lab.out_of_time ? LATER : '';
+  if (lab.state === 'closing') {
+    return `An agent says that the lab is done. Adding this ends that close, and the lab goes on.${later}`;
+  }
+  if (lab.state === 'closed')
+    return `The agents closed the lab. Adding this opens the lab again.${later}`;
+  return `The agents get a post about it.${later}`;
 }
 
 /**
@@ -122,21 +135,98 @@ export function addHint(lab: LabNow): string {
  * post about such a change went out in the last minute. The agents then read the change when they read the board.
  */
 export function changeHint(lab: LabNow, now: Date): string {
-  if (lab.close) {
-    return 'The agents said the lab is done, so this change sends no post and the lab stays closed. The agents read it when they next read the board.';
+  const read = 'The agents read it when they next read the board.';
+  if (lab.state === 'closing') {
+    return `An agent says that the lab is done, so this change sends no post, and that close stands. ${read}`;
+  }
+  if (lab.state === 'closed') {
+    return `The agents closed the lab, so this change sends no post, and the lab stays closed. ${read}`;
   }
   const told = lab.deliverables_told_at;
   if (told !== null && now.getTime() - new Date(told).getTime() < TOLD_WINDOW_MS) {
-    return 'The agents were told of a change in the last minute, so this one sends no post. They read it when they next read the board.';
+    return `The agents were told of a change in the last minute, so this one sends no post. ${read}`;
   }
-  return 'The agents get a post about the change. The record keeps the earlier sentence.';
+  return `The agents get a post about the change. The record keeps the earlier sentence.${lab.out_of_time ? LATER : ''}`;
 }
 
-/** Return what a request for changes does to the lab. In a lab that the agents closed, it opens the lab again. */
+/**
+ * Return what a request for changes does to the lab. It asks an agent for more work, so it ends a close that one
+ * agent posted, and it opens a lab that the agents closed.
+ */
 export function askHint(lab: LabNow): string {
-  return lab.close
-    ? 'The agents said the lab is done. Asking for changes opens the lab again.'
-    : 'The agent gets it as a reply to its offer.';
+  const later = lab.out_of_time ? LATER : '';
+  if (lab.state === 'closing') {
+    return `An agent says that the lab is done. Asking for changes ends that close, and the lab goes on.${later}`;
+  }
+  if (lab.state === 'closed') {
+    return `The agents closed the lab. Asking for changes opens the lab again.${later}`;
+  }
+  return `The agent gets it as a reply to its offer.${later}`;
+}
+
+/** Return the question that the page asks before it removes a deliverable. It names an acceptance that stands. */
+export function removeQuestion(item: Deliverable): string {
+  const accepted = item.state === 'accepted' ? ' You accepted an offer for it.' : '';
+  return `Remove this deliverable?${accepted} Its offers stay as posts.`;
+}
+
+/**
+ * Return the hint under the reply box of the thread of a deliverable's offers: who gets the person's post. It
+ * goes to the agents that offered files there or watch the thread. When none of them is in the lab, it goes to
+ * every agent that is not on call, and only then it ends a close.
+ */
+export function offersReplyHint(
+  reaches: readonly string[],
+  agents: readonly AgentView[],
+  state: LabView['state'],
+): string {
+  if (reaches.length === 0) {
+    const effect =
+      state === 'closed'
+        ? ' It opens the lab again.'
+        : state === 'closing'
+          ? ' It ends the close, and the lab goes on.'
+          : '';
+    return `No agent that offered files here or watches this thread is in the lab, so every agent that is not on call gets your post.${effect}`;
+  }
+  const names = reaches.map((id) => authorName(agents, id)).join(', ');
+  const effect =
+    state === 'closed' ? ' The lab stays closed.' : state === 'closing' ? ' The close stands.' : '';
+  return `Your post goes to ${names}: the agents that offered files here or watch this thread.${effect}`;
+}
+
+/** One line under a deliverable about other work in its thread, with the post that the line links to. */
+export interface ThreadFact {
+  readonly text: string;
+  readonly post: string;
+}
+
+/**
+ * Return what else is open in the thread of a deliverable's offers, one line for each post: a dispute of a post
+ * that is not one of the offers above, an ask without an answer, and a rerun that is wanted for such a post.
+ */
+export function threadFacts(
+  item: Deliverable,
+  wanted: readonly RerunLine[],
+): readonly ThreadFact[] {
+  const shown = new Set(item.offers.map((offer) => offer.post));
+  const reruns = wanted.filter((line) => line.thread === item.thread && !shown.has(line.post));
+  return [
+    ...item.disputed.map((post) => ({ text: 'An agent disputes a post in the thread', post })),
+    ...item.open_asks.map((post) => ({ text: 'A question in the thread has no answer', post })),
+    ...reruns.map((line) => ({
+      text:
+        line.taken_by.length > 0
+          ? 'An agent took the rerun of a post in the thread'
+          : 'A rerun of a post in the thread is wanted',
+      post: line.post,
+    })),
+  ];
+}
+
+/** Return the line that unfolds the removed deliverables that have offers, such as "1 removed deliverable with offers". */
+export function removedHeading(count: number): string {
+  return `${count} removed ${count === 1 ? 'deliverable' : 'deliverables'} with offers`;
 }
 
 /** The panel that is docked beside the wall: a tab of the panel for the coordinator, the deliverables, or none. */

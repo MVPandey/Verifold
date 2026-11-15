@@ -390,3 +390,32 @@ async def test_a_seat_can_start_from_an_earlier_event_so_that_its_agent_gets_wha
 
     assert (await now.wait(0)).posts == ()
     assert [entry.post.text for entry in (await earlier.wait(0)).posts] == ['For Bo.']
+
+
+async def test_a_rerun_of_an_offer_is_asked_for_taken_and_checked_as_for_any_post_with_files(lab: Lab) -> None:
+    async def pin(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+        return tuple(FileEvidence(path=path, commit='a' * 40) for path in paths)
+
+    await lab.add_deliverable('A script that runs it again.')
+    ada, bo = Member(lab, 'ada', pin=pin), Member(lab, 'bo', pin=pin, copies=FakeCopies())
+    offered = await ada.offer('d-1', ('run.py',), 'Runs with one command.')
+    offer = offered.post.id
+
+    await Member(lab, 'person').rerun(offer)
+    wanted = [(line.post, line.thread, line.asked_by, line.taken_by) for line in bo.brief('').reruns_wanted]
+    taken = await bo.take_rerun(offer)
+    during = [line.taken_by for line in ada.brief('').reruns_wanted]
+    check = PostRequest.model_validate(
+        {'kind': 'check', 'text': 'It runs.', 'reply_to': offer, 'thread': offered.post.thread, 'outcome': 'holds'}
+        | {'method': 'rerun', 'files': ('rerun.log',)}
+    )
+    checked = await bo.post(check)
+
+    assert wanted == [(offer, offered.post.thread, ('person',), ())]
+    assert (taken.post, taken.files, during) == (offer, ('run.py',), [('bo',)])
+    assert checked.post.model_dump()['take'] == lab.board.takes[0].seq
+    # The check answers the request and says where the offer's post stands. It decides nothing for the person.
+    (line,) = ada.brief('').deliverables
+    assert ada.brief('').reruns_wanted == ()
+    assert [(item.post, item.standing, item.state) for item in line.offers] == [(offer, 'checked', 'waiting')]
+    assert line.state == 'offered'

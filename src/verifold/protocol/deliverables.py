@@ -71,7 +71,9 @@ class OfferLine(Record):
     """When the person accepted the offer or asked for changes, while `state` says so. `None` otherwise."""
     standing: OfferStanding = 'open'
     disputed_by: PostId | None = None
-    """While `standing` is `disputed`: the newest objection or failed check that replies to the offer."""
+    """While `standing` is `disputed`: the newest failed check or objection to the offer that still stands."""
+    conceded_to: PostId | None = None
+    """While `standing` is `conceded`: the objection to the offer that its author accepted."""
 
 
 class DeliverableLine(Record):
@@ -89,3 +91,19 @@ class DeliverableLine(Record):
     Each agent's newest offer, oldest first, each with its own state. The offer that the person accepted is among
     them also when its agent offered again later.
     """
+    disputed: tuple[PostId, ...] = ()
+    """The other posts of the thread that stand disputed: an earlier offer, or what an agent said there."""
+    open_asks: tuple[PostId, ...] = ()
+    """The asks in the thread that no answer replies to."""
+
+
+class RemovedDeliverable(Record):
+    """A deliverable that the person removed after agents offered files for it, with the thread that holds the offers."""
+
+    id: DeliverableId
+    text: Sentence
+    """The sentence that the deliverable had last."""
+    removed_at: AwareDatetime
+    thread: ThreadId
+    active: bool = False
+    """Whether a post came to the thread after the removal."""

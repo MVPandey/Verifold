@@ -127,6 +127,7 @@ export function Wall(
         needs={needs}
         question={questionId}
         done={lab.state !== 'open'}
+        state={lab.state}
         reruns={lab.reruns_wanted}
         seats={lab.reviewer_seats}
         now={props.now}
@@ -140,8 +141,17 @@ export function Wall(
     );
   // The thread of the offers for a deliverable is no line of work, so it has no card. The panel for the
   // deliverables links to it, and it shows as a card while it is open.
+  // The thread of a removed deliverable is a card again once a post comes there, so that work is not out of sight.
+  const surfaced = new Set(
+    lab.removed_deliverables.filter((item) => item.active).map((item) => item.thread),
+  );
   const cards = threads
     .filter((summary) => summary !== question && !isSide(summary))
+    .map((summary) =>
+      surfaced.has(summary.thread.id)
+        ? { ...summary, thread: { ...summary.thread, deliverable: null } }
+        : summary,
+    )
     .filter((summary) => !summary.thread.deliverable || summary.thread.id === open)
     .sort((first, second) => number(first) - number(second));
   const side = threads.filter(isSide);
@@ -208,6 +218,7 @@ export function Wall(
             <Deliverables
               api={api}
               list={lab.deliverables}
+              removed={lab.removed_deliverables}
               lab={lab}
               agents={lab.agents}
               now={props.now}

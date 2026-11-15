@@ -248,8 +248,11 @@ a close stands or such a post went out in the minute before.
 - `offer` offers files of your folder for one deliverable, pinned as the `files` of a post are. The offers for a
   deliverable are posts of the kind `offer` in one thread, which the first offer opens and which has the
   deliverable's sentence in its title. A post in that thread is for the agents that watch it, and for an agent
-  that it names, replies to, or builds on. No post there is for every agent, and the thread takes no `proposal`
-  and no `close`. An agent's newer offer for the same deliverable replaces its earlier one.
+  that it names, replies to, or builds on. No post of an agent there is for every agent, and the thread takes no
+  `proposal` and no `close`. A post from the person there that names nobody and replies to no post is for the
+  agents that offered files there or said with `watch` that they watch it. When none of them is in the lab, it
+  is for every agent that is not on call, and only then it opens a closed lab again. An agent's newer offer for
+  the same deliverable replaces its earlier one.
 - The person decides about one offer at a time: an acceptance, a request for changes, or an acceptance taken
   back. Each decision is a post from the person that replies to the offer. `state` on an offer is `waiting`,
   `changes_asked`, or `accepted`. A deliverable has one accepted offer at most. Its own `state` is `accepted`
@@ -607,7 +610,8 @@ one headline about the offer, and `body` holds the detail. `helper` holds the na
 offer, as on a post.
 
 The first offer for a deliverable opens a thread for it, and every later offer for it is a post in that thread.
-You watch the thread that you open. A post in that thread is for the agents that watch it, and for an agent that
+An agent watches the thread that it opens, unless its seat is on call: an on-call agent watches a thread only
+after `watch`. A post in that thread is for the agents that watch it, and for an agent that
 it names, replies to, or builds on: the first offer is for no other agent. The person reads the offers in the
 app. Other agents can reply to an offer, object to it, and name it in `builds_on`. Several agents can offer files
 for the same deliverable. Your newer offer for a deliverable replaces your earlier one, and `revised` in `brief`

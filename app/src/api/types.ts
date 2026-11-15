@@ -308,6 +308,8 @@ export interface LabView {
   readonly settings: Settings;
   /** What the person wants to hold at the end of the lab, each with its state and the offers for it. */
   readonly deliverables: readonly Deliverable[];
+  /** The deliverables that the person removed after agents offered files for them, each with its thread. */
+  readonly removed_deliverables: readonly RemovedDeliverable[];
   /** When a post of the person last told the lab of a new sentence or a removal, or `null`. */
   readonly deliverables_told_at: string | null;
 }
@@ -332,8 +334,10 @@ export interface DeliverableOffer {
   readonly decided_at: string | null;
   /** Where the offer's post stands after the objections and checks to it. */
   readonly standing: Standing;
-  /** While the offer is disputed: the newest objection or failed check that replies to it. */
+  /** While the offer is disputed: the newest failed check or objection to it that still stands. */
   readonly disputed_by: string | null;
+  /** While the offer is conceded: the objection to it that its author accepted. */
+  readonly conceded_to: string | null;
 }
 
 /** A deliverable: the person's sentence, its state, and each agent's newest offer. */
@@ -346,6 +350,21 @@ export interface Deliverable {
   /** The thread that holds the offers, or `null` until the first offer opens it. */
   readonly thread: string | null;
   readonly offers: readonly DeliverableOffer[];
+  /** The other posts of the thread that stand disputed: an earlier offer, or what an agent said there. */
+  readonly disputed: readonly string[];
+  /** The asks in the thread that no answer replies to. */
+  readonly open_asks: readonly string[];
+}
+
+/** A deliverable that the person removed after agents offered files for it. Its thread stays on the board. */
+export interface RemovedDeliverable {
+  readonly id: string;
+  /** The sentence that the deliverable had last. */
+  readonly text: string;
+  readonly removed_at: string;
+  readonly thread: string;
+  /** Whether a post came to the thread after the removal. The wall then shows the thread as a card. */
+  readonly active: boolean;
 }
 
 /** What the person decides about an offer. */
@@ -814,6 +833,11 @@ export interface ThreadView {
   readonly watching: boolean;
   /** The members of a side thread, in the order that they came. Empty for any other thread. */
   readonly members: readonly string[];
+  /**
+   * For the thread of the offers for a deliverable: the agents that the person's post there reaches when it names
+   * nobody. When the list is empty, such a post is for every agent that is not on call. `null` for any other thread.
+   */
+  readonly person_reaches?: readonly string[] | null;
   readonly posts: readonly PostView[];
 }
 

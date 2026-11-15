@@ -8,6 +8,7 @@ import type {
   Deliverable,
   DeliverableDecision,
   DeliverableOffer,
+  RemovedDeliverable,
 } from '../api/types.ts';
 import { authorName } from '../model/agents.ts';
 import {
@@ -21,10 +22,14 @@ import {
   isNewSentence,
   offerLine,
   offerState,
+  removeQuestion,
+  removedHeading,
   rerunFact,
   stateLine,
+  threadFacts,
 } from '../model/deliverables.ts';
 import type { LabNow } from '../model/deliverables.ts';
+import { dayClock } from '../model/format.ts';
 import { href } from '../model/route.ts';
 import { Who } from './Picture.tsx';
 
@@ -78,8 +83,14 @@ interface Shared {
  * adds a deliverable. The page that docks the panel makes the room for it.
  */
 export function Deliverables(
-  props: Shared & { readonly list: readonly Deliverable[]; readonly onClose: () => void },
+  props: Shared & {
+    readonly list: readonly Deliverable[];
+    /** The deliverables that the person removed after agents offered files for them. */
+    readonly removed?: readonly RemovedDeliverable[];
+    readonly onClose: () => void;
+  },
 ): ReactElement {
+  const removed = props.removed ?? [];
   const { api, list, reload } = props;
   const [adding, setAdding] = useState(false);
   const full = list.length >= MAX_DELIVERABLES;
@@ -107,6 +118,29 @@ export function Deliverables(
         {list.map((item) => (
           <Item key={item.id} item={item} {...props} />
         ))}
+        {removed.length > 0 ? (
+          <li className="d-gone">
+            <details>
+              <summary>
+                {removedHeading(removed.length)} <u className="closed">Show</u>
+                <u className="opened">Hide</u>
+              </summary>
+              <ul>
+                {removed.map((item) => (
+                  <li key={item.id}>
+                    <p className="d-note">{item.text}</p>
+                    <p className="d-more">
+                      Removed at {dayClock(item.removed_at, props.now)}.{' '}
+                      <a href={href({ page: 'thread', id: item.thread, post: null })}>
+                        Open the thread with its offers
+                      </a>
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          </li>
+        ) : null}
       </ol>
       <div className="d-foot">
         {adding ? (
@@ -153,6 +187,7 @@ function Item(props: Shared & { readonly item: Deliverable }): ReactElement {
           label="The deliverable"
           start={item.text}
           hint={changeHint(props.lab, props.now)}
+          removeQuestion={removeQuestion(item)}
           button="Save"
           ready={(text) => isNewSentence(text, item.text)}
           onSave={async (text) => {
@@ -193,6 +228,16 @@ function Item(props: Shared & { readonly item: Deliverable }): ReactElement {
         <OfferBlock key={offer.post} {...props} offer={offer} onError={setError} />
       ))}
       {item.thread ? (
+        <ul className="d-work">
+          {threadFacts(item, props.lab.reruns_wanted ?? []).map((fact) => (
+            <li key={`${fact.post} ${fact.text}`}>
+              {fact.text}{' '}
+              <a href={href({ page: 'thread', id: item.thread ?? '', post: fact.post })}>Read it</a>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {item.thread ? (
         <p className="d-more">
           <a href={href({ page: 'thread', id: item.thread, post: null })}>
             Open the thread with every offer
@@ -228,6 +273,7 @@ function OfferBlock(
   const by = `the offer by ${authorName(props.agents, offer.by)}`;
   const left = authorLeft(offer, props.agents);
   const rerun = rerunFact(offer, props.lab.reruns_wanted ?? []);
+  const doubted = offer.standing === 'disputed' || offer.standing === 'conceded';
   const decide = (decision: DeliverableDecision): void => {
     setBusy(true);
     props.onError(null);
@@ -278,6 +324,19 @@ function OfferBlock(
             ) : null}
           </span>
         ) : null}
+        {offer.standing === 'conceded' ? (
+          <span className="d-disputed">
+            Its author accepted an objection to it
+            {item.thread && offer.conceded_to ? (
+              <>
+                {' '}
+                <a href={href({ page: 'thread', id: item.thread, post: offer.conceded_to })}>
+                  Read why
+                </a>
+              </>
+            ) : null}
+          </span>
+        ) : null}
       </p>
       {asking ? (
         <LineForm
@@ -288,8 +347,9 @@ function OfferBlock(
           most={1000}
           ready={(text) => isNewSentence(text)}
           onSave={async (text) => {
-            await api.decideDeliverable(item.id, 'ask_changes', offer.post, text);
-            reload();
+            // The server refuses a request about an offer that its author replaced, or whose author left. The
+            // page reads the lab again either way, as after the other decisions.
+            await api.decideDeliverable(item.id, 'ask_changes', offer.post, text).finally(reload);
           }}
           onClose={() => {
             setAsking(false);
@@ -312,7 +372,8 @@ function OfferBlock(
             <>
               <button
                 type="button"
-                className={item.state === 'accepted' ? undefined : 'go'}
+                // An offer that stands disputed or conceded is no primary action.
+                className={item.state === 'accepted' || doubted ? undefined : 'go'}
                 disabled={busy}
                 aria-label={
                   item.state === 'accepted' ? `Accept this one instead, ${by}` : `Accept ${by}`
@@ -359,6 +420,8 @@ function LineForm(props: {
   readonly ready: (text: string) => boolean;
   readonly onSave: (text: string) => Promise<void>;
   readonly onRemove?: () => Promise<void>;
+  /** What the form asks before it removes the deliverable. */
+  readonly removeQuestion?: string;
   readonly onClose: () => void;
 }): ReactElement {
   const [text, setText] = useState(props.start ?? '');
@@ -383,7 +446,7 @@ function LineForm(props: {
   if (removing && onRemove) {
     return (
       <div className="d-form" role="group" aria-label="Remove the deliverable">
-        <p className="d-ask">Remove this deliverable? Its offers stay as posts.</p>
+        <p className="d-ask">{props.removeQuestion}</p>
         <div>
           <span className={error ? 'error' : undefined} role={error ? 'alert' : undefined}>
             {error ?? props.hint}
