@@ -48,10 +48,11 @@ from verifold.protocol.settings import AtExit, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
 from verifold.runner.errors import NoAgentFolder, NoFileManager
-from verifold.runner.folders import LAB_FOLDER, agent_folder, agents_folder, open_folder, real_folder, tracked_lab_files
-from verifold.runner.git import GitError, git
+from verifold.runner.folders import LAB_FOLDER, agent_folder, open_folder, real_folder, tracked_lab_files
+from verifold.runner.git import GitError
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
 from verifold.runner.messages import invitation, start_message
+from verifold.runner.objects import READ_SECONDS, Missing, PinnedCommit, Running, TooLarge, fetches_nothing, file_bytes
 from verifold.runner.permissions import Refusals
 from verifold.runner.reruns import CleanCopies
 from verifold.runner.session import Place, SessionOptions, offer_of
@@ -186,6 +187,10 @@ class Host:
         self._project = project
         self._copies = CleanCopies(project)
         """Gives the clean copies for reruns, each verified against the pinned commit at every take."""
+        self._reads = Running()
+        """The Git processes that read a pinned file for the app now."""
+        self._fetches_nothing: bool | None = None
+        """Whether this computer's Git fetches no missing object when told so. Asked once."""
         self._desktop = True
         self._record = record
         self._catalog = catalog
@@ -303,16 +308,26 @@ class Host:
         )
 
     def stop_exports(self) -> None:
-        """End every export of a clean copy that runs, as when the server stops. The takes that wait for one fail."""
+        """
+        End every export of a clean copy and every read of a pinned file that runs, as when the server stops.
+
+        The takes that wait for an export fail, and so does a read.
+        """
         self._copies.stop()
+        self._reads.stop()
 
     async def file_text(self, post_id: PostId, path: str) -> FileText:
         """
         Return the text of a file that backs a post, at the commit that the post pins.
 
+        Verifold reads the commit, its folders, and the file as Git objects, and checks each one against its ID,
+        from the commit's ID in the record down. It runs no Git command in the author's folder.
+
         Raises:
             NoLab: The folder has no lab.
-            NotFound: The post does not name the file, the file is gone, it is too large, or it is not text.
+            NotFound: The post does not name the file, the file is gone, it is too large, or it is not text. Or
+                Verifold does not read it: the path names no plain file, or an object on the way to it is not the
+                one that its ID names.
 
         """
         if self._lab is None:
@@ -321,18 +336,28 @@ class Host:
         file = next((item for item in entry.post.evidence if item.path == path), None) if entry else None
         if entry is None or file is None:
             raise NotFound(f'Post {post_id} names no file {path}.')
-        folder = agents_folder(self._project) / entry.post.author
-        blob = f'{file.commit}:{file.path}'
+        if self._fetches_nothing is None:
+            self._fetches_nothing = await asyncio.to_thread(fetches_nothing)
+        pinned = PinnedCommit(
+            project=self._project.resolve(),
+            author=entry.post.author,
+            commit=file.commit,
+            seconds=READ_SECONDS,
+            fetches_nothing=self._fetches_nothing,
+            running=self._reads,
+        )
         try:
-            size = int(await git('cat-file', '-s', blob, cwd=folder))
-            if size > MAX_FILE_BYTES:
-                raise NotFound(f'{path} is larger than {MAX_FILE_BYTES:,} bytes, so the app does not show it.')
-            text = await git('show', blob, cwd=folder, strip=False)
+            data = await asyncio.to_thread(file_bytes, pinned, file.path, MAX_FILE_BYTES)
+        except TooLarge as error:
+            raise NotFound(f'{path} is larger than {MAX_FILE_BYTES:,} bytes, so the app does not show it.') from error
+        except Missing as error:
+            raise NotFound(f'{path} is not in the folder of {entry.post.author} at {file.commit[:8]}.') from error
+        except (GitError, OSError, ValueError) as error:
+            raise NotFound(f'The app does not show {path} at {file.commit[:8]}: {error}') from error
+        try:
+            return FileText(path=file.path, commit=file.commit, text=data.decode())
         except UnicodeDecodeError as error:
             raise NotFound(f'{path} is not a text file.') from error
-        except (GitError, OSError, ValueError) as error:
-            raise NotFound(f'{path} is not in the folder of {entry.post.author} at {file.commit[:8]}.') from error
-        return FileText(path=file.path, commit=file.commit, text=text)
 
     async def open_folder(self, agent_id: AgentId | None = None) -> FolderView:
         """

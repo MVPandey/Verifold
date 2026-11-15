@@ -1,12 +1,31 @@
 """Git commands that run with a clean environment."""
 
 import asyncio
+import os
 from asyncio.subprocess import PIPE
 from collections.abc import Mapping
 from pathlib import Path
 
 from verifold.runner.environment import clean_environment
 from verifold.runner.errors import RunnerError
+
+GIT_OPTIONS = ('-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.sshCommand=false', '-c', 'protocol.allow=never')  # fmt: skip
+"""
+Options of every Git command that reads the objects of a pinned commit: no hook, no file watcher, and no transport.
+A repository's own `protocol.<name>.allow` overrides `protocol.allow`, so that option alone stops no fetch from a
+repository that an agent can write. `GIT_NO_LAZY_FETCH` does. With a Git that does not know it, Verifold reads a
+repository's configuration itself first, and reads no repository whose configuration can make Git fetch.
+"""
+
+GIT_ENVIRONMENT = {
+    'GIT_NO_LAZY_FETCH': '1',
+    'GIT_NO_REPLACE_OBJECTS': '1',
+    'GIT_CONFIG_GLOBAL': os.devnull,
+    'GIT_CONFIG_NOSYSTEM': '1',
+    'GIT_ATTR_NOSYSTEM': '1',
+    'GIT_TERMINAL_PROMPT': '0',
+}
+"""Git fetches no object that a repository lacks, replaces none, and reads no configuration of the person or the system."""
 
 
 class GitError(RunnerError):

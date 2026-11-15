@@ -14,10 +14,11 @@ from builders import START, until
 
 from verifold.protocol.events import Posted
 from verifold.protocol.posts import FileEvidence, Result
-from verifold.runner import reruns
+from verifold.runner import objects, reruns
 from verifold.runner.folders import agent_folder
 from verifold.runner.git import git
-from verifold.runner.reruns import LEFTOVER_SECONDS, CleanCopies, fetches_nothing
+from verifold.runner.objects import fetches_nothing
+from verifold.runner.reruns import LEFTOVER_SECONDS, CleanCopies
 from verifold.runner.snapshots import pin, snapshot
 from verifold.server.errors import EvidenceRejected, NoCleanCopy
 
@@ -645,7 +646,7 @@ async def test_an_older_git_reads_only_a_repository_whose_configuration_cannot_m
     assert everything(await clean_copy(plain, claim)) == FILES
     configs[plain].write_bytes(kept[plain])
 
-    monkeypatch.setattr(reruns, 'FETCHES_NOTHING_FROM', (99, 0))
+    monkeypatch.setattr(objects, 'FETCHES_NOTHING_FROM', (99, 0))
     assert not fetches_nothing()
     # An older Git with an ordinary configuration makes the copy: in a project without Git commits and with them.
     assert everything(await clean_copy(plain, claim)) == FILES
@@ -675,7 +676,7 @@ async def test_an_older_git_reads_only_a_repository_whose_configuration_cannot_m
         elif shape == 'pipe':
             os.mkfifo(configs[plain])
         elif shape == 'large':
-            configs[plain].write_bytes(kept[plain] + b'#' * (reruns.MAX_CONFIG_BYTES + 1))
+            configs[plain].write_bytes(kept[plain] + b'#' * (objects.MAX_CONFIG_BYTES + 1))
         with pytest.raises(NoCleanCopy, match='cannot read the configuration'):
             await clean_copy(plain, claim)
         if shape != 'gone':

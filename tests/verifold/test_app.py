@@ -801,6 +801,49 @@ async def test_the_app_reads_a_file_that_backs_a_post_and_the_lab_folder_gets_th
     assert (project / '.verifold' / 'WRITING.md').read_text() == WRITING_TEMPLATE
 
 
+async def test_the_app_shows_a_pinned_file_as_its_commit_holds_it_and_says_why_it_shows_none(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await asyncio.to_thread(lab_of, project, 1)
+
+    async with serving(project) as client:
+        invited = (await client.post('/invitations', json={'name': 'Writer'})).json()
+        url, token, folder = invited_parts(invited['text'])
+        (folder / 'notes.md').write_text('It is faster.\n')
+        (folder / 'data.bin').write_bytes(b'\xff\xfe')
+        (folder / 'latest').symlink_to('notes.md')
+        files = ['notes.md', 'data.bin', 'latest']
+        async with board_of(url, token) as board:
+            posted = await board.call_tool(
+                'post', {'kind': 'result', 'text': 'It is faster.', 'new_thread': 'Speed', 'files': files}
+            )
+        assert posted.structured_content is not None
+        post = posted.structured_content['post']
+        commit = post['evidence'][0]['commit']
+        # The agent goes on with the file. The app shows the version that the post pins.
+        (folder / 'notes.md').write_text('A later draft.\n')
+
+        async def read(path: str) -> tuple[int, str]:
+            answer = await client.get(f'/posts/{post["id"]}/file', params={'path': path})
+            return answer.status_code, answer.json().get('text') or answer.json()['detail']
+
+        shown, binary, link = await read('notes.md'), await read('data.bin'), await read('latest')
+        with monkeypatch.context() as smaller:
+            smaller.setattr('verifold.app.MAX_FILE_BYTES', 5)
+            large = await read('notes.md')
+        # The repository loses the file's object.
+        blob = await git('rev-parse', f'{commit}:notes.md', cwd=folder)
+        (folder / '.git' / 'objects' / blob[:2] / blob[2:]).unlink()
+        gone = await read('notes.md')
+
+    assert shown == (200, 'It is faster.\n')
+    assert binary == (404, 'data.bin is not a text file.')
+    no_file = 'latest is a link in the pinned commit, so the commit has no file latest to read.'
+    assert link == (404, f'The app does not show latest at {commit[:8]}: {no_file}')
+    assert large == (404, 'notes.md is larger than 5 bytes, so the app does not show it.')
+    assert gone == (404, f'notes.md is not in the folder of agent-2 at {commit[:8]}.')
+
+
 async def test_an_agent_of_another_family_takes_a_wanted_rerun_in_a_clean_copy_and_verifold_starts_nothing(
     project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
