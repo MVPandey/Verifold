@@ -225,10 +225,11 @@ async def test_a_project_that_git_opens_only_with_the_persons_own_settings_is_re
     project = await committed(tmp_path / 'project')
     pinned = await a_pin(project)
     # Git takes every repository that it finds as another user's, as it takes a project that needs the person's
-    # `safe.directory` setting. It then opens no repository in the project.
+    # `safe.directory` setting. Without the person's and the system's settings, it then opens no repository in the
+    # project.
     other_owner = {'GIT_TEST_ASSUME_DIFFERENT_OWNER': '1'}
     with pytest.raises(GitError, match='dubious ownership'):
-        await git('rev-parse', '--git-dir', cwd=project, env=other_owner)
+        await git('rev-parse', '--git-dir', cwd=project, env={**GIT_ENVIRONMENT, **other_owner})
     monkeypatch.setattr(objects, 'GIT_ENVIRONMENT', {**GIT_ENVIRONMENT, **other_owner})
 
     assert file_bytes(pinned, 'result.txt', LIMIT) == b'11.8'
