@@ -47,8 +47,10 @@ from verifold.runner.messages import DOORBELL, RESTARTED, STARTED_AGAIN
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.server.lab import Lab
 from verifold.server.web import web_app
+from verifold.society.attention import update
 from verifold.society.fold import fold
 from verifold.society.standing import standing
+from verifold.society.turns import before as place_of
 from verifold.store.record_file import RecordFile
 
 events: TypeAdapter[Event] = TypeAdapter(Event)
@@ -262,6 +264,35 @@ def ended(project: Path) -> int:
     return len(turns(project))
 
 
+FAST = ServeOptions(quiet=0.05, max_quiet=0.5)
+"""A doorbell that rings at once, so that no test waits through the quiet window of a real lab."""
+
+NO_DOORBELL = ServeOptions(quiet=3_600, max_quiet=3_600)
+"""A doorbell that does not ring while the test runs, so that a post for an agent still waits at the restart."""
+
+
+def at_rest(project: Path, agents: tuple[str, ...], after: int = 0) -> bool:
+    """
+    Return whether each agent ended its last turn by itself, has read event `after`, and has no post that waits for it.
+
+    Nothing more happens for such agents until a new post comes, so a test that waits for this depends on no timing.
+    """
+    events = record(project)
+    if not events:
+        return False
+    board = fold(events)
+    return all(
+        (was := place_of(board, agent)).rested is not None
+        and was.seen >= after
+        and not update(board, agent, was.seen).posts
+        for agent in agents
+    )
+
+
+def turns_of(project: Path, agent_id: str) -> int:
+    return sum(turn.agent == agent_id for turn in turns(project))
+
+
 def prompts_of(log: Path, agent_id: str) -> list[str]:
     return [call['text'] for call in calls(log) if call['event'] == 'prompt' and call['agent'] == agent_id]
 
@@ -269,21 +300,31 @@ def prompts_of(log: Path, agent_id: str) -> list[str]:
 async def test_after_a_restart_each_agent_keeps_its_conversation_and_waits_where_it_was(
     project: Path, log: Path
 ) -> None:
-    async with serving(project, TWO_AGENTS):
-        await until(lambda: ended(project) == 2)
+    both = ('agent-1', 'agent-2')
+    async with serving(project, TWO_AGENTS, options=FAST):
+        # Each agent's first post is for the other one. The lab stops only when every such doorbell has rung and
+        # its turn is over, so that no post waits for an agent at the restart.
+        await until(lambda: at_rest(project, both))
     sessions = {event.agent: event.session for event in record(project) if isinstance(event, TurnStarted)}
     assert sessions == {'agent-1': 'session-agent-1', 'agent-2': 'session-agent-2'}
+    rested = (ended(project), len(prompts_of(log, 'agent-1')), turns_of(project, 'agent-1'))
 
-    async with serving(project) as client:
+    async with serving(project, options=FAST) as client:
         await until(lambda: sum(call['event'] == 'load_session' for call in calls(log)) == 2)
-        await asyncio.sleep(0.5)
+        # An agent that waits after the restart shows as idle. One that got a message would show as working.
+        states: set[str] = set()
+        async with asyncio.timeout(20):
+            while states != {'idle'}:
+                states = {await state_of(client, 'agent-1'), await state_of(client, 'agent-2')}
         # Both agents ended their turns before the restart, so the restart starts no turn.
-        assert (ended(project), len(prompts_of(log, 'agent-1'))) == (2, 1)
-        states = {await state_of(client, 'agent-1'), await state_of(client, 'agent-2')}
+        assert (ended(project), len(prompts_of(log, 'agent-1'))) == rested[:2]
         ask = {'kind': 'ask', 'text': 'Which layer?', 'thread': 't-1', 'mentions': ['agent-1']}
-        assert (await client.post('/posts', json=ask)).status_code == 200
-        # The ask can wake agent-2 too, so the test waits for the turn of agent-1.
-        await until(lambda: sum(turn.agent == 'agent-1' for turn in turns(project)) == 2)
+        asked = await client.post('/posts', json=ask)
+        assert asked.status_code == 200
+        # The test waits for the answer to this ask and for the end of the turn of the agent that the ask names.
+        seen = f'Seen {asked.json()["post"]["id"]}.'
+        await until(lambda: any(entry.post.text == seen for entry in posts(project)))
+        await until(lambda: turns_of(project, 'agent-1') == rested[2] + 1)
 
     assert states == {'idle'}
     loaded = [call for call in calls(log) if call['event'] == 'load_session']
@@ -530,10 +571,11 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
 async def test_an_agent_that_left_stops_for_good_and_an_invited_one_loses_its_token(project: Path) -> None:
     guests = project / '.verifold' / 'guests.json'
 
-    async with serving(project, TWO_AGENTS) as client:
+    # No doorbell rings before the restart, so each agent has one turn there, and Reader's post waits for agent-1.
+    async with serving(project, TWO_AGENTS, options=NO_DOORBELL) as client:
         # Both first turns must be over. An agent that still ran would read Reader's post in that turn, and then no
         # doorbell rings for it after the restart.
-        await until(lambda: len(turns(project)) == 2, timeout=60)
+        await until(lambda: turns_of(project, 'agent-1') == 1 and turns_of(project, 'agent-2') == 1, timeout=60)
         invited = (await client.post('/invitations', json={'name': 'Reader'})).json()
         url, token, _ = invited_parts(invited['text'])
         async with board_of(url, token) as board:
@@ -562,8 +604,8 @@ async def test_an_agent_that_left_stops_for_good_and_an_invited_one_loses_its_to
 
     # After a restart, Verifold starts only the agent that is still in the lab, and the old token opens nothing.
     # The doorbell for Reader's post had not rung when Verifold stopped, so it rings now.
-    async with serving(project) as client:
-        await until(lambda: sum(turn.agent == 'agent-1' for turn in turns(project)) == 2, timeout=60)
+    async with serving(project, options=FAST) as client:
+        await until(lambda: turns_of(project, 'agent-1') == 2, timeout=60)
         async with board_of(url, token) as board:
             void = await board.call_tool('brief', {})
         running = len(harness_pids())
