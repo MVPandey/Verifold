@@ -436,7 +436,8 @@ function RemoveAgent(props: {
   }
   return (
     <p className="f-where">
-      Remove {props.agent.name} from the lab? Its posts stay, and it cannot come back.{' '}
+      Remove {props.agent.name} from the lab? Its posts stay, and it cannot come back. Programs that
+      it started in the background run on until the lab stops.{' '}
       <button className="btn small danger" type="button" onClick={remove} disabled={busy}>
         {busy ? 'Removing' : 'Remove'}
       </button>{' '}

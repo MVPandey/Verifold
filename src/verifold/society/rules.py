@@ -23,6 +23,7 @@ from verifold.protocol.posts import Answer, Check, Close, Objection, Post
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
+from verifold.society.lifecycle import lab_state
 from verifold.society.standing import closing
 
 MAX_RERUNS = 2
@@ -290,11 +291,21 @@ def _check_close(board: Board, close: Close) -> None:
     if close.author == PERSON:
         raise RejectedEvent("A close is the agents' word that the lab is done. You can stop the lab at any time.")
     standing_close = closing(board)
-    if standing_close and standing_close.post.author != close.author:
-        raise RejectedEvent(
-            f'{standing_close.post.author} says in {standing_close.post.id} that the lab is done. Agree with an '
-            f'answer to it that has `accepts: true`, or object to it.'
-        )
+    if standing_close is None or standing_close.post.author == close.author:
+        return
+    # Nobody can ask the author of a close to withdraw it once that author left. So another agent's close replaces
+    # it, unless the lab is closed already: the agents that stood behind the old close keep their word.
+    if board.gone(standing_close.post.author):
+        if lab_state(board) == 'closed':
+            raise RejectedEvent(
+                f'The lab is closed already: more than half of its agents stood behind {standing_close.post.id}. '
+                'It takes no other close.'
+            )
+        return
+    raise RejectedEvent(
+        f'{standing_close.post.author} says in {standing_close.post.id} that the lab is done. Agree with an '
+        f'answer to it that has `accepts: true`, or object to it.'
+    )
 
 
 def _check_concession(board: Board, answer: Answer, target: Post) -> None:

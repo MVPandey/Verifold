@@ -392,19 +392,19 @@ describe('turns', () => {
     const context = { called: () => 'Agent 1', author: null, question: 't-1' };
     assert.equal(act(close, null, context), 'said that the lab is done');
     assert.equal(act(agree, close, context), 'agreed that the lab is done');
-    assert.equal(doneLine({ state: 'open', close_agreed: 0 }, 3), null);
+    assert.equal(doneLine({ state: 'open', close_agreed: 0, close_among: 0 }), null);
     assert.equal(
-      doneLine({ state: 'closing', close_agreed: 0 }, 3),
+      doneLine({ state: 'closing', close_agreed: 0, close_among: 3 }),
       'An agent says that the lab is done (1 of 3 agents so far).',
     );
     assert.equal(
-      doneLine({ state: 'closed', close_agreed: 1 }, 3),
+      doneLine({ state: 'closed', close_agreed: 1, close_among: 3 }),
       'The agents say that the lab is done (2 of 3 agents). You can still steer it.',
     );
-    // The agent that said it left since, so only the agents that agreed stand behind it.
+    // The agent that said it left since, and nobody else is in the lab. Its word still counts.
     assert.equal(
-      doneLine({ state: 'closing', close_agreed: 1 }, 2, true),
-      'An agent says that the lab is done (1 of 2 agents so far).',
+      doneLine({ state: 'closed', close_agreed: 0, close_among: 1 }),
+      'The agents say that the lab is done (1 of 1 agent). You can still steer it.',
     );
   });
 

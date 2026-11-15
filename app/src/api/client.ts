@@ -89,6 +89,7 @@ export function createApi(
         state: lab.state ?? 'open',
         close: lab.close ?? null,
         close_agreed: lab.close_agreed ?? 0,
+        close_among: lab.close_among ?? lab.agents.filter((view) => !view.agent.checks).length,
         agents: lab.agents.map((view) => ({
           ...view,
           role: view.role ?? '',

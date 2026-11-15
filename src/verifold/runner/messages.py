@@ -13,6 +13,9 @@ from verifold.society.lines import question_thread
 DOORBELL = 'New posts for you on the lab board.'
 """The message that wakes an agent after it ended its turn. The agent reads the posts with its board tools."""
 
+DEPARTURE = 'An agent that you named or answered on the lab board has left the lab.'
+"""The message that wakes an agent after it ended its turn, when no post came and such an agent left."""
+
 JOBS_ENDED = 'The processes that you left running when your turn ended have ended.'
 """The message that wakes an agent with one job, which ended its turn while its own processes still ran."""
 

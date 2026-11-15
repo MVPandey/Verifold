@@ -109,6 +109,8 @@ export interface LabView {
   readonly close: { readonly id: string; readonly thread: string; readonly author: string } | null;
   /** How many other agents agreed with it. */
   readonly close_agreed: number;
+  /** Among how many agents its author and the agents that agreed count. An agent that left can be one of them. */
+  readonly close_among: number;
   /** The settings that the lab follows. */
   readonly settings: Settings;
 }

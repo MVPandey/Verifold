@@ -388,3 +388,29 @@ async def test_a_removal_ends_an_open_wait_and_a_blind_checker_cannot_leave(lab:
     assert checker.is_error
     assert 'A blind checker is gone after its one check' in str(checker.content)
     assert [entry.agent for entry in lab.board.left] == ['bo']
+
+
+async def test_a_departure_reaches_the_agents_that_wrote_to_the_agent_and_ends_their_wait(lab: Lab) -> None:
+    ada = Member(lab, 'ada')
+    await lab.post(PostRequest(kind='ask', text='Which seed?', thread='t-1', mentions=('bo',)), 'ada')
+    ada.news()
+    waiting = asyncio.create_task(ada.wait(30))
+    await asyncio.sleep(0)
+
+    await lab.leave('bo', 'person', 'Off the question.')
+    async with asyncio.timeout(5):
+        woken = await waiting
+    async with Client(join_server(lambda _: ada)) as client:
+        named = await client.call_tool(
+            'post', {'kind': 'message', 'text': 'Is bo still here?', 'thread': 't-1', 'mentions': ['bo']}
+        )
+        plain = await client.call_tool('post', {'kind': 'message', 'text': 'Then I go on.', 'thread': 't-1'})
+
+    line = {'id': 'bo', 'name': 'Bo', 'by': 'person', 'reason': 'Off the question.'}
+    assert (woken.posts, [entry.model_dump() for entry in woken.left]) == ((), [line])
+    # A post that names only an agent that left goes on the board, and its result says that the agent is gone.
+    assert named.structured_content is not None
+    assert plain.structured_content is not None
+    assert (named.is_error, named.structured_content['left'], plain.structured_content['left']) == (False, [line], [])
+    # The agent got the departure in its wait, so its news does not repeat it.
+    assert named.structured_content['news']['left'] == []

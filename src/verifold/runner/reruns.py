@@ -7,11 +7,12 @@ from functools import partial
 from pathlib import Path
 
 from verifold.harnesses.catalog import HarnessEntry
-from verifold.protocol.agents import Agent, ModelSpec
+from verifold.protocol.agents import UNKNOWN_FAMILY, Agent, ModelSpec
 from verifold.protocol.events import RerunRequested, TurnSummary
 from verifold.protocol.posts import Check
 from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentSetup
+from verifold.runner.errors import NoCrew
 from verifold.runner.folders import LAB_FOLDER, agent_folder, checker_folder
 from verifold.runner.messages import rerun_message
 from verifold.runner.session import SessionOptions
@@ -25,6 +26,9 @@ from verifold.society.rules import waiting_reruns
 
 type Crew = tuple[tuple[HarnessEntry, SessionOptions], ...]
 """The lab's harnesses, each with the options that its agents use."""
+
+NO_HARNESS = 'none'
+"""The harness of a checker that could not start, because the lab had no harness for it."""
 
 type Supervise = Callable[[Member, AgentSetup, Callable[[Board], bool]], Awaitable[None]]
 """Runs one agent's loop until it is done, the same way that the lab runs its other agents."""
@@ -111,7 +115,19 @@ class Reruns:
             return
         crew = self._crew()
         if not crew:
-            return
+            # Without a harness no checker can start. A checker that only holds the failure joins, so that the
+            # board shows why no check comes, and the agents that asked can ask again.
+            await self._lab.join(
+                Agent(
+                    id=_checker_id(request),
+                    name=f'Checker {request.seq}',
+                    harness=NO_HARNESS,
+                    model=ModelSpec(family=UNKNOWN_FAMILY),
+                    recruited_by=request.by,
+                    checks=request.post,
+                )
+            )
+            raise NoCrew('The lab has no agent that Verifold started, so no blind checker can start.')
         harness, options = next(
             ((entry, options) for entry, options in crew if entry.family != author.agent.model.family),
             crew[0],

@@ -10,7 +10,6 @@ from verifold.protocol.join import (
     AgentLine,
     AnswerView,
     Brief,
-    LeftLine,
     News,
     PostLine,
     PostView,
@@ -20,7 +19,7 @@ from verifold.protocol.join import (
     ThreadView,
 )
 from verifold.protocol.posts import Ask, Call, Check, Close, Objection, Plan, Proposal, Report, Result
-from verifold.society.attention import watches_thread
+from verifold.society.attention import left_line, watches_thread
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
 from verifold.society.lifecycle import lab_state
@@ -143,7 +142,11 @@ def _summary(
         disputed=results.count('disputed'),
         checked=sum(state in {'checked', 'held_up'} for state in results),
         not_checked=results.count('open'),
-        open_asks=sum(isinstance(entry.post, Ask) and not is_answered(board, entry.post.id) for entry in entries),
+        # Nobody waits for the answer to an ask whose author left.
+        open_asks=sum(
+            isinstance(entry.post, Ask) and not is_answered(board, entry.post.id) and not board.gone(entry.post.author)
+            for entry in entries
+        ),
         open_calls=sum(isinstance(entry.post, Call) and is_open_call(board, entry.post.id) for entry in entries),
         team=_team(board, opened, lines),
         builds_on_threads=_links(incoming),
@@ -201,6 +204,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         and entry.post.author != agent_id
         and entry.post.mentions != (PERSON,)
         and not is_answered(board, entry.post.id)
+        and not board.gone(entry.post.author)
     )
     open_calls = tuple(
         PostLine.of(entry)
@@ -230,11 +234,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         you=agent_id,
         how=how,
         agents=tuple(_agent_line(board, agent, working) for agent in others),
-        left=tuple(
-            LeftLine(id=entry.agent, name=joined.agent.name, by=entry.by, reason=entry.reason)
-            for entry in board.left
-            if (joined := board.agent(entry.agent))
-        ),
+        left=tuple(left_line(board, entry) for entry in board.left),
         answer=PostLine.of(proposed) if proposed else None,
         answer_standing=standing(board, proposed.post.id) if proposed else None,
         state=lab_state(board),
@@ -274,6 +274,7 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
     Return the asks that name the person and have no answer from the person yet, oldest first.
 
     Permission requests are asks too. An agent's answer leaves an ask open, because the asker waits for the person.
+    The ask of an agent that left is not among them: nobody waits for its answer.
     """
     return tuple(
         post_view(board, entry)
@@ -281,6 +282,7 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
         if isinstance(entry.post, Ask)
         and PERSON in entry.post.mentions
         and not is_answered(board, entry.post.id, by=PERSON)
+        and not board.gone(entry.post.author)
     )
 
 

@@ -205,7 +205,8 @@ class Member:
         """
         Return what happened since the agent last looked, once a post wakes it or `timeout` seconds pass.
 
-        Posts that don't wake the agent count toward the update's summary, but they don't end the wait.
+        Posts that don't wake the agent count toward the update's summary, but they don't end the wait. The wait
+        also ends when an agent that this agent wrote to leaves the lab.
         """
         self._check_not_blind()
         loop = asyncio.get_running_loop()
@@ -217,7 +218,7 @@ class Member:
                 raise UnknownAgent('This agent got a new invitation, so the token of this call is void.')
             news = update(self._lab.board, self.agent_id, self._seen)
             remaining = deadline - loop.time()
-            if news.posts or remaining <= 0:
+            if news.posts or news.left or remaining <= 0:
                 self._seen = news.seq
                 return news
             await self._lab.wait_for_change(news.seq, remaining)

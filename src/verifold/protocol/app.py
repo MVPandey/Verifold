@@ -72,6 +72,8 @@ class LabView(Record):
     """The post that says that the lab is done, while it stands."""
     close_agreed: int = 0
     """How many other agents agreed with it."""
+    close_among: int = 0
+    """Among how many agents its author and the agents that agreed count. Zero while no close stands."""
     settings: Settings = Settings()
     """The settings that the lab follows, such as what happens to the agents' processes when the person stops it."""
 

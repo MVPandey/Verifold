@@ -76,6 +76,7 @@ describe('the API client', () => {
     assert.equal(removal?.init.method, 'DELETE');
     assert.equal(removal?.init.body, undefined);
     assert.equal(read.agents[0]?.left, null);
+    assert.equal(read.close_among, 1);
   });
 
   it('turns a refusal into an error with the server reason', async () => {

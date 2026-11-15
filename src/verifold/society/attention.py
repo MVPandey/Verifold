@@ -12,6 +12,8 @@ may know the missing piece. A check is also for the agent that asked for the rer
 names nobody and replies to no post is for every agent. No post is for a blind checker, which reads nothing but its claim.
 No post is for an agent that left the lab.
 
+An agent that left the lab is news for the agents that wrote to it: the ones whose posts name it or reply to it.
+
 A post that is for an agent wakes it. The agent's news holds every post that it has not seen, and says which are for
 it. So an agent learns of the rest when it reads the board, and not before.
 """
@@ -19,9 +21,9 @@ it. So an agent learns of the rest when it reads the board, and not before.
 import re
 from functools import lru_cache
 
-from verifold.protocol.events import Posted
+from verifold.protocol.events import AgentLeft, Posted
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
-from verifold.protocol.join import MAX_NEWS, News, PostLine, Update
+from verifold.protocol.join import MAX_NEWS, LeftLine, News, PostLine, Update
 from verifold.protocol.posts import Ask, Call, Check, Close, Post
 from verifold.society.board import Board
 from verifold.society.lines import lines_of
@@ -95,6 +97,7 @@ def update(board: Board, agent_id: AgentId, after: int) -> Update:
             for entry in board.agents
             if after < entry.seq <= reach and entry.agent.id != agent_id and board.here(entry)
         ),
+        left=departures(board, agent_id, after, reach),
         ends_at=board.ends_at,
     )
 
@@ -114,6 +117,48 @@ def news(board: Board, agent_id: AgentId, after: int) -> News:
         more=len(woken) - len(shown),
         others=tuple(PostLine.of(entry) for entry in others[-MAX_NEWS:]),
         left_out=max(len(others) - MAX_NEWS, 0),
+        left=departures(board, agent_id, after, reach),
+    )
+
+
+def left_line(board: Board, left: AgentLeft) -> LeftLine:
+    """Return an agent that left as one line: who it is, who caused it, and the reason."""
+    joined = board.agent(left.agent)
+    return LeftLine(id=left.agent, name=joined.agent.name if joined else left.agent, by=left.by, reason=left.reason)
+
+
+def departures(board: Board, agent_id: AgentId, after: int, reach: int) -> tuple[LeftLine, ...]:
+    """
+    Return the agents that left after event `after`, up to event `reach`, and that an agent wrote to before.
+
+    An agent wrote to another when one of its posts names the other, in `mentions` or in its text, or replies to
+    one of the other's posts. So an agent that waits for an answer learns that none comes.
+    """
+    return tuple(
+        left_line(board, left)
+        for left in board.left
+        if after < left.seq <= reach and left.agent != agent_id and _wrote_to(board, agent_id, left)
+    )
+
+
+def gone_named(board: Board, post: Post) -> tuple[LeftLine, ...]:
+    """Return the agents that a post names in `mentions` or answers with `reply_to`, and that left the lab."""
+    answered = board.post(post.reply_to) if post.reply_to else None
+    named = dict.fromkeys((*post.mentions, *((answered.post.author,) if answered else ())))
+    return tuple(left_line(board, left) for agent in named if (left := board.gone(agent)))
+
+
+def _wrote_to(board: Board, agent_id: AgentId, left: AgentLeft) -> bool:
+    name = left_line(board, left).name
+    return any(
+        entry.post.author == agent_id
+        and entry.seq < left.seq
+        and (
+            left.agent in entry.post.mentions
+            or bool((answered := board.post(entry.post.reply_to or '')) and answered.post.author == left.agent)
+            or left.agent in _in_text(f'{entry.post.text}\n{entry.post.body}', ((left.agent, name),))
+        )
+        for entry in board.posts
     )
 
 

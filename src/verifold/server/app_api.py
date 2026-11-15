@@ -35,12 +35,12 @@ from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import AnswerView, FileText, PostLine, PostRequest, PostView, ThreadSummary, ThreadView
 from verifold.protocol.usage import Usage
 from verifold.server.activity import Activity
-from verifold.server.errors import LabExists, NoLab, ServerError
+from verifold.server.errors import LabExists, NoLab, ServerError, SetupRejected
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
-from verifold.society.lifecycle import lab_state
+from verifold.society.lifecycle import close_count, lab_state
 from verifold.society.lines import lines_of
 from verifold.society.standing import agreed, closing
 from verifold.society.views import answer_view, latest_report, needs_person, thread_summaries, thread_view
@@ -145,8 +145,11 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     async def remove_agent(agent_id: AgentId, reason: Reason = '') -> LabView:
         # The record is all that the removal writes. The agent's loop, its seat, and its token follow the record.
         running = current()
-        if running.board.agent(agent_id) is None:
+        joined = running.board.agent(agent_id)
+        if joined is None:
             raise NotFound(f'The lab has no agent with the ID {agent_id}.')
+        if running.board.gone(agent_id):
+            raise SetupRejected(f'{joined.agent.name} has left the lab already.')
         await running.leave(agent_id, PERSON, reason)
         return _lab_view(running.board, activity)
 
@@ -225,6 +228,7 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
         state=lab_state(board),
         close=PostLine.of(done) if done else None,
         close_agreed=len(agreed(board, done)) if done else 0,
+        close_among=close_count(board, done)[1] if done else 0,
         question=board.opened.question,
         opened_at=board.opened.at,
         seq=board.seq,

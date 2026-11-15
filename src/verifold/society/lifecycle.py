@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta
 
-from verifold.protocol.events import AlarmSet
+from verifold.protocol.events import AlarmSet, Posted
 from verifold.protocol.ids import AgentId
 from verifold.protocol.join import LabState
 from verifold.society.board import Board
@@ -20,21 +20,29 @@ def lab_state(board: Board) -> LabState:
     knows whether it came, so an invitation that nobody used does not keep the lab open. Its first post after the
     close does not change the count either, so a closed lab stays closed.
 
-    An agent that left is not one of the lab's agents, whenever it left. It does not count among them, and its
-    close or its agreement does not count behind the close. The close is the word of the agents that are in the
-    lab: an agent that is gone, or that the person removed, cannot stand behind what the others still work on. So
-    a lab whose remaining agents all stand behind a close is closed. A closed lab goes back to closing when an
-    agent that agreed leaves and the agents behind the close are no longer more than half of the rest.
+    An agent that left keeps the word that it gave. When it stood behind the close as it left, as the author or with
+    its agreement, it still counts: among the lab's agents and behind the close. So agents that finish, agree, and
+    leave do not open the lab again, and a close that every agent left behind is closed. An agent that left without
+    that word counts on neither side, because nobody can get its word any more. So a lab whose remaining agents
+    all stand behind a close is closed.
     """
     close = closing(board)
     if close is None:
         return 'open'
-    workers = sum(
-        not joined.agent.checks and board.came(joined, before=close.seq) and not board.gone(joined.agent.id)
+    behind, among = close_count(board, close)
+    return 'closed' if behind * 2 > among else 'closing'
+
+
+def close_count(board: Board, close: Posted) -> tuple[int, int]:
+    """Return how many agents stand behind a close, and among how many agents of the lab they count."""
+    behind = {close.post.author, *agreed(board, close)}
+    among = sum(
+        not joined.agent.checks
+        and board.came(joined, before=close.seq)
+        and (joined.agent.id in behind or not board.gone(joined.agent.id))
         for joined in board.agents
     )
-    behind = len(agreed(board, close)) + (not board.gone(close.post.author))
-    return 'closed' if behind * 2 > workers else 'closing'
+    return len(behind), among
 
 
 def pending_alarm(board: Board, agent_id: AgentId) -> AlarmSet | None:

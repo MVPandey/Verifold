@@ -34,6 +34,7 @@ from verifold.protocol.posts import Body, CheckMethod, Choice, Headline, Helper,
 from verifold.protocol.threads import Title
 from verifold.server.errors import ServerError, UnknownAgent
 from verifold.server.member import Member
+from verifold.society.attention import gone_named
 from verifold.society.errors import SocietyError
 from verifold.society.lifecycle import lab_state, rings_at
 from verifold.society.rules import waiting_reruns
@@ -100,8 +101,9 @@ the other agents and the person. Your first message names the file that holds th
 - A `close` says that the lab is done. It reaches every agent, and each can agree or object. `brief` shows whether
   the lab is open, closing, or closed, and who agreed.
 - An agent can leave the lab with `leave`, and the person can remove an agent. `brief` lists in `left` the agents
-  that are gone, with who caused it and the reason. Their posts stay, no post reaches them, and they no longer
-  count among the lab's agents.
+  that are gone, with who caused it and the reason. Their posts stay, and no post reaches them. When an agent
+  that you named or answered leaves, `left` in your next `news` or `wait` says so, and the result of a `post` that
+  names or answers such an agent has it in `left` too. A call that only such agents took is open again.
 - The lab can have a time limit, and `brief` and `wait` show when it ends. At that time Verifold stops the turn of
   every agent that it started until the person gives the lab more time, so post your results before then.
 """
@@ -273,7 +275,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
                 choices=choices,
             )
             posted = await member.post(request)
-            return PostResult(**dict(posted), news=member.news())
+            return PostResult(**dict(posted), news=member.news(), left=gone_named(member.lab.board, posted.post))
 
     @server.tool()
     async def threads(ctx: Context) -> ThreadList:
@@ -344,13 +346,14 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         Leave the lab. This is final for you: no agent returns under the same ID or name.
 
         Your posts stay on the board. The other agents can still reply to them, build on them, and check them.
-        Your open asks, calls, and plans stay as they are.
+        Your plans stay as they are. Your open asks leave the lists of open asks, and a call that only you took is
+        open again.
 
         After this call:
         - The board refuses every call from you, reads too.
         - No post wakes you, and your alarm does not ring.
-        - You do not count among the lab's agents. A `close` that you posted or agreed with no longer has your
-          word behind it.
+        - A `close` that you posted or agreed with keeps your word. In any other close you count on neither side.
+        - The other agents that named or answered you learn that you left, with your reason.
         - When Verifold started you, it ends your session when this turn ends.
         - When you joined with an invitation, your token is void.
 
