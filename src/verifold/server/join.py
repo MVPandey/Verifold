@@ -27,7 +27,6 @@ from verifold.protocol.agents import (
     About,
     ChosenName,
     Color,
-    Family,
     Label,
     Picture,
     Role,
@@ -169,17 +168,22 @@ a close stands or such a post went out in the minute before.
   its post. An `ask` from an agent there waits for the person in the app. The conversation takes no `proposal` and
   no `close`, and a post from the person there does not open a closed lab again. When the seat changes, the
   thread stays, and the person's posts there are for the new holder.
-- The coordinator can mark a post with `for_person: true`: the post carries what the person wants, in the
-  coordinator's words. The app shows the mark on the post, and on a thread that such a post opens. `for_person`
-  says whose wish a post is, and `to_lab` says who hears it. Where a post for the whole lab can stand, the board
-  marks a post for the person with `to_lab` too. The board refuses `for_person` from every other agent.
+- The coordinator can mark a post with `for_person: true`. The mark records that the coordinator says that the
+  post is on the person's behalf. The words are the coordinator's, and the post's author stays the coordinator:
+  a post of the person has `person` as its author. Each line of a post in `brief`, in the news, and in `wait` has
+  the mark in `for_person`, and the app shows it on the post and on a thread that such a post opens.
+  `for_person` says on whose behalf a post is, and `to_lab` says who hears it. Where a post for the whole lab can
+  stand, the board marks a post for the person with `to_lab` too. The board refuses `for_person` from every
+  other agent, and on a `proposal` and a `close`.
 - Five kinds of move are the person's alone: more time for the lab, the answer to another agent's permission
   request, one more agent or one fewer, a setting of the lab, and a revision of the question. The coordinator
   asks for one with `request`, and the person answers with yes or no. A yes makes the move. The person can switch
-  on a power for a kind of move, and `powers` in `brief` lists the powers that are on. A request for a move of
-  such a kind takes effect at once, and the record says that the coordinator made it. Every power is off until
-  the person switches it on, and every power is off again when the coordinator seat changes. No move stops the
-  lab, and no move changes a power or how Verifold handles permission requests.
+  on a power for a kind of move, and `powers` in `brief` lists the powers that are on. While the lab has time, a
+  request for a move of such a kind takes effect at once, and the record says that the coordinator made it.
+  After the lab's time ran out or the person stopped the lab, every request waits for the person. Every power is
+  off until the person switches it on, and every power is off again when the coordinator seat changes. A request
+  ends without an answer when the seat changes after it. No move stops the lab, and no move changes a power or
+  how Verifold handles permission requests.
 - The person can put a seat on call, and `brief` shows which agents are on call. No post for every agent is for
   an on-call agent: not the first post of a thread, an `ask` or a `call` that names nobody, or the person's post
   that names nobody. A name in a `plan`, a `message`, a `result`, or another post that is no `ask` and no `call`
@@ -320,9 +324,10 @@ carries the agent's name, and readers see the helper's name beside it.
 
 `conversation: true` puts the post in the conversation between the person and the coordinator, in place of
 `thread` and `new_thread`. The first such post opens that thread. A post from the person there is for the agent
-that holds the coordinator seat. `for_person: true` marks a post that the coordinator writes for the person. The
-board takes the mark from the agent that holds the coordinator seat only. In a thread for the whole lab, such a
-post that names nobody and replies to no post gets `to_lab` too.
+that holds the coordinator seat. `for_person: true` records that the coordinator says that the post is on the
+person's behalf. The board takes the mark from the agent that holds the coordinator seat only, and on no
+`proposal` and no `close`. In a thread for the whole lab, such a post that names nobody and replies to no post
+gets `to_lab` too.
 
 `text` is one headline of at most 1000 characters, and `body` holds the detail, up to 20000 characters. `files`
 names paths in your folder that back the post. Verifold commits your folder and pins each file to that commit, so a
@@ -472,25 +477,31 @@ takes it from the agent that holds the coordinator seat, and refuses every other
 - `permission`: the answer to the permission request `ask` of another agent's harness, while that request waits
   for the person. `option` is the harness's ID of one of its answers: `shown.ids` of the ask holds the IDs, in
   the order of its `choices`. Only an answer for this once counts. An answer that the harness remembers, and
-  Verifold's grant for every agent, stay with the person. So does every request of your own harness.
-- `add_agent`: one more agent. `harness` names its harness, and `model`, `effort`, `role`, `on_call`, and
-  `family` describe its seat as far as the call has them.
+  Verifold's grant for every agent, stay with the person. So does every request of your own harness. The
+  request ends when that permission request gets its answer or ends.
+- `add_agent`: one more agent. `harness` names its harness, and `model`, `effort`, and `on_call` describe its
+  seat as far as the call has them. `role` is a role that the coordinator gives the seat: the board and the app
+  show it as given by the coordinator. The seat has the model family of its harness and the lab's own mode. A
+  move states no family and no mode, and its seat is no coordinator seat and no reviewer seat.
 - `remove_agent`: the removal of `agent`, another agent of the lab. It is final for that agent.
 - `setting`: the value `value` for the lab's setting `setting`. `jobs.at_time_limit` takes `pause`, `stop`, or
-  `finish`, and `jobs.at_exit` takes `stop` or `keep`. The person's settings files stay as they are.
+  `finish`, and `jobs.at_exit` takes `stop` or `keep`. The person's settings files stay as they are. `finish` and
+  `keep` let processes run on after the lab stops or Verifold exits, so a request for one of them waits for the
+  person also while the power for settings is on.
 - `question`: a revision of the lab's question to the text in `question`. `note` says why, in one line.
 
 The request waits for the person, who answers it with yes or no in the app. A yes makes the move, and the record
 says that the move came from this request. The person's answer is a post that replies to the request, so it is a
-post for you. Without an answer, nothing changes. A request ends without an answer when its author holds the
-coordinator seat no longer.
+post for you. Without an answer, nothing changes. A request ends without an answer when the coordinator seat
+changes after it, also when its author holds the seat again later.
 
 The person can switch on a power for one kind of move: `time`, `permissions`, `agents`, `settings`, or
 `question`. `powers` in `brief` lists the powers that are on. While a power is on, a request for a move of that
 kind takes effect at once, and `decision` in the result says so. The record says that the coordinator made the
 move under that power, and the person's app lists it. Every power is off until the person switches it on, and
-every power is off again when the coordinator seat changes. A power gives time only to a lab whose time has not
-run out. No move stops the lab or ends it earlier, and no move changes a power or how Verifold handles
+every power is off again when the coordinator seat changes. A power covers a move only while the lab has time:
+after the lab's time ran out or the person stopped the lab, a request waits for the person, and the result has
+no `decision`. No move stops the lab or ends it earlier, and no move changes a power or how Verifold handles
 permission requests.
 """
 """Each tool's description, as every harness reads it. The module's note says what these texts may hold."""
@@ -700,7 +711,6 @@ def _request_tool(server: MCPServer, acting: Acting) -> None:
         effort: TypedId | None = None,
         role: Role | None = None,
         on_call: bool | None = None,
-        family: Family | None = None,
         setting: LabSetting | None = None,
         value: str | None = None,
         question: Question | None = None,
@@ -719,7 +729,6 @@ def _request_tool(server: MCPServer, acting: Acting) -> None:
                 effort=effort,
                 role=role,
                 on_call=on_call,
-                family=family,
                 setting=setting,
                 value=value,
                 question=question,

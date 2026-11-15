@@ -160,6 +160,8 @@ export interface AgentLeft {
   readonly reason: string;
   /** With `by` the person: the coordinator, when it removed the agent with the power that the person switched on. */
   readonly through?: string | null;
+  /** The coordinator's request that the removal came from, which holds the coordinator's reason. */
+  readonly request?: string | null;
 }
 
 /** The alarm that an agent set for itself. It stays until it rings. */
@@ -235,10 +237,14 @@ export interface AgentView {
 export interface QuestionVersion {
   readonly question: string;
   readonly at: string;
-  /** Why the person revised the question, or an empty text. */
+  /** Why the question was revised, in the words of the one who revised it, or an empty text. */
   readonly note: string;
-  /** The person's post that told the lab of the revision, or `null` for the first text. */
+  /** The post that told the lab of the revision, or `null` for the first text. */
   readonly post: string | null;
+  /** Who revised the question: `person`, or the coordinator under the power to revise it. */
+  readonly by?: string;
+  /** The coordinator's request that the revision came from, or `null` for the person's own revision. */
+  readonly request?: string | null;
 }
 
 export interface LabView {
@@ -498,7 +504,7 @@ export type Move =
   | { readonly type: 'time'; readonly minutes: number }
   /** `option` is the harness's own ID of one of its answers on the ask. */
   | { readonly type: 'permission'; readonly ask: string; readonly option: string }
-  | { readonly type: 'add_agent'; readonly seat: SavedChoice }
+  | { readonly type: 'add_agent'; readonly seat: AddSeat }
   | { readonly type: 'remove_agent'; readonly agent: string }
   | {
       readonly type: 'setting';
@@ -506,6 +512,19 @@ export type Move =
       readonly value: string;
     }
   | { readonly type: 'question'; readonly question: string; readonly note: string };
+
+/**
+ * The seat of the one agent that a move adds. It holds nothing else: no model family, no mode, no coordinator
+ * mark, no power, and no reviewer seat.
+ */
+export interface AddSeat {
+  readonly harness: string;
+  readonly model: string | null;
+  readonly effort: string | null;
+  readonly on_call: boolean;
+  /** A role that the coordinator gives the seat, or an empty string. It is the coordinator's word. */
+  readonly role: string;
+}
 
 /** The answer to a coordinator's request for a move: the person's yes or no, or the yes of a power that is on. */
 export interface RequestAnswered {
@@ -638,6 +657,11 @@ export interface PostView {
   readonly decision?: RequestAnswered | null;
   /** For a request for a move: whether it waits for the person's answer. */
   readonly waits?: boolean;
+  /**
+   * For a request for a move without an answer: why it waits for none. `seat`: the coordinator seat changed after
+   * it. `ask`: the permission request that it answers got its answer or ended. `null` while it waits.
+   */
+  readonly ended?: 'seat' | 'ask' | null;
 }
 
 /** One power of the coordinator as the person sees it. */

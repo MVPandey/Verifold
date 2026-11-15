@@ -14,6 +14,7 @@ from pathlib import Path
 
 from verifold.protocol.agents import Agent
 from verifold.protocol.events import AlarmSet
+from verifold.protocol.ids import PERSON
 from verifold.protocol.posts import Post
 from verifold.protocol.settings import AtTimeLimit
 from verifold.society.board import Board
@@ -106,8 +107,11 @@ def start_message(
         f'You are {agent.name} ({agent.id}) in a Verifold lab. {others}',
         BOARD,
     ]
-    if agent.given_role:
-        lines.append(f'The person gave your seat this role: {agent.given_role}')
+    given, giver = board.given_role(agent.id)
+    role = given or agent.given_role
+    if role:
+        who = 'The person' if giver == PERSON else f'{giver}, as the coordinator of the lab,'
+        lines.append(f'{who} gave your seat this role: {role}')
     if board.coordinator == agent.id:
         lines.append("You hold the lab's coordinator seat.")
     if board.on_call(agent.id):

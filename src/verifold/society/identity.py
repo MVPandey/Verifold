@@ -14,7 +14,7 @@ from verifold.protocol.ids import PERSON, AgentId
 from verifold.protocol.join import MAX_SEAT, Byline, PostLine, PostView
 from verifold.protocol.posts import MoveRequest
 from verifold.society.board import Board
-from verifold.society.coordinator import request_waits
+from verifold.society.coordinator import request_end, request_waits
 from verifold.society.labels import is_numbered, plain
 from verifold.society.standing import standing
 
@@ -104,4 +104,5 @@ def post_view(board: Board, entry: Posted) -> PostView:
         built_on_by=tuple(other.post.id for other in board.built_on(entry.post.id)),
         decision=board.answer_to(entry.post.id) if isinstance(entry.post, MoveRequest) else None,
         waits=request_waits(board, entry),
+        ended=None if board.answer_to(entry.post.id) else request_end(board, entry),
     )

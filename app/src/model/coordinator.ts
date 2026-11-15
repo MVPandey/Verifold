@@ -4,24 +4,26 @@ import type {
   ConversationView,
   Deed,
   HarnessOption,
+  LabView,
   Move,
   PostView,
   Power,
   PowerView,
 } from '../api/types.ts';
-import { authorName } from './agents.ts';
-import { clock } from './format.ts';
+import { authorName, labTotal } from './agents.ts';
+import { clock, dayClock } from './format.ts';
 import { AT_EXIT, AT_TIME_LIMIT } from './settings.ts';
 
 /** A tab of the panel for the coordinator. */
 export type Tab = 'talk' | 'powers' | 'log';
 
-/** What a move's sentences need from the lab. */
+/** What a move's words need from the lab. */
 export interface Around {
-  readonly agents: readonly AgentView[];
+  readonly lab: LabView;
   readonly harnesses: readonly HarnessOption[];
   /** The permission requests that the requests in the conversation name. */
   readonly asks: readonly PostView[];
+  readonly now: Date;
 }
 
 /** Return the agent that holds the coordinator seat and is in the lab, or `null`. */
@@ -29,15 +31,14 @@ export function coordinatorOf(agents: readonly AgentView[]): AgentView | null {
   return agents.find((view) => view.coordinator && view.left === null) ?? null;
 }
 
+function waitWords(waits: number): string {
+  return `${waits} ${waits === 1 ? 'waits' : 'wait'} for you`;
+}
+
 /** Return the name of each tab, with the number of posts that wait for the person on the first. */
 export function tabs(name: string, waits: number): readonly (readonly [Tab, string])[] {
   return [
-    [
-      'talk',
-      waits > 0
-        ? `Conversation (${waits} ${waits === 1 ? 'waits' : 'wait'} for you)`
-        : 'Conversation',
-    ],
+    ['talk', waits > 0 ? `Conversation (${waitWords(waits)})` : 'Conversation'],
     ['powers', `What ${name} may do`],
     ['log', 'Done for you'],
   ];
@@ -45,9 +46,7 @@ export function tabs(name: string, waits: number): readonly (readonly [Tab, stri
 
 /** Return the words on the button that opens the conversation. */
 export function talkLabel(name: string, waits: number): string {
-  return waits > 0
-    ? `Talk to ${name} (${waits} ${waits === 1 ? 'waits' : 'wait'} for you)`
-    : `Talk to ${name}`;
+  return waits > 0 ? `Talk to ${name} (${waitWords(waits)})` : `Talk to ${name}`;
 }
 
 /** The name of each power, and what the coordinator does with it. `what` takes the coordinator's name. */
@@ -56,7 +55,7 @@ export const POWER_WORDS: Readonly<
 > = {
   time: {
     name: 'Give the lab more time',
-    what: (name) => `${name} adds minutes before the lab’s time runs out.`,
+    what: (name) => `${name} adds minutes while the lab has time.`,
   },
   permissions: {
     name: 'Answer permission requests',
@@ -70,7 +69,7 @@ export const POWER_WORDS: Readonly<
   settings: {
     name: 'Change the lab’s settings',
     what: (name) =>
-      `${name} changes what happens to the agents’ processes at the time limit and when Verifold exits.`,
+      `${name} sets the agents’ processes to pause or to stop at the time limit, and to stop when Verifold exits. To let them run on after a stop, ${name} asks you.`,
   },
   question: {
     name: 'Revise the question',
@@ -94,67 +93,40 @@ export function pickedChoice(move: Move, asks: readonly PostView[]): string | nu
   return ask.choices[at] ?? null;
 }
 
-function askAuthor(move: Move, around: Around): string {
-  const ask =
-    move.type === 'permission' ? around.asks.find((item) => item.post.id === move.ask) : null;
-  return ask ? authorName(around.agents, ask.post.author) : 'an agent';
-}
-
-function settingWords(move: Move & { readonly type: 'setting' }): string {
-  const [subject, choices] =
-    move.key === 'jobs.at_time_limit'
-      ? ['At the time limit, for the agents’ processes', AT_TIME_LIMIT]
-      : ['When Verifold exits, for the agents’ processes', AT_EXIT];
-  const label = choices.find((choice) => choice.value === move.value)?.label ?? move.value;
-  return `${subject}: ${label}`;
-}
-
-function seatWords(move: Move & { readonly type: 'add_agent' }, around: Around): string {
-  const { seat } = move;
-  const parts = [
-    around.harnesses.find((option) => option.name === seat.harness)?.title ?? seat.harness,
-    seat.model,
-    seat.effort ? `${seat.effort} effort` : null,
-    seat.role ? `role: ${seat.role}` : null,
-    seat.on_call ? 'on call' : null,
-  ];
-  return parts.filter(Boolean).join(' · ');
-}
-
-/** Return what the coordinator asks for, as the heading of its request. */
-export function askLine(move: Move, around: Around): string {
+/**
+ * Return what the coordinator asks for, as the heading of its request.
+ *
+ * The app writes the sentence, and it holds no text of an agent or a harness: only the kind of the move and, for
+ * more time, its number of minutes. `details` gives the rest as labelled values.
+ */
+export function askLine(move: Move): string {
   switch (move.type) {
     case 'time':
       return `Asks you for ${move.minutes} more minutes`;
-    case 'permission': {
-      const choice = pickedChoice(move, around.asks);
-      const who = askAuthor(move, around);
-      return choice
-        ? `Asks you to answer “${choice}” to a permission request of ${who}`
-        : `Asks you to answer a permission request of ${who}`;
-    }
+    case 'permission':
+      return 'Asks you to answer a permission request of another agent';
     case 'add_agent':
-      return `Asks you to add an agent: ${seatWords(move, around)}`;
+      return 'Asks you to add one agent';
     case 'remove_agent':
-      return `Asks you to remove ${authorName(around.agents, move.agent)}`;
+      return 'Asks you to remove an agent';
     case 'setting':
-      return `Asks you to change a setting. ${settingWords(move)}`;
+      return 'Asks you to change a setting of the lab';
     case 'question':
       return 'Asks you to revise the question';
   }
 }
 
-/** Return the words on the button that says yes to a request. */
-export function yesLabel(move: Move, around: Around): string {
+/** Return the words on the button that says yes to a request. They hold no text of an agent or a harness. */
+export function yesLabel(move: Move): string {
   switch (move.type) {
     case 'time':
       return `Give ${move.minutes} min`;
     case 'permission':
-      return pickedChoice(move, around.asks) ?? 'Answer it so';
+      return 'Give this answer';
     case 'add_agent':
       return 'Add the agent';
     case 'remove_agent':
-      return `Remove ${authorName(around.agents, move.agent)}`;
+      return 'Remove the agent';
     case 'setting':
       return 'Change it';
     case 'question':
@@ -162,37 +134,149 @@ export function yesLabel(move: Move, around: Around): string {
   }
 }
 
-/** Return what a move did, in the past, for the log and for a request that a power decided. */
-export function doneLine(item: PostView, agent: string | null, around: Around): string {
+/** Return what a move did, in the past, as the app's own sentence. `details` gives the rest. */
+export function doneLine(item: PostView): string {
   if (item.post.kind !== 'request') return '';
   const { move } = item.post;
   switch (move.type) {
     case 'time':
       return `Gave the lab ${item.decision?.minutes ?? move.minutes} more minutes`;
-    case 'permission': {
-      const choice = pickedChoice(move, around.asks);
-      const who = askAuthor(move, around);
-      return choice
-        ? `Answered “${choice}” to a permission request of ${who}`
-        : `Answered a permission request of ${who}`;
-    }
+    case 'permission':
+      return 'Answered a permission request';
     case 'add_agent':
-      return `Added an agent: ${agent ? authorName(around.agents, agent) : seatWords(move, around)}`;
+      return 'Added an agent';
     case 'remove_agent':
-      return `Removed ${authorName(around.agents, move.agent)}`;
+      return 'Removed an agent';
     case 'setting':
-      return `Changed a setting. ${settingWords(move)}`;
+      return 'Changed a setting of the lab';
     case 'question':
       return 'Revised the question';
   }
 }
 
+/**
+ * One field of a move: the app's label, and the value. `theirs` marks a value that an agent or a harness wrote,
+ * which the page shows in a box of its own and never inside a sentence of the app.
+ */
+export interface Detail {
+  readonly label: string;
+  readonly value: string;
+  readonly theirs?: boolean;
+}
+
+const SETTINGS = {
+  'jobs.at_time_limit': {
+    label: 'The agents’ processes at the time limit, and when you stop the lab',
+    choices: AT_TIME_LIMIT,
+  },
+  'jobs.at_exit': { label: 'The agents’ processes when Verifold exits', choices: AT_EXIT },
+} as const;
+
+/** Return when the lab would end with `minutes` more: after its end, or after now when the end has passed. */
+export function newEnd(lab: LabView, minutes: number, now: Date): Date | null {
+  if (lab.ends_at === null) return null;
+  const from = Math.max(new Date(lab.ends_at).getTime(), now.getTime());
+  return new Date(from + minutes * 60_000);
+}
+
+/**
+ * Return every field of a move as a labelled value, in the app's words. A request shows them all, so the person
+ * sees the whole of what a yes does. `added` is the agent that the move added, once it did.
+ */
+export function details(
+  move: Move,
+  around: Around,
+  added: string | null = null,
+): readonly Detail[] {
+  const { lab, now } = around;
+  const name = (id: string): string => authorName(lab.agents, id);
+  switch (move.type) {
+    case 'time': {
+      const end = newEnd(lab, move.minutes, now);
+      return [
+        ...(lab.ends_at === null
+          ? []
+          : [{ label: 'The lab ends now at', value: dayClock(lab.ends_at, now) }]),
+        ...(end === null
+          ? []
+          : [{ label: 'With these minutes it ends at', value: dayClock(end.toISOString(), now) }]),
+        { label: 'The lab’s cost so far', value: labTotal(lab.agents) },
+      ];
+    }
+    case 'permission': {
+      const ask = around.asks.find((item) => item.post.id === move.ask);
+      const choice = pickedChoice(move, around.asks);
+      return [
+        {
+          label: 'The agent that asks for the permission',
+          value: ask ? name(ask.post.author) : 'Not known',
+          theirs: ask !== undefined,
+        },
+        {
+          label: 'The answer that the coordinator would give',
+          value: choice ?? move.option,
+          theirs: true,
+        },
+        { label: 'How long the answer holds', value: 'For this one time' },
+      ];
+    }
+    case 'add_agent': {
+      const { seat } = move;
+      const harness = around.harnesses.find((option) => option.name === seat.harness);
+      return [
+        { label: 'Harness', value: harness?.title ?? seat.harness, theirs: harness === undefined },
+        seat.model
+          ? { label: 'Model', value: seat.model, theirs: true }
+          : { label: 'Model', value: 'The harness’s default' },
+        seat.effort
+          ? { label: 'Effort', value: seat.effort, theirs: true }
+          : { label: 'Effort', value: 'The harness’s default' },
+        { label: 'On call', value: seat.on_call ? 'Yes. Only a post for it wakes it.' : 'No' },
+        seat.role
+          ? { label: 'Role, given by the coordinator', value: seat.role, theirs: true }
+          : { label: 'Role', value: 'None' },
+        { label: 'Model family', value: harness ? harness.family : 'The family of its harness' },
+        { label: 'Mode', value: 'As the lab’s other agents' },
+        ...(added ? [{ label: 'The agent that joined', value: name(added), theirs: true }] : []),
+      ];
+    }
+    case 'remove_agent':
+      return [
+        { label: 'The agent to remove', value: name(move.agent), theirs: true },
+        { label: 'For how long', value: 'For good. Its posts stay.' },
+      ];
+    case 'setting': {
+      const setting = SETTINGS[move.key];
+      const now_ = setting.choices.find(
+        (choice) =>
+          choice.value ===
+          lab.settings.jobs[move.key === 'jobs.at_exit' ? 'at_exit' : 'at_time_limit'],
+      );
+      const next = setting.choices.find((choice) => choice.value === move.value);
+      return [
+        { label: 'Setting', value: setting.label },
+        {
+          label: 'New value',
+          value: next ? `${next.label}. ${next.detail}` : move.value,
+          theirs: next === undefined,
+        },
+        { label: 'The lab’s value now', value: now_?.label ?? 'Not known' },
+      ];
+    }
+    case 'question':
+      return [
+        { label: 'The new question', value: move.question, theirs: true },
+        ...(move.note ? [{ label: 'The coordinator’s note', value: move.note, theirs: true }] : []),
+      ];
+  }
+}
+
 /** Return who decided a move, as the log says it under the move. */
-export function decidedLine(item: PostView, around: Around): string {
+export function decidedLine(item: PostView): string {
   const decision = item.decision;
   if (item.post.kind !== 'request' || !decision) return '';
   if (decision.by === PERSON) return 'You said yes.';
-  return `${authorName(around.agents, decision.by)} did it with the power “${POWER_WORDS[powerOf(item.post.move)].name}”.`;
+  return `The coordinator did it with the power “${POWER_WORDS[powerOf(item.post.move)].name}”.`;
 }
 
 /** Return the power that covers a move, as `power_of` in the server's `protocol/moves.py`. */
@@ -224,12 +308,19 @@ export function undoLabel(deed: Deed): string | null {
 /** How a request stands in the conversation. */
 export type RequestState = 'waits' | 'done' | 'yes' | 'no' | 'ended';
 
-/** Return how a request stands: it waits, a power made its move, the person said yes or no, or it ended with the seat. */
+/** Return how a request stands: it waits, a power made its move, the person said yes or no, or it ended. */
 export function requestState(item: PostView): RequestState {
   const decision = item.decision;
   if (!decision) return item.waits ? 'waits' : 'ended';
   if (!decision.yes) return 'no';
   return decision.by === PERSON ? 'yes' : 'done';
+}
+
+/** Return why a request ended without an answer, as one sentence. */
+export function endedLine(item: PostView): string {
+  return item.ended === 'ask'
+    ? 'This request ended, because the permission request got its answer or ended.'
+    : 'This request ended when the coordinator seat changed.';
 }
 
 /** Return the deed of a request, or `null` when the request made no move. */

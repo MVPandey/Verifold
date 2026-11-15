@@ -48,6 +48,7 @@ from verifold.protocol.app import (
 from verifold.protocol.events import Reason, RerunRequested
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import AnswerView, FileText, PostRequest, PostView, ThreadSummary, ThreadView
+from verifold.protocol.moves import AddSeat
 from verifold.protocol.usage import Usage
 from verifold.server.activity import Activity
 from verifold.server.conversation import conversation_view
@@ -123,8 +124,12 @@ class Host(Protocol):
         """Open the folder where the lab's agents work, or one agent's folder, and return where it is."""
         ...
 
-    async def add_agents(self, choice: AgentChoice, first: tuple[Build, ...] = ()) -> None:
-        """Add the agents of one seat to the lab that runs, and start them. The record takes `first` with the first one."""
+    async def add_agents(self, choice: AgentChoice) -> None:
+        """Add the agents of one seat to the lab that runs, and start them."""
+        ...
+
+    async def add_seat(self, seat: AddSeat, first: tuple[Build, ...], asked_by: AgentId) -> None:
+        """Add the one agent of a seat that a coordinator's move describes. The record takes `first` with it."""
         ...
 
     async def change_seat(self, agent_id: AgentId, change: SeatChange) -> None:
@@ -309,7 +314,7 @@ def _coordinator_routes(api: FastAPI, host: Host, authorized: params.Depends) ->
     async def answer_request(post_id: PostId, answer: RequestAnswer) -> ConversationView:
         # A yes makes the move as the person's own: the same events that the person's own move records.
         lab = _lab(host)
-        await lab.answer_request(post_id, yes=answer.yes, minutes=answer.minutes, adds=host.add_agents)
+        await lab.answer_request(post_id, yes=answer.yes, minutes=answer.minutes, adds=host.add_seat)
         return conversation_view(lab.board)
 
     @api.post('/requests/{post_id}/minutes', dependencies=[authorized])

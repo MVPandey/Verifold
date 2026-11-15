@@ -11,7 +11,7 @@ from typing import Annotated, Literal, Self, assert_never
 
 from pydantic import AfterValidator, Field, StringConstraints, model_validator
 
-from verifold.protocol.agents import AgentChoice, Power, ValueId, one_line
+from verifold.protocol.agents import Label, Power, Role, TypedId, ValueId, one_line
 from verifold.protocol.ids import AgentId, PostId
 from verifold.protocol.record import Record
 from verifold.protocol.settings import MAX_MINUTES, JobSettings
@@ -48,17 +48,31 @@ class PermissionMove(Record):
     option: ValueId
 
 
+class AddSeat(Record):
+    """
+    The seat of the one agent that a move adds: its harness, its model, its effort, and whether it is on call.
+
+    The seat holds nothing else. It states no model family, because the family decides whether a blind rerun
+    counts as one by another family. It names no mode of the harness, and it is not the coordinator's seat, has no
+    power, and is no reviewer seat. Those stay with the person.
+    """
+
+    harness: Label
+    model: TypedId | None = None
+    effort: TypedId | None = None
+    on_call: bool = False
+    role: Role = ''
+    """
+    A role that the coordinator gives the seat, as one line. The record keeps it as the coordinator's word, never
+    as the person's.
+    """
+
+
 class AddMove(Record):
     """One more agent for the lab, in the seat that the move describes."""
 
     type: Literal['add_agent'] = 'add_agent'
-    seat: AgentChoice
-
-    @model_validator(mode='after')
-    def _one_plain_seat(self) -> Self:
-        if self.seat.count != 1 or self.seat.coordinator:
-            raise ValueError('A move adds one agent, and the seat is not the seat of the coordinator.')
-        return self
+    seat: AddSeat
 
 
 class RemoveMove(Record):

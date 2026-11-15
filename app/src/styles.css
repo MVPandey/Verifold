@@ -2897,6 +2897,43 @@ body.with-panel {
   letter-spacing: -0.01em;
   overflow-wrap: anywhere;
 }
+.k-fields {
+  margin: 10px 0 0;
+}
+.k-fields div {
+  margin-top: 8px;
+}
+.k-fields dt,
+.k-label {
+  margin: 12px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.k-fields dt {
+  margin: 0;
+}
+.k-fields dd {
+  margin: 2px 0 0;
+  font-size: 14.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+/* A value that an agent or a harness wrote, and the coordinator's reason, each in a box of its own */
+.k-fields dd.theirs,
+.k-reason {
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--line2);
+}
+.k-reason .k-text {
+  margin: 0;
+}
+.k-say.other {
+  opacity: 0.85;
+}
 .k-did,
 .k-note {
   margin: 10px 0 0;

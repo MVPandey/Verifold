@@ -9,6 +9,7 @@ import type {
   ConversationView,
   Deed,
   HarnessOption,
+  LabView,
   PostView,
   Power,
   ThreadSummary,
@@ -20,7 +21,9 @@ import {
   coordinatorOf,
   decidedLine,
   deedOf,
+  details,
   doneLine,
+  endedLine,
   minutesOf,
   powerLine,
   requestState,
@@ -29,13 +32,13 @@ import {
   undoLabel,
   yesLabel,
 } from '../model/coordinator.ts';
-import type { Around, Tab } from '../model/coordinator.ts';
+import type { Around, Detail, Tab } from '../model/coordinator.ts';
 import { clock } from '../model/format.ts';
 import { personAnswer, split } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import type { PageProps } from './hooks.ts';
 import { Words } from './Markdown.tsx';
-import { Exact, HarnessAsk } from './parts.tsx';
+import { HarnessAsk } from './parts.tsx';
 import { Name, Who } from './Picture.tsx';
 
 const NO_VIEW: ConversationView = {
@@ -102,9 +105,8 @@ export function CoordinatorSeat(props: PageProps & { readonly start?: Tab }): Re
           api={api}
           view={view}
           holder={holder}
-          agents={data.lab.agents}
+          lab={data.lab}
           harnesses={data.setup?.harnesses ?? []}
-          resting={data.lab.out_of_time || data.lab.state === 'closed'}
           now={props.now}
           tab={tab}
           onTab={setTab}
@@ -120,35 +122,36 @@ export function Panel(props: {
   readonly api: Api;
   readonly view: ConversationView;
   readonly holder: AgentView;
-  readonly agents: readonly AgentView[];
+  readonly lab: LabView;
   readonly harnesses: readonly HarnessOption[];
-  /** Whether the lab is out of time or closed, so that no agent works. */
-  readonly resting: boolean;
   readonly now: Date;
   readonly tab: Tab;
   readonly onTab: (tab: Tab | null) => void;
   readonly reload: () => void;
 }): ReactElement {
-  const { view, holder, tab } = props;
+  const { view, holder, tab, lab } = props;
   const name = holder.agent.name;
+  // Out of time or closed, no agent works, and the line under the name says so.
+  const resting = lab.out_of_time || lab.state === 'closed';
   const shared: Shared = {
     api: props.api,
     view,
-    agents: props.agents,
+    lab,
     harnesses: props.harnesses,
     asks: view.asks,
+    now: props.now,
     reload: props.reload,
   };
   return (
     <aside className="k-panel" aria-label={`${name}, the coordinator`}>
       <header>
-        <Who agents={props.agents} id={holder.agent.id} size={38} />
+        <Who agents={lab.agents} id={holder.agent.id} size={38} />
         <div>
           <p className="k-title">
             <Name view={holder} />
             <span className="i-seat coord">Coordinator</span>
           </p>
-          <p className="k-prov">{memberLine(holder, props.resting, props.now).text}</p>
+          <p className="k-prov">{memberLine(holder, resting, props.now).text}</p>
         </div>
         <button
           type="button"
@@ -217,12 +220,18 @@ function Say(props: Shared & { readonly item: PostView }): ReactElement {
   const { item } = props;
   const { post, at } = item;
   const mine = post.author === PERSON;
+  // Any agent can post in this thread. Only the coordinator's posts are the coordinator's side of the talk.
+  const other = !mine && post.author !== props.view.coordinator;
   const waits = props.view.waits.includes(post.id);
   const boxed = post.kind === 'request' || (post.kind === 'ask' && waits);
   return (
-    <li id={`k-${post.id}`} className={`k-say${mine ? ' you' : ''}${boxed ? ' ask' : ''}`}>
+    <li
+      id={`k-${post.id}`}
+      className={`k-say${mine ? ' you' : ''}${boxed ? ' ask' : ''}${other ? ' other' : ''}`}
+    >
       <p className="k-who">
-        <b>{mine ? 'You' : authorName(props.agents, post.author)}</b>
+        <b>{mine ? 'You' : authorName(props.lab.agents, post.author)}</b>
+        {other ? <span className="f-tag">not the coordinator</span> : null}
         <time dateTime={at}>{clock(at)}</time>
       </p>
       {post.kind === 'request' ? (
@@ -247,11 +256,27 @@ function Say(props: Shared & { readonly item: PostView }): ReactElement {
   );
 }
 
+/** The fields of a move as labelled values. A value that an agent or a harness wrote stands in a box of its own. */
+function Fields(props: { readonly details: readonly Detail[] }): ReactElement {
+  return (
+    <dl className="k-fields">
+      {props.details.map((detail) => (
+        <div key={detail.label}>
+          <dt>{detail.label}</dt>
+          <dd className={detail.theirs ? 'theirs' : undefined}>{detail.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 /**
- * A request of the coordinator for a move: what it asks for, its reason, what the move holds, and the answers.
+ * A request of the coordinator for a move: what it asks for, every field of the move, the coordinator's reason,
+ * and the answers.
  *
- * The app writes the heading from the move's fields. The coordinator's own words follow it as text. A command
- * shows only in the boxes of the permission request that the move names.
+ * The app writes the heading and the labels. Each value that an agent or a harness wrote stands in a box of its
+ * own under its label, and so does the coordinator's reason, so none of it reads as the app's sentence or as the
+ * person's. A command shows only in the boxes of the permission request that the move names.
  */
 export function RequestBox(props: Shared & { readonly item: PostView }): ReactElement | null {
   const { item, view } = props;
@@ -265,18 +290,16 @@ export function RequestBox(props: Shared & { readonly item: PostView }): ReactEl
   const deed = deedOf(view, post.id);
   return (
     <>
-      <p className="k-ask-head">{askLine(move, props)}</p>
-      <p className="k-text">{post.text}</p>
-      {post.body ? <Words text={post.body} /> : null}
-      {move.type === 'question' ? (
-        <>
-          <Exact label="The new question" text={move.question} />
-          {move.note ? <p className="k-note">Why: {move.note}</p> : null}
-        </>
-      ) : null}
+      <p className="k-ask-head">{askLine(move)}</p>
+      <Fields details={details(move, props, deed?.agent ?? null)} />
+      <p className="k-label">The coordinator’s reason</p>
+      <div className="k-reason">
+        <p className="k-text">{post.text}</p>
+        {post.body ? <Words text={post.body} /> : null}
+      </div>
       {asked && shown ? (
         <>
-          <HarnessAsk shown={shown} name={authorName(props.agents, asked.post.author)} />
+          <HarnessAsk shown={shown} name={authorName(props.lab.agents, asked.post.author)} />
           <p className="k-note">
             <a href={href({ page: 'thread', id: asked.post.thread, post: asked.post.id })}>
               See the request in its thread
@@ -288,14 +311,14 @@ export function RequestBox(props: Shared & { readonly item: PostView }): ReactEl
       {state === 'waits' ? (
         <Decide {...props} item={item} />
       ) : state === 'ended' ? (
-        <p className="k-did">This request ended when the coordinator seat changed.</p>
+        <p className="k-did">{endedLine(item)}</p>
       ) : state === 'no' ? (
         <p className="k-did">You said: not now.</p>
       ) : (
         <>
           <p className="k-did">
-            <span className="f-mark fm-good" aria-hidden="true" />{' '}
-            {doneLine(item, deed?.agent ?? null, props)}. {decidedLine(item, props)}
+            <span className="f-mark fm-good" aria-hidden="true" /> {doneLine(item)}.{' '}
+            {decidedLine(item)}
           </p>
           {deed ? <Undo {...props} deed={deed} /> : null}
         </>
@@ -338,7 +361,7 @@ function Decide(props: Shared & { readonly item: PostView }): ReactElement | nul
             answer(true);
           }}
         >
-          {yesLabel(move, props)}
+          {yesLabel(move)}
         </button>
         {move.type === 'time' && other === null ? (
           <button
@@ -423,9 +446,7 @@ function Undo(props: Shared & { readonly deed: Deed }): ReactElement | null {
       <p className="k-buttons">
         {agent && confirming ? (
           <>
-            <span>
-              Remove {authorName(props.agents, agent)} for good? Its posts stay on the board.
-            </span>
+            <span>Remove this agent for good? Its posts stay on the board.</span>
             <button type="button" disabled={busy} onClick={undo}>
               Remove
             </button>
@@ -594,8 +615,9 @@ function Powers(props: Shared & { readonly name: string }): ReactElement {
   return (
     <div className="k-powers">
       <p className="k-lede">
-        {name} asks you before each of these. Switch one on, and {name} does it without asking. Each
-        use shows under “Done for you”.
+        {name} asks you before each of these. Switch one on, and {name} does it without asking while
+        the lab has time. After the lab’s time ran out, or after you stopped the lab, {name} asks
+        you again. Each use shows under “Done for you”.
       </p>
       <ul>
         {props.view.powers.map((power) => {
@@ -650,8 +672,11 @@ function Log(props: Shared): ReactElement {
           <li key={deed.request.post.id}>
             <time dateTime={at}>{clock(at)}</time>
             <div>
-              <p>{doneLine(deed.request, deed.agent, props)}</p>
-              <span className="k-by">{decidedLine(deed.request, props)}</span>
+              <p>{doneLine(deed.request)}</p>
+              <span className="k-by">{decidedLine(deed.request)}</span>
+              {deed.request.post.kind === 'request' ? (
+                <Fields details={details(deed.request.post.move, props, deed.agent)} />
+              ) : null}
               <Undo {...props} deed={deed} />
             </div>
           </li>
@@ -673,9 +698,17 @@ export function OpenedForYou(props: {
   );
 }
 
-/** The mark on a post that the coordinator wrote for the person. */
-export function ForYou(props: { readonly marked: boolean | undefined }): ReactElement | null {
-  return props.marked ? <span className="k-for">for you, through the coordinator</span> : null;
+/**
+ * The mark on a post that the coordinator posted on the person's behalf. The words of the post are the
+ * coordinator's, so the mark names who posted it.
+ */
+export function ForYou(props: {
+  readonly marked: boolean | undefined;
+  readonly agents: readonly AgentView[];
+  readonly author: string;
+}): ReactElement | null {
+  if (!props.marked) return null;
+  return <span className="k-for">posted for you by {authorName(props.agents, props.author)}</span>;
 }
 
 /** A request of the coordinator on the Needs you page, with its answers. */
@@ -694,9 +727,10 @@ export function RequestNeed(props: PageProps & { readonly item: PostView }): Rea
         <RequestBox
           api={api}
           view={view}
-          agents={data.lab.agents}
+          lab={data.lab}
           harnesses={data.setup?.harnesses ?? []}
           asks={view.asks}
+          now={props.now}
           reload={data.reload}
           item={item}
         />

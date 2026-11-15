@@ -1767,11 +1767,15 @@ describe('an agent’s picture', () => {
     }
   });
 
-  it('shows a dashed outline with the seat’s number for an agent that chose none', () => {
+  it('shows a dashed outline with the number of the agent’s ID for an agent that chose none', () => {
+    // The number at the end of the seat's label is not it: the agent's ID is unique in the lab.
     const html = draw({ picture: null, seat: 'Codex · gpt-6.1-sol 2' });
     assert.ok(html.includes('<svg class="i-pic none"'));
-    assert.ok(html.includes('<text x="12" y="16" text-anchor="middle">2</text>'));
-    assert.ok(draw({ picture: null }).includes('>1</text>'));
+    assert.ok(html.includes('<text x="12" y="16" text-anchor="middle">1</text>'));
+    const third = renderToStaticMarkup(
+      <Mark view={agentView('agent-3', { picture: null, seat: 'Codex · 6 Astra' })} />,
+    );
+    assert.ok(third.includes('>3</text>'));
   });
 
   it('is an outline on call, gray after the agent left, and has a dot in a turn or while it waits for the person', () => {

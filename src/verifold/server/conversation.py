@@ -19,7 +19,12 @@ def conversation_view(board: Board) -> ConversationView:
     return ConversationView(
         coordinator=board.coordinator,
         thread=thread,
-        waits=tuple(item.post.id for item in needs_person(board) if item.post.thread == talk),
+        # Another agent's ask to the person there stays on the Needs you page, as its asks in any thread do.
+        waits=tuple(
+            item.post.id
+            for item in needs_person(board)
+            if item.post.thread == talk and item.post.author == board.coordinator
+        ),
         asks=tuple(post_view(board, entry) for entry in board.posts if entry.post.id in asked),
         powers=_powers(board),
         deeds=_deeds(board),

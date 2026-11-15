@@ -67,6 +67,11 @@ class QuestionRevised(EventBase):
     Who revised the question: the person, or the lab's coordinator while the person's power to revise the question
     is on. The person's is the default, and it is what a record from before this field holds.
     """
+    request: PostId | None = None
+    """
+    The coordinator's request that the revision came from: the person said yes to it, or the power decided it.
+    `None` for a revision that the person made by themselves.
+    """
 
 
 type Reason = Annotated[str, AfterValidator(one_line), StringConstraints(max_length=200)]
@@ -148,6 +153,11 @@ class AgentLeft(EventBase):
     """
     With `by` the person: the lab's coordinator, when it removed the agent with the power that the person switched
     on. `None` when the person removed the agent, also with a yes to a request of the coordinator.
+    """
+    request: PostId | None = None
+    """
+    The coordinator's request that the removal came from: the person said yes to it, or the power decided it. The
+    request holds the coordinator's reason, and `reason` stays the word of the one in `by`.
     """
 
 

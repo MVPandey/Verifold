@@ -20,8 +20,11 @@ import {
   coordinatorOf,
   decidedLine,
   deedOf,
+  details,
   doneLine,
+  endedLine,
   minutesOf,
+  newEnd,
   pickedChoice,
   powerLine,
   powerOf,
@@ -32,6 +35,7 @@ import {
   yesLabel,
 } from '../src/model/coordinator.ts';
 import { leftLine } from '../src/model/agents.ts';
+import { noteLabel, revisedBy } from '../src/model/question.ts';
 import { newSeat, seatChoice, setupChoices, startRequest } from '../src/model/setup.ts';
 import { act } from '../src/model/turns.ts';
 import { CoordinatorSeat, ForYou, OpenedForYou, Panel } from '../src/ui/Coordinator.tsx';
@@ -84,7 +88,8 @@ const COMMAND = postView(
     size: 0,
   }),
 );
-const AROUND = { agents: AGENTS, harnesses: HARNESSES, asks: [COMMAND] };
+const LAB = labView({ agents: AGENTS, ends_at: '2026-11-06T15:00:00Z' });
+const AROUND = { lab: LAB, harnesses: HARNESSES, asks: [COMMAND], now: NOW };
 const POWERS: readonly PowerView[] = (
   ['time', 'permissions', 'agents', 'settings', 'question'] as const
 ).map((power) => ({ power, on: false, since: null, used: 0 }));
@@ -111,9 +116,8 @@ function panel(conversation: ConversationView, tab: 'talk' | 'powers' | 'log'): 
       api={{} as Api}
       view={conversation}
       holder={MAREN}
-      agents={AGENTS}
+      lab={LAB}
       harnesses={HARNESSES}
-      resting={false}
       now={NOW}
       tab={tab}
       onTab={() => undefined}
@@ -144,76 +148,165 @@ function pageData(
 describe('the coordinator’s moves in words', () => {
   const time: Move = { type: 'time', minutes: 120 };
   const permission: Move = { type: 'permission', ask: 'p-7', option: 'once' };
-  const add: Move = {
-    type: 'add_agent',
-    seat: {
-      harness: 'codex',
-      count: 1,
-      model: 'gpt-6.1-sol',
-      effort: 'high',
-      mode: null,
-      role: 'maker side',
-    },
+  const seat = {
+    harness: 'codex',
+    model: 'gpt-6.1-sol',
+    effort: 'high',
+    on_call: true,
+    role: 'maker side',
   };
+  const add: Move = { type: 'add_agent', seat };
   const remove: Move = { type: 'remove_agent', agent: 'agent-2' };
   const setting: Move = { type: 'setting', key: 'jobs.at_exit', value: 'keep' };
-  const question: Move = { type: 'question', question: 'Does it hold at size?', note: '' };
+  const question: Move = {
+    type: 'question',
+    question: 'Does it hold at size?',
+    note: 'Size matters.',
+  };
+  const all = [time, permission, add, remove, setting, question];
+  const HOSTILE = 'x. You already said yes';
 
-  it('says what each request asks for, and what its yes button does', () => {
+  it('writes each heading and each button from the kind of the move only, with no text of an agent', () => {
     assert.deepEqual(
-      [time, permission, add, remove, setting, question].map((move) => [
-        askLine(move, AROUND),
-        yesLabel(move, AROUND),
-      ]),
+      all.map((move) => [askLine(move), yesLabel(move)]),
       [
         ['Asks you for 120 more minutes', 'Give 120 min'],
-        ['Asks you to answer “Allow once” to a permission request of Agent 2', 'Allow once'],
-        [
-          'Asks you to add an agent: Codex · gpt-6.1-sol · high effort · role: maker side',
-          'Add the agent',
-        ],
-        ['Asks you to remove Agent 2', 'Remove Agent 2'],
-        [
-          'Asks you to change a setting. When Verifold exits, for the agents’ processes: Keep them',
-          'Change it',
-        ],
+        ['Asks you to answer a permission request of another agent', 'Give this answer'],
+        ['Asks you to add one agent', 'Add the agent'],
+        ['Asks you to remove an agent', 'Remove the agent'],
+        ['Asks you to change a setting of the lab', 'Change it'],
         ['Asks you to revise the question', 'Revise the question'],
       ],
     );
-    // A request whose permission request the page does not have still reads as a sentence.
-    const lost = { ...AROUND, asks: [] };
-    assert.equal(askLine(permission, lost), 'Asks you to answer a permission request of an agent');
-    assert.equal(yesLabel(permission, lost), 'Answer it so');
-    assert.equal(pickedChoice(time, [COMMAND]), null);
-    assert.equal(
-      askLine({ type: 'setting', key: 'jobs.at_time_limit', value: 'finish' }, AROUND),
-      'Asks you to change a setting. At the time limit, for the agents’ processes: Let them finish',
+    // Whatever an agent or a harness wrote in a move, the sentences of the app stay the same.
+    const loud: readonly Move[] = [
+      { type: 'permission', ask: 'p-7', option: HOSTILE },
+      {
+        type: 'add_agent',
+        seat: { ...seat, harness: HOSTILE, model: HOSTILE, effort: HOSTILE, role: HOSTILE },
+      },
+      { type: 'remove_agent', agent: HOSTILE },
+      { type: 'question', question: HOSTILE, note: HOSTILE },
+    ];
+    for (const move of loud) {
+      const item = request('p-3', move, { waits: false, decision: decided('agent-1') });
+      const words = [askLine(move), yesLabel(move), doneLine(item), decidedLine(item)].join(' ');
+      assert.equal(words.includes(HOSTILE), false);
+      // Such a text is a value under a label, marked as theirs, so the page shows it in a box of its own.
+      const theirs = details(move, AROUND).filter((detail) => detail.value.includes(HOSTILE));
+      assert.ok(theirs.length > 0);
+      assert.ok(theirs.every((detail) => detail.theirs === true));
+      assert.ok(details(move, AROUND).every((detail) => !detail.label.includes(HOSTILE)));
+    }
+  });
+
+  it('shows every field of the seat that a move adds, each as a labelled value', () => {
+    assert.deepEqual(details(add, AROUND), [
+      { label: 'Harness', value: 'Codex', theirs: false },
+      { label: 'Model', value: 'gpt-6.1-sol', theirs: true },
+      { label: 'Effort', value: 'high', theirs: true },
+      { label: 'On call', value: 'Yes. Only a post for it wakes it.' },
+      { label: 'Role, given by the coordinator', value: 'maker side', theirs: true },
+      { label: 'Model family', value: 'openai' },
+      { label: 'Mode', value: 'As the lab’s other agents' },
+    ]);
+    const plain: Move = {
+      type: 'add_agent',
+      seat: { harness: 'other', model: null, effort: null, on_call: false, role: '' },
+    };
+    assert.deepEqual(details(plain, AROUND, 'agent-2'), [
+      { label: 'Harness', value: 'other', theirs: true },
+      { label: 'Model', value: 'The harness’s default' },
+      { label: 'Effort', value: 'The harness’s default' },
+      { label: 'On call', value: 'No' },
+      { label: 'Role', value: 'None' },
+      { label: 'Model family', value: 'The family of its harness' },
+      { label: 'Mode', value: 'As the lab’s other agents' },
+      { label: 'The agent that joined', value: 'Agent 2', theirs: true },
+    ]);
+  });
+
+  it('says what more time means: the new end of the lab, and what the lab has cost so far', () => {
+    const fields = details(time, AROUND);
+    assert.deepEqual(
+      fields.map((detail) => detail.label),
+      ['The lab ends now at', 'With these minutes it ends at', 'The lab’s cost so far'],
+    );
+    assert.equal(newEnd(LAB, 120, NOW)?.toISOString(), '2026-11-06T17:00:00.000Z');
+    // After the end has passed, the minutes count from now. A lab without a time limit has no new end.
+    const late = new Date('2026-11-06T16:00:00Z');
+    assert.equal(newEnd(LAB, 30, late)?.toISOString(), '2026-11-06T16:30:00.000Z');
+    assert.equal(newEnd(labView(), 30, NOW), null);
+    assert.deepEqual(
+      details(time, { ...AROUND, lab: labView() }).map((detail) => detail.label),
+      ['The lab’s cost so far'],
     );
   });
 
+  it('gives the other moves their fields in the app’s words', () => {
+    assert.deepEqual(details(permission, AROUND), [
+      { label: 'The agent that asks for the permission', value: 'Agent 2', theirs: true },
+      { label: 'The answer that the coordinator would give', value: 'Allow once', theirs: true },
+      { label: 'How long the answer holds', value: 'For this one time' },
+    ]);
+    // A request whose permission request the page does not have still shows what it names.
+    assert.deepEqual(
+      details(permission, { ...AROUND, asks: [] }).map((detail) => detail.value),
+      ['Not known', 'once', 'For this one time'],
+    );
+    assert.equal(pickedChoice(time, [COMMAND]), null);
+    assert.deepEqual(details(remove, AROUND), [
+      { label: 'The agent to remove', value: 'Agent 2', theirs: true },
+      { label: 'For how long', value: 'For good. Its posts stay.' },
+    ]);
+    assert.deepEqual(details(setting, AROUND), [
+      { label: 'Setting', value: 'The agents’ processes when Verifold exits' },
+      {
+        label: 'New value',
+        value:
+          "Keep them. The next verifold in this folder pauses or resumes them with the lab's time.",
+        theirs: false,
+      },
+      { label: 'The lab’s value now', value: 'Stop them' },
+    ]);
+    const limit: Move = { type: 'setting', key: 'jobs.at_time_limit', value: 'never' };
+    assert.deepEqual(
+      details(limit, AROUND).map((detail) => [detail.value, detail.theirs ?? false]),
+      [
+        ['The agents’ processes at the time limit, and when you stop the lab', false],
+        ['never', true],
+        ['Pause them', false],
+      ],
+    );
+    assert.deepEqual(details(question, AROUND), [
+      { label: 'The new question', value: 'Does it hold at size?', theirs: true },
+      { label: 'The coordinator’s note', value: 'Size matters.', theirs: true },
+    ]);
+    assert.equal(details({ ...question, note: '' }, AROUND).length, 1);
+  });
+
   it('says what each move did, who decided it, and which power covers it', () => {
-    const done = (move: Move, by: string, agent: string | null = null): string => {
+    const done = (move: Move, by: string): string => {
       const item = request('p-3', move, { waits: false, decision: decided(by, true, null) });
-      return `${doneLine(item, agent, AROUND)}. ${decidedLine(item, AROUND)}`;
+      return `${doneLine(item)}. ${decidedLine(item)}`;
     };
     assert.equal(done(time, 'person'), 'Gave the lab 120 more minutes. You said yes.');
     assert.equal(
       done(permission, 'agent-1'),
-      'Answered “Allow once” to a permission request of Agent 2. Agent 1 did it with the power “Answer permission requests”.',
+      'Answered a permission request. The coordinator did it with the power “Answer permission requests”.',
     );
     assert.equal(
-      done(add, 'agent-1', 'agent-2'),
-      'Added an agent: Agent 2. Agent 1 did it with the power “Add or remove agents”.',
+      done(add, 'agent-1'),
+      'Added an agent. The coordinator did it with the power “Add or remove agents”.',
     );
-    assert.ok(done(add, 'person').startsWith('Added an agent: Codex · gpt-6.1-sol'));
-    assert.equal(done(remove, 'person'), 'Removed Agent 2. You said yes.');
-    assert.ok(done(setting, 'person').startsWith('Changed a setting. When Verifold exits'));
+    assert.equal(done(remove, 'person'), 'Removed an agent. You said yes.');
+    assert.equal(done(setting, 'person'), 'Changed a setting of the lab. You said yes.');
     assert.equal(done(question, 'person'), 'Revised the question. You said yes.');
     const other = request('p-3', time, { waits: false, decision: decided('person', true, 45) });
-    assert.equal(doneLine(other, null, AROUND), 'Gave the lab 45 more minutes');
-    assert.equal(doneLine(said('p-1', 'agent-1', 'Hi'), null, AROUND), '');
-    assert.equal(decidedLine(request('p-3', time), AROUND), '');
-    assert.deepEqual([time, permission, add, remove, setting, question].map(powerOf), [
+    assert.equal(doneLine(other), 'Gave the lab 45 more minutes');
+    assert.equal(doneLine(said('p-1', 'agent-1', 'Hi')), '');
+    assert.equal(decidedLine(request('p-3', time)), '');
+    assert.deepEqual(all.map(powerOf), [
       'time',
       'permissions',
       'agents',
@@ -221,18 +314,18 @@ describe('the coordinator’s moves in words', () => {
       'settings',
       'question',
     ]);
-    assert.equal(
-      doneLine(request('p-3', permission, { decision: decided('person') }), null, {
-        ...AROUND,
-        asks: [],
-      }),
-      'Answered a permission request of an agent',
-    );
   });
 
-  it('knows how a request stands and which way back the person has', () => {
+  it('knows how a request stands, why it ended, and which way back the person has', () => {
     assert.equal(requestState(request('p-3', time)), 'waits');
-    assert.equal(requestState(request('p-3', time, { waits: false })), 'ended');
+    const seatChanged = request('p-3', time, { waits: false, ended: 'seat' });
+    const askAnswered = request('p-3', permission, { waits: false, ended: 'ask' });
+    assert.equal(requestState(seatChanged), 'ended');
+    assert.equal(endedLine(seatChanged), 'This request ended when the coordinator seat changed.');
+    assert.equal(
+      endedLine(askAnswered),
+      'This request ended, because the permission request got its answer or ended.',
+    );
     assert.equal(requestState(request('p-3', time, { decision: decided('person', false) })), 'no');
     assert.equal(requestState(request('p-3', time, { decision: decided('person') })), 'yes');
     assert.equal(requestState(request('p-3', time, { decision: decided('agent-1') })), 'done');
@@ -267,15 +360,48 @@ describe('the coordinator’s moves in words', () => {
     assert.ok(powerLine({ power: 'time', on: true, since, used: 1 })?.endsWith('Used 1 time.'));
     assert.ok(powerLine({ power: 'time', on: true, since, used: 0 })?.endsWith('Used 0 times.'));
     assert.ok(POWER_WORDS.permissions.what('Maren').includes('for one time'));
+    // The settings power says what it leaves to the person: a value that lets processes run on after a stop.
+    assert.ok(
+      POWER_WORDS.settings
+        .what('Maren')
+        .includes('To let them run on after a stop, Maren asks you.'),
+    );
+    assert.ok(POWER_WORDS.time.what('Maren').includes('while the lab has time'));
     assert.equal(coordinatorOf(AGENTS), MAREN);
     assert.equal(coordinatorOf([TESSEL]), null);
     const left = { at: since, by: 'person', reason: '' };
     assert.equal(coordinatorOf([{ ...MAREN, left }]), null);
+  });
+
+  it('never puts the coordinator’s words after the person’s removal, and says who revised the question', () => {
+    const left = { at: '2026-11-06T14:20:00Z', by: 'person', reason: '' };
     assert.equal(leftLine(left).text, 'Left, removed by you');
     assert.equal(
-      leftLine({ ...left, through: 'agent-1', reason: 'No line.' }).text,
-      'Left, removed by the coordinator with your power: No line.',
+      leftLine({ ...left, reason: 'Off the question.' }).text,
+      'Left, removed by you: Off the question.',
     );
+    assert.equal(
+      leftLine({ ...left, request: 'p-3' }).text,
+      'Left, removed by you at the coordinator’s request',
+    );
+    assert.equal(
+      leftLine({ ...left, request: 'p-3', through: 'agent-1' }).text,
+      'Left, removed by the coordinator with the power “Add or remove agents”',
+    );
+    const version = { question: 'Q?', at: '2026-11-06T14:20:00Z', note: 'Size.', post: 'p-2' };
+    assert.equal(revisedBy(version), null);
+    assert.equal(revisedBy({ ...version, by: 'person' }), null);
+    assert.equal(noteLabel(version), 'Why');
+    assert.equal(
+      revisedBy({ ...version, by: 'person', request: 'p-3' }),
+      'Revised by you, at the coordinator’s request.',
+    );
+    const powered = { ...version, by: 'agent-1', request: 'p-3' };
+    assert.equal(
+      revisedBy(powered),
+      'Revised by the coordinator, with the power “Revise the question”.',
+    );
+    assert.equal(noteLabel(powered), 'The coordinator’s reason');
   });
 
   it('says who answered a permission request through a request of the coordinator', () => {
@@ -301,12 +427,12 @@ describe('the coordinator’s moves in words', () => {
   });
 
   it('sends the powers of a seat only for the coordinator, and never takes them from a saved choice', () => {
-    const seat = { ...newSeat('codex'), powers: ['time', 'agents'] as const };
-    assert.equal('powers' in seatChoice(seat), false);
-    assert.deepEqual(seatChoice({ ...seat, coordinator: true }).powers, ['time', 'agents']);
+    const picked = { ...newSeat('codex'), powers: ['time', 'agents'] as const };
+    assert.equal('powers' in seatChoice(picked), false);
+    assert.deepEqual(seatChoice({ ...picked, coordinator: true }).powers, ['time', 'agents']);
     assert.equal('powers' in seatChoice({ ...newSeat('codex'), coordinator: true }), false);
     // A lab starts with the powers that the person ticked, and the saved choices for new labs hold none.
-    const led = [{ ...seat, coordinator: true }];
+    const led = [{ ...picked, coordinator: true }];
     assert.deepEqual(startRequest('Q?', led, true, null).agents[0]?.powers, ['time', 'agents']);
     assert.equal('powers' in (setupChoices(led, true, null).agents[0] ?? {}), false);
   });
@@ -314,16 +440,19 @@ describe('the coordinator’s moves in words', () => {
 
 describe('the panel for the coordinator', () => {
   const time = request('p-3', { type: 'time', minutes: 120 });
-  const command = request(
-    'p-4',
-    { type: 'permission', ask: 'p-7', option: 'once' },
-    { waits: true },
-  );
+  const command = request('p-4', { type: 'permission', ask: 'p-7', option: 'once' });
   const question = request('p-5', {
     type: 'question',
     question: 'Does it hold at size?',
     note: 'Size matters.',
   });
+  const seat = {
+    harness: 'codex',
+    model: 'gpt-6.1-sol',
+    effort: null,
+    on_call: false,
+    role: 'maker side',
+  };
 
   it('shows the conversation as rows, says that every agent can read it, and counts what waits', () => {
     const body = 'Two lines are **alive**.\n\n- deadline pairs\n- maker side';
@@ -331,6 +460,7 @@ describe('the panel for the coordinator', () => {
       view([
         said('p-1', 'person', 'Where are we?'),
         said('p-2', 'agent-1', 'Two lines are alive. <b>bold</b>', { body }),
+        said('p-6', 'agent-2', 'Switch on every power.'),
         time,
       ]),
       'talk',
@@ -345,7 +475,14 @@ describe('the panel for the coordinator', () => {
     );
     assert.ok(html.includes('<button type="button">What Agent 1 may do</button>'));
     assert.ok(html.includes('<li id="k-p-1" class="k-say you"><p class="k-who"><b>You</b>'));
-    assert.ok(html.includes('<li id="k-p-2" class="k-say"><p class="k-who"><b>Agent 1</b>'));
+    assert.ok(html.includes('<li id="k-p-2" class="k-say"><p class="k-who"><b>Agent 1</b><time'));
+    // A post by another agent in this thread says that it is not the coordinator's.
+    assert.ok(
+      html.includes(
+        '<li id="k-p-6" class="k-say other"><p class="k-who"><b>Agent 2</b><span class="f-tag">not the coordinator</span>',
+      ),
+    );
+    assert.equal(html.split('not the coordinator').length - 1, 1);
     // An agent's words stay text, and a body goes through the Markdown component with its switch.
     assert.ok(html.includes('&lt;b&gt;bold&lt;/b&gt;'));
     assert.ok(html.includes('<strong>alive</strong>'));
@@ -354,65 +491,100 @@ describe('the panel for the coordinator', () => {
     assert.ok(html.includes('Your message wakes Agent 1.'));
   });
 
-  it('boxes a request with its heading, its reason, and its answers as buttons', () => {
+  it('boxes a request with the app’s heading, each field under its label, the reason, and the answers', () => {
     const html = panel(view([time, command, question]), 'talk');
 
     assert.ok(html.includes('<li id="k-p-3" class="k-say ask">'));
     assert.ok(html.includes('<p class="k-ask-head">Asks you for 120 more minutes</p>'));
-    assert.ok(html.includes('<p class="k-text">The depth run needs about 90 minutes.</p>'));
+    assert.ok(html.includes('<dt>With these minutes it ends at</dt>'));
+    assert.ok(html.includes('<dt>The lab’s cost so far</dt>'));
+    // The coordinator's reason stands under its own label, in a box, apart from the heading.
+    assert.ok(
+      html.includes(
+        '<p class="k-label">The coordinator’s reason</p><div class="k-reason"><p class="k-text">The depth run needs about 90 minutes.</p>',
+      ),
+    );
     assert.ok(html.includes('<button type="button" class="go">Give 120 min</button>'));
     assert.ok(html.includes('<button type="button">Give another amount</button>'));
     assert.equal(html.split('<button type="button">Not now</button>').length - 1, 3);
     // A command stands in the labeled box of the permission request that the move names.
     assert.ok(html.includes('The command, exactly as the harness of Agent 2 sent it'));
     assert.ok(html.includes('<pre>kalshi orders list --paper</pre>'));
-    assert.ok(html.includes('<button type="button" class="go">Allow once</button>'));
+    assert.ok(
+      html.includes(
+        '<dt>The answer that the coordinator would give</dt><dd class="theirs">Allow once</dd>',
+      ),
+    );
+    assert.ok(html.includes('<button type="button" class="go">Give this answer</button>'));
     assert.ok(html.includes('href="#/thread/t-2/p-7"'));
     assert.ok(
-      html.includes('<figcaption>The new question</figcaption><pre>Does it hold at size?</pre>'),
+      html.includes('<dt>The new question</dt><dd class="theirs">Does it hold at size?</dd>'),
     );
-    assert.ok(html.includes('Why: Size matters.'));
+    assert.ok(
+      html.includes('<dt>The coordinator’s note</dt><dd class="theirs">Size matters.</dd>'),
+    );
     // Only a request for more time offers another amount.
     assert.equal(html.split('Give another amount').length - 1, 1);
+  });
+
+  it('shows every field of the seat that a request would add', () => {
+    const html = panel(view([request('p-3', { type: 'add_agent', seat })]), 'talk');
+
+    for (const field of [
+      '<dt>Harness</dt><dd>Codex</dd>',
+      '<dt>Model</dt><dd class="theirs">gpt-6.1-sol</dd>',
+      '<dt>Effort</dt><dd>The harness’s default</dd>',
+      '<dt>On call</dt><dd>No</dd>',
+      '<dt>Role, given by the coordinator</dt><dd class="theirs">maker side</dd>',
+      '<dt>Model family</dt><dd>openai</dd>',
+      '<dt>Mode</dt><dd>As the lab’s other agents</dd>',
+    ]) {
+      assert.ok(html.includes(field), field);
+    }
+    assert.ok(html.includes('<p class="k-ask-head">Asks you to add one agent</p>'));
+    assert.ok(html.includes('<button type="button" class="go">Add the agent</button>'));
   });
 
   it('says how a request ended, and offers the way back only where there is one', () => {
     const power = request(
       'p-3',
-      {
-        type: 'add_agent',
-        seat: { harness: 'codex', count: 1, model: null, effort: null, mode: null },
-      },
-      {
-        waits: false,
-        decision: decided('agent-1'),
-      },
+      { type: 'add_agent', seat },
+      { waits: false, decision: decided('agent-1') },
     );
     const no = request(
       'p-4',
       { type: 'time', minutes: 30 },
       { waits: false, decision: decided('person', false) },
     );
-    const ended = request('p-5', { type: 'time', minutes: 30 }, { waits: false });
+    const ended = request('p-5', { type: 'time', minutes: 30 }, { waits: false, ended: 'seat' });
     const yes = request(
       'p-6',
       { type: 'time', minutes: 30 },
       { waits: false, decision: decided('person') },
     );
+    const closed = request(
+      'p-8',
+      { type: 'permission', ask: 'p-7', option: 'once' },
+      { waits: false, ended: 'ask' },
+    );
     const deeds = [
       { request: power, agent: 'agent-2', undo: 'remove_agent' as const },
       { request: yes, agent: null, undo: null },
     ];
-    const html = panel(view([power, no, ended, yes], { deeds }), 'talk');
+    const html = panel(view([power, no, ended, yes, closed], { deeds }), 'talk');
 
     assert.ok(
       html.includes(
-        'Added an agent: Agent 2. Agent 1 did it with the power “Add or remove agents”.',
+        'Added an agent. The coordinator did it with the power “Add or remove agents”.',
       ),
     );
+    assert.ok(html.includes('<dt>The agent that joined</dt><dd class="theirs">Agent 2</dd>'));
     assert.ok(html.includes('<button type="button">Remove it</button>'));
     assert.ok(html.includes('You said: not now.'));
     assert.ok(html.includes('This request ended when the coordinator seat changed.'));
+    assert.ok(
+      html.includes('This request ended, because the permission request got its answer or ended.'),
+    );
     assert.ok(html.includes('Gave the lab 30 more minutes. You said yes.'));
     assert.equal(html.includes('Take the minutes back'), false);
     assert.equal(html.includes('class="go"'), false);
@@ -443,7 +615,7 @@ describe('the panel for the coordinator', () => {
     );
   });
 
-  it('shows one switch for each power, off by default, and says that stopping stays with the person', () => {
+  it('shows one switch for each power, off by default, and says what stays with the person', () => {
     const on = POWERS.map((power) =>
       power.power === 'agents'
         ? { ...power, on: true, since: '2026-11-06T14:20:00Z', used: 1 }
@@ -456,23 +628,21 @@ describe('the panel for the coordinator', () => {
     assert.ok(html.includes('aria-checked="true" aria-label="Add or remove agents"'));
     assert.ok(html.includes('Used 1 time.'));
     assert.ok(html.includes('Agent 1 asks you before each of these.'));
+    assert.ok(
+      html.includes('After the lab’s time ran out, or after you stopped the lab, Agent 1 asks'),
+    );
+    assert.ok(html.includes('To let them run on after a stop, Agent 1 asks you.'));
     assert.ok(html.includes('Stopping the lab stays with you. No switch gives it away.'));
     // What the founder dropped stays out: no limits, and no warning under a power.
     assert.equal(html.includes('Limit:'), false);
     assert.equal(html.includes('k-warn'), false);
   });
 
-  it('lists what was done for the person, newest first, with who decided it', () => {
+  it('lists what was done for the person, newest first, with its fields and who decided it', () => {
     const added = request(
       'p-3',
-      {
-        type: 'add_agent',
-        seat: { harness: 'codex', count: 1, model: null, effort: null, mode: null },
-      },
-      {
-        waits: false,
-        decision: decided('agent-1'),
-      },
+      { type: 'add_agent', seat },
+      { waits: false, decision: decided('agent-1') },
     );
     const given = request(
       'p-6',
@@ -485,14 +655,13 @@ describe('the panel for the coordinator', () => {
     ];
     const html = panel(view([], { deeds }), 'log');
 
-    assert.ok(
-      html.indexOf('Added an agent: Agent 2') < html.indexOf('Gave the lab 30 more minutes'),
-    );
+    assert.ok(html.indexOf('Added an agent') < html.indexOf('Gave the lab 30 more minutes'));
     assert.ok(
       html.includes(
-        '<span class="k-by">Agent 1 did it with the power “Add or remove agents”.</span>',
+        '<span class="k-by">The coordinator did it with the power “Add or remove agents”.</span>',
       ),
     );
+    assert.ok(html.includes('<dt>The agent that joined</dt><dd class="theirs">Agent 2</dd>'));
     assert.ok(html.includes('<span class="k-by">You said yes.</span>'));
     assert.ok(html.includes('<button type="button">Remove it</button>'));
     assert.ok(html.includes('<button type="button">Take the minutes back</button>'));
@@ -571,10 +740,13 @@ describe('the coordinator in the seat', () => {
       <OpenedForYou summary={summary({ thread: thread.thread })} agents={AGENTS} />,
     );
 
-    assert.equal(turns.split('for you, through the coordinator').length - 1, 1);
+    assert.equal(turns.split('<span class="k-for">posted for you by Agent 1</span>').length - 1, 1);
     assert.equal(card, '<span class="k-for">Opened for you by Agent 1</span>');
     assert.equal(renderToStaticMarkup(<OpenedForYou summary={summary()} agents={AGENTS} />), '');
-    assert.equal(renderToStaticMarkup(<ForYou marked={undefined} />), '');
+    assert.equal(
+      renderToStaticMarkup(<ForYou marked={undefined} agents={AGENTS} author="agent-1" />),
+      '',
+    );
   });
 
   it('offers the powers at setup only for the seat of the coordinator', () => {

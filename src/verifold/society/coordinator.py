@@ -14,11 +14,13 @@ holds the seat is on. An answer to a permission request picks an answer of the h
 the harness remembers, never Verifold's grant, and never for the coordinator's own harness.
 """
 
+from datetime import datetime
 from typing import Literal
 
 from verifold.protocol.events import AgentLeft, Posted, PowerSet, QuestionRevised, RequestAnswered, TimeSet
 from verifold.protocol.ids import PERSON, AgentId
-from verifold.protocol.moves import Move, PermissionMove, QuestionMove, RemoveMove, TimeMove, power_of
+from verifold.protocol.join import RequestEnd
+from verifold.protocol.moves import Move, PermissionMove, QuestionMove, RemoveMove, SettingMove, TimeMove, power_of
 from verifold.protocol.posts import Answer, Ask, Close, MoveRequest, PermissionShown, Post, Proposal
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
@@ -78,6 +80,10 @@ def check_marks(board: Board, post: Post, thread: Thread) -> None:
     """
     if post.for_person and post.author != board.coordinator:
         raise RejectedEvent('Only the agent that holds the coordinator seat marks a post as one for the person.')
+    if post.for_person and isinstance(post, Proposal | Close):
+        raise RejectedEvent(
+            f"A {post.kind} is the agents' own word, so no {post.kind} is marked as one for the person."
+        )
     if thread.conversation and (post.to_lab or isinstance(post, Proposal | Close)):
         kind = 'post with `to_lab`' if post.to_lab else post.kind
         raise RejectedEvent(
@@ -109,87 +115,149 @@ def check_answered(board: Board, event: RequestAnswered) -> None:
     Check the answer to a request for a move.
 
     The person answers any request once. The coordinator answers only its own request, only with a yes, and only
-    while the person's power for that kind of move is on. Its yes gives no time to a lab whose time ran out, so
-    that a lab that the person stopped stays stopped. A yes needs a request whose author still holds the seat
-    and a move that can still be made.
+    while the person's power covers the move: the power for that kind of move is on, the lab has time, and the
+    move is not one that lets processes run on after a stop. So a lab that the person stopped, or whose time ran
+    out, takes no move without the person. A yes needs a request from the present holding of the coordinator
+    seat, and a move that can still be made.
 
     Raises:
         RejectedEvent: The answer breaks one of these rules.
 
     """
-    request = _request(board, event)
-    if request is None:
+    entry = board.post(event.request)
+    request = entry.post if entry and isinstance(entry.post, MoveRequest) else None
+    if entry is None or request is None:
         raise RejectedEvent(f'Post {event.request} is no request for a move.')
     if board.answer_to(event.request):
         raise RejectedEvent(f'The request {event.request} has its answer already.')
     by_person = event.by == PERSON
     if event.minutes is not None and not (event.yes and by_person and isinstance(request.move, TimeMove)):
         raise RejectedEvent("Only the person's yes to a request for more time names minutes.")
-    holder = board.coordinator
-    powered = event.yes and event.by == request.author and event.by == holder and power_of(request.move) in board.powers
-    if not by_person and not powered:
-        raise RejectedEvent(
-            'The person answers a request for a move. The coordinator answers its own request only with a yes, and '
-            'only while the person switched on the power for that kind of move.'
-        )
-    if powered and isinstance(request.move, TimeMove) and (board.out_of_time or _ended(board, event)):
-        raise RejectedEvent("The lab's time ran out, so only the person gives it more time.")
+    own_yes = event.yes and event.by == request.author and event.by == board.coordinator
+    if not by_person and not (own_yes and power_covers(board, request.move, event.at)):
+        raise RejectedEvent(_not_covered(board, request.move, event.at))
     if event.yes:
-        if request.author != holder:
+        if request_end(board, entry) == 'seat':
             raise RejectedEvent(
-                f'{request.author} holds the coordinator seat no longer, so its request {event.request} ended.'
+                f'The coordinator seat changed after {request.author} asked, so its request {event.request} ended.'
             )
         _check_move(board, request.move, request.author)
 
 
+def power_covers(board: Board, move: Move, at: datetime) -> bool:
+    """
+    Return whether a power of the coordinator covers a move at a moment, so that the move needs no yes of the person.
+
+    The person's switch for that kind of move is on. The lab has time: its time did not run out, and the person
+    did not stop it. The move does not let the agents' processes run on after the lab stops or Verifold exits.
+    """
+    return power_of(move) in board.powers and not _over(board, at) and not _outlasts_a_stop(move)
+
+
+def _over(board: Board, at: datetime) -> bool:
+    # Whether the lab's end passed, also when the record does not say so yet. The person stops a lab with its end.
+    return board.out_of_time or (board.ends_at is not None and at >= board.ends_at)
+
+
+def _outlasts_a_stop(move: Move) -> bool:
+    # The values of the job settings with which processes run on after the lab stops, or after Verifold exits.
+    return isinstance(move, SettingMove) and (move.key, move.value) in {
+        ('jobs.at_time_limit', 'finish'),
+        ('jobs.at_exit', 'keep'),
+    }
+
+
+def _not_covered(board: Board, move: Move, at: datetime) -> str:
+    if power_of(move) in board.powers and _over(board, at):
+        return "The lab's time ran out or the person stopped the lab, so only the person makes a move now."
+    if power_of(move) in board.powers and _outlasts_a_stop(move):
+        return (
+            "This value lets the agents' processes run on after the lab stops or Verifold exits, so only the "
+            "person's yes sets it."
+        )
+    return (
+        'The person answers a request for a move. The coordinator answers its own request only with a yes, and '
+        'only while the person switched on the power for that kind of move.'
+    )
+
+
 def check_removal(board: Board, left: AgentLeft) -> None:
     """
-    Check a removal that names the coordinator in `through`: it follows the coordinator's own yes to that move.
+    Check a removal that names a request of the coordinator: it is the move of that request, just after its yes.
+
+    The removal is the person's, and its reason is empty: the coordinator's reason is in the request. With the
+    person's yes it names no coordinator in `through`, and with the coordinator's own yes it names that agent.
 
     Raises:
-        RejectedEvent: The event before it is not that yes.
+        RejectedEvent: The event before it is not the yes to such a request, or the removal says something else.
 
     """
     answered = _just_answered(board)
     request = _request(board, answered) if answered else None
     move = request.move if request else None
-    made = answered and answered.yes and answered.by == left.through and left.by == PERSON
-    if not (made and isinstance(move, RemoveMove) and move.agent == left.agent):
+    through = None if answered is None or answered.by == PERSON else answered.by
+    made = answered and answered.yes and answered.request == left.request and left.by == PERSON
+    if not (made and isinstance(move, RemoveMove) and move.agent == left.agent and left.through == through):
         raise RejectedEvent(
-            f'{left.through} removes {left.agent} only with its own request, while the person switched on the '
-            'power to add or remove agents.'
+            f'A removal of {left.agent} names a request of the coordinator only as the move of that request, just '
+            'after its yes.'
         )
+    if left.reason:
+        raise RejectedEvent("The request holds the coordinator's reason, so the removal has no reason of its own.")
 
 
 def check_reviser(board: Board, revision: QuestionRevised) -> None:
     """
-    Check a revision of the question by somebody other than the person: it follows the coordinator's own yes.
+    Check a revision of the question that names a request of the coordinator, or that the person did not make.
+
+    It follows the yes to that request, with the question of the request. With the person's yes it is the
+    person's revision and has no note, because the coordinator's reason is in the request. With the
+    coordinator's own yes it is the coordinator's, and the post that tells the lab is marked as one for the person.
 
     Raises:
-        RejectedEvent: No such yes came just before it, or the post that tells the lab is not marked for the person.
+        RejectedEvent: No such yes came just before it, or the revision says something else.
 
     """
     answered = board.answers[-1] if board.answers else None
     request = _request(board, answered) if answered else None
     move = request.move if request else None
     told = board.posts[-1].post
-    just = answered and answered.yes and answered.by == revision.by and board.seq - answered.seq <= _TOLD
-    if not (just and isinstance(move, QuestionMove) and move.question == revision.question and told.for_person):
+    just = answered and answered.yes and board.seq - answered.seq <= _TOLD and answered.request == revision.request
+    same = isinstance(move, QuestionMove) and move.question == revision.question
+    words = told.for_person if revision.by != PERSON else not revision.note
+    if not (just and answered.by == revision.by and same and words):
         raise RejectedEvent(
-            f'{revision.by} revises the question only with its own request, while the person switched on the '
-            'power to revise the question.'
+            'A revision of the question names a request of the coordinator only as the move of that request, just '
+            'after its yes. An agent revises the question only so, under the power to revise it.'
         )
 
 
-def request_waits(board: Board, entry: Posted) -> bool:
+def request_end(board: Board, entry: Posted) -> RequestEnd | None:
     """
-    Return whether a request for a move waits for the person's answer.
+    Return why a request for a move without an answer waits for none, or `None` while it waits.
 
-    It waits while it has no answer and its author holds the coordinator seat. The request of an agent that holds
-    the seat no longer ended with its seat.
+    A request ends for good when the coordinator seat changes after it, also when its author gets the seat again
+    later. A request to answer a permission request ends when that permission request got its answer or ended.
     """
     post = entry.post
-    return isinstance(post, MoveRequest) and not board.answer_to(post.id) and post.author == board.coordinator
+    if not isinstance(post, MoveRequest):
+        return None
+    if post.author != board.coordinator or entry.seq < board.seat_since:
+        return 'seat'
+    if isinstance(post.move, PermissionMove) and not _ask_waits(board, post.move):
+        return 'ask'
+    return None
+
+
+def request_waits(board: Board, entry: Posted) -> bool:
+    """Return whether a request for a move waits for the person's answer: it has none, and it has not ended."""
+    post = entry.post
+    return isinstance(post, MoveRequest) and not board.answer_to(post.id) and request_end(board, entry) is None
+
+
+def _ask_waits(board: Board, move: PermissionMove) -> bool:
+    asked = board.post(move.ask)
+    return bool(asked and waits_for_person(board, move.ask) and not board.gone(asked.post.author))
 
 
 def permission_choice(board: Board, move: PermissionMove, by: AgentId) -> tuple[Ask, str]:
@@ -210,7 +278,7 @@ def permission_choice(board: Board, move: PermissionMove, by: AgentId) -> tuple[
             f'Post {move.ask} is a permission request of the harness of {by}. Only the person answers the '
             "request of the coordinator's own harness."
         )
-    if not waits_for_person(board, ask.id) or board.gone(ask.author):
+    if not _ask_waits(board, move):
         raise RejectedEvent(f'The permission request {move.ask} waits for no answer now.')
     shown = ask.shown
     if move.option not in shown.ids:
@@ -251,11 +319,6 @@ def undo_of(board: Board, answered: RequestAnswered) -> Undo | None:
     if given and board.times[-1] is given:
         return 'take_minutes'
     return None
-
-
-def _ended(board: Board, event: RequestAnswered) -> bool:
-    # Whether the lab's end passed before the event, also when the record does not say so yet.
-    return board.ends_at is not None and event.at >= board.ends_at
 
 
 def _request(board: Board, answered: RequestAnswered) -> MoveRequest | None:

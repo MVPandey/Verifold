@@ -16,7 +16,7 @@ import { authorName, members } from '../model/agents.ts';
 import { crossedLine, crossLines } from '../model/crossings.ts';
 import { clock, dayClock, duration, minutesBetween } from '../model/format.ts';
 import { clip, personMessage, standingChip } from '../model/posts.ts';
-import { isRevision, revisedLine } from '../model/question.ts';
+import { isRevision, noteLabel, revisedBy, revisedLine } from '../model/question.ts';
 import { href } from '../model/route.ts';
 import { hasNew, markSeen, readSeen } from '../model/seen.ts';
 import { NEED_WORDS, WAITS_ID, quietBand, waitGroups } from '../model/status.ts';
@@ -419,7 +419,12 @@ function Versions(props: {
             <time dateTime={version.at}>{dayClock(version.at, props.now)}</time>
             {index === props.versions.length - 1 ? <b>Current</b> : null}
             <p>{version.question}</p>
-            {version.note ? <p className="dim">Why: {version.note}</p> : null}
+            {revisedBy(version) ? <p className="dim">{revisedBy(version)}</p> : null}
+            {version.note ? (
+              <p className="dim">
+                {noteLabel(version)}: {version.note}
+              </p>
+            ) : null}
           </li>
         ))}
       </ol>

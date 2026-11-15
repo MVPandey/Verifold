@@ -357,7 +357,8 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         how=how,
         question=board.question,
         revisions=tuple(
-            RevisionLine(at=entry.at, note=entry.note, post=entry.post) for entry in board.revisions[-MAX_LEADS:]
+            RevisionLine(at=entry.at, note=entry.note, post=entry.post, by=entry.by, request=entry.request)
+            for entry in board.revisions[-MAX_LEADS:]
         ),
         state=lab_state(board),
         close=close_line,
@@ -487,7 +488,7 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
     """
     Return the posts that wait for the person's answer, oldest first.
 
-    They are the asks that name the person and have no answer from the person yet, the asks of an agent in the
+    They are the asks that name the person and have no answer from the person yet, the coordinator's asks in the
     conversation with the person, and the coordinator's requests for a move that wait.
 
     Permission requests are asks too. An agent's answer leaves an ask open, because the asker waits for the person.
@@ -501,7 +502,10 @@ def _waits_for_person(board: Board, entry: Posted) -> bool:
     post = entry.post
     if not isinstance(post, Ask):
         return request_waits(board, entry)
-    to_person = PERSON in post.mentions or (post.thread == board.conversation and post.author != PERSON)
+    # In the conversation, the coordinator's ask is to the person. Another agent's ask there is to the person
+    # only when it names the person, as in any thread.
+    talks = post.thread == board.conversation and post.author == board.coordinator
+    to_person = PERSON in post.mentions or talks
     return to_person and waits_for_person(board, post.id) and not board.gone(post.author)
 
 
@@ -544,7 +548,14 @@ def versions(board: Board) -> tuple[QuestionVersion, ...]:
     return (
         QuestionVersion(question=board.opened.question, at=board.opened.at),
         *(
-            QuestionVersion(question=entry.question, at=entry.at, note=entry.note, post=entry.post)
+            QuestionVersion(
+                question=entry.question,
+                at=entry.at,
+                note=entry.note,
+                post=entry.post,
+                by=entry.by,
+                request=entry.request,
+            )
             for entry in board.revisions
         ),
     )

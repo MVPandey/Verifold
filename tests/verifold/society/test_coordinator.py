@@ -2,12 +2,15 @@ from datetime import timedelta
 
 import pytest
 from builders import START, RecordBuilder, lab
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
+from verifold.protocol.agents import Power
 from verifold.protocol.events import AgentLeft, Event, QuestionRevised
 from verifold.protocol.join import News
 from verifold.protocol.moves import (
     AddMove,
+    AddSeat,
+    LabSetting,
     Move,
     PermissionMove,
     QuestionMove,
@@ -15,16 +18,16 @@ from verifold.protocol.moves import (
     SettingMove,
     TimeMove,
 )
-from verifold.protocol.posts import Answer, Ask, Close, Message, Plan, Post, Proposal
+from verifold.protocol.posts import Answer, Ask, Close, Message, Plan, Post, Proposal, Result
 from verifold.protocol.threads import Thread
-from verifold.society.attention import wakes, watches_thread
+from verifold.society.attention import left_line, news, wakes, watches_thread
 from verifold.society.coordinator import joined_by, permission_choice, time_given, undo_of
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import fold
 from verifold.society.lifecycle import lab_state
 from verifold.society.lines import lines_of
 from verifold.society.standing import waits_for_person
-from verifold.society.views import brief, needs_person, post_view, thread_summaries
+from verifold.society.views import brief, needs_person, post_view, thread_summaries, versions
 
 MORE = TimeMove(minutes=120)
 END = START + timedelta(hours=8)
@@ -212,16 +215,27 @@ def test_the_person_answers_a_request_once_and_nobody_else_does_without_a_power(
     refused(other, 'names minutes')
 
 
-def test_a_request_ends_when_its_author_holds_the_seat_no_longer() -> None:
+def test_a_request_ends_for_good_when_the_seat_changes_also_when_its_author_gets_the_seat_again() -> None:
     asked = talk().request('p-1', 'ada', MORE).coordinator('bo')
 
     board = asked.board()
 
-    assert not post_view(board, board.posts[-1]).waits
+    assert (post_view(board, board.posts[-1]).waits, post_view(board, board.posts[-1]).ended) == (False, 'seat')
     assert needs_person(board) == ()
-    refused(RecordBuilder(events=list(asked.events)).answered('p-1'), 'ada holds the coordinator seat no longer')
+    ended = 'The coordinator seat changed after ada asked, so its request p-1 ended'
+    refused(RecordBuilder(events=list(asked.events)).answered('p-1'), ended)
     # The person can still say no to it.
     assert RecordBuilder(events=list(asked.events)).answered('p-1', yes=False).board().answers
+    # The seat comes back to ada. Her request from before stays ended, also for her power.
+    back = RecordBuilder(events=list(asked.events)).coordinator('ada').power('time', 'ada')
+    again = back.board()
+    assert (post_view(again, again.posts[-1]).waits, post_view(again, again.posts[-1]).ended) == (False, 'seat')
+    assert needs_person(again) == ()
+    refused(RecordBuilder(events=list(back.events)).answered('p-1'), ended)
+    refused(RecordBuilder(events=list(back.events)).answered('p-1', by='ada'), ended)
+    # A request from the present holding of the seat waits.
+    fresh = back.request('p-2', 'ada', MORE).board()
+    assert [item.post.id for item in needs_person(fresh)] == ['p-2']
 
 
 def test_a_yes_needs_a_move_that_the_board_can_still_take() -> None:
@@ -285,16 +299,52 @@ def test_with_a_power_the_coordinators_own_yes_makes_the_move_and_no_other_agent
     refused(taken.answered('p-1', by='bo'), 'The person answers a request')
 
 
-def test_a_power_gives_no_time_to_a_lab_whose_time_ran_out() -> None:
-    record = lab().time_set(START + timedelta(minutes=7)).coordinator('ada')
-    record.thread('t-2', opened_by='ada', conversation=True).power('time', 'ada').request('p-1', 'ada', MORE)
-    # The request came at minute 8, after the end, and the record does not say yet that the time ran out.
+OVER = "The lab's time ran out or the person stopped the lab, so only the person makes a move now"
+
+
+@pytest.mark.parametrize(
+    ('power', 'move'),
+    [
+        ('time', MORE),
+        ('agents', RemoveMove(agent='bo')),
+        ('agents', AddMove(seat=AddSeat(harness='fake'))),
+        ('settings', SettingMove(key='jobs.at_time_limit', value='stop')),
+        ('question', QuestionMove(question='Is it stable?')),
+        ('permissions', PermissionMove(ask='p-1', option='once')),
+    ],
+)
+def test_no_power_covers_a_move_after_the_labs_time_ran_out_or_the_person_stopped_it(power: Power, move: Move) -> None:
+    record = lab().time_set(START + timedelta(minutes=9)).coordinator('ada').permission('p-1', 'bo')
+    record.thread('t-2', opened_by='ada', conversation=True).power(power, 'ada').request('p-2', 'ada', move)
+    # The request came at minute 10, after the end, and the record does not say yet that the time ran out.
     past = RecordBuilder(events=list(record.events))
     out = RecordBuilder(events=list(record.events)).ran_out()
 
-    refused(past.answered('p-1', by='ada'), "The lab's time ran out, so only the person gives it more time")
-    refused(out.answered('p-1', by='ada'), "The lab's time ran out, so only the person gives it more time")
+    refused(past.answered('p-2', by='ada'), OVER)
+    refused(out.answered('p-2', by='ada'), OVER)
+    # The request is on the board, and the person can still say yes to it.
+    assert [item.post.id for item in needs_person(record.board())][-1] == 'p-2'
+    assert record.answered('p-2').board().answers[-1].by == 'person'
+
+
+def test_a_lab_that_the_person_stopped_takes_no_move_under_a_power() -> None:
+    record = talk().power('settings', 'ada').power('time', 'ada')
+    # The person stops the lab: its end is now.
+    record.time_set(record.at(len(record.events) + 1))
+    record.request('p-1', 'ada', SettingMove(key='jobs.at_time_limit', value='stop')).request('p-2', 'ada', MORE)
+
+    refused(RecordBuilder(events=list(record.events)).answered('p-1', by='ada'), OVER)
+    refused(RecordBuilder(events=list(record.events)).answered('p-2', by='ada'), OVER)
+
+
+@pytest.mark.parametrize(('key', 'value'), [('jobs.at_time_limit', 'finish'), ('jobs.at_exit', 'keep')])
+def test_the_settings_power_sets_no_value_that_lets_processes_run_on_after_a_stop(key: LabSetting, value: str) -> None:
+    record = talk().power('settings', 'ada').request('p-1', 'ada', SettingMove(key=key, value=value))
+    strict = talk().power('settings', 'ada').request('p-1', 'ada', SettingMove(key='jobs.at_time_limit', value='stop'))
+
+    refused(RecordBuilder(events=list(record.events)).answered('p-1', by='ada'), "only the person's yes sets it")
     assert record.answered('p-1').board().answers[-1].by == 'person'
+    assert strict.answered('p-1', by='ada').board().answers[-1].by == 'ada'
 
 
 def carried(by: str, request: str = 'p-2', choice: str = 'Allow once') -> Answer:
@@ -335,75 +385,164 @@ def test_with_the_power_the_coordinators_answer_decides_a_permission_request_and
     assert (answer.author, answer.for_request) == ('ada', 'p-2')
 
 
-def test_only_the_coordinators_own_yes_removes_an_agent_through_the_coordinator() -> None:
-    record = talk().power('agents', 'ada').request('p-1', 'ada', RemoveMove(agent='bo'))
-    through = AgentLeft(seq=1, at=START, agent='bo', by='person', through='ada')
-
-    def removed(record: RecordBuilder, left: AgentLeft) -> RecordBuilder:
-        seq, at = record._stamp()
-        record.events.append(left.model_copy(update={'seq': seq, 'at': at}))
-        return record
-
-    board = removed(RecordBuilder(events=list(record.events)).answered('p-1', by='ada'), through).board()
-
-    assert (board.left[-1].through, board.gone('bo')) == ('ada', board.left[-1])
-    why = 'ada removes bo only with its own request'
-    refused(removed(RecordBuilder(events=list(record.events)), through), why)
-    refused(removed(RecordBuilder(events=list(record.events)).answered('p-1'), through), why)
-    refused(removed(talk().power('agents', 'ada'), through), why)
-    other = through.model_copy(update={'agent': 'cy'})
-    refused(removed(RecordBuilder(events=list(record.events)).answered('p-1', by='ada'), other), 'ada removes cy only')
-    own = through.model_copy(update={'by': 'bo'})
-    refused(removed(RecordBuilder(events=list(record.events)).answered('p-1', by='ada'), own), why)
-
-
-def revision(record: RecordBuilder, by: str, question: str = 'Is it stable?', *, marked: bool = True) -> RecordBuilder:
-    record.post(Message(id='p-2', thread='t-1', author=by, text=f'Revised: {question}', for_person=marked))
+def removed(record: RecordBuilder, left: AgentLeft) -> RecordBuilder:
     seq, at = record._stamp()
-    record.events.append(QuestionRevised(seq=seq, at=at, question=question, post='p-2', by=by))
+    record.events.append(left.model_copy(update={'seq': seq, 'at': at}))
     return record
 
 
-def test_only_the_coordinators_own_yes_revises_the_question_for_the_person() -> None:
-    record = talk().power('question', 'ada').request('p-1', 'ada', QuestionMove(question='Is it stable?'))
+def test_a_removal_names_a_request_only_as_the_move_of_that_request_and_never_holds_the_coordinators_words() -> None:
+    record = talk().power('agents', 'ada').request('p-1', 'ada', RemoveMove(agent='bo'))
+    through = AgentLeft(seq=1, at=START, agent='bo', by='person', through='ada', request='p-1')
+    approved = through.model_copy(update={'through': None})
 
-    board = revision(RecordBuilder(events=list(record.events)).answered('p-1', by='ada'), 'ada').board()
+    def after(*, by: str = 'ada', yes: bool = True) -> RecordBuilder:
+        return RecordBuilder(events=list(record.events)).answered('p-1', by=by, yes=yes)
 
-    assert (board.question, board.revisions[-1].by) == ('Is it stable?', 'ada')
-    why = 'ada revises the question only with its own request'
+    powered = removed(after(), through).board()
+    yes = removed(after(by='person'), approved).board()
+
+    assert (powered.left[-1].through, powered.left[-1].request, powered.left[-1].reason) == ('ada', 'p-1', '')
+    assert (yes.left[-1].through, yes.left[-1].request, yes.left[-1].by) == (None, 'p-1', 'person')
+    line = left_line(yes, yes.left[-1])
+    assert (line.by, line.through, line.request, line.reason) == ('person', None, 'p-1', '')
+    why = 'A removal of bo names a request of the coordinator only as the move of that request'
+    refused(removed(RecordBuilder(events=list(record.events)), through), why)
+    refused(removed(talk().power('agents', 'ada'), through), why)
+    # With the person's yes, the removal names no coordinator, and with the coordinator's own yes it names it.
+    refused(removed(after(by='person'), through), why)
+    refused(removed(after(), approved), why)
+    refused(removed(after(yes=False, by='person'), approved), why)
+    refused(removed(after(), through.model_copy(update={'request': None})), why)
+    refused(removed(after(), through.model_copy(update={'agent': 'cy'})), 'A removal of cy names a request')
+    refused(removed(after(), through.model_copy(update={'by': 'bo'})), why)
+    # The coordinator's reason is in the request, so the removal carries none as the person's.
+    worded = approved.model_copy(update={'reason': 'Bo repeats the same run.'})
+    refused(removed(after(by='person'), worded), 'the removal has no reason of its own')
+
+
+def revision(
+    record: RecordBuilder,
+    by: str,
+    question: str = 'Is it stable?',
+    *,
+    marked: bool = True,
+    request: str | None = 'p-1',
+    note: str = '',
+) -> RecordBuilder:
+    told = Message(id='p-2', thread='t-1', author=by, text=f'Revised: {question}', for_person=marked and by != 'person')
+    record.post(told)
+    seq, at = record._stamp()
+    record.events.append(
+        QuestionRevised(seq=seq, at=at, question=question, post='p-2', by=by, request=request, note=note)
+    )
+    return record
+
+
+def test_a_revision_names_a_request_only_as_the_move_of_that_request() -> None:
+    record = (
+        talk().power('question', 'ada').request('p-1', 'ada', QuestionMove(question='Is it stable?', note='Why not.'))
+    )
+
+    def after(*, by: str = 'ada', yes: bool = True) -> RecordBuilder:
+        return RecordBuilder(events=list(record.events)).answered('p-1', by=by, yes=yes)
+
+    powered = revision(after(), 'ada', note='Why not.').board()
+    approved = revision(after(by='person'), 'person').board()
+
+    assert (powered.question, powered.revisions[-1].by, powered.revisions[-1].request) == (
+        'Is it stable?',
+        'ada',
+        'p-1',
+    )
+    assert (approved.revisions[-1].by, approved.revisions[-1].request, approved.revisions[-1].note) == (
+        'person',
+        'p-1',
+        '',
+    )
+    # The views say who made each revision, and which request it came from.
+    assert [(version.by, version.request) for version in versions(approved)] == [('person', None), ('person', 'p-1')]
+    line = brief(powered, 'bo', News(seq=powered.seq)).revisions[-1]
+    assert (line.by, line.request) == ('ada', 'p-1')
+    why = 'A revision of the question names a request of the coordinator only as the move of that request'
     refused(revision(RecordBuilder(events=list(record.events)), 'ada'), why)
-    refused(revision(RecordBuilder(events=list(record.events)).answered('p-1'), 'ada'), why)
+    refused(revision(after(by='person'), 'ada'), why)
+    refused(revision(after(), 'person'), why)
+    refused(revision(after(yes=False, by='person'), 'person'), why)
     refused(revision(talk().power('question', 'ada'), 'ada'), why)
-    other = revision(RecordBuilder(events=list(record.events)).answered('p-1', by='ada'), 'ada', 'Is it fast?')
-    refused(other, why)
-    plain = revision(RecordBuilder(events=list(record.events)).answered('p-1', by='ada'), 'ada', marked=False)
-    refused(plain, why)
-    late = RecordBuilder(events=list(record.events)).answered('p-1', by='ada').watch('bo', 't-1').watch('cy', 't-1')
+    refused(revision(after(), 'ada', 'Is it fast?'), why)
+    refused(revision(after(), 'ada', marked=False), why)
+    refused(revision(after(), 'ada', request=None), why)
+    # The person's revision at the coordinator's request carries no note: the reason is the coordinator's.
+    refused(revision(after(by='person'), 'person', note='Why not.'), why)
+    late = after().watch('bo', 't-1').watch('cy', 't-1')
     refused(revision(late, 'ada'), why)
     # Another agent's post never tells the lab of a revision.
-    forged = RecordBuilder(events=list(record.events)).answered('p-1', by='ada')
+    forged = after()
     forged.post(Message(id='p-2', thread='t-1', author='bo', text='Revised.'))
     seq, at = forged._stamp()
-    forged.events.append(QuestionRevised(seq=seq, at=at, question='Is it stable?', post='p-2', by='ada'))
+    forged.events.append(QuestionRevised(seq=seq, at=at, question='Is it stable?', post='p-2', by='ada', request='p-1'))
     refused(forged, 'is not the post of the person that tells the lab')
 
 
-def test_an_ask_of_an_agent_in_the_conversation_waits_for_the_person() -> None:
+def test_the_agents_own_words_are_never_marked_as_the_persons() -> None:
+    proposal = Proposal(id='p-1', thread='t-1', author='ada', text='The answer.', for_person=True)
+    close = Close(id='p-1', thread='t-1', author='ada', text='Done.', for_person=True)
+
+    refused(talk().post(proposal), "A proposal is the agents' own word")
+    refused(talk().post(close), "A close is the agents' own word")
+    # Every reader of the board can tell the coordinator's post on the person's behalf from the person's own.
+    board = talk().post(Message(id='p-1', thread='t-1', author='ada', text='Size first.', for_person=True)).board()
+    unseen = news(board, 'bo', 0)
+    line = (*unseen.for_you, *unseen.others)[-1]
+    assert (line.author, line.for_person) == ('ada', True)
+
+
+def test_a_blind_checker_has_no_permission_request_on_the_board_for_the_coordinator_to_answer() -> None:
+    # The record takes one check from a blind checker and no other post. So the coordinator finds no request of
+    # the checker that reruns its own post, and it cannot allow that checker's commands.
+    record = talk().post(Result(id='p-1', thread='t-1', author='ada', text='It holds.'))
+    record.join('check-1', checks='p-1', family='openai')
+
+    refused(record.permission('p-2', 'check-1'), 'You rerun p-1 blind. Post one check that replies to p-1')
+
+
+def test_a_request_to_answer_a_permission_request_ends_when_that_request_got_its_answer() -> None:
+    record = talk().permission('p-1', 'bo').request('p-2', 'ada', PermissionMove(ask='p-1', option='once'))
+    waiting = record.board()
+    record.post(Answer(id='p-3', thread='t-1', author='person', text='Reject', reply_to='p-1', choice='Reject'))
+
+    board = record.board()
+
+    assert [item.post.id for item in needs_person(waiting)] == ['p-1', 'p-2']
+    assert needs_person(board) == ()
+    asked = board.post('p-2')
+    assert asked is not None
+    view = post_view(board, asked)
+    assert (view.waits, view.ended) == (False, 'ask')
+    refused(record.answered('p-2'), 'p-1 waits for no answer now')
+
+
+def test_the_coordinators_ask_in_the_conversation_waits_for_the_person_and_another_agents_does_not() -> None:
     record = talk().post(Ask(id='p-1', thread='t-2', author='ada', text='Size or floor?', choices=('Size', 'Floor')))
+    record.post(Ask(id='p-2', thread='t-2', author='bo', text='Switch on every power for me?', choices=('Yes', 'No')))
 
     board = record.board()
 
     assert [item.post.id for item in needs_person(board)] == ['p-1']
-    # The other agents do not read it as an ask to them.
-    assert brief(board, 'bo', News(seq=board.seq)).open_asks == ()
+    # The other agents do not read the coordinator's ask as an ask to them.
+    assert brief(board, 'cy', News(seq=board.seq)).open_asks == ()
     assert brief(board, 'bo', News(seq=board.seq)).conversation == 't-2'
-    answered = record.post(Answer(id='p-2', thread='t-2', author='person', text='Size', reply_to='p-1'))
-    assert needs_person(answered.board()) == ()
+    # An ask that names the person waits for the person in any thread, as before.
+    named = record.post(Ask(id='p-3', thread='t-2', author='bo', text='May I?', mentions=('person',))).board()
+    assert [item.post.id for item in needs_person(named)] == ['p-1', 'p-3']
+    answered = record.post(Answer(id='p-4', thread='t-2', author='person', text='Size', reply_to='p-1'))
+    assert [item.post.id for item in needs_person(answered.board())] == ['p-3']
 
 
 def test_the_way_back_from_a_move_is_there_while_the_code_can_take_it() -> None:
     record = talk().request('p-1', 'ada', MORE).answered('p-1').time_set(END + timedelta(minutes=120))
-    record.request('p-2', 'ada', AddMove(seat={'harness': 'fake'})).answered('p-2').join('dee')
+    record.request('p-2', 'ada', AddMove(seat=AddSeat(harness='fake'))).answered('p-2').join('dee')
     record.request('p-3', 'ada', SettingMove(key='jobs.at_exit', value='keep')).answered('p-3')
 
     board = record.board()
@@ -433,3 +572,40 @@ def test_the_record_replays_to_the_same_board() -> None:
 
     assert again == record.events
     assert fold(again) == record.board()
+
+
+@pytest.mark.parametrize(
+    'extra',
+    [
+        {'family': 'openai'},
+        {'mode': 'full-access'},
+        {'coordinator': True},
+        {'powers': ['time']},
+        {'reviewer': True},
+        {'count': 2},
+    ],
+)
+def test_a_move_adds_a_seat_that_holds_nothing_but_its_harness_model_effort_on_call_and_a_role(
+    extra: dict[str, object],
+) -> None:
+    seat: dict[str, object] = {
+        'harness': 'fake',
+        'model': 'small',
+        'effort': 'low',
+        'on_call': True,
+        'role': 'maker side',
+    }
+    request = {'kind': 'request', 'id': 'p-1', 'thread': 't-2', 'author': 'ada', 'text': 'One more hand.'}
+    events = TypeAdapter(Event)
+
+    def posted(seat: dict[str, object]) -> dict[str, object]:
+        post = request | {'move': {'type': 'add_agent', 'seat': seat}}
+        return {'type': 'posted', 'seq': 9, 'at': '2026-11-06T12:08:00Z', 'post': post}
+
+    assert AddSeat.model_validate(seat).role == 'maker side'
+    assert events.validate_python(posted(seat)).seq == 9
+    # The schema of the seat refuses the field, and so does a record that holds it.
+    with pytest.raises(ValidationError, match=next(iter(extra))):
+        AddSeat.model_validate(seat | extra)
+    with pytest.raises(ValidationError, match=next(iter(extra))):
+        events.validate_python(posted(seat | extra))

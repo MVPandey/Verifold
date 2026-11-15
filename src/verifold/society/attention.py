@@ -235,7 +235,9 @@ def left_line(board: Board, left: AgentLeft) -> LeftLine:
     """Return an agent that left as one line: who it is, who caused it, and the reason."""
     joined = board.agent(left.agent)
     name = joined.agent.name if joined else left.agent
-    return LeftLine(id=left.agent, name=name, by=left.by, reason=left.reason, through=left.through)
+    return LeftLine(
+        id=left.agent, name=name, by=left.by, reason=left.reason, through=left.through, request=left.request
+    )
 
 
 def departures(board: Board, agent_id: AgentId, after: int, reach: int) -> tuple[LeftLine, ...]:

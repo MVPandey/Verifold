@@ -151,7 +151,7 @@ def check_revision(board: Board, revision: QuestionRevised) -> None:
     told = board.posts[-1] if board.posts else None
     if told is None or told.post.id != revision.post or told.post.author != revision.by or told.seq != board.seq:
         raise RejectedEvent(f'Post {revision.post} is not the post of the person that tells the lab of this revision.')
-    if revision.by != PERSON:
+    if revision.by != PERSON or revision.request:
         check_reviser(board, revision)
 
 
@@ -172,7 +172,7 @@ def check_left(board: Board, left: AgentLeft) -> None:
         raise RejectedEvent('A blind checker is gone after its one check, so it does not leave and nobody removes it.')
     if left.by not in (left.agent, PERSON):
         raise RejectedEvent(f'Only {left.agent} itself or the person can remove {left.agent} from the lab.')
-    if left.through:
+    if left.through or left.request:
         check_removal(board, left)
 
 

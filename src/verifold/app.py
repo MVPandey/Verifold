@@ -42,6 +42,7 @@ from verifold.protocol.app import (
 from verifold.protocol.events import TurnSummary
 from verifold.protocol.ids import PERSON, AgentId, PostId
 from verifold.protocol.join import FileText, PostRequest
+from verifold.protocol.moves import AddSeat
 from verifold.protocol.record import Record
 from verifold.protocol.settings import AtExit, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
@@ -524,13 +525,28 @@ class Host:
             await self._join(lab, number, choice, auto_mode=request.auto_mode)
         await self._launch()
 
-    async def _join(
-        self, lab: Lab, number: int, choice: AgentChoice, *, auto_mode: bool, first: tuple[Build, ...] = ()
+    async def _join(  # noqa: PLR0913
+        self,
+        lab: Lab,
+        number: int,
+        choice: AgentChoice,
+        *,
+        auto_mode: bool,
+        first: tuple[Build, ...] = (),
+        given: tuple[str, AgentId] | None = None,
     ) -> Agent:
-        # Add one agent of a seat to the record, with its name and the facts that the person gave the seat.
+        # Add one agent of a seat to the record, with its name and the facts that the person gave the seat. `given`
+        # is a role that the coordinator gives the seat, which the record keeps as the coordinator's.
         harness = self._catalog[choice.harness]
         agent = _agent(number, harness, choice, self._offers.get(harness.name), _names(lab.board), auto_mode=auto_mode)
-        await lab.join(agent, on_call=choice.on_call, coordinator=choice.coordinator, powers=choice.powers, first=first)
+        await lab.join(
+            agent,
+            on_call=choice.on_call,
+            coordinator=choice.coordinator,
+            powers=choice.powers,
+            first=first,
+            given=given,
+        )
         return agent
 
     async def resume(self) -> None:
@@ -689,12 +705,29 @@ class Host:
                 raise SetupRejected(f'Verifold did not stop {agent.name}, so it needs no new start.')
             await self._run_agent(lab, agent, under_way=True)
 
-    async def add_agents(self, choice: AgentChoice, first: tuple[Build, ...] = ()) -> None:
+    async def add_seat(self, seat: AddSeat, first: tuple[Build, ...], asked_by: AgentId) -> None:
+        """
+        Add the one agent of a seat that the coordinator's move describes, and start it.
+
+        The seat gives a harness, a model, an effort, and whether the agent is on call. Everything else is as in a
+        seat that the person adds with no facts: the family of the harness, the lab's auto mode, no coordinator
+        mark, and no power. A role of the seat is recorded as given by `asked_by`, the coordinator that asked.
+        The record takes `first` in the same step as the agent, before it.
+        """
+        choice = AgentChoice(harness=seat.harness, model=seat.model, effort=seat.effort, on_call=seat.on_call)
+        await self.add_agents(choice, first, given=(seat.role, asked_by) if seat.role else None)
+
+    async def add_agents(
+        self,
+        choice: AgentChoice,
+        first: tuple[Build, ...] = (),
+        given: tuple[str, AgentId] | None = None,
+    ) -> None:
         """
         Add agents of one harness to the lab that runs, and start them.
 
         `first` are events that the record takes in the same step as the first agent, before it: the yes to the
-        coordinator's request that asked for the agent.
+        coordinator's request that asked for the agent. `given` is a role that the coordinator gives the seat.
 
         Raises:
             NoLab: The folder has no lab.
@@ -721,7 +754,9 @@ class Host:
                     await agent_folder(self._project, f'agent-{number}')
                 except (GitError, OSError) as error:
                     raise SetupRejected(f"Can't make the folder of agent-{number}: {error}") from error
-                agent = await self._join(lab, number, choice, auto_mode=lab.board.opened.auto_mode, first=first)
+                agent = await self._join(
+                    lab, number, choice, auto_mode=lab.board.opened.auto_mode, first=first, given=given
+                )
                 first = ()
                 await self._run_agent(lab, agent, under_way=True)
 
@@ -847,7 +882,7 @@ class Host:
         own = any(entry.post.author == agent.id for entry in board.posts)
         folder = await agent_folder(self._project, agent.id)
         member = Member(
-            lab, agent.id, pin=partial(pin, folder, agent.id), seen=before(board, agent.id).seen, adds=self.add_agents
+            lab, agent.id, pin=partial(pin, folder, agent.id), seen=before(board, agent.id).seen, adds=self.add_seat
         )
         self._members.add_guest(member, digest)
         # A `brief` leaves no mark on the record, so an agent that only read the board shows as invited again.
@@ -872,7 +907,7 @@ class Host:
         # The seat starts at what the record says that the agent had seen. So after a restart, the posts for the
         # agent that came since reach it by the usual rules.
         seen = before(lab.board, agent.id).seen
-        member = Member(lab, agent.id, pin=partial(pin, folder, agent.id), seen=seen, adds=self.add_agents)
+        member = Member(lab, agent.id, pin=partial(pin, folder, agent.id), seen=seen, adds=self.add_seat)
         setup = AgentSetup(
             agent=agent,
             harness=self._catalog[agent.harness],

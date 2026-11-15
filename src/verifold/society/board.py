@@ -41,7 +41,7 @@ class Board:
     opened: LabOpened
     seq: int
     revisions: tuple[QuestionRevised, ...] = ()
-    """The person's revisions of the question, oldest first."""
+    """The revisions of the question, oldest first. Each one says who made it and which request it came from."""
     agents: tuple[AgentJoined, ...] = ()
     """Each agent's entry, with the name that the agent has now."""
     labels: tuple[tuple[int, AgentId, str], ...] = ()
@@ -173,9 +173,14 @@ class Board:
         holder = self.coordinator
         if holder is None:
             return frozenset()
-        since = self.coordinators[-1].seq
+        since = self.seat_since
         switches = {entry.power: entry.on for entry in self.power_sets if entry.seq > since and entry.agent == holder}
         return frozenset(power for power, on in switches.items() if on)
+
+    @property
+    def seat_since(self) -> int:
+        """The event of the latest change of the coordinator seat, or zero when the seat never changed."""
+        return self.coordinators[-1].seq if self.coordinators else 0
 
     @property
     def conversation(self) -> ThreadId | None:

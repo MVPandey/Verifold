@@ -28,6 +28,7 @@ from verifold.protocol.app import (
 )
 from verifold.protocol.events import Posted, TurnSummary
 from verifold.protocol.join import FileText, PostRequest
+from verifold.protocol.moves import AddSeat
 from verifold.protocol.posts import Ask, FileEvidence, Objection, PermissionShown, Result
 from verifold.protocol.settings import Settings
 from verifold.protocol.usage import Usage
@@ -109,8 +110,10 @@ class Host:
         self.norms_text = change.text
         return self.norms().model_copy(update={'told': 'p-9'})
 
-    async def add_agents(self, choice: AgentChoice, first: tuple[Build, ...] = ()) -> None:
-        assert first == ()
+    async def add_seat(self, seat: AddSeat, first: tuple[Build, ...], asked_by: str) -> None:
+        raise SetupRejected(f'This stand-in starts no agent for {asked_by}: {seat.harness}, {len(first)}.')
+
+    async def add_agents(self, choice: AgentChoice) -> None:
         if choice.harness != 'fake':
             raise SetupRejected('Unknown harness nope.')
         self.added.append(choice)

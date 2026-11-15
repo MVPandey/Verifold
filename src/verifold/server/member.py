@@ -86,6 +86,8 @@ class Member:
             how = 'The person removed you from this lab' if left.by == PERSON else 'You left this lab'
             if left.through:
                 how = f'{left.through}, the coordinator, removed you from this lab with a power that the person gave it'
+            elif left.request:
+                how = f"The person removed you from this lab, with a yes to the coordinator's request {left.request}"
             raise HasLeft(f'{how}, so the board takes no call from you. Your posts stay on it.')
 
     async def leave(self, reason: str = '') -> AgentLeft:

@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Final, Self, assert_never
 
-from verifold.protocol.agents import Agent, AgentChoice, Picture, Power, one_line
+from verifold.protocol.agents import Agent, Picture, Power, one_line
 from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
@@ -36,13 +36,13 @@ from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import PostRequest
 from verifold.protocol.moves import (
     AddMove,
+    AddSeat,
     Move,
     PermissionMove,
     QuestionMove,
     RemoveMove,
     SettingMove,
     TimeMove,
-    power_of,
 )
 from verifold.protocol.posts import (
     MAX_HEADLINE,
@@ -60,7 +60,7 @@ from verifold.protocol.threads import CONVERSATION_TITLE, QUESTION_TITLE, Carrie
 from verifold.server.changes import wait_until
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.society.board import Board
-from verifold.society.coordinator import check_asks, permission_choice, time_given
+from verifold.society.coordinator import check_asks, permission_choice, power_covers, time_given
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
 from verifold.society.labels import awaits_model, is_numbered, label, plain
@@ -72,10 +72,11 @@ from verifold.store.record_file import RecordFile
 
 type Clock = Callable[[], datetime]
 type Build = Callable[[Board, int, datetime], Event]
-type Adds = Callable[[AgentChoice, tuple[Build, ...]], Awaitable[None]]
+type Adds = Callable[[AddSeat, tuple[Build, ...], AgentId], Awaitable[None]]
 """
-Adds one agent to the lab and starts it. The record takes the given events first, in the same step as the agent,
-so that it says where the agent came from.
+Adds one agent to the lab in the seat that a move describes, and starts it. The record takes the given events
+first, in the same step as the agent, so that it says where the agent came from. The agent is the coordinator
+that asked for the seat: a role of the seat is recorded as given by it.
 """
 
 
@@ -140,7 +141,7 @@ class Lab:
         """The board after every event so far."""
         return self._board
 
-    async def join(
+    async def join(  # noqa: PLR0913
         self,
         agent: Agent,
         *,
@@ -148,6 +149,7 @@ class Lab:
         coordinator: bool = False,
         powers: tuple[Power, ...] = (),
         first: tuple[Build, ...] = (),
+        given: tuple[str, AgentId] | None = None,
     ) -> AgentJoined:
         """
         Add an agent to the lab.
@@ -155,7 +157,8 @@ class Lab:
         With `on_call`, the person put its seat on call. With `coordinator`, the person made it the lab's
         coordinator, and `powers` are the powers that the person switched on for it. The record takes all of them
         in the same step as the agent. `first` are events that come before the agent in that step, such as the
-        yes to the request that asked for it.
+        yes to the request that asked for it. `given` is a role for the seat and the coordinator that gives it:
+        the record keeps it as the coordinator's word, in the same step.
         """
         builds: list[Build] = [*first, lambda _, seq, at: AgentJoined(seq=seq, at=at, agent=agent)]
         if on_call:
@@ -163,6 +166,9 @@ class Lab:
         if coordinator:
             builds.append(lambda _, seq, at: CoordinatorSet(seq=seq, at=at, agent=agent.id, by=PERSON))
             builds += [_power(power, agent.id) for power in powers]
+        if given:
+            role, by = given
+            builds.append(lambda _, seq, at: ProfileSet(seq=seq, at=at, agent=agent.id, given_role=role, by=by))
         board = await self._commit(*builds)
         return next(entry for entry in reversed(board.agents) if entry.agent.id == agent.id)
 
@@ -519,9 +525,9 @@ class Lab:
         """
         Post the coordinator's request for a move in the conversation with the person, and return the post.
 
-        The request opens the conversation when the lab has none. While the person's power for this kind of move is
-        on, the same step records the coordinator's yes and makes the move. Otherwise the request waits for the
-        person's answer, and nothing else changes.
+        The request opens the conversation when the lab has none. While the person's power covers the move, the
+        same step records the coordinator's yes and makes the move. Otherwise the request waits for the person's
+        answer, and nothing else changes: so it does when the lab's time ran out or the person stopped the lab.
 
         Raises:
             RejectedEvent: The author does not hold the coordinator seat, or the move cannot be made.
@@ -546,13 +552,13 @@ class Lab:
             return Posted(seq=seq, at=at, post=request)
 
         builds: tuple[Build, ...] = (*opens, post)
-        if power_of(move) in board.powers:
+        if power_covers(board, move, self._clock()):
             builds = (*builds, _answered(None, author, yes=True))
             if isinstance(move, AddMove):
-                await _add(adds, move, builds)
+                await _add(adds, move, builds, author)
                 board = self._board
             else:
-                board = await self._commit(*builds, *_effects(board, move, author, text))
+                board = await self._commit(*builds, *_effects(board, move, author))
         else:
             board = await self._commit(*builds)
         return next(
@@ -592,9 +598,9 @@ class Lab:
         if not yes or request is None:
             await self._commit(*builds)
         elif isinstance(request.move, AddMove):
-            await _add(adds, request.move, builds)
+            await _add(adds, request.move, builds, request.author)
         else:
-            await self._commit(*builds, *_effects(board, request.move, PERSON, request.text, minutes))
+            await self._commit(*builds, *_effects(board, request.move, PERSON, minutes))
         return self._board.answers[-1]
 
     async def take_minutes_back(self, request_id: PostId) -> None:
@@ -656,9 +662,11 @@ NO: Final = 'Not now'
 """The person's answer to a request for a move, as the conversation shows it."""
 
 
-def _revision(board: Board, question: str, note: str, by: AgentId) -> tuple[Build, ...]:
+def _revision(board: Board, question: str, note: str, by: AgentId, *, requested: bool = False) -> tuple[Build, ...]:
     # The post that tells the lab of a revision, in the question's thread, and the revision after it. A lab from
-    # before the question had a thread gets one thread for these posts.
+    # before the question had a thread gets one thread for these posts, whoever revised the question first. With
+    # `requested`, the revision is the move of the request that just got its yes.
+    earlier = {told.post.thread for revision in board.revisions if (told := board.post(revision.post))}
     whole = f'{REVISED if by == PERSON else REVISED_FOR_PERSON}{question}'
     text = _headline(whole)
     # A question that fits in the headline is not repeated in the body.
@@ -668,7 +676,8 @@ def _revision(board: Board, question: str, note: str, by: AgentId) -> tuple[Buil
         (
             opened.thread.id
             for opened in board.threads
-            if opened.thread.opened_by == PERSON and opened.thread.title == REVISED_TITLE
+            if opened.thread.title == REVISED_TITLE
+            and (opened.thread.opened_by == PERSON or opened.thread.id in earlier)
         ),
         None,
     )
@@ -685,7 +694,13 @@ def _revision(board: Board, question: str, note: str, by: AgentId) -> tuple[Buil
         *opens,
         _add_post(request, by, ()),
         lambda board, seq, at: QuestionRevised(
-            seq=seq, at=at, question=question, note=note, post=board.posts[-1].post.id, by=by
+            seq=seq,
+            at=at,
+            question=question,
+            note=note,
+            post=board.posts[-1].post.id,
+            by=by,
+            request=board.answers[-1].request if requested else None,
         ),
     )
 
@@ -703,24 +718,23 @@ def _answered(request_id: PostId | None, by: AgentId, *, yes: bool, minutes: int
     return build
 
 
-async def _add(adds: Adds | None, move: AddMove, first: tuple[Build, ...]) -> None:
+async def _add(adds: Adds | None, move: AddMove, first: tuple[Build, ...], asked_by: AgentId) -> None:
     if adds is None:
         raise SetupRejected('This lab cannot start an agent from here.')
-    await adds(move.seat, first)
+    await adds(move.seat, first, asked_by)
 
 
 type RecordedMove = TimeMove | PermissionMove | RemoveMove | SettingMove | QuestionMove
 """A move that the record alone makes. A move that adds an agent is not one, because the host starts the agent."""
 
 
-def _effects(
-    board: Board, move: RecordedMove, by: AgentId, reason: str, minutes: int | None = None
-) -> tuple[Build, ...]:
+def _effects(board: Board, move: RecordedMove, by: AgentId, minutes: int | None = None) -> tuple[Build, ...]:
     """
     Return the events that make a move after the yes to its request. `by` is who said yes.
 
-    They are the events that the person's own move records. `reason` is the headline of the request, and
-    `minutes` is the amount that the person gave in place of the request's.
+    They are the events that the person's own move records, and each names the request where its record can.
+    `minutes` is the amount that the person gave in place of the request's. No event holds the coordinator's
+    words as the person's: the reason stays in the request.
     """
     match move:
         case TimeMove():
@@ -728,13 +742,14 @@ def _effects(
         case PermissionMove():
             return (_permission_answer(move, by),)
         case RemoveMove():
-            return (_removal(move, by, reason),)
+            return (_removal(move, by),)
         case SettingMove():
             return (_setting(move),)
         case QuestionMove():
             if move.question == board.question:
                 raise RejectedEvent('The question has this text already.')
-            return _revision(board, move.question, move.note, by)
+            # The note is the coordinator's word. The person's revision carries none of it.
+            return _revision(board, move.question, '' if by == PERSON else move.note, by, requested=True)
         case _:
             assert_never(move)
 
@@ -766,11 +781,12 @@ def _permission_answer(move: PermissionMove, by: AgentId) -> Build:
     return build
 
 
-def _removal(move: RemoveMove, by: AgentId, reason: str) -> Build:
-    # The removal is the person's. With the coordinator's power, it names the coordinator too.
+def _removal(move: RemoveMove, by: AgentId) -> Build:
+    # The removal is the person's. With the coordinator's power, it names the coordinator too. The reason is the
+    # coordinator's, so it stays in the request, which the removal names.
     through = None if by == PERSON else by
-    return lambda _, seq, at: AgentLeft(
-        seq=seq, at=at, agent=move.agent, by=PERSON, reason=one_line(reason)[:200], through=through
+    return lambda board, seq, at: AgentLeft(
+        seq=seq, at=at, agent=move.agent, by=PERSON, through=through, request=board.answers[-1].request
     )
 
 

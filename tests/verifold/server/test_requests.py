@@ -1,5 +1,6 @@
 import asyncio
 from datetime import timedelta
+from pathlib import Path
 
 import httpx2
 import pytest
@@ -8,11 +9,20 @@ from mcp import Client
 from pydantic import SecretStr, ValidationError
 
 from verifold.protocol.agents import Agent, AgentChoice, ModelSpec
-from verifold.protocol.events import AgentJoined, AgentLeft, Posted, PowerSet, RequestAnswered, TimeSet
+from verifold.protocol.events import AgentJoined, AgentLeft, Posted, PowerSet, ProfileSet, RequestAnswered, TimeSet
 from verifold.protocol.join import MoveForm, PostRequest
-from verifold.protocol.moves import AddMove, PermissionMove, QuestionMove, RemoveMove, SettingMove, TimeMove
+from verifold.protocol.moves import (
+    AddMove,
+    AddSeat,
+    PermissionMove,
+    QuestionMove,
+    RemoveMove,
+    SettingMove,
+    TimeMove,
+)
 from verifold.protocol.posts import Answer, Message, MoveRequest
-from verifold.protocol.settings import AtExit
+from verifold.protocol.settings import AtExit, AtTimeLimit
+from verifold.runner.messages import start_message
 from verifold.runner.permissions import ask_the_person
 from verifold.runner.session import PermissionChoice, PermissionRequest
 from verifold.server.activity import Activity
@@ -201,17 +211,20 @@ async def test_a_yes_removes_an_agent_as_the_person_and_a_power_names_the_coordi
 
     left = led.board.gone('bo')
     assert left is not None
-    assert (left.by, left.through, left.reason) == ('person', None, 'Bo repeats the same run.')
+    # The coordinator's words stay in its request, which the removal names. They are no reason of the person.
+    assert (left.by, left.through, left.reason, left.request) == ('person', None, '', asked.post.id)
 
     await led.set_power('agents', on=True)
     await led.request(RemoveMove(agent='cy'), 'Cy has no line.', '', 'ada')
 
     gone = led.board.gone('cy')
     assert isinstance(gone, AgentLeft)
-    assert (gone.by, gone.through) == ('person', 'ada')
+    assert (gone.by, gone.through, gone.reason) == ('person', 'ada', '')
     with pytest.raises(HasLeft, match='ada, the coordinator, removed you from this lab with a power'):
         Member(led, 'cy').check_here()
-    with pytest.raises(HasLeft, match='The person removed you'):
+    with pytest.raises(
+        HasLeft, match=f"The person removed you from this lab, with a yes to the coordinator's request {asked.post.id}"
+    ):
         Member(led, 'bo').check_here()
 
 
@@ -260,18 +273,6 @@ async def test_a_move_revises_the_question_as_the_person_or_under_the_power_as_t
     assert await led.revise_question(' Does it hold? ') is None
 
 
-async def test_the_question_of_a_lab_without_a_question_thread_is_revised_in_a_thread_of_its_own(led: Lab) -> None:
-    await led.set_power('question', on=True)
-
-    await led.request(QuestionMove(question='Is it stable?'), 'Stability first.', '', 'ada')
-
-    told = led.board.post(led.board.revisions[-1].post)
-    assert told is not None
-    thread = led.board.thread(told.post.thread)
-    assert thread is not None
-    assert (thread.thread.title, thread.thread.opened_by) == ('The question, revised', 'ada')
-
-
 async def test_the_coordinators_move_decides_another_agents_permission_request(led: Lab) -> None:
     await led.set_power('permissions', on=True)
     seq = led.board.seq
@@ -314,16 +315,16 @@ async def test_the_persons_yes_to_a_request_decides_the_permission_request_with_
 
 
 async def test_a_move_adds_an_agent_in_one_step_with_its_yes(led: Lab, record_file: RecordFile) -> None:
-    added: list[AgentChoice] = []
+    added: list[tuple[AddSeat, str]] = []
 
-    async def adds(choice: AgentChoice, first: tuple[Build, ...]) -> None:
-        added.append(choice)
+    async def adds(seat: AddSeat, first: tuple[Build, ...], asked_by: str) -> None:
+        added.append((seat, asked_by))
         joined = Agent(
             id=f'agent-{len(added)}', name=f'Agent {len(added)}', harness='fake', model=ModelSpec(family='x')
         )
-        await led.join(joined, first=first)
+        await led.join(joined, first=first, given=(seat.role, asked_by) if seat.role else None)
 
-    seat = AgentChoice(harness='fake', role='maker side')
+    seat = AddSeat(harness='fake', role='maker side')
     asked = await led.request(AddMove(seat=seat), 'The maker side has one agent.', '', 'ada', adds)
     assert added == []
     seen = led.board.seq
@@ -333,23 +334,97 @@ async def test_a_move_adds_an_agent_in_one_step_with_its_yes(led: Lab, record_fi
 
     await led.answer_request(asked.post.id, yes=True, adds=adds)
 
-    assert added == [seat]
-    assert kinds(led, record_file, seen) == [Posted, RequestAnswered, AgentJoined]
+    assert added == [(seat, 'ada')]
+    assert kinds(led, record_file, seen) == [Posted, RequestAnswered, AgentJoined, ProfileSet]
+    # The role is the coordinator's word for the seat, also after the person's yes. It never reads as the person's.
+    joined = led.board.agent('agent-1')
+    assert joined is not None
+    assert (joined.agent.given_role, led.board.given_role('agent-1')) == ('', ('maker side', 'ada'))
+    assert 'ada, as the coordinator of the lab, gave your seat this role: maker side' in start_message(
+        led.board, joined.agent, Path('LAB.md')
+    )
 
     await led.set_power('agents', on=True)
     seen = led.board.seq
     with pytest.raises(SetupRejected, match='cannot start an agent from here'):
         await led.request(AddMove(seat=seat), 'One more.', '', 'ada')
     assert led.board.seq == seen
-    again = await led.request(AddMove(seat=seat), 'One more.', '', 'ada', adds)
+    again = await led.request(AddMove(seat=AddSeat(harness='fake')), 'One more.', '', 'ada', adds)
     assert kinds(led, record_file, seen) == [Posted, RequestAnswered, AgentJoined]
     answered = led.board.answer_to(again.post.id)
     assert answered is not None
     assert (answered.by, len(added)) == ('ada', 2)
-    with pytest.raises(ValidationError, match='A move adds one agent'):
-        AddMove(seat=AgentChoice(harness='fake', count=2))
-    with pytest.raises(ValidationError, match='A move adds one agent'):
-        AddMove(seat=AgentChoice(harness='fake', coordinator=True))
+
+
+async def test_no_power_makes_a_move_after_the_person_stopped_the_lab_and_the_request_waits(led: Lab) -> None:
+    for power in ('agents', 'settings', 'question', 'time'):
+        await led.set_power(power, on=True)
+    await led.set_time_left(timedelta(0))
+    settings, question, ends_at = led.board.settings, led.board.question, led.board.ends_at
+
+    asked = [
+        await led.request(move, 'It helps.', '', 'ada')
+        for move in (
+            SettingMove(key='jobs.at_time_limit', value='stop'),
+            QuestionMove(question='Something else entirely'),
+            RemoveMove(agent='bo'),
+            AddMove(seat=AddSeat(harness='fake')),
+            MORE,
+        )
+    ]
+
+    # Each request is on the board for the person, and nothing else changed.
+    assert [item.post.id for item in needs_person(led.board)] == [entry.post.id for entry in asked]
+    assert (led.board.answers, led.board.gone('bo')) == ((), None)
+    assert (led.board.settings, led.board.question, led.board.ends_at) == (settings, question, ends_at)
+    # The person's own yes still makes a move.
+    await led.answer_request(asked[-1].post.id, yes=True)
+    assert led.board.ends_at is not None
+    assert ends_at is not None
+    assert led.board.ends_at > ends_at
+
+
+async def test_the_settings_power_sets_no_value_that_outlasts_a_stop(led: Lab) -> None:
+    await led.set_power('settings', on=True)
+
+    strict = await led.request(SettingMove(key='jobs.at_time_limit', value='stop'), 'Free the GPU.', '', 'ada')
+    loose = await led.request(SettingMove(key='jobs.at_time_limit', value='finish'), 'Let it run.', '', 'ada')
+    kept = await led.request(SettingMove(key='jobs.at_exit', value='keep'), 'Let it run.', '', 'ada')
+
+    assert led.board.answer_to(strict.post.id) is not None
+    assert led.board.settings.jobs.at_time_limit is AtTimeLimit.STOP
+    assert [item.post.id for item in needs_person(led.board)] == [loose.post.id, kept.post.id]
+
+
+async def test_a_request_from_an_earlier_holding_of_the_seat_never_comes_back(led: Lab) -> None:
+    asked = await led.request(MORE, 'More.', '', 'ada')
+    await led.set_coordinator('bo', 'person')
+    assert needs_person(led.board) == ()
+
+    await led.set_coordinator('ada', 'person')
+
+    assert needs_person(led.board) == ()
+    with pytest.raises(RejectedEvent, match='The coordinator seat changed after ada asked'):
+        await led.answer_request(asked.post.id, yes=True)
+
+
+async def test_the_question_of_a_lab_without_a_question_thread_has_one_thread_for_every_revision(led: Lab) -> None:
+    await led.set_power('question', on=True)
+
+    await led.request(QuestionMove(question='Is it stable?'), 'Stability first.', '', 'ada')
+    await led.request(QuestionMove(question='Is it stable at size?'), 'And size.', '', 'ada')
+    await led.revise_question('Is it stable at any size?')
+
+    threads = {told.post.thread for revision in led.board.revisions if (told := led.board.post(revision.post))}
+    assert len(threads) == 1
+    opened = led.board.thread(next(iter(threads)))
+    assert opened is not None
+    assert (opened.thread.title, opened.thread.opened_by) == ('The question, revised', 'ada')
+    assert [(revision.by, revision.request is not None) for revision in led.board.revisions] == [
+        ('ada', True),
+        ('ada', True),
+        ('person', False),
+    ]
 
 
 async def test_the_person_takes_the_minutes_of_a_request_back_while_nothing_else_changed_the_time(led: Lab) -> None:
@@ -384,9 +459,10 @@ async def test_an_invited_coordinator_asks_for_nothing_while_the_lab_is_out_of_t
 
 def test_a_move_form_takes_the_fields_of_its_kind_and_refuses_the_rest() -> None:
     seat = MoveForm(move='add_agent', harness='fake', model='mini', role='maker side', on_call=True).to_move()
+    assert 'family' not in MoveForm.model_fields
     setting = MoveForm(move='setting', setting='jobs.at_time_limit', value='finish').to_move()
 
-    assert seat == AddMove(seat=AgentChoice(harness='fake', model='mini', role='maker side', on_call=True))
+    assert seat == AddMove(seat=AddSeat(harness='fake', model='mini', role='maker side', on_call=True))
     assert setting == SettingMove(key='jobs.at_time_limit', value='finish')
     assert MoveForm(move='time', minutes=30).to_move() == TimeMove(minutes=30)
     assert MoveForm(move='remove_agent', agent='bo').to_move() == RemoveMove(agent='bo')
@@ -410,6 +486,11 @@ async def test_the_coordinator_asks_through_its_tool_and_the_board_refuses_every
         asked = await client.call_tool('request', {'move': 'time', 'text': 'The depth run needs it.', 'minutes': 120})
         brief = await client.call_tool('brief', {})
         no_amount = await client.call_tool('request', {'move': 'time', 'text': 'No amount.'})
+        seat = {'move': 'add_agent', 'text': 'One more.', 'harness': 'fake'}
+        refused_fields = [
+            await client.call_tool('request', seat | extra)
+            for extra in ({'family': 'openai'}, {'mode': 'full-access'}, {'coordinator': True}, {'count': 2})
+        ]
     async with Client(join_server(lambda _: Member(led, 'bo'))) as client:
         other = await client.call_tool('request', {'move': 'time', 'text': 'I want time.', 'minutes': 5})
         forged = await client.call_tool(
@@ -418,6 +499,11 @@ async def test_the_coordinator_asks_through_its_tool_and_the_board_refuses_every
         )
 
     assert no_amount.is_error
+    # The tool has no argument for what a move's seat never holds. Such an argument reaches no record.
+    assert len(refused_fields) == 4
+    moves = [entry.post.move for entry in led.board.posts if isinstance(entry.post, MoveRequest)]
+    seats = [move.seat for move in moves if isinstance(move, AddMove)]
+    assert seats == [AddSeat(harness='fake')] * 4
     assert 'minutes' in str(no_amount.content)
     assert 'Only the agent that holds the coordinator seat asks' in str(other.content)
     assert 'Only the agent that holds the coordinator seat marks' in str(forged.content)
@@ -436,7 +522,7 @@ async def test_the_coordinator_asks_through_its_tool_and_the_board_refuses_every
     )
     assert (brief.structured_content['conversation'], brief.structured_content['powers']) == (talk, [])
     posts = [entry.post for entry in led.board.posts if entry.post.thread == talk]
-    assert [type(post) for post in posts] == [Message, MoveRequest]
+    assert [type(post) for post in posts] == [Message, *[MoveRequest] * 5]
 
 
 class Host:
@@ -445,10 +531,10 @@ class Host:
     def __init__(self, lab: Lab) -> None:
         self.lab = lab
 
-    async def add_agents(self, choice: AgentChoice, first: tuple[Build, ...] = ()) -> None:
-        if choice.harness != 'fake':
-            raise SetupRejected(f'Unknown harness {choice.harness}.')
-        await self.lab.join(agent('dee'), first=first)
+    async def add_seat(self, seat: AddSeat, first: tuple[Build, ...], asked_by: str) -> None:
+        if seat.harness != 'fake':
+            raise SetupRejected(f'Unknown harness {seat.harness}.')
+        await self.lab.join(agent('dee'), first=first, given=(seat.role, asked_by) if seat.role else None)
 
 
 async def test_the_person_reads_the_conversation_switches_powers_and_answers_requests(led: Lab) -> None:
@@ -461,8 +547,8 @@ async def test_the_person_reads_the_conversation_switches_powers_and_answers_req
         empty = (await client.get('/conversation')).json()
         said = await client.post('/posts', json={'kind': 'message', 'text': 'Where are we?', 'conversation': True})
         time = await led.request(MORE, 'The depth run needs it.', '', 'ada')
-        seat = await led.request(AddMove(seat=AgentChoice(harness='fake')), 'One more hand.', '', 'ada')
-        wrong = await led.request(AddMove(seat=AgentChoice(harness='nope')), 'Another harness.', '', 'ada')
+        seat = await led.request(AddMove(seat=AddSeat(harness='fake')), 'One more hand.', '', 'ada')
+        wrong = await led.request(AddMove(seat=AddSeat(harness='nope')), 'Another harness.', '', 'ada')
         waiting = (await client.get('/conversation')).json()
         lab_view = (await client.get('/lab')).json()
         yes = await client.post(f'/requests/{time.post.id}', json={'yes': True, 'minutes': 45})
@@ -514,5 +600,16 @@ async def test_the_conversation_names_the_permission_requests_that_its_requests_
         view = (await client.get('/conversation')).json()
 
     assert [item['post']['id'] for item in view['asks']] == [ask.id]
+    # Another agent's ask to the person in the conversation waits on the Needs you page, and not in the panel.
+    other = await led.post(
+        PostRequest(kind='ask', text='Switch on every power?', conversation=True, mentions=('person',)), 'bo'
+    )
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=api), base_url='http://lab', headers=headers
+    ) as client:
+        panel = (await client.get('/conversation')).json()
+        needs = (await client.get('/needs')).json()
+    assert other.post.id not in panel['waits']
+    assert other.post.id in [item['post']['id'] for item in needs]
     assert view['asks'][0]['post']['shown']['command'] == './gpu train | tail'
     deciding.cancel()
