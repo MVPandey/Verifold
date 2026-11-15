@@ -5,13 +5,13 @@ import pytest
 from builders import START, RecordBuilder, lab
 
 from verifold.protocol.events import AlarmSet
-from verifold.protocol.join import News
+from verifold.protocol.join import AlarmLine, News
 from verifold.protocol.posts import Answer, Close, Message, Objection, Result, RuledOut
 from verifold.runner.messages import start_message
-from verifold.society.attention import update, wakes
+from verifold.society.attention import news, update, wakes
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply
-from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
+from verifold.society.lifecycle import alarm_line, lab_state, pending_alarm, rings_at
 from verifold.society.lines import lines_of
 from verifold.society.standing import agreed, closing
 from verifold.society.views import brief
@@ -53,31 +53,86 @@ def test_a_close_takes_no_agreement_from_its_author_and_its_author_can_withdraw_
     assert lab_state(record.board()) == 'open'
 
 
-def test_an_alarm_waits_from_the_turn_in_which_the_agent_set_it_until_its_next_turn(record: RecordBuilder) -> None:
-    def alarm(minutes: float, *, quiet: bool = False, agent: str = 'bo') -> None:
-        seq = len(record.events) + 1
-        record.events.append(AlarmSet(seq=seq, at=record.at(seq), agent=agent, minutes=minutes, quiet=quiet))
+def set_alarm(
+    record: RecordBuilder, minutes: float, *, quiet: bool = False, agent: str = 'bo', stays: bool = True
+) -> AlarmSet:
+    seq = len(record.events) + 1
+    alarm = AlarmSet(seq=seq, at=record.at(seq), agent=agent, minutes=minutes, quiet=quiet, stays=stays)
+    record.events.append(alarm)
+    return alarm
 
-    alarm(10)
+
+def test_an_alarm_stays_until_it_rings_or_its_agent_replaces_or_cancels_it(record: RecordBuilder) -> None:
+    assert (pending_alarm(record.board(), 'bo'), alarm_line(record.board(), 'bo')) == (None, None)
+    first = set_alarm(record, 10)
+    # It waits from the moment that the agent set it, in its turn too, so the agent can read it back.
+    assert pending_alarm(record.board(), 'bo') == first
+    assert pending_alarm(record.board(), 'ada') is None
+
+    # A turn that starts and ends for another reason, such as a doorbell, does not spend it.
+    record.turn('bo').start('bo', seen=0).turn('bo')
+    board = record.board()
+    assert pending_alarm(board, 'bo') == first
+    assert alarm_line(board, 'bo') == AlarmLine(minutes=10, rings_at=first.at + timedelta(minutes=10))
+
+    # A new alarm replaces it.
+    second = set_alarm(record, 20, quiet=True)
+    assert pending_alarm(record.board(), 'bo') == second
+
+    # It rings 20 minutes after the newest post, and a new post moves that.
+    assert rings_at(record.board(), second) == second.at + timedelta(minutes=20)
+    record.post(Message(id='p-1', thread='t-1', author='ada', text='Still here.'))
+    quiet_until = record.board().posts[-1].at + timedelta(minutes=20)
+    assert rings_at(record.board(), second) == quiet_until
+    assert alarm_line(record.board(), 'bo') == AlarmLine(minutes=20, quiet=True, rings_at=quiet_until)
+
+    # The turn that starts with its ring spends it. The ring of an earlier alarm does not.
+    record.start('bo', seen=0, rang=first.seq)
+    assert pending_alarm(record.board(), 'bo') == second
+    record.turn('bo').start('bo', seen=0, rang=second.seq)
+    assert pending_alarm(record.board(), 'bo') is None
+
+    # Zero minutes cancels one.
+    set_alarm(record, 30)
+    set_alarm(record, 0)
+    assert (pending_alarm(record.board(), 'bo'), alarm_line(record.board(), 'bo')) == (None, None)
+
+
+def test_an_agent_reads_its_alarm_in_its_brief_and_in_every_news(record: RecordBuilder) -> None:
+    alarm = set_alarm(record, 15)
+    board = record.board()
+    line = AlarmLine(minutes=15, rings_at=alarm.at + timedelta(minutes=15))
+
+    assert (news(board, 'bo', 0).alarm, update(board, 'bo', 0).alarm) == (line, line)
+    assert (news(board, 'ada', 0).alarm, update(board, 'ada', 0).alarm) == (None, None)
+    assert (brief(board, 'bo', News(seq=0)).your_alarm, brief(board, 'ada', News(seq=0)).your_alarm) == (line, None)
+
+    # No alarm rings in a closed lab, so the alarm waits and has no time.
+    record.post(Close(id='p-1', thread='t-1', author='ada', text='Done.'))
+    record.post(Answer(id='p-2', thread='t-1', author='bo', text='Agreed.', reply_to='p-1', accepts=True))
+    assert news(record.board(), 'bo', 0).alarm == AlarmLine(minutes=15, rings_at=None)
+
+
+def test_an_alarm_from_an_older_record_keeps_the_rule_of_its_time(record: RecordBuilder) -> None:
+    # A record from before Verifold kept alarms across turns says of no alarm that it stays.
+    old = AlarmSet.model_validate({'type': 'alarm_set', 'seq': 6, 'at': START, 'agent': 'bo', 'minutes': 10})
+    assert not old.stays
+
+    set_alarm(record, 10, stays=False)
     # The agent is still in its turn, so nothing waits yet.
     assert pending_alarm(record.board(), 'bo') is None
-    alarm(20, quiet=True)
+    set_alarm(record, 20, quiet=True, stays=False)
     record.turn('bo')
     waiting = pending_alarm(record.board(), 'bo')
     assert waiting is not None
     assert (waiting.minutes, waiting.quiet) == (20, True)
-    assert pending_alarm(record.board(), 'ada') is None
 
-    # It rings 20 minutes after the newest post, and a new post moves that.
-    assert rings_at(record.board(), waiting) == waiting.at + timedelta(minutes=20)
-    record.post(Message(id='p-1', thread='t-1', author='ada', text='Still here.'))
-    assert rings_at(record.board(), waiting) == record.board().posts[-1].at + timedelta(minutes=20)
-
-    # The agent's next turn spends the alarm, and zero minutes cancels one.
-    record.turn('bo')
-    assert pending_alarm(record.board(), 'bo') is None
-    alarm(30)
-    alarm(0)
+    # The start of the agent's next turn spends it, and so does that turn's end in a record without turn starts.
+    assert pending_alarm(record.start('bo', seen=0).board(), 'bo') is None
+    record.events.pop()
+    assert pending_alarm(record.turn('bo').board(), 'bo') is None
+    set_alarm(record, 30, stays=False)
+    set_alarm(record, 0, stays=False)
     record.turn('bo')
     assert pending_alarm(record.board(), 'bo') is None
 

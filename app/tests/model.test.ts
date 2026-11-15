@@ -12,13 +12,14 @@ import {
   labTotal,
   leftLine,
   listed,
+  memberLine,
   members,
   ownName,
   present,
   stateLine,
   workingLine,
 } from '../src/model/agents.ts';
-import { duration, minutesBetween, money, tokens } from '../src/model/format.ts';
+import { clock, duration, minutesBetween, money, tokens } from '../src/model/format.ts';
 import { orderNeeds, pauses } from '../src/model/needs.ts';
 import {
   builtOnLabel,
@@ -280,6 +281,42 @@ describe('agents', () => {
       '0 of 1 member working, 1 blind rerun',
     );
     assert.equal(workingLine([rerun, rerun]), '0 of 0 members working, 2 blind reruns');
+  });
+
+  it('says what wakes a member that is in no turn', () => {
+    const now = new Date('2026-11-06T14:12:00Z');
+    const rings = '2026-11-06T14:20:00Z';
+    const idle = { state: 'idle', detail: '', at: '2026-11-06T12:37:00Z' } as const;
+    const rested = agentView('agent-1', { activity: idle, turn_ended_at: '2026-11-06T12:37:00Z' });
+    assert.deepEqual(memberLine({ ...rested, rings_at: rings }, false, now), {
+      text: `Waits for its alarm at ${clock(rings)}.`,
+      dot: 'idle',
+    });
+    assert.deepEqual(memberLine(rested, false, now), {
+      text: 'Ended its turn 1 h 35 min ago and set no alarm. A post that names it wakes it.',
+      dot: 'idle',
+    });
+    assert.equal(
+      memberLine({ ...rested, turn_ended_at: '2026-11-06T14:11:40Z' }, false, now).text,
+      'Ended its turn just now and set no alarm. A post that names it wakes it.',
+    );
+    // No alarm rings in a lab that is out of time or closed, so the line names none.
+    assert.equal(memberLine({ ...rested, rings_at: rings }, true, now).text, 'Idle, 1 h 35 min');
+    // An agent that waits again after a restart and has no turn in the record keeps the plain line.
+    assert.equal(
+      memberLine(agentView('agent-1', { activity: idle }), false, now).text,
+      'Idle, 1 h 35 min',
+    );
+    // A member in a turn, a stopped member, and one that left keep their lines, with an alarm or without.
+    const working = { state: 'working', detail: 'Run pytest', at: '2026-11-06T14:10:00Z' } as const;
+    assert.equal(
+      memberLine({ ...rested, activity: working, rings_at: rings }, false, now).text,
+      'Run pytest, 2 min',
+    );
+    const stopped = { state: 'stopped', detail: '', at: null } as const;
+    assert.equal(memberLine({ ...rested, activity: stopped }, false, now).text, 'Stopped');
+    const left = { at: '2026-11-06T14:00:00Z', by: 'person', reason: '' };
+    assert.equal(memberLine({ ...rested, left }, false, now).text, 'Left, removed by you');
   });
 
   it('says what an agent does and what it costs', () => {

@@ -17,9 +17,8 @@ import {
   face,
   harnessTitle,
   labTotal,
-  leftLine,
   listed,
-  stateLine,
+  memberLine,
   workingLine,
 } from '../model/agents.ts';
 import { href } from '../model/route.ts';
@@ -141,7 +140,7 @@ function Members(props: {
   const busy = lab.agents.some((view) => view.activity.state === 'working');
   const dot = lab.out_of_time ? 'stop' : busy ? 'live' : 'idle';
   const row = (view: AgentView): ReactElement => {
-    const state = view.left ? leftLine(view.left) : stateLine(view.activity, props.now);
+    const state = memberLine(view, lab.out_of_time || lab.state === 'closed', props.now);
     return (
       <>
         <p>

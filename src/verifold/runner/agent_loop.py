@@ -24,7 +24,7 @@ from pydantic import Field, SecretStr
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent
 from verifold.protocol.app import AgentState
-from verifold.protocol.events import TimeRanOut, TurnSummary
+from verifold.protocol.events import AlarmSet, TimeRanOut, TurnSummary
 from verifold.protocol.ids import PERSON
 from verifold.protocol.record import Record
 from verifold.protocol.settings import AtExit, AtTimeLimit
@@ -167,8 +167,8 @@ class AgentLoop:
         """Whether a turn of the agent runs: its start is in the record, and its end is not."""
         self._turn_ended = was.ended if rested else board.seq
         """The board's sequence number when the agent's last turn ended. A stop after it concerns the agent's jobs."""
-        self._turn_started = rested.seq if rested else board.seq
-        """The board's sequence number when the agent's last turn started. An alarm from before it is spent."""
+        self._rang: int | None = None
+        """The sequence number of the alarm that rings with the agent's next message, or `None`."""
         self._cut_short = ''
         """Why the agent's last turn ended without the agent's choice, or empty when the agent ended it."""
 
@@ -264,8 +264,7 @@ class AgentLoop:
             error=f'{type(error).__name__}: {error}',
             seen=self._member.seen,
             stopped=stops,
-            # A harness that fails when it starts ends no turn. So the agent's place in the record, and the alarm
-            # that it set in its last turn, stay as they are.
+            # A harness that fails when it starts ends no turn. So the agent's place in the record stays as it is.
             no_turn=not in_turn,
         )
         await self._lab.end_turn(failed)
@@ -299,8 +298,9 @@ class AgentLoop:
         started = time.monotonic()
         self._seen_at_turn = self._member.seen
         # The mark comes before the message. A turn with a mark and no end did not end.
-        mark = await self._lab.start_turn(self._setup.agent.id, session.id, self._seen_at_turn)
-        self._turn_started, self._in_turn = mark.seq, True
+        rang, self._rang = self._rang, None
+        await self._lab.start_turn(self._setup.agent.id, session.id, self._seen_at_turn, rang)
+        self._in_turn = True
         try:
             async with asyncio.timeout(self._settings.turn_timeout) as limit:
                 stopper = asyncio.create_task(self._stop_when_out_of_time(limit))
@@ -421,6 +421,10 @@ class AgentLoop:
 
         Under `stop`, the time limit also ends the processes of an agent that waits here. That agent wakes when the
         lab gets more time, and its message says so, followed by the doorbell when posts came meanwhile.
+
+        The agent's alarm rings here at its time. An alarm whose time came earlier, while a turn of the agent ran
+        or while the lab was out of time or closed, rings at once. It rings once: a doorbell that rings when the
+        alarm is due carries it.
         """
         agent_id = self._setup.agent.id
         # An agent that read one page of its posts in its turn gets a doorbell for the rest. An agent that read
@@ -438,29 +442,36 @@ class AgentLoop:
             # An agent that this agent wrote to and that left wakes it as a post does: no answer comes from it.
             # Like the alarm, that does not wake an agent in a closed lab, where agents leave because it is done.
             posts = bool(news.posts or (news.left and lab_state(board) != 'closed'))
+            # The agent's own alarm. It does not ring in a lab that is out of time or closed.
+            alarm = pending_alarm(board, agent_id)
+            left = None
+            if alarm and not board.out_of_time and lab_state(board) != 'closed':
+                left = (rings_at(board, alarm) - self._lab.now()).total_seconds()
+            due = alarm if alarm and left is not None and left <= 0 else None
             # A post during a stop waits for the wake after more time, so the doorbell rings then.
             if stopped and not board.out_of_time:
                 if posts:
                     self._notified = board.seq
                 message = more_time_message(board.ends_at, AtTimeLimit.STOP)
-                return f'{message} {DOORBELL}' if posts else message
+                return self._ring(f'{message} {DOORBELL}' if posts else message, due)
             if posts and not stopped:
                 if not settled:
                     await self._settle()
                     settled = True
                     continue
                 self._notified = board.seq
-                return DOORBELL if news.posts else DEPARTURE
-            # The agent's own alarm. It does not ring in a lab that is out of time or closed.
-            alarm = pending_alarm(board, agent_id)
-            left = None
-            # So is an alarm from a turn that did not end, because Verifold stopped while the turn ran.
-            fresh = alarm is not None and alarm.seq > self._turn_started
-            if alarm and fresh and not stopped and not board.out_of_time and lab_state(board) != 'closed':
-                left = (rings_at(board, alarm) - self._lab.now()).total_seconds()
-                if left <= 0:
-                    return alarm_message(alarm)
+                return self._ring(DOORBELL if news.posts else DEPARTURE, due)
+            if due:
+                return self._ring('', due)
             await self._lab.wait_for_change(board.seq, left)
+
+    def _ring(self, message: str, due: AlarmSet | None) -> str:
+        # Add the alarm that is due to a message that wakes the agent, so that the alarm rings once. The start of
+        # the agent's next turn records that it rang.
+        if due is None:
+            return message
+        self._rang = due.seq
+        return f'{message} {alarm_message(due)}'.strip()
 
     async def _settle(self) -> None:
         # Wait until the board has no new event for `quiet` seconds, and for `max_quiet` seconds at most.

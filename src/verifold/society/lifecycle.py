@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from verifold.protocol.events import AlarmSet, Posted
 from verifold.protocol.ids import AgentId
-from verifold.protocol.join import LabState
+from verifold.protocol.join import AlarmLine, LabState
 from verifold.society.board import Board
 from verifold.society.standing import agreed, closing
 
@@ -47,18 +47,37 @@ def close_count(board: Board, close: Posted) -> tuple[int, int]:
 
 def pending_alarm(board: Board, agent_id: AgentId) -> AlarmSet | None:
     """
-    Return the alarm that waits for an agent whose turn has ended, or `None`.
+    Return the alarm that waits for an agent, or `None`.
 
-    It is the newest alarm that the agent set in its last turn, unless that one cancels. An alarm from an earlier
-    turn is spent. No alarm waits for an agent that left.
+    It is the newest alarm that the agent set, unless that one cancels or has rung. A turn that starts for another
+    reason does not spend it. No alarm waits for an agent that left.
+
+    An alarm from before Verifold kept alarms across turns keeps the rule that its agent was told: it waits only
+    after the turn where the agent set it, and it is spent when the agent's next turn starts.
     """
-    if board.gone(agent_id):
+    alarm = next((alarm for alarm in reversed(board.alarms) if alarm.agent == agent_id), None)
+    if alarm is None or alarm.minutes == 0 or board.gone(agent_id):
         return None
+    starts = tuple(start for start in board.starts if start.agent == agent_id and start.seq > alarm.seq)
+    if alarm.stays:
+        return None if any(start.rang == alarm.seq for start in starts) else alarm
     # A harness that failed outside a turn ended no turn, so it spends no alarm.
     ends = tuple(turn.seq for turn in board.turns if turn.agent == agent_id and not turn.no_turn)
     before = ends[-2] if len(ends) > 1 else 0
-    alarm = next((alarm for alarm in reversed(board.alarms) if alarm.agent == agent_id), None)
-    return alarm if alarm and ends and before < alarm.seq < ends[-1] and alarm.minutes > 0 else None
+    return alarm if ends and before < alarm.seq < ends[-1] and not starts else None
+
+
+def alarm_line(board: Board, agent_id: AgentId) -> AlarmLine | None:
+    """Return the alarm that waits for an agent as the agent reads it, or `None` when none waits."""
+    alarm = pending_alarm(board, agent_id)
+    if alarm is None:
+        return None
+    return AlarmLine(minutes=alarm.minutes, quiet=alarm.quiet, rings_at=due_at(board, alarm))
+
+
+def due_at(board: Board, alarm: AlarmSet) -> datetime | None:
+    """Return when an alarm rings as the lab stands, or `None` in a closed lab, where no alarm rings."""
+    return None if lab_state(board) == 'closed' else rings_at(board, alarm)
 
 
 def rings_at(board: Board, alarm: AlarmSet) -> datetime:

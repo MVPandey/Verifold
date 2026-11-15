@@ -210,9 +210,29 @@ class LeftLine(Record):
     reason: str = ''
 
 
+class AlarmLine(Record):
+    """
+    The alarm that waits for an agent.
+
+    It stays until it rings, until the agent sets another, or until the agent cancels it with zero minutes. A turn
+    that starts for another reason does not spend it.
+    """
+
+    minutes: float
+    quiet: bool = False
+    """Whether the alarm rings when the board got no post for `minutes`. Each new post then moves `rings_at`."""
+    rings_at: AwareDatetime | None = None
+    """
+    When the alarm rings as the lab stands. A time that passed means that the alarm rings when the agent's turn
+    ends. `None` in a closed lab, where no alarm rings.
+    """
+
+
 class News(Record):
     """
-    The posts that an agent has not seen yet, oldest first. Every result of a board tool carries them.
+    The posts that an agent has not seen yet, oldest first, with the agent's alarm.
+
+    Every result of a board tool carries them.
 
     `for_you` holds the posts that name the agent, reply to one of its posts, or are in a thread that it watches,
     at most `MAX_NEWS` of them. When more wait, the news stops at the last one that it holds, and the next result
@@ -230,6 +250,8 @@ class News(Record):
     """How many older posts `others` leaves out. `threads` and `thread` show them."""
     left: tuple[LeftLine, ...] = ()
     """The agents that left the lab since, among those that the agent wrote to: who caused it, and the reason."""
+    alarm: AlarmLine | None = None
+    """The alarm that waits for the agent. `None` means that no alarm waits, so only a post for the agent wakes it."""
 
 
 class PostResult(PostView):
@@ -348,7 +370,11 @@ class FileText(Record):
 
 
 class AlarmResult(Record):
-    """What the `alarm` tool returns: when the alarm rings, or `None` when the agent has none."""
+    """
+    What the `alarm` tool returns: the alarm that waits for the agent after the call.
+
+    `rings_at` is `None` when no alarm waits, which is so after a call with zero minutes, and in a closed lab.
+    """
 
     rings_at: AwareDatetime | None = None
     quiet: bool = False
@@ -375,6 +401,8 @@ class Brief(Record):
     you: AgentId
     your_line: AgentLine | None = None
     """What the board holds about you: your role and status, the thread where you work, and your latest plan and post."""
+    your_alarm: AlarmLine | None = None
+    """The alarm that waits for you. `None` means that no alarm waits, so only a post for you wakes you."""
     how: str = ''
     """How the board works. The first brief of a session carries it, and later ones leave it out."""
     agents: tuple[AgentLine, ...] = ()
@@ -438,5 +466,7 @@ class Update(Record):
     agents: tuple[Agent, ...] = ()
     left: tuple[LeftLine, ...] = ()
     """The agents that left the lab since, among those that the agent wrote to: who caused it, and the reason."""
+    alarm: AlarmLine | None = None
+    """The alarm that waits for the agent. `None` means that no alarm waits, so only a post for the agent wakes it."""
     ends_at: AwareDatetime | None = None
     """When the lab ends. At that time Verifold stops the agents' turns. `None` means no time limit."""

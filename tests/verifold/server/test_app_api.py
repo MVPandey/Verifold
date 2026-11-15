@@ -233,6 +233,33 @@ async def test_the_lab_view_shows_each_agents_activity_and_cost(
     assert (done['state'], done['close']['id'], done['close_agreed']) == ('closed', 'p-2', 1)
 
 
+async def test_the_lab_view_says_when_an_agent_ended_its_turn_and_when_its_alarm_rings(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    async def views() -> tuple[tuple[str | None, str | None], ...]:
+        agents = (await client.get('/lab')).json()['agents']
+        return tuple((view['turn_ended_at'], view['rings_at']) for view in agents)
+
+    assert await views() == ((None, None), (None, None))
+
+    ended = await lab.end_turn(TurnSummary(agent='ada', seconds=3, usage=Usage()))
+    # A harness that fails outside a turn ends no turn.
+    await lab.end_turn(TurnSummary(agent='ada', seconds=0, usage=Usage(), error='It did not start.', no_turn=True))
+    set_ = await lab.set_alarm('ada', 10, quiet=False)
+    rings = (set_.at + timedelta(minutes=10)).isoformat().replace('+00:00', 'Z')
+    assert await views() == ((ended.at.isoformat().replace('+00:00', 'Z'), rings), (None, None))
+
+    # No alarm rings while the lab is out of time, or closed.
+    await lab.set_time_left(timedelta(0))
+    await lab.run_out_of_time()
+    assert (await views())[0][1] is None
+    await lab.set_time_left(timedelta(hours=1))
+    assert (await views())[0][1] == rings
+    await lab.post(PostRequest(kind='close', text='The answer stands.', thread='t-1'), 'ada')
+    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-2', accepts=True), 'bo')
+    assert (await views())[0][1] is None
+
+
 async def test_threads_and_a_thread_read_as_the_person(client: httpx2.AsyncClient) -> None:
     threads = (await client.get('/threads')).json()
     thread = (await client.get('/threads/t-1')).json()

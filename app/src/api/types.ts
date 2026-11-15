@@ -89,6 +89,10 @@ export interface AgentView {
   /** Whether Verifold stopped the agent because its harness failed too often. The person can start it again. */
   readonly stopped: boolean;
   readonly turns: number;
+  /** When the agent's last turn ended, or `null` when none ended. */
+  readonly turn_ended_at: string | null;
+  /** When the agent's alarm rings. `null` when none waits, and while the lab is out of time or closed. */
+  readonly rings_at: string | null;
   readonly posts: number;
   readonly usage: Usage;
   /** `null` when the harness reports tokens only. */

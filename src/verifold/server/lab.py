@@ -150,9 +150,9 @@ class Lab:
         return await self.post(PostRequest(kind='message', text=headline, body=body, new_thread=QUESTION_TITLE), PERSON)
 
     async def set_alarm(self, agent_id: AgentId, minutes: float, *, quiet: bool) -> AlarmSet:
-        """Record that an agent wants to be woken after its turn. Zero minutes cancels its alarm."""
+        """Record that an agent wants to be woken. The alarm replaces the agent's last one, and zero minutes cancels it."""
         board = await self._commit(
-            lambda _, seq, at: AlarmSet(seq=seq, at=at, agent=agent_id, minutes=minutes, quiet=quiet)
+            lambda _, seq, at: AlarmSet(seq=seq, at=at, agent=agent_id, minutes=minutes, quiet=quiet, stays=True)
         )
         return board.alarms[-1]
 
@@ -197,10 +197,14 @@ class Lab:
         board = await self._commit(build)
         return board.reruns[-1]
 
-    async def start_turn(self, agent_id: AgentId, session: str, seen: int) -> TurnStarted:
-        """Record that a turn of an agent starts, in the harness's conversation `session`, with what it had seen."""
+    async def start_turn(self, agent_id: AgentId, session: str, seen: int, rang: int | None = None) -> TurnStarted:
+        """
+        Record that a turn of an agent starts, in the harness's conversation `session`, with what it had seen.
+
+        `rang` is the sequence number of the agent's alarm that rang with the turn's message.
+        """
         board = await self._commit(
-            lambda _, seq, at: TurnStarted(seq=seq, at=at, agent=agent_id, session=session, seen=seen)
+            lambda _, seq, at: TurnStarted(seq=seq, at=at, agent=agent_id, session=session, seen=seen, rang=rang)
         )
         return board.starts[-1]
 
