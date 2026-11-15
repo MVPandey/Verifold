@@ -6,7 +6,8 @@ import shutil
 import stat
 import subprocess
 import sys
-from contextlib import suppress
+from collections.abc import Generator
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 from verifold.protocol.ids import AgentId
@@ -40,8 +41,11 @@ what makes the folder possible, as a fact, because an agent with the power to ad
 command is the one that Verifold runs, so it fetches what the folder needs and no more, with any version of Git.
 """
 
-type _Made = tuple[int, int]
-"""What tells the folder that a call made from any other folder at its path: its device and its number there."""
+type _Made = int
+"""
+The handle of the folder that a call made, held open until the call ends. It tells that folder from any other one
+at its path. A folder's number alone does not: a file system gives a removed folder's number to the next new one.
+"""
 
 
 def real_folder(project: Path, agent_id: AgentId | None = None) -> Path:
@@ -125,8 +129,8 @@ async def agent_folder(project: Path, agent_id: AgentId) -> Path:
     the lab folder is excluded from the project's Git status. In any other project, the folder is a new repository,
     so the agent can still commit its work. A later call returns the same folder, so a resumed agent keeps its work.
 
-    Verifold makes the folder itself, empty, and Git fills it. Git checks the files out with the project's and
-    the person's own filters, and it fetches no object that the project's repository lacks.
+    Verifold makes the folder itself, empty, holds it open, and Git fills it. Git checks the files out with the
+    project's and the person's own filters, and it fetches no object that the project's repository lacks.
 
     When Git fails by itself, it removes what it made, and Verifold removes nothing but the folder that this call
     made, when that folder is empty. When Verifold ends Git, at the time limit or because the caller was
@@ -147,30 +151,30 @@ async def agent_folder(project: Path, agent_id: AgentId) -> Path:
     folder.parent.mkdir(parents=True, exist_ok=True)
     head = await commit_of(project, 'HEAD')
     if head is None:
-        made = _make(folder)
-        try:
-            await git('init', '--quiet', cwd=folder)
-        except BaseException as error:
-            _remove(folder, made, whole=_ended_by_verifold(error))
-            raise
+        with _made(folder) as made:
+            try:
+                await git('init', '--quiet', cwd=folder)
+            except BaseException as error:
+                _remove(folder, made, whole=_ended_by_verifold(error))
+                raise
         return folder
     await _exclude_lab_folder(project)
     branch = f'verifold/{agent_id}'
     existing = await git('branch', '--list', branch, cwd=project)
     names = (str(folder), branch) if existing else ('-b', branch, str(folder))
-    made = _make(folder)
-    try:
-        no_fetch = {'GIT_NO_LAZY_FETCH': '1'}
-        await git('worktree', 'add', '--quiet', *names, cwd=project, env=no_fetch, seconds=WORKTREE_SECONDS)
-    except BaseException as error:
-        if _ended_by_verifold(error):
-            # Git made the branch at the project's last commit, when the call named a new one.
-            await _discard(project, folder, made, None if existing else (f'refs/heads/{branch}', head))
+    with _made(folder) as made:
+        try:
+            no_fetch = {'GIT_NO_LAZY_FETCH': '1'}
+            await git('worktree', 'add', '--quiet', *names, cwd=project, env=no_fetch, seconds=WORKTREE_SECONDS)
+        except BaseException as error:
+            if _ended_by_verifold(error):
+                # Git made the branch at the project's last commit, when the call named a new one.
+                await _discard(project, folder, made, None if existing else (f'refs/heads/{branch}', head))
+                raise
+            _remove(folder, made, whole=False)
+            if isinstance(error, GitError) and await _partial_clone(project):
+                raise GitError(f'{error}\n{PARTIAL_CLONE}') from error
             raise
-        _remove(folder, made, whole=False)
-        if isinstance(error, GitError) and await _partial_clone(project):
-            raise GitError(f'{error}\n{PARTIAL_CLONE}') from error
-        raise
     return folder
 
 
@@ -192,23 +196,36 @@ def _there(folder: Path) -> bool:
     return True
 
 
-def _make(folder: Path) -> _Made:
-    # Make an agent's folder, empty. Only one caller can make it, so from here on the folder is this call's own.
+@contextmanager
+def _made(folder: Path) -> Generator[_Made]:
+    """
+    Make an agent's folder, empty, and hold it open for as long as the call works on it.
+
+    Only one caller can make the folder, so from here on it is this call's own.
+
+    Raises:
+        OSError: Something else made the folder since the caller looked.
+
+    """
     try:
         folder.mkdir()
     except FileExistsError as error:
         raise OSError(f'Something else made {folder} at the same moment, so Verifold leaves it as it is.') from error
-    made = folder.lstat()
-    return made.st_dev, made.st_ino
+    handle = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        yield handle
+    finally:
+        os.close(handle)
 
 
 def _mine(folder: Path, made: _Made) -> bool:
-    # Whether the folder at the path is still the one that this call made, and no other that took its place.
+    # Whether the folder at the path is still the one that this call made, and no other that took its place. The
+    # call holds its folder open, so no other folder has that folder's device and number.
     try:
-        now = folder.lstat()
+        held, now = os.fstat(made), folder.lstat()
     except OSError:
         return False
-    return stat.S_ISDIR(now.st_mode) and (now.st_dev, now.st_ino) == made
+    return stat.S_ISDIR(now.st_mode) and (now.st_dev, now.st_ino) == (held.st_dev, held.st_ino)
 
 
 def _ended_by_verifold(error: BaseException) -> bool:
@@ -221,16 +238,21 @@ def _remove(folder: Path, made: _Made, *, whole: bool) -> None:
     Remove the folder that this call made, when it is still at its path.
 
     With `whole`, Verifold ended Git in the middle of its work, and the folder goes with what Git put there.
-    Without it, Git failed by itself and removed what it made. The folder then goes only when it is empty: Git
-    also fails because something else put a file there, and that file is not this call's to remove.
+    Verifold removes that through the folder's handle, so it removes nothing of another folder that takes the
+    path meanwhile. Without `whole`, Git failed by itself and removed what it made. The folder then goes only
+    when it is empty: Git also fails because something else put a file there, and that file is not this call's
+    to remove.
     """
     if not _mine(folder, made):
         return
     if whole:
-        shutil.rmtree(folder, ignore_errors=True)
-    else:
-        with suppress(OSError):
-            folder.rmdir()
+        for name in os.listdir(made):  # noqa: PTH208
+            try:
+                os.unlink(name, dir_fd=made)
+            except OSError:
+                shutil.rmtree(name, dir_fd=made, ignore_errors=True)
+    with suppress(OSError):
+        folder.rmdir()
 
 
 async def _discard(project: Path, folder: Path, made: _Made, branch: tuple[str, str] | None) -> None:
