@@ -657,7 +657,7 @@ def _permission_answer(move: PermissionMove, by: AgentId) -> Build:
             text=label,
             reply_to=move.ask,
             choice=label,
-            request=answered.request,
+            for_request=answered.request,
         )
         return Posted(seq=seq, at=at, post=answer)
 

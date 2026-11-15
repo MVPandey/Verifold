@@ -279,7 +279,7 @@ async def test_the_coordinators_move_decides_another_agents_permission_request(l
     assert await deciding == 'once'
     answer = led.board.posts[-1].post
     assert isinstance(answer, Answer)
-    assert (answer.author, answer.choice, answer.reply_to, answer.request) == ('ada', 'Allow once', ask.id, 'p-3')
+    assert (answer.author, answer.choice, answer.reply_to, answer.for_request) == ('ada', 'Allow once', ask.id, 'p-3')
     assert needs_person(led.board) == ()
     # The answer replies to the agent's ask, so the agent hears who decided it.
     assert answer.id in [entry.post.id for entry in update(led.board, 'bo', seq).posts]
@@ -296,7 +296,7 @@ async def test_the_persons_yes_to_a_request_decides_the_permission_request_with_
     await led.answer_request(asked.post.id, yes=True)
 
     assert await deciding == 'no'
-    answer = next(entry.post for entry in led.board.posts if isinstance(entry.post, Answer) and entry.post.request)
+    answer = next(entry.post for entry in led.board.posts if isinstance(entry.post, Answer) and entry.post.for_request)
     assert (answer.author, answer.choice) == ('person', 'Reject')
     # The coordinator's own harness asks the person, never the coordinator.
     own = asyncio.create_task(ask_the_person(Member(led, 'ada'), COMMAND))

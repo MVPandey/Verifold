@@ -87,7 +87,7 @@ def check_marks(board: Board, post: Post, thread: Thread) -> None:
         if not thread.conversation:
             raise RejectedEvent('A request for a move is a post in the conversation with the person.')
         _check_move(board, post.move, post.author)
-    if isinstance(post, Answer) and post.request:
+    if isinstance(post, Answer) and post.for_request:
         _check_carried(board, post)
 
 
@@ -290,7 +290,7 @@ def _check_carried(board: Board, answer: Answer) -> None:
     answered = _just_answered(board)
     request = _request(board, answered) if answered else None
     move = request.move if request else None
-    made = answered and answered.yes and answered.request == answer.request and answered.by == answer.author
+    made = answered and answered.yes and answered.request == answer.for_request and answered.by == answer.author
     if not (request and made and isinstance(move, PermissionMove) and move.ask == answer.reply_to):
         raise RejectedEvent('Only the yes to a request for a move decides a permission request for it.')
     if answer.choice != permission_choice(board, move, request.author):

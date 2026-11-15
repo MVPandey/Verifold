@@ -231,7 +231,7 @@ class Answer(PostBase):
     Whether Verifold ended the harness's request that the ask carries, without the person's answer. Verifold sets
     it, and no agent can. The ask then waits for nobody.
     """
-    request: PostId | None = None
+    for_request: PostId | None = None
     """
     The coordinator's request that this answer carries out. The answer then decides the permission request that it
     replies to: its author is the person, who said yes to the request, or the coordinator, whose power decided it.

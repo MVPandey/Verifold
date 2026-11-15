@@ -296,7 +296,7 @@ def test_a_power_gives_no_time_to_a_lab_whose_time_ran_out() -> None:
 
 
 def carried(by: str, request: str = 'p-2', choice: str = 'Allow once') -> Answer:
-    return Answer(id='p-3', thread='t-1', author=by, text=choice, reply_to='p-1', choice=choice, request=request)
+    return Answer(id='p-3', thread='t-1', author=by, text=choice, reply_to='p-1', choice=choice, for_request=request)
 
 
 def test_only_the_yes_to_a_request_decides_another_agents_permission_request() -> None:
@@ -330,7 +330,7 @@ def test_with_the_power_the_coordinators_answer_decides_a_permission_request_and
     assert not waits_for_person(board, 'p-1')
     answer = board.posts[-1].post
     assert isinstance(answer, Answer)
-    assert (answer.author, answer.request) == ('ada', 'p-2')
+    assert (answer.author, answer.for_request) == ('ada', 'p-2')
 
 
 def test_only_the_coordinators_own_yes_removes_an_agent_through_the_coordinator() -> None:

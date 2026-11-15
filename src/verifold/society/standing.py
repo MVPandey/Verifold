@@ -47,7 +47,7 @@ def waits_for_person(board: Board, post_id: PostId) -> bool:
     """
     replies = [entry.post for entry in board.replies(post_id) if isinstance(entry.post, Answer)]
     # An answer that carries out a request of the coordinator decides the ask, with the person's yes or power.
-    return not any(reply.author == PERSON or reply.ends_request or reply.request for reply in replies)
+    return not any(reply.author == PERSON or reply.ends_request or reply.for_request for reply in replies)
 
 
 def is_answered(board: Board, post_id: PostId, by: AgentId | None = None) -> bool:

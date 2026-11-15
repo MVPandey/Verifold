@@ -816,7 +816,7 @@ def _persons_answer(board: Board, ask_id: PostId) -> _Reply | None:
             entry.post
             for entry in board.replies(ask_id)
             # The answer that carries out a coordinator's request decides as the person's own does.
-            if isinstance(entry.post, Answer) and (entry.post.author == PERSON or entry.post.request)
+            if isinstance(entry.post, Answer) and (entry.post.author == PERSON or entry.post.for_request)
         ),
         None,
     )
