@@ -94,6 +94,16 @@ def loop_for(
     )
 
 
+def pass_time(served: ServedBoard, seconds: int) -> None:
+    """Move the lab's clock on by `seconds`. Each look at that clock is one second, so no test waits for an alarm."""
+    for _ in range(seconds):
+        served.lab.now()
+
+
+SIDE_NOTE = PostRequest(kind='message', text='A side note.', thread='t-1')
+"""A post that rings no doorbell for `bo`. The board changes, so the loop of `bo` looks at the clock again."""
+
+
 def posts_by(served: ServedBoard, author: str) -> list[str]:
     return [entry.post.text for entry in served.lab.board.posts if entry.post.author == author]
 
@@ -145,15 +155,17 @@ async def test_a_post_that_the_agent_got_in_a_tool_result_during_its_turn_rings_
 
 async def test_one_doorbell_covers_a_burst_of_posts(served: ServedBoard, tmp_path: Path, log: Path) -> None:
     lab = served.lab
-    # The quiet window is far longer than the gaps, so a slow machine cannot split the burst.
-    running = asyncio.create_task(loop_for(served, tmp_path, quiet=1.5, max_quiet=10).run())
+    # The posts come with a gap, so the loop sees the first one alone and must wait for a quiet board. The quiet
+    # window is far longer than the gaps, so a slow machine cannot split the burst.
+    running = asyncio.create_task(loop_for(served, tmp_path, quiet=0.5, max_quiet=10).run())
     try:
         await until(lambda: len(lab.board.turns) == 1)
         for number in range(3):
             await lab.post(PostRequest(kind='ask', text=f'Question {number}?', thread='t-1', mentions=('bo',)), 'ada')
             await asyncio.sleep(0.05)
         await until(lambda: len(lab.board.turns) == 2)
-        await asyncio.sleep(2)
+        # A second doorbell would ring after one more quiet window.
+        await asyncio.sleep(0.8)
     finally:
         running.cancel()
 
@@ -229,17 +241,16 @@ async def test_the_alarm_that_an_agent_set_in_its_turn_rings_once_after_the_turn
     # Every turn of this agent runs until Verifold cuts it short, so the test can set an alarm inside a turn.
     monkeypatch.setenv('FAKE_ACP_SLOW', '1')
     activity = Activity()
-    running = asyncio.create_task(loop_for(served, tmp_path, activity, turn_timeout=1.0).run())
+    running = asyncio.create_task(loop_for(served, tmp_path, activity, turn_timeout=0.5).run())
     try:
-        # The first turn is cut, and the agent goes on once. The alarm is set in that second turn.
-        await until(lambda: len(lab.board.turns) == 1)
-        await until(lambda: activity.of('bo').state == 'working')
+        # The alarm is set in the first turn. That turn is cut, the agent goes on once, and that turn is cut too.
+        await until(lambda: len(lab.board.starts) == 1)
         set_ = await lab.set_alarm('bo', 0.02, quiet=False)
         await until(lambda: len(calls(log, 'prompt')) >= 3)
     finally:
         running.cancel()
 
-    cut = cut_short_message('The turn ran past 1 seconds and was cancelled.')
+    cut = cut_short_message('The turn ran past 0.5 seconds and was cancelled.')
     prompts = [call['text'] for call in calls(log, 'prompt')]
     assert prompts[:3] == ['Start.', cut, alarm_message(set_)]
     assert alarm_message(stale) not in prompts
@@ -260,11 +271,11 @@ async def test_an_alarm_stays_through_a_turn_that_a_post_started_and_rings_once_
         await until(lambda: len(lab.board.turns) == 2)
         assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL]
         assert pending_alarm(lab.board, 'bo') == set_
-        while len(lab.board.turns) < 3:
-            # The loop looks at the clock again when the board changes.
-            await lab.post(PostRequest(kind='message', text='A side note.', thread='t-1'), 'ada')
-            await asyncio.sleep(0.05)
-        await asyncio.sleep(0.5)
+        pass_time(served, 30)
+        # The loop looks at the clock again when the board changes.
+        await lab.post(SIDE_NOTE, 'ada')
+        await until(lambda: len(lab.board.turns) == 3)
+        await asyncio.sleep(0.3)
     finally:
         running.cancel()
 
@@ -287,8 +298,7 @@ async def test_an_alarm_whose_time_comes_while_its_agent_is_in_a_turn_rings_when
         await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
         await until(lambda: len(lab.board.starts) == 2)
         # The time of the alarm passes while the turn for the post runs.
-        for _ in range(15):
-            lab.now()
+        pass_time(served, 15)
         assert (len(lab.board.turns), lab.now() > rings_at(lab.board, set_)) == (1, True)
         await until(lambda: len(lab.board.turns) == 3)
         await asyncio.sleep(0.3)
@@ -310,13 +320,11 @@ async def test_an_alarm_for_a_quiet_board_stays_through_a_turn_that_a_post_start
         await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
         await until(lambda: len(lab.board.turns) == 2)
         assert pending_alarm(lab.board, 'bo') == set_
-        step = 0
-        while len(lab.board.turns) < 3:
-            # The board changes without a post, so the loop looks at the clock and the board stays quiet.
-            step += 1
-            await lab.set_profile('ada', None, f'Step {step}.')
-            await asyncio.sleep(0.05)
-        await asyncio.sleep(0.5)
+        pass_time(served, 30)
+        # The board changes without a post, so the loop looks at the clock and the board stays quiet.
+        await lab.set_profile('ada', None, 'Step 1.')
+        await until(lambda: len(lab.board.turns) == 3)
+        await asyncio.sleep(0.3)
     finally:
         running.cancel()
 
@@ -341,10 +349,9 @@ async def test_an_alarm_from_an_older_record_is_spent_when_a_post_starts_the_nex
         old = pending_alarm(lab.board, 'bo')
         await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
         await until(lambda: len(lab.board.turns) == 2)
-        for _ in range(60):
-            lab.now()
-        await lab.post(PostRequest(kind='message', text='A side note.', thread='t-1'), 'ada')
-        await asyncio.sleep(1)
+        pass_time(served, 60)
+        await lab.post(SIDE_NOTE, 'ada')
+        await asyncio.sleep(0.3)
     finally:
         running.cancel()
 
@@ -398,10 +405,12 @@ async def test_an_alarm_that_is_due_rings_with_the_message_about_more_time_when_
         set_ = await lab.set_alarm('bo', 0.02, quiet=False)
         await lab.set_time_left(timedelta(0))
         await lab.run_out_of_time()
-        await asyncio.sleep(1)
+        # The loop sees the lab out of time, and then the time of the alarm passes.
+        await asyncio.sleep(0.1)
+        pass_time(served, 5)
         await lab.set_time_left(timedelta(hours=1))
         await until(lambda: len(lab.board.turns) == 2)
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.3)
     finally:
         running.cancel()
 
@@ -417,7 +426,10 @@ async def test_an_alarm_that_its_agent_cancelled_does_not_ring(served: ServedBoa
         await until(lambda: len(lab.board.turns) == 1)
         await lab.set_alarm('bo', 0.02, quiet=False)
         await lab.set_alarm('bo', 0, quiet=False)
-        await asyncio.sleep(2)
+        # The time of the cancelled alarm passes, and the loop looks at the clock.
+        pass_time(served, 5)
+        await lab.post(SIDE_NOTE, 'ada')
+        await asyncio.sleep(0.3)
     finally:
         running.cancel()
 
@@ -434,7 +446,10 @@ async def test_an_alarm_does_not_ring_in_a_lab_that_is_out_of_time_and_rings_onc
         set_ = await lab.set_alarm('bo', 0.02, quiet=False)
         await lab.set_time_left(timedelta(0))
         await lab.run_out_of_time()
-        await asyncio.sleep(2)
+        # The time of the alarm passes, and the loop looks at the clock.
+        pass_time(served, 5)
+        await lab.set_profile('ada', None, 'Waits.')
+        await asyncio.sleep(0.3)
         assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
 
         await lab.set_time_left(timedelta(hours=1))
@@ -457,7 +472,10 @@ async def test_an_alarm_does_not_ring_in_a_closed_lab_and_rings_with_the_doorbel
     try:
         await until(lambda: len(lab.board.turns) == 1)
         set_ = await lab.set_alarm('bo', 0.02, quiet=False)
-        await asyncio.sleep(3)
+        # The time of the alarm passes, and the loop looks at the clock.
+        pass_time(served, 5)
+        await lab.set_profile('ada', None, 'Done.')
+        await asyncio.sleep(0.3)
         assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
         # The alarm still waits. The person's post opens the lab again.
         assert pending_alarm(lab.board, 'bo') == set_
@@ -775,9 +793,15 @@ async def test_a_request_that_waits_ends_with_its_turn_and_the_agents_next_reque
     def asks() -> list[Ask]:
         return [entry.post for entry in lab.board.posts if isinstance(entry.post, Ask)]
 
-    running = asyncio.create_task(loop_for(served, tmp_path, turn_timeout=0.5).run())
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
     try:
-        # The turn runs past its time while the request waits. The agent goes on, and its harness asks again.
+        # The lab runs out of time while the request waits, which ends the turn. With more time the agent goes on,
+        # and its harness asks again. No turn has a time limit here, so no answer comes too late for its turn.
+        await until(lambda: len(asks()) == 1)
+        await lab.set_time_left(timedelta(0))
+        await lab.run_out_of_time()
+        await until(lambda: len(lab.board.turns) == 1)
+        await lab.set_time_left(timedelta(hours=1))
         await until(lambda: len(asks()) == 2)
         old, live = asks()
         await until(lambda: [view.post.id for view in needs_person(lab.board)] == [live.id])
@@ -1268,8 +1292,10 @@ async def test_no_alarm_rings_after_an_agent_behind_the_close_left_a_closed_lab(
         await until(lambda: activity.of('bo').state == 'working')
         await lab.set_alarm('bo', 0.02, quiet=False)
         await until(lambda: len(lab.board.turns) == 1)
+        # The time of the alarm passes before cy leaves, so the loop looks at the clock when the alarm is due.
+        pass_time(served, 5)
         await lab.leave('cy', 'cy')
-        await asyncio.sleep(3)
+        await asyncio.sleep(0.3)
     finally:
         running.cancel()
 
@@ -1457,21 +1483,16 @@ async def test_an_alarm_that_waited_when_verifold_stopped_rings_once_at_its_time
     await until(lambda: len(lab.board.turns) == 1)
     await stop(first)
 
-    def a_minute_passes() -> None:
-        # Each look at the lab's clock is one second.
-        for _ in range(90):
-            lab.now()
-
     if passed:
-        a_minute_passes()
+        pass_time(served, 90)
     running = asyncio.create_task(loop_for(served, tmp_path).run())
     try:
         if not passed:
             await asyncio.sleep(0.5)
             assert prompts(log) == ['Start.']
-            a_minute_passes()
+            pass_time(served, 90)
             # The loop looks at the clock again when the board changes.
-            await lab.post(PostRequest(kind='message', text='A side note.', thread='t-1'), 'ada')
+            await lab.post(SIDE_NOTE, 'ada')
         await until(lambda: len(lab.board.turns) == 2)
         await asyncio.sleep(0.5)
     finally:
@@ -1491,12 +1512,14 @@ async def test_an_alarm_that_rang_before_verifold_stopped_does_not_ring_again_af
     await stop(first)
     assert (prompts(log), lab.board.starts[-1].rang) == (['Start.', alarm_message(set_)], set_.seq)
 
-    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    activity = Activity()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
     try:
-        await asyncio.sleep(1.5)
+        await until(lambda: activity.of('bo').state == 'idle')
+        pass_time(served, 5)
         # The agent waits again, and a change of the board makes the loop look at the clock.
-        await lab.post(PostRequest(kind='message', text='A side note.', thread='t-1'), 'ada')
-        await asyncio.sleep(0.5)
+        await lab.post(SIDE_NOTE, 'ada')
+        await asyncio.sleep(0.3)
     finally:
         await stop(running)
 
@@ -1567,8 +1590,7 @@ async def test_a_harness_that_fails_when_it_starts_spends_no_alarm_and_moves_the
     await until(lambda: len(lab.board.turns) == 1)
     await stop(first)
     was = before(lab.board, 'bo')
-    for _ in range(90):
-        lab.now()
+    pass_time(served, 90)
     monkeypatch.setenv('FAKE_ACP_CRASH_LOAD', '1')
 
     running = asyncio.create_task(loop_for(served, tmp_path).run())

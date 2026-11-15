@@ -217,14 +217,19 @@ async def test_a_resumed_lab_keeps_its_agents_and_the_persons_edits_to_its_norms
     norms = project / '.verifold' / 'LAB.md'
     norms.write_text('# Our own rules\n')
 
+    def modes() -> list[dict[str, str]]:
+        return [call for call in calls(log) if call['event'] == 'mode']
+
     async with serving(project) as client:
-        await until(lambda: len(posts(project)) == 4)
+        # Each harness that starts again gets its mode. An agent posts again only when the stop cut its turn off,
+        # so the test does not wait for a post.
+        await until(lambda: len(modes()) == 4)
         setup = (await client.get('/setup')).json()
 
     assert setup['question'] == 'Does it hold?'
     assert sum(isinstance(event, AgentJoined) for event in record(project)) == 2
     assert norms.read_text() == '# Our own rules\n'
-    resumed = [call for call in calls(log) if call['event'] == 'mode'][2:]
+    resumed = modes()[2:]
     assert sorted(call['agent'] for call in resumed) == ['agent-1', 'agent-2']
 
 
@@ -502,7 +507,7 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
         before = await state_of(client, 'agent-2')
         async with board_of(url, token) as board:
             brief = await board.call_tool('brief', {})
-            waiting = asyncio.create_task(board.call_tool('wait', {'timeout_seconds': 2}))
+            waiting = asyncio.create_task(board.call_tool('wait', {'timeout_seconds': 1}))
             listening = False
             while not waiting.done():
                 listening = listening or await state_of(client, 'agent-2') == 'listening'
@@ -807,7 +812,7 @@ async def test_the_norms_page_edits_what_a_new_lab_gets_and_a_change_in_a_lab_re
     project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     lab_norms = project / '.verifold' / 'LAB.md'
-    async with serving(project, catalog={'fake': FAKE_HARNESS}) as client:
+    async with serving(project, catalog={'fake': FAKE_HARNESS}, options=FAST) as client:
         defaults = (await client.get('/norms')).json()
         first = await save_norms(client, 'LAB.md', '# Our rules\n')
         on_disk = lab_norms.read_text()
