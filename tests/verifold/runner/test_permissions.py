@@ -4,6 +4,7 @@ from datetime import timedelta
 import pytest
 from builders import until
 
+from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import MAX_BODY, Answer, Ask, PermissionShown, QuestionShown
 from verifold.protocol.settings import PermissionSettings, Settings, WhileYouDecide
@@ -253,6 +254,83 @@ async def test_later_requests_use_the_same_thread_and_wait_for_the_persons_answe
 
     assert len(asks(lab)) == 2
     assert asks(lab)[0].thread == asks(lab)[1].thread
+
+
+async def test_an_agent_whose_name_changed_keeps_its_one_thread_for_permission_requests(lab: Lab) -> None:
+    waits = Agent(id='agent-9', name='Fake · default model', harness='fake', model=ModelSpec(family='test'))
+    await lab.join(waits)
+    member = Member(lab, 'agent-9')
+    for round_ in (1, 2):
+        asking = asyncio.create_task(ask_the_person(member, MAKE))
+        await until(lambda round_=round_: len(asks(lab)) == round_)
+        # The harness names the agent's model while the first ask waits, so the agent has a new name from then on.
+        await lab.name_by_model('agent-9', 'Fake', 'small')
+        await answered(lab, 'Allow once')
+        assert await asking == 'once'
+
+    first, second = asks(lab)
+    assert lab.board.agents[-1].agent.name == 'Fake · small'
+    # The asks name their agent by its ID, so the app shows the name of today, and both are in one thread.
+    assert (first.author, second.author, first.thread) == ('agent-9', 'agent-9', second.thread)
+    titles = [opened.thread.title for opened in lab.board.threads if opened.thread.opened_by == 'agent-9']
+    # A name with a middle dot and spaces stays as it is in the title.
+    assert titles == ['Permission requests from Fake · default model']
+
+
+async def test_a_tracked_ask_goes_only_to_the_thread_that_verifold_opened_for_it(lab: Lab) -> None:
+    # The agent opens threads of its own whose titles read like the threads for its harness's requests.
+    for title in ('Questions from the rerun of table 2', 'Permission requests from the cluster'):
+        await lab.post(PostRequest(kind='message', text='Notes.', new_thread=title), 'bo')
+    own = {opened.thread.id: opened.thread.title for opened in lab.board.threads if opened.thread.opened_by == 'bo'}
+    bo = Member(lab, 'bo')
+    for _ in range(2):
+        asking = asyncio.create_task(ask_the_person(bo, MAKE))
+        before = len(asks(lab))
+        await until(lambda before=before: len(asks(lab)) > before)
+        await answered(lab, 'Allow once')
+        await asking
+
+    first, second = asks(lab)
+    opened = lab.board.thread(first.thread)
+    assert opened is not None
+    # Verifold opened a thread of its own and marked it. Only the runner sets the mark.
+    assert (opened.thread.title, opened.thread.carries, first.thread) == (
+        'Permission requests from Bo',
+        'permission',
+        second.thread,
+    )
+    assert first.thread not in own
+    marks = {opened.thread.id: opened.thread.carries for opened in lab.board.threads}
+    assert all(marks[tid] is None for tid in own)
+    assert 'carries' not in PostRequest.model_fields
+
+
+async def test_a_thread_from_before_the_mark_is_found_by_its_title_with_a_name_that_the_agent_has_or_had(
+    lab: Lab,
+) -> None:
+    waits = Agent(id='agent-9', name='Fake · default model', harness='fake', model=ModelSpec(family='test'))
+    await lab.join(waits)
+    # A record from before the mark holds the thread with the agent's name of then, and no mark.
+    old = await lab.post(
+        PostRequest(kind='message', text='Earlier.', new_thread='Permission requests from Fake · default model'),
+        'agent-9',
+    )
+    await lab.name_by_model('agent-9', 'Fake', 'small')
+    asking = asyncio.create_task(ask_the_person(Member(lab, 'agent-9'), MAKE))
+    await until(lambda: bool(asks(lab)))
+    await answered(lab, 'Allow once')
+    await asking
+
+    assert asks(lab)[0].thread == old.post.thread
+
+
+async def test_the_longest_name_still_fits_the_title_of_its_permission_thread(lab: Lab) -> None:
+    await lab.join(Agent(id='agent-9', name=f'Fake · {"m" * 113}', harness='fake', model=ModelSpec(family='test')))
+    asking = asyncio.create_task(ask_the_person(Member(lab, 'agent-9'), MAKE))
+    await until(lambda: bool(asks(lab)))
+    await answered(lab, 'Allow once')
+
+    assert await asking == 'once'
 
 
 @pytest.mark.parametrize('unclear', ['ok, what is this for?', 'yes?', '\x1c'])

@@ -22,7 +22,7 @@ from verifold.protocol.ids import AgentId
 from verifold.protocol.record import Record
 from verifold.protocol.usage import Usage
 from verifold.runner.environment import harness_environment
-from verifold.runner.errors import RunnerError
+from verifold.runner.errors import ModelRefused, RunnerError
 from verifold.runner.processes import STOP_GRACE, start, stop
 
 
@@ -523,12 +523,13 @@ def _option(value: str, name: str) -> OptionValue | None:
 
 async def _begin(
     connection: ClientSideConnection, harness: HarnessEntry, folder: Path, board: BoardAccess, options: SessionOptions
-) -> tuple[str, bool]:
+) -> tuple[str, bool, OptionValue | None]:
     """
     Initialize the connection, open or load the session, and set the options that the lab asks for.
 
-    Return the session's ID, and whether it is the session that `options.resume` names. It is a new one when the
-    harness says that it loads no sessions, and when it refuses to load this one.
+    Return the session's ID, whether it is the session that `options.resume` names, and the session's model as the
+    harness reports it. The session is a new one when the harness says that it loads no sessions, and when it
+    refuses to load this one.
     """
     abilities = (await _initialize(connection)).agent_capabilities
     servers: McpServers = [
@@ -549,17 +550,41 @@ async def _begin(
     else:
         opened = await connection.new_session(cwd=str(folder), mcp_servers=servers)
         session_id, offered = opened.session_id, opened.config_options
+    silent = False
     for category, value in (('model', options.model), ('thought_level', options.effort)):
         if value:
             option = _option_id(offered or [], category, harness)
-            changed = await connection.set_config_option(session_id=session_id, config_id=option, value=value)
+            try:
+                changed = await connection.set_config_option(session_id=session_id, config_id=option, value=value)
+            except acp.RequestError as error:
+                if category != 'model':
+                    raise
+                # The record keeps this cause apart, so that the lab can say that the model was refused.
+                raise ModelRefused(f'{harness.title} refused the model {value}: {error}') from error
             # A model can have its own effort levels. ACP answers a change with the full set of options, so a later
             # option comes from that answer. An empty answer says nothing, so the options from before stay.
+            silent = silent or (category == 'model' and not changed.config_options)
             offered = changed.config_options or offered
     # The mode comes last, so that a switch of model can't change it.
     if mode := options.mode or (harness.auto_mode if options.auto_mode else None):
         await connection.set_session_mode(session_id=session_id, mode_id=mode)
-    return session_id, loaded is not None
+    return session_id, loaded is not None, _model_now(offered, options.model if silent else None)
+
+
+def _model_now(offered: Sequence[ConfigOption] | None, chosen: str | None) -> OptionValue | None:
+    """
+    Return the session's model, with the name that the harness shows for it, or `None` when the harness names none.
+
+    The harness reports its models in the session option of the ACP category `model`, and the option's current
+    value is the session's model. `chosen` is the model that the lab set when the harness answered that change
+    with no options: the options are then from before the change, so the session's model is the chosen one. A
+    model that the harness does not list has its ID for a name.
+    """
+    option = _by_category(offered).get('model')
+    if option is None:
+        return None
+    value = chosen or option.current_value
+    return next((model for model in _values(option) if model.value == value), _option(value, value))
 
 
 def _option_id(offered: Sequence[ConfigOption], category: str, harness: HarnessEntry) -> str:
@@ -580,11 +605,24 @@ def _option_id(offered: Sequence[ConfigOption], category: str, harness: HarnessE
 class AgentSession:
     """A running ACP session. Open it with `AgentSession.open`, which stops the harness when the block ends."""
 
-    def __init__(self, connection: ClientSideConnection, session_id: str, client: _Client, *, loaded: bool) -> None:
-        """Wrap a session that is open on `connection`. `loaded` says that it holds an earlier conversation."""
+    def __init__(
+        self,
+        connection: ClientSideConnection,
+        session_id: str,
+        client: _Client,
+        *,
+        loaded: bool,
+        model: OptionValue | None = None,
+    ) -> None:
+        """
+        Wrap a session that is open on `connection`. `loaded` says that it holds an earlier conversation.
+
+        `model` is the session's model as the harness reported it when the session opened, or `None`.
+        """
         self._connection = connection
         self.id = session_id
         self.loaded = loaded
+        self.model = model
         self._client = client
 
     @classmethod
@@ -602,8 +640,8 @@ class AgentSession:
         """
         client = _Client(hooks, names_mcp_server=harness.names_mcp_server)
         async with _connected(harness, place, client) as connection:
-            session_id, loaded = await _begin(connection, harness, place.folder, board, options)
-            yield cls(connection, session_id, client, loaded=loaded)
+            session_id, loaded, model = await _begin(connection, harness, place.folder, board, options)
+            yield cls(connection, session_id, client, loaded=loaded, model=model)
 
     async def send(self, text: str) -> TurnResult:
         """Send one message, and return once the harness ends its turn."""

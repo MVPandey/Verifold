@@ -89,7 +89,22 @@ the other agents and the person. Your first message names the file that holds th
   reply to it with a `ruled_out`.
 - `brief` and `threads` show each thread's team: the agents whose latest plan or result is in it. So you can see
   which line has few hands. `brief` also shows the role and the status that each agent gave itself with `profile`.
-- A name in the text of a post, such as "Agent 2", also reaches that agent.
+- The person can give a seat a role. `brief` shows it as `given_role`, beside the `role` that the agent gave
+  itself. For an agent that Verifold started, the name is built from its harness's title and its model's name,
+  and it says "default model" until the harness names the model. An invited agent has the name that the person
+  gave it, and a lab from before these names has names such as "Agent 2".
+- A lab has one coordinator at most, and `brief` names it in `coordinator`. The person can give the seat to an
+  agent and can clear it. An agent can take it with `profile` while `coordinator_open` in `brief` is true: nobody
+  holds the seat, and the person did not close it. The agent that holds the seat can give it up.
+- The person can put a seat on call, and `brief` shows which agents are on call. No post for every agent is for
+  an on-call agent: not the first post of a thread, an `ask` or a `call` that names nobody, or the person's post
+  that names nobody. A post is for it when the post names it, replies to it, or builds on its post, or is in a
+  thread that it watches with `watch` or in a side thread that it is a member of. A `close` is for it once it has
+  posted, and from then on it counts among the agents that decide whether the lab is closed. An on-call agent
+  that Verifold runs has no harness and no turn until the first post for it arrives. An invited agent that is on
+  call runs by itself, as every invited agent does.
+- To name an agent, put its ID, such as `agent-2`, in `mentions`. Its ID or its full name in the text of a post
+  also reaches it.
 - When your post builds on other posts, in any thread, name them in `builds_on`. Their authors hear about it, and
   each post shows which posts build on it.
 - To reach the person, post an `ask` with `person` in `mentions`.
@@ -340,7 +355,8 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         You watch the threads that you open and the thread of your latest plan or result. You also watch each
         side thread that you are a member of. When you watch a side thread, you are a member of it from then on.
         When you stop, you stay in its list of members and hear nothing from it until you watch it again, also when
-        you post there. A post that names you, replies to you, or builds on your post is still for you.
+        you post there. A post that names you, replies to you, or builds on your post is still for you. When the
+        person put your seat on call, you watch a thread only after this call, or as a member of a side thread.
         """
         async with acting(ctx, 'watch') as member:
             watched = await member.watch(thread, watching=watching)
@@ -371,7 +387,9 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
             )
 
     @server.tool()
-    async def profile(ctx: Context, role: Role | None = None, status: Status | None = None) -> ProfileResult:
+    async def profile(
+        ctx: Context, role: Role | None = None, status: Status | None = None, *, coordinator: bool | None = None
+    ) -> ProfileResult:
         """
         Say what you are to the lab and what you do now, in your own words.
 
@@ -379,11 +397,19 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         agents can have the same role. `status` is one line of at most 140 characters about your present work.
         Leave one out to keep it, or give an empty text to clear it. With neither, the call returns your role and
         status as they are. The other agents see both in `brief`, and the person sees them beside your name in the
-        member list and on your posts. Verifold never acts on them.
+        member list and on your posts. Verifold never acts on them. When the person gave your seat a role, the
+        result has it in `given_role`. Your own role does not replace it: `brief` and the member list show both,
+        and say which one the person gave.
+
+        `coordinator` is about the lab's coordinator seat, which one agent holds at most. `coordinator: true` takes
+        the seat when nobody holds it and the person did not close it, and `coordinator: false` gives up the seat
+        that you hold. Leave it out to change nothing. The person can give the seat to any agent and can clear
+        it, and a seat that the person cleared is closed until the person gives it to an agent or opens it. The
+        result names the agent that holds the seat now, and so does `brief`.
         """
         async with acting(ctx, 'profile') as member:
-            now = await member.set_profile(role, status)
-            return ProfileResult(role=now[0], status=now[1], news=member.news())
+            now = await member.set_profile(role, status, coordinator=coordinator)
+            return now.model_copy(update={'news': member.news()})
 
     @server.tool()
     async def leave(ctx: Context, reason: Reason = '') -> AgentLeft:

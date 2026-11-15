@@ -22,13 +22,14 @@ from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import TypeAdapter
 
-from verifold.app import WRITING_TEMPLATE, ServeHooks, ServeOptions, WebServer, _agent, _options, serve
+from verifold.app import WRITING_TEMPLATE, Host, ServeHooks, ServeOptions, WebServer, _agent, _crew, _options, serve
 from verifold.harnesses.catalog import CATALOG as BUILT_IN
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent, AgentChoice, ModelSpec
-from verifold.protocol.app import StartRequest
+from verifold.protocol.app import AgentView, LabView, StartRequest
 from verifold.protocol.events import (
     AgentJoined,
+    AgentNamed,
     Event,
     Posted,
     RerunRequested,
@@ -40,12 +41,15 @@ from verifold.protocol.events import (
 )
 from verifold.protocol.settings import AtExit, AtTimeLimit
 from verifold.protocol.usage import Usage
+from verifold.runner.agent_loop import AgentSetup
 from verifold.runner.environment import harness_environment
 from verifold.runner.git import GitError, git
 from verifold.runner.jobs import Sweep, sweep
 from verifold.runner.messages import DOORBELL, RESTARTED, STARTED_AGAIN
+from verifold.runner.messages import ON_CALL as ON_CALL_FACT
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.server.lab import Lab
+from verifold.server.member import Member
 from verifold.server.web import web_app
 from verifold.society.attention import update
 from verifold.society.fold import fold
@@ -179,9 +183,10 @@ async def test_the_person_starts_a_lab_from_the_setup_screen(
         'agent-2',
     }
     first = next(call['text'] for call in calls(log) if call['event'] == 'prompt' and call['agent'] == 'agent-2')
+    # The setup screen asked the harness what it offers, so each name holds the model's name from the first.
     assert first.startswith(
-        'Does it hold?\n\nYou are Agent 2 (agent-2) in a Verifold lab. '
-        'The other agents got this question at the same moment: Agent 1 (agent-1, fake).'
+        'Does it hold?\n\nYou are Fake · small 2 (agent-2) in a Verifold lab. '
+        'The other agents got this question at the same moment: Fake · small (agent-1, fake).'
     )
     assert 'Thread t-1 on the board holds this question, and every agent watches it.' in first
     board = fold(record(project))
@@ -240,15 +245,15 @@ async def test_a_lab_that_resumes_keeps_the_auto_mode_that_its_agents_ran_with(p
 def test_the_built_in_codex_entry_keeps_its_earlier_auto_mode_for_the_labs_from_before() -> None:
     codex = BUILT_IN['codex']
     before = Agent(id='agent-1', name='Agent 1', harness='codex', model=ModelSpec(family='openai'))
-    new = _agent(2, codex, AgentChoice(harness='codex'), auto_mode=True)
-    chosen = _agent(3, codex, AgentChoice(harness='codex', mode='read-only'), auto_mode=True)
+    new = _agent(2, codex, AgentChoice(harness='codex'), None, (), auto_mode=True)
+    chosen = _agent(3, codex, AgentChoice(harness='codex', mode='read-only'), None, (), auto_mode=True)
 
     assert (codex.auto_mode, codex.auto_mode_before, new.auto_mode) == ('agent', 'workspace-write', 'agent')
     assert _options(before, codex, auto_mode=True).mode == 'workspace-write'
     assert _options(new, codex, auto_mode=True).mode == 'agent'
     assert _options(chosen, codex, auto_mode=True).mode == 'read-only'
     assert _options(before, codex, auto_mode=False).mode is None
-    assert _agent(4, codex, AgentChoice(harness='codex'), auto_mode=False).auto_mode is None
+    assert _agent(4, codex, AgentChoice(harness='codex'), None, (), auto_mode=False).auto_mode is None
     # A harness without an earlier mode goes by the catalog, as before.
     assert (
         _options(before.model_copy(update={'harness': 'claude-code'}), BUILT_IN['claude-code'], auto_mode=True).mode
@@ -439,7 +444,10 @@ async def test_the_person_adds_an_agent_to_a_lab_that_runs_and_it_starts_like_th
 
     assert [view['agent']['id'] for view in added.json()['agents']] == ['agent-1', 'agent-2']
     starts = [call['text'] for call in calls(log) if call['event'] == 'prompt' and call['agent'] == 'agent-2']
-    assert 'The lab is under way, and these agents work in it: Agent 1 (agent-1, fake).' in starts[0]
+    # Nobody asked the harness what it offers. Agent 1's name got its model when its first turn started.
+    assert 'You are Fake · default model 2 (agent-2) in a Verifold lab.' in starts[0]
+    assert 'The lab is under way, and these agents work in it: Fake · default (agent-1, fake).' in starts[0]
+    assert [joined.agent.name for joined in fold(record(project)).agents] == ['Fake · default', 'Fake · default 2']
     assert (unknown.status_code, too_many.status_code) == (400, 400)
     # A refused add leaves no agent on the record.
     assert len([event for event in record(project) if isinstance(event, AgentJoined)]) == 2
@@ -499,7 +507,7 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
         await client.post('/posts', json={'kind': 'message', 'text': 'Go on with the tail.', 'thread': 't-1'})
 
     assert (invited['agent'], invited['name']) == ('agent-2', 'Reader')
-    assert 'The lab is under way, and these agents work in it: Agent 1 (agent-1, fake).' in invited['text']
+    assert 'The lab is under way, and these agents work in it: Fake · default (agent-1, fake).' in invited['text']
     assert f"{project / '.verifold' / 'LAB.md'} holds the lab's norms" in invited['text']
     assert folder == project / '.verifold' / 'agents' / 'agent-2'
     assert 'Keep the token and your MCP settings outside this folder.' in invited['text']
@@ -1211,10 +1219,8 @@ async def test_saved_choices_for_new_labs_fill_the_setup_and_leave_a_running_lab
     assert changed['project']['values'] == {'setup': written}
     # The setup names the file that its first choices come from, which here is the project's own.
     assert setup['defaults_from'] == changed['project']['path']
-    assert changed['project']['defaults'] == {
-        **written,
-        'agents': [{**written['agents'][0], 'effort': None, 'mode': None}],
-    }
+    unset = {'effort': None, 'mode': None, 'role': '', 'on_call': False, 'coordinator': False, 'family': None}
+    assert changed['project']['defaults'] == {**written, 'agents': [{**written['agents'][0], **unset}]}
     assert setup['defaults'] == changed['project']['defaults']
     assert wrong.status_code == 400
     assert record(project) == []
@@ -1372,6 +1378,296 @@ async def test_a_harness_that_fails_its_probe_offers_nothing_and_stops_probing(p
     assert setup['harnesses'] == [
         {'name': 'broken', 'title': 'Fake', 'family': 'test', 'available': True, 'probing': False, 'offer': None}
     ]
+
+
+SEATS = [
+    {'harness': 'fake', 'model': 'small', 'role': 'driver', 'coordinator': True},
+    {'harness': 'fake', 'model': 'small-model', 'role': 'direction creator', 'on_call': True, 'family': 'other'},
+    {'harness': 'fake', 'count': 2},
+]
+ON_CALL = StartRequest(
+    question='Does it hold?',
+    agents=(AgentChoice(harness='fake'), AgentChoice(harness='fake', model='small', on_call=True)),
+)
+
+
+def started(project: Path) -> set[str]:
+    """Return the agents that have a turn in the record."""
+    return {event.agent for event in record(project) if isinstance(event, TurnStarted)}
+
+
+async def views(client: httpx2.AsyncClient) -> dict[str, AgentView]:
+    return {view.agent.id: view for view in LabView.model_validate((await client.get('/lab')).json()).agents}
+
+
+async def test_a_lab_starts_with_several_seats_of_one_harness_and_an_on_call_agent_starts_when_a_post_names_it(
+    project: Path, log: Path
+) -> None:
+    async with serving(project, options=FAST) as client:
+        await probed_setup(client)
+        begun = await client.post('/labs', json={'question': 'Does it hold?', 'agents': SEATS})
+        await until(lambda: len(posts(project)) == 3)
+        # The person's words that name nobody are for every agent but the one on call.
+        steer = await client.post('/posts', json={'kind': 'message', 'text': 'Look at the tail.', 'thread': 't-1'})
+        heard = steer.json()['seq']
+        await until(lambda: at_rest(project, ('agent-1', 'agent-3', 'agent-4'), after=heard), timeout=60)
+        quiet, before = started(project), await views(client)
+        prompted = {call['agent'] for call in calls(log) if call['event'] == 'prompt'}
+        await client.post(
+            '/posts', json={'kind': 'ask', 'text': 'A hard one.', 'thread': 't-1', 'mentions': ['agent-2']}
+        )
+        await until(lambda: turns_of(project, 'agent-2') == 1, timeout=60)
+        after = await views(client)
+
+    assert begun.status_code == 200
+    joined = [event.agent for event in record(project) if isinstance(event, AgentJoined)]
+    # The harness named its models when the setup asked, so each name holds the model's name from the first.
+    assert [agent.name for agent in joined] == [
+        'Fake · small',
+        'Fake · small-model',
+        'Fake · default',
+        'Fake · default 2',
+    ]
+    assert [(agent.given_role, agent.model.family) for agent in joined[:3]] == [
+        ('driver', 'test'),
+        ('direction creator', 'other'),
+        ('', 'test'),
+    ]
+    assert quiet == {'agent-1', 'agent-3', 'agent-4'}
+    assert [(before[agent].on_call, before[agent].coordinator) for agent in ('agent-1', 'agent-2')] == [
+        (False, True),
+        (True, False),
+    ]
+    # No harness ran for the on-call agent, so it cost nothing, and the app shows it as idle.
+    assert (before['agent-2'].turns, before['agent-2'].cost_usd, before['agent-2'].activity.state) == (
+        0,
+        None,
+        'idle',
+    )
+    assert prompted == quiet
+    first = next(call['text'] for call in calls(log) if call['event'] == 'prompt' and call['agent'] == 'agent-2')
+    # Its first message holds the facts of the moment that it starts, and its seat.
+    assert 'You are Fake · small-model (agent-2) in a Verifold lab. The lab is under way' in first
+    assert 'The person gave your seat this role: direction creator' in first
+    assert 'The person put your seat on call.' in first
+    assert posts(project)[-1].post.author == 'agent-2'
+    assert after['agent-2'].turns == 1
+    start = next(event for event in record(project) if isinstance(event, TurnStarted) and event.agent == 'agent-2')
+    assert (start.model, start.model_name) == ('small-model', 'small-model')
+
+
+async def test_an_on_call_agent_that_was_never_called_has_no_turn_after_a_restart_and_starts_when_its_seat_comes_off_call(
+    project: Path,
+) -> None:
+    async with serving(project, ON_CALL, {'fake': FAKE_HARNESS}):
+        await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
+    first_run = started(project)
+
+    async with serving(project, catalog={'fake': FAKE_HARNESS}) as client:
+        await client.post('/posts', json={'kind': 'message', 'text': 'Go on.', 'thread': 't-1'})
+        resumed = (await views(client))['agent-2']
+        switched = await client.post('/agents/agent-2/seat', json={'on_call': False})
+        await until(lambda: 'agent-2' in started(project), timeout=60)
+        missing = await client.post('/agents/agent-9/seat', json={'on_call': True})
+        coordinator = await client.post('/agents/agent-2/seat', json={'coordinator': True})
+        moved = await client.post('/agents/agent-1/seat', json={'coordinator': True})
+        other = await client.post('/agents/agent-2/seat', json={'coordinator': False})
+        cleared = await client.post('/agents/agent-1/seat', json={'coordinator': False})
+
+    assert first_run == {'agent-1'}
+    assert (resumed.on_call, resumed.turns, resumed.activity.state) == (True, 0, 'idle')
+    assert (switched.status_code, missing.status_code) == (200, 404)
+    holders = [
+        [view['agent']['id'] for view in response.json()['agents'] if view['coordinator']]
+        for response in (coordinator, moved, other, cleared)
+    ]
+    # One agent holds the seat at a time, and taking it from an agent that does not hold it changes nothing.
+    assert holders == [['agent-2'], ['agent-1'], ['agent-1'], []]
+    board = fold(record(project))
+    assert not board.on_call('agent-2')
+    # Nobody asked the harness for its models before the lab started, so the first turn of agent 1 named its model.
+    renamed = [event for event in record(project) if isinstance(event, AgentNamed)]
+    assert [(event.agent, event.name) for event in renamed] == [('agent-1', 'Fake · default')]
+    assert [joined.agent.name for joined in board.agents] == ['Fake · default', 'Fake · small']
+    assert [start.model for start in board.starts if start.agent == 'agent-1'][:1] == ['default']
+
+
+async def test_an_on_call_agent_that_a_post_names_while_the_lab_is_out_of_time_starts_when_the_lab_has_time(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seated: list[tuple[str, bool]] = []
+    seat = Host._seat
+
+    async def watched(host: Host, lab: Lab, agent: Agent, start: str) -> tuple[Member, AgentSetup]:
+        seated.append((agent.id, lab.board.out_of_time))
+        return await seat(host, lab, agent, start)
+
+    monkeypatch.setattr(Host, '_seat', watched)
+    async with serving(project, ON_CALL, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: turns_of(project, 'agent-1') == 1, timeout=60)
+        await client.post('/time', json={'minutes': 0})
+        # The record says that the lab is out of time a moment after the person stops it. The ask comes after that.
+        await until(lambda: any(isinstance(event, TimeRanOut) for event in record(project)))
+        ask = {'kind': 'ask', 'text': 'A hard one.', 'thread': 't-1', 'mentions': ['agent-2']}
+        assert (await client.post('/posts', json=ask)).status_code == 200
+        idle = await state_of(client, 'agent-2')
+        await client.post('/time', json={'minutes': 5})
+        await until(lambda: turns_of(project, 'agent-2') == 1, timeout=60)
+
+    # No harness starts for the agent while no turn can run. It starts once, when the lab has time again.
+    assert idle == 'idle'
+    assert [out_of_time for agent, out_of_time in seated if agent == 'agent-2'] == [False]
+
+
+async def test_an_on_call_agent_whose_name_changed_while_it_waited_starts_with_its_name_of_now(
+    project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    labs: list[Lab] = []
+    seated: list[str] = []
+    seat = Host._seat
+
+    async def watched(host: Host, lab: Lab, agent: Agent, start: str) -> tuple[Member, AgentSetup]:
+        labs.append(lab)
+        seated.append(agent.name)
+        return await seat(host, lab, agent, start)
+
+    monkeypatch.setattr(Host, '_seat', watched)
+    async with serving(project, ON_CALL, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: turns_of(project, 'agent-1') == 1, timeout=60)
+        # The record gives the waiting agent a new name before any post calls it.
+        renamed = await labs[0].name_by_model('agent-2', 'Fake', 'Small v2')
+        ask = {'kind': 'ask', 'text': 'A hard one.', 'thread': 't-1', 'mentions': ['agent-2']}
+        await client.post('/posts', json=ask)
+        await until(lambda: turns_of(project, 'agent-2') == 1, timeout=60)
+
+    assert (renamed, seated[-1]) == ('Fake · Small v2', 'Fake · Small v2')
+    assert 'You are Fake · Small v2 (agent-2) in a Verifold lab.' in prompts_of(log, 'agent-2')[0]
+
+
+async def test_an_on_call_agent_that_cannot_start_does_not_stop_the_lab_and_the_person_starts_it_again(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    failed: list[str] = []
+    seat = Host._seat
+
+    async def broken_once(host: Host, lab: Lab, agent: Agent, start: str) -> tuple[Member, AgentSetup]:
+        if agent.id == 'agent-2' and not failed:
+            failed.append(agent.id)
+            raise GitError('fatal: the worktree is gone')
+        return await seat(host, lab, agent, start)
+
+    monkeypatch.setattr(Host, '_seat', broken_once)
+    async with serving(project, ON_CALL, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: turns_of(project, 'agent-1') == 1, timeout=60)
+        ask = {'kind': 'ask', 'text': 'A hard one.', 'thread': 't-1', 'mentions': ['agent-2']}
+        await client.post('/posts', json=ask)
+        await until(lambda: turns_of(project, 'agent-2') == 1)
+        stopped = (await views(client))['agent-2']
+        again = await client.post('/agents/agent-2/start')
+        # The ask still waits for the agent, so it starts at once.
+        await until(lambda: turns_of(project, 'agent-2') == 2, timeout=60)
+        started_again = (await views(client))['agent-2']
+
+    entry = next(turn for turn in turns(project) if turn.agent == 'agent-2')
+    assert (entry.error, entry.stopped, entry.no_turn) == (
+        "Verifold can't start Fake · small: fatal: the worktree is gone",
+        True,
+        True,
+    )
+    # The member list says why, and the person starts the agent again from there.
+    assert (stopped.stopped, stopped.error, stopped.activity.state) == (True, entry.error, 'stopped')
+    assert (again.status_code, started_again.error, started_again.stopped) == (200, None, False)
+    assert 'agent-2' in started(project)
+
+
+async def test_the_person_adds_an_on_call_seat_and_invites_an_agent_with_the_facts_of_its_seat(project: Path) -> None:
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),))
+    seat = {'harness': 'fake', 'model': 'small', 'effort': 'low', 'role': 'lit review', 'on_call': True}
+
+    async with serving(project, start, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
+        added = await client.post('/agents', json=seat)
+        invite = {'name': 'Reader', 'role': 'reads papers', 'family': 'openai', 'coordinator': True, 'on_call': True}
+        invited = (await client.post('/invitations', json=invite)).json()
+        plain = (await client.post('/invitations', json={})).json()
+        lab = await views(client)
+        # The person removes the on-call agent before any post called it, so no harness ever starts for it.
+        removed = await client.delete('/agents/agent-2')
+        await client.post('/posts', json={'kind': 'message', 'text': 'Go on.', 'thread': 't-1'})
+        gone = (await views(client))['agent-2']
+
+    assert added.status_code == 200
+    assert (removed.status_code, gone.left is not None, gone.turns) == (200, True, 0)
+    assert (lab['agent-2'].agent.name, lab['agent-2'].on_call, lab['agent-2'].turns) == (
+        'Fake · small',
+        True,
+        0,
+    )
+    assert lab['agent-2'].agent.model == ModelSpec(family='test', name='small', effort='low')
+    assert 'agent-2' not in started(project)
+    reader = lab['agent-3']
+    assert (reader.agent.given_role, reader.agent.model.family) == ('reads papers', 'openai')
+    assert (reader.on_call, reader.coordinator) == (True, True)
+    _, _, folder = invited_parts(invited['text'])
+    assert folder == project / '.verifold' / 'agents' / 'agent-3'
+    assert 'The person gave your seat this role: reads papers' in invited['text']
+    assert "You hold the lab's coordinator seat." in invited['text']
+    # Verifold never starts an invited agent, and its invitation does not say that it does.
+    assert ON_CALL_FACT in invited['text']
+    assert 'Verifold starts you' not in invited['text']
+    # An invitation without facts is as before: a numbered name, and a family that nobody knows.
+    assert (plain['name'], lab['agent-4'].agent.model.family, lab['agent-4'].on_call) == (
+        'Agent 4',
+        'unknown',
+        False,
+    )
+
+
+async def test_a_lab_that_is_served_again_asks_the_harnesses_when_the_person_opens_the_form_and_asks_each_once(
+    project: Path, log: Path
+) -> None:
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),))
+
+    async with serving(project, start, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
+        before = (await client.get('/setup')).json()['harnesses'][0]
+        asking = (await client.post('/offers', json={})).json()['harnesses'][0]
+        await probed_setup(client)
+        after = (await client.get('/setup')).json()['harnesses']
+        again = (await client.post('/offers', json={})).json()['harnesses'][0]
+        await asyncio.sleep(0.2)
+
+    assert (before['offer'], before['probing'], asking['probing']) == (None, False, True)
+    assert [model['value'] for model in after[0]['offer']['models']] == ['default', 'small', 'small-model']
+    assert again['probing'] is False
+    # The probe runs in the project folder, which the fake agent takes for its name.
+    assert len([call for call in calls(log) if call['agent'] == project.name and call['event'] == 'new_session']) == 1
+
+
+def test_a_checker_comes_from_each_harness_and_family_that_a_seat_states() -> None:
+    def seat(number: int, family: str, model: str | None = None) -> Agent:
+        return Agent(
+            id=f'agent-{number}', name=f'Agent {number}', harness='fake', model=ModelSpec(family=family, name=model)
+        )
+
+    crew = _crew(
+        (seat(1, 'test', 'small'), seat(2, 'test'), seat(3, 'other', 'small-model')),
+        {'fake': FAKE_HARNESS},
+        auto_mode=True,
+    )
+
+    assert [(entry.name, entry.family, options.model) for entry, options in crew] == [
+        ('fake', 'test', 'small'),
+        ('fake', 'other', 'small-model'),
+    ]
+    # A family is the same whatever its capitals. An on-call seat gives its model only when no other seat has its family.
+    spared = _crew(
+        (seat(1, 'test', 'strong'), seat(2, ' Test ', 'small'), seat(3, 'other', 'strong')),
+        {'fake': FAKE_HARNESS},
+        auto_mode=True,
+        on_call=frozenset({'agent-1', 'agent-3'}),
+    )
+    assert [(entry.family, options.model) for entry, options in spared] == [(' Test ', 'small'), ('other', 'strong')]
 
 
 @pytest.mark.usefixtures('log')

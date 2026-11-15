@@ -25,7 +25,7 @@ from pydantic import Field, SecretStr
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent
 from verifold.protocol.app import AgentState
-from verifold.protocol.events import AlarmSet, TimeRanOut, TurnSummary
+from verifold.protocol.events import ERROR_OUT_OF_TIME, ERROR_RAN_PAST, AlarmSet, TimeRanOut, TurnSummary
 from verifold.protocol.ids import PERSON
 from verifold.protocol.record import Record
 from verifold.protocol.settings import AtExit, AtTimeLimit
@@ -324,7 +324,18 @@ class AgentLoop:
         self._seen_at_turn = self._member.seen
         # The mark comes before the message. A turn with a mark and no end did not end.
         rang, self._rang = self._rang, None
-        await self._lab.start_turn(self._setup.agent.id, session.id, self._seen_at_turn, rang)
+        model = session.model
+        if model:
+            # A name that says "default model" names the model that the harness reported, from the first turn on.
+            await self._lab.name_by_model(self._setup.agent.id, self._setup.harness.title, model.name)
+        await self._lab.start_turn(
+            self._setup.agent.id,
+            session.id,
+            self._seen_at_turn,
+            rang,
+            model=model.value if model else None,
+            model_name=model.name if model else None,
+        )
         self._in_turn = True
         try:
             async with asyncio.timeout(self._settings.turn_timeout) as limit:
@@ -351,9 +362,9 @@ class AgentLoop:
                 return False
             out_of_time = self._lab.board.out_of_time
             error = (
-                'The lab ran out of time, so Verifold cancelled the turn.'
+                f'{ERROR_OUT_OF_TIME}, so Verifold cancelled the turn.'
                 if out_of_time
-                else f'The turn ran past {self._settings.turn_timeout:g} seconds and was cancelled.'
+                else f'{ERROR_RAN_PAST} {self._settings.turn_timeout:g} seconds and was cancelled.'
             )
             await self._record(started, Usage(), None, error)
             self._cut_short = '' if out_of_time else error

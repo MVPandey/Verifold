@@ -963,6 +963,7 @@ class BlockingSession:
 
     id = 'session-1'
     loaded = False
+    model = None
 
     async def send(self, _: str) -> None:
         await asyncio.Event().wait()

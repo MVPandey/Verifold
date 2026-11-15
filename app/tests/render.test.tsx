@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { Api } from '../src/api/client.ts';
 import type {
+  AgentView,
   AnswerView,
   HarnessOption,
   LabView,
@@ -1053,6 +1054,133 @@ describe('the lab page', () => {
     assert.equal(html.split('<span class="f-new">New</span>').length - 1, 1);
   });
 
+  it('shows the name with the harness and the model, the role that the person gave, the coordinator, and who is on call', () => {
+    const [first, second] = lab.agents;
+    assert.ok(first && second);
+    const html = renderToStaticMarkup(
+      <Top
+        folder="~/code/sort-bench"
+        route={{ page: 'lab' }}
+        open={{
+          lab: {
+            ...lab,
+            agents: [
+              {
+                ...first,
+                agent: { ...first.agent, name: 'Claude Code · Opus 5.5', given_role: 'driver' },
+                role: 'theory',
+                coordinator: true,
+              },
+              {
+                ...second,
+                agent: { ...second.agent, name: 'Reader', given_role: 'reads' },
+                role: 'reads',
+                on_call: true,
+              },
+            ],
+          },
+          threads: [summary()],
+          harnesses: HARNESSES,
+          needs: 0,
+          now,
+          api: {} as Api,
+          onChange: () => undefined,
+        }}
+      />,
+    );
+    // A name that holds the harness's title gets no second harness tag. An older or a given name keeps the tag.
+    assert.ok(
+      html.includes(
+        '<b>Claude Code · Opus 5.5</b><span class="f-role">Coordinator</span><span class="f-role">driver (given by you)</span><span class="f-role">theory</span></p>',
+      ),
+    );
+    // A role that the agent repeats shows once, as the person's.
+    assert.ok(
+      html.includes(
+        '<b>Reader</b><span class="f-role">reads (given by you)</span><span class="f-tag">Codex</span>',
+      ),
+    );
+    assert.equal(html.split('On call. A post that names it wakes it.').length - 1, 1);
+    assert.ok(html.includes('Take off call'));
+    assert.ok(html.includes('Remove as coordinator'));
+    assert.ok(html.includes('No turns yet'));
+    // An agent holds the coordinator seat, so the list says nothing about a seat without a holder.
+    assert.equal(html.includes('No coordinator.'), false);
+  });
+
+  it('says whether agents may take a coordinator seat that nobody holds, and why a harness failed', () => {
+    const [first, second] = lab.agents;
+    assert.ok(first && second);
+    const list = (open: boolean): string =>
+      renderToStaticMarkup(
+        <Top
+          folder="~/code/sort-bench"
+          route={{ page: 'lab' }}
+          open={{
+            lab: {
+              ...lab,
+              coordinator_open: open,
+              agents: [
+                first,
+                { ...second, error: 'RequestError: The model fable-9 is not available.' },
+              ],
+            },
+            threads: [summary()],
+            harnesses: HARNESSES,
+            needs: 0,
+            now,
+            api: {} as Api,
+            onChange: () => undefined,
+          }}
+        />,
+      );
+
+    assert.ok(list(true).includes('No coordinator. Agents may take the seat.'));
+    assert.ok(list(true).includes('Close the seat'));
+    assert.ok(list(false).includes('No coordinator. You closed the seat.'));
+    assert.ok(list(false).includes('Let agents take it'));
+    assert.equal(
+      list(true).split('Last failure: RequestError: The model fable-9 is not available.').length -
+        1,
+      1,
+    );
+  });
+
+  it('shows the start of a long failure as text, with the whole of it to open, and a coordinator that has not come', () => {
+    const [first, second] = lab.agents;
+    assert.ok(first && second);
+    const error = `GitError: <b>fatal</b>\n${'x'.repeat(400)} the end`;
+    const list = (agents: readonly AgentView[]): string =>
+      renderToStaticMarkup(
+        <Top
+          folder="~/code/sort-bench"
+          route={{ page: 'lab' }}
+          open={{
+            lab: { ...lab, agents },
+            threads: [summary()],
+            harnesses: HARNESSES,
+            needs: 0,
+            now,
+            api: {} as Api,
+            onChange: () => undefined,
+          }}
+        />,
+      );
+    const html = list([
+      { ...first, coordinator: true },
+      { ...second, error },
+    ]);
+
+    // The harness's text is text, never markup, and the row holds only its start until the person opens it.
+    assert.ok(html.includes('<summary>Last failure: GitError: &lt;b&gt;fatal&lt;/b&gt; xxx'));
+    assert.ok(html.includes('the end</pre>'));
+    assert.equal(html.includes('<b>fatal</b>'), false);
+    // The first agent has turns in the record, so it came. Only an agent with no turn and no post has not.
+    assert.equal(html.includes('has not come yet'), false);
+    const waiting = list([first, { ...second, coordinator: true, on_call: true }]);
+    assert.equal(waiting.split('Holds the coordinator seat and has not come yet.').length - 1, 1);
+  });
+
   it('keeps the members, their state and cost, the lab total, and the time in the top bar', () => {
     const html = renderToStaticMarkup(
       <Top
@@ -1094,9 +1222,16 @@ describe('the lab page', () => {
     assert.equal(html.split('>Open folder</button>').length - 1, 2);
     assert.equal(html.split('>Open the agents’ folder</button>').length - 1, 1);
     assert.ok(html.includes('Lab total <b>$0.50</b>'));
-    // The person can add an agent of a harness that this computer has.
+    // The person can add an agent of a harness that this computer has, with the seat form of the setup screen.
     assert.ok(html.includes('Add an agent'));
     assert.ok(html.includes('<button type="button">Add</button>'));
+    assert.ok(html.includes('<summary>Opus, High effort (your default)</summary>'));
+    assert.ok(html.includes('Other…</option>'));
+    assert.ok(html.includes('<summary>Its seat</summary>'));
+    // Each member has the two switches of its seat.
+    assert.ok(html.includes('Put on call'));
+    assert.ok(html.includes('Make coordinator'));
+    assert.equal(html.includes('On call. A post that names it wakes it.'), false);
     // The person can also invite an agent that they run themselves. No invitation shows before they ask for one.
     assert.ok(html.includes('Invite an agent'));
     assert.ok(html.includes('<button type="button">Invite</button>'));
@@ -1316,6 +1451,81 @@ describe('the setup screen', () => {
     assert.ok(html.includes('<summary>Opus, High effort (your default)</summary>'));
     assert.ok(html.includes('<option value="" selected="">Opus (your default)</option>'));
     assert.ok(html.includes('<option value="plan">Plan</option>'));
+    // The model menu ends with the way to type a model that the harness does not list.
+    assert.ok(html.includes('Other…</option>'));
+    assert.equal(html.includes('Model ID'), false);
+    // Each seat takes a role, a model family, and the two marks, and a harness takes another seat.
+    assert.ok(html.includes('placeholder="None. Such as: driver"'));
+    assert.ok(html.includes('placeholder="anthropic"'));
+    assert.ok(html.includes('On call. Only a post that names it wakes it.'));
+    assert.ok(html.includes('Coordinator. A lab has one.'));
+    assert.ok(html.includes('Add a seat with another model'));
+    assert.equal(html.includes('Remove seat'), false);
+    assert.equal(html.includes('Every seat is on call'), false);
+    assert.equal(html.includes('needs a model ID'), false);
+  });
+
+  it('shows each saved seat of a harness, with a typed model for one that the harness does not list', () => {
+    const html = renderToStaticMarkup(
+      <SetupPage
+        api={{} as Api}
+        setup={{
+          folder: '~/code',
+          harnesses: HARNESSES,
+          question: null,
+          defaults: {
+            agents: [
+              { harness: 'claude-code', count: 2, model: 'opus', effort: null, mode: null },
+              {
+                harness: 'claude-code',
+                count: 1,
+                model: 'fable',
+                effort: null,
+                mode: null,
+                role: 'direction creator',
+                on_call: true,
+                coordinator: true,
+              },
+            ],
+            auto_mode: true,
+            minutes: null,
+          },
+          defaults_from: null,
+        }}
+        onStarted={() => undefined}
+        onRefresh={() => undefined}
+      />,
+    );
+
+    assert.ok(html.includes('Start lab with 3 agents'));
+    assert.ok(html.includes('<summary>Opus, High effort</summary>'));
+    assert.ok(html.includes('<summary>fable · direction creator, coordinator, on call</summary>'));
+    assert.ok(html.includes('Seat 2'));
+    assert.ok(html.includes('Model ID'));
+    assert.ok(html.includes('value="fable"'));
+    assert.equal(html.split('Remove seat').length - 1, 2);
+    // Only what the harness reported is offered: it said nothing about the effort levels of this model.
+    assert.equal(html.split('>Effort</label>').length - 1, 1);
+  });
+
+  it('says that nothing starts by itself when every seat is on call', () => {
+    const seat = { harness: 'claude-code', count: 1, model: null, effort: null, mode: null };
+    const html = renderToStaticMarkup(
+      <SetupPage
+        api={{} as Api}
+        setup={{
+          folder: '~/code',
+          harnesses: HARNESSES,
+          question: null,
+          defaults: { agents: [{ ...seat, on_call: true }], auto_mode: true, minutes: null },
+          defaults_from: null,
+        }}
+        onStarted={() => undefined}
+        onRefresh={() => undefined}
+      />,
+    );
+
+    assert.ok(html.includes('Every seat is on call, so no agent starts until a post names one.'));
   });
 
   it('waits for a harness that Verifold still asks, and takes typed choices from one that did not answer', () => {

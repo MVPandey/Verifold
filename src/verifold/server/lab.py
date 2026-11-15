@@ -5,13 +5,16 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Final, Self
 
-from verifold.protocol.agents import Agent
+from verifold.protocol.agents import Agent, one_line
 from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
+    AgentNamed,
     AlarmSet,
+    CoordinatorSet,
     Event,
     LabOpened,
+    OnCallSet,
     PermissionGranted,
     Posted,
     ProfileSet,
@@ -30,12 +33,13 @@ from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import MAX_HEADLINE, Answer, Ask, FileEvidence, Mark, PermissionShown, QuestionShown
 from verifold.protocol.settings import Settings
-from verifold.protocol.threads import QUESTION_TITLE, Thread
+from verifold.protocol.threads import QUESTION_TITLE, Carries, Thread
 from verifold.server.changes import wait_until
 from verifold.server.errors import LabExists
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
+from verifold.society.labels import awaits_model, is_numbered, label, plain
 from verifold.society.lines import question_thread
 from verifold.society.rules import waiting_reruns
 from verifold.store.record_file import RecordFile
@@ -105,10 +109,78 @@ class Lab:
         """The board after every event so far."""
         return self._board
 
-    async def join(self, agent: Agent) -> AgentJoined:
-        """Add an agent to the lab."""
-        board = await self._commit(lambda _, seq, at: AgentJoined(seq=seq, at=at, agent=agent))
-        return board.agents[-1]
+    async def join(self, agent: Agent, *, on_call: bool = False, coordinator: bool = False) -> AgentJoined:
+        """
+        Add an agent to the lab.
+
+        With `on_call`, the person put its seat on call. With `coordinator`, the person made it the lab's
+        coordinator. The record takes both in the same step as the agent.
+        """
+        builds: list[Build] = [lambda _, seq, at: AgentJoined(seq=seq, at=at, agent=agent)]
+        if on_call:
+            builds.append(lambda _, seq, at: OnCallSet(seq=seq, at=at, agent=agent.id, on_call=True))
+        if coordinator:
+            builds.append(lambda _, seq, at: CoordinatorSet(seq=seq, at=at, agent=agent.id, by=PERSON))
+        board = await self._commit(*builds)
+        return next(entry for entry in reversed(board.agents) if entry.agent.id == agent.id)
+
+    async def name_by_model(self, agent_id: AgentId, title: str, model: str) -> str:
+        """
+        Record the name of the model that an agent's harness reported, and return the agent's name after it.
+
+        Only a name that Verifold built before the harness named the model changes: one that says "default model",
+        or one that holds the ID of the model that the person chose. Only this agent's name changes. The new name
+        keeps clear of every name that an agent of the lab has or had, so a name in an older post never becomes
+        the name of another agent. A number, once given, stays with its agent, so numbers can be out of the order
+        that the agents joined.
+        """
+        joined = self._board.agent(agent_id)
+        if joined is None or not one_line(model):
+            return joined.agent.name if joined else agent_id
+        agent, base = joined.agent, plain(title, model)
+        if is_numbered(agent.name, base) or not awaits_model(agent.name, title, agent.model.name):
+            return agent.name
+
+        def build(board: Board, seq: int, at: datetime) -> AgentNamed:
+            others = (entry.agent.name for entry in board.agents if entry.agent.id != agent_id)
+            former = (before for event, before in board.renames if event.agent != agent_id)
+            return AgentNamed(seq=seq, at=at, agent=agent_id, name=label(title, model, (*others, *former)))
+
+        board = await self._commit(build)
+        return board.renames[-1][0].name
+
+    async def set_on_call(self, agent_id: AgentId, *, on_call: bool) -> None:
+        """
+        Record that the person put an agent's seat on call, or took it off. The same answer again records nothing.
+
+        Raises:
+            RejectedEvent: The agent is not in the lab, left it, or is a blind checker.
+
+        """
+        if self._board.agent(agent_id) and self._board.on_call(agent_id) == on_call:
+            return
+        await self._commit(lambda _, seq, at: OnCallSet(seq=seq, at=at, agent=agent_id, on_call=on_call))
+
+    async def set_coordinator(self, agent_id: AgentId | None, by: AgentId, *, free: bool = False) -> AgentId | None:
+        """
+        Record who holds the lab's coordinator seat, and return the holder after the change.
+
+        `by` is the person, who can give the seat to any agent or clear it with `None`, or an agent, which can take
+        the seat for itself when nobody holds it and the person did not close it, and give up the seat that it
+        holds. When the person clears the seat, `free` says whether an agent may take it by itself. A change that
+        leaves the seat as it is records nothing.
+
+        Raises:
+            RejectedEvent: The change breaks one of these rules.
+
+        """
+        known = agent_id is None or self._board.agent(agent_id)
+        same = self._board.coordinator == agent_id and (agent_id is not None or self._board.coordinator_open == free)
+        if known and same and by in (PERSON, agent_id):
+            return agent_id
+        opens = free and agent_id is None and by == PERSON
+        board = await self._commit(lambda _, seq, at: CoordinatorSet(seq=seq, at=at, agent=agent_id, by=by, open=opens))
+        return board.coordinator
 
     async def leave(self, agent_id: AgentId, by: AgentId, reason: str = '') -> AgentLeft:
         """
@@ -142,7 +214,9 @@ class Lab:
             pydantic.ValidationError: The request does not describe a valid post of its kind.
 
         """
-        opens = (_open_thread(request.new_thread, author, request.between),) if request.new_thread else ()
+        # A thread that opens with an ask of the runner is the agent's thread for that kind of request.
+        carries = mark.type if mark and mark != 'ends_request' else None
+        opens = (_open_thread(request.new_thread, author, request.between, carries),) if request.new_thread else ()
         board = await self._commit(*opens, _add_post(request, author, evidence, question_seen, mark))
         return board.posts[-1]
 
@@ -245,14 +319,33 @@ class Lab:
         board = await self._commit(build)
         return board.reruns[-1]
 
-    async def start_turn(self, agent_id: AgentId, session: str, seen: int, rang: int | None = None) -> TurnStarted:
+    async def start_turn(  # noqa: PLR0913
+        self,
+        agent_id: AgentId,
+        session: str,
+        seen: int,
+        rang: int | None = None,
+        *,
+        model: str | None = None,
+        model_name: str | None = None,
+    ) -> TurnStarted:
         """
         Record that a turn of an agent starts, in the harness's conversation `session`, with what it had seen.
 
-        `rang` is the sequence number of the agent's alarm that rang with the turn's message.
+        `rang` is the sequence number of the agent's alarm that rang with the turn's message. `model` and
+        `model_name` are the model that the harness reported for the session, when it reported one.
         """
         board = await self._commit(
-            lambda _, seq, at: TurnStarted(seq=seq, at=at, agent=agent_id, session=session, seen=seen, rang=rang)
+            lambda _, seq, at: TurnStarted(
+                seq=seq,
+                at=at,
+                agent=agent_id,
+                session=session,
+                seen=seen,
+                rang=rang,
+                model=model,
+                model_name=model_name,
+            )
         )
         return board.starts[-1]
 
@@ -322,12 +415,16 @@ def _headline(text: str) -> str:
     return first if len(first) <= MAX_HEADLINE else f'{first[: MAX_HEADLINE - 1]}…'
 
 
-def _open_thread(title: str, opened_by: AgentId, between: tuple[AgentId, ...] = ()) -> Build:
+def _open_thread(
+    title: str, opened_by: AgentId, between: tuple[AgentId, ...] = (), carries: Carries | None = None
+) -> Build:
     # The author is always in its own side thread, and comes first. An agent that names itself changes nothing.
     members = tuple(dict.fromkeys((opened_by, *between))) if between else ()
 
     def build(board: Board, seq: int, at: datetime) -> ThreadOpened:
-        thread = Thread(id=f't-{len(board.threads) + 1}', title=title, opened_by=opened_by, between=members)
+        thread = Thread(
+            id=f't-{len(board.threads) + 1}', title=title, opened_by=opened_by, between=members, carries=carries
+        )
         return ThreadOpened(seq=seq, at=at, thread=thread)
 
     return build
