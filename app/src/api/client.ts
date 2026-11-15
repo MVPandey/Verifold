@@ -12,6 +12,7 @@ import type {
   PostRequest,
   PostView,
   Power,
+  ProfileChange,
   SeatChange,
   SettingsChange,
   SettingsView,
@@ -59,8 +60,12 @@ export interface Api {
   reviseQuestion(question: string, note: string): Promise<LabView>;
   /** Add the agents of one seat to the lab that runs. */
   addAgents(choice: AgentChoice): Promise<LabView>;
-  /** Put an agent's seat on call or take it off, and give or take the lab's coordinator seat. */
+  /** Put an agent's seat on call or take it off, and give or take the coordinator seat or a reviewer seat. */
   changeSeat(agentId: string, change: SeatChange): Promise<LabView>;
+  /** Take back the name, the about line, or the picture that an agent chose, or give its seat a role. */
+  changeProfile(agentId: string, change: ProfileChange): Promise<LabView>;
+  /** Set how many reviewer seats the lab has. `null` follows the size of the lab again. */
+  setReviewerSeats(seats: number | null): Promise<LabView>;
   /** Leave the coordinator seat without a holder, open for an agent to take or closed. */
   setCoordinatorSeat(open: boolean): Promise<LabView>;
   /** Ask the harnesses that Verifold did not ask yet what they offer. The setup shows the answers when they come. */
@@ -130,9 +135,27 @@ export function createApi(
         close: lab.close ?? null,
         close_agreed: lab.close_agreed ?? 0,
         close_among: lab.close_among ?? lab.agents.filter((view) => !view.agent.checks).length,
+        waits: lab.waits ?? [],
+        thread_needs: lab.thread_needs ?? {},
+        reviewer_seats: lab.reviewer_seats ?? 0,
+        reviewer_seats_set: lab.reviewer_seats_set ?? null,
         agents: lab.agents.map((view) => ({
           ...view,
           agent: { ...view.agent, given_role: view.agent.given_role ?? '' },
+          seat: view.seat || (view.agent.name ?? ''),
+          chosen_name: view.chosen_name ?? '',
+          about: view.about ?? '',
+          about_by: view.about_by ?? null,
+          in_turn: view.in_turn ?? view.activity?.state === 'working',
+          picture: view.picture ?? null,
+          given_role: view.given_role ?? view.agent.given_role ?? '',
+          given_by: view.given_by ?? null,
+          reviewer: view.reviewer ?? false,
+          flag: view.flag ?? '',
+          edits: view.edits ?? [],
+          need: view.need ?? 'idle',
+          outcomes: view.outcomes ?? { built_on: [], held: [], refuted: [], open_asks: [] },
+          turns_started: view.turns_started ?? view.turns,
           role: view.role ?? '',
           on_call: view.on_call ?? false,
           coordinator: view.coordinator ?? false,
@@ -181,6 +204,9 @@ export function createApi(
     reviseQuestion: (question, note) => request('/question', { question, note }),
     addAgents: (choice) => request('/agents', choice),
     changeSeat: (agentId, change) => request(`/agents/${encodeURIComponent(agentId)}/seat`, change),
+    changeProfile: (agentId, change) =>
+      request(`/agents/${encodeURIComponent(agentId)}/profile`, change),
+    setReviewerSeats: (seats) => request('/reviewers', { seats }),
     setCoordinatorSeat: (open) => request('/coordinator', { open }),
     askOffers: () => request('/offers', {}),
     invite: (invitation) => request('/invitations', invitation ?? {}),

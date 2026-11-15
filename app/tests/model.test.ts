@@ -1,23 +1,21 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { Post, PostView, ThreadSummary } from '../src/api/types.ts';
+import type { AgentView, Post, PostView, ThreadSummary, Wait } from '../src/api/types.ts';
 
 import {
   authorName,
   called,
+  author,
   costLine,
-  harnessTitle,
-  face,
+  counted,
   labTotal,
   leftLine,
-  listed,
   memberLine,
   members,
   ownName,
   present,
   stateLine,
-  workingLine,
 } from '../src/model/agents.ts';
 import { clock, dayClock, duration, minutesBetween, money, tokens } from '../src/model/format.ts';
 import { MAX_CHARS, MAX_LINES, linkHost, plainOnly } from '../src/model/markdown.ts';
@@ -28,7 +26,6 @@ import {
   harnessRequest,
   choiceGroups,
   gaps,
-  isPermission,
   personAnswer,
   personMessage,
   clip,
@@ -39,8 +36,33 @@ import {
 import { crossedLine, crossLines } from '../src/model/crossings.ts';
 import { href, parseRoute } from '../src/model/route.ts';
 import { hasNew, markSeen, readSeen } from '../src/model/seen.ts';
+import {
+  editLine,
+  giveRole,
+  outcomeLines,
+  pictureBefore,
+  pictureLook,
+  roles,
+  seatBeside,
+  seatMarks,
+  seatNumber,
+  seatSwitches,
+  takeBackRole,
+  takeBacks,
+} from '../src/model/identity.ts';
 import { betweenLine, isSide, sideHeading, sideLines, sideReplyHint } from '../src/model/side.ts';
-import { AT_EXIT, labelOf, stopLine, valueAt } from '../src/model/settings.ts';
+import {
+  ON_CALL,
+  needGroups,
+  quietBand,
+  reviewerLine,
+  turnLine,
+  waitGroups,
+  waitsLine,
+  whereLine,
+} from '../src/model/status.ts';
+import { wrapFocus } from '../src/model/focus.ts';
+import { AT_EXIT, labelOf, seatsValue, stopLine, valueAt } from '../src/model/settings.ts';
 import {
   agentCount,
   defaultsLine,
@@ -238,12 +260,11 @@ describe('posts', () => {
     assert.equal(builtOnLabel([]), null);
     assert.equal(builtOnLabel(['p-4']), 'Built on by 1 post');
     assert.equal(builtOnLabel(['p-4', 'p-9']), 'Built on by 2 posts');
-    assert.equal(isPermission(ask('p-1', 'agent-1')), true);
-    assert.equal(isPermission(result('p-1')), false);
+    assert.equal(harnessRequest(ask('p-1', 'agent-1')), 'permission');
+    assert.equal(harnessRequest(result('p-1')), null);
     // Only the field that Verifold records makes a permission request. An agent's own ask with the same words is none.
     const lookalike = ask('p-1', 'agent-1', [], null);
     assert.equal(lookalike.text.startsWith('Permission needed:'), true);
-    assert.equal(isPermission(lookalike), false);
     assert.equal(harnessRequest(lookalike), null);
     assert.equal(harnessRequest(ask('p-1', 'agent-1', [], 'question')), 'question');
   });
@@ -252,15 +273,17 @@ describe('posts', () => {
 describe('agents', () => {
   it('lists a member that left under the others, out of the count, with who caused it and why', () => {
     const at = '2026-11-06T14:10:00Z';
-    const working = { state: 'working', detail: '', at: null } as const;
     const gone = agentView('agent-1', {
-      activity: working,
+      need: 'left',
       left: { at, by: 'agent-1', reason: 'My line is ruled out.' },
     });
-    const removed = agentView('agent-3', { left: { at, by: 'person', reason: '' } });
+    const removed = agentView('agent-3', {
+      need: 'left',
+      left: { at, by: 'person', reason: '' },
+    });
     const agents = [
       gone,
-      agentView('agent-2', { activity: working }),
+      agentView('agent-2', { need: 'working', in_turn: true }),
       removed,
       agentView('agent-4'),
     ];
@@ -269,21 +292,26 @@ describe('agents', () => {
       present(agents).map((view) => view.agent.id),
       ['agent-2', 'agent-4'],
     );
+    // The members that left are the last group of the member list.
     assert.deepEqual(
-      listed(agents).map((view) => view.agent.id),
-      ['agent-2', 'agent-4', 'agent-1', 'agent-3'],
+      needGroups(agents).map((group) => [group.heading, group.rows.map((view) => view.agent.id)]),
+      [
+        ['Working (1)', ['agent-2']],
+        ['Idle (1)', ['agent-4']],
+        ['Left (2)', ['agent-1', 'agent-3']],
+      ],
     );
-    assert.equal(workingLine(agents), '1 of 2 members working');
+    assert.equal(turnLine(agents).text, '1 of 2 agents in a turn');
     assert.deepEqual(leftLine({ at, by: 'agent-1', reason: 'My line is ruled out.' }), {
       text: 'Left by its own choice: My line is ruled out.',
       dot: 'stop',
     });
     assert.equal(leftLine({ at, by: 'person', reason: '' }).text, 'Left, removed by you');
-    // A member keeps its letters and its color after it left, so its posts look the same.
-    assert.equal(face(agents, 'agent-3').initials, 'A3');
+    // A member is still a member after it left, so its posts keep its name and its picture.
+    assert.equal(author(agents, 'agent-3').kind, 'member');
   });
 
-  it('gives each member two letters and a color from its position, and a blind rerun neither', () => {
+  it('knows a member, the person, and a blind rerun, which has no name of its own in a thread', () => {
     const checker = agentView('checker-7');
     const agents = [
       agentView('agent-1'),
@@ -294,29 +322,15 @@ describe('agents', () => {
       members(agents).map((view) => view.agent.id),
       ['agent-1', 'agent-2'],
     );
-    assert.deepEqual(face(agents, 'agent-2'), {
-      kind: 'member',
-      initials: 'A2',
-      color: 1,
-      name: 'Agent 2',
-    });
-    assert.deepEqual(face(agents, 'checker-7'), {
-      kind: 'rerun',
-      initials: '',
-      color: null,
-      name: 'Blind rerun',
-    });
-    assert.deepEqual(face(agents, 'person'), {
-      kind: 'person',
-      initials: 'You',
-      color: null,
-      name: 'You',
-    });
-    const many = Array.from({ length: 10 }, (_, index) => agentView(`agent-${index + 1}`));
+    const second = author(agents, 'agent-2');
     assert.deepEqual(
-      [face(many, 'agent-9').color, face(many, 'agent-10').initials, face(many, 'agent-10').color],
-      [0, '10', 1],
+      [second.kind, second.name, second.kind === 'member' && second.view === agents[2]],
+      ['member', 'Agent 2', true],
     );
+    assert.deepEqual(author(agents, 'checker-7'), { kind: 'rerun', name: 'Blind rerun' });
+    assert.deepEqual(author(agents, 'person'), { kind: 'person', name: 'You' });
+    // An author that the lab does not list shows as a blind rerun does, with its ID for a name.
+    assert.deepEqual(author(agents, 'gone'), { kind: 'rerun', name: 'gone' });
     assert.deepEqual(
       ['agent-1', 'checker-7', 'person', 'gone'].map((id) => authorName(agents, id)),
       ['Agent 1', 'Blind rerun', 'You', 'gone'],
@@ -331,19 +345,54 @@ describe('agents', () => {
     );
   });
 
-  it('counts the members and the blind reruns that work now', () => {
-    const working = { state: 'working', detail: '', at: null } as const;
-    const checker = agentView('checker-7', { activity: working });
+  it('counts the members and the blind reruns that are in a turn, and says so when none is', () => {
+    const checker = agentView('checker-7', { need: 'working', in_turn: true });
     const rerun = { ...checker, agent: { ...checker.agent, checks: 'p-1' } };
-    assert.equal(
-      workingLine([agentView('agent-1', { activity: working }), agentView('agent-2')]),
-      '1 of 2 members working',
+    assert.deepEqual(
+      turnLine([agentView('agent-1', { need: 'working', in_turn: true }), agentView('agent-2')]),
+      {
+        text: '1 of 2 agents in a turn',
+        live: true,
+      },
     );
     assert.equal(
-      workingLine([agentView('agent-1'), rerun]),
-      '0 of 1 member working, 1 blind rerun',
+      turnLine([agentView('agent-1', { need: 'working', in_turn: true })]).text,
+      '1 of 1 agent in a turn',
     );
-    assert.equal(workingLine([rerun, rerun]), '0 of 0 members working, 2 blind reruns');
+    // With no agent in a turn, the dot is hollow and the line counts who is in the lab.
+    assert.deepEqual(turnLine([agentView('agent-1'), agentView('agent-2')]), {
+      text: 'No agent in a turn, 2 in the lab',
+      live: false,
+    });
+    // An ask that waits for the person puts no agent in a turn by itself.
+    assert.equal(
+      turnLine([
+        agentView('agent-1', { need: 'approval' }),
+        agentView('agent-2', { need: 'answer' }),
+      ]).live,
+      false,
+    );
+    // A turn in which the harness waits for the person's approval still runs, so its agent counts.
+    const asking = {
+      state: 'waiting',
+      detail: 'Asks you: run pytest',
+      at: null,
+      waits_for: 'person',
+    } as const;
+    assert.deepEqual(
+      turnLine([
+        agentView('agent-1', { need: 'approval', in_turn: true, activity: asking }),
+        agentView('agent-2'),
+      ]),
+      { text: '1 of 2 agents in a turn', live: true },
+    );
+    // A status alone counts nobody: the count follows the live turn.
+    assert.equal(turnLine([agentView('agent-1', { need: 'working' })]).live, false);
+    assert.deepEqual(turnLine([agentView('agent-1'), rerun]), {
+      text: 'No agent in a turn, 1 in the lab, 1 blind rerun',
+      live: true,
+    });
+    assert.equal(turnLine([rerun, rerun]).text, 'No agent in a turn, 0 in the lab, 2 blind reruns');
   });
 
   it('says what wakes a member that is in no turn', () => {
@@ -416,6 +465,13 @@ describe('agents', () => {
       text: 'Stopped',
       dot: 'stop',
     });
+    // The server gives the reason for an agent that no loop runs.
+    const lacks = {
+      state: 'stopped',
+      detail: 'Its harness is not on this computer.',
+      at: null,
+    } as const;
+    assert.equal(stateLine(lacks, now).text, 'Its harness is not on this computer.');
     const priced = agentView('agent-1', { turns: 4, cost_usd: 0.37 });
     const unpriced = agentView('agent-2', {
       turns: 3,
@@ -427,12 +483,14 @@ describe('agents', () => {
       '461k tokens in, 2k out over 3 turns. Cost not reported by the harness.',
     );
     assert.equal(costLine(agentView('agent-3')), 'No turns yet');
+    // An agent in its first turn has started one, and none has ended.
+    assert.equal(costLine(agentView('agent-3', { turns_started: 1 })), 'In its first turn');
+    assert.equal(costLine({ ...priced, turns_started: 5 }), '$0.37 over 4 turns');
     // An invited agent runs by itself. Verifold sees its board calls and nothing else.
     const guest = agentView('agent-4', {
       agent: { ...agentView('agent-4').agent, harness: 'guest' },
     });
     assert.equal(costLine(guest), 'Runs by itself, so Verifold sees no turns and no cost.');
-    assert.equal(harnessTitle([], 'guest'), 'Own harness');
     const at = '2026-11-06T14:10:00Z';
     assert.deepEqual(
       (['invited', 'listening', 'here'] as const).map(
@@ -446,10 +504,10 @@ describe('agents', () => {
       dot: 'stop',
     });
     // Nobody knows whether an invited agent came until its first post, so it is no member in the count before.
-    assert.equal(workingLine([agentView('agent-1'), guest]), '0 of 1 member working');
+    assert.equal(counted([agentView('agent-1'), guest]).length, 1);
     assert.equal(
-      workingLine([agentView('agent-1'), { ...guest, posts: 1 }]),
-      '0 of 2 members working',
+      turnLine([agentView('agent-1'), { ...guest, posts: 1 }]).text,
+      'No agent in a turn, 2 in the lab',
     );
     assert.equal(
       stateLine({ state: 'here', detail: '', at: '2026-11-06T14:11:30Z' }, now).text,
@@ -763,6 +821,7 @@ describe('seen', () => {
         reply_to: null,
         seq: 9,
         at: '2026-11-06T14:10:00Z',
+        by: null,
       },
     });
     assert.equal(hasNew(fromPerson, readSeen(store, 'lab')), false);
@@ -1040,6 +1099,12 @@ describe('settings', () => {
     assert.equal(valueAt(values, 'harnesses.0'), undefined);
     assert.equal(valueAt({}, 'jobs.at_exit'), undefined);
     assert.equal(labelOf(AT_EXIT, 'keep'), 'Keep them');
+    assert.equal(valueAt({ reviewers: { seats: 2 } }, 'reviewers.seats'), 2);
+    // The reviewer seats are a whole number from 0 to 20, or an empty field for no number.
+    assert.deepEqual(
+      ['', ' 0 ', '3', '20', '21', '-1', '1.5', 'two'].map((text) => seatsValue(text)),
+      [null, 0, 3, 20, undefined, undefined, undefined, undefined],
+    );
     assert.deepEqual(parseRoute('#/settings'), { page: 'settings' });
     assert.deepEqual(parseRoute('#/norms'), { page: 'norms' });
     assert.equal(href({ page: 'norms' }), '#/norms');
@@ -1263,8 +1328,11 @@ describe('side threads', () => {
   });
 
   it('have a heading that counts them, and a line that says who they are between', () => {
-    assert.equal(sideHeading(1), '1 side thread');
-    assert.equal(sideHeading(3), '3 side threads');
+    assert.equal(sideHeading([pair]), '1 side thread between two agents.');
+    assert.equal(sideHeading([pair, three, pair]), '3 side threads between two or three agents.');
+    const five = { ...three, members: ['agent-1', 'agent-2', 'agent-3', 'agent-4', 'agent-5'] };
+    assert.equal(sideHeading([three]), '1 side thread between three agents.');
+    assert.equal(sideHeading([pair, five]), '2 side threads between two to 5 agents.');
     assert.equal(
       betweenLine(pair.members, agents),
       'A side thread between Agent 2 and Agent 1. Every agent and you can read it.',
@@ -1277,5 +1345,548 @@ describe('side threads', () => {
       sideReplyHint(true),
       'The members of this side thread get your reply. It does not open the lab again. For that, post in another thread.',
     );
+  });
+});
+
+describe('an agent’s identity', () => {
+  const maren = agentView('agent-1', {
+    agent: { ...agentView('agent-1').agent, name: 'Maren' },
+    seat: 'Claude Code · Opus 5.5',
+    chosen_name: 'Maren',
+    picture: { shape: 'hex', color: '#f08c3a', symbol: 'orbit' },
+    about: 'I keep the question in view.',
+  });
+  const plain = agentView('agent-2', {
+    agent: { ...agentView('agent-2').agent, name: 'Codex · gpt-6.1-sol 2' },
+    seat: 'Codex · gpt-6.1-sol 2',
+  });
+
+  it('shows the seat beside a name only when the agent chose a name', () => {
+    assert.equal(seatBeside(maren), 'Claude Code · Opus 5.5');
+    assert.equal(seatBeside(plain), null);
+  });
+
+  it('draws the chosen picture, or else the seat’s number, and marks on call, left, and the two dots', () => {
+    assert.deepEqual(pictureLook(maren), {
+      picture: { shape: 'hex', color: '#f08c3a', symbol: 'orbit' },
+      number: 1,
+      hollow: false,
+      gone: false,
+      dot: null,
+    });
+    // An agent that chose nothing has the number at the end of its seat's label, or 1 without one.
+    assert.deepEqual([pictureLook(plain).picture, pictureLook(plain).number], [null, 2]);
+    assert.deepEqual(
+      ['Codex · gpt-6.1-sol', 'Codex · gpt-6.1-sol 12', 'Own harness · model not reported', ''].map(
+        (seat) => seatNumber(seat),
+      ),
+      [1, 12, 1, 1],
+    );
+    assert.equal(pictureLook({ ...maren, on_call: true }).hollow, true);
+    const left = { at: '2026-11-06T14:00:00Z', by: 'person', reason: '' };
+    assert.equal(pictureLook({ ...maren, left, need: 'left' }).gone, true);
+    // The green dot comes from the live turn, and no status alone gives it.
+    assert.deepEqual(
+      (['approval', 'answer', 'working', 'waiting', 'idle', 'stopped', 'left'] as const).map(
+        (need) => pictureLook({ ...maren, need }).dot,
+      ),
+      ['wait', 'wait', null, null, null, null, null],
+    );
+    assert.equal(pictureLook({ ...maren, need: 'working', in_turn: true }).dot, 'live');
+    // An agent whose turn waits for the person's approval keeps the yellow dot, which comes first.
+    assert.equal(pictureLook({ ...maren, need: 'approval', in_turn: true }).dot, 'wait');
+  });
+
+  it('puts the seat marks in one order, before the given role with who gave it and the agent’s own role', () => {
+    const all = { ...maren, on_call: true, reviewer: true, coordinator: true };
+    assert.deepEqual(seatMarks(all), ['Coordinator', 'Reviewer seat', 'On call']);
+    assert.deepEqual(seatMarks(maren), []);
+    assert.deepEqual(
+      roles({ ...maren, given_role: 'Direction creator', given_by: 'person', role: 'Builder' }),
+      ['Direction creator (given by you)', 'Builder'],
+    );
+    assert.deepEqual(roles({ ...maren, given_role: 'Scout', given_by: 'agent-3' }), [
+      'Scout (given by the coordinator)',
+    ]);
+    // A role that the agent repeats shows once, as the given one.
+    assert.deepEqual(roles({ ...maren, given_role: 'reads', given_by: 'person', role: 'reads' }), [
+      'reads (given by you)',
+    ]);
+    assert.deepEqual(roles(maren), []);
+  });
+
+  it('says each change to a profile in plain words, with the text from before', () => {
+    const at = '2026-11-06T14:00:00Z';
+    const line = (
+      by: string,
+      part: 'name' | 'about' | 'picture' | 'role' | 'flag',
+      before: string,
+      after: string,
+    ): string => editLine({ at, by, part, before, after });
+    assert.equal(line('person', 'name', 'Overlord', ''), 'You took back the name “Overlord”.');
+    assert.equal(
+      line('agent-1', 'about', 'I win.', 'I test claims.'),
+      'The coordinator rewrote the about line. Before: I win.',
+    );
+    assert.equal(
+      line('person', 'about', 'I win.', ''),
+      'You took back the about line. Before: I win.',
+    );
+    assert.equal(
+      line('person', 'picture', 'hex, #f08c3a, orbit', ''),
+      'You took back the picture.',
+    );
+    assert.deepEqual(
+      pictureBefore({
+        at,
+        by: 'person',
+        part: 'picture',
+        before: 'hex, #f08c3a, orbit',
+        after: '',
+      }),
+      { shape: 'hex', color: '#f08c3a', symbol: 'orbit' },
+    );
+    assert.equal(
+      pictureBefore({ at, by: 'person', part: 'about', before: 'a, b, c', after: '' }),
+      null,
+    );
+    assert.equal(line('person', 'role', '', 'driver'), 'You gave the role “driver”.');
+    assert.equal(
+      line('agent-1', 'role', 'driver', 'reader'),
+      'The coordinator changed the given role from “driver” to “reader”.',
+    );
+    assert.equal(line('person', 'role', 'driver', ''), 'You took back the role “driver”.');
+    assert.equal(
+      line('agent-1', 'flag', '', 'The name claims a rank.'),
+      'The coordinator flagged this profile: The name claims a rank.',
+    );
+    assert.equal(
+      line('agent-1', 'flag', 'The name claims a rank.', ''),
+      'The coordinator took back the flag. Before: The name claims a rank.',
+    );
+  });
+
+  it('counts what became of an agent’s posts, with the posts, and no score', () => {
+    const post = (id: string): { id: string; thread: string } => ({ id, thread: 't-2' });
+    const lines = outcomeLines({
+      built_on: [post('p-1'), post('p-4')],
+      held: [post('p-1')],
+      refuted: [],
+      open_asks: [post('p-9')],
+    });
+    assert.deepEqual(
+      lines.map((line) => [line.label, line.posts.map((one) => one.id)]),
+      [
+        ['Results built on', ['p-1', 'p-4']],
+        ['Checked and held', ['p-1']],
+        ['Refuted or ruled out', []],
+        ['Open asks', ['p-9']],
+      ],
+    );
+  });
+
+  it('gives the person the calls that take back, give a role, and change a seat', async () => {
+    const calls: unknown[] = [];
+    const api = {
+      changeSeat: (id: string, change: unknown) => {
+        calls.push(['seat', id, change]);
+        return Promise.resolve(labView());
+      },
+      changeProfile: (id: string, change: unknown) => {
+        calls.push(['profile', id, change]);
+        return Promise.resolve(labView());
+      },
+    };
+    // Only what the agent chose can go back: a plain agent has nothing to take back.
+    assert.deepEqual(takeBacks(plain), []);
+    assert.deepEqual(
+      takeBacks(maren).map((action) => action.label),
+      ['Take back the name', 'Take back the about line', 'Take back the picture'],
+    );
+    for (const action of takeBacks(maren)) await action.run(api);
+    assert.deepEqual(
+      seatSwitches(maren).map((action) => action.label),
+      ['Put on call', 'Make coordinator', 'Give a reviewer seat'],
+    );
+    const held = { ...maren, on_call: true, coordinator: true, reviewer: true };
+    assert.deepEqual(
+      seatSwitches(held).map((action) => action.label),
+      ['Take off call', 'Remove as coordinator', 'Take back the reviewer seat'],
+    );
+    for (const action of [...seatSwitches(maren), ...seatSwitches(held)]) await action.run(api);
+    // A role is one line of at most 40 characters, and the same role again is no change.
+    assert.equal(giveRole(maren, '  '), null);
+    assert.equal(giveRole(maren, 'x'.repeat(41)), null);
+    assert.equal(giveRole({ ...maren, given_role: 'driver' }, 'driver'), null);
+    assert.equal(takeBackRole(maren), null);
+    const give = giveRole(maren, ' driver ');
+    const change = giveRole({ ...maren, given_role: 'driver' }, 'reader');
+    const back = takeBackRole({ ...maren, given_role: 'driver' });
+    assert.deepEqual(
+      [give?.label, change?.label, back?.label],
+      ['Give the role', 'Change the role', 'Take back the role'],
+    );
+    await give?.run(api);
+    await back?.run(api);
+    assert.deepEqual(calls, [
+      ['profile', 'agent-1', { reset_name: true }],
+      ['profile', 'agent-1', { reset_about: true }],
+      ['profile', 'agent-1', { reset_picture: true }],
+      ['seat', 'agent-1', { on_call: true }],
+      ['seat', 'agent-1', { coordinator: true }],
+      ['seat', 'agent-1', { reviewer: true }],
+      ['seat', 'agent-1', { on_call: false }],
+      ['seat', 'agent-1', { coordinator: false }],
+      ['seat', 'agent-1', { reviewer: false }],
+      ['profile', 'agent-1', { role: 'driver' }],
+      ['profile', 'agent-1', { role: '' }],
+    ]);
+  });
+});
+
+describe('one status', () => {
+  const now = new Date('2026-11-06T14:30:00Z');
+  const wait = (kind: 'approval' | 'answer', agent: string, what: string, since: string): Wait => ({
+    kind,
+    agent,
+    what,
+    since,
+    post: `p-${agent}-${since}`,
+    thread: 't-2',
+  });
+
+  it('groups the members by status in the order of who needs the person, and leaves out a blind rerun', () => {
+    const checker = agentView('checker-7', { need: 'working', in_turn: true });
+    const agents = [
+      agentView('agent-1', { need: 'left' }),
+      agentView('agent-2', { need: 'stopped' }),
+      agentView('agent-3', { need: 'idle' }),
+      agentView('agent-4', { need: 'waiting' }),
+      agentView('agent-5', { need: 'working', in_turn: true }),
+      agentView('agent-6', { need: 'answer' }),
+      agentView('agent-7', { need: 'approval' }),
+      agentView('agent-8', { need: 'working', in_turn: true }),
+      { ...checker, agent: { ...checker.agent, checks: 'p-1' } },
+    ];
+    assert.deepEqual(
+      needGroups(agents).map((group) => [group.heading, group.rows.map((view) => view.agent.id)]),
+      [
+        ['Needs your approval (1)', ['agent-7']],
+        ['Needs your answer (1)', ['agent-6']],
+        ['Working (2)', ['agent-5', 'agent-8']],
+        ['Waiting on others (1)', ['agent-4']],
+        ['Idle (1)', ['agent-3']],
+        ['Stopped (1)', ['agent-2']],
+        ['Left (1)', ['agent-1']],
+      ],
+    );
+    assert.deepEqual(needGroups([]), []);
+  });
+
+  it('counts what waits for the person, and says nothing when nothing waits', () => {
+    assert.equal(waitsLine(0), null);
+    assert.equal(waitsLine(1), '1 thing waits for you');
+    assert.equal(waitsLine(3), '3 things wait for you');
+  });
+
+  it('lists the approvals and then the answers, each with who asks and how long it has waited', () => {
+    const checker = agentView('checker-12');
+    const lab = labView({
+      agents: [
+        agentView('agent-1'),
+        { ...checker, agent: { ...checker.agent, name: 'Checker 12', checks: 'p-1' } },
+      ],
+      waits: [
+        wait('approval', 'agent-1', 'Asks to run a command', '2026-11-06T14:24:00Z'),
+        wait('approval', 'checker-12', 'Asks to run a command', '2026-11-06T14:26:00Z'),
+        wait('answer', 'agent-1', 'Which seed counts?', '2026-11-06T13:18:00Z'),
+      ],
+    });
+    assert.deepEqual(
+      waitGroups(lab, now).map((group) => [
+        group.heading,
+        group.word,
+        group.rows.map((row) => [row.name, row.wait.what, row.waited]),
+      ]),
+      [
+        [
+          'Needs your approval (2)',
+          'Decide',
+          [
+            ['Agent 1', 'Asks to run a command', '6 min'],
+            // Two checkers can ask at once, so each keeps its own name.
+            ['Checker 12', 'Asks to run a command', '4 min'],
+          ],
+        ],
+        ['Needs your answer (1)', 'Answer', [['Agent 1', 'Which seed counts?', '1 h 12 min']]],
+      ],
+    );
+    assert.deepEqual(waitGroups(labView(), now), []);
+  });
+
+  it('says in a member’s row what it does now and where it works', () => {
+    const idle = { state: 'idle', detail: '', at: '2026-11-06T14:12:00Z' } as const;
+    const working = { state: 'working', detail: 'Run pytest', at: '2026-11-06T14:27:00Z' } as const;
+    const lab = labView({
+      waits: [wait('approval', 'agent-1', 'Asks to run a command', '2026-11-06T14:26:00Z')],
+    });
+    assert.equal(
+      whereLine(
+        agentView('agent-2', { activity: working, need: 'working', in_turn: true }),
+        lab,
+        now,
+        'Baseline',
+      ),
+      'Run pytest, 3 min. Works in “Baseline”.',
+    );
+    // A member that waits for the person says for what, and for how long.
+    assert.equal(
+      whereLine(agentView('agent-1', { need: 'approval' }), lab, now, null),
+      'Waits for your approval, 4 min.',
+    );
+    // A line that ends with a full stop keeps one.
+    const rested = agentView('agent-2', { activity: idle, turn_ended_at: idle.at });
+    assert.equal(
+      whereLine(rested, lab, now, 'Baseline'),
+      'Its last turn ended 18 min ago, and no alarm is set. A post for it wakes it. Works in “Baseline”.',
+    );
+    // An on-call member in no turn says what wakes it, and a plain post does not.
+    assert.equal(ON_CALL, 'On call. An ask or a call that names it wakes it.');
+    assert.equal(whereLine({ ...rested, on_call: true }, lab, now, null), ON_CALL);
+    assert.equal(
+      whereLine(
+        { ...rested, on_call: true, activity: working, need: 'working', in_turn: true },
+        lab,
+        now,
+        null,
+      ),
+      'Run pytest, 3 min.',
+    );
+    // In a lab that is out of time, nothing wakes an agent, so the row names no alarm and no call.
+    assert.equal(
+      whereLine({ ...rested, on_call: true }, { ...lab, out_of_time: true }, now, null),
+      'Idle, 18 min.',
+    );
+    const left = { at: '2026-11-06T14:00:00Z', by: 'person', reason: '' };
+    assert.equal(
+      whereLine({ ...rested, left, need: 'left' }, lab, now, 'Baseline'),
+      'Left, removed by you.',
+    );
+  });
+
+  it('counts the reviewer seats and the free ones, and says when the number follows the lab’s size', () => {
+    const agents = [
+      agentView('agent-1', { reviewer: true }),
+      agentView('agent-2'),
+      agentView('agent-3', {
+        reviewer: true,
+        left: { at: '2026-11-06T14:00:00Z', by: 'person', reason: '' },
+      }),
+    ];
+    assert.equal(
+      reviewerLine(labView({ agents, reviewer_seats: 2, reviewer_seats_set: 2 })),
+      '2 reviewer seats, 1 free.',
+    );
+    assert.equal(
+      reviewerLine(labView({ agents, reviewer_seats: 1 })),
+      '1 reviewer seat, 0 free. The number follows the lab’s size.',
+    );
+    assert.equal(
+      reviewerLine(labView({ reviewer_seats: 0, reviewer_seats_set: 0 })),
+      'No reviewer seats.',
+    );
+  });
+});
+
+describe('a quiet lab', () => {
+  const now = new Date('2026-11-06T14:30:00Z');
+  const ended = '2026-11-06T14:12:00Z';
+  const idle = { state: 'idle', detail: '', at: ended } as const;
+  const rested = (id: string, changes: Partial<AgentView> = {}): AgentView =>
+    agentView(id, { activity: idle, turn_ended_at: ended, ...changes });
+  const rings = '2026-11-06T15:11:00Z';
+  const waits: readonly Wait[] = [
+    {
+      kind: 'answer',
+      agent: 'agent-1',
+      what: 'Which seed?',
+      since: ended,
+      post: 'p-8',
+      thread: 't-2',
+    },
+  ];
+  const lab = labView({
+    agents: [
+      rested('agent-1', { alarm: { minutes: 60, quiet: false, rings_at: rings } }),
+      rested('agent-2', {
+        turn_ended_at: '2026-11-06T13:00:00Z',
+        alarm: { minutes: 20, quiet: false, rings_at: '2026-11-06T15:40:00Z' },
+      }),
+      rested('agent-3'),
+    ],
+    waits,
+    ends_at: '2026-11-06T15:04:00Z',
+  });
+
+  it('says for how long no agent has been in a turn, with what waits, the alarms, and the time left', () => {
+    assert.deepEqual(quietBand(lab, now), {
+      title: 'The lab is quiet',
+      // The time counts from the newest end of a turn.
+      text: 'No agent has been in a turn for 18 min. An agent starts a turn when a post is for it, or when its alarm rings.',
+      waits: 1,
+      alarms: 2,
+      next: `The next rings at ${clock(rings)}`,
+      left: '34 min',
+    });
+  });
+
+  it('says that only a post starts a turn when no alarm is set, and names no limit that the lab does not have', () => {
+    const none = labView({ agents: [rested('agent-1'), rested('agent-2')] });
+    const band = quietBand(none, now);
+    assert.deepEqual(
+      [band?.waits, band?.alarms, band?.next, band?.left],
+      [0, 0, 'Only a post starts a turn now', 'No limit'],
+    );
+    // Without a turn that ended, the band gives no duration.
+    const fresh = quietBand(labView({ agents: [agentView('agent-1')] }), now);
+    assert.equal(
+      fresh?.text,
+      'No agent is in a turn. An agent starts a turn when a post is for it, or when its alarm rings.',
+    );
+  });
+
+  it('gives the rule of an alarm for a quiet board, which has no time of day', () => {
+    const quiet = { minutes: 30, quiet: true, rings_at: rings };
+    const only = labView({ agents: [rested('agent-1', { alarm: quiet })] });
+    assert.equal(quietBand(only, now)?.next, 'The next rings after 30 min with no new post');
+    const both = labView({
+      agents: [
+        rested('agent-1', { alarm: quiet }),
+        rested('agent-2', { alarm: { minutes: 60, quiet: false, rings_at: rings } }),
+      ],
+    });
+    assert.equal(
+      quietBand(both, now)?.next,
+      `One rings at ${clock(rings)}. One rings after 30 min with no new post.`,
+    );
+  });
+
+  it('does not show while an agent or a blind rerun is in a turn, or while no member is in the lab', () => {
+    const [first, ...rest] = lab.agents;
+    assert.ok(first);
+    assert.equal(
+      quietBand({ ...lab, agents: [{ ...first, need: 'working', in_turn: true }, ...rest] }, now),
+      null,
+    );
+    const checker = agentView('checker-7', { need: 'working', in_turn: true });
+    const rerun = { ...checker, agent: { ...checker.agent, checks: 'p-1' } };
+    assert.equal(quietBand({ ...lab, agents: [...lab.agents, rerun] }, now), null);
+    assert.equal(quietBand(labView(), now), null);
+    // An agent with an ask to the person and no turn leaves the lab quiet.
+    assert.ok(quietBand({ ...lab, agents: [{ ...first, need: 'answer' }, ...rest] }, now));
+    // An approval inside a turn that runs hides the band: the turn goes on when the person answers.
+    const asking = {
+      state: 'waiting',
+      detail: 'Asks you: run pytest',
+      at: null,
+      waits_for: 'person',
+    } as const;
+    assert.equal(
+      quietBand(
+        {
+          ...lab,
+          agents: [{ ...first, need: 'approval', in_turn: true, activity: asking }, ...rest],
+        },
+        now,
+      ),
+      null,
+    );
+  });
+
+  it('shows the band of a lab that is out of time, where every agent waits for more time', () => {
+    const waiting = {
+      state: 'waiting',
+      detail: 'The lab is out of time. The person can give it more.',
+      at: '2026-11-06T14:20:00Z',
+      waits_for: 'time',
+    } as const;
+    const agents = lab.agents.map((view) => ({
+      ...view,
+      activity: waiting,
+      need: 'idle' as const,
+      in_turn: false,
+      alarm: view.alarm ? { ...view.alarm, rings_at: null } : null,
+    }));
+    const stopped = { ...lab, agents, out_of_time: true };
+    assert.deepEqual(turnLine(agents), { text: 'No agent in a turn, 3 in the lab', live: false });
+    assert.equal(quietBand(stopped, now)?.title, 'The lab is out of time');
+    const [one] = agents;
+    assert.ok(one);
+    assert.equal(pictureLook(one).dot, null);
+    // The row says what the server says, with no time after it.
+    assert.equal(
+      whereLine(one, stopped, now, 'Baseline'),
+      'The lab is out of time. The person can give it more. Works in “Baseline”.',
+    );
+    const process = {
+      state: 'waiting',
+      detail: 'Waits for a process that it left running.',
+      at: '2026-11-06T14:20:00Z',
+      waits_for: 'process',
+    } as const;
+    assert.equal(
+      whereLine({ ...one, activity: process }, lab, now, null),
+      'Waits for a process that it left running.',
+    );
+    assert.equal(
+      stateLine({ ...process, detail: '' }, now).text,
+      'Waits for a process that it left running.',
+    );
+    assert.equal(stateLine({ ...waiting, detail: '' }, now).text, 'The lab is out of time.');
+    // A harness that waits for the person inside its turn keeps the time.
+    assert.equal(
+      stateLine({ ...waiting, detail: 'Asks you: run pytest', waits_for: 'person' }, now).text,
+      'Asks you: run pytest, 10 min',
+    );
+  });
+
+  it('says what the person can do in a lab that is out of time or done, where no alarm rings', () => {
+    const held = lab.agents.map((view) =>
+      view.alarm ? { ...view, alarm: { ...view.alarm, rings_at: null } } : view,
+    );
+    assert.deepEqual(quietBand({ ...lab, agents: held, out_of_time: true }, now), {
+      title: 'The lab is out of time',
+      text: 'No agent has been in a turn for 18 min. No agent starts a turn until you give the lab more time.',
+      waits: 1,
+      alarms: 2,
+      next: 'No alarm rings while the lab is out of time',
+      left: 'None',
+    });
+    assert.deepEqual(quietBand({ ...lab, agents: held, state: 'closed' }, now), {
+      title: 'The lab is quiet',
+      text: 'No agent has been in a turn for 18 min. The agents say that the lab is done. Your post to the lab opens it again.',
+      waits: 1,
+      alarms: 2,
+      next: 'No alarm rings while the lab is done',
+      left: '34 min',
+    });
+    const bare = labView({ agents: [rested('agent-1')] });
+    assert.equal(quietBand({ ...bare, out_of_time: true }, now)?.next, 'No turn starts now');
+    assert.equal(quietBand({ ...bare, state: 'closed' }, now)?.next, 'No alarm is set');
+  });
+});
+
+describe('focus in the profile', () => {
+  it('goes from the last control to the first with Tab, and back with Shift+Tab', () => {
+    assert.equal(wrapFocus(4, 3, false), 0);
+    assert.equal(wrapFocus(4, 0, true), 3);
+    // Between the edges, the browser's own Tab stays inside.
+    assert.equal(wrapFocus(4, 1, false), null);
+    assert.equal(wrapFocus(4, 2, true), null);
+    // Focus that got outside comes back in.
+    assert.equal(wrapFocus(4, -1, false), 0);
+    assert.equal(wrapFocus(4, -1, true), 3);
+    assert.equal(wrapFocus(1, 0, false), 0);
+    assert.equal(wrapFocus(0, -1, false), null);
   });
 });

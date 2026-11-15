@@ -24,7 +24,7 @@ from pydantic import Field, SecretStr
 
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent
-from verifold.protocol.app import AgentState
+from verifold.protocol.app import AgentState, WaitsFor
 from verifold.protocol.events import ERROR_OUT_OF_TIME, ERROR_RAN_PAST, AlarmSet, TimeRanOut, TurnSummary
 from verifold.protocol.ids import PERSON
 from verifold.protocol.record import Record
@@ -404,7 +404,7 @@ class AgentLoop:
         lab = self._lab
         if not lab.board.out_of_time or self._left():
             return False
-        await self._report('waiting', 'The lab is out of time. The person can give it more.')
+        await self._report('waiting', 'The lab is out of time. The person can give it more.', 'time')
         while lab.board.out_of_time and not self._left():
             await lab.wait_for_change(lab.board.seq)
         return True
@@ -441,7 +441,7 @@ class AgentLoop:
             async with asyncio.timeout(self._settings.job_wait):
                 while await self._has_jobs(agent_id):
                     if not waited:
-                        await self._report('waiting', 'Waits for a process that it left running.')
+                        await self._report('waiting', 'Waits for a process that it left running.', 'process')
                         waited = True
                     await asyncio.sleep(self._settings.job_poll)
         except TimeoutError:
@@ -567,7 +567,7 @@ class AgentLoop:
     async def _asks(self, what: str) -> AsyncGenerator[None]:
         """Show the agent as waiting for the person while the block runs, and while another request of it waits."""
         self._asking += 1
-        await self._report('waiting', f'Asks you: {what}')
+        await self._report('waiting', f'Asks you: {what}', 'person')
         try:
             yield
         finally:
@@ -579,6 +579,6 @@ class AgentLoop:
     async def _step(self, title: str) -> None:
         await self._report('working', title)
 
-    async def _report(self, state: AgentState, detail: str = '') -> None:
+    async def _report(self, state: AgentState, detail: str = '', waits_for: WaitsFor | None = None) -> None:
         if self._activity:
-            await self._activity.set(self._setup.agent.id, state, detail)
+            await self._activity.set(self._setup.agent.id, state, detail, waits_for)

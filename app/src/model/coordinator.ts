@@ -9,7 +9,7 @@ import type {
   Power,
   PowerView,
 } from '../api/types.ts';
-import { authorName, harnessTitle } from './agents.ts';
+import { authorName } from './agents.ts';
 import { clock } from './format.ts';
 import { AT_EXIT, AT_TIME_LIMIT } from './settings.ts';
 
@@ -112,7 +112,7 @@ function settingWords(move: Move & { readonly type: 'setting' }): string {
 function seatWords(move: Move & { readonly type: 'add_agent' }, around: Around): string {
   const { seat } = move;
   const parts = [
-    harnessTitle(around.harnesses, seat.harness),
+    around.harnesses.find((option) => option.name === seat.harness)?.title ?? seat.harness,
     seat.model,
     seat.effort ? `${seat.effort} effort` : null,
     seat.role ? `role: ${seat.role}` : null,

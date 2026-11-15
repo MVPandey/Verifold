@@ -1,8 +1,9 @@
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from verifold.protocol.agents import MAX_AGENTS, Agent, AgentChoice, ModelSpec
 from verifold.protocol.app import InviteRequest, StartRequest
+from verifold.protocol.events import Event, Posted, ProfileSet, SettingsSet
 from verifold.protocol.settings import SettingsFile, SetupDefaults
 
 
@@ -86,3 +87,40 @@ def test_an_invitation_takes_the_facts_of_the_seat() -> None:
         False,
     )
     assert InviteRequest() == InviteRequest(name=None, role='', family=None)
+
+
+def test_a_record_and_a_settings_file_from_before_profiles_and_reviewer_seats_still_load() -> None:
+    events: TypeAdapter[Event] = TypeAdapter(Event)
+    at = '2026-11-06T12:00:00Z'
+    said = events.validate_python({'type': 'profile_set', 'seq': 4, 'at': at, 'agent': 'ada', 'role': 'theory'})
+    posted = events.validate_python(
+        {
+            'type': 'posted',
+            'seq': 5,
+            'at': at,
+            'post': {'kind': 'message', 'id': 'p-1', 'thread': 't-1', 'author': 'ada', 'text': 'Hello.'},
+        }
+    )
+    settings = {'version': 1, 'jobs': {'at_exit': 'keep'}, 'permissions': {'while_you_decide': 'wait'}}
+    recorded = events.validate_python({'type': 'settings_set', 'seq': 2, 'at': at, 'settings': settings})
+
+    assert isinstance(said, ProfileSet)
+    assert (said.role, said.name, said.about, said.picture, said.by, said.given_role, said.flag) == (
+        'theory',
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    assert isinstance(posted, Posted)
+    assert posted.post.to_lab is False
+    assert isinstance(recorded, SettingsSet)
+    assert recorded.settings.reviewers.seats is None
+    # A saved file without the new setting follows the size of the lab, and one with it keeps its number.
+    assert SettingsFile.model_validate(settings).lab_settings().reviewers.seats is None
+    assert SettingsFile.model_validate(settings | {'reviewers': {'seats': 2}}).lab_settings().reviewers.seats == 2
+    for seats in (-1, 21, 1.5):
+        with pytest.raises(ValidationError):
+            SettingsFile.model_validate({'reviewers': {'seats': seats}})

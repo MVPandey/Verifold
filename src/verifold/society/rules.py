@@ -17,6 +17,7 @@ from verifold.protocol.events import (
     ProfileSet,
     QuestionRevised,
     RerunRequested,
+    ReviewerSet,
     TimeRanOut,
     TimeSet,
     TurnEnded,
@@ -30,6 +31,7 @@ from verifold.society.board import Board
 from verifold.society.coordinator import check_marked_thread, check_marks, check_removal, check_reviser
 from verifold.society.errors import RejectedEvent
 from verifold.society.lifecycle import lab_state
+from verifold.society.reviewers import free_seats, seats, seats_line
 from verifold.society.standing import closing
 
 MAX_RERUNS = 2
@@ -55,9 +57,9 @@ def check_agent(board: Board, agent: Agent) -> None:
         raise RejectedEvent(f'Post {agent.checks} does not exist.')
 
 
-def check_named(board: Board, named: AgentNamed) -> str:
+def check_named(board: Board, named: AgentNamed) -> None:
     """
-    Check that an agent can get a new name, and return the name that it has now.
+    Check that an agent's seat can get a new label.
 
     A name that an agent has or had is never another agent's name, so that a name in an older post means the
     same agent for ever.
@@ -66,15 +68,15 @@ def check_named(board: Board, named: AgentNamed) -> str:
         RejectedEvent: The agent is not in the lab, or another agent has or had the name.
 
     """
-    joined = board.agent(named.agent)
-    if not joined:
+    if not board.agent(named.agent):
         raise RejectedEvent(f'{named.agent} is not an agent in this lab.')
-    folded = named.name.casefold()
-    others = (entry.agent.name for entry in board.agents if entry.agent.id != named.agent)
-    former = (before for event, before in board.renames if event.agent != named.agent)
-    if any(name.casefold() == folded for name in (*others, *former)):
+    if _held_by_another(board, named.agent, named.name):
         raise RejectedEvent(f'Another agent has or had the name {named.name}.')
-    return joined.agent.name
+
+
+def _held_by_another(board: Board, agent_id: AgentId, name: str) -> bool:
+    folded = name.casefold()
+    return any(agent != agent_id and text.casefold() == folded for agent, text in board.names())
 
 
 def check_on_call(board: Board, event: OnCallSet) -> None:
@@ -213,13 +215,7 @@ def check_post(board: Board, post: Post) -> None:
     for built_on in post.builds_on:
         if not board.post(built_on):
             raise RejectedEvent(f'Post {built_on} does not exist, so no post can build on it.')
-    if isinstance(post, Proposal | Close) and opened.thread.between:
-        raise RejectedEvent(
-            f'Thread {post.thread} is a side thread, and a {post.kind} is for the whole lab. Post it in a thread '
-            'that is not a side thread.'
-        )
-    if isinstance(post, Close):
-        _check_close(board, post)
+    _check_for_lab(board, post)
     check_marks(board, post, opened.thread)
     if post.reply_to is None:
         return
@@ -268,20 +264,84 @@ def check_alarm(board: Board, alarm: AlarmSet) -> None:
 
 def check_profile(board: Board, profile: ProfileSet) -> None:
     """
-    Check that an agent can say what it is and what it does.
+    Check that a profile can change: by its agent, by the person, or by the lab's coordinator.
+
+    The agent sets its own role, status, name, about line, and picture. The person takes back a name, an about
+    line, or a picture, and gives the seat a role. The coordinator takes back another agent's name, rewrites its
+    about line, flags its profile, and gives it a role where the person gave none.
 
     Raises:
-        RejectedEvent: The agent is not in the lab, is a blind checker, or changes nothing.
+        RejectedEvent: The agent is not in the lab or is a blind checker, the change holds nothing, the name is
+            taken or reserved, or the change is not one that its author can make.
 
     """
     joined = board.agent(profile.agent)
     if not joined:
         raise RejectedEvent(f'{profile.agent} is not an agent in this lab.')
-    _check_here(board, profile.agent)
+    # The person can still take back what an agent that left chose: its posts keep showing it.
+    resets = profile.by == PERSON and profile.given_role is None
+    if not resets:
+        _check_here(board, profile.agent)
     if joined.agent.checks:
         raise RejectedEvent('A blind checker has no role and no status.')
-    if profile.role is None and profile.status is None:
-        raise RejectedEvent('Give a role, a status, or both.')
+    own = (profile.role, profile.status, profile.name, profile.about, profile.picture)
+    others = (profile.given_role, profile.flag)
+    if all(part is None for part in (*own, *others)) and not profile.no_picture:
+        raise RejectedEvent(
+            'The call changes nothing. It can set a role, a status, a name, an about line, or a picture.'
+        )
+    if profile.picture and profile.no_picture:
+        raise RejectedEvent('A change sets a picture or takes it back, not both.')
+    if profile.by not in (None, profile.agent):
+        _check_profile_by_another(board, profile, profile.by)
+        return
+    if any(part is not None for part in others) or profile.no_picture:
+        raise RejectedEvent(
+            'Only the person or the coordinator gives a role to a seat, flags a profile, or takes a picture back.'
+        )
+
+
+def _check_profile_by_another(board: Board, profile: ProfileSet, by: AgentId) -> None:
+    if profile.role is not None or profile.status is not None or profile.picture or profile.name:
+        raise RejectedEvent("An agent's role, status, name, and picture are its own. Another can take a name back.")
+    if by == PERSON:
+        if profile.about or profile.flag is not None:
+            raise RejectedEvent('The person takes an about line back and flags no profile.')
+        return
+    if board.coordinator != by:
+        raise RejectedEvent(f"Only the person and the lab's coordinator change the profile of {profile.agent}.")
+    if profile.no_picture:
+        raise RejectedEvent('Only the person takes a picture back.')
+    given, giver = board.given_role(profile.agent)
+    if profile.given_role is not None and given and giver == PERSON:
+        raise RejectedEvent(f'The person gave {profile.agent} a role, and only the person changes it.')
+
+
+def check_reviewer(board: Board, event: ReviewerSet) -> None:
+    """
+    Check that an agent can take, get, give up, or lose a reviewer seat.
+
+    The person gives a seat to any agent of the lab and takes it. An agent takes a seat for itself while one is
+    free, and gives up the seat that it holds.
+
+    Raises:
+        RejectedEvent: The agent is not in the lab, left it, or is a blind checker, an agent names another
+            agent, no seat is free, or the agent gives up a seat that it does not hold.
+
+    """
+    _check_seat(board, event.agent)
+    if event.by == PERSON:
+        return
+    if event.by != event.agent:
+        raise RejectedEvent('An agent takes a reviewer seat for itself. Only the person gives one to another.')
+    if not event.reviewer:
+        if not board.reviewer(event.agent):
+            raise RejectedEvent('You hold no reviewer seat, so you have none to give up.')
+        return
+    if seats(board) == 0:
+        raise RejectedEvent('This lab has no reviewer seats, so any agent can check.')
+    if free_seats(board) < 1:
+        raise RejectedEvent(f'No reviewer seat is free. {seats_line(board)}')
 
 
 def check_turn(board: Board, turn: TurnStarted | TurnEnded) -> None:
@@ -387,6 +447,27 @@ def check_time_out(board: Board, event: TimeRanOut) -> None:
     ends_at = board.ends_at
     if ends_at is None or event.at < ends_at or board.out_of_time:
         raise RejectedEvent('The lab runs out of time once, at its end.')
+
+
+def _check_for_lab(board: Board, post: Post) -> None:
+    # The posts that are for the whole lab: a proposal, a close, and a post that its author marks so.
+    side = board.is_side(post.thread)
+    if isinstance(post, Proposal | Close) and side:
+        raise RejectedEvent(
+            f'Thread {post.thread} is a side thread, and a {post.kind} is for the whole lab. Post it in a thread '
+            'that is not a side thread.'
+        )
+    if isinstance(post, Close):
+        _check_close(board, post)
+    if not post.to_lab:
+        return
+    if post.author not in (PERSON, board.coordinator):
+        raise RejectedEvent("Only the lab's coordinator and the person mark a post as one for the whole lab.")
+    if side or post.mentions or post.reply_to:
+        raise RejectedEvent(
+            'A post for the whole lab is in a thread for the whole lab, names nobody in `mentions`, and replies to '
+            'no post.'
+        )
 
 
 def _check_blind(board: Board, post: Post) -> None:

@@ -61,6 +61,20 @@ class PermissionSettings(Record):
     while_you_decide: WhileYouDecide = WhileYouDecide.AUTO
 
 
+MAX_REVIEWER_SEATS = 20
+"""The most reviewer seats that the person can give a lab: one for each agent that a lab can have."""
+
+
+class ReviewerSettings(Record):
+    """How many reviewer seats a lab has."""
+
+    seats: int | None = Field(default=None, ge=0, le=MAX_REVIEWER_SEATS)
+    """
+    The number of reviewer seats. `None` follows the size of the lab: one seat for every five agents, and one seat
+    in a lab of three or four. Zero means that the lab has no reviewer seats, and then a check takes none.
+    """
+
+
 class Settings(Record):
     """
     The person's settings, with Verifold's defaults for anything they leave out.
@@ -72,6 +86,7 @@ class Settings(Record):
     version: Literal[1] = 1
     jobs: JobSettings = JobSettings()
     permissions: PermissionSettings = PermissionSettings()
+    reviewers: ReviewerSettings = ReviewerSettings()
 
 
 class HarnessSettings(Record):
@@ -124,6 +139,7 @@ class SettingsFile(Record):
     version: Literal[1] = 1
     jobs: JobSettings = JobSettings()
     permissions: PermissionSettings = PermissionSettings()
+    reviewers: ReviewerSettings = ReviewerSettings()
     setup: SetupDefaults = SetupDefaults()
     harnesses: dict[Label, HarnessSettings] = Field(default_factory=dict)
 
@@ -139,4 +155,4 @@ class SettingsFile(Record):
 
     def lab_settings(self) -> Settings:
         """Return the settings that a new lab records and follows."""
-        return Settings(version=self.version, jobs=self.jobs, permissions=self.permissions)
+        return Settings(version=self.version, jobs=self.jobs, permissions=self.permissions, reviewers=self.reviewers)

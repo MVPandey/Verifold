@@ -13,7 +13,7 @@ import type {
   Power,
   ThreadSummary,
 } from '../api/types.ts';
-import { authorName, face, harnessTitle, memberLine } from '../model/agents.ts';
+import { authorName, memberLine } from '../model/agents.ts';
 import {
   POWER_WORDS,
   askLine,
@@ -35,7 +35,8 @@ import { personAnswer, split } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import type { PageProps } from './hooks.ts';
 import { Words } from './Markdown.tsx';
-import { Exact, FaceView, HarnessAsk } from './parts.tsx';
+import { Exact, HarnessAsk } from './parts.tsx';
+import { Name, Who } from './Picture.tsx';
 
 const NO_VIEW: ConversationView = {
   coordinator: null,
@@ -82,9 +83,9 @@ export function CoordinatorSeat(props: PageProps & { readonly start?: Tab }): Re
   return (
     <div className="k-door">
       <p className="k-door-head">
-        <FaceView face={face(data.lab.agents, holder.agent.id)} />
-        <b>{name}</b>
-        <span className="k-seat">Coordinator</span>
+        <Who agents={data.lab.agents} id={holder.agent.id} size={34} />
+        <Name view={holder} />
+        <span className="i-seat coord">Coordinator</span>
       </p>
       <button
         type="button"
@@ -141,16 +142,13 @@ export function Panel(props: {
   return (
     <aside className="k-panel" aria-label={`${name}, the coordinator`}>
       <header>
-        <FaceView face={face(props.agents, holder.agent.id)} />
+        <Who agents={props.agents} id={holder.agent.id} size={38} />
         <div>
           <p className="k-title">
-            <b>{name}</b>
-            <span className="k-seat">Coordinator</span>
+            <Name view={holder} />
+            <span className="i-seat coord">Coordinator</span>
           </p>
-          <p className="k-prov">
-            {harnessTitle(props.harnesses, holder.agent.harness)}.{' '}
-            {memberLine(holder, props.resting, props.now).text}
-          </p>
+          <p className="k-prov">{memberLine(holder, props.resting, props.now).text}</p>
         </div>
         <button
           type="button"
@@ -688,7 +686,7 @@ export function RequestNeed(props: PageProps & { readonly item: PostView }): Rea
   return (
     <section className="nitem open k-need" aria-label={`${name}: ${item.post.text}`}>
       <div className="nh">
-        <FaceView face={face(data.lab.agents, item.post.author)} />
+        <Who agents={data.lab.agents} id={item.post.author} />
         <b>{name}</b>
         <span className="kind">Asks you for a move</span>
       </div>

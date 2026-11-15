@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
@@ -7,6 +8,7 @@ import { LabPage } from './LabPage.tsx';
 import { Manifold } from './Manifold.tsx';
 import { NeedsPage } from './NeedsPage.tsx';
 import { NormsPage } from './NormsPage.tsx';
+import { Profiles } from './Picture.tsx';
 import { SettingsPage } from './SettingsPage.tsx';
 import { SetupPage } from './SetupPage.tsx';
 import { Top } from './Top.tsx';
@@ -16,6 +18,9 @@ export function App(props: { readonly api: Api; readonly token: string }): React
   const data = useLab(props.api, props.token);
   const route = useRoute();
   const now = useNow();
+  // The agent whose profile shows over the page, or `null`. A press on any name or picture sets it.
+  const [shown, show] = useState<string | null>(null);
+  const profiles = useMemo(() => ({ shown, show }), [shown]);
 
   if (data.setup === null) {
     return <Message text={data.error ?? 'Loading the lab.'} />;
@@ -49,7 +54,7 @@ export function App(props: { readonly api: Api; readonly token: string }): React
   const shared = { api: props.api, data: { ...data, lab: data.lab }, now };
   const onWall = route.page === 'lab' || route.page === 'thread';
   return (
-    <>
+    <Profiles value={profiles}>
       {onWall ? <Manifold /> : null}
       <Top
         folder={data.setup.folder}
@@ -91,7 +96,7 @@ export function App(props: { readonly api: Api; readonly token: string }): React
           />
         )}
       </main>
-    </>
+    </Profiles>
   );
 }
 

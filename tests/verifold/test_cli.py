@@ -298,6 +298,40 @@ def test_a_projects_saved_choices_make_run_stricter_but_never_looser(
     assert printed.index('Started a lab') < printed.index('Open the lab')
 
 
+@pytest.mark.parametrize(
+    ('mine', 'theirs', 'seats'),
+    [
+        # A lower number is not the stricter one: zero turns the reviewer seats off. So no number of a project counts.
+        (2, 0, 2),
+        (2, 5, 2),
+        (0, 3, 0),
+        (None, 0, 'size'),
+        (None, 20, 'size'),
+        # Without a number in the project's file, the start gives none, and the lab follows the person's file.
+        (3, None, None),
+        (None, None, None),
+    ],
+)
+def test_run_does_not_use_the_reviewer_seats_of_a_projects_file_and_says_so(
+    serves: list[StartRequest | None],
+    project: Path,
+    capsys: pytest.CaptureFixture[str],
+    mine: int | None,
+    theirs: int | None,
+    seats: int | str | None,
+) -> None:
+    global_settings(project, {} if mine is None else {'reviewers': {'seats': mine}})
+    project_settings(project, {} if theirs is None else {'reviewers': {'seats': theirs}})
+
+    main(['run', 'Does it hold?', '--agent', 'codex:mini'])
+
+    (started,) = serves
+    assert started is not None
+    assert started.reviewer_seats == seats
+    said = "Did not use the number of reviewer seats from this project's settings file" in capsys.readouterr().out
+    assert said == (theirs is not None)
+
+
 def test_saved_modes_come_only_from_the_file_for_all_projects_and_not_under_ask_me(
     serves: list[StartRequest | None], project: Path
 ) -> None:

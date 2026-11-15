@@ -18,6 +18,7 @@ from verifold.protocol.events import (
 )
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.join import (
+    MAX_FORMER_NAMES,
     MAX_LEADS,
     MAX_LINKS,
     MAX_NEWS,
@@ -26,8 +27,10 @@ from verifold.protocol.join import (
     AnswerView,
     Brief,
     News,
+    PostEntry,
     PostLine,
     PostView,
+    ProfileResult,
     QuestionVersion,
     RevisionLine,
     SideLine,
@@ -36,11 +39,12 @@ from verifold.protocol.join import (
     ThreadSummary,
     ThreadView,
 )
-from verifold.protocol.posts import Ask, Call, Check, Close, MoveRequest, Objection, Plan, Proposal, Report, Result
+from verifold.protocol.posts import Ask, Call, Check, Close, Objection, Plan, Proposal, Report, Result
 from verifold.society.attention import left_line, watches_thread
 from verifold.society.board import Board
 from verifold.society.coordinator import request_waits
 from verifold.society.errors import NotFound
+from verifold.society.identity import post_line, post_view, seat_label
 from verifold.society.lifecycle import (
     alarm_line,
     lab_state,
@@ -50,22 +54,10 @@ from verifold.society.lifecycle import (
     pending_alarm,
 )
 from verifold.society.lines import lines_of, question_thread
+from verifold.society.reviewers import free_seats, holders, seats
 from verifold.society.rules import blind_checks
 from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing, waits_for_person
 from verifold.society.turns import before
-
-
-def post_view(board: Board, entry: Posted) -> PostView:
-    """Return a post with its time, where it stands, and the posts that build on it."""
-    return PostView(
-        seq=entry.seq,
-        at=entry.at,
-        post=entry.post,
-        standing=standing(board, entry.post.id),
-        built_on_by=tuple(other.post.id for other in board.built_on(entry.post.id)),
-        decision=board.answer_to(entry.post.id) if isinstance(entry.post, MoveRequest) else None,
-        waits=request_waits(board, entry),
-    )
 
 
 def thread_view(board: Board, agent_id: AgentId, thread_id: ThreadId) -> ThreadView:
@@ -161,7 +153,8 @@ def _links(pairs: tuple[Crossing, ...]) -> tuple[ThreadLink, ...]:
     return tuple(sorted(links, key=lambda link: link.count, reverse=True)[:MAX_LINKS])
 
 
-def _team(board: Board, opened: ThreadOpened, lines: dict[AgentId, ThreadId | None]) -> tuple[AgentId, ...]:
+def team(board: Board, opened: ThreadOpened, lines: dict[AgentId, ThreadId | None]) -> tuple[AgentId, ...]:
+    """Return the agents that work in a thread now."""
     # The lab's agents that work in the thread now. The agent that opened the thread is in its team until it works
     # in another one, unless it opened the thread with a call, which says that the work needs somebody else. The
     # person, blind checkers, and agents that left are in no team. The question's thread has none, and neither has a
@@ -195,7 +188,7 @@ def _summary(
         members=board.members(opened.thread.id),
         posts=len(entries),
         last_at=latest.at if latest else opened.at,
-        latest=PostLine.of(latest) if latest else None,
+        latest=post_line(board, latest) if latest else None,
         disputed=results.count('disputed'),
         checked=sum(state in {'checked', 'held_up'} for state in results),
         not_checked=results.count('open'),
@@ -205,7 +198,7 @@ def _summary(
             for entry in entries
         ),
         open_calls=sum(isinstance(entry.post, Call) and is_open_call(board, entry.post.id) for entry in entries),
-        team=_team(board, opened, lines),
+        team=team(board, opened, lines),
         builds_on_threads=_links(incoming),
         built_on_by_threads=_links(
             tuple((built, source) for source, built in crossed if source.post.thread == opened.thread.id)
@@ -263,13 +256,13 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         if opened.thread.between and agent_id not in board.members(opened.thread.id)
     }
     not_checked = tuple(
-        PostLine.of(entry)
+        entry
         for entry, state in stands
         if isinstance(entry.post, Result) and entry.post.author != agent_id and state == 'open'
     )
-    disputed = tuple(PostLine.of(entry) for entry, state in stands if state == 'disputed')
+    disputed = tuple(entry for entry, state in stands if state == 'disputed')
     open_asks = tuple(
-        PostLine.of(entry)
+        entry
         for entry in board.posts
         if isinstance(entry.post, Ask)
         and entry.post.author != agent_id
@@ -280,7 +273,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         and not board.gone(entry.post.author)
     )
     open_calls = tuple(
-        PostLine.of(entry)
+        entry
         for entry in board.posts
         if isinstance(entry.post, Call)
         and entry.post.author != agent_id
@@ -315,7 +308,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         if not joined.agent.checks and joined.agent.harness != GUEST and not board.gone(joined.agent.id)
     )
     not_built_on = tuple(
-        PostLine.of(entry)
+        entry
         for entry, state in stands
         if isinstance(entry.post, Result)
         and entry.post.author != agent_id
@@ -325,9 +318,40 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
     proposed = answer(board)
     done = closing(board)
     you = board.agent(agent_id)
+    close_line = post_line(board, done) if done else None
+    answer_line = post_line(board, proposed) if proposed else None
+    your_line = _agent_line(board, you.agent, working) if you else None
+    lines = tuple(_agent_line(board, agent, working) for agent in others)
+    # A post whose line the brief holds already is its ID alone in the lists of posts, so the brief holds each
+    # headline once.
+    held = (
+        *news.for_you,
+        *news.others,
+        close_line,
+        answer_line,
+        *(line for agent in (your_line, *lines) if agent for line in (agent.plan, agent.latest)),
+        *(summary.latest for summary in summaries[:MAX_NEWS]),
+    )
+    told = {line.id for line in held if line}
+
+    # The brief's list of agents says who each agent is, so a line in the brief's own lists says who wrote the
+    # post only for an author that the list does not hold, or whose seat had another label then.
+    labels = {agent.id: seat_label(board, agent.id) for agent in (*others, *((you.agent,) if you else ()))}
+
+    def line(entry: Posted) -> PostLine:
+        seat = labels.get(entry.post.author)
+        return post_line(board, entry) if seat is None else _own_line(board, entry, seat)
+
+    def listed(entries: tuple[Posted, ...]) -> tuple[PostEntry, ...]:
+        shown = tuple(
+            PostEntry(id=entry.post.id, line=None if entry.post.id in told else line(entry)) for entry in entries
+        )
+        told.update(entry.post.id for entry in entries)
+        return shown
+
     return Brief(
         you=agent_id,
-        your_line=_agent_line(board, you.agent, working) if you else None,
+        your_line=your_line,
         your_alarm=alarm_line(board, agent_id),
         no_alarm=no_alarm_line(board, agent_id, now),
         how=how,
@@ -336,19 +360,22 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
             RevisionLine(at=entry.at, note=entry.note, post=entry.post) for entry in board.revisions[-MAX_LEADS:]
         ),
         state=lab_state(board),
-        close=PostLine.of(done) if done else None,
+        close=close_line,
         close_agreed=agreed(board, done) if done else (),
         ends_at=board.ends_at,
         minutes_left=minutes_left(board, now),
         in_turn=sum(before(board, agent).cut_off for agent in run),
         alarms_waiting=sum(pending_alarm(board, joined.agent.id) is not None for joined in board.agents),
-        agents=tuple(_agent_line(board, agent, working) for agent in others),
+        agents=lines,
         coordinator=board.coordinator,
         coordinator_open=board.coordinator_open,
+        reviewers=holders(board),
+        reviewer_seats=seats(board),
+        reviewer_seats_free=free_seats(board),
         conversation=board.conversation,
         powers=tuple(power for power in POWERS if power in board.powers),
         left=tuple(left_line(board, entry) for entry in board.left),
-        answer=PostLine.of(proposed) if proposed else None,
+        answer=answer_line,
         answer_standing=standing(board, proposed.post.id) if proposed else None,
         answer_to_earlier_question=bool(proposed) and to_earlier_question(board, proposed),
         threads=summaries[:MAX_NEWS],
@@ -361,11 +388,11 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
             for summary in quiet[:MAX_LEADS]
         ),
         more_quiet_threads=max(len(quiet) - MAX_LEADS, 0),
-        disputed=disputed[-MAX_NEWS:],
-        not_built_on=not_built_on[-MAX_LEADS:],
-        not_checked=not_checked[-MAX_NEWS:],
-        open_asks=open_asks[-MAX_NEWS:],
-        open_calls=open_calls[-MAX_NEWS:],
+        disputed=listed(disputed[-MAX_NEWS:]),
+        not_built_on=listed(not_built_on[-MAX_LEADS:]),
+        not_checked=listed(not_checked[-MAX_NEWS:]),
+        open_asks=listed(open_asks[-MAX_NEWS:]),
+        open_calls=listed(open_calls[-MAX_NEWS:]),
         news=news,
     )
 
@@ -374,19 +401,70 @@ def _agent_line(board: Board, agent: Agent, working: dict[AgentId, ThreadId | No
     posts = tuple(entry for entry in board.posts if entry.post.author == agent.id)
     plan = next((entry for entry in reversed(posts) if isinstance(entry.post, Plan)), None)
     role, status = board.profile(agent.id)
+    given, giver = board.given_role(agent.id)
+    seat = seat_label(board, agent.id)
+    flag = board.flag(agent.id)
     return AgentLine(
         id=agent.id,
         name=agent.name,
+        seat='' if seat == agent.name else seat,
         harness=agent.harness,
+        former_names=_former_names(board, agent),
+        about=board.about(agent.id),
+        about_by=board.about_by(agent.id),
         role=role,
-        given_role=agent.given_role,
+        given_role=given,
+        given_by=giver if given else None,
         on_call=board.on_call(agent.id),
         coordinator=board.coordinator == agent.id,
+        reviewer=board.reviewer(agent.id),
+        flag=flag.flag or '' if flag else '',
         status=status,
         thread=working.get(agent.id),
-        plan=PostLine.of(plan) if plan else None,
-        latest=PostLine.of(posts[-1]) if posts and posts[-1] is not plan else None,
+        plan=_own_line(board, plan, seat) if plan else None,
+        latest=_own_line(board, posts[-1], seat) if posts and posts[-1] is not plan else None,
         error=_reason(board.failure(agent.id)),
+    )
+
+
+def _former_names(board: Board, agent: Agent) -> tuple[str, ...]:
+    # The names that the agent chose and held last before its name of now, newest last. A name that it took
+    # again counts where it held it last.
+    held = tuple(entry.name for entry in board.profiles if entry.agent == agent.id and entry.name)
+    last = dict.fromkeys(name for name in reversed(held) if name != agent.name)
+    return tuple(reversed(tuple(last)))[-MAX_FORMER_NAMES:]
+
+
+def _own_line(board: Board, entry: Posted, seat: str) -> PostLine:
+    # A post's line in a list that holds its author already. It says who wrote the post only when the seat's
+    # label was another when the post was written.
+    line = post_line(board, entry)
+    same = line.by is not None and seat_label(board, entry.post.author, entry.seq) == seat
+    return line.model_copy(update={'by': None}) if same else line
+
+
+def profile_result(board: Board, agent_id: AgentId) -> ProfileResult:
+    """Return an agent's profile as it is now, with the lab's coordinator and its reviewer seats."""
+    joined = board.agent(agent_id)
+    role, status = board.profile(agent_id)
+    given, giver = board.given_role(agent_id)
+    flag = board.flag(agent_id)
+    return ProfileResult(
+        agent=agent_id,
+        name=joined.agent.name if joined else agent_id,
+        seat=seat_label(board, agent_id),
+        about=board.about(agent_id),
+        about_by=board.about_by(agent_id),
+        picture=board.picture(agent_id),
+        role=role,
+        status=status,
+        given_role=given,
+        given_by=giver if given else None,
+        flag=flag.flag or '' if flag else '',
+        coordinator=board.coordinator,
+        reviewers=holders(board),
+        reviewer_seats=seats(board),
+        reviewer_seats_free=free_seats(board),
     )
 
 

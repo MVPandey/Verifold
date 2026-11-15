@@ -1,5 +1,5 @@
 import { GUEST, PERSON } from '../api/types.ts';
-import type { AgentActivity, AgentLeft, AgentView, HarnessOption } from '../api/types.ts';
+import type { AgentActivity, AgentLeft, AgentView } from '../api/types.ts';
 import { dayClock, duration, minutesBetween, money, tokens } from './format.ts';
 
 /** The dot before an agent's state. */
@@ -10,14 +10,13 @@ export interface StateLine {
   readonly dot: Dot;
 }
 
-/** An author's face: two letters and a color that stay the same on every screen. */
-export interface Face {
-  readonly kind: 'member' | 'person' | 'rerun';
-  readonly initials: string;
-  /** The member's place in the lab's palette. The stylesheet has eight colors and starts again after them. */
-  readonly color: number | null;
-  readonly name: string;
-}
+/**
+ * Who an author is to the page: a member, which shows with its own picture, the person, or a blind rerun, which
+ * has no name and no picture in a thread.
+ */
+export type Author =
+  | { readonly kind: 'member'; readonly name: string; readonly view: AgentView }
+  | { readonly kind: 'person' | 'rerun'; readonly name: string };
 
 /** Return the lab's members: its agents without the blind checkers. */
 export function members(agents: readonly AgentView[]): readonly AgentView[] {
@@ -29,9 +28,12 @@ export function present(agents: readonly AgentView[]): readonly AgentView[] {
   return members(agents).filter((view) => view.left === null);
 }
 
-/** Return the members in the order of the member list: the ones in the lab, and under them the ones that left. */
-export function listed(agents: readonly AgentView[]): readonly AgentView[] {
-  return [...present(agents), ...members(agents).filter((view) => view.left !== null)];
+/**
+ * Return the members that count as in the lab. An invited agent counts from its first post, because until then
+ * nobody knows whether it came.
+ */
+export function counted(agents: readonly AgentView[]): readonly AgentView[] {
+  return present(agents).filter((view) => view.agent.harness !== GUEST || view.posts > 0);
 }
 
 /** Return the state of a member that left: who caused it, and the reason when it has one. */
@@ -43,18 +45,12 @@ export function leftLine(left: AgentLeft): StateLine {
   return { text: left.reason ? `${how}: ${left.reason}` : how, dot: 'stop' };
 }
 
-/**
- * Return an author's face. A member's letters and color come from its position among the lab's members. A blind
- * checker has no name and no color.
- */
-export function face(agents: readonly AgentView[], authorId: string): Face {
-  if (authorId === PERSON) return { kind: 'person', initials: 'You', color: null, name: 'You' };
-  const position = members(agents).findIndex((view) => view.agent.id === authorId);
-  const name = authorName(agents, authorId);
-  if (position < 0) return { kind: 'rerun', initials: '', color: null, name };
-  const number = position + 1;
-  const initials = number < 10 ? `${name.slice(0, 1).toUpperCase()}${number}` : String(number);
-  return { kind: 'member', initials, color: position % 8, name };
+/** Return who an author is. An author that the lab does not list as a member shows as a blind rerun. */
+export function author(agents: readonly AgentView[], authorId: string): Author {
+  if (authorId === PERSON) return { kind: 'person', name: 'You' };
+  const view = members(agents).find((one) => one.agent.id === authorId);
+  if (view) return { kind: 'member', name: view.agent.name, view };
+  return { kind: 'rerun', name: authorName(agents, authorId) };
 }
 
 /** Return an author's own name: the agent's name, such as "Checker 12" for a blind checker, or "You". */
@@ -77,12 +73,6 @@ export function called(agents: readonly AgentView[], authorId: string): string {
   if (authorId === PERSON) return 'you';
   const name = authorName(agents, authorId);
   return name === 'Blind rerun' ? 'the blind rerun' : name;
-}
-
-/** Return the title of a harness, such as "Claude Code". An invited agent runs in a harness that Verifold does not know. */
-export function harnessTitle(harnesses: readonly HarnessOption[], name: string): string {
-  if (name === GUEST) return 'Own harness';
-  return harnesses.find((option) => option.name === name)?.title ?? name;
 }
 
 /**
@@ -117,13 +107,24 @@ export function stateLine(activity: AgentActivity, now: Date): StateLine {
     case 'working':
       return { text: `${activity.detail || 'Working'}${since}`, dot: 'live' };
     case 'waiting':
+      // An agent that waits for more time or for its own process is in no turn. The line is the server's own.
+      if (activity.waits_for === 'time') {
+        return { text: activity.detail || 'The lab is out of time.', dot: 'idle' };
+      }
+      if (activity.waits_for === 'process') {
+        return {
+          text: activity.detail || 'Waits for a process that it left running.',
+          dot: 'idle',
+        };
+      }
       return { text: `${activity.detail || 'Waiting for you'}${since}`, dot: 'wait' };
     case 'idle':
       return { text: `Idle${since}`, dot: 'idle' };
     case 'starting':
       return { text: 'Starting', dot: 'idle' };
     case 'stopped':
-      return { text: 'Stopped', dot: 'stop' };
+      // The server says why an agent with no loop is stopped, such as a harness that this computer lacks.
+      return { text: activity.detail || 'Stopped', dot: 'stop' };
     case 'invited':
       return { text: 'Invited, not joined yet', dot: 'idle' };
     case 'void':
@@ -143,24 +144,11 @@ export function stateLine(activity: AgentActivity, now: Date): StateLine {
 /** Return what an agent has cost: its price when the harness gives one, or else its tokens. */
 export function costLine(view: AgentView): string {
   if (view.agent.harness === GUEST) return 'Runs by itself, so Verifold sees no turns and no cost.';
-  if (view.turns === 0) return 'No turns yet';
+  if (view.turns === 0) return view.turns_started > 0 ? 'In its first turn' : 'No turns yet';
   const turns = `${view.turns} ${view.turns === 1 ? 'turn' : 'turns'}`;
   if (view.cost_usd !== null) return `${money(view.cost_usd)} over ${turns}`;
   const { input_tokens: input, output_tokens: output } = view.usage;
   return `${tokens(input)} tokens in, ${tokens(output)} out over ${turns}. Cost not reported by the harness.`;
-}
-
-/**
- * Return how many members work now, such as "3 of 4 members working, 2 blind reruns". An invited agent counts
- * from its first post, because until then nobody knows whether it came. A member that left does not count.
- */
-export function workingLine(agents: readonly AgentView[]): string {
-  const all = present(agents).filter((view) => view.agent.harness !== GUEST || view.posts > 0);
-  const busy = (view: AgentView): boolean => view.activity.state === 'working';
-  const reruns = agents.filter((view) => view.agent.checks !== null && busy(view)).length;
-  const line = `${all.filter(busy).length} of ${all.length} ${all.length === 1 ? 'member' : 'members'} working`;
-  if (reruns === 0) return line;
-  return `${line}, ${reruns} blind ${reruns === 1 ? 'rerun' : 'reruns'}`;
 }
 
 /**

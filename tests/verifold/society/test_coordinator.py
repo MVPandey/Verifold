@@ -127,10 +127,12 @@ def test_only_the_coordinator_marks_a_post_or_a_thread_as_one_for_the_person() -
     steer = Message(id='p-2', thread='t-1', author='ada', text='The person cares about size.', for_person=True)
     forged = steer.model_copy(update={'author': 'bo'})
 
-    # It reaches every agent that is not on call, as the person's own post does.
-    assert woken(started().on_call('cy'), steer) == {'bo'}
-    assert woken(started().on_call('cy'), steer.model_copy(update={'for_person': False})) == set()
+    # The mark says whose wish the post is. Who hears the post is the business of the mark for the whole lab.
+    assert woken(started().on_call('cy'), steer) == set()
+    assert woken(started().on_call('cy'), steer.model_copy(update={'to_lab': True})) == {'bo'}
     assert woken(started(), steer.model_copy(update={'mentions': ('bo',)})) == {'bo'}
+    wide = Message(id='p-1', thread='t-2', author='person', text='To everyone.', to_lab=True)
+    refused(talk().post(wide), 'is the conversation with the person, and a post with `to_lab` is for the whole lab')
     refused(started().post(forged), 'Only the agent that holds the coordinator seat marks a post')
     refused(started().coordinator('bo').post(steer), 'Only the agent that holds the coordinator seat marks a post')
     refused(lab().post(forged.model_copy(update={'id': 'p-1'})), 'Only the agent that holds the coordinator seat')

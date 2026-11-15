@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import { ApiError, messageOf } from '../api/client.ts';
@@ -11,7 +11,16 @@ import type {
   SettingsView,
 } from '../api/types.ts';
 import { defaultsLine } from '../model/setup.ts';
-import { AT_EXIT, AT_TIME_LIMIT, WHILE_YOU_DECIDE, labelOf, valueAt } from '../model/settings.ts';
+import {
+  AT_EXIT,
+  AT_TIME_LIMIT,
+  MAX_REVIEWER_SEATS,
+  SEATS_FOLLOW,
+  WHILE_YOU_DECIDE,
+  labelOf,
+  seatsValue,
+  valueAt,
+} from '../model/settings.ts';
 import type { Choice } from '../model/settings.ts';
 
 const CHANGED =
@@ -36,7 +45,7 @@ export function SettingsPage(props: {
     api.settings().then(setView, (failure: unknown) => setError(messageOf(failure)));
   }, [api]);
 
-  const change = (key: SettingKey, value: string | null): void => {
+  const change = (key: SettingKey, value: string | number | null): void => {
     if (view === null) return;
     const revisions = {
       project: view.project.revision,
@@ -115,7 +124,7 @@ export function SettingsForm(props: {
   readonly labOpen: boolean;
   readonly harnesses: readonly HarnessOption[];
   readonly disabled: boolean;
-  readonly onChange: (key: SettingKey, value: string | null) => void;
+  readonly onChange: (key: SettingKey, value: string | number | null) => void;
 }): ReactElement {
   const project = props.level === 'project';
   const file = project ? props.view.project : props.view.all_projects;
@@ -178,6 +187,15 @@ export function SettingsForm(props: {
         disabled={props.disabled}
         onChange={(value) => props.onChange('permissions.while_you_decide', value)}
       />
+      <ReviewerSetting
+        // The field starts again from the file after each save.
+        key={`${props.level}:${file.revision}`}
+        file={file}
+        project={project}
+        projectOwn={own('reviewers.seats')}
+        disabled={props.disabled}
+        onChange={(value) => props.onChange('reviewers.seats', value)}
+      />
       <NewLabs
         file={file}
         project={project}
@@ -187,6 +205,80 @@ export function SettingsForm(props: {
         onRemove={() => props.onChange('setup', null)}
       />
     </>
+  );
+}
+
+/** Return a number of reviewer seats in words, or that the number follows the lab's size. */
+function seatsWords(seats: number | null): string {
+  if (seats === null) return 'the number follows the lab’s size';
+  return seats === 1 ? '1 seat' : `${seats} seats`;
+}
+
+/**
+ * How many reviewer seats a lab has: a number, or an empty field. An empty field removes the number from this
+ * level's file, so the level above applies, and without any number the seats follow the lab's size.
+ */
+function ReviewerSetting(props: {
+  readonly file: SettingsFileView;
+  readonly project: boolean;
+  /** On the page for all projects: this project's file has a number of its own, which wins. */
+  readonly projectOwn: boolean;
+  readonly disabled: boolean;
+  readonly onChange: (value: number | null) => void;
+}): ReactElement {
+  const written = valueAt(props.file.values, 'reviewers.seats');
+  const [text, setText] = useState(typeof written === 'number' ? String(written) : '');
+  const id = useId();
+  const seats = seatsValue(text);
+  const same = seats === (typeof written === 'number' ? written : null);
+  return (
+    <section className="section">
+      <h3>Reviewer seats</h3>
+      <p className="sub">
+        How many agents can hold a reviewer seat. Leave the field empty, and the number follows the
+        lab’s size: {SEATS_FOLLOW}.
+      </p>
+      <div className="seats">
+        <label htmlFor={id}>Seats</label>
+        <input
+          id={id}
+          type="number"
+          min={0}
+          max={MAX_REVIEWER_SEATS}
+          value={text}
+          placeholder={props.project ? 'Same as all projects' : 'Follows the lab’s size'}
+          disabled={props.disabled}
+          onChange={(event) => {
+            setText(event.target.value);
+          }}
+        />
+        <button
+          className="btn small"
+          type="button"
+          disabled={props.disabled || seats === undefined || same}
+          onClick={() => {
+            if (seats !== undefined) props.onChange(seats);
+          }}
+        >
+          Save
+        </button>
+      </div>
+      {seats === undefined ? (
+        <p className="note">Type a whole number from 0 to {MAX_REVIEWER_SEATS}.</p>
+      ) : null}
+      <p className="note">
+        {props.project && written === undefined ? 'Same as all projects. ' : ''}Now:{' '}
+        {seatsWords(props.file.settings.reviewers.seats)}.
+      </p>
+      {props.project ? (
+        <p className="note">
+          <code>verifold run</code> does not take a higher number from this project’s file.
+        </p>
+      ) : null}
+      {props.projectOwn ? (
+        <p className="note">This project has its own number, and it wins over this one.</p>
+      ) : null}
+    </section>
   );
 }
 

@@ -87,7 +87,14 @@ async def test_the_coordinator_posts_and_opens_a_thread_for_the_person_and_no_ot
 
     thread = led.board.thread(opened.post.thread)
     assert thread is not None
-    assert (thread.thread.for_person, opened.post.for_person) == (True, True)
+    assert (thread.thread.for_person, opened.post.for_person, opened.post.to_lab) == (True, True, True)
+    # Where a post for the whole lab can stand, a post for the person is one, so it reaches every agent.
+    steer = await led.post(PostRequest(kind='message', text='Size first.', thread='t-1', for_person=True), 'ada')
+    named = await led.post(
+        PostRequest(kind='message', text='Bo, size first.', thread='t-1', for_person=True, mentions=('bo',)), 'ada'
+    )
+    assert (steer.post.to_lab, named.post.to_lab) == (True, False)
+    assert steer.post.id in [entry.post.id for entry in update(led.board, 'bo', opened.seq).posts]
     with pytest.raises(RejectedEvent, match='Only the agent that holds the coordinator seat'):
         await led.post(PostRequest(kind='message', text='The person wants it.', thread='t-1', for_person=True), 'bo')
     with pytest.raises(RejectedEvent, match='Only the agent that holds the coordinator seat'):
@@ -475,6 +482,11 @@ async def test_the_person_reads_the_conversation_switches_powers_and_answers_req
     assert waiting['waits'] == [time.post.id, seat.post.id, wrong.post.id]
     assert waiting['thread']['thread']['conversation'] is True
     assert lab_view['needs_you'] == 3
+    assert [(wait['kind'], wait['what']) for wait in lab_view['waits']] == [
+        ('approval', 'Asks for more time for the lab'),
+        ('approval', 'Asks to add an agent'),
+        ('approval', 'Asks to add an agent'),
+    ]
     assert (yes.status_code, added.status_code, no.status_code) == (200, 200, 200)
     assert (refused.status_code, refused.json()['detail']) == (400, 'Unknown harness nope.')
     assert (again.status_code, again.json()['detail']) == (400, f'The request {time.post.id} has its answer already.')

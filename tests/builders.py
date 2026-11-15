@@ -18,9 +18,12 @@ from verifold.protocol.events import (
     OnCallSet,
     Posted,
     PowerSet,
+    ProfileSet,
     QuestionRevised,
     RequestAnswered,
     RerunRequested,
+    ReviewerSet,
+    SettingsSet,
     ThreadOpened,
     TimeRanOut,
     TimeSet,
@@ -30,6 +33,7 @@ from verifold.protocol.events import (
 )
 from verifold.protocol.moves import Move
 from verifold.protocol.posts import Ask, Message, MoveRequest, PermissionShown, Post
+from verifold.protocol.settings import ReviewerSettings, Settings
 from verifold.protocol.threads import Thread
 from verifold.protocol.usage import Usage
 from verifold.society.board import Board
@@ -43,6 +47,10 @@ class RecordBuilder:
     """Builds a lab record one event a minute, so tests can read times from sequence numbers."""
 
     events: list[Event] = field(default_factory=lambda: [LabOpened(seq=1, at=START, question='Does it hold?')])
+
+    def copy(self) -> 'RecordBuilder':
+        """Return a builder with the same events, so that a test can try one more event and keep this record."""
+        return RecordBuilder(events=list(self.events))
 
     def at(self, seq: int) -> datetime:
         return START + timedelta(minutes=seq - 1)
@@ -85,6 +93,23 @@ class RecordBuilder:
     def coordinator(self, agent_id: str | None, by: str = 'person', *, free: bool = False) -> 'RecordBuilder':
         seq, at = self._stamp()
         self.events.append(CoordinatorSet(seq=seq, at=at, agent=agent_id, by=by, open=free))
+        return self
+
+    def profile(self, agent_id: str, **fields: object) -> 'RecordBuilder':
+        """Add a change to an agent's profile: by the agent itself, or with `by`, by the person or the coordinator."""
+        seq, at = self._stamp()
+        self.events.append(ProfileSet.model_validate({'seq': seq, 'at': at, 'agent': agent_id} | fields))
+        return self
+
+    def reviewer(self, agent_id: str, by: str | None = None, *, reviewer: bool = True) -> 'RecordBuilder':
+        seq, at = self._stamp()
+        self.events.append(ReviewerSet(seq=seq, at=at, agent=agent_id, reviewer=reviewer, by=by or agent_id))
+        return self
+
+    def reviewer_seats(self, seats: int | None) -> 'RecordBuilder':
+        """Add the person's settings with a number of reviewer seats."""
+        seq, at = self._stamp()
+        self.events.append(SettingsSet(seq=seq, at=at, settings=Settings(reviewers=ReviewerSettings(seats=seats))))
         return self
 
     def leave(self, agent_id: str, by: str | None = None, reason: str = '') -> 'RecordBuilder':
@@ -195,9 +220,18 @@ class RecordBuilder:
         self.events.append(turn)
         return self
 
-    def start(self, agent_id: str, seen: int, session: str = 'session-1', rang: int | None = None) -> 'RecordBuilder':
+    def start(
+        self,
+        agent_id: str,
+        seen: int,
+        session: str = 'session-1',
+        rang: int | None = None,
+        model_name: str | None = None,
+    ) -> 'RecordBuilder':
         seq, at = self._stamp()
-        self.events.append(TurnStarted(seq=seq, at=at, agent=agent_id, session=session, seen=seen, rang=rang))
+        self.events.append(
+            TurnStarted(seq=seq, at=at, agent=agent_id, session=session, seen=seen, rang=rang, model_name=model_name)
+        )
         return self
 
     def time_set(self, ends_at: datetime) -> 'RecordBuilder':

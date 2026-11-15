@@ -765,12 +765,7 @@ def _own_thread(member: Member, carries: Carries, about: str) -> str | None:
     agent's own thread with a like title, such as "Questions from the rerun", gets no tracked ask.
     """
     board = member.lab.board
-    joined = board.agent(member.agent_id)
-    names = (
-        *((joined.agent.name,) if joined else ()),
-        *(before for event, before in board.renames if event.agent == member.agent_id),
-        member.agent_id,
-    )
+    names = (*(name for agent, name in board.names() if agent == member.agent_id), member.agent_id)
     titles = {f'{about} from {name}' for name in names}
     own = tuple(entry.thread for entry in board.threads if entry.thread.opened_by == member.agent_id)
     marked = next((thread.id for thread in own if thread.carries == carries), None)

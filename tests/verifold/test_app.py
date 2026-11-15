@@ -1222,6 +1222,52 @@ async def test_a_projects_file_says_whether_agents_wait_in_a_lab_that_starts_wit
     assert kept == [value]
 
 
+async def test_an_agent_whose_harness_this_computer_lacks_shows_as_stopped_with_the_reason(project: Path) -> None:
+    async with serving(project, ONE_AGENT, catalog={'fake': FAKE_HARNESS}):
+        await until(lambda: len(posts(project)) == 1)
+
+    # The folder is served again on a computer without the harness, so no loop runs the agent.
+    async with serving(project, catalog={}) as client:
+        (view,) = (await client.get('/lab')).json()['agents']
+
+    assert (view['activity']['state'], view['activity']['detail']) == (
+        'stopped',
+        'Its harness is not on this computer.',
+    )
+    assert (view['need'], view['in_turn']) == ('stopped', False)
+
+
+async def test_a_lab_starts_with_its_reviewer_seats_and_the_settings_page_changes_them(project: Path) -> None:
+    folder = project / '.verifold'
+    folder.mkdir(exist_ok=True)
+    (folder / 'settings.json').write_text(json.dumps({'reviewers': {'seats': 4}}))
+
+    # The start's own number wins over the files, as `verifold run` gives one in place of a project's number.
+    async with serving(project, ONE_AGENT.model_copy(update={'reviewer_seats': 2})) as client:
+        await until(lambda: any(isinstance(event, SettingsSet) for event in record(project)))
+        started = (await client.get('/lab')).json()
+        before = (await client.get('/settings')).json()
+        change = {'level': 'project', 'key': 'reviewers.seats', 'value': 3, 'revisions': revisions_of(before)}
+        after = (await client.post('/settings', json=change)).json()
+        removed = (
+            await client.post('/settings', json={**change, 'value': None, 'revisions': revisions_of(after)})
+        ).json()
+        ended = (await client.get('/lab')).json()
+        seated = await client.post('/agents/agent-1/seat', json={'reviewer': True})
+        unseated = await client.post('/agents/agent-1/seat', json={'reviewer': False})
+
+    assert (started['reviewer_seats'], started['reviewer_seats_set']) == (2, 2)
+    assert (before['project']['settings']['reviewers'], before['lab']['reviewers']) == ({'seats': 4}, {'seats': 2})
+    assert (after['project']['values'], after['lab']['reviewers']) == ({'reviewers': {'seats': 3}}, {'seats': 3})
+    # Without a number, the lab follows its size again: one agent has no reviewer seat.
+    assert (removed['project']['values'], removed['lab']['reviewers']) == ({}, {'seats': None})
+    assert (ended['reviewer_seats'], ended['reviewer_seats_set']) == (0, None)
+    kept = [event.settings.reviewers.seats for event in record(project) if isinstance(event, SettingsSet)]
+    assert kept == [2, 3, None]
+    # The person gives a reviewer seat to an agent and takes it, whatever the number of seats.
+    assert [response.json()['agents'][0]['reviewer'] for response in (seated, unseated)] == [True, False]
+
+
 async def test_the_persons_change_applies_to_the_running_lab_but_an_agents_edit_does_not(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1250,6 +1296,7 @@ async def test_the_persons_change_applies_to_the_running_lab_but_an_agents_edit_
             'version': 1,
             'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'},
             'permissions': {'while_you_decide': 'auto'},
+            'reviewers': {'seats': None},
         },
         'defaults': {'agents': None, 'auto_mode': True, 'minutes': None},
     }

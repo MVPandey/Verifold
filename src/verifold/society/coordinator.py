@@ -78,9 +78,10 @@ def check_marks(board: Board, post: Post, thread: Thread) -> None:
     """
     if post.for_person and post.author != board.coordinator:
         raise RejectedEvent('Only the agent that holds the coordinator seat marks a post as one for the person.')
-    if thread.conversation and isinstance(post, Proposal | Close):
+    if thread.conversation and (post.to_lab or isinstance(post, Proposal | Close)):
+        kind = 'post with `to_lab`' if post.to_lab else post.kind
         raise RejectedEvent(
-            f'Thread {thread.id} is the conversation with the person, and a {post.kind} is for the whole lab.'
+            f'Thread {thread.id} is the conversation with the person, and a {kind} is for the whole lab.'
         )
     if isinstance(post, MoveRequest):
         check_asks(board, post.author)

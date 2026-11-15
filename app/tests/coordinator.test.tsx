@@ -521,7 +521,7 @@ describe('the coordinator in the seat', () => {
       />,
     );
 
-    assert.ok(closed.includes('<b>Agent 1</b><span class="k-seat">Coordinator</span>'));
+    assert.ok(closed.includes('>Agent 1</button><span class="i-seat coord">Coordinator</span>'));
     assert.ok(closed.includes('aria-expanded="false">Talk to Agent 1 (1 waits for you)</button>'));
     assert.equal(closed.includes('k-panel'), false);
     assert.ok(open.includes('aria-expanded="true">Close the conversation</button>'));
@@ -561,7 +561,6 @@ describe('the coordinator in the seat', () => {
       <Turns
         view={thread}
         agents={AGENTS}
-        harnesses={HARNESSES}
         needs={[]}
         question={null}
         onRerun={() => Promise.resolve()}

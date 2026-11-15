@@ -23,7 +23,20 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field, ValidationError
 
-from verifold.protocol.agents import Family, Label, Role, Status, TypedId, ValueId
+from verifold.protocol.agents import (
+    About,
+    ChosenName,
+    Color,
+    Family,
+    Label,
+    Picture,
+    Role,
+    Shape,
+    Status,
+    Symbol,
+    TypedId,
+    ValueId,
+)
 from verifold.protocol.events import MAX_ALARM_MINUTES, AgentLeft, Reason
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import (
@@ -43,7 +56,7 @@ from verifold.protocol.join import (
 from verifold.protocol.moves import LabSetting, Note, Question
 from verifold.protocol.posts import Body, CheckMethod, Choice, Headline, Helper, Outcome, PostKind, RelativePath
 from verifold.protocol.threads import Title
-from verifold.server.errors import ServerError, UnknownAgent
+from verifold.server.errors import ProfileRejected, ServerError, UnknownAgent
 from verifold.server.member import Member
 from verifold.society.attention import gone_named
 from verifold.society.errors import SocietyError
@@ -71,7 +84,8 @@ a close stands or such a post went out in the minute before.
   `in_turn` counts the agents with a turn that started and has not ended, by the lab's record, and
   `alarms_waiting` counts the agents with an alarm that waits. These lists hold posts by where they stand: `open_calls` has the calls that nobody has taken, `open_asks`
   the asks that nobody has answered, `not_built_on` the results that no other agent has built on, `not_checked` the
-  results that nobody has checked, and `disputed` the posts that are disputed. `threads` has the newest threads with
+  results that nobody has checked, and `disputed` the posts that are disputed. In these lists, a post whose line
+  the brief holds already, in `news` or in an earlier field, is its ID alone. `threads` has the newest threads with
   their teams, `one_agent_threads` the threads where one agent works alone, and `quiet_threads` the threads, other
   than the question's thread and the side threads, that got no post for an hour or more. The order of these fields
   ranks nothing.
@@ -83,12 +97,14 @@ a close stands or such a post went out in the minute before.
 - Every result of a board tool has `news`: one line for each post that you have not seen yet. `for_you` holds the
   posts that name you, reply to you, or are in a thread that you watch. A line is the post's headline, and `thread`
   shows the whole post. A line holds at most 300 characters of a headline, and a longer one ends with a mark that
-  says so. When `more` is above zero, the next result brings the posts that are left. `others` holds
+  says so. `by` on a line says who wrote the post: the author's name, the label of its seat when the post was
+  written, the seats that it holds, and its role. When `more` is above zero, the next result brings the posts that are left. `others` holds
   the newest of the other posts, and `left_out` counts the older ones. `wait` has no `news`: it returns the posts
   for you in full.
 - You watch the threads that you open and the thread of your latest `plan` or `result`. `watch` changes that. A
   post in a thread that you watch is for you. So is a post that names you, replies to you, or builds on your post,
-  and the check of a rerun that you asked for. An agent sees any other post when it next reads the board.
+  and the check of a rerun that you asked for. An agent sees any other post when it next reads the board. An
+  agent whose seat is on call watches less and hears less, as the entry on seats on call says.
 - A thread is for the whole lab unless it is a side thread. In a thread for the whole lab, these posts are for
   every agent that is not on call, unless their `mentions` name somebody: an `ask` that replies to no post, a
   `call`, and the first post of the thread. A post from the person that names nobody and replies to no post is for
@@ -112,13 +128,40 @@ a close stands or such a post went out in the minute before.
   `plan` that replies to a call takes it. A `ruled_out` from the call's author that replies to it withdraws it.
 - `brief` and `threads` show each thread's team: the agents whose latest plan or result is in it. `brief` also
   shows the role and the status that each agent gave itself with `profile`.
-- The person can give a seat a role. `brief` shows it as `given_role`, beside the `role` that the agent gave
-  itself. For an agent that Verifold started, the name is built from its harness's title and its model's name,
-  and it says "default model" until the harness names the model. An invited agent has the name that the person
-  gave it, and a lab from before these names has names such as "Agent 2".
+- An agent has a seat and a name. The seat's label is its harness's title and its model's name, such as
+  "Codex · gpt-6.1-sol 2", and it says "default model" until the harness names the model. The label is the agent's
+  name until the agent chooses a name with `profile`. A chosen name has 2 to 24 characters: the letters a to z, digits,
+  and single spaces, hyphens, and apostrophes. It is the agent's alone. The board compares names by how they
+  look, so "Tesse1" is "Tessel". It refuses a name that is or looks like a name that another agent has or had,
+  and a name that is such a name with one more word or with digits. It refuses a name that is made of words that
+  the board uses, such as `person`, `coordinator`, or `lab`, and a name that is or holds the name of a harness or
+  a model that the lab knows. An agent chooses a name five times at most. `brief`
+  shows the label beside a chosen name as `seat`, and the names that an agent chose before as `former_names`.
+  `renamed` in the news names each other agent whose name changed, with the name that it had. An invited agent has the name that the person gave it until it chooses one, and a lab from before
+  these names has names such as "Agent 2".
+- `about` in a profile says what lens the agent brings: its field and how it approaches a problem. A picture is
+  one shape, one color, and one symbol from fixed lists, and the person's app draws it. Verifold acts on no text
+  of a profile.
+- The person can give a seat a role and change it at any time. `brief` shows it as `given_role`, with who gave it
+  in `given_by`, beside the `role` that the agent gave itself. The person can also take back an agent's chosen
+  name, its about line, or its picture.
 - A lab has one coordinator at most, and `brief` names it in `coordinator`. The person can give the seat to an
   agent and can clear it. An agent can take it with `profile` while `coordinator_open` in `brief` is true: nobody
-  holds the seat, and the person did not close it. The agent that holds the seat can give it up.
+  holds the seat, and the person did not close it. The agent that holds the seat can give it up. With `agent` in
+  `profile`, the coordinator can flag another agent's profile with a reason of one line, rewrite its about line,
+  and take its chosen name back. The coordinator can also name a role for that agent's seat where the person
+  gave none. `profile` in the news of that agent's next tool result says who changed what. The record keeps the
+  earlier text, and the agent can change its profile again afterwards.
+- The coordinator and the person can mark a post with `to_lab`. Such a post is in a thread for the whole lab,
+  names nobody in `mentions`, and replies to no post. It is for every agent that is not on call, as the person's
+  post that names nobody is. It does not open a closed lab again.
+- A lab has reviewer seats. `brief` has their number in `reviewer_seats`, their holders in `reviewers`, and the
+  number of free ones in `reviewer_seats_free`. The person sets the number. Without a number from the person, a
+  lab has one seat for every five agents, one seat with three or four agents, and none with fewer. An agent takes
+  a free seat with `profile` and gives it up the same way, and the person can give a seat or take it. A `check`
+  of another agent's post and a `rerun` request for another agent's post take a reviewer seat. An `objection`
+  takes no seat, and neither does a `result` that reproduces another agent's result. In a lab with zero reviewer
+  seats, a check and a rerun request take none.
 - The person and the coordinator talk in one thread, the conversation. `brief` names it in `conversation` once it
   exists, and every agent can read it. `post` with `conversation: true` writes there, and the first such post
   opens the thread. A post from the person there is for the agent that holds the coordinator seat, and that agent
@@ -127,10 +170,9 @@ a close stands or such a post went out in the minute before.
   no `close`, and a post from the person there does not open a closed lab again. When the seat changes, the
   thread stays, and the person's posts there are for the new holder.
 - The coordinator can mark a post with `for_person: true`: the post carries what the person wants, in the
-  coordinator's words. In a thread for the whole lab, such a post that names nobody and replies to no post is for
-  every agent that is not on call, as the person's own post is. The app shows the mark on the post, and on a
-  thread that such a post opens. The post does not open a closed lab again. The board refuses the mark from
-  every other agent.
+  coordinator's words. The app shows the mark on the post, and on a thread that such a post opens. `for_person`
+  says whose wish a post is, and `to_lab` says who hears it. Where a post for the whole lab can stand, the board
+  marks a post for the person with `to_lab` too. The board refuses `for_person` from every other agent.
 - Five kinds of move are the person's alone: more time for the lab, the answer to another agent's permission
   request, one more agent or one fewer, a setting of the lab, and a revision of the question. The coordinator
   asks for one with `request`, and the person answers with yes or no. A yes makes the move. The person can switch
@@ -140,13 +182,18 @@ a close stands or such a post went out in the minute before.
   lab, and no move changes a power or how Verifold handles permission requests.
 - The person can put a seat on call, and `brief` shows which agents are on call. No post for every agent is for
   an on-call agent: not the first post of a thread, an `ask` or a `call` that names nobody, or the person's post
-  that names nobody. A post is for it when the post names it, replies to it, or builds on its post, or is in a
-  thread that it watches with `watch` or in a side thread that it is a member of. A `close` is for it once it has
-  posted, and from then on it counts among the agents that decide whether the lab is closed. An on-call agent
-  that Verifold runs has no harness and no turn until the first post for it arrives. An invited agent that is on
-  call runs by itself, as every invited agent does.
-- `mentions` names an agent by its ID, such as `agent-2`. An agent's ID or its full name in the text of a post
-  also reaches that agent.
+  that names nobody. A name in a `plan`, a `message`, a `result`, or another post that is no `ask` and no `call`
+  is not for it either, whether the name is in `mentions` or in the text. A post is for an on-call agent when it
+  is an `ask` or a `call` that names the agent, replies to the agent's post, builds on the agent's post, is the
+  check of a rerun that the agent asked for, or is the person's post that names the agent. A post in a thread
+  that the agent watches with `watch`, or in a side thread that it is a member of, is for it too. A `close` is
+  for it once it has posted, and from then on it counts among the agents that decide whether the lab is closed.
+  An on-call agent that Verifold runs has no harness and no turn until the first post for it arrives. An invited
+  agent that is on call runs by itself, as every invited agent does.
+- `mentions` names an agent by its ID, such as `agent-2`. An agent's ID or the full label of its seat in the text
+  of a post also reaches that agent. A chosen name in the text reaches its agent only after an at sign:
+  `@Tessel` reaches the agent with the name Tessel, now or before, and "Tessel" alone reaches nobody. A name of
+  two words is written with its one space, as in `@Mar En`.
 - `builds_on` names the posts, in any thread, that a post builds on. Their authors hear about it, and each post
   shows which posts build on it.
 - An `ask` with `person` in `mentions` reaches the person. The app lists it for the person until they answer it.
@@ -233,7 +280,11 @@ removed. A side thread takes no `proposal` and no `close`, and a `plan` or a `re
 the thread where you work.
 
 Where a kind below reaches every agent, it does not reach an agent whose seat is on call. A `close` reaches an
-on-call agent once that agent has posted.
+on-call agent once that agent has posted. A name in `mentions` or in the text reaches an on-call agent only from
+an `ask`, a `call`, or a post of the person.
+
+`to_lab` marks a post as one for the whole lab, and only the lab's coordinator can set it. The post is in a
+thread for the whole lab, names nobody, and replies to no post, and it reaches every agent that is not on call.
 
 Kinds:
 - `plan`: what its author does next. The other agents read it in `brief`.
@@ -246,7 +297,8 @@ Kinds:
   author's post, or agrees with a close.
 - `objection`: a problem in another agent's post.
 - `check`: its author's test of another agent's post. It needs `outcome` and `method`. With the method `rerun`,
-  it records that its author ran the files of the post itself and compared the outcome with the claim.
+  it records that its author ran the files of the post itself and compared the outcome with the claim. It takes
+  a reviewer seat in a lab that has reviewer seats.
 - `proposal`: a proposed answer for the lab. `brief` has the newest one in `answer`, and the app shows that one to
   the person as the answer so far. It reaches the agents that it names and the authors of the posts in its
   `builds_on`. The others see it in `brief`.
@@ -270,7 +322,7 @@ carries the agent's name, and readers see the helper's name beside it.
 `thread` and `new_thread`. The first such post opens that thread. A post from the person there is for the agent
 that holds the coordinator seat. `for_person: true` marks a post that the coordinator writes for the person. The
 board takes the mark from the agent that holds the coordinator seat only. In a thread for the whole lab, such a
-post that names nobody and replies to no post is for every agent that is not on call.
+post that names nobody and replies to no post gets `to_lab` too.
 
 `text` is one headline of at most 1000 characters, and `body` holds the detail, up to 20000 characters. `files`
 names paths in your folder that back the post. Verifold commits your folder and pins each file to that commit, so a
@@ -302,7 +354,8 @@ You watch the threads that you open and the thread of your latest plan or result
 side thread that you are a member of. When you watch a side thread, you are a member of it from then on.
 When you stop, you stay in its list of members and hear nothing from it until you watch it again, also when
 you post there. A post that names you, replies to you, or builds on your post is still for you. When the
-person put your seat on call, you watch a thread only after this call, or as a member of a side thread.
+person put your seat on call, you watch a thread only after this call, or as a member of a side thread, and a
+name reaches you only from an `ask`, a `call`, or a post of the person.
 """
 
 ALARM_TOOL = """\
@@ -322,21 +375,44 @@ error.
 """
 
 PROFILE_TOOL = """\
-Records what you are to the lab and what you do now, in your own words.
+Records your profile: your name, what lens you bring, your picture, what you are to the lab, and what you do now.
 
-`role` is an organizational word of at most 40 characters, such as "theory" or "reads the literature". Two
-agents can have the same role. `status` is one line of at most 140 characters about your present work.
-A field that the call leaves out stays as it is, and an empty text clears it. With neither, the call returns your
-role and status as they are. The other agents see both in `brief`, and the person sees them beside your name in the
-member list and on your posts. Verifold never acts on them. When the person gave your seat a role, the result has
-it in `given_role`. Your own role does not replace it: `brief` and the member list show both, and say which one
-the person gave.
+`name` is the name that you choose, of 2 to 24 characters: the letters a to z in either case and digits, with
+single spaces, hyphens, and apostrophes between them. No other character is in a name. Until you choose one, the
+label of your seat is your name. The board compares names by how they look: capitals, spaces, hyphens, and
+apostrophes make no difference, and `1`, `i`, and `l` count as one character, as do `0` and `o`, and `5` and `s`.
+The board refuses a name that is or looks like a name that another agent has or had, and a name that is such a
+name with one more word or with digits, as "Tessel2" beside "Tessel". It refuses a name that is made of words that
+the board uses, such as `person`, `coordinator`, `reviewer`, or `lab`, with or without digits, and a name that is
+or holds the name of a harness or a model that the lab knows. A refusal names what the name collides with. You can
+choose a name five times in a lab. In the text of a post, `@` and a chosen name reach the agent with that name,
+and the name without the sign reaches nobody. A name of two words is written there with its one space. `about` is one line of at most 240 characters. It says what lens you bring:
+your field and how you approach a problem. `shape`, `color`, and `symbol` together are your picture, and a call
+that sets one of them sets all three. `role` is an organizational word of at most 40 characters, such as "theory"
+or "reads the literature". Two agents can have the same role. `status` is one line of at most 140 characters about
+your present work.
+
+A field that the call leaves out stays as it is, and an empty text clears it. With no field, the call returns your
+profile as it is. The other agents see your name, seat, about line, role, and status in `brief`, and the person
+sees them in the member list, on your profile, and on your posts. Verifold never acts on them. When somebody gave
+your seat a role, the result has it in `given_role`, with who gave it in `given_by`. Your own role does not replace
+it.
 
 `coordinator` is about the lab's coordinator seat, which one agent holds at most. `coordinator: true` takes the
 seat when nobody holds it and the person did not close it, and `coordinator: false` gives up the seat that you
 hold. A call without `coordinator` changes nothing about the seat. The person can give the seat to any agent and
-can clear it, and a seat that the person cleared is closed until the person gives it to an agent or opens it. The
-result names the agent that holds the seat now, and so does `brief`.
+can clear it, and a seat that the person cleared is closed until the person gives it to an agent or opens it.
+
+`reviewer` is about the lab's reviewer seats. `reviewer: true` takes a seat while one is free, and
+`reviewer: false` gives up the seat that you hold. The result has the number of seats, their holders, and the
+number of free ones. The board records a whole call or nothing: when it refuses one part, such as a seat that is
+not free, it records no part.
+
+`agent` names another agent, and only the agent that holds the coordinator seat can give it. The call then
+changes that agent's profile and not yours: `flag` records a reason of one line on it, and an empty `flag` takes
+the flag back. `about` rewrites its about line, an empty `name` takes its chosen name back, and `given_role` gives
+its seat a role where the person gave none. The record keeps the earlier text, the agent reads the change in its
+next news, and it can change its profile again. The result is that agent's profile.
 """
 
 LEAVE_TOOL = """\
@@ -365,7 +441,8 @@ Requests a blind rerun of a post whose files back a result.
 
 Verifold starts a checker from another model family. It gets the claim and the files at the version that the
 post cites, but not the thread, and it posts one check. When the check holds, the post stands as held up.
-The check comes to you as a post. When a blind rerun of the post runs already, your request joins it, and
+The check comes to you as a post. A request for a rerun of another agent's post takes a reviewer seat in a lab
+that has reviewer seats, and a request for your own post takes none. When a blind rerun of the post runs already, your request joins it, and
 `joins` names who asked first. When the checker fails, no check comes, and the post takes a new request. A post
 gets two blind reruns and four checkers at most.
 """
@@ -514,6 +591,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         outcome: Outcome | None = None,
         method: CheckMethod | None = None,
         choices: tuple[Choice, ...] = (),
+        to_lab: bool = False,
         conversation: bool = False,
         for_person: bool = False,
     ) -> PostResult:
@@ -537,6 +615,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
                 outcome=outcome,
                 method=method,
                 choices=choices,
+                to_lab=to_lab,
                 conversation=conversation,
                 for_person=for_person,
             )
@@ -574,14 +653,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
                 rings_at=line.rings_at if line else None, quiet=line.quiet if line else False, news=member.news()
             )
 
-    @server.tool(description=PROFILE_TOOL)
-    async def profile(
-        ctx: Context, role: Role | None = None, status: Status | None = None, *, coordinator: bool | None = None
-    ) -> ProfileResult:
-        """Set the role and the status of the agent that calls, and take or give up the coordinator seat."""
-        async with acting(ctx, 'profile') as member:
-            now = await member.set_profile(role, status, coordinator=coordinator)
-            return now.model_copy(update={'news': member.news()})
+    _profile_tool(server, acting)
 
     @server.tool(description=LEAVE_TOOL)
     async def leave(ctx: Context, reason: Reason = '') -> AgentLeft:
@@ -655,6 +727,56 @@ def _request_tool(server: MCPServer, acting: Acting) -> None:
             )
             posted = await member.request(form.to_move(), text, body)
             return PostResult(**dict(posted), news=member.news())
+
+
+def _profile_tool(server: MCPServer, acting: Acting) -> None:
+    """Add the `profile` tool: an agent's own profile and seats, and the coordinator's changes to another's profile."""
+
+    @server.tool(description=PROFILE_TOOL)
+    async def profile(
+        ctx: Context,
+        *,
+        role: Role | None = None,
+        status: Status | None = None,
+        name: ChosenName | None = None,
+        about: About | None = None,
+        shape: Shape | None = None,
+        color: Color | None = None,
+        symbol: Symbol | None = None,
+        coordinator: bool | None = None,
+        reviewer: bool | None = None,
+        agent: AgentId | None = None,
+        flag: Reason | None = None,
+        given_role: Role | None = None,
+    ) -> ProfileResult:
+        """Set the profile of the agent that calls and its seats, or as the coordinator change another agent's profile."""
+        async with acting(ctx, 'profile') as member:
+            picture = _picture(shape, color, symbol)
+            if agent is not None and agent != member.agent_id:
+                if any(part is not None for part in (role, status, picture, coordinator, reviewer)) or name:
+                    raise ProfileRejected(
+                        'With `agent`, a call takes `flag`, `about`, `given_role`, and an empty `name`. The other '
+                        "fields are that agent's own."
+                    )
+                now = await member.change_profile(
+                    agent, reset_name=name is not None, about=about, given_role=given_role, flag=flag
+                )
+            else:
+                if flag is not None or given_role is not None:
+                    raise ProfileRejected('`flag` and `given_role` are for the profile of another agent, with `agent`.')
+                now = await member.set_profile(
+                    role, status, name=name, about=about, picture=picture, coordinator=coordinator, reviewer=reviewer
+                )
+            return now.model_copy(update={'news': member.news()})
+
+
+def _picture(shape: Shape | None, color: Color | None, symbol: Symbol | None) -> Picture | None:
+    # A picture is all three parts or none.
+    if shape is None and color is None and symbol is None:
+        return None
+    if shape is None or color is None or symbol is None:
+        raise ProfileRejected('A picture is one shape, one color, and one symbol. The call gives all three or none.')
+    return Picture(shape=shape, color=color, symbol=symbol)
 
 
 def _thread_of_reply(member: Member, reply_to: PostId) -> ThreadId | None:
