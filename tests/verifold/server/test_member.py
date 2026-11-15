@@ -2,13 +2,31 @@ import asyncio
 from datetime import timedelta
 
 import pytest
+from conftest import agent
+from fakes import FakeCopies
 
 from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import FileEvidence
-from verifold.server.errors import BlindCheck, EvidenceRejected, OutOfTime
+from verifold.server.errors import EvidenceRejected, NoCleanCopy, OutOfTime
 from verifold.server.lab import Lab
 from verifold.server.member import Member
+from verifold.society.errors import RejectedEvent
+from verifold.society.standing import standing
+
+EVIDENCE = (FileEvidence(path='bench.json', commit='c' * 40),)
+
+
+async def a_claim(lab: Lab) -> None:
+    """Give the lab ada's result p-2, with a file, in thread t-1."""
+    await lab.post(PostRequest(kind='result', text='11.8x.', body='Run `make bench`.', thread='t-1'), 'ada', EVIDENCE)
+
+
+def rerun_check(files: tuple[str, ...] = ('rerun.json',), method: str = 'rerun') -> PostRequest:
+    return PostRequest.model_validate(
+        {'kind': 'check', 'text': 'Reran it.', 'reply_to': 'p-2', 'thread': 't-1', 'outcome': 'holds'}
+        | {'method': method, 'files': files}
+    )
 
 
 async def test_a_member_posts_reads_and_watches_as_its_agent(lab: Lab) -> None:
@@ -124,20 +142,117 @@ async def test_a_member_without_a_pin_refuses_files(lab: Lab) -> None:
         await Member(lab, 'bo').post(PostRequest(kind='result', text='x', thread='t-1', files=('bench.json',)))
 
 
-async def test_a_blind_checker_cannot_read_the_board_but_others_can_ask_for_reruns(lab: Lab) -> None:
-    evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
-    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
-    requested = await Member(lab, 'bo').rerun('p-2')
-    await lab.join(Agent(id='dee', name='Dee', harness='fake', model=ModelSpec(family='openai'), checks='p-2'))
-    dee = Member(lab, 'dee')
+async def test_a_request_for_a_rerun_starts_nothing_and_stays_open(lab: Lab) -> None:
+    await a_claim(lab)
+    agents, seq = lab.board.agents, lab.board.seq
+    bo = Member(lab, 'bo')
 
-    assert (requested.by, requested.post) == ('bo', 'p-2')
-    for read in (dee.threads, lambda: dee.thread('t-1'), lambda: dee.brief('How the board works.')):
-        with pytest.raises(BlindCheck, match='rerun p-2 blind'):
-            read()
-    assert dee.news() is None
-    with pytest.raises(BlindCheck):
-        await dee.wait(timeout=0)
+    requested = await Member(lab, 'ada').rerun('p-2')
+
+    # The record got the request and nothing else: no agent joined for it.
+    assert (requested.by, requested.post, lab.board.seq) == ('ada', 'p-2', seq + 1)
+    assert lab.board.agents == agents
+    brief = bo.brief('')
+    assert [(line.post, line.asked_by, line.taken_by) for line in brief.reruns_wanted] == [('p-2', ('ada',), ())]
+    assert [line.post for line in brief.news.reruns] == ['p-2']
+    # The author reads the wanted rerun in its brief, and cannot take it.
+    assert [line.post for line in Member(lab, 'ada').brief('').reruns_wanted] == ['p-2']
+
+
+async def test_an_agent_takes_a_rerun_and_gets_the_claim_and_a_clean_copy(lab: Lab) -> None:
+    await a_claim(lab)
+    await Member(lab, 'ada').rerun('p-2')
+    copies = FakeCopies()
+    bo = Member(lab, 'bo', copies=copies)
+
+    taken = await bo.take_rerun('p-2')
+
+    assert (taken.post, taken.thread, taken.author, taken.text, taken.body) == (
+        'p-2',
+        't-1',
+        'ada',
+        '11.8x.',
+        'Run `make bench`.',
+    )
+    assert (taken.files, taken.commit, taken.folder) == (('bench.json',), 'c' * 40, str(copies.folder / 'p-2'))
+    assert copies.made == [('p-2', 'ada')]
+    assert [(entry.agent, entry.post, entry.commit) for entry in lab.board.takes] == [('bo', 'p-2', 'c' * 40)]
+    assert [line.taken_by for line in Member(lab, 'ada').brief('').reruns_wanted] == [('bo',)]
+
+    # A second call records nothing more and gives the same copy.
+    again = await bo.take_rerun('p-2')
+    assert (again.folder, len(lab.board.takes)) == (taken.folder, 1)
+
+
+async def test_the_check_of_a_rerun_that_an_agent_took_gets_its_files_from_the_clean_copy(lab: Lab) -> None:
+    async def pin(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+        return tuple(FileEvidence(path=path, commit='a' * 40) for path in paths)
+
+    await a_claim(lab)
+    await Member(lab, 'ada').rerun('p-2')
+    await lab.join(agent('cy').model_copy(update={'model': ModelSpec(family='openai')}))
+    # With three agents the lab has one reviewer seat, which a check and a take need.
+    await lab.set_reviewer('cy', 'cy', reviewer=True)
+    copies = FakeCopies()
+    cy = Member(lab, 'cy', pin=pin, copies=copies)
+
+    # Before the take, a rerun's files come from the agent's own folder, and the check answers no request.
+    plain = await cy.post(rerun_check())
+    assert (plain.post.evidence[0].commit, copies.pinned, plain.post.model_dump()['take']) == ('a' * 40, [], None)
+    assert standing(lab.board, 'p-2') == 'checked'
+
+    await cy.take_rerun('p-2')
+    # A check by another method, and a post of another kind, still pin from the agent's own folder.
+    read = await cy.post(rerun_check(method='code_read'))
+    assert read.post.evidence[0].commit == 'a' * 40
+    checked = await cy.post(rerun_check())
+
+    assert copies.pinned == [('p-2', ('rerun.json',))]
+    assert [(file.path, file.commit) for file in checked.post.evidence] == [('rerun.json', 'd' * 40)]
+    assert checked.post.model_dump()['take'] == lab.board.takes[0].seq
+    # The check answers the request, and it comes from another model family, so the post is held up.
+    assert Member(lab, 'ada').brief('').reruns_wanted == ()
+    assert standing(lab.board, 'p-2') == 'held_up'
+
+
+async def test_who_can_take_a_rerun(lab: Lab) -> None:
+    await a_claim(lab)
+    ada, bo = Member(lab, 'ada', copies=FakeCopies()), Member(lab, 'bo', copies=FakeCopies())
+
+    with pytest.raises(RejectedEvent, match='No rerun of post p-2 is wanted now'):
+        await bo.take_rerun('p-2')
+    with pytest.raises(RejectedEvent, match='Post p-9 does not exist'):
+        await bo.take_rerun('p-9')
+    await ada.rerun('p-2')
+    with pytest.raises(RejectedEvent, match='p-2 is your own'):
+        await ada.take_rerun('p-2')
+    with pytest.raises(NoCleanCopy, match='cannot make a clean copy'):
+        await Member(lab, 'bo').take_rerun('p-2')
+
+    # With a third agent the lab has one reviewer seat, and a take needs it.
+    await lab.join(agent('cy'))
+    with pytest.raises(RejectedEvent, match="The rerun of another agent's post takes a reviewer seat"):
+        await bo.take_rerun('p-2')
+    assert lab.board.takes == ()
+    await lab.set_reviewer('bo', 'bo', reviewer=True)
+    assert (await bo.take_rerun('p-2')).post == 'p-2'
+    # A seat that makes no clean copies pins no file from one.
+    with pytest.raises(EvidenceRejected, match='cannot pin files'):
+        await Member(lab, 'bo').post(rerun_check())
+
+
+async def test_a_request_ends_the_wait_of_an_agent_that_can_take_it(lab: Lab) -> None:
+    await a_claim(lab)
+    bo = Member(lab, 'bo')
+    waiting = asyncio.create_task(bo.wait(30))
+    await asyncio.sleep(0)
+
+    await Member(lab, 'ada').rerun('p-2')
+
+    news = await asyncio.wait_for(waiting, 5)
+    assert (news.posts, [line.post for line in news.reruns]) == ((), ['p-2'])
+    # The agent got the request once.
+    assert (await bo.wait(0)).reruns == ()
 
 
 async def test_the_board_refuses_a_guest_while_the_lab_is_out_of_time_and_never_an_agent_that_verifold_runs(
@@ -157,6 +272,8 @@ async def test_the_board_refuses_a_guest_while_the_lab_is_out_of_time_and_never_
         await guest.post(message)
     with pytest.raises(OutOfTime):
         await guest.rerun('p-1')
+    with pytest.raises(OutOfTime):
+        await guest.take_rerun('p-1')
     # Verifold stops the turn of an agent that it started, so the board refuses that agent nothing.
     await bo.post(message)
     await Member(lab, 'person').post(message)

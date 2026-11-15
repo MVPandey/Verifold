@@ -2,9 +2,11 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from pathlib import Path
+from typing import Protocol
 
 from verifold.protocol.agents import GUEST, Picture
-from verifold.protocol.events import AgentLeft, AlarmSet, RerunRequested, WatchSet
+from verifold.protocol.events import AgentLeft, AlarmSet, RerunRequested, RerunTaken, WatchSet
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import (
     Brief,
@@ -12,19 +14,33 @@ from verifold.protocol.join import (
     PostRequest,
     PostView,
     ProfileResult,
+    RerunTake,
     ThreadList,
     ThreadView,
     Update,
 )
 from verifold.protocol.posts import FileEvidence
-from verifold.server.errors import BlindCheck, CannotWake, EvidenceRejected, HasLeft, OutOfTime, UnknownAgent
+from verifold.server.errors import CannotWake, EvidenceRejected, HasLeft, NoCleanCopy, OutOfTime, UnknownAgent
 from verifold.server.lab import Lab
 from verifold.society.attention import news, update
+from verifold.society.errors import RejectedEvent
 from verifold.society.identity import post_view
 from verifold.society.views import brief, profile_result, side_lines, thread_summaries, thread_view, work_threads
 
 type Pin = Callable[[tuple[str, ...]], Awaitable[tuple[FileEvidence, ...]]]
 """Commits an agent's folder and returns each named file pinned to that commit."""
+
+
+class CleanCopies(Protocol):
+    """The clean copies in which one agent reruns the posts that it took, inside its own folder."""
+
+    async def make(self, taken: RerunTaken, author: AgentId) -> Path:
+        """Return the clean copy for a take: the files of the post's author at the commit that the post pins."""
+        ...
+
+    async def pin(self, taken: RerunTaken, paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+        """Commit the clean copy of a take, and return each named file of it pinned to that commit."""
+        ...
 
 
 class Member:
@@ -35,11 +51,19 @@ class Member:
     gets each post once, and a post that it got during a turn does not wake it later.
     """
 
-    def __init__(self, lab: Lab, agent_id: AgentId, pin: Pin | None = None, seen: int | None = None) -> None:
+    def __init__(
+        self,
+        lab: Lab,
+        agent_id: AgentId,
+        pin: Pin | None = None,
+        seen: int | None = None,
+        copies: CleanCopies | None = None,
+    ) -> None:
         """
         Seat an agent that has joined the lab. It has read everything up to now, or up to event `seen` when given.
 
         `pin` commits the agent's folder and pins the files that a post names. Without it, posts cannot name files.
+        `copies` makes the clean copies for the reruns that the agent takes. Without it, the agent takes none.
         """
         self._lab = lab
         self.agent_id = agent_id
@@ -47,6 +71,7 @@ class Member:
         self.void = False
         """Whether the agent got a new token, so that this seat's open `wait` must return nothing more."""
         self._pin = pin
+        self._copies = copies
         self._briefed = False
 
     @property
@@ -80,7 +105,7 @@ class Member:
         Leave the lab, for good. The agent's posts stay.
 
         Raises:
-            RejectedEvent: The agent is a blind checker.
+            RejectedEvent: The agent left already.
 
         """
         return await self._lab.leave(self.agent_id, self.agent_id, reason)
@@ -88,6 +113,9 @@ class Member:
     async def post(self, request: PostRequest) -> PostView:
         """
         Post as the agent, with its files pinned as evidence, and return the post as it stands.
+
+        A check with the method `rerun` of a post whose rerun the agent took gets its files from the clean copy of
+        that take, and the post records the take.
 
         Raises:
             EvidenceRejected: The post names files, and this member cannot pin them or they are not in the folder.
@@ -97,24 +125,29 @@ class Member:
         self._check_in_time()
         board = self._lab.board
         evidence: tuple[FileEvidence, ...] = ()
-        if request.files:
+        reruns = request.kind == 'check' and request.method == 'rerun' and request.reply_to
+        taken = board.take(self.agent_id, request.reply_to) if reruns and request.reply_to and request.files else None
+        if taken:
+            if self._copies is None:
+                raise EvidenceRejected('This lab cannot pin files for you.')
+            evidence = await self._copies.pin(taken, request.files)
+        elif request.files:
             if self._pin is None:
                 raise EvidenceRejected('This lab cannot pin files for you.')
             evidence = await self._pin(request.files)
         # A proposal keeps which revisions of the question its author had been shown. An agent that worked on an
         # earlier version can post just after a revision, and its answer is then to that earlier version.
         seen = sum(self._seen >= told.seq for revision in board.revisions if (told := board.post(revision.post)))
-        posted = await self._lab.post(request, self.agent_id, evidence, seen)
+        posted = await self._lab.post(request, self.agent_id, evidence, seen, take=taken.seq if taken else None)
         return post_view(self._lab.board, posted)
 
-    def news(self) -> News | None:
+    def news(self) -> News:
         """
         Return the posts that the agent has not seen yet, and count them as seen.
 
-        Every board tool adds it to its result, so posts reach an agent that works, not only one that waits. A blind
-        checker gets `None`.
+        Every board tool adds it to its result, so posts reach an agent that works, not only one that waits.
         """
-        return None if self._checks() else self._unseen()
+        return self._unseen()
 
     def brief(self, how: str) -> Brief:
         """
@@ -122,7 +155,6 @@ class Member:
 
         `how` says how the board works. Only the member's first brief carries it.
         """
-        self._check_not_blind()
         first, self._briefed = not self._briefed, True
         return brief(self._lab.board, self.agent_id, self._unseen(), how if first else '', now=self._lab.now())
 
@@ -145,18 +177,16 @@ class Member:
 
         Both have the most recently active first, and the agent's own side threads come before the others.
         """
-        self._check_not_blind()
         every = thread_summaries(self._lab.board, self.agent_id)
         return ThreadList(threads=work_threads(every), side_threads=side_lines(every, self.agent_id))
 
     def thread(self, thread_id: ThreadId) -> ThreadView:
         """Return a thread and its posts."""
-        self._check_not_blind()
         return thread_view(self._lab.board, self.agent_id, thread_id)
 
     async def rerun(self, post_id: PostId) -> RerunRequested:
         """
-        Ask for a blind rerun of a post that has files as evidence.
+        Ask for an independent rerun of a post that has files as evidence. The request starts nothing.
 
         Raises:
             OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
@@ -165,13 +195,37 @@ class Member:
         self._check_in_time()
         return await self._lab.request_rerun(self.agent_id, post_id)
 
-    def _checks(self) -> str | None:
-        joined = self._lab.board.agent(self.agent_id)
-        return joined.agent.checks if joined else None
+    async def take_rerun(self, post_id: PostId) -> RerunTake:
+        """
+        Take the rerun of a post that somebody asked for, and return the claim with the clean copy of its files.
 
-    def _check_not_blind(self) -> None:
-        if target := self._checks():
-            raise BlindCheck(f'You rerun {target} blind, so you cannot read the board.')
+        Verifold makes the copy inside the agent's own folder. A second call returns the same copy.
+
+        Raises:
+            RejectedEvent: The agent cannot take the rerun: the post does not exist or is its own, no rerun of it
+                is wanted, or the take needs a reviewer seat that it does not hold.
+            NoCleanCopy: This seat makes no clean copies, or Verifold could not make this one.
+            OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
+
+        """
+        self._check_in_time()
+        claim = self._lab.board.post(post_id)
+        if claim is None:
+            raise RejectedEvent(f'Post {post_id} does not exist.')
+        if self._copies is None:
+            raise NoCleanCopy('This lab cannot make a clean copy for you.')
+        taken = await self._lab.take_rerun(self.agent_id, post_id)
+        folder = await self._copies.make(taken, claim.post.author)
+        return RerunTake(
+            post=post_id,
+            thread=claim.post.thread,
+            author=claim.post.author,
+            text=claim.post.text,
+            body=claim.post.body,
+            files=tuple(file.path for file in claim.post.evidence),
+            commit=taken.commit,
+            folder=str(folder),
+        )
 
     def _is_guest(self) -> bool:
         joined = self._lab.board.agent(self.agent_id)
@@ -184,8 +238,8 @@ class Member:
         ended = board.out_of_time or (board.ends_at is not None and self._lab.now() >= board.ends_at)
         if ended and self._is_guest():
             raise OutOfTime(
-                "The lab's time ran out or the person stopped the lab, so the board takes no post and no rerun "
-                'request from you now. The person can give the lab more time.'
+                "The lab's time ran out or the person stopped the lab, so the board takes no post, no rerun "
+                'request, and no take of a rerun from you now. The person can give the lab more time.'
             )
 
     async def set_alarm(self, minutes: float, *, quiet: bool) -> AlarmSet:
@@ -196,7 +250,6 @@ class Member:
             CannotWake: The agent joined with an invitation, so Verifold cannot wake it.
 
         """
-        self._check_not_blind()
         if self._is_guest():
             # An alarm that never rings would tell the agent a time that means nothing.
             raise CannotWake(
@@ -228,7 +281,6 @@ class Member:
                 chooses a name that it cannot have.
 
         """
-        self._check_not_blind()
         await self._lab.set_profile(
             self.agent_id,
             role,
@@ -258,7 +310,6 @@ class Member:
                 the lab.
 
         """
-        self._check_not_blind()
         await self._lab.change_profile(
             agent_id, self.agent_id, reset_name=reset_name, about=about, given_role=given_role, flag=flag
         )
@@ -273,9 +324,9 @@ class Member:
         Return what happened since the agent last looked, once a post wakes it or `timeout` seconds pass.
 
         Posts that don't wake the agent count toward the update's summary, but they don't end the wait. The wait
-        also ends when an agent that this agent wrote to leaves the lab.
+        also ends when an agent that this agent wrote to leaves the lab, and when somebody asks for a rerun that
+        this agent can take.
         """
-        self._check_not_blind()
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while True:
@@ -285,7 +336,7 @@ class Member:
                 raise UnknownAgent('This agent got a new invitation, so the token of this call is void.')
             news = update(self._lab.board, self.agent_id, self._seen, self._lab.now())
             remaining = deadline - loop.time()
-            if news.posts or news.left or remaining <= 0:
+            if news.posts or news.left or news.reruns or remaining <= 0:
                 self._seen = news.seq
                 return news
             await self._lab.wait_for_change(news.seq, remaining)

@@ -2,9 +2,9 @@
 The lab's reviewer seats: how many it has, who holds them, and what takes one.
 
 Exploring and testing is every agent's work, and a few agents hold reviewer seats for the rest. A check of another
-agent's post and a request for a blind rerun of another agent's post take a reviewer seat. An objection takes no
-seat, and neither does a result that reproduces another's: that is building. The person is never limited, and
-neither is a blind checker, which is no agent of the lab. A lab with no reviewer seats limits nobody.
+agent's post, a request for an independent rerun of another agent's post, and the taking of such a rerun take a
+reviewer seat. An objection takes no seat, and neither does a result that reproduces another's: that is building.
+The person is never limited. A lab with no reviewer seats limits nobody.
 """
 
 from verifold.protocol.ids import PERSON, AgentId, PostId
@@ -35,7 +35,7 @@ def seats(board: Board) -> int:
     Return how many reviewer seats the lab has: the number that the person set, or else the number for its size.
 
     The size counts the agents that are in the lab now: each agent that Verifold started and each invited agent
-    that came, without the agents that left and the blind checkers.
+    that came, without the agents that left. A checker in a record from before agents took reruns is none.
     """
     chosen = board.settings.reviewers.seats
     if chosen is not None:
@@ -62,22 +62,17 @@ def seats_line(board: Board) -> str:
 
 
 def may_review(board: Board, agent_id: AgentId, post_id: PostId) -> bool:
-    """Return whether an agent can check a post, or ask for a blind rerun of it, as the module's note says."""
-    joined = board.agent(agent_id)
+    """Return whether an agent can check a post, ask for an independent rerun of it, or take one, as the module's note says."""
     target = board.post(post_id)
     own = target is not None and target.post.author == agent_id
-    return (
-        agent_id == PERSON
-        or own
-        or bool(joined and joined.agent.checks)
-        or seats(board) == 0
-        or board.reviewer(agent_id)
-    )
+    return agent_id == PERSON or own or seats(board) == 0 or board.reviewer(agent_id)
 
 
 def check_review(board: Board, agent_id: AgentId, post_id: PostId, what: str) -> None:
     """
-    Check that an agent can check a post or ask for a blind rerun of it. `what` names the move, such as "A check on".
+    Check that an agent can check a post, ask for an independent rerun of it, or take one.
+
+    `what` names the move, such as "A check on".
 
     Raises:
         RejectedEvent: The move takes a reviewer seat, and the agent holds none.
@@ -86,5 +81,5 @@ def check_review(board: Board, agent_id: AgentId, post_id: PostId, what: str) ->
     if not may_review(board, agent_id, post_id):
         raise RejectedEvent(
             f"{what} another agent's post takes a reviewer seat. {seats_line(board)} An objection needs no seat, "
-            'and an author can ask for a blind rerun of its own post.'
+            'and an author can ask for an independent rerun of its own post.'
         )

@@ -31,7 +31,7 @@ After the question, the person posted twice. At 16:05 the person answered an age
 
 Held up means that a blind rerun by a checker from another model family reproduced the result, and that no check failed. Conceded means that the author accepted an objection. The [guide](guide.md#the-board) explains the other words.
 
-The lab ran one day before a change to blind reruns. Two results here each got two checkers within 40 seconds. Verifold now starts one checker for such requests.
+The lab ran before two changes to reruns. Verifold then started a checker of its own for each request, from the other model family, and that checker got the files and the claim but not the thread. Two results here each got two checkers within 40 seconds. Today Verifold starts no agent of its own: an agent of the lab takes a rerun that is wanted and runs it in a clean copy of the files, as the [guide](guide.md#the-board) says.
 
 ## The answer
 

@@ -4,9 +4,9 @@ from pathlib import Path
 import pytest
 
 from verifold.runner.errors import NoAgentFolder, NoFileManager
-from verifold.runner.folders import agent_folder, checker_folder, open_folder, real_folder, tracked_lab_files
+from verifold.runner.folders import agent_folder, clean_copy, open_folder, real_folder, tracked_lab_files
 from verifold.runner.git import GitError, commit_of, git
-from verifold.runner.snapshots import snapshot, snapshot_ref
+from verifold.runner.snapshots import snapshot
 
 
 async def committed_project(path: Path) -> Path:
@@ -65,19 +65,50 @@ async def test_an_existing_agent_branch_is_reused(tmp_path: Path) -> None:
     assert exclude.read_text().count('/.verifold/') == 1
 
 
-async def test_a_checker_folder_holds_the_authors_files_at_the_cited_commit(tmp_path: Path) -> None:
-    project = await committed_project(tmp_path / 'project')
+@pytest.mark.parametrize('with_commits', [True, False])
+async def test_a_clean_copy_holds_the_authors_files_at_the_pinned_commit_and_nothing_else(
+    tmp_path: Path, *, with_commits: bool
+) -> None:
+    project = await committed_project(tmp_path / 'project') if with_commits else tmp_path / 'project'
+    project.mkdir(exist_ok=True)
     author = await agent_folder(project, 'ada')
     (author / 'result.txt').write_text('11.8')
-    cited = await snapshot(author, 'ada')
+    pinned = await snapshot(author, 'ada')
     (author / 'result.txt').write_text('changed later')
+    (author / 'later.txt').write_text('A file from after the post.')
     await snapshot(author, 'ada')
+    taker = await agent_folder(project, 'bo')
+    (taker / 'notes.txt').write_text("The taker's own work.")
 
-    folder = await checker_folder(project, 'checker-9', author, snapshot_ref('ada'), cited)
+    copy = await clean_copy(taker, 'p-4', author, pinned)
 
-    assert (folder / 'result.txt').read_text() == '11.8'
-    assert (folder / 'data.csv').exists()
-    assert await checker_folder(project, 'checker-9', author, snapshot_ref('ada'), cited) == folder
+    # The copy is inside the taker's own folder, and it holds what the author's snapshot held then.
+    assert copy == taker / '.verifold' / 'reruns' / 'p-4'
+    assert (copy / 'result.txt').read_text() == '11.8'
+    assert sorted(path.name for path in copy.iterdir() if path.name != '.git') == (
+        ['data.csv', 'result.txt'] if with_commits else ['result.txt']
+    )
+    # The taker's own snapshot leaves the copy out, so the copy is in no evidence of the taker's own work.
+    own = await snapshot(taker, 'bo')
+    assert '.verifold' not in await git('ls-tree', '-r', '--name-only', own, cwd=taker)
+    # A later call returns the same folder as the agent left it.
+    (copy / 'rerun.txt').write_text('11.8')
+    assert await clean_copy(taker, 'p-4', author, pinned) == copy
+    assert (copy / 'rerun.txt').exists()
+
+
+async def test_a_clean_copy_that_git_cannot_make_leaves_no_folder(tmp_path: Path) -> None:
+    project = await committed_project(tmp_path / 'project')
+    author = await agent_folder(project, 'ada')
+    taker = await agent_folder(project, 'bo')
+
+    # The project's own commit is in no snapshot of the author.
+    head = await commit_of(project, 'HEAD')
+    assert head is not None
+    with pytest.raises(GitError, match=r'No snapshot in .* holds the commit'):
+        await clean_copy(taker, 'p-4', author, head)
+
+    assert not (taker / '.verifold' / 'reruns' / 'p-4').exists()
 
 
 async def track(project: Path, name: str) -> None:

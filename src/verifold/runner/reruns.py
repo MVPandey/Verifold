@@ -1,185 +1,65 @@
-"""Answers rerun requests by starting blind checkers."""
+"""The clean copies in which an agent reruns the posts that it took, and the files that it pins from them."""
 
-import asyncio
-from collections.abc import Awaitable, Callable, Coroutine
-from contextlib import suppress
-from functools import partial
 from pathlib import Path
 
-from verifold.harnesses.catalog import HarnessEntry
-from verifold.protocol.agents import UNKNOWN_FAMILY, Agent, ModelSpec, same_family
-from verifold.protocol.events import RerunRequested, TurnSummary
-from verifold.protocol.posts import Check
-from verifold.protocol.usage import Usage
-from verifold.runner.agent_loop import AgentSetup
-from verifold.runner.errors import NoCrew
-from verifold.runner.folders import LAB_FOLDER, agent_folder, checker_folder
-from verifold.runner.messages import rerun_message
-from verifold.runner.session import SessionOptions
-from verifold.runner.snapshots import pin, snapshot_ref
-from verifold.server.join import Members
-from verifold.server.lab import Lab
-from verifold.server.member import Member
-from verifold.society.board import Board
-from verifold.society.errors import SocietyError
-from verifold.society.rules import waiting_reruns
+from verifold.protocol.events import RerunTaken
+from verifold.protocol.ids import AgentId, PostId
+from verifold.protocol.posts import FileEvidence
+from verifold.runner.folders import agent_folder, clean_copy, clean_copy_folder
+from verifold.runner.git import GitError, git
+from verifold.runner.snapshots import pin
+from verifold.server.errors import EvidenceRejected, NoCleanCopy
 
-type Crew = tuple[tuple[HarnessEntry, SessionOptions], ...]
-"""The lab's harnesses, each with the options that its agents use."""
 
-NO_HARNESS = 'none'
-"""The harness of a checker that could not start, because the lab had no harness for it."""
-
-type Supervise = Callable[[Member, AgentSetup, Callable[[Board], bool]], Awaitable[None]]
-"""Runs one agent's loop until it is done, the same way that the lab runs its other agents."""
+def rerun_ref(agent_id: AgentId, post_id: PostId) -> str:
+    """Return the ref that holds the commits of an agent's rerun of a post."""
+    return f'refs/verifold/reruns/{agent_id}/{post_id}'
 
 
 class Reruns:
     """
-    Starts a blind checker for each post that has an open rerun request.
+    Makes the clean copies for the reruns that one agent takes, inside that agent's own folder.
 
-    The checker comes from a harness of the lab whose model family differs from the author's, when the lab has one.
-    It gets the author's files at the cited commit and the claim, but not the thread, and it stops after its check.
-    A checker that ends its turn while its own rerun still runs wakes when the rerun ends.
+    Verifold starts nothing here. It copies the files of a post's author at the pinned commit, and how the agent
+    runs them is the agent's business.
     """
 
-    def __init__(
-        self, lab: Lab, members: Members, project: Path, crew: Callable[[], Crew], supervise: Supervise
-    ) -> None:
-        """
-        Prepare to answer the lab's rerun requests with checkers from `crew`, run by `supervise`.
-
-        `crew` gives the harnesses of the lab's agents now, so an agent that joins later counts.
-        """
-        self._lab = lab
-        self._members = members
+    def __init__(self, project: Path, agent_id: AgentId) -> None:
+        """Prepare the clean copies of one agent of the lab in `project`."""
         self._project = project
-        self._crew = crew
-        self._supervise = supervise
+        self._agent_id = agent_id
 
-    async def run(self) -> None:
+    async def make(self, taken: RerunTaken, author: AgentId) -> Path:
         """
-        Start a checker for each post with an open request, now and as requests arrive.
+        Return the clean copy for a take, and make it on the first call.
 
-        One post has one checker at a time. A request that arrives while a rerun runs gets that rerun's check. A
-        checker that fails answers none of its requests, and they start no other checker, here or after a restart.
-        A request that comes after the failure gets its own checker.
+        Raises:
+            NoCleanCopy: Git could not make the copy, such as when the author's folder is gone.
+
         """
-        async with asyncio.TaskGroup() as group:
-            tried: set[int] = set()
-            running: dict[str, asyncio.Task[None]] = {}
-            ended = asyncio.Event()
-            while True:
-                # A checker can end without an event on the board, so its end also wakes this loop.
-                ended.clear()
-                board = self._lab.board
-                running = {post: task for post, task in running.items() if not task.done()}
-                for request in board.reruns:
-                    # A request waits while its post has a checker. Each request gets at most one checker.
-                    if request.seq in tried or request.post in running:
-                        continue
-                    tried.add(request.seq)
-                    if request in waiting_reruns(board, request.post):
-                        task = group.create_task(self._contained(request))
-                        task.add_done_callback(lambda _: ended.set())
-                        running[request.post] = task
-                await _first(self._lab.wait_for_change(board.seq), ended.wait())
-
-    async def _contained(self, request: RerunRequested) -> None:
-        # One rerun that fails, for example because Git can't prepare the checker's folder, must not stop the lab or
-        # its other reruns. The post stays unchecked, and the board shows the failure as the checker's.
         try:
-            await self._check(request)
-        except Exception as error:
-            # While the lab stops, the check's cleanup can fail too. That error ends the check, and nothing more.
-            if (task := asyncio.current_task()) and task.cancelling():
-                raise asyncio.CancelledError from error
-            checker_id = _checker_id(request)
-            failed = TurnSummary(
-                agent=checker_id,
-                seconds=0,
-                usage=Usage(),
-                error=f'{type(error).__name__}: {error}',
-                # An error after the check, such as one from the cleanup, leaves a rerun that has its check.
-                rerun_failed=not _checked(self._lab.board, checker_id, request.post),
-            )
-            # A checker that never joined can't have a turn. Its failure then shows nowhere but in the missing check.
-            with suppress(SocietyError):
-                await self._lab.end_turn(failed)
+            folder = await agent_folder(self._project, self._agent_id)
+            source = await agent_folder(self._project, author)
+            return await clean_copy(folder, taken.post, source, taken.commit)
+        except (GitError, OSError) as error:
+            raise NoCleanCopy(f'Verifold could not make the clean copy of post {taken.post}: {error}') from error
 
-    async def _check(self, request: RerunRequested) -> None:
-        board = self._lab.board
-        target = board.post(request.post)
-        author = board.agent(target.post.author) if target else None
-        if target is None or author is None or not target.post.evidence:
-            return
-        crew = self._crew()
-        if not crew:
-            # Without a harness no checker can start. A checker that only holds the failure joins, so that the
-            # board shows why no check comes, and the agents that asked can ask again.
-            await self._lab.join(
-                Agent(
-                    id=_checker_id(request),
-                    name=f'Checker {request.seq}',
-                    harness=NO_HARNESS,
-                    model=ModelSpec(family=UNKNOWN_FAMILY),
-                    recruited_by=request.by,
-                    checks=request.post,
-                )
-            )
-            raise NoCrew('The lab has no agent that Verifold started, so no blind checker can start.')
-        harness, options = next(
-            ((entry, options) for entry, options in crew if not same_family(entry.family, author.agent.model.family)),
-            crew[0],
-        )
-        checker_id = _checker_id(request)
-        joined = board.agent(checker_id)
-        checker = joined.agent if joined else (await self._lab.join(_checker(request, harness, options))).agent
-        source = await agent_folder(self._project, author.agent.id)
-        commit = target.post.evidence[0].commit
-        folder = await checker_folder(self._project, checker_id, source, snapshot_ref(author.agent.id), commit)
-        member = Member(self._lab, checker_id, pin=partial(pin, folder, checker_id))
-        setup = AgentSetup(
-            agent=checker,
-            harness=harness,
-            lab=self._project,
-            folder=folder,
-            log=self._project / LAB_FOLDER / 'logs' / f'{checker_id}.log',
-            token=self._members.add(member),
-            options=options,
-            start=rerun_message(target.post, checker, folder),
-        )
-        await self._supervise(member, setup, partial(_checked, agent_id=checker_id, post_id=request.post))
+    async def pin(self, taken: RerunTaken, paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+        """
+        Commit the clean copy of a take, and return each named file of it pinned to that commit.
 
+        The agent's own repository gets the commit too, so the files of the check are read where the agent's other
+        files are.
 
-async def _first(*waits: Coroutine[None, None, object]) -> None:
-    # Return when the first of the waits ends, and cancel the others.
-    tasks = [asyncio.ensure_future(wait) for wait in waits]
-    try:
-        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        Raises:
+            EvidenceRejected: The clean copy is gone, a path is not a file in it, or Git ignores it.
 
-
-def _checker_id(request: RerunRequested) -> str:
-    return f'checker-{request.seq}'
-
-
-def _checker(request: RerunRequested, harness: HarnessEntry, options: SessionOptions) -> Agent:
-    return Agent(
-        id=_checker_id(request),
-        name=f'Checker {request.seq}',
-        harness=harness.name,
-        model=ModelSpec(family=harness.family, name=options.model),
-        recruited_by=request.by,
-        checks=request.post,
-    )
-
-
-def _checked(board: Board, agent_id: str, post_id: str) -> bool:
-    return any(
-        isinstance(entry.post, Check) and entry.post.author == agent_id and entry.post.reply_to == post_id
-        for entry in board.posts
-    )
+        """
+        folder = await agent_folder(self._project, self._agent_id)
+        copy = clean_copy_folder(folder, taken.post)
+        if not copy.is_dir():
+            raise EvidenceRejected(f'The clean copy {copy} is gone. `take_rerun` makes it again.')
+        ref = rerun_ref(self._agent_id, taken.post)
+        evidence = await pin(copy, self._agent_id, paths, ref)
+        await git('fetch', '--quiet', str(copy), f'+{ref}:{ref}', cwd=folder)
+        return evidence

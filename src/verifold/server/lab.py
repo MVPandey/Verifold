@@ -20,6 +20,7 @@ from verifold.protocol.events import (
     ProfileSet,
     QuestionRevised,
     RerunRequested,
+    RerunTaken,
     ReviewerSet,
     SettingsSet,
     ThreadOpened,
@@ -52,8 +53,8 @@ from verifold.society.fold import apply, fold
 from verifold.society.labels import awaits_model, is_numbered, label, plain
 from verifold.society.lines import question_thread
 from verifold.society.names import check_name
+from verifold.society.reruns import wanted_reruns
 from verifold.society.reviewers import check_review
-from verifold.society.rules import waiting_reruns
 from verifold.store.record_file import RecordFile
 
 type Clock = Callable[[], datetime]
@@ -127,7 +128,14 @@ class Lab:
 
         With `on_call`, the person put its seat on call. With `coordinator`, the person made it the lab's
         coordinator. The record takes both in the same step as the agent.
+
+        Raises:
+            RejectedEvent: The agent is a checker for one post. Only a record from before agents took reruns holds
+                such agents.
+
         """
+        if agent.checks:
+            raise RejectedEvent('No agent joins a lab as the checker of one post. An agent of the lab takes a rerun.')
         builds: list[Build] = [lambda _, seq, at: AgentJoined(seq=seq, at=at, agent=agent)]
         if on_call:
             builds.append(lambda _, seq, at: OnCallSet(seq=seq, at=at, agent=agent.id, on_call=True))
@@ -206,13 +214,15 @@ class Lab:
         board = await self._commit(lambda _, seq, at: AgentLeft(seq=seq, at=at, agent=agent_id, by=by, reason=reason))
         return board.left[-1]
 
-    async def post(
+    async def post(  # noqa: PLR0913
         self,
         request: PostRequest,
         author: AgentId,
         evidence: tuple[FileEvidence, ...] = (),
         question_seen: int | None = None,
         mark: Mark | None = None,
+        *,
+        take: int | None = None,
     ) -> Posted:
         """
         Add a post with the next free post ID. With `new_thread`, open its thread in the same step.
@@ -221,6 +231,8 @@ class Lab:
         `question_seen` is how many revisions of the question the author had been shown, which a proposal keeps.
         `mark` marks an ask that carries a request of the author's harness, or the answer with which Verifold ends
         such a request. Only the runner gives it. A post from an agent's tool or from the person has none.
+        `take` is the event with which the author took the rerun that a check answers, when `evidence` comes from
+        the clean copy of that take. Only the author's seat gives it.
 
         Raises:
             RejectedEvent: The post breaks a rule of the record.
@@ -230,7 +242,7 @@ class Lab:
         # A thread that opens with an ask of the runner is the agent's thread for that kind of request.
         carries = mark.type if mark and mark != 'ends_request' else None
         opens = (_open_thread(request.new_thread, author, request.between, carries),) if request.new_thread else ()
-        board = await self._commit(*opens, _add_post(request, author, evidence, question_seen, mark))
+        board = await self._commit(*opens, _add_post(request, author, evidence, question_seen, mark, take=take))
         return board.posts[-1]
 
     async def open_question_thread(self) -> Posted:
@@ -408,7 +420,7 @@ class Lab:
 
     async def request_rerun(self, by: AgentId, post_id: PostId) -> RerunRequested:
         """
-        Record a request for a blind rerun of a post. The runner answers it by starting a checker.
+        Record a request for an independent rerun of a post. The request starts nothing: an agent of the lab takes it.
 
         Raises:
             RejectedEvent: The post cannot get a rerun, or the same member has an open request for it already.
@@ -417,15 +429,40 @@ class Lab:
 
         def build(board: Board, seq: int, at: datetime) -> RerunRequested:
             # A record from before this rule can hold such a pair, so the rule is here and not in the record's rules.
-            if any(entry.by == by for entry in waiting_reruns(board, post_id)):
-                raise RejectedEvent(f'You asked for a blind rerun of {post_id} already. Its check will come to you.')
+            if any(entry.by == by for entry in wanted_reruns(board, post_id)):
+                raise RejectedEvent(
+                    f'You asked for an independent rerun of {post_id} already. Its check comes to you as a post.'
+                )
             # An older record holds requests from before the reviewer seats, so this rule is here too.
             if board.post(post_id):
-                check_review(board, by, post_id, 'A request for a blind rerun of')
+                check_review(board, by, post_id, 'A request for an independent rerun of')
             return RerunRequested(seq=seq, at=at, by=by, post=post_id)
 
         board = await self._commit(build)
         return board.reruns[-1]
+
+    async def take_rerun(self, agent_id: AgentId, post_id: PostId) -> RerunTaken:
+        """
+        Record that an agent takes the rerun of a post, and return the take. A second call returns the first take.
+
+        Raises:
+            RejectedEvent: No rerun of the post is wanted, the post is the agent's own, or the take needs a
+                reviewer seat that the agent does not hold.
+
+        """
+        if taken := self._board.take(agent_id, post_id):
+            return taken
+
+        def build(board: Board, seq: int, at: datetime) -> RerunTaken:
+            target = board.post(post_id)
+            if target is None or not target.post.evidence:
+                raise RejectedEvent(f'No rerun of post {post_id} is wanted now. `rerun` asks for one.')
+            # The seats are the same rule that a check and a request follow, so it stands beside theirs.
+            check_review(board, agent_id, post_id, 'The rerun of')
+            return RerunTaken(seq=seq, at=at, agent=agent_id, post=post_id, commit=target.post.evidence[0].commit)
+
+        board = await self._commit(build)
+        return board.takes[-1]
 
     async def start_turn(  # noqa: PLR0913
         self,
@@ -538,16 +575,19 @@ def _open_thread(
     return build
 
 
-def _add_post(
+def _add_post(  # noqa: PLR0913
     request: PostRequest,
     author: AgentId,
     evidence: tuple[FileEvidence, ...],
     question_seen: int | None = None,
     mark: Mark | None = None,
+    *,
+    take: int | None = None,
 ) -> Build:
     def build(board: Board, seq: int, at: datetime) -> Posted:
         thread_id = request.thread or board.threads[-1].thread.id
-        post = request.to_post(f'p-{len(board.posts) + 1}', thread_id, author, evidence, question_seen)
+        # No field of a request holds a take either, so only the seat that pinned the files can give one.
+        post = request.to_post(f'p-{len(board.posts) + 1}', thread_id, author, evidence, question_seen, take=take)
         # No field of a request holds a mark, so no agent and no person's post can carry one.
         if isinstance(post, Answer) and mark == 'ends_request':
             post = post.model_copy(update={'ends_request': True})

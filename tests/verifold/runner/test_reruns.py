@@ -1,199 +1,75 @@
-import asyncio
 from pathlib import Path
 
 import pytest
-from builders import until
+from builders import START
 
-from verifold.protocol.agents import Agent, ModelSpec
-from verifold.protocol.events import RerunRequested, TurnSummary
-from verifold.protocol.join import PostRequest
-from verifold.protocol.posts import FileEvidence
-from verifold.protocol.usage import Usage
-from verifold.runner.reruns import Reruns
-from verifold.server.join import Members
-from verifold.server.lab import Lab
-from verifold.server.member import Member
-from verifold.society.board import Board
-
-EVIDENCE = (FileEvidence(path='bench.json', commit='c' * 40),)
+from verifold.protocol.events import RerunTaken
+from verifold.runner.folders import agent_folder
+from verifold.runner.git import commit_of, git
+from verifold.runner.reruns import Reruns, rerun_ref
+from verifold.runner.snapshots import pin
+from verifold.server.errors import EvidenceRejected, NoCleanCopy
 
 
-async def unused(*_: object) -> None:
-    """Stand in for the supervisor, which the tests replace together with the check itself."""
+async def a_claim(project: Path) -> RerunTaken:
+    """Give ada a result file that a post pins, and return bo's take of the rerun of that post."""
+    project.mkdir()
+    author = await agent_folder(project, 'ada')
+    (author / 'result.txt').write_text('11.8')
+    (author / 'notes.txt').write_text('How I got there.')
+    pinned = await pin(author, 'ada', ('result.txt',))
+    (author / 'result.txt').write_text('changed later')
+    return RerunTaken(seq=9, at=START, agent='bo', post='p-4', commit=pinned[0].commit)
 
 
-def a_rerun_loop(lab: Lab, tmp_path: Path) -> Reruns:
-    return Reruns(lab, Members(), tmp_path, tuple, unused)
+async def test_a_clean_copy_is_in_the_takers_own_folder_and_a_check_pins_its_files_from_it(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    taken = await a_claim(project)
+    reruns = Reruns(project, 'bo')
 
+    copy = await reruns.make(taken, 'ada')
 
-async def a_failed_checker(lab: Lab, checker: str, post: str) -> None:
-    """Record a blind checker that joined for `post` and failed, as one whose harness crashed."""
-    await lab.join(Agent(id=checker, name=checker, harness='fake', model=ModelSpec(family='openai'), checks=post))
-    await lab.end_turn(TurnSummary(agent=checker, seconds=0, usage=Usage(), error='It crashed.', rerun_failed=True))
+    taker = await agent_folder(project, 'bo')
+    assert copy.is_relative_to(taker)
+    assert (copy / 'result.txt').read_text() == '11.8'
+    assert await reruns.make(taken, 'ada') == copy
 
+    # The agent reruns in the copy, and the evidence of its check is the copy's own file at the copy's commit.
+    (copy / 'rerun.txt').write_text('11.8')
+    (taker / 'rerun.txt').write_text('A file of the same name in the folder of the agent itself.')
+    evidence = await reruns.pin(taken, ('rerun.txt',))
 
-async def test_requests_for_one_post_share_one_checker_and_the_next_request_follows_a_checker_without_a_check(
-    lab: Lab, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    started: list[str] = []
-    release = asyncio.Event()
-
-    async def check(_: Reruns, request: RerunRequested) -> None:
-        # The first checker runs until the test lets it go, and then ends without a check and without an event.
-        started.append(request.by)
-        if request.by == 'bo':
-            await release.wait()
-
-    monkeypatch.setattr(Reruns, '_check', check)
-    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', EVIDENCE)
-    running = asyncio.create_task(a_rerun_loop(lab, tmp_path).run())
-    try:
-        await lab.request_rerun('bo', 'p-2')
-        await lab.request_rerun('person', 'p-2')
-        await until(lambda: started == ['bo'])
-        await asyncio.sleep(0.1)
-        assert started == ['bo']
-
-        release.set()
-        await until(lambda: started == ['bo', 'person'], timeout=5)
-    finally:
-        running.cancel()
-
-
-async def test_one_blind_check_answers_every_request_before_it(
-    lab: Lab, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    started: list[str] = []
-    closing = asyncio.Event()
-
-    async def check(_: Reruns, request: RerunRequested) -> None:
-        # The checker posts its check, and its session then takes a while to close.
-        started.append(request.by)
-        if request.by != 'bo':
-            return
-        await lab.join(Agent(id='dee', name='Dee', harness='fake', model=ModelSpec(family='openai'), checks='p-2'))
-        answer = PostRequest(kind='check', text='So.', thread='t-1', reply_to='p-2', outcome='holds', method='rerun')
-        await Member(lab, 'dee').post(answer)
-        await closing.wait()
-
-    def checked(board: Board) -> bool:
-        return any(entry.post.kind == 'check' for entry in board.posts)
-
-    monkeypatch.setattr(Reruns, '_check', check)
-    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', EVIDENCE)
-    running = asyncio.create_task(a_rerun_loop(lab, tmp_path).run())
-    try:
-        await lab.request_rerun('bo', 'p-2')
-        await lab.request_rerun('person', 'p-2')
-        await until(lambda: checked(lab.board))
-        # A request after the check is a new rerun. It starts when the first checker's session has closed.
-        await lab.request_rerun('ada', 'p-2')
-        await asyncio.sleep(0.1)
-        assert started == ['bo']
-
-        closing.set()
-        await until(lambda: started == ['bo', 'ada'], timeout=5)
-    finally:
-        running.cancel()
-
-
-async def test_a_checker_that_fails_starts_no_other_checker_until_a_member_asks_again(
-    lab: Lab, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    started: list[str] = []
-
-    async def check(_: Reruns, request: RerunRequested) -> None:
-        started.append(request.by)
-        await a_failed_checker(lab, f'checker-{request.seq}', request.post)
-
-    monkeypatch.setattr(Reruns, '_check', check)
-    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', EVIDENCE)
-    await lab.request_rerun('bo', 'p-2')
-    await lab.request_rerun('person', 'p-2')
-    running = asyncio.create_task(a_rerun_loop(lab, tmp_path).run())
-    try:
-        await until(lambda: started == ['bo'])
-        await asyncio.sleep(0.1)
-        # The person's request joined the rerun that failed, so it starts no checker of its own.
-        assert started == ['bo']
-
-        await lab.request_rerun('person', 'p-2')
-        await until(lambda: started == ['bo', 'person'], timeout=5)
-    finally:
-        running.cancel()
-
-
-async def test_a_new_loop_starts_checkers_only_for_the_requests_that_still_wait(
-    lab: Lab, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    started: list[str] = []
-
-    async def check(_: Reruns, request: RerunRequested) -> None:
-        started.append(request.post)
-
-    monkeypatch.setattr(Reruns, '_check', check)
-    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', EVIDENCE)
-    await lab.post(PostRequest(kind='result', text='9.1x.', thread='t-1'), 'ada', EVIDENCE)
-    await lab.post(PostRequest(kind='result', text='7.4x.', thread='t-1'), 'ada', EVIDENCE)
-    # Before the restart, the rerun of p-2 failed, the time limit cancelled the turn of the checker of p-3, and the
-    # request for p-4 had no checker yet.
-    await lab.request_rerun('bo', 'p-2')
-    await a_failed_checker(lab, 'dee', 'p-2')
-    await lab.request_rerun('bo', 'p-3')
-    await lab.join(Agent(id='eve', name='Eve', harness='fake', model=ModelSpec(family='openai'), checks='p-3'))
-    await lab.end_turn(TurnSummary(agent='eve', seconds=1, usage=Usage(), error='The lab ran out of time.'))
-    await lab.request_rerun('person', 'p-4')
-    running = asyncio.create_task(a_rerun_loop(lab, tmp_path).run())
-    try:
-        await until(lambda: len(started) == 2)
-        await asyncio.sleep(0.1)
-    finally:
-        running.cancel()
-
-    assert started == ['p-3', 'p-4']
-
-
-async def test_an_error_after_the_check_leaves_a_rerun_that_did_not_fail(
-    lab: Lab, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    async def check(_: Reruns, request: RerunRequested) -> None:
-        # The checker posts its check, and then its cleanup fails.
-        checker = f'checker-{request.seq}'
-        await lab.join(Agent(id=checker, name=checker, harness='fake', model=ModelSpec(family='openai'), checks='p-2'))
-        answer = PostRequest(kind='check', text='So.', thread='t-1', reply_to='p-2', outcome='holds', method='rerun')
-        await Member(lab, checker).post(answer)
-        raise RuntimeError('The folder is gone.')
-
-    monkeypatch.setattr(Reruns, '_check', check)
-    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', EVIDENCE)
-    await lab.request_rerun('bo', 'p-2')
-    running = asyncio.create_task(a_rerun_loop(lab, tmp_path).run())
-    try:
-        await until(lambda: bool(lab.board.turns))
-    finally:
-        running.cancel()
-
-    assert [(turn.error, turn.rerun_failed) for turn in lab.board.turns] == [
-        ('RuntimeError: The folder is gone.', False)
+    assert [file.path for file in evidence] == ['rerun.txt']
+    commit = evidence[0].commit
+    assert await commit_of(copy, rerun_ref('bo', 'p-4')) == commit
+    # The agent's own repository holds the commit, where the app reads the files of the agent's posts.
+    assert await git('show', f'{commit}:rerun.txt', cwd=taker) == '11.8'
+    assert await git('show', f'{commit}:result.txt', cwd=taker) == '11.8'
+    # The commit holds the clean copy and nothing of the agent's own folder.
+    assert sorted((await git('ls-tree', '-r', '--name-only', commit, cwd=taker)).split()) == [
+        'notes.txt',
+        'rerun.txt',
+        'result.txt',
     ]
 
 
-async def test_a_rerun_request_in_a_lab_without_a_harness_fails_in_the_open_and_the_agent_can_ask_again(
-    lab: Lab, tmp_path: Path
-) -> None:
-    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', EVIDENCE)
-    running = asyncio.create_task(a_rerun_loop(lab, tmp_path).run())
-    try:
-        await lab.request_rerun('bo', 'p-2')
-        await until(lambda: bool(lab.board.turns))
-        failed = lab.board.turns[0]
-        # The failure freed the request, so the same agent's next request is no repeat.
-        await lab.request_rerun('bo', 'p-2')
-        await until(lambda: len(lab.board.turns) == 2)
-    finally:
-        running.cancel()
+async def test_a_check_names_files_of_the_clean_copy_only(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    taken = await a_claim(project)
+    reruns = Reruns(project, 'bo')
 
-    checker = lab.board.agent(failed.agent)
-    assert checker is not None
-    assert (checker.agent.harness, checker.agent.checks, failed.rerun_failed) == ('none', 'p-2', True)
-    assert failed.error == 'NoCrew: The lab has no agent that Verifold started, so no blind checker can start.'
+    with pytest.raises(EvidenceRejected, match=r'The clean copy .* is gone'):
+        await reruns.pin(taken, ('rerun.txt',))
+
+    await reruns.make(taken, 'ada')
+    (await agent_folder(project, 'bo') / 'mine.txt').write_text('Not in the copy.')
+    with pytest.raises(EvidenceRejected, match=r'These files are not in the clean copy: mine\.txt'):
+        await reruns.pin(taken, ('mine.txt',))
+
+
+async def test_a_clean_copy_that_cannot_be_made_is_an_error_that_the_agent_reads(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    taken = await a_claim(project)
+
+    with pytest.raises(NoCleanCopy, match='Verifold could not make the clean copy of post p-4'):
+        await Reruns(project, 'bo').make(taken.model_copy(update={'commit': 'f' * 40}), 'ada')

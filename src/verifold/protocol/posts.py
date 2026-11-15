@@ -256,6 +256,12 @@ class Check(PostBase):
     reply_to: PostId
     outcome: Outcome
     method: CheckMethod
+    take: int | None = Field(default=None, ge=1)
+    """
+    The event with which the author took the rerun of the post, when the check has the method `rerun` and its files
+    come from the clean copy that Verifold made for that take. Verifold sets it, and no agent can. `None` for any
+    other check.
+    """
 
 
 class RuledOut(PostBase):

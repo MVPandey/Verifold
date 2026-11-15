@@ -8,13 +8,12 @@ once.
 
 After Verifold restarts, the loop goes on from the agent's turns in the record. An agent that ended its last turn by
 its own choice waits again, with the same doorbell and the same alarm. So does every agent of a closed lab. Any
-other agent that worked before gets a message at once, because its turn did not end or the record cannot tell. A
-blind checker has no board and one job, so it starts its rerun again.
+other agent that worked before gets a message at once, because its turn did not end or the record cannot tell.
 """
 
 import asyncio
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
@@ -37,8 +36,8 @@ from verifold.runner.messages import (
     DOORBELL,
     HARNESS_FAILED,
     IN_TURN,
-    JOBS_ENDED,
     OUT_OF_TIME,
+    RERUN_WANTED,
     RESTARTED,
     STARTED_AGAIN,
     alarm_message,
@@ -73,7 +72,7 @@ from verifold.society.attention import update
 from verifold.society.board import Board
 from verifold.society.grants import agent_waits
 from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
-from verifold.society.turns import Before, before
+from verifold.society.turns import before
 
 
 class LoopSettings(Record):
@@ -90,12 +89,8 @@ class LoopSettings(Record):
     """Seconds without a new event on the board before a doorbell rings, so that one doorbell covers a burst."""
     max_quiet: float = Field(default=45, ge=0)
     """The most seconds that a doorbell waits for the board to go quiet."""
-    job_poll: float = Field(default=5, gt=0)
-    """Seconds between two looks at the processes that an agent with one job left running."""
     leave_grace: float = Field(default=5, ge=0)
     """Seconds that an agent that left the lab gets to end its turn by itself, before Verifold cancels the turn."""
-    job_wait: float = Field(default=3_600, gt=0)
-    """The most seconds that the loop of an agent with one job waits for those processes before it ends."""
 
 
 class AgentSetup(Record):
@@ -122,8 +117,6 @@ class Shared:
     """Receives what each agent is doing now, for the person's view."""
     refusals: Refusals | None = None
     """Keeps the asks of the requests that Verifold refuses at once, when the person chose that no agent waits."""
-    has_jobs: Callable[[str], Awaitable[bool]] | None = None
-    """Says whether an agent has processes of its own that still run. Without it, no loop waits for them."""
 
 
 class AgentLoop:
@@ -142,17 +135,13 @@ class AgentLoop:
         member: Member,
         setup: AgentSetup,
         settings: LoopSettings,
-        done: Callable[[Board], bool] | None = None,
         shared: Shared | None = None,
     ) -> None:
         """
         Prepare to supervise an agent that joined the lab.
 
         `member` is the same seat that serves the agent's tool calls, so a doorbell never repeats what the agent read
-        with `wait`. `done` says whether the agent's one job is done, as for a checker that posted its check. The
-        loop of an agent with one job ends when the job is done. It also ends when the agent ends a turn without the
-        job and leaves no process running, or one that runs past `job_wait`, because nothing else wakes that agent. `shared` holds what the lab's loops
-        share.
+        with `wait`. `shared` holds what the lab's loops share.
         """
         shared = shared or Shared()
         self._refusals = shared.refusals
@@ -161,16 +150,13 @@ class AgentLoop:
         self._turn_over.set()
         self._asking = 0
         """How many requests of the harness wait for the person now."""
-        self._has_jobs = shared.has_jobs
-        self._done = done
         self._activity = shared.activity
         self._member = member
         self._lab = member.lab
         self._setup = setup
         self._settings = settings
         board = self._lab.board
-        # An agent with one job, such as a blind checker, has no board to find its place on. It starts the job again.
-        self._before = Before(seen=member.seen) if done else before(board, setup.agent.id)
+        self._before = before(board, setup.agent.id)
         """Where the agent was, from its turns in the record. A new agent has none."""
         was, rested = self._before, self._before.rested
         self._rests = was.worked and not was.stopped and (rested is not None or lab_state(board) == 'closed')
@@ -249,12 +235,7 @@ class AgentLoop:
                         worked = True
                         stopped = await self._send(session, message)
                         failures, back = 0, None
-                        if self._done and self._done(self._lab.board):
-                            return
-                        following = await self._following(stopped=stopped, resumed=resumed)
-                        if following is None:
-                            return
-                        message, resumed = following
+                        message, resumed = await self._following(stopped=stopped, resumed=resumed)
             # Any failure of one harness restarts that harness. It must not stop the lab's other agents.
             except Exception as error:
                 # While the lab stops, the harness's cleanup can fail too. That error ends the agent and restarts nothing.
@@ -295,22 +276,13 @@ class AgentLoop:
         await self._lab.end_turn(failed)
         return in_turn, stops or self._left()
 
-    async def _following(self, *, stopped: bool, resumed: bool) -> tuple[str, bool] | None:
+    async def _following(self, *, stopped: bool, resumed: bool) -> tuple[str, bool]:
         # Wait for what starts the agent's next turn. Return its message, and whether that turn resumes one that
-        # was cut short. Return `None` when the loop of an agent with one job ends. `stopped` says that the turn
-        # stopped because the lab ran out of time.
+        # was cut short. `stopped` says that the turn stopped because the lab ran out of time.
         if stopped:
             await self._while_out_of_time()
             current = self._lab.board
             return more_time_message(current.ends_at, current.settings.jobs.at_time_limit), resumed
-        if self._done:
-            # No post wakes a blind checker. One that waits for its own rerun wakes when the rerun ends. One that
-            # left nothing running would wait for ever, so its loop ends.
-            if not await self._jobs_ended():
-                return None
-            await self._while_out_of_time()
-            stop = self._jobs_stopped(self._lab.board)
-            return (more_time_message(self._lab.board.ends_at, AtTimeLimit.STOP) if stop else JOBS_ENDED), resumed
         if self._cut_short and not resumed:
             # The agent did not choose to stop, so no post may be on its way. It goes on once. A second cut in a
             # row waits for a post, so a turn that always fails does not repeat.
@@ -429,24 +401,6 @@ class AgentLoop:
             )
         )
 
-    async def _jobs_ended(self) -> bool:
-        # Wait until the processes that the agent left running end. Return False when it left none, and when they
-        # still run after `job_wait` seconds, so a process that never ends does not hold the agent's place.
-        if self._has_jobs is None:
-            return False
-        agent_id = self._setup.agent.id
-        waited = False
-        try:
-            async with asyncio.timeout(self._settings.job_wait):
-                while await self._has_jobs(agent_id):
-                    if not waited:
-                        await self._report('waiting', 'Waits for a process that it left running.', 'process')
-                        waited = True
-                    await asyncio.sleep(self._settings.job_poll)
-        except TimeoutError:
-            return False
-        return waited
-
     def _jobs_stopped(self, board: Board) -> bool:
         # Whether the time limit stopped the agent's processes after its last turn. The record shows a stop also
         # when the lab got more time before this look.
@@ -480,7 +434,8 @@ class AgentLoop:
             news = update(board, agent_id, max(self._notified, self._member.seen))
             # An agent that this agent wrote to and that left wakes it as a post does: no answer comes from it.
             # Like the alarm, that does not wake an agent in a closed lab, where agents leave because it is done.
-            posts = bool(news.posts or (news.left and lab_state(board) != 'closed'))
+            # A rerun that somebody asked for, and that this agent can take, wakes it as a call does.
+            posts = bool(news.posts or news.reruns or (news.left and lab_state(board) != 'closed'))
             # The agent's own alarm. It does not ring in a lab that is out of time or closed.
             alarm = pending_alarm(board, agent_id)
             left = None
@@ -508,7 +463,7 @@ class AgentLoop:
                     settled = True
                     continue
                 self._notified = board.seq
-                return self._ring(DOORBELL if news.posts else DEPARTURE, due, late)
+                return self._ring(DOORBELL if news.posts else RERUN_WANTED if news.reruns else DEPARTURE, due, late)
             if due:
                 return self._ring('', due, late)
             await self._lab.wait_for_change(board.seq, left)

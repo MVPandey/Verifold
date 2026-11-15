@@ -200,12 +200,12 @@ async def test_a_check_and_a_rerun_request_take_a_reviewer_seat_and_an_objection
     check = PostRequest(kind='check', text='Holds.', reply_to='p-1', thread='t-1', outcome='holds', method='code_read')
     fact = (
         "another agent's post takes a reviewer seat. The lab has 1: held by nobody; 1 is free. An objection needs "
-        'no seat, and an author can ask for a blind rerun of its own post.'
+        'no seat, and an author can ask for an independent rerun of its own post.'
     )
 
     with pytest.raises(RejectedEvent, match=f'A check on {fact}'):
         await lab.post(check, 'bo')
-    with pytest.raises(RejectedEvent, match=f'A request for a blind rerun of {fact}'):
+    with pytest.raises(RejectedEvent, match=f'A request for an independent rerun of {fact}'):
         await lab.request_rerun('bo', 'p-1')
     posts = len(lab.board.posts)
     # An objection is open to every agent, and so is a result that builds on the post. Neither opens the gate.

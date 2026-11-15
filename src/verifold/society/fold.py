@@ -19,6 +19,7 @@ from verifold.protocol.events import (
     ProfileSet,
     QuestionRevised,
     RerunRequested,
+    RerunTaken,
     ReviewerSet,
     SettingsSet,
     ThreadOpened,
@@ -43,6 +44,7 @@ from verifold.society.rules import (
     check_rerun,
     check_reviewer,
     check_revision,
+    check_take,
     check_thread,
     check_time,
     check_time_out,
@@ -110,6 +112,9 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
         case RerunRequested():
             check_rerun(board, event)
             return replace(board, seq=event.seq, reruns=(*board.reruns, event))
+        case RerunTaken():
+            check_take(board, event)
+            return replace(board, seq=event.seq, takes=(*board.takes, event))
         case TimeSet():
             check_time(event)
             return replace(board, seq=event.seq, times=(*board.times, event))

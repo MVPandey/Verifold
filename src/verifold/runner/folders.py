@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from verifold.protocol.ids import AgentId, CommitId
+from verifold.protocol.ids import AgentId, CommitId, PostId
 from verifold.runner.errors import NoAgentFolder, NoFileManager
 from verifold.runner.git import GitError, commit_of, git
 
@@ -125,18 +125,37 @@ async def _exclude_lab_folder(project: Path) -> None:
         exclude.write_text('\n'.join([*lines, rule]) + '\n')
 
 
-async def checker_folder(project: Path, checker_id: AgentId, source: Path, ref: str, commit: CommitId) -> Path:
-    """
-    Return a blind checker's folder: a new repository with the author's files at the commit that the evidence cites.
+def clean_copy_folder(folder: Path, post_id: PostId) -> Path:
+    """Return where the clean copy for a rerun of a post is, inside the folder of the agent that took the rerun."""
+    return folder / LAB_FOLDER / 'reruns' / post_id
 
-    The folder holds only what the author's snapshot holds, fetched from the author's folder. A later call returns the
-    same folder.
+
+async def clean_copy(folder: Path, post_id: PostId, source: Path, commit: CommitId) -> Path:
     """
-    folder = agents_folder(project) / checker_id
-    if folder.exists():
-        return folder
-    folder.mkdir(parents=True)
-    await git('init', '--quiet', cwd=folder)
-    await git('fetch', '--quiet', str(source), ref, cwd=folder)
-    await git('checkout', '--quiet', '--detach', commit, cwd=folder)
-    return folder
+    Return the clean copy for an agent's rerun of a post, and make it on the first call.
+
+    The copy is a new repository inside `folder`, the folder of the agent that took the rerun. It holds what the
+    snapshot of the post's author holds at the commit that the post pins, fetched from the author's folder
+    `source`, and nothing else. The agent's own snapshots leave the copy out. A later call returns the same folder.
+
+    Raises:
+        GitError: No snapshot in the author's folder holds the commit, or Git failed.
+
+    """
+    copy = clean_copy_folder(folder, post_id)
+    if copy.exists():
+        return copy
+    # The agent's own repository ignores the lab folder inside it, as the project does.
+    await _exclude_lab_folder(folder)
+    refs = (await git('for-each-ref', '--contains', commit, '--format=%(refname)', 'refs/verifold', cwd=source)).split()
+    if not refs:
+        raise GitError(f'No snapshot in {source} holds the commit {commit}.')
+    # The copy gets its place when it is whole, so a failure leaves nothing that a later call takes for a copy.
+    partial = copy.with_name(f'{post_id}.partial')
+    shutil.rmtree(partial, ignore_errors=True)
+    partial.mkdir(parents=True)
+    await git('init', '--quiet', cwd=partial)
+    await git('fetch', '--quiet', str(source), refs[0], cwd=partial)
+    await git('checkout', '--quiet', '--detach', commit, cwd=partial)
+    partial.rename(copy)
+    return copy

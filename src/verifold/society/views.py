@@ -53,8 +53,8 @@ from verifold.society.lifecycle import (
     pending_alarm,
 )
 from verifold.society.lines import lines_of, question_thread
+from verifold.society.reruns import rerun_checks, reruns_wanted
 from verifold.society.reviewers import free_seats, holders, seats
-from verifold.society.rules import blind_checks
 from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing, waits_for_person
 from verifold.society.turns import before
 
@@ -388,6 +388,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         not_checked=listed(not_checked[-MAX_NEWS:]),
         open_asks=listed(open_asks[-MAX_NEWS:]),
         open_calls=listed(open_calls[-MAX_NEWS:]),
+        reruns_wanted=reruns_wanted(board)[-MAX_NEWS:],
         news=news,
     )
 
@@ -558,16 +559,17 @@ def answer_view(board: Board) -> AnswerView | None:
 
 
 def _can_rerun(entry: Posted) -> bool:
-    # A blind rerun needs files to run.
+    # A rerun needs files to run.
     return isinstance(entry.post, Result) and bool(entry.post.evidence)
 
 
 def _not_rerun(board: Board, results: tuple[Posted, ...]) -> tuple[Posted, ...]:
-    # The results that no blind checker has checked, whatever the check said, and that their author still holds.
+    # The results that have no check of an independent rerun, whatever a check said, and that their author still
+    # holds.
     return tuple(
         entry
         for entry in results
-        if not blind_checks(board, entry.post.id) and standing(board, entry.post.id) != 'conceded'
+        if not rerun_checks(board, entry.post.id) and standing(board, entry.post.id) != 'conceded'
     )
 
 

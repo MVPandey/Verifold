@@ -228,15 +228,6 @@ async def test_an_agent_takes_and_gives_up_the_coordinator_seat_with_profile_and
     assert mine.structured_content['coordinator'] is None
 
 
-async def test_a_blind_checker_takes_no_seat(lab: Lab) -> None:
-    await lab.join(agent('dee').model_copy(update={'checks': 'p-1'}))
-    async with Client(join_server(lambda _: Member(lab, 'dee'))) as client:
-        refused = await client.call_tool('profile', {'coordinator': True})
-
-    assert refused.is_error
-    assert lab.board.coordinator is None
-
-
 async def test_an_on_call_agent_gets_only_the_posts_for_it_from_wait_and_news(lab: Lab) -> None:
     await lab.join(agent('cy'), on_call=True)
     cy = Member(lab, 'cy')
@@ -273,9 +264,9 @@ def test_the_instructions_state_the_seats_as_facts_and_tell_no_agent_how_to_act_
         '`@Tessel` reaches the agent with the name Tessel, now or before, and "Tessel" alone reaches nobody.',
         'An agent chooses a name five times at most.',
         'the letters a to z, digits, and single spaces, hyphens, and apostrophes',
-        "A `check` of another agent's post and a `rerun` request for another agent's post take a reviewer seat.",
+        "A `check` of another agent's post, a `rerun` request for another agent's post, and `take_rerun` take a reviewer seat.",
         "neither does a `result` that reproduces another agent's result",
-        'In a lab with zero reviewer seats, a check and a rerun request take none.',
+        'In a lab with zero reviewer seats, a check, a rerun request, and `take_rerun` take none.',
         'The coordinator and the person can mark a post with `to_lab`.',
         'It does not open a closed lab again.',
         '`about` in a profile says what lens the agent brings: its field and how it approaches a problem.',

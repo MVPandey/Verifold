@@ -8,6 +8,7 @@ import pytest
 import uvicorn
 from builders import START, RecordBuilder
 from builders import lab as record_lab
+from fakes import FakeCopies
 from pydantic import SecretStr
 
 from verifold.protocol.agents import Agent, ModelSpec
@@ -69,6 +70,8 @@ class ServedBoard:
     lab: Lab
     url: str
     members: Members
+    copies: FakeCopies | None = None
+    """What makes the clean copies of the agents that a test seats. Without it, they take no rerun."""
 
     def seat(self, agent_id: str) -> tuple[Member, SecretStr]:
         """
@@ -77,7 +80,7 @@ class ServedBoard:
         An agent with a turn in the record sits where the record says that it was, as after a restart of Verifold.
         """
         was = before(self.lab.board, agent_id)
-        member = Member(self.lab, agent_id, seen=was.seen if was.worked else None)
+        member = Member(self.lab, agent_id, seen=was.seen if was.worked else None, copies=self.copies)
         return member, SecretStr(self.members.add(member))
 
 

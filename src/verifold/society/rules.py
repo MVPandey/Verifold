@@ -4,6 +4,10 @@ The integrity rules of the record.
 These rules keep the record consistent: references point at things that exist, nobody checks their own work, and
 only the author of a post can concede an objection to it. How agents should work is a norm for the agents, not a rule
 here.
+
+A blind checker in these rules is an agent of a record from before agents took reruns. Verifold started it for one
+rerun request, and it read nothing but its claim. No such agent joins a lab now, and the rules keep the record of an
+old one as it was.
 """
 
 from verifold.protocol.agents import Agent
@@ -13,10 +17,10 @@ from verifold.protocol.events import (
     AlarmSet,
     CoordinatorSet,
     OnCallSet,
-    Posted,
     ProfileSet,
     QuestionRevised,
     RerunRequested,
+    RerunTaken,
     ReviewerSet,
     TimeRanOut,
     TimeSet,
@@ -24,20 +28,15 @@ from verifold.protocol.events import (
     TurnStarted,
     WatchSet,
 )
-from verifold.protocol.ids import PERSON, AgentId, PostId
+from verifold.protocol.ids import PERSON, AgentId
 from verifold.protocol.posts import Answer, Check, Close, Objection, Post, Proposal
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 from verifold.society.lifecycle import lab_state
+from verifold.society.reruns import MAX_RERUNS, rerun_checks, wanted_reruns
 from verifold.society.reviewers import free_seats, seats, seats_line
 from verifold.society.standing import closing
-
-MAX_RERUNS = 2
-"""The most blind reruns that one post can have. Each one ends with a blind checker's check."""
-
-MAX_CHECKERS = 4
-"""The most blind checkers that one post can get. A checker that fails counts, so failures can't start checkers without end."""
 
 
 def check_agent(board: Board, agent: Agent) -> None:
@@ -215,6 +214,8 @@ def check_post(board: Board, post: Post) -> None:
     match post:
         case Objection() | Check() if target.post.author == post.author:
             raise RejectedEvent(f'Post {post.reply_to} is your own. Another agent must object to it or check it.')
+        case Check(take=int()):
+            _check_from_take(board, post)
         case Answer(accepts=True):
             _check_concession(board, post, target.post)
 
@@ -353,11 +354,11 @@ def check_turn(board: Board, turn: TurnStarted | TurnEnded) -> None:
 
 def check_rerun(board: Board, rerun: RerunRequested) -> None:
     """
-    Check that a post can get a blind rerun.
+    Check that somebody can ask for an independent rerun of a post.
 
     Raises:
-        RejectedEvent: The post does not exist, has no files as evidence, has all its blind reruns already, or got
-            all the blind checkers that a post can get.
+        RejectedEvent: The post does not exist, has no files as evidence, or has the checks of all the independent
+            reruns that one post gets.
 
     """
     _check_member(board, rerun.by)
@@ -366,50 +367,34 @@ def check_rerun(board: Board, rerun: RerunRequested) -> None:
     if target is None:
         raise RejectedEvent(f'Post {rerun.post} does not exist.')
     if not target.post.evidence:
-        raise RejectedEvent(f'Post {rerun.post} has no files as evidence, so a checker has nothing to rerun.')
-    if len(blind_checks(board, rerun.post)) >= MAX_RERUNS:
-        raise RejectedEvent(f'Post {rerun.post} has {MAX_RERUNS} blind reruns already.')
-    # A request that joins the rerun of a request that waits starts no checker of its own.
-    if len(_checkers(board, rerun.post)) >= MAX_CHECKERS and not waiting_reruns(board, rerun.post):
-        raise RejectedEvent(f'Post {rerun.post} got {MAX_CHECKERS} blind checkers already, and a post gets no more.')
+        raise RejectedEvent(f'Post {rerun.post} has no files as evidence, so a rerun has nothing to run.')
+    if len(rerun_checks(board, rerun.post)) >= MAX_RERUNS:
+        raise RejectedEvent(f'Post {rerun.post} has the checks of {MAX_RERUNS} independent reruns already.')
 
 
-def blind_checks(board: Board, post_id: PostId) -> tuple[Posted, ...]:
-    """Return the first check of each blind checker of a post, oldest first. One checker is one blind rerun."""
-    checkers = _checkers(board, post_id)
-    first: dict[AgentId, Posted] = {}
-    for entry in board.replies(post_id):
-        if isinstance(entry.post, Check) and entry.post.author in checkers:
-            first.setdefault(entry.post.author, entry)
-    return tuple(first.values())
-
-
-def open_reruns(board: Board, post_id: PostId) -> tuple[RerunRequested, ...]:
+def check_take(board: Board, take: RerunTaken) -> None:
     """
-    Return the requests for a blind rerun of a post that no blind check has answered yet, oldest first.
+    Check that an agent can take the rerun of a post.
 
-    One blind check answers every request that came before it. So a request that arrives while a rerun runs joins
-    that rerun, and the lab starts one checker for both.
+    Raises:
+        RejectedEvent: The agent is not in the lab or left it, the post does not exist or is the agent's own, the
+            agent took it already, no rerun of the post is wanted, or the commit is not the one that the post pins.
+
     """
-    latest = max((entry.seq for entry in blind_checks(board, post_id)), default=0)
-    return tuple(entry for entry in board.reruns if entry.post == post_id and entry.seq > latest)
-
-
-def waiting_reruns(board: Board, post_id: PostId) -> tuple[RerunRequested, ...]:
-    """
-    Return the open requests for a post that came after its last failed rerun, oldest first.
-
-    A rerun that fails leaves the requests before it without a check. Those requests start no other checker, and
-    their members can ask again. A turn that fails without the end of the rerun, such as one that the time limit
-    cancelled, frees no request, because the same checker goes on.
-    """
-    checkers = _checkers(board, post_id)
-    failed = max((turn.seq for turn in board.turns if turn.rerun_failed and turn.agent in checkers), default=0)
-    return tuple(entry for entry in open_reruns(board, post_id) if entry.seq > failed)
-
-
-def _checkers(board: Board, post_id: PostId) -> set[AgentId]:
-    return {joined.agent.id for joined in board.agents if joined.agent.checks == post_id}
+    if not board.agent(take.agent):
+        raise RejectedEvent(f'{take.agent} is not an agent in this lab.')
+    _check_here(board, take.agent)
+    target = board.post(take.post)
+    if target is None:
+        raise RejectedEvent(f'Post {take.post} does not exist.')
+    if target.post.author == take.agent:
+        raise RejectedEvent(f'Post {take.post} is your own. Another agent takes its rerun.')
+    if board.take(take.agent, take.post):
+        raise RejectedEvent(f'{take.agent} took the rerun of post {take.post} already.')
+    if not wanted_reruns(board, take.post):
+        raise RejectedEvent(f'No rerun of post {take.post} is wanted now. `rerun` asks for one.')
+    if all(file.commit != take.commit for file in target.post.evidence):
+        raise RejectedEvent(f'Post {take.post} pins no file to the commit {take.commit}.')
 
 
 def check_time(time: TimeSet) -> None:
@@ -455,6 +440,16 @@ def _check_for_lab(board: Board, post: Post) -> None:
         raise RejectedEvent(
             'A post for the whole lab is in a thread for the whole lab, names nobody in `mentions`, and replies to '
             'no post.'
+        )
+
+
+def _check_from_take(board: Board, check: Check) -> None:
+    # Only Verifold marks a check as one from a clean copy. The mark names the author's own take of the same post.
+    taken = board.take(check.author, check.reply_to)
+    if check.method != 'rerun' or taken is None or taken.seq != check.take or not check.evidence:
+        raise RejectedEvent(
+            f'Event {check.take} is not the take with which {check.author} took the rerun of {check.reply_to}, or '
+            'the check is no rerun with files.'
         )
 
 

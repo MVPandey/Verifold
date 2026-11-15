@@ -27,13 +27,18 @@ def snapshot_ref(agent_id: AgentId) -> str:
     return f'refs/verifold/agents/{agent_id}'
 
 
-async def snapshot(folder: Path, agent_id: AgentId) -> CommitId:
-    """Commit the folder's current files onto the agent's snapshot ref, and return the commit."""
+async def snapshot(folder: Path, agent_id: AgentId, ref: str | None = None) -> CommitId:
+    """
+    Commit the folder's current files onto the agent's snapshot ref, and return the commit.
+
+    With `ref`, the commit goes onto that ref, as for the clean copy of a rerun, which is no snapshot of the
+    agent's own folder.
+    """
     with tempfile.TemporaryDirectory() as temporary:
         index = {'GIT_INDEX_FILE': str(Path(temporary) / 'index')}
         await git('add', '--all', '.', cwd=folder, env=index)
         tree = await git('write-tree', cwd=folder, env=index)
-    ref = snapshot_ref(agent_id)
+    ref = ref or snapshot_ref(agent_id)
     parent = await commit_of(folder, ref)
     commit = await git(
         'commit-tree',
@@ -48,9 +53,11 @@ async def snapshot(folder: Path, agent_id: AgentId) -> CommitId:
     return commit
 
 
-async def pin(folder: Path, agent_id: AgentId, paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+async def pin(
+    folder: Path, agent_id: AgentId, paths: tuple[str, ...], ref: str | None = None
+) -> tuple[FileEvidence, ...]:
     """
-    Snapshot the folder and pin each path to the snapshot.
+    Snapshot the folder and pin each path to the snapshot. With `ref`, the snapshot goes onto that ref.
 
     Raises:
         EvidenceRejected: A path is not a file in the folder, or Git ignores it.
@@ -60,8 +67,10 @@ async def pin(folder: Path, agent_id: AgentId, paths: tuple[str, ...]) -> tuple[
     paths = tuple(str(PurePosixPath(path)) for path in paths)
     missing = [path for path in paths if not (folder / PurePosixPath(path)).is_file()]
     if missing:
-        raise EvidenceRejected(f'These files are not in your folder: {", ".join(missing)}.')
-    commit = await snapshot(folder, agent_id)
+        raise EvidenceRejected(
+            f'These files are not in {"the clean copy" if ref else "your folder"}: {", ".join(missing)}.'
+        )
+    commit = await snapshot(folder, agent_id, ref)
     tracked = set((await git('ls-tree', '-r', '--name-only', commit, cwd=folder)).splitlines())
     ignored = [path for path in paths if path not in tracked]
     if ignored:

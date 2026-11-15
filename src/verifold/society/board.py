@@ -16,6 +16,7 @@ from verifold.protocol.events import (
     ProfileSet,
     QuestionRevised,
     RerunRequested,
+    RerunTaken,
     ReviewerSet,
     ThreadOpened,
     TimeRanOut,
@@ -63,6 +64,8 @@ class Board:
     """The starts of the agents' turns, oldest first. A record from before Verifold kept them has none."""
     turns: tuple[TurnEnded, ...] = ()
     reruns: tuple[RerunRequested, ...] = ()
+    takes: tuple[RerunTaken, ...] = ()
+    """Each time that an agent took the rerun of a post, oldest first."""
     times: tuple[TimeSet | TimeRanOut, ...] = ()
     settings: Settings = field(default_factory=Settings)
     """The person's settings for the lab: the latest that the record holds, or the defaults."""
@@ -296,7 +299,7 @@ class Board:
 
         The agents that the thread opened between come first. Then comes each agent that posted in the thread or
         started to watch it. Nobody leaves the list: an agent that stops watching stays a member and hears nothing
-        from the thread until it watches again, and an agent that left the lab stays in the list too. The person and blind checkers post in a side thread without being members.
+        from the thread until it watches again, and an agent that left the lab stays in the list too. The person posts in a side thread without being a member.
         """
         opened = self.thread(thread_id)
         if opened is None or not opened.thread.between:
@@ -309,6 +312,10 @@ class Board:
         )
         agents = {joined.agent.id for joined in self.agents if not joined.agent.checks}
         return tuple(dict.fromkeys((*opened.thread.between, *(agent for _, agent in came if agent in agents))))
+
+    def take(self, agent_id: AgentId, post_id: PostId) -> RerunTaken | None:
+        """Return the entry with which an agent took the rerun of a post, or `None`. An agent takes a post once."""
+        return next((entry for entry in self.takes if entry.agent == agent_id and entry.post == post_id), None)
 
     def post(self, post_id: PostId) -> Posted | None:
         """Return the entry of a post, or `None`."""

@@ -1,6 +1,6 @@
 """Where posts stand after the objections, checks, and answers to them."""
 
-from verifold.protocol.agents import GUEST, UNKNOWN_FAMILY, same_family
+from verifold.protocol.agents import GUEST, UNKNOWN_FAMILY, Agent, same_family
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import PERSON, AgentId, PostId
 from verifold.protocol.join import Standing
@@ -15,8 +15,10 @@ def standing(board: Board, post_id: PostId) -> Standing:
     - `conceded`: the post's author accepted an objection to it.
     - `disputed`: a check of the post failed, or an objection stands. A later check that holds overrules an
       objection, unless the objector wrote that check.
-    - `held_up`: a blind checker from another model family reran the post, and its check holds. The post of an
-      invited agent gets this far only when the person stated its model family: Verifold does not know its model.
+    - `held_up`: an independent rerun by another model held. That is a check with the method `rerun` that holds,
+      from another agent, with files from the clean copy that Verifold made when that agent took the rerun, and
+      from another model than the post's. `another_model` says when the models differ. In a record from before
+      agents took reruns, it is the check of a checker that Verifold started from another model family.
     - `checked`: another agent's check holds.
     - `open`: none of the above.
 
@@ -31,7 +33,7 @@ def standing(board: Board, post_id: PostId) -> Standing:
         return 'disputed'
     if any(not _overruled(seq, objection, checks) for seq, objection in objections):
         return 'disputed'
-    if any(_independent_rerun(board, post_id, check) for _, check in checks):
+    if any(_independent_rerun(board, post_id, seq, check) for seq, check in checks):
         return 'held_up'
     return 'checked' if checks else 'open'
 
@@ -87,21 +89,53 @@ def is_open_call(board: Board, call_id: PostId) -> bool:
     return not withdrawn and not takers(board, call_id)
 
 
-def _independent_rerun(board: Board, post_id: PostId, check: Check) -> bool:
+def _independent_rerun(board: Board, post_id: PostId, seq: int, check: Check) -> bool:
     checker = board.agent(check.author)
     target = board.post(post_id)
     author = board.agent(target.post.author) if target else None
-    return bool(
-        check.outcome == 'holds'
-        and check.method == 'rerun'
-        and checker
-        and author
-        and checker.agent.checks == post_id
-        # Nobody knows the model of an invited agent whose family the person did not state, so no checker's
-        # family is known to differ from it.
-        and (author.agent.harness, author.agent.model.family) != (GUEST, UNKNOWN_FAMILY)
-        and not same_family(checker.agent.model.family, author.agent.model.family)
-    )
+    if check.outcome != 'holds' or check.method != 'rerun' or checker is None or target is None or author is None:
+        return False
+    if checker.agent.checks == post_id:
+        # A checker that Verifold started, in a record from before agents took reruns. It read nothing but its
+        # claim, and the families of the two seats decide, as they did then.
+        return _other_family(author.agent, checker.agent)
+    # Any other check counts when its files come from the clean copy of its author's take.
+    return check.take is not None and another_model(board, target, seq, check.author)
+
+
+def another_model(board: Board, post: Posted, seq: int, checker_id: AgentId) -> bool:
+    """
+    Return whether an agent's check at event `seq` comes from another model than the post that it checks.
+
+    The two seats have different model families, as the person stated them or as their harnesses' entries have
+    them. Nobody knows the model of an invited agent whose family the person did not state, so such an agent's
+    model is never known to differ.
+
+    The record also holds the model that a harness reported for each turn, as that harness's own ID. Two seats of
+    one harness can state two families and still run one model. So when both seats have the same harness, and the
+    record has the model of the turn that wrote the post and of the turn that wrote the check, those two models
+    differ too. The IDs of two harnesses do not compare, and a record from before Verifold kept the model of a
+    turn has none, so there the families decide.
+    """
+    author, checker = board.agent(post.post.author), board.agent(checker_id)
+    if author is None or checker is None or author is checker or not _other_family(author.agent, checker.agent):
+        return False
+    wrote, checked = _model_at(board, author.agent.id, post.seq), _model_at(board, checker_id, seq)
+    one_harness = author.agent.harness == checker.agent.harness
+    return not (one_harness and wrote and checked and wrote.casefold() == checked.casefold())
+
+
+def _other_family(author: Agent, checker: Agent) -> bool:
+    unknown = (GUEST, UNKNOWN_FAMILY)
+    if unknown in ((author.harness, author.model.family), (checker.harness, checker.model.family)):
+        return False
+    return not same_family(checker.model.family, author.model.family)
+
+
+def _model_at(board: Board, agent_id: AgentId, seq: int) -> str | None:
+    # The model that the agent's harness reported for the turn that ran at event `seq`, or `None`.
+    turn = next((start for start in reversed(board.starts) if start.agent == agent_id and start.seq < seq), None)
+    return turn.model if turn else None
 
 
 def _conceded(board: Board, objection: Objection) -> bool:

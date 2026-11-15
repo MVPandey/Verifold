@@ -4,7 +4,6 @@ from pathlib import Path
 from builders import START, RecordBuilder, lab
 
 from verifold.app import NORMS_TEMPLATE
-from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.posts import FileEvidence, Result
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.threads import QUESTION_TITLE
@@ -15,7 +14,6 @@ from verifold.runner.messages import (
     back_message,
     invitation,
     more_time_message,
-    rerun_message,
     start_message,
 )
 
@@ -143,7 +141,7 @@ def test_the_lab_norms_hold_the_goal_the_obstacle_the_reviewer_seats_and_the_nam
         "Exploring and testing is everyone's main work. Before you build on a result, look at it yourself",
         'When the lab has reviewer seats, a check that the lab relies on comes from an agent in one.',
         'Take a seat only when checking is the work you want; leave it free when you would rather build.',
-        "Ask for a blind rerun of your own result when the lab's answer rests on it",
+        "Ask for one of your own result when the lab's answer rests on it",
         'an agent in a reviewer seat can ask for one of any result',
         'When the agents agree that nothing useful is left to try, one of them posts a close.',
         'When no agent holds the seat and it is open, an agent that wants this work can take it.',
@@ -180,60 +178,15 @@ def test_the_lab_norms_ask_agents_to_take_other_sides_say_when_they_are_stuck_an
         assert norm in NORMS_TEMPLATE
 
 
-CHECKER = Agent(id='checker-7', name='Checker 7', harness='fake', model=ModelSpec(family='openai'), checks='p-4')
-CHECKS = Path('/lab/.verifold/checks/checker-7')
-
-
-def test_the_lab_norms_hold_what_came_out_of_python_and_the_norm_on_blind_reruns() -> None:
+def test_the_lab_norms_hold_what_came_out_of_python_and_the_norm_on_reruns() -> None:
     for norm in (
         "Post your results before the lab's time ends",
         "have it give its own name in the post's helper field",
         'When you check a result with a rerun, reproduce it yourself from its files, and do not trust the claim',
         'Post the check with the files of your own run',
+        'an agent in a reviewer seat can ask for one of any result, and takes a rerun that is wanted',
     ):
         assert norm in NORMS_TEMPLATE
-
-
-def test_a_rerun_message_gives_the_claim_its_files_and_where_to_check_but_not_the_thread() -> None:
-    post = Result(
-        id='p-4',
-        thread='t-2',
-        author='ada',
-        text='sorted() is 11.8x faster.',
-        body='My reasoning: the C implementation avoids interpreter overhead.',
-        evidence=(FileEvidence(path='bench.py', commit='c' * 40), FileEvidence(path='out.json', commit='c' * 40)),
-    )
-
-    message = rerun_message(post, CHECKER, CHECKS)
-
-    assert message.splitlines() == [
-        (
-            'You are Checker 7 (checker-7), a blind checker in a Verifold lab. An agent of the lab asked for a blind '
-            'rerun of post p-4, which makes this claim:'
-        ),
-        '"sorted() is 11.8x faster."',
-        (
-            "Your folder is /lab/.verifold/checks/checker-7. It is a copy of the folder of the claim's author at the "
-            'version that the claim cites. These files in it back the claim: bench.py, out.json.'
-        ),
-        (
-            'A blind checker gets the claim and its files, and nothing else from the board: the board refuses every '
-            'read from you.'
-        ),
-        (
-            'The `post` tool of the MCP server `verifold` takes one `check` from you, in thread t-2, as a reply to '
-            'p-4. A `check` records `outcome`, which is `holds` or `fails`, `method`, and in `files` the files of '
-            'your folder that back it. With the `method` `rerun`, a check records that its author ran the files of '
-            'the claim itself and compared the outcome with the claim, without the thread. The check ends your part '
-            'in the lab.'
-        ),
-    ]
-    # The message says what the checker's move means, as protocol. It gives no order and names no file that the
-    # claim's author can write, and it holds nothing of the author's reasoning.
-    assert 'reasoning' not in message
-    assert 'LAB.md' not in message
-    assert 'Reproduce' not in message
-    assert 'trust' not in message
 
 
 def test_the_message_after_more_time_says_what_happened_to_the_agents_processes() -> None:
@@ -280,8 +233,9 @@ def test_an_invitation_gives_the_address_the_token_the_folder_and_the_facts_and_
     assert 'After a restart, `brief` shows what the board got while you were not connected.' in lines[7]
     assert lines[9] == 'Your folder: /lab/a3'
     assert lines[11] == (
-        'Verifold commits the whole folder when a post names files, and a blind checker gets a copy of it. So a '
-        'token or MCP settings in this folder reach those commits and each blind checker.'
+        'Verifold commits the whole folder when a post names files, and an agent that takes a rerun of such a post '
+        'gets a copy of that commit. So a token or MCP settings in this folder reach those commits and each such '
+        'agent.'
     )
     assert lines[13].startswith('`brief` gives the board as it is now.')
     assert lines[-3:] == ['Does it hold?', '', 'You are Agent 3.']
@@ -319,7 +273,7 @@ def test_the_message_for_an_agent_that_comes_back_holds_facts_and_names_the_tool
     assert new.splitlines()[-1] == 'Start.'
 
 
-def test_an_agent_that_starts_after_a_revision_gets_the_current_question_and_a_checker_gets_none() -> None:
+def test_an_agent_that_starts_after_a_revision_gets_the_current_question() -> None:
     record = RecordBuilder().thread('t-1', opened_by='person', title=QUESTION_TITLE).join('ada')
     record.post(Result(id='p-1', thread='t-1', author='ada', text='It holds.', evidence=(EVIDENCE,)))
     board = record.revise('Does it hold on ARM?', 'p-2').board()
@@ -334,4 +288,3 @@ def test_an_agent_that_starts_after_a_revision_gets_the_current_question_and_a_c
             '`brief` lists the posts that hold the revisions.'
         ),
     ]
-    assert 'Does it hold' not in rerun_message(board.posts[0].post, CHECKER, CHECKS)
