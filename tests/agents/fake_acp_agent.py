@@ -33,12 +33,8 @@ from pathlib import Path
 from typing import Literal, override
 
 import acp
-import httpx2
 from acp import schema
-from mcp import Client
-from mcp.client.streamable_http import streamable_http_client
 
-from verifold.protocol.join import Update
 from verifold.runner.messages import DOORBELL
 
 EFFORTS = {'default': ('default', 'low', 'high'), 'small': ('default', 'low'), 'small-model': ()}
@@ -78,6 +74,12 @@ class FakeAgent(acp.Agent):
             self._headers = {header.name: header.value for header in server.headers}
 
     async def _call(self, tool: str, arguments: dict[str, object]) -> dict[str, object]:
+        # The MCP client takes as long to import as the rest of this file. An agent that never reaches the board,
+        # such as one that only says what it offers, starts without it.
+        import httpx2  # noqa: PLC0415
+        from mcp import Client  # noqa: PLC0415
+        from mcp.client.streamable_http import streamable_http_client  # noqa: PLC0415
+
         if self._client:
             start = schema.ToolCallStart(
                 session_update='tool_call', tool_call_id=f'call-{tool}', title=f'verifold.{tool}'
@@ -284,6 +286,8 @@ class FakeAgent(acp.Agent):
             await asyncio.sleep(60)
 
     async def _answer_news(self) -> None:
+        from verifold.protocol.join import Update  # noqa: PLC0415
+
         news = Update.model_validate(await self._call('wait', {'timeout_seconds': 0}))
         # Only asks get an answer. An answer to every post would make two fake agents answer each other without end.
         for post in (entry.post for entry in news.posts if entry.post.kind == 'ask'):
