@@ -86,6 +86,10 @@ class Host(Protocol):
         """Add an agent that runs by itself to the lab that runs, and return its invitation."""
         ...
 
+    async def invite_again(self, agent_id: AgentId) -> Invitation:
+        """Give an invited agent a new token, which makes its earlier one void, and return its new invitation."""
+        ...
+
 
 def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     """Return the app API for the folder's lab. It acts as the person who holds `person_token`."""
@@ -140,6 +144,10 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     @api.post('/invitations', dependencies=[authorized])
     async def invite(request: InviteRequest) -> Invitation:
         return await host.invite(request.name)
+
+    @api.post('/invitations/{agent_id}', dependencies=[authorized])
+    async def invite_again(agent_id: AgentId) -> Invitation:
+        return await host.invite_again(agent_id)
 
     @api.post('/time', dependencies=[authorized])
     async def time(request: TimeRequest) -> LabView:

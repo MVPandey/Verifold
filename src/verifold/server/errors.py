@@ -29,5 +29,9 @@ class SetupRejected(ServerError):
     """The person's setup cannot start a lab. The message says what to change."""
 
 
+class OutOfTime(ServerError):
+    """An invited agent tried to post while the lab was out of time or stopped. Verifold cannot stop its turn."""
+
+
 class CannotWake(ServerError):
     """An invited agent asked Verifold to wake it. Verifold did not start it, so it has no way to."""

@@ -9,6 +9,7 @@ from pydantic import Field, ValidationError
 
 from verifold.protocol.ids import AgentId
 from verifold.protocol.record import Record
+from verifold.store.errors import GuestsInvalid
 
 GUESTS_FILE = 'guests.json'
 
@@ -24,20 +25,34 @@ class Guests(Record):
 
 
 def read_guests(path: Path) -> Guests:
-    """Return what the file holds. A file that is missing or not valid holds nothing, so its invitations are void."""
+    """
+    Return what the file holds. A file that does not exist holds nothing.
+
+    Raises:
+        GuestsInvalid: The file is there, and it can't be read or is not a guests file of this version.
+
+    """
+    if not path.exists():
+        return Guests()
     try:
         return Guests.model_validate_json(path.read_bytes())
-    except (OSError, ValidationError):
-        return Guests()
+    except (OSError, ValidationError) as error:
+        raise GuestsInvalid(
+            f'{path} is not a valid file of invitations, so Verifold cannot change it without losing the tokens '
+            'that it holds. Delete the file, which makes every invitation void, and then invite each agent again.'
+        ) from error
 
 
 def keep_guest(path: Path, agent_id: AgentId, digest: str, port: int | None) -> None:
     """
     Add an invited agent's token digest to the file, with the port that its invitation names.
 
-    Only the person can read the file. The new file replaces the old one at once, so a reader never sees half a file.
+    A digest that the file holds for the agent already is replaced, so the agent's earlier token is void. Other
+    users of the computer cannot read the file. The lab's own agents can, and a digest opens nothing. The new file
+    replaces the old one at once, so a reader never sees half a file.
 
     Raises:
+        GuestsInvalid: The file is there and is not valid. It stays as it is.
         OSError: The file can't be written.
 
     """

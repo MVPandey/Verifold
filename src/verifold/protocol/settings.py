@@ -3,9 +3,9 @@
 from enum import StrEnum
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from verifold.protocol.agents import AgentChoices, Label
+from verifold.protocol.agents import GUEST, AgentChoices, Label
 from verifold.protocol.record import Record
 
 MAX_MINUTES = 7 * 24 * 60
@@ -107,6 +107,16 @@ class SettingsFile(Record):
     jobs: JobSettings = JobSettings()
     setup: SetupDefaults = SetupDefaults()
     harnesses: dict[Label, HarnessSettings] = Field(default_factory=dict)
+
+    @field_validator('harnesses')
+    @classmethod
+    def _no_harness_is_the_guest(cls, harnesses: dict[str, HarnessSettings]) -> dict[str, HarnessSettings]:
+        if GUEST in harnesses:
+            raise ValueError(
+                f'A harness cannot have the name `{GUEST}`. Verifold uses that name for the agents that you invite, '
+                'which it does not start. Give the harness another name.'
+            )
+        return harnesses
 
     def lab_settings(self) -> Settings:
         """Return the settings that a new lab records and follows."""

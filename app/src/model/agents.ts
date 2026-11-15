@@ -83,6 +83,8 @@ export function stateLine(activity: AgentActivity, now: Date): StateLine {
       return { text: 'Stopped', dot: 'stop' };
     case 'invited':
       return { text: 'Invited, not joined yet', dot: 'idle' };
+    case 'void':
+      return { text: 'Invitation is void. Invite again.', dot: 'stop' };
     case 'listening':
       return { text: `Waits for a post${since}`, dot: 'idle' };
     case 'here':
@@ -105,9 +107,12 @@ export function costLine(view: AgentView): string {
   return `${tokens(input)} tokens in, ${tokens(output)} out over ${turns}. No price.`;
 }
 
-/** Return how many members work now, such as "3 of 4 members working, 2 blind reruns". */
+/**
+ * Return how many members work now, such as "3 of 4 members working, 2 blind reruns". An invited agent counts
+ * from its first post, because until then nobody knows whether it came.
+ */
 export function workingLine(agents: readonly AgentView[]): string {
-  const all = members(agents);
+  const all = members(agents).filter((view) => view.agent.harness !== GUEST || view.posts > 0);
   const busy = (view: AgentView): boolean => view.activity.state === 'working';
   const reruns = agents.filter((view) => view.agent.checks !== null && busy(view)).length;
   const line = `${all.filter(busy).length} of ${all.length} ${all.length === 1 ? 'member' : 'members'} working`;

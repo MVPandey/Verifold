@@ -8,7 +8,7 @@ from verifold.protocol.events import AlarmSet, RerunRequested, WatchSet
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import Brief, News, PostRequest, PostView, ThreadSummary, ThreadView, Update
 from verifold.protocol.posts import FileEvidence
-from verifold.server.errors import BlindCheck, CannotWake, EvidenceRejected
+from verifold.server.errors import BlindCheck, CannotWake, EvidenceRejected, OutOfTime, UnknownAgent
 from verifold.server.lab import Lab
 from verifold.society.attention import news, update
 from verifold.society.views import brief, post_view, thread_summaries, thread_view
@@ -27,15 +27,17 @@ class Member:
 
     # ponytail: the read position lives in memory. After a restart the agent starts from the newest event, and it
     # can read the threads to catch up. Record read positions if agents miss too much across restarts.
-    def __init__(self, lab: Lab, agent_id: AgentId, pin: Pin | None = None) -> None:
+    def __init__(self, lab: Lab, agent_id: AgentId, pin: Pin | None = None, seen: int | None = None) -> None:
         """
-        Seat an agent that has joined the lab. It has read everything up to now.
+        Seat an agent that has joined the lab. It has read everything up to now, or up to event `seen` when given.
 
         `pin` commits the agent's folder and pins the files that a post names. Without it, posts cannot name files.
         """
         self._lab = lab
         self.agent_id = agent_id
-        self._seen = lab.board.seq
+        self._seen = lab.board.seq if seen is None else seen
+        self.void = False
+        """Whether the agent got a new token, so that this seat's open `wait` must return nothing more."""
         self._pin = pin
         self._briefed = False
 
@@ -55,8 +57,10 @@ class Member:
 
         Raises:
             EvidenceRejected: The post names files, and this member cannot pin them or they are not in the folder.
+            OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
 
         """
+        self._check_in_time()
         evidence: tuple[FileEvidence, ...] = ()
         if request.files:
             if self._pin is None:
@@ -108,7 +112,14 @@ class Member:
         return thread_view(self._lab.board, self.agent_id, thread_id)
 
     async def rerun(self, post_id: PostId) -> RerunRequested:
-        """Ask for a blind rerun of a post that has files as evidence."""
+        """
+        Ask for a blind rerun of a post that has files as evidence.
+
+        Raises:
+            OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
+
+        """
+        self._check_in_time()
         return await self._lab.request_rerun(self.agent_id, post_id)
 
     def _checks(self) -> str | None:
@@ -119,6 +130,21 @@ class Member:
         if target := self._checks():
             raise BlindCheck(f'You rerun {target} blind, so you cannot read the board.')
 
+    def _is_guest(self) -> bool:
+        joined = self._lab.board.agent(self.agent_id)
+        return bool(joined and joined.agent.harness == GUEST)
+
+    def _check_in_time(self) -> None:
+        # Verifold stops the turn of an agent that it started. It cannot stop an invited agent, so the board
+        # refuses that agent instead. The end can pass a moment before the record says so.
+        board = self._lab.board
+        ended = board.out_of_time or (board.ends_at is not None and self._lab.now() >= board.ends_at)
+        if ended and self._is_guest():
+            raise OutOfTime(
+                "The lab's time ran out or the person stopped the lab, so the board takes no post and no rerun "
+                'request from you now. The person can give the lab more time.'
+            )
+
     async def set_alarm(self, minutes: float, *, quiet: bool) -> AlarmSet:
         """
         Ask Verifold to wake the agent after its turn ends, when no post for it wakes it first.
@@ -128,8 +154,7 @@ class Member:
 
         """
         self._check_not_blind()
-        joined = self._lab.board.agent(self.agent_id)
-        if joined and joined.agent.harness == GUEST:
+        if self._is_guest():
             # An alarm that never rings would tell the agent a time that means nothing.
             raise CannotWake(
                 'You joined with an invitation, so Verifold cannot wake you and sets no alarm. `wait` returns when '
@@ -160,6 +185,8 @@ class Member:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while True:
+            if self.void:
+                raise UnknownAgent('This agent got a new invitation, so the token of this call is void.')
             news = update(self._lab.board, self.agent_id, self._seen)
             remaining = deadline - loop.time()
             if news.posts or remaining <= 0:

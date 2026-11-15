@@ -27,8 +27,9 @@ async def test_waiters_wake_on_a_change_or_time_out() -> None:
 
 async def test_a_guest_is_invited_until_its_first_call_and_listens_while_it_waits() -> None:
     activity = Activity(clock=lambda: datetime(2026, 11, 6, 12, tzinfo=UTC))
-    await activity.invite('guest', joined=False)
-    await activity.invite('back', joined=True)
+    await activity.invite('guest', 'invited')
+    await activity.invite('back', 'here')
+    await activity.invite('lost', 'void')
 
     # The record shows that `back` called before this server started. Nobody saw when.
     assert [(activity.of(agent).state, activity.of(agent).at) for agent in ('guest', 'back')] == [
@@ -43,6 +44,8 @@ async def test_a_guest_is_invited_until_its_first_call_and_listens_while_it_wait
 
     assert (during, after_wait.state, after_wait.at is not None) == ('listening', 'here', True)
     assert activity.of('back').at is not None
+    # Verifold holds no token digest for `lost`, so it can make no call.
+    assert activity.of('lost').state == 'void'
 
 
 async def test_a_call_of_an_agent_that_verifold_started_changes_nothing() -> None:

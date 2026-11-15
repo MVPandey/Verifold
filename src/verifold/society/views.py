@@ -177,7 +177,12 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
     nobody has answered, the results that nobody has checked, and the disputed posts. Then come the newest threads
     and the agent's `news`. `how` says how the board works.
     """
-    others = tuple(joined.agent for joined in board.agents if joined.agent.id != agent_id and not joined.agent.checks)
+    # An invited agent that has not posted may never come, so no agent reads it as a peer to ask or wait for.
+    others = tuple(
+        joined.agent
+        for joined in board.agents
+        if joined.agent.id != agent_id and not joined.agent.checks and board.came(joined)
+    )
     stands = tuple((entry, standing(board, entry.post.id)) for entry in board.posts)
     not_checked = tuple(
         PostLine.of(entry)

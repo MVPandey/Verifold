@@ -1,4 +1,5 @@
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from builders import START, RecordBuilder, lab
@@ -6,7 +7,8 @@ from builders import START, RecordBuilder, lab
 from verifold.protocol.events import AlarmSet
 from verifold.protocol.join import News
 from verifold.protocol.posts import Answer, Close, Message, Objection, Result, RuledOut
-from verifold.society.attention import wakes
+from verifold.runner.messages import start_message
+from verifold.society.attention import update, wakes
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply
 from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
@@ -135,24 +137,46 @@ def test_a_close_is_no_work_in_a_thread_and_builds_on_nothing(record: RecordBuil
     assert [line.id for line in brief(board, 'cy', News(seq=0)).not_built_on] == ['p-1']
 
 
-def test_an_invited_agent_counts_toward_a_close_only_from_its_first_post() -> None:
-    # Two agents, and two invitations that nobody used yet.
+def test_an_invited_agent_counts_toward_a_close_only_when_it_posted_before_the_close() -> None:
+    # Two agents, an invited agent that posted, and an invitation that nobody used yet.
     record = RecordBuilder().join('ada').join('bo').thread('t-1', opened_by='ada')
     record.join('guest', family='unknown', harness='guest').join('late', family='unknown', harness='guest')
-    record.post(Close(id='p-1', thread='t-1', author='ada', text='The answer stands.'))
+    record.post(Message(id='p-1', thread='t-1', author='guest', text='I read the thread.'))
+    record.post(Close(id='p-2', thread='t-1', author='ada', text='The answer stands.'))
+    # One of three is not more than half. The unused invitation does not count.
     assert lab_state(record.board()) == 'closing'
 
-    record.post(Answer(id='p-2', thread='t-1', author='bo', text='Agreed.', reply_to='p-1', accepts=True))
+    record.post(Answer(id='p-3', thread='t-1', author='bo', text='Agreed.', reply_to='p-2', accepts=True))
     assert lab_state(record.board()) == 'closed'
 
-    # A guest that posts is an agent of the lab, so two of three is still more than half, and two of four is not.
-    record.post(Message(id='p-3', thread='t-1', author='guest', text='I read the thread.'))
+    # The first post of an invited agent after the close does not open a closed lab again.
+    record.post(Message(id='p-4', thread='t-1', author='late', text='I am here now.'))
     assert lab_state(record.board()) == 'closed'
-    record.post(Message(id='p-4', thread='t-1', author='late', text='So did I.'))
+
+    # It counts for a later close: two of four is not more than half, and three of four is.
+    record.post(Close(id='p-5', thread='t-1', author='ada', text='Done, again.'))
+    record.post(Answer(id='p-6', thread='t-1', author='bo', text='Agreed.', reply_to='p-5', accepts=True))
     assert lab_state(record.board()) == 'closing'
-
-    record.post(Answer(id='p-5', thread='t-1', author='late', text='Agreed.', reply_to='p-1', accepts=True))
+    record.post(Answer(id='p-7', thread='t-1', author='late', text='Agreed.', reply_to='p-5', accepts=True))
     closed = record.board()
     done = closing(closed)
     assert done is not None
     assert (lab_state(closed), agreed(closed, done)) == ('closed', ('bo', 'late'))
+
+
+def test_an_invited_agent_that_has_not_posted_is_no_peer_in_a_brief_an_update_or_a_start_message() -> None:
+    record = RecordBuilder().join('ada').join('bo').thread('t-1', opened_by='ada')
+    record.join('guest', family='unknown', harness='guest')
+    unused = record.board()
+    ada = unused.agents[0].agent
+
+    assert [line.id for line in brief(unused, 'ada', News(seq=0)).agents] == ['bo']
+    assert [agent.id for agent in update(unused, 'ada', 0).agents] == ['bo']
+    assert 'Bo (bo, fake).' in start_message(unused, ada, Path('LAB.md'))
+    assert 'guest' not in start_message(unused, ada, Path('LAB.md')).lower()
+
+    came = record.post(Message(id='p-1', thread='t-1', author='guest', text='I am here.')).board()
+
+    assert [line.id for line in brief(came, 'ada', News(seq=0)).agents] == ['bo', 'guest']
+    assert [agent.id for agent in update(came, 'ada', 0).agents] == ['bo', 'guest']
+    assert 'Bo (bo, fake), Guest (guest, guest).' in start_message(came, ada, Path('LAB.md'))

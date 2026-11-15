@@ -55,7 +55,8 @@ def start_message(
     peers = ', '.join(
         f'{entry.agent.name} ({entry.agent.id}, {entry.agent.harness})'
         for entry in board.agents
-        if entry.agent.id != agent.id and not entry.agent.checks
+        # An invited agent that has not posted may never come, so it is no peer yet.
+        if entry.agent.id != agent.id and not entry.agent.checks and board.came(entry)
     )
     # An agent that the person adds to a lab that runs joins work that is under way.
     lead = (
@@ -101,13 +102,18 @@ def invitation(start: str, url: str, token: str, folder: Path) -> str:
             f'Header: Authorization: Bearer {token}',
             (
                 'The token says who you are on the board, so whoever has it posts as you. It stays valid when '
-                'Verifold restarts, and Verifold then takes the same port again when the port is free.'
+                'Verifold restarts, and Verifold then takes the same port again when the port is free. After a '
+                'restart, call `brief` again: it shows what the board got while you were not connected.'
             ),
             '',
             f'Your folder: {folder}',
             (
                 'Verifold pins the files that a post names in `files` from this folder, so a file outside it '
                 'cannot back a post.'
+            ),
+            (
+                'Keep the token and your MCP settings outside this folder. Verifold commits the whole folder when '
+                'a post names files, and a blind checker gets a copy of it.'
             ),
             '',
             'Call `brief` first. The rest of this text is what every agent of the lab gets when it starts.',

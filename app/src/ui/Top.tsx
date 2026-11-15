@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
 import { messageOf } from '../api/client.ts';
+import { GUEST } from '../api/types.ts';
 import type { AgentView, HarnessOption, Invitation, LabView, ThreadSummary } from '../api/types.ts';
 import {
   costLine,
@@ -40,6 +41,9 @@ export function Top(props: {
   const name = props.folder.split('/').filter(Boolean).pop() ?? props.folder;
   const { open, route } = props;
   const place = href(route);
+  // The invitation is here, and not in the member list, because the list starts again on every new page. It holds
+  // the only copy of the agent's token, so it stays until the person closes it.
+  const [invitation, setInvitation] = useState<Invitation | null>(null);
   const current = (on: boolean): 'page' | undefined => (on ? 'page' : undefined);
 
   // Escape closes an open panel, and so does a press anywhere outside it.
@@ -95,6 +99,8 @@ export function Top(props: {
             threads={open.threads}
             harnesses={open.harnesses}
             now={open.now}
+            invitation={invitation}
+            onInvitation={setInvitation}
           />
           <details key={place} className="f-pop f-time" name="top">
             <summary>{clockLine(open.lab, open.now)}</summary>
@@ -117,6 +123,9 @@ function Members(props: {
   readonly threads: readonly ThreadSummary[];
   readonly harnesses: readonly HarnessOption[];
   readonly now: Date;
+  /** The invitation that shows now, or `null`. */
+  readonly invitation: Invitation | null;
+  readonly onInvitation: (invitation: Invitation | null) => void;
 }): ReactElement {
   const { lab } = props;
   const reruns = lab.agents.filter((view) => view.agent.checks !== null);
@@ -138,6 +147,14 @@ function Members(props: {
         </p>
         <Where view={view} threads={props.threads} />
         <p className="f-where">{costLine(view)}</p>
+        {view.agent.harness === GUEST ? (
+          <InviteAgain
+            api={props.api}
+            agent={view.agent.id}
+            onInvited={props.onInvitation}
+            onChange={props.onChange}
+          />
+        ) : null}
       </>
     );
   };
@@ -190,7 +207,16 @@ function Members(props: {
           </span>
         </p>
         <AddAgent api={props.api} harnesses={props.harnesses} onChange={props.onChange} />
-        <InviteAgent api={props.api} onChange={props.onChange} />
+        <InviteAgent api={props.api} onInvited={props.onInvitation} onChange={props.onChange} />
+        {props.invitation ? (
+          <InvitationText
+            key={props.invitation.text}
+            invitation={props.invitation}
+            onClose={() => {
+              props.onInvitation(null);
+            }}
+          />
+        ) : null}
       </div>
     </details>
   );
@@ -255,13 +281,16 @@ function AddAgent(props: {
 
 /**
  * The way to invite an agent that the person runs themselves, in any harness that speaks MCP. Verifold starts
- * nothing for it. The invitation shows once, here, because it holds the agent's token.
+ * nothing for it.
  */
-function InviteAgent(props: { readonly api: Api; readonly onChange: () => void }): ReactElement {
+function InviteAgent(props: {
+  readonly api: Api;
+  readonly onInvited: (invitation: Invitation) => void;
+  readonly onChange: () => void;
+}): ReactElement {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [invitation, setInvitation] = useState<Invitation | null>(null);
   const invite = (): void => {
     setBusy(true);
     setError(null);
@@ -269,7 +298,7 @@ function InviteAgent(props: { readonly api: Api; readonly onChange: () => void }
       (made) => {
         setBusy(false);
         setName('');
-        setInvitation(made);
+        props.onInvited(made);
         props.onChange();
       },
       (failure: unknown) => {
@@ -302,13 +331,63 @@ function InviteAgent(props: { readonly api: Api; readonly onChange: () => void }
           {error}
         </span>
       ) : null}
-      {invitation ? <InvitationText key={invitation.agent} invitation={invitation} /> : null}
     </div>
   );
 }
 
+/**
+ * The way to give an invited agent a new invitation: when the first one is lost, or when its token is no longer
+ * private. The agent's earlier token then opens nothing.
+ */
+function InviteAgain(props: {
+  readonly api: Api;
+  readonly agent: string;
+  readonly onInvited: (invitation: Invitation) => void;
+  readonly onChange: () => void;
+}): ReactElement {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const again = (): void => {
+    setBusy(true);
+    setError(null);
+    props.api.inviteAgain(props.agent).then(
+      (made) => {
+        setBusy(false);
+        props.onInvited(made);
+        props.onChange();
+      },
+      (failure: unknown) => {
+        setBusy(false);
+        setError(messageOf(failure));
+      },
+    );
+  };
+  return (
+    <p className="f-where">
+      <button
+        className="linkbtn"
+        type="button"
+        onClick={again}
+        disabled={busy}
+        title="Makes a new token. The old token stops working."
+      >
+        Invite again
+      </button>
+      {error ? (
+        <span className="error" role="alert">
+          {' '}
+          {error}
+        </span>
+      ) : null}
+    </p>
+  );
+}
+
 /** An invitation, as text to copy. It holds the agent's token, and Verifold does not show it again. */
-export function InvitationText(props: { readonly invitation: Invitation }): ReactElement {
+export function InvitationText(props: {
+  readonly invitation: Invitation;
+  readonly onClose: () => void;
+}): ReactElement {
   const { invitation } = props;
   const [copied, setCopied] = useState<boolean | null>(null);
   const copy = (): void => {
@@ -327,11 +406,15 @@ export function InvitationText(props: { readonly invitation: Invitation }): Reac
         <b>Invitation for {invitation.name}</b>
       </p>
       <p className="f-where">
-        Give this text to the agent. It holds the agent’s token, and it shows only this once.
+        Give this text to the agent. It holds the agent’s token, and it shows only until you close
+        it. If you lose it, use Invite again.
       </p>
       <textarea readOnly rows={8} value={invitation.text} aria-label="Invitation text" />
       <button type="button" onClick={copy}>
         {copied ? 'Copied' : 'Copy'}
+      </button>
+      <button className="linkbtn" type="button" onClick={props.onClose}>
+        Close
       </button>
       {copied === false ? (
         <span className="error" role="alert">

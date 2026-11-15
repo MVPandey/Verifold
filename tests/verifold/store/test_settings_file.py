@@ -256,3 +256,11 @@ def test_a_folder_in_place_of_the_settings_file_is_refused_without_leaking_a_des
             load_settings(files.project, home=files.home)
 
     assert psutil.Process().num_fds() == before
+
+
+def test_a_harness_with_the_name_of_the_invited_agents_is_refused(tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    write(home / '.verifold', {'harnesses': {'guest': {'command': ['guest-acp'], 'family': 'other'}}})
+
+    with pytest.raises(SettingsInvalid, match=r'A harness cannot have the name `guest`.*Give the harness another name'):
+        load_settings(tmp_path / 'project', home=home)

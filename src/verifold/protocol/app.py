@@ -13,12 +13,13 @@ from verifold.protocol.record import Record
 from verifold.protocol.settings import MAX_MINUTES, Settings, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
 
-type AgentState = Literal['starting', 'working', 'waiting', 'idle', 'stopped', 'invited', 'here', 'listening']
+type AgentState = Literal['starting', 'working', 'waiting', 'idle', 'stopped', 'invited', 'here', 'listening', 'void']
 """
 `waiting` means that the harness waits for the person, for example for a permission answer.
 
-The last three are for an invited agent, which Verifold sees only through its board calls: `invited` until its
-first call, `listening` while its `wait` call is open, and `here` after any other call.
+The last four are for an invited agent, which Verifold sees only through its board calls: `invited` until its
+first call, `listening` while its `wait` call is open, `here` after any other call, and `void` when Verifold holds
+no digest of its token, so only a new invitation lets it join.
 """
 
 

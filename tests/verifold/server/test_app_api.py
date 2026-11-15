@@ -87,6 +87,11 @@ class Host:
         self.invited.append(name)
         return Invitation(agent='agent-3', name=name or 'Agent 3', text='URL: http://127.0.0.1:1/mcp')
 
+    async def invite_again(self, agent_id: str) -> Invitation:
+        if agent_id != 'agent-3':
+            raise NotFound(f'The lab has no invited agent with the ID {agent_id}.')
+        return Invitation(agent=agent_id, name='Agent 3', text='URL: http://127.0.0.1:1/mcp\nnew token')
+
     async def file_text(self, post_id: str, path: str) -> FileText:
         if path != 'answer.md':
             raise NotFound(f'Post {post_id} names no file {path}.')
@@ -361,6 +366,8 @@ async def test_the_person_invites_an_agent_and_gets_its_invitation(lab: Lab, act
         named = await client.post('/invitations', json={'name': ' The\nreader '})
         taken = await client.post('/invitations', json={'name': 'Ada'})
         empty = await client.post('/invitations', json={'name': '  '})
+        again = await client.post('/invitations/agent-3')
+        launched = await client.post('/invitations/ada')
     async with client_of(Host(None), activity) as client:
         no_lab = await client.post('/invitations', json={})
 
@@ -372,3 +379,5 @@ async def test_the_person_invites_an_agent_and_gets_its_invitation(lab: Lab, act
         'The lab has the name Ada already. Choose another name.',
     )
     assert (empty.status_code, no_lab.status_code) == (422, 409)
+    assert again.json()['text'].endswith('new token')
+    assert (launched.status_code, launched.json()['detail']) == (404, 'The lab has no invited agent with the ID ada.')

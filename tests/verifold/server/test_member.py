@@ -1,11 +1,12 @@
 import asyncio
+from datetime import timedelta
 
 import pytest
 
 from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import FileEvidence
-from verifold.server.errors import BlindCheck, EvidenceRejected
+from verifold.server.errors import BlindCheck, EvidenceRejected, OutOfTime
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 
@@ -137,3 +138,39 @@ async def test_a_blind_checker_cannot_read_the_board_but_others_can_ask_for_reru
     assert dee.news() is None
     with pytest.raises(BlindCheck):
         await dee.wait(timeout=0)
+
+
+async def test_the_board_refuses_a_guest_while_the_lab_is_out_of_time_and_never_an_agent_that_verifold_runs(
+    lab: Lab,
+) -> None:
+    await lab.join(Agent(id='guest', name='Guest', harness='guest', model=ModelSpec(family='unknown')))
+    guest, bo = Member(lab, 'guest'), Member(lab, 'bo')
+    message = PostRequest(kind='message', text='One more.', thread='t-1')
+    await guest.post(message)
+
+    # The person stops the lab. The end has passed a moment before the record says that the time ran out.
+    await lab.set_time_left(timedelta(0))
+    with pytest.raises(OutOfTime, match='The person can give the lab more time'):
+        await guest.post(message)
+    await lab.run_out_of_time()
+    with pytest.raises(OutOfTime):
+        await guest.post(message)
+    with pytest.raises(OutOfTime):
+        await guest.rerun('p-1')
+    # Verifold stops the turn of an agent that it started, so the board refuses that agent nothing.
+    await bo.post(message)
+    await Member(lab, 'person').post(message)
+
+    await lab.set_time_left(timedelta(hours=1))
+    await guest.post(message)
+
+    assert [entry.post.author for entry in lab.board.posts[1:]] == ['guest', 'bo', 'person', 'guest']
+
+
+async def test_a_seat_can_start_from_an_earlier_event_so_that_its_agent_gets_what_came_since(lab: Lab) -> None:
+    await lab.post(PostRequest(kind='message', text='For Bo.', thread='t-1', mentions=('bo',)), 'ada')
+
+    now, earlier = Member(lab, 'bo'), Member(lab, 'bo', seen=lab.board.posts[0].seq)
+
+    assert (await now.wait(0)).posts == ()
+    assert [entry.post.text for entry in (await earlier.wait(0)).posts] == ['For Bo.']

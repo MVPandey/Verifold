@@ -1,6 +1,6 @@
 """Where posts stand after the objections, checks, and answers to them."""
 
-from verifold.protocol.agents import UNKNOWN_FAMILY
+from verifold.protocol.agents import GUEST
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import PERSON, AgentId, PostId
 from verifold.protocol.join import Standing
@@ -84,7 +84,8 @@ def _independent_rerun(board: Board, post_id: PostId, check: Check) -> bool:
         and author
         and checker.agent.checks == post_id
         # Nobody knows an invited agent's model, so no checker's family is known to differ from it.
-        and author.agent.model.family not in {UNKNOWN_FAMILY, checker.agent.model.family}
+        and author.agent.harness != GUEST
+        and checker.agent.model.family != author.agent.model.family
     )
 
 

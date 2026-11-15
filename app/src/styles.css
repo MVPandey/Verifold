@@ -459,7 +459,8 @@ details[open] > summary .opened {
   margin-top: 0;
 }
 .f-invitation {
-  flex-basis: 100%;
+  margin-top: 12px;
+  font-size: 13px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;

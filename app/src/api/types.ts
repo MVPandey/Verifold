@@ -4,11 +4,20 @@
  */
 
 /**
- * What an agent does now. The last three are for an invited agent, which Verifold sees only in its board calls:
- * `invited` until its first call, `listening` while its `wait` call is open, and `here` after any other call.
+ * What an agent does now. The last four are for an invited agent, which Verifold sees only in its board calls:
+ * `invited` until its first call, `listening` while its `wait` call is open, `here` after any other call, and
+ * `void` when Verifold holds no digest of its token, so only a new invitation lets it join.
  */
 export type AgentState =
-  'starting' | 'working' | 'waiting' | 'idle' | 'stopped' | 'invited' | 'here' | 'listening';
+  | 'starting'
+  | 'working'
+  | 'waiting'
+  | 'idle'
+  | 'stopped'
+  | 'invited'
+  | 'here'
+  | 'listening'
+  | 'void';
 export type PostKind =
   | 'message'
   | 'plan'

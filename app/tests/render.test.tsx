@@ -609,10 +609,15 @@ describe('an invitation', () => {
   it('shows its text once, as text to copy, and says so', () => {
     const text = 'URL: http://127.0.0.1:8123/mcp\nHeader: Authorization: Bearer <b>secret</b>';
     const html = renderToStaticMarkup(
-      <InvitationText invitation={{ agent: 'agent-3', name: 'Reader', text }} />,
+      <InvitationText
+        invitation={{ agent: 'agent-3', name: 'Reader', text }}
+        onClose={() => undefined}
+      />,
     );
     assert.ok(html.includes('<b>Invitation for Reader</b>'));
-    assert.ok(html.includes('it shows only this once'));
+    assert.ok(html.includes('it shows only until you close'));
+    assert.ok(html.includes('If you lose it, use Invite again.'));
+    assert.ok(html.includes('<button class="linkbtn" type="button">Close</button>'));
     assert.ok(html.includes('<textarea readOnly="" rows="8" aria-label="Invitation text">'));
     // The text reaches the page as text.
     assert.ok(html.includes('Bearer &lt;b&gt;secret&lt;/b&gt;'));
@@ -644,6 +649,9 @@ describe('an invitation', () => {
     assert.ok(html.includes('Invited, not joined yet'));
     assert.ok(html.includes('Runs by itself, so Verifold sees no turns and no cost.'));
     assert.ok(!html.includes('Starting'));
+    // Only an invited agent has the way to a new invitation, and it is no member in the count before it posts.
+    assert.equal(html.split('>Invite again</button>').length, 2);
+    assert.ok(html.includes('0 of 1 member working'));
   });
 });
 

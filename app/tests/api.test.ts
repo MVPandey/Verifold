@@ -50,6 +50,7 @@ describe('the API client', () => {
 
     const invitation = await api.invite('Reader');
     await api.invite();
+    await api.inviteAgain('agent-3');
 
     assert.deepEqual(invitation, { agent: 'agent-3', name: 'Reader', text: 'URL' });
     assert.deepEqual(
@@ -57,6 +58,7 @@ describe('the API client', () => {
       [
         ['/api/invitations', '{"name":"Reader"}'],
         ['/api/invitations', '{}'],
+        ['/api/invitations/agent-3', '{}'],
       ],
     );
   });

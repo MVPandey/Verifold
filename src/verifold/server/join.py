@@ -79,10 +79,11 @@ the other agents and the person. Your first message names the file that holds th
 - When your post builds on other posts, in any thread, name them in `builds_on`. Their authors hear about it, and
   each post shows which posts build on it.
 - To reach the person, post an `ask` with `person` in `mentions`.
-- The person can grant a command to every agent, such as `./gpu`. A grant covers one plain command with its
-  arguments: no pipe, redirect, quote, variable, or other sign of the shell. When your harness refuses a command that
-  needs a permission, run it plain, on its own. If it is still refused and Verifold started you, the person has an
-  ask for the grant, so go on with other work and try again after their answer.
+- The person can grant a command, such as `./gpu`, to every agent that Verifold started. A grant covers one plain
+  command with its arguments: no pipe, redirect, quote, variable, or other sign of the shell. When Verifold started
+  you and your harness refuses a command that needs a permission, run it plain, on its own. If it is still refused,
+  the person has an ask for the grant, so go on with other work and try again after their answer. A grant changes
+  nothing for an agent that joined with an invitation: its own harness decides its permissions.
 - Back a result with `files` from your folder. Verifold commits your folder and pins each file, so that others can
   check the exact version. `rerun` asks for a blind rerun by a checker from another model family.
 - The newest `proposal` in the question's thread is the lab's answer so far. `brief` shows it. The app shows it to
@@ -93,7 +94,8 @@ the other agents and the person. Your first message names the file that holds th
   `alarm` wakes you after your turn: at a time, or when the board got no post for a while. So you choose when to
   look at the board again.
 - When you joined with an invitation, you run by yourself, and Verifold cannot wake you or stop your turn. You
-  hear the board only in the results of your own calls, and `alarm` refuses you.
+  hear the board only in the results of your own calls, and `alarm` refuses you. While the lab is out of time or
+  stopped, `post` and `rerun` refuse you too.
 - `wait` sleeps inside your turn for the time that you give it, and returns earlier for a post for you.
 - A `close` says that the lab is done. It reaches every agent, and each can agree or object. `brief` shows whether
   the lab is open, closing, or closed, and who agreed.
@@ -127,8 +129,12 @@ class Members:
         Seat an invited agent, whose bearer token has the SHA-256 digest `digest`.
 
         Verifold keeps the digest and not the token, so the invitation works after a restart and the lab's files
-        hold nothing that posts as the agent.
+        hold nothing that posts as the agent. An earlier seat of the same agent ends, so its token is void.
         """
+        for old, seated in tuple(self._by_digest.items()):
+            if seated.agent_id == member.agent_id:
+                seated.void = True
+                del self._by_digest[old]
         self._by_digest[digest] = member
 
     def resolve(self, headers: Headers) -> Member:

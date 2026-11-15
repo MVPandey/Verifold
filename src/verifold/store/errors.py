@@ -13,6 +13,10 @@ class CorruptRecord(StoreError):
     """A complete line of the record is not a valid event."""
 
 
+class GuestsInvalid(StoreError):
+    """The file that keeps the invited agents' token digests is not valid, so nothing can be added to it safely."""
+
+
 class SettingsInvalid(StoreError):
     """A settings file is not valid JSON, or holds a setting that Verifold doesn't know or accept."""
 

@@ -275,6 +275,16 @@ describe('agents', () => {
       ['Invited, not joined yet', 'Waits for a post, 2 min', 'Last board call 2 min ago'],
     );
     assert.equal(stateLine({ state: 'here', detail: '', at: null }, now).text, 'Joined');
+    assert.deepEqual(stateLine({ state: 'void', detail: '', at: null }, now), {
+      text: 'Invitation is void. Invite again.',
+      dot: 'stop',
+    });
+    // Nobody knows whether an invited agent came until its first post, so it is no member in the count before.
+    assert.equal(workingLine([agentView('agent-1'), guest]), '0 of 1 member working');
+    assert.equal(
+      workingLine([agentView('agent-1'), { ...guest, posts: 1 }]),
+      '0 of 2 members working',
+    );
     assert.equal(
       stateLine({ state: 'here', detail: '', at: '2026-11-06T14:11:30Z' }, now).text,
       'Last board call just now',

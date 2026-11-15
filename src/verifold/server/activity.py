@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Literal
 
 from verifold.protocol.app import AgentActivity, AgentState
 from verifold.protocol.ids import AgentId
@@ -33,16 +34,16 @@ class Activity:
             self.version += 1
             self._changed.notify_all()
 
-    async def invite(self, agent_id: AgentId, *, joined: bool) -> None:
+    async def invite(self, agent_id: AgentId, state: Literal['invited', 'here', 'void']) -> None:
         """
         Show an agent as a guest from now on: an agent that runs by itself, which Verifold sees only in its calls.
 
-        It is `invited` until its first call. With `joined`, the record shows that it called before this server
-        started, so it is `here`, with no time for a call that this server did not see.
+        It is `invited` until its first call. It is `here` when the record shows that it called before, with no
+        time for a call that this server did not see. It is `void` when Verifold holds no token digest for it.
         """
         async with self._changed:
             self._guests.add(agent_id)
-            self._by_agent[agent_id] = AgentActivity(state='here' if joined else 'invited')
+            self._by_agent[agent_id] = AgentActivity(state=state)
             self.version += 1
             self._changed.notify_all()
 

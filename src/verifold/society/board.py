@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from verifold.protocol.agents import GUEST
 from verifold.protocol.events import (
     AgentJoined,
     AlarmSet,
@@ -61,6 +62,19 @@ class Board:
     def agent(self, agent_id: AgentId) -> AgentJoined | None:
         """Return the entry of a joined agent, or `None`."""
         return next((entry for entry in self.agents if entry.agent.id == agent_id), None)
+
+    def came(self, joined: AgentJoined, before: int | None = None) -> bool:
+        """
+        Return whether an agent of the lab is known to be in it.
+
+        An agent that Verifold started is. An invited agent is from its first post, because until then nobody knows
+        whether it used its invitation. With `before`, only its posts before that event count.
+        """
+        if joined.agent.harness != GUEST:
+            return True
+        return any(
+            entry.post.author == joined.agent.id and (before is None or entry.seq < before) for entry in self.posts
+        )
 
     def profile(self, agent_id: AgentId) -> tuple[str, str]:
         """Return the role and the status that an agent gave itself last. Each is empty when it gave none."""

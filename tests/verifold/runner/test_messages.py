@@ -154,8 +154,11 @@ def test_an_invitation_gives_the_address_the_token_the_folder_and_the_facts_and_
         lines[7],
     ]
     assert 'whoever has it posts as you' in lines[7]
+    assert 'After a restart, call `brief` again' in lines[7]
     assert lines[9] == 'Your folder: /lab/a3'
-    assert lines[12].startswith('Call `brief` first.')
+    assert lines[11].startswith('Keep the token and your MCP settings outside this folder.')
+    assert 'a blind checker gets a copy of it' in lines[11]
+    assert lines[13].startswith('Call `brief` first.')
     assert lines[-3:] == ['Does it hold?', '', 'You are Agent 3.']
     assert text.count('the-token') == 1
     assert 'role' not in text.lower()
