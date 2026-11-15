@@ -44,7 +44,15 @@ import {
   agentCount,
   defaultsLine,
   effortsOf,
-  firstPicks,
+  addSeat,
+  allOnCall,
+  firstSeats,
+  needsModel,
+  newSeat,
+  removeSeat,
+  seatChoice,
+  withSeat,
+  OTHER_MODEL,
   initials,
   menuEntries,
   modeEntries,
@@ -754,49 +762,43 @@ describe('seen', () => {
 
 describe('setup', () => {
   it('starts with one agent of each harness that this computer has', () => {
-    const picks = firstPicks(HARNESSES, DEFAULTS);
+    const picks = firstSeats(HARNESSES, DEFAULTS);
     assert.deepEqual(
       picks.map((pick) => pick.count),
       [1, 0],
     );
-    assert.equal(agentCount(step(step(picks, 'claude-code', 30), 'codex', -1)), 20);
-    // The limit is for the whole lab: a second harness gets only the room that the first leaves.
-    const both = [
-      { harness: 'claude-code', count: 15, model: '', effort: '', mode: '' },
-      { harness: 'codex', count: 0, model: '', effort: '', mode: '' },
-    ];
+    assert.equal(agentCount(step(step(picks, 0, 30), 1, -1)), 20);
+    // The limit is for the whole lab: a second seat gets only the room that the first leaves.
+    const both = [newSeat('claude-code', 15), newSeat('codex', 0)];
     assert.deepEqual(
-      step(both, 'codex', 10).map((pick) => pick.count),
+      step(both, 1, 10).map((pick) => pick.count),
       [15, 5],
     );
     // Over the limit, a step down still works, and nothing goes below zero or grows.
-    const over = [
-      { harness: 'claude-code', count: 18, model: '', effort: '', mode: '' },
-      { harness: 'codex', count: 5, model: '', effort: '', mode: '' },
-    ];
+    const over = [newSeat('claude-code', 18), newSeat('codex', 5)];
     assert.deepEqual(
-      step(over, 'codex', -1).map((pick) => pick.count),
+      step(over, 1, -1).map((pick) => pick.count),
       [18, 4],
     );
     assert.deepEqual(
-      step(over, 'codex', 1).map((pick) => pick.count),
+      step(over, 1, 1).map((pick) => pick.count),
       [18, 5],
     );
     assert.deepEqual(
-      step(step(over, 'codex', -5), 'codex', -1).map((pick) => pick.count),
+      step(step(over, 1, -5), 1, -1).map((pick) => pick.count),
       [18, 0],
     );
     const many = Array.from({ length: 25 }, (_, number) => ({
       ...HARNESSES[0],
       name: `h${String(number)}`,
     })) as typeof HARNESSES;
-    assert.equal(agentCount(firstPicks(many, DEFAULTS)), 20);
+    assert.equal(agentCount(firstSeats(many, DEFAULTS)), 20);
   });
 
   it('sends only the choices that the person made', () => {
     const picks = [
-      { harness: 'claude-code', count: 3, model: ' opus ', effort: '', mode: 'plan' },
-      { harness: 'codex', count: 0, model: '', effort: 'low', mode: '' },
+      { ...newSeat('claude-code', 3), model: ' opus ', mode: 'plan' },
+      { ...newSeat('codex', 0), effort: 'low' },
     ];
     assert.deepEqual(startRequest(' Is it faster? ', picks, false, 30), {
       question: 'Is it faster?',
@@ -808,9 +810,111 @@ describe('setup', () => {
     assert.deepEqual(['Claude Code', 'Codex'].map(initials), ['CC', 'CX']);
   });
 
+  it('gives a harness several seats, each with its own model and facts', () => {
+    const seats = addSeat([newSeat('claude-code'), newSeat('codex')], 'claude-code');
+    assert.deepEqual(
+      seats.map((seat) => seat.harness),
+      ['claude-code', 'claude-code', 'codex'],
+    );
+    const driver = {
+      ...newSeat('claude-code'),
+      model: 'opus',
+      role: ' driver ',
+      family: 'anthropic',
+    };
+    const called = { ...newSeat('claude-code'), model: 'fable', typed: true, onCall: true };
+    assert.deepEqual(startRequest('Q?', [driver, called, newSeat('codex', 2)], true, null).agents, [
+      { harness: 'claude-code', count: 1, model: 'opus', role: 'driver', family: 'anthropic' },
+      { harness: 'claude-code', count: 1, model: 'fable', on_call: true },
+      { harness: 'codex', count: 2 },
+    ]);
+    assert.deepEqual(
+      removeSeat(seats, 1).map((seat) => seat.harness),
+      ['claude-code', 'codex'],
+    );
+    // A full lab still gets the seat, with no agent in it.
+    assert.equal(addSeat([newSeat('codex', 20)], 'codex')[1]?.count, 0);
+  });
+
+  it('keeps one coordinator, in a seat of one agent', () => {
+    const seats = [
+      { ...newSeat('claude-code', 3), coordinator: true },
+      newSeat('codex', 2),
+      newSeat('codex', 0),
+    ];
+    const moved = withSeat(seats, 1, { ...newSeat('codex', 2), coordinator: true });
+    assert.deepEqual(
+      moved.map((seat) => [seat.coordinator, seat.count]),
+      [
+        [false, 3],
+        [true, 1],
+        [false, 0],
+      ],
+    );
+    assert.equal(step(moved, 1, 1)[1]?.count, 1);
+    assert.deepEqual(seatChoice(moved[1] ?? newSeat('codex')), {
+      harness: 'codex',
+      count: 1,
+      coordinator: true,
+    });
+    // Any other change leaves the other seats as they are.
+    assert.deepEqual(
+      withSeat(moved, 0, { ...newSeat('claude-code', 3), role: 'driver' })[1],
+      moved[1],
+    );
+    // An empty seat that becomes the coordinator's takes one agent only while the lab has room.
+    const empty = { ...newSeat('codex', 0), coordinator: true };
+    assert.equal(
+      withSeat([newSeat('claude-code', 19), newSeat('codex', 0)], 1, empty)[1]?.count,
+      1,
+    );
+    assert.equal(
+      withSeat([newSeat('claude-code', 20), newSeat('codex', 0)], 1, empty)[1]?.count,
+      0,
+    );
+  });
+
+  it('asks for the ID of a typed model, and says when every seat is on call', () => {
+    const typed = { ...newSeat('claude-code'), typed: true };
+    assert.deepEqual(
+      [typed, { ...typed, model: ' ' }, { ...typed, model: 'fable' }, { ...typed, count: 0 }].map(
+        needsModel,
+      ),
+      [true, true, false, false],
+    );
+    const called = { ...newSeat('codex'), onCall: true };
+    assert.equal(allOnCall([called, { ...called, harness: 'claude-code' }]), true);
+    assert.equal(allOnCall([called, newSeat('claude-code')]), false);
+    // A seat with no agent starts nothing, so it does not count.
+    assert.equal(allOnCall([called, newSeat('claude-code', 0)]), true);
+    assert.equal(allOnCall([newSeat('claude-code', 0)]), false);
+  });
+
+  it('lets the person type a model that the harness does not list', () => {
+    const typed = withModel({ ...newSeat('claude-code'), effort: 'low' }, OFFER, OTHER_MODEL);
+    assert.deepEqual([typed.typed, typed.model, typed.effort], [true, '', '']);
+    assert.equal(withModel({ ...typed, model: 'fable' }, OFFER, 'opus').typed, false);
+    assert.equal(modelSummary({ ...typed, model: 'fable' }, OFFER), 'fable');
+    // The harness said nothing about the effort levels of a model that it does not list.
+    assert.deepEqual(effortsOf(OFFER, 'fable').values, []);
+  });
+
   it('names the choices with the names that the harness offered', () => {
-    const pick = { harness: 'claude-code', count: 1, model: '', effort: '', mode: '' };
+    const pick = newSeat('claude-code');
+    assert.equal(
+      modelSummary({ ...pick, role: 'driver', coordinator: true, onCall: true }, OFFER),
+      'Opus, High effort (your default) · driver, coordinator, on call',
+    );
     assert.equal(modelSummary(pick, OFFER), 'Opus, High effort (your default)');
+    // A family that is not the harness's own shows on the closed line, whatever its capitals.
+    assert.equal(
+      modelSummary({ ...pick, family: ' Other ', role: 'driver' }, OFFER, 'anthropic'),
+      'Opus, High effort (your default) · Other family, driver',
+    );
+    assert.equal(
+      modelSummary({ ...pick, family: 'Anthropic' }, OFFER, 'anthropic'),
+      'Opus, High effort (your default)',
+    );
     assert.equal(
       modelSummary({ ...pick, model: 'default' }, OFFER),
       'Default (recommended), default effort',
@@ -843,7 +947,7 @@ describe('setup', () => {
   });
 
   it('offers the effort levels of the chosen model, and drops a level that the model lacks', () => {
-    const pick = { harness: 'claude-code', count: 1, model: '', effort: 'low', mode: '' };
+    const pick = { ...newSeat('claude-code'), effort: 'low' };
     assert.deepEqual(effortsOf(OFFER, ''), { values: OFFER.efforts, current: 'high' });
     assert.deepEqual(effortsOf(OFFER, 'default').current, null);
     assert.deepEqual(effortsOf(OFFER, 'haiku').values, []);
@@ -948,18 +1052,65 @@ describe('choices for new labs', () => {
   };
 
   it('start the setup, with nothing for a harness that this computer lacks', () => {
-    assert.deepEqual(firstPicks(HARNESSES, saved), [
-      { harness: 'claude-code', count: 2, model: 'opus', effort: '', mode: 'plan' },
-      { harness: 'codex', count: 0, model: '', effort: 'low', mode: '' },
+    assert.deepEqual(firstSeats(HARNESSES, saved), [
+      { ...newSeat('claude-code', 2), model: 'opus', mode: 'plan' },
+      newSeat('codex', 0),
     ]);
     assert.deepEqual(
-      firstPicks(HARNESSES, DEFAULTS).map((pick) => pick.count),
+      firstSeats(HARNESSES, DEFAULTS).map((pick) => pick.count),
       [1, 0],
     );
   });
 
+  it('start the setup with each saved seat of a harness, and with a seat of none for a harness that they leave out', () => {
+    const both = HARNESSES.map((option) => ({ ...option, available: true, offer: OFFER }));
+    const seats = {
+      agents: [
+        {
+          harness: 'claude-code',
+          count: 1,
+          model: 'opus',
+          effort: null,
+          mode: null,
+          role: 'driver',
+        },
+        {
+          harness: 'claude-code',
+          count: 1,
+          model: 'fable',
+          effort: null,
+          mode: null,
+          role: 'direction creator',
+          family: 'anthropic',
+          on_call: true,
+          coordinator: true,
+        },
+      ],
+      auto_mode: true,
+      minutes: null,
+    };
+    assert.deepEqual(firstSeats(both, seats), [
+      { ...newSeat('claude-code'), model: 'opus', role: 'driver' },
+      {
+        ...newSeat('claude-code'),
+        model: 'fable',
+        // The harness does not list this model now, so the person sees it as a typed one.
+        typed: true,
+        role: 'direction creator',
+        family: 'anthropic',
+        onCall: true,
+        coordinator: true,
+      },
+      newSeat('codex', 0),
+    ]);
+    assert.equal(
+      defaultsLine(seats, both),
+      'Claude Code: 1 agent (opus, role: driver); Claude Code: 1 agent (fable, anthropic family, role: direction creator, coordinator, on call). Auto mode. No time limit.',
+    );
+  });
+
   it('come from the setup as the person left it, and read as words', () => {
-    const picks = firstPicks(HARNESSES, saved);
+    const picks = firstSeats(HARNESSES, saved);
     assert.deepEqual(setupChoices(picks, false, 45), {
       agents: [{ harness: 'claude-code', count: 2, model: 'opus', mode: 'plan' }],
       auto_mode: false,

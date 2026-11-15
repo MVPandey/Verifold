@@ -1,6 +1,6 @@
 """The threads of the board."""
 
-from typing import Annotated, Final
+from typing import Annotated, Final, Literal
 
 from pydantic import StringConstraints
 
@@ -11,6 +11,10 @@ type Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=
 
 QUESTION_TITLE: Final = 'The question'
 """The title of the thread that a lab opens with. It holds the person's question, the plans, and the lab's answer."""
+
+
+type Carries = Literal['permission', 'question']
+"""The kind of request of a harness that a thread carries to the person."""
 
 
 class Thread(Record):
@@ -25,4 +29,10 @@ class Thread(Record):
 
     A post in a side thread reaches the members that watch it, and not every agent. The person and every agent
     that reads the board can read it. Any other thread is a thread for the whole lab.
+    """
+    carries: Carries | None = None
+    """
+    For the thread that Verifold opened for an agent's requests of one kind: that kind. Only the runner sets it, so
+    an agent's own thread with a like title never gets a tracked ask. `None` for any other thread, and in a record
+    from before Verifold kept it.
     """

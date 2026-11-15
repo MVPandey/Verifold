@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, AwareDatetime, Field, StringConstraints
 
-from verifold.protocol.agents import Agent, Role, Status, one_line
+from verifold.protocol.agents import Agent, Name, Role, Status, ValueId, one_line
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, CommitId, PostId, ThreadId
 from verifold.protocol.posts import Post
@@ -63,6 +63,56 @@ class AgentJoined(EventBase):
 
     type: Literal['agent_joined'] = 'agent_joined'
     agent: Agent
+
+
+class AgentNamed(EventBase):
+    """
+    Verifold learned which model an agent runs, and the agent's name says so from now on.
+
+    An agent that starts with its harness's default model can join before Verifold knows the model's name. Its
+    name then says "default model". When the agent's session opens and the harness reports the model, Verifold
+    records the name with it, once. A name in a post's text reaches the agent under both names.
+    """
+
+    type: Literal['agent_named'] = 'agent_named'
+    agent: AgentId
+    name: Name
+
+
+class OnCallSet(EventBase):
+    """
+    The person put an agent's seat on call, or took it off.
+
+    An on-call agent is a member of the lab. No post for every agent wakes it: not the first post of a thread, not
+    an ask or a call that names nobody, and not the person's post that names nobody. A post that names it, replies
+    to it, or builds on its post wakes it, and so does a post in a thread that it chose to watch. No agent tool
+    records this event.
+    """
+
+    type: Literal['on_call_set'] = 'on_call_set'
+    agent: AgentId
+    on_call: bool
+
+
+class CoordinatorSet(EventBase):
+    """
+    The lab's coordinator changed: an agent holds the seat now, or nobody does.
+
+    A lab has one coordinator at most. The person can give the seat to any agent and can clear it. The agent that
+    holds the seat can give it up. An agent can take the seat for itself while the seat is free and open: nobody
+    ever held it, its holder gave it up or left the lab by itself, or the person said that agents may take it. A
+    seat that the person cleared, or whose holder the person removed, is closed to the agents until the person
+    gives it to an agent or opens it. The code acts on nothing but who holds the seat: what a coordinator does is
+    for the lab to decide.
+    """
+
+    type: Literal['coordinator_set'] = 'coordinator_set'
+    agent: AgentId | None
+    """The agent that holds the seat from now on, or `None` when nobody does."""
+    by: AgentId
+    """Who caused it: the person, or the agent itself."""
+    open: bool = False
+    """With no holder and from the person: whether an agent may take the seat by itself. It means nothing else."""
 
 
 type Reason = Annotated[str, AfterValidator(one_line), StringConstraints(max_length=200)]
@@ -198,6 +248,13 @@ class TurnStarted(EventBase):
     """The last event that the agent had got when the turn started."""
     rang: int | None = Field(default=None, ge=1)
     """The sequence number of the agent's alarm that rang with the message of this turn, or `None`."""
+    model: ValueId | None = None
+    """
+    The model that the harness reported for the session when the turn started, as the harness's own ID for it.
+    `None` when the harness reported none, and in a record from before Verifold kept it.
+    """
+    model_name: str | None = None
+    """The name that the harness shows for that model."""
 
 
 class TurnSummary(Record):
@@ -221,6 +278,16 @@ class TurnSummary(Record):
     Whether the harness failed outside a turn, such as when it started. The entry then ends no turn: it keeps the
     error for the person, and the agent's last turn is the one before it.
     """
+
+
+ERROR_MODEL_REFUSED = 'ModelRefused'
+"""How the error of a harness that refused the model that the lab set starts."""
+
+ERROR_OUT_OF_TIME = 'The lab ran out of time'
+"""How the error of a turn that Verifold cancelled at the lab's end starts."""
+
+ERROR_RAN_PAST = 'The turn ran past'
+"""How the error of a turn that Verifold cancelled at the limit for one turn starts."""
 
 
 class TurnEnded(EventBase, TurnSummary):
@@ -256,6 +323,9 @@ type Event = Annotated[
     LabOpened
     | QuestionRevised
     | AgentJoined
+    | AgentNamed
+    | OnCallSet
+    | CoordinatorSet
     | AgentLeft
     | ThreadOpened
     | Posted

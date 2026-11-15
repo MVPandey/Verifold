@@ -2,7 +2,8 @@
 Who hears what.
 
 A post is for an agent when it names the agent, replies to one of the agent's posts, builds on one of them, or
-lands in a thread that the agent watches. A post names an agent in `mentions` or in its text. An agent watches the
+lands in a thread that the agent watches. A post names an agent in `mentions`, or in its text with the agent's ID
+or its full name. An agent watches the
 threads that it opens and the thread where it works now, which is the thread of its latest plan or result, until it
 says otherwise. Nobody watches the question's thread by default, so a post there is for the agents that it names.
 
@@ -11,6 +12,11 @@ nobody when its `mentions` are empty and it replies to no post, so an agent that
 may know the missing piece. A check is also for the agent that asked for the rerun. The person's words reach the agents by default: a post from the person that
 names nobody and replies to no post is for every agent. No post is for a blind checker, which reads nothing but its claim.
 No post is for an agent that left the lab.
+
+An on-call agent hears less. No post for every agent is for it, and neither are the person's words that name nobody.
+It watches a thread only when it said so with `watch`, or as a member of a side thread. So a post is for it when
+the post names it, replies to it, builds on its post, or lands in such a thread. A close is for it once it has
+posted, because from then on it counts among the agents that decide whether the lab is done.
 
 A side thread is a thread between named agents. Its members are those agents and every agent that posted in it or
 started to watch it since. A member watches it until it says otherwise, and then it hears nothing from the thread
@@ -57,6 +63,10 @@ def watches_thread(
         return False
     if opened.thread.between:
         return agent_id in board.members(thread_id)
+    if board.on_call(agent_id):
+        # An on-call agent watches a thread only by its own word, so its own work does not make every post in a
+        # thread wake it.
+        return False
     working = lines_of(board) if working is None else working
     return opened.thread.opened_by == agent_id or working.get(agent_id) == thread_id
 
@@ -78,10 +88,12 @@ def wakes(
     if board.is_side(post.thread):
         # A side thread is for the members that watch it. No post in it is for every agent, the person's neither.
         return watches_thread(board, agent_id, post.thread)
-    if _for_everyone(board, entry):
-        return True
-    # The person's words that name nobody are for every agent, whoever watches the thread.
-    if post.author == PERSON and not post.mentions and not post.reply_to:
+    if reader and board.on_call(agent_id):
+        # No post for every agent is for an on-call agent, but a close is once the agent counts for it.
+        if isinstance(post, Close) and board.counts(reader, before=entry.seq):
+            return True
+    elif _for_everyone(board, entry) or (post.author == PERSON and not post.mentions and not post.reply_to):
+        # The person's words that name nobody are for every agent, whoever watches the thread.
         return True
     working = lines_of(board) if working is None else working
     return watches_thread(board, agent_id, post.thread, working)
@@ -199,7 +211,11 @@ def _page(
 
 
 def _workers(board: Board) -> Names:
-    return tuple((joined.agent.id, joined.agent.name) for joined in board.agents if not joined.agent.checks)
+    # Each agent with its name, and with each name that it had before, so that an older post still names it.
+    checkers = {joined.agent.id for joined in board.agents if joined.agent.checks}
+    now = tuple((joined.agent.id, joined.agent.name) for joined in board.agents)
+    former = tuple((event.agent, before) for event, before in board.renames)
+    return tuple(pair for pair in (*now, *former) if pair[0] not in checkers)
 
 
 def _names(board: Board, agent_id: AgentId, post: Post) -> bool:
@@ -231,16 +247,25 @@ def _for_everyone(board: Board, entry: Posted) -> bool:
 
 @lru_cache(maxsize=512)
 def _in_text(text: str, names: Names) -> frozenset[AgentId]:
-    # Agents write "Agent 2" or "agent-2" in their text more often than they fill `mentions`. Every reader asks
+    # Agents write a name or "agent-2" in their text more often than they fill `mentions`. Every reader asks
     # about the same post, so the scan of a long body runs once.
-    return frozenset(
+    # An ID matches whole and outside a path: "agent-3" is not in "agents/agent-3/out.json".
+    found = {
         agent_id
-        for agent_id, name in names
-        # A display name matches whole and with its capitals: "Agent 1" is not in "Agent 12" or "the agent 1 run".
-        # An ID matches whole and outside a path: "agent-3" is not in "agents/agent-3/out.json".
-        if re.search(rf'(?<![\w-]){re.escape(name)}(?![\w-])', text)
-        or re.search(rf'(?<![\w/.-]){re.escape(agent_id)}(?![\w/-])', text, re.IGNORECASE)
-    )
+        for agent_id, _ in names
+        if re.search(rf'(?<![\w/.-]){re.escape(agent_id)}(?![\w/-])', text, re.IGNORECASE)
+    }
+    # A display name matches whole and with its capitals: "Agent 1" is not in "Agent 12" or "the agent 1 run". The
+    # longest name goes first and leaves the text, so "Codex · gpt-6 2" does not also name "Codex · gpt-6". A name
+    # does not end where its last word goes on, as "Codex · gpt-6" in "Codex · gpt-6.1-sol": a dot ends a name only
+    # when no letter or digit follows it.
+    rest = text
+    for agent_id, name in sorted(names, key=lambda pair: len(pair[1]), reverse=True):
+        whole = rf'(?<![\w-]){re.escape(name)}(?![\w-]|\.\w)'
+        if re.search(whole, rest):
+            found.add(agent_id)
+            rest = re.sub(whole, ' ', rest)
+    return frozenset(found)
 
 
 def _opens_thread(board: Board, entry: Posted) -> bool:

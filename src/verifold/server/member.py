@@ -6,7 +6,16 @@ from collections.abc import Awaitable, Callable
 from verifold.protocol.agents import GUEST
 from verifold.protocol.events import AgentLeft, AlarmSet, RerunRequested, WatchSet
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
-from verifold.protocol.join import Brief, News, PostRequest, PostView, ThreadList, ThreadView, Update
+from verifold.protocol.join import (
+    Brief,
+    News,
+    PostRequest,
+    PostView,
+    ProfileResult,
+    ThreadList,
+    ThreadView,
+    Update,
+)
 from verifold.protocol.posts import FileEvidence
 from verifold.server.errors import BlindCheck, CannotWake, EvidenceRejected, HasLeft, OutOfTime, UnknownAgent
 from verifold.server.lab import Lab
@@ -195,14 +204,31 @@ class Member:
             )
         return await self._lab.set_alarm(self.agent_id, minutes, quiet=quiet)
 
-    async def set_profile(self, role: str | None, status: str | None) -> tuple[str, str]:
+    async def set_profile(
+        self, role: str | None = None, status: str | None = None, *, coordinator: bool | None = None
+    ) -> ProfileResult:
         """
-        Say what the agent is to the lab and what it does now. Return its role and status after the change.
+        Say what the agent is to the lab and what it does now, and return its profile after the change.
 
-        With neither, it returns them as they are.
+        With `coordinator`, the agent takes the lab's coordinator seat, or gives it up. With nothing, the call
+        returns the profile as it is.
+
+        Raises:
+            RejectedEvent: The agent takes a seat that another agent holds, or gives up a seat that it does not hold.
+
         """
         self._check_not_blind()
-        return await self._lab.set_profile(self.agent_id, role, status)
+        if coordinator is not None:
+            await self._lab.set_coordinator(self.agent_id if coordinator else None, self.agent_id)
+        now_role, now_status = await self._lab.set_profile(self.agent_id, role, status)
+        board = self._lab.board
+        joined = board.agent(self.agent_id)
+        return ProfileResult(
+            role=now_role,
+            status=now_status,
+            given_role=joined.agent.given_role if joined else '',
+            coordinator=board.coordinator,
+        )
 
     async def watch(self, thread_id: ThreadId, *, watching: bool) -> WatchSet:
         """Start or stop watching a thread."""

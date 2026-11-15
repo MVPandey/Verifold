@@ -1,9 +1,9 @@
 """The person's settings: what Verifold does by default, at two levels, for all projects and for one project."""
 
 from enum import StrEnum
-from typing import Literal, Self
+from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_validator
 
 from verifold.protocol.agents import GUEST, AgentChoices, Label
 from verifold.protocol.record import Record
@@ -106,19 +106,12 @@ class SetupDefaults(Record):
 
     agents: AgentChoices | None = None
     """
-    One entry for each harness that a new lab starts. `None` starts one agent of each harness that this computer
-    has, with the person's own settings.
+    The seats that a new lab starts with. A harness can have several, such as two models of it. `None` starts one
+    agent of each harness that this computer has, with the person's own settings.
     """
     auto_mode: bool = True
     minutes: int | None = Field(default=None, ge=1, le=MAX_MINUTES)
     """How long the agents may work. `None` means no time limit."""
-
-    @model_validator(mode='after')
-    def _one_entry_for_each_harness(self) -> Self:
-        names = [agent.harness for agent in self.agents or ()]
-        if len(set(names)) != len(names):
-            raise ValueError('The choices for new labs name each harness once.')
-        return self
 
 
 class SettingsFile(Record):

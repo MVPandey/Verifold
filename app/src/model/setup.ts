@@ -14,16 +14,40 @@ import { duration } from './format.ts';
 export const MAX_AGENTS = 20;
 
 /**
- * The person's choice for one harness on the setup screen.
+ * One seat that the person sets up: some agents of one harness with one model, and the facts of the seat. A harness
+ * can have several seats.
  *
  * A blank model or effort keeps the person's own setting. A blank mode follows the answer to the auto mode question.
+ * A blank role gives none, and a blank family takes the family of the harness.
  */
-export interface HarnessPick {
+export interface Seat {
   readonly harness: string;
   readonly count: number;
   readonly model: string;
+  /** The person types the model, because the harness's list does not hold the one that they want. */
+  readonly typed: boolean;
   readonly effort: string;
   readonly mode: string;
+  readonly role: string;
+  readonly family: string;
+  readonly onCall: boolean;
+  readonly coordinator: boolean;
+}
+
+/** Return a seat of a harness with the person's own settings and no facts. */
+export function newSeat(harness: string, count = 1): Seat {
+  return {
+    harness,
+    count,
+    model: '',
+    typed: false,
+    effort: '',
+    mode: '',
+    role: '',
+    family: '',
+    onCall: false,
+    coordinator: false,
+  };
 }
 
 /** One entry in a menu: the value to send, or `''` to send nothing, and the text that the menu shows for it. */
@@ -33,67 +57,107 @@ export interface MenuEntry {
 }
 
 /**
- * Return the first picks: the person's saved choices for new labs, or one agent of each harness that this computer
- * has. A harness that this computer doesn't have starts no agents.
+ * Return the first seats: the person's saved choices for new labs, or one agent of each harness that this computer
+ * has. A harness that this computer doesn't have gets a seat with no agents.
  */
-export function firstPicks(
+export function firstSeats(
   harnesses: readonly HarnessOption[],
   defaults: SetupDefaults,
-): readonly HarnessPick[] {
+): readonly Seat[] {
   let room = MAX_AGENTS;
-  return harnesses.map((option) => {
-    if (defaults.agents === null) {
-      // One of each harness that this computer has, for as long as the lab has room.
-      const count = option.available && room > 0 ? 1 : 0;
+  return harnesses.flatMap((option): readonly Seat[] => {
+    const saved = (defaults.agents ?? []).filter((choice) => choice.harness === option.name);
+    if (defaults.agents === null || saved.length === 0 || !option.available) {
+      // One of each harness that this computer has, for as long as the lab has room. With saved choices, a
+      // harness that they leave out starts none.
+      const count = defaults.agents === null && option.available && room > 0 ? 1 : 0;
       room -= count;
-      return { harness: option.name, count, model: '', effort: '', mode: '' };
+      return [newSeat(option.name, count)];
     }
-    // The server keeps one saved choice for each harness, and at most `MAX_AGENTS` agents in all.
-    const saved = defaults.agents.find((choice) => choice.harness === option.name);
-    return {
+    const listed = new Set(option.offer?.models.map((model) => model.value));
+    return saved.map((choice) => ({
       harness: option.name,
-      count: option.available && saved ? saved.count : 0,
-      model: saved?.model ?? '',
-      effort: saved?.effort ?? '',
-      mode: saved?.mode ?? '',
-    };
+      count: choice.count,
+      model: choice.model ?? '',
+      // A saved model that the harness does not list now stays as a typed one.
+      typed: option.offer !== null && choice.model !== null && !listed.has(choice.model),
+      effort: choice.effort ?? '',
+      mode: choice.mode ?? '',
+      role: choice.role ?? '',
+      family: choice.family ?? '',
+      onCall: choice.on_call ?? false,
+      coordinator: choice.coordinator ?? false,
+    }));
   });
 }
 
-/** Return the picks with one harness's count changed by `step`, kept at zero or more, and `MAX_AGENTS` in all. */
-export function step(
-  picks: readonly HarnessPick[],
-  harness: string,
-  change: number,
-): readonly HarnessPick[] {
-  const others = picks.filter((pick) => pick.harness !== harness);
-  const room = MAX_AGENTS - agentCount(others);
-  // A count never grows past the room that the other harnesses leave, and a step down always works.
-  return picks.map((pick) =>
-    pick.harness === harness
-      ? {
-          ...pick,
-          count: Math.max(0, Math.min(Math.max(room, pick.count), pick.count + change)),
-        }
-      : pick,
+/**
+ * Return the seats with the seat at `index` replaced. A lab has one coordinator, so a seat that becomes the
+ * coordinator's holds one agent, and no other seat is the coordinator's.
+ */
+export function withSeat(seats: readonly Seat[], index: number, changed: Seat): readonly Seat[] {
+  // A seat with no agent takes one only while the lab has room for it.
+  const room = MAX_AGENTS - agentCount(seats.filter((_, at) => at !== index));
+  const seat = changed.coordinator
+    ? { ...changed, count: Math.min(1, room, Math.max(changed.count, 1)) }
+    : changed;
+  return seats.map((old, at) =>
+    at === index ? seat : seat.coordinator ? { ...old, coordinator: false } : old,
   );
 }
 
-/** Return how many agents the picks start. */
-export function agentCount(picks: readonly HarnessPick[]): number {
-  return picks.reduce((sum, pick) => sum + pick.count, 0);
+/** Return the seats with one more seat of a harness, after the harness's other seats. */
+export function addSeat(seats: readonly Seat[], harness: string): readonly Seat[] {
+  const last = seats.map((seat) => seat.harness).lastIndexOf(harness);
+  const count = agentCount(seats) < MAX_AGENTS ? 1 : 0;
+  return [...seats.slice(0, last + 1), newSeat(harness, count), ...seats.slice(last + 1)];
+}
+
+/** Return the seats without the seat at `index`. */
+export function removeSeat(seats: readonly Seat[], index: number): readonly Seat[] {
+  return seats.filter((_, at) => at !== index);
+}
+
+/**
+ * Return the seats with the count of the seat at `index` changed by `change`, kept at zero or more, and
+ * `MAX_AGENTS` in all. The coordinator's seat holds one agent at most.
+ */
+export function step(seats: readonly Seat[], index: number, change: number): readonly Seat[] {
+  const room = MAX_AGENTS - agentCount(seats.filter((_, at) => at !== index));
+  // A count never grows past the room that the other seats leave, and a step down always works.
+  return seats.map((seat, at) => {
+    if (at !== index) return seat;
+    const most = seat.coordinator ? 1 : Math.max(room, seat.count);
+    return { ...seat, count: Math.max(0, Math.min(most, seat.count + change)) };
+  });
+}
+
+/** Return whether a seat asks for a typed model and has none yet. A blank ID would start the harness's default model. */
+export function needsModel(seat: Seat): boolean {
+  return seat.typed && seat.count > 0 && seat.model.trim() === '';
+}
+
+/** Return whether the seats start agents and every one of them is on call, so that no agent starts by itself. */
+export function allOnCall(seats: readonly Seat[]): boolean {
+  const chosen = seats.filter((seat) => seat.count > 0);
+  return chosen.length > 0 && chosen.every((seat) => seat.onCall);
+}
+
+/** Return how many agents the seats start. */
+export function agentCount(seats: readonly Seat[]): number {
+  return seats.reduce((sum, seat) => sum + seat.count, 0);
 }
 
 /** Return the request that starts a lab with the person's choices. */
 export function startRequest(
   question: string,
-  picks: readonly HarnessPick[],
+  seats: readonly Seat[],
   autoMode: boolean,
   minutes: number | null,
 ): StartRequest {
   return {
     question: question.trim(),
-    agents: chosenAgents(picks),
+    agents: chosenAgents(seats),
     auto_mode: autoMode,
     ...(minutes ? { minutes } : {}),
   };
@@ -101,23 +165,30 @@ export function startRequest(
 
 /** Return the person's choices on the setup screen as the choices that new labs start with. */
 export function setupChoices(
-  picks: readonly HarnessPick[],
+  seats: readonly Seat[],
   autoMode: boolean,
   minutes: number | null,
 ): SetupChoices {
-  return { agents: chosenAgents(picks), auto_mode: autoMode, minutes };
+  return { agents: chosenAgents(seats), auto_mode: autoMode, minutes };
 }
 
-function chosenAgents(picks: readonly HarnessPick[]): readonly AgentChoice[] {
-  return picks
-    .filter((pick) => pick.count > 0)
-    .map((pick) => ({
-      harness: pick.harness,
-      count: pick.count,
-      ...(pick.model.trim() ? { model: pick.model.trim() } : {}),
-      ...(pick.effort.trim() ? { effort: pick.effort.trim() } : {}),
-      ...(pick.mode.trim() ? { mode: pick.mode.trim() } : {}),
-    }));
+function chosenAgents(seats: readonly Seat[]): readonly AgentChoice[] {
+  return seats.filter((seat) => seat.count > 0).map(seatChoice);
+}
+
+/** Return a seat as the server takes it. It leaves out what the person did not set. */
+export function seatChoice(seat: Seat): AgentChoice {
+  return {
+    harness: seat.harness,
+    count: seat.count,
+    ...(seat.model.trim() ? { model: seat.model.trim() } : {}),
+    ...(seat.effort.trim() ? { effort: seat.effort.trim() } : {}),
+    ...(seat.mode.trim() ? { mode: seat.mode.trim() } : {}),
+    ...(seat.role.trim() ? { role: seat.role.trim() } : {}),
+    ...(seat.family.trim() ? { family: seat.family.trim() } : {}),
+    ...(seat.onCall ? { on_call: true } : {}),
+    ...(seat.coordinator ? { coordinator: true } : {}),
+  };
 }
 
 /** Return what new labs start with, in words. */
@@ -137,6 +208,10 @@ function agentWords(choice: SavedChoice, harnesses: readonly HarnessOption[]): s
     choice.model,
     choice.effort ? `${choice.effort} effort` : null,
     choice.mode ? `${choice.mode} mode` : null,
+    choice.family ? `${choice.family} family` : null,
+    choice.role ? `role: ${choice.role}` : null,
+    choice.coordinator ? 'coordinator' : null,
+    choice.on_call ? 'on call' : null,
   ].filter((detail) => detail !== null);
   const agents = `${title}: ${choice.count} ${choice.count === 1 ? 'agent' : 'agents'}`;
   return details.length > 0 ? `${agents} (${details.join(', ')})` : agents;
@@ -172,14 +247,39 @@ export function effortsOf(offer: Offer, model: string): Efforts {
   };
 }
 
-/** Return the pick with another model, and without an effort level that the harness doesn't offer with it. */
-export function withModel(pick: HarnessPick, offer: Offer, model: string): HarnessPick {
+/** The value of the model menu's last entry, which lets the person type a model that the harness does not list. */
+export const OTHER_MODEL = '\u0000other';
+
+/**
+ * Return the seat with another model, and without an effort level that the harness doesn't offer with it.
+ * `OTHER_MODEL` starts a typed model, which is blank until the person types it.
+ */
+export function withModel(pick: Seat, offer: Offer, model: string): Seat {
+  if (model === OTHER_MODEL) return { ...pick, model: '', typed: true, effort: '' };
   const kept = effortsOf(offer, model).values.some((option) => option.value === pick.effort);
-  return { ...pick, model, effort: kept ? pick.effort : '' };
+  return { ...pick, model, typed: false, effort: kept ? pick.effort : '' };
 }
 
-/** Return what a pick's model menu says when it is closed, with the names that the harness offered. */
-export function modelSummary(pick: HarnessPick, offer: Offer | null): string {
+/**
+ * Return what a seat's menu says when it is closed: its model with the names that the harness offered, and its
+ * facts, with its model family when that is not the harness's own.
+ */
+export function modelSummary(pick: Seat, offer: Offer | null, family = ''): string {
+  // A family of the person's own shows, because it decides whether a rerun by this seat's model counts as
+  // independent. `family` is the harness's own.
+  const stated = pick.family.trim();
+  const own = stated !== '' && stated.toLowerCase() !== family.trim().toLowerCase();
+  const facts = [
+    own ? `${stated} family` : '',
+    pick.role.trim(),
+    pick.coordinator ? 'coordinator' : '',
+    pick.onCall ? 'on call' : '',
+  ].filter(Boolean);
+  const model = modelLine(pick, offer);
+  return facts.length > 0 ? `${model} · ${facts.join(', ')}` : model;
+}
+
+function modelLine(pick: Seat, offer: Offer | null): string {
   const mode = pick.mode ? `, ${nameOf(offer?.modes ?? [], pick.mode)} mode` : '';
   const chosen = pick.model.trim() || pick.effort.trim();
   if (offer === null) {

@@ -1,6 +1,6 @@
 """Where posts stand after the objections, checks, and answers to them."""
 
-from verifold.protocol.agents import GUEST
+from verifold.protocol.agents import GUEST, UNKNOWN_FAMILY, same_family
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import PERSON, AgentId, PostId
 from verifold.protocol.join import Standing
@@ -16,7 +16,7 @@ def standing(board: Board, post_id: PostId) -> Standing:
     - `disputed`: a check of the post failed, or an objection stands. A later check that holds overrules an
       objection, unless the objector wrote that check.
     - `held_up`: a blind checker from another model family reran the post, and its check holds. The post of an
-      invited agent never gets this far: Verifold does not know its model, so no checker is known to differ.
+      invited agent gets this far only when the person stated its model family: Verifold does not know its model.
     - `checked`: another agent's check holds.
     - `open`: none of the above.
 
@@ -97,9 +97,10 @@ def _independent_rerun(board: Board, post_id: PostId, check: Check) -> bool:
         and checker
         and author
         and checker.agent.checks == post_id
-        # Nobody knows an invited agent's model, so no checker's family is known to differ from it.
-        and author.agent.harness != GUEST
-        and checker.agent.model.family != author.agent.model.family
+        # Nobody knows the model of an invited agent whose family the person did not state, so no checker's
+        # family is known to differ from it.
+        and (author.agent.harness, author.agent.model.family) != (GUEST, UNKNOWN_FAMILY)
+        and not same_family(checker.agent.model.family, author.agent.model.family)
     )
 
 

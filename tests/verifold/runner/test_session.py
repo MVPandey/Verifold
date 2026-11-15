@@ -24,6 +24,7 @@ from verifold.runner.session import (
     SessionHooks,
     SessionOptions,
     _Client,
+    _model_now,
     _values,
     offer_of,
 )
@@ -262,6 +263,42 @@ async def test_a_probe_that_runs_out_of_time_still_stops_the_harness(
         await offer_of(FAKE_HARNESS, folder, timeout=0.5)
 
     assert not fake_harnesses()
+
+
+async def test_a_session_reports_its_model_the_persons_own_or_the_one_that_the_lab_set(
+    served: ServedBoard, folder: Place, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, token = served.seat('bo')
+    board = BoardAccess(url=served.url, token=token)
+
+    async with AgentSession.open(FAKE_HARNESS, folder, board, SessionOptions(), NO_PERMISSION) as own:
+        default = own.model
+    async with AgentSession.open(FAKE_HARNESS, folder, board, SessionOptions(model='small'), NO_PERMISSION) as set_:
+        chosen = set_.model
+    monkeypatch.setenv('FAKE_ACP_NO_OPTIONS', '1')
+    async with AgentSession.open(FAKE_HARNESS, folder, board, SessionOptions(), NO_PERMISSION) as silent:
+        unknown = silent.model
+
+    assert default is not None
+    assert chosen is not None
+    assert (default.value, chosen.value, chosen.name, unknown) == ('default', 'small', 'small', None)
+
+
+def test_a_model_that_the_harness_accepts_and_does_not_list_has_its_id_for_a_name() -> None:
+    listed = schema.SessionConfigOptionSelect(
+        id='model',
+        name='Model',
+        category='model',
+        current_value='small',
+        type='select',
+        options=[schema.SessionConfigSelectOption(value='small', name='Small')],
+    )
+
+    own, typed, none = _model_now([listed], None), _model_now([listed], 'fable-5'), _model_now([], 'fable-5')
+
+    assert own is not None
+    assert typed is not None
+    assert (own.name, typed.value, typed.name, none) == ('Small', 'fable-5', 'fable-5', None)
 
 
 def test_grouped_values_come_one_after_another() -> None:

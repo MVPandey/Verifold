@@ -4,7 +4,7 @@ from typing import Literal, Self
 
 from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
 
-from verifold.protocol.agents import Agent, Label
+from verifold.protocol.agents import Agent, Label, Name
 from verifold.protocol.events import Note, Posted, Question
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.posts import (
@@ -215,7 +215,7 @@ class LeftLine(Record):
     """An agent that left the lab: who caused it, and why. Its posts stay, and no post reaches it."""
 
     id: AgentId
-    name: Label
+    name: Name
     by: AgentId
     """The agent itself, or `person` when the person removed it."""
     reason: str = ''
@@ -334,10 +334,19 @@ class AgentLine(Record):
     """An agent of the lab at a glance: the plan that it posted last, and its latest post."""
 
     id: AgentId
-    name: Label
+    name: Name
     harness: Label
     role: str = ''
     """What the agent says that it is to the lab, in its own words."""
+    given_role: str = ''
+    """The role that the person gave the agent's seat. The agent's own `role` stands beside it and does not replace it."""
+    on_call: bool = False
+    """
+    Whether the person put the agent's seat on call. No post for every agent wakes an on-call agent. A post that
+    names it, replies to it, or builds on its post does, and so does a post in a thread that it chose to watch.
+    """
+    coordinator: bool = False
+    """Whether the agent holds the lab's coordinator seat."""
     status: str = ''
     """What the agent says that it does now."""
     thread: ThreadId | None = None
@@ -348,6 +357,11 @@ class AgentLine(Record):
     plan: PostLine | None = None
     latest: PostLine | None = None
     """The agent's latest post, when that is not its plan."""
+    error: str | None = None
+    """
+    Why the agent's latest turn, or the latest start of its harness, failed, as one short sentence of Verifold.
+    `None` when it did not fail, and once a later turn of the agent started.
+    """
 
 
 MAX_LEADS = 10
@@ -420,6 +434,10 @@ class ProfileResult(Record):
 
     role: str
     status: str
+    given_role: str = ''
+    """The role that the person gave the agent's seat, which the agent's own role does not replace."""
+    coordinator: AgentId | None = None
+    """The agent that holds the lab's coordinator seat, or `None` when nobody does."""
     news: News | None = None
 
 
@@ -434,7 +452,10 @@ class Brief(Record):
 
     you: AgentId
     your_line: AgentLine | None = None
-    """What the board holds about you: your role and status, the thread where you work, and your latest plan and post."""
+    """
+    What the board holds about you: your name, your role and status, the role that the person gave your seat,
+    whether your seat is on call, the thread where you work, and your latest plan and post.
+    """
     your_alarm: AlarmLine | None = None
     """The alarm that waits for you. `None` means that no alarm waits, so only a post for you wakes you."""
     how: str = ''
@@ -445,6 +466,10 @@ class Brief(Record):
     """The newest revisions of the question by the person, newest last, at most `MAX_LEADS`. Each one's post holds its text."""
     agents: tuple[AgentLine, ...] = ()
     """The other agents that are in the lab. Blind checkers are not among them."""
+    coordinator: AgentId | None = None
+    """The agent that holds the lab's coordinator seat, or `None` when nobody does."""
+    coordinator_open: bool = True
+    """Whether an agent may take the seat with `profile`: nobody holds it, and the person did not close it."""
     left: tuple[LeftLine, ...] = ()
     """The agents that left the lab or that the person removed, oldest first."""
     answer: PostLine | None = None

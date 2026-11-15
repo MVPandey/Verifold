@@ -10,7 +10,7 @@ from builders import IGNORES_SIGTERM, SLEEP
 
 from verifold.runner import jobs
 from verifold.runner.environment import harness_environment
-from verifold.runner.jobs import COMMAND_LENGTH, running_jobs, sweep
+from verifold.runner.jobs import COMMAND_LENGTH, pause_jobs, running_jobs, sweep
 
 
 @pytest.fixture
@@ -201,6 +201,31 @@ def test_a_sweep_looks_again_only_while_still_holds(lab: Path, started: list[sub
 
     assert [job.pid for job in first.stopped] == [parent.pid]
     assert len(later.stopped) == 1
+
+
+def test_a_harness_that_starts_while_a_pause_looks_at_the_processes_is_not_paused(
+    lab: Path, started: list[subprocess.Popen[bytes]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = marked(started, lab)
+    looked: list[bool] = []
+    look = psutil.process_iter
+
+    def looking() -> Iterator[psutil.Process]:
+        looked.append(True)
+        return look()
+
+    # The harness is no child of the server when the pause begins, and it is one once the pause has looked at the
+    # processes: it started during the look, which takes time on a computer with many processes.
+    monkeypatch.setattr(psutil, 'process_iter', looking)
+    monkeypatch.setattr(jobs, '_harness_groups', lambda: frozenset({harness.pid}) if looked else frozenset())
+
+    paused = pause_jobs(lab)
+
+    # A paused harness would never run again, because the resume spares the harnesses too.
+    assert paused.paused == ()
+    assert psutil.Process(harness.pid).status() != psutil.STATUS_STOPPED
+    assert sweep(lab, spare_harnesses=True).stopped == ()
+    assert harness.poll() is None
 
 
 def test_the_running_jobs_of_an_agent_are_its_own_and_never_its_harness(

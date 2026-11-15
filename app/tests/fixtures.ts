@@ -77,11 +77,14 @@ export function agentView(id: string, changes: Partial<AgentView> = {}): AgentVi
       model: { family: 'anthropic', name: null, effort: null },
       role: '',
       brief: '',
+      given_role: '',
       mode: null,
       recruited_by: null,
       checks: null,
     },
     role: '',
+    on_call: false,
+    coordinator: false,
     status: '',
     thread: null,
     activity: { state: 'idle', detail: '', at: null },
@@ -93,6 +96,7 @@ export function agentView(id: string, changes: Partial<AgentView> = {}): AgentVi
     posts: 0,
     usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 },
     cost_usd: null,
+    error: null,
     ...changes,
   };
 }
@@ -181,6 +185,7 @@ export function summary(changes: Partial<ThreadSummary> = {}): ThreadSummary {
 export function labView(changes: Partial<LabView> = {}): LabView {
   return {
     question: 'Is sorted() faster?',
+    coordinator_open: true,
     versions: [],
     opened_at: '2026-11-06T14:00:00Z',
     seq: 9,
