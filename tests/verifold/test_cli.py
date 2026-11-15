@@ -510,7 +510,7 @@ def test_a_record_with_one_number_for_two_events_exits_with_one_line_that_names_
 
 @pytest.mark.usefixtures('project')
 def test_a_record_that_another_program_replaces_stops_the_lab_with_one_line_and_keeps_what_was_written(
-    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
 ) -> None:
     path = Path.cwd() / '.verifold' / 'record.jsonl'
     kept = path.with_name('record.kept.jsonl')
@@ -556,7 +556,7 @@ def test_a_record_that_another_program_replaces_stops_the_lab_with_one_line_and_
     assert exit_info.value.code == f'verifold: {why}'
     assert json.loads(seen['answer']) == {'detail': why}
     assert kept.read_bytes() == seen['written']
-    assert 'Traceback' not in printed.out + printed.err
+    assert 'Traceback' not in printed.out + printed.err + caplog.text
 
 
 @pytest.fixture

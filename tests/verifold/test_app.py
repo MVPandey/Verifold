@@ -640,7 +640,7 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
 
 
 async def test_a_record_that_another_program_replaces_stops_the_server_and_each_caller_reads_why(
-    project: Path,
+    project: Path, caplog: pytest.LogCaptureFixture, capfd: pytest.CaptureFixture[str]
 ) -> None:
     start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),))
     path = project / '.verifold' / 'record.jsonl'
@@ -684,6 +684,8 @@ async def test_a_record_that_another_program_replaces_stops_the_server_and_each_
     assert stat.S_IMODE(kept.stat().st_mode) == 0o600
     assert path.read_bytes() == written.splitlines(keepends=True)[0]
     assert harness_pids() == []
+    # Nothing logs the error with its traceback: not the web server, and not the library that serves the tools.
+    assert 'Traceback' not in caplog.text + capfd.readouterr().err
 
 
 async def test_an_agent_that_left_stops_for_good_and_an_invited_one_loses_its_token(project: Path) -> None:
