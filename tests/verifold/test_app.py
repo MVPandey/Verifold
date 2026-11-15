@@ -759,11 +759,18 @@ async def test_an_agent_of_another_family_takes_a_wanted_rerun_in_a_clean_copy_a
     project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv('FAKE_ACP_RESULT', 'agent-1')
+    monkeypatch.setenv('FAKE_ACP_NO_RERUN', '1')
     catalog = {'fake': FAKE_HARNESS, 'other': FAKE_HARNESS.model_copy(update={'name': 'other', 'family': 'other'})}
     # Two agents make a lab without reviewer seats, so the agent of the other harness can take the rerun.
     start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='other')))
 
     async with serving(project, start, catalog, options=FAST) as client:
+        # The person asks when both agents rest, so the request is news for the agent that can take it.
+        await until(lambda: any(entry.post.kind == 'result' for entry in posts(project)), timeout=60)
+        await until(lambda: at_rest(project, ('agent-1', 'agent-2')))
+        claim = next(entry.post.id for entry in posts(project) if entry.post.kind == 'result')
+        asked = await client.post('/reruns', json={'post': claim})
+        assert asked.status_code == 200
         await until(lambda: any(entry.post.kind == 'check' for entry in posts(project)), timeout=60)
         check = next(entry.post for entry in posts(project) if entry.post.kind == 'check')
         file = await client.get(f'/posts/{check.id}/file', params={'path': 'rerun.txt'})
@@ -774,7 +781,7 @@ async def test_an_agent_of_another_family_takes_a_wanted_rerun_in_a_clean_copy_a
     # The request started no agent and no harness: the lab has the two seats that the person chose.
     assert [entry.agent.id for entry in board.agents] == ['agent-1', 'agent-2']
     assert {call['agent'] for call in calls(log) if call['event'] == 'new_session'} == {'agent-1', 'agent-2'}
-    assert [(entry.by, entry.post) for entry in board.reruns] == [('agent-1', result.id)]
+    assert [(entry.by, entry.post) for entry in board.reruns] == [('person', result.id)]
     assert [(entry.agent, entry.post) for entry in board.takes] == [('agent-2', result.id)]
     # The check comes from the clean copy inside the taker's own folder, and its file is the copy's own.
     copy = project / '.verifold' / 'agents' / 'agent-2' / '.verifold' / 'reruns' / result.id

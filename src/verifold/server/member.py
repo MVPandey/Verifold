@@ -125,8 +125,9 @@ class Member:
         self._check_in_time()
         board = self._lab.board
         evidence: tuple[FileEvidence, ...] = ()
-        reruns = request.kind == 'check' and request.method == 'rerun' and request.reply_to
-        taken = board.take(self.agent_id, request.reply_to) if reruns and request.reply_to and request.files else None
+        # The files of a rerun that the agent took are paths in the clean copy of that take.
+        reruns = request.kind == 'check' and request.method == 'rerun' and request.files
+        taken = board.take(self.agent_id, request.reply_to) if reruns and request.reply_to else None
         if taken:
             if self._copies is None:
                 raise EvidenceRejected('This lab cannot pin files for you.')

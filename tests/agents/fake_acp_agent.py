@@ -4,12 +4,13 @@ A fake ACP agent for tests. It reaches the lab's board over MCP with its token, 
 The first message makes it post in a new thread. The doorbell makes it read its posts with `wait` and answer each ask.
 It also takes each rerun that this news holds, reruns it in the clean copy, and posts the check with a file of that copy.
 Environment variables change its behavior: `FAKE_ACP_LOG` logs each call, `FAKE_ACP_PERMISSION` asks permission
-first, `FAKE_ACP_COMMAND` asks permission for that shell command, which the request names by its call's ID only, `FAKE_ACP_ABORT` makes the only "no" to that request an answer that stops the turn, `FAKE_ACP_QUESTION` asks its user which branch to take, as a form, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, `FAKE_ACP_SLOW_AGENT` does the
-same for an agent whose name starts with its value, and `FAKE_ACP_CHILD` starts a
+first, `FAKE_ACP_COMMAND` asks permission for that shell command, which the request names by its call's ID only, `FAKE_ACP_ABORT` makes the only "no" to that request an answer that stops the turn, `FAKE_ACP_QUESTION` asks its user which branch to take, as a form, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, and `FAKE_ACP_CHILD` starts a
 child that holds the agent's pipes open and writes its process ID to that path. `FAKE_ACP_JOB` starts a job in a
 session of its own, the way that a harness starts a background command, and writes its process ID to that path.
 `FAKE_ACP_LEAVE` makes the agent of that name leave the lab at the end of its first turn, and
 `FAKE_ACP_SLOW_AFTER_LEAVE` makes that turn take a minute more.
+`FAKE_ACP_RESULT` makes the agent of that name post a result with a file and ask for a rerun of it, and
+`FAKE_ACP_NO_RERUN` makes it post the result only.
 
 Each session offers a model option `llm` and an effort option `thinking`, under their ACP categories, as real
 adapters do under their own IDs, and the modes `ask` and `auto`. As in real adapters, each model has its own effort
@@ -185,8 +186,7 @@ class FakeAgent(acp.Agent):
                 Path(once).touch()
             os._exit(3)
         await asyncio.sleep(float(os.environ.get('FAKE_ACP_TURN_SECONDS', '0')))
-        slow_agent = os.environ.get('FAKE_ACP_SLOW_AGENT')
-        if os.environ.get('FAKE_ACP_SLOW') or (slow_agent and self._name.startswith(slow_agent)):
+        if os.environ.get('FAKE_ACP_SLOW'):
             await asyncio.sleep(60)
         # The doorbell can follow other news, such as a restart of Verifold.
         if text.endswith((DOORBELL, RERUN_WANTED)):
@@ -258,7 +258,7 @@ class FakeAgent(acp.Agent):
             {'kind': 'result', 'text': 'sorted() is 11.8x faster.', 'new_thread': 'Speed', 'files': ['result.txt']},
         )
         post = posted.get('post')
-        if isinstance(post, dict):
+        if isinstance(post, dict) and not os.environ.get('FAKE_ACP_NO_RERUN'):
             await self._call('rerun', {'post': post.get('id')})
 
     async def _answer_news(self) -> None:
