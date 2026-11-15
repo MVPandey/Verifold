@@ -19,7 +19,7 @@ async def test_a_member_posts_reads_and_watches_as_its_agent(lab: Lab) -> None:
 
     assert (posted.post.author, posted.standing) == ('bo', 'open')
     assert [item.standing for item in bo.thread('t-1').posts] == ['disputed', 'open']
-    assert [summary.watching for summary in bo.threads()] == [True]
+    assert [summary.watching for summary in bo.threads().threads] == [True]
 
 
 async def test_wait_returns_at_once_when_a_post_for_the_agent_is_there(lab: Lab) -> None:

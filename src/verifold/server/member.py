@@ -6,12 +6,12 @@ from collections.abc import Awaitable, Callable
 from verifold.protocol.agents import GUEST
 from verifold.protocol.events import AgentLeft, AlarmSet, RerunRequested, WatchSet
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
-from verifold.protocol.join import Brief, News, PostRequest, PostView, ThreadSummary, ThreadView, Update
+from verifold.protocol.join import Brief, News, PostRequest, PostView, ThreadList, ThreadView, Update
 from verifold.protocol.posts import FileEvidence
 from verifold.server.errors import BlindCheck, CannotWake, EvidenceRejected, HasLeft, OutOfTime, UnknownAgent
 from verifold.server.lab import Lab
 from verifold.society.attention import news, update
-from verifold.society.views import brief, post_view, thread_summaries, thread_view
+from verifold.society.views import brief, post_view, side_lines, thread_summaries, thread_view, work_threads
 
 type Pin = Callable[[tuple[str, ...]], Awaitable[tuple[FileEvidence, ...]]]
 """Commits an agent's folder and returns each named file pinned to that commit."""
@@ -127,10 +127,15 @@ class Member:
         """
         self._seen = min(self._seen, seq)
 
-    def threads(self) -> tuple[ThreadSummary, ...]:
-        """Return a summary of each thread, the most recently active first."""
+    def threads(self) -> ThreadList:
+        """
+        Return a summary of each thread that is not a side thread, and one line for each side thread.
+
+        Both have the most recently active first, and the agent's own side threads come before the others.
+        """
         self._check_not_blind()
-        return thread_summaries(self._lab.board, self.agent_id)
+        every = thread_summaries(self._lab.board, self.agent_id)
+        return ThreadList(threads=work_threads(every), side_threads=side_lines(every, self.agent_id))
 
     def thread(self, thread_id: ThreadId) -> ThreadView:
         """Return a thread and its posts."""

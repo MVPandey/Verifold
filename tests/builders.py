@@ -68,9 +68,12 @@ class RecordBuilder:
         self.events.append(AgentLeft(seq=seq, at=at, agent=agent_id, by=by or agent_id, reason=reason))
         return self
 
-    def thread(self, thread_id: str, opened_by: str, title: str = 'Subject') -> 'RecordBuilder':
+    def thread(
+        self, thread_id: str, opened_by: str, title: str = 'Subject', between: tuple[str, ...] = ()
+    ) -> 'RecordBuilder':
         seq, at = self._stamp()
-        self.events.append(ThreadOpened(seq=seq, at=at, thread=Thread(id=thread_id, title=title, opened_by=opened_by)))
+        thread = Thread(id=thread_id, title=title, opened_by=opened_by, between=between)
+        self.events.append(ThreadOpened(seq=seq, at=at, thread=thread))
         return self
 
     def post(self, post: Post) -> 'RecordBuilder':

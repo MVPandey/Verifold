@@ -108,9 +108,15 @@ export function createApi(
           crossed: summary.crossed ?? 0,
           open_calls: summary.open_calls ?? 0,
           team: summary.team ?? [],
+          members: summary.members ?? [],
         })),
       ),
-    thread: (id) => request(`/threads/${encodeURIComponent(id)}`),
+    thread: (id) =>
+      // A server from before side threads sends no members.
+      request<ThreadView>(`/threads/${encodeURIComponent(id)}`).then((view) => ({
+        ...view,
+        members: view.members ?? [],
+      })),
     needs: () => request('/needs'),
     report: () => request('/report'),
     // A server from before this route has none, and the page must still load.

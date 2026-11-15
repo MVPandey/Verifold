@@ -911,6 +911,63 @@ details[open] > summary .opened {
   font-size: 13px;
   color: var(--muted);
 }
+.f-side {
+  margin-top: 18px;
+  border: 1px dashed var(--line2);
+  font-size: 13px;
+}
+.f-side > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.f-side ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px dashed var(--line2);
+}
+.f-side li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+}
+.f-side li > a {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  min-width: 0;
+  padding: 7px 0;
+  color: inherit;
+  text-decoration: none;
+}
+.f-side li > a:hover span {
+  text-decoration: underline;
+}
+.f-side li > a b {
+  font-weight: 500;
+}
+.f-side li > a span {
+  overflow-wrap: anywhere;
+}
+.f-side li > a em {
+  font-style: normal;
+}
+.f-side li > a small {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.f-side li > .f-card {
+  flex: 1;
+  margin: 12px 0;
+}
 .f-head {
   margin: 6px 0 0;
   font: 500 24px/1.32 var(--head);

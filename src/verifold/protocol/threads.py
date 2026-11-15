@@ -19,3 +19,10 @@ class Thread(Record):
     id: ThreadId
     title: Title
     opened_by: AgentId
+    between: tuple[AgentId, ...] = ()
+    """
+    The agents that a side thread opened between, with the agent that opened it first. Empty for any other thread.
+
+    A post in a side thread reaches the members that watch it, and not every agent. The person and every agent
+    that reads the board can read it. Any other thread is a thread for the whole lab.
+    """
