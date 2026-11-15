@@ -16,6 +16,7 @@ from verifold.protocol.agents import (
     TypedId,
     ValueId,
 )
+from verifold.protocol.deliverables import DeliverableLine
 from verifold.protocol.events import Note, Posted, Question, RequestAnswered
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.moves import LabSetting, Move
@@ -100,6 +101,8 @@ class PostRequest(Record):
     def _one_thread(self) -> Self:
         if self.kind == 'request':
             raise ValueError('A request for a move of the person goes through the `request` tool.')
+        if self.kind == 'offer':
+            raise ValueError('An offer of files for a deliverable goes through the `offer` tool.')
         if self.conversation:
             if self.thread or self.new_thread or self.for_person:
                 raise ValueError('`conversation` stands alone: without thread, new_thread, and for_person.')
@@ -269,6 +272,12 @@ class ThreadView(Record):
     watching: bool
     members: tuple[AgentId, ...] = ()
     """The members of a side thread, in the order that they came. Empty for any other thread."""
+    person_reaches: tuple[AgentId, ...] | None = None
+    """
+    For the thread of the offers for a deliverable: the agents that a post of the person there reaches when it
+    names nobody and replies to no post. They offered files there or said that they watch the thread. When the
+    list is empty, such a post is for every agent that is not on call. `None` for any other thread.
+    """
     posts: tuple[PostView, ...]
 
 
@@ -872,6 +881,11 @@ class Brief(Record):
     """The question that the lab works on now. The person can revise it."""
     revisions: tuple[RevisionLine, ...] = ()
     """The newest revisions of the question by the person, newest last, at most `MAX_LEADS`. Each one's post holds its text."""
+    deliverables: tuple[DeliverableLine, ...] = ()
+    """
+    What the person wants to hold at the end of the lab, each with its state and the files that agents offered
+    for it. Only the person states a deliverable and decides about an offer. Empty when the person stated none.
+    """
     state: LabState = 'open'
     """Whether the lab's agents say that it is done."""
     close: PostLine | None = None

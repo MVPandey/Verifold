@@ -21,8 +21,9 @@ from verifold.protocol.agents import (
     ValueId,
     one_line,
 )
+from verifold.protocol.deliverables import Decision, Sentence
 from verifold.protocol.grants import Grant
-from verifold.protocol.ids import PERSON, AgentId, CommitId, PostId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, CommitId, DeliverableId, PostId, ThreadId
 from verifold.protocol.moves import Note, Question
 from verifold.protocol.posts import Post
 from verifold.protocol.record import Record
@@ -499,6 +500,42 @@ class BadgeSet(EventBase):
     """
 
 
+class DeliverableSet(EventBase):
+    """
+    The person stated a deliverable, changed its sentence, or removed it.
+
+    A deliverable is what the person wants to hold at the end of the lab, as one sentence. A new ID states one, a
+    known ID with a new text changes its sentence, and `removed` removes it. The record keeps every earlier
+    sentence. `post` is the person's post that tells the lab, which comes just before this event. A deliverable
+    that the person stated when the lab opened, before any agent joined, has none. No agent tool records this
+    event.
+    """
+
+    type: Literal['deliverable_set'] = 'deliverable_set'
+    deliverable: DeliverableId
+    text: Sentence
+    """The sentence from now on. With `removed`, the sentence that the deliverable had last."""
+    removed: bool = False
+    post: PostId | None = None
+
+
+class DeliverableDecided(EventBase):
+    """
+    The person decided about an offer of files for a deliverable.
+
+    The person accepted the offer, asked its author for changes, or took back their acceptance of it. `post` is the
+    person's post that replies to the offer, which comes just before this event, so the offer's author hears the
+    decision. With `changes_asked`, that post holds the person's words. A deliverable is accepted only by this
+    event, and only this event takes an acceptance back. No agent tool records it.
+    """
+
+    type: Literal['deliverable_decided'] = 'deliverable_decided'
+    deliverable: DeliverableId
+    decision: Decision
+    offer: PostId
+    post: PostId
+
+
 type Event = Annotated[
     LabOpened
     | QuestionRevised
@@ -525,6 +562,8 @@ type Event = Annotated[
     | PowerSet
     | RequestAnswered
     | Voted
-    | BadgeSet,
+    | BadgeSet
+    | DeliverableSet
+    | DeliverableDecided,
     Field(discriminator='type'),
 ]

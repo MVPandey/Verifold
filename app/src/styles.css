@@ -3202,6 +3202,352 @@ body.with-panel {
   }
 }
 
+/* Deliverables ("d-"): the line under the answer, and the panel in the dock of the panel for the coordinator. */
+.d-door {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  align-items: baseline;
+  width: 100%;
+  margin-top: 10px;
+  padding: 12px 20px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.d-door:hover,
+.d-door.on {
+  border-color: var(--accent);
+}
+.d-door .f-label {
+  margin: 0;
+}
+.d-sum {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font-size: 14.5px;
+  color: var(--ink2);
+}
+.d-sum b {
+  margin-right: 4px;
+  color: var(--ink);
+}
+.d-door u {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 13px;
+  text-underline-offset: 3px;
+}
+.d-panel > header {
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  border-bottom: 1px solid var(--line);
+}
+.d-title {
+  margin: 0 0 3px;
+  font: 700 19px var(--head);
+}
+.d-list {
+  flex: 1;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  /* Room under the last deliverable, so that its form does not sit against the foot. */
+  padding: 0 18px 28px;
+}
+.d-list > li {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--line);
+}
+.d-list > li.d-empty {
+  color: var(--ink2);
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+.d-head {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.d-head .linkbtn {
+  flex: none;
+  font-size: 13.5px;
+}
+.d-text {
+  margin: 0;
+  font: 500 18px/1.35 var(--head);
+  letter-spacing: -0.005em;
+  overflow-wrap: anywhere;
+}
+.d-state {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.d-state i {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--muted);
+}
+.d-accepted .d-state {
+  color: var(--good);
+}
+.d-accepted .d-state i {
+  background: var(--good);
+  border-color: var(--good);
+}
+.d-offered .d-state,
+.d-changes_asked .d-state {
+  color: var(--turn);
+}
+.d-offered .d-state i,
+.d-changes_asked .d-state i {
+  border-color: var(--turn);
+}
+.d-offer + .d-offer {
+  margin-top: 16px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line2);
+}
+.d-file {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+  padding: 9px 12px;
+  background: var(--bg);
+  border: 1px solid var(--line2);
+}
+.d-file:hover {
+  border-color: var(--ink2);
+}
+/* The offer that the person accepted has the color of that state. */
+.d-o-accepted .d-file {
+  border-color: var(--good);
+}
+.d-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--ink2);
+}
+.d-o-accepted .d-ostate {
+  color: var(--good);
+  font-weight: 600;
+}
+.d-o-changes_asked .d-ostate {
+  color: var(--turn);
+  font-weight: 600;
+}
+.d-disputed {
+  color: var(--bad);
+  font-weight: 600;
+}
+.d-disputed a {
+  color: inherit;
+  font-weight: 500;
+  text-underline-offset: 3px;
+}
+.d-ask {
+  margin: 0;
+  font-size: 15px;
+  color: var(--ink);
+}
+.d-file code {
+  display: block;
+  font: 13.5px/1.4 var(--mono);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.d-file small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.d-file a {
+  font-size: 13px;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+/* The link covers its whole row, so the row opens the file as one target. The picture stays above it. */
+.d-file a::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
+.d-file .i-open {
+  position: relative;
+  z-index: 1;
+}
+.d-note {
+  margin: 10px 0 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ink2);
+  overflow-wrap: anywhere;
+}
+.d-more {
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+.d-more a {
+  color: var(--ink2);
+  text-underline-offset: 3px;
+}
+.d-list .error {
+  margin: 10px 0 0;
+  font-size: 13px;
+}
+.d-add {
+  width: 100%;
+  padding: 10px;
+  background: none;
+  border: 1px dashed var(--line2);
+  color: var(--ink);
+  font: 600 14px var(--body);
+  cursor: pointer;
+}
+.d-add:hover {
+  border-color: var(--ink2);
+}
+.d-add:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.d-form {
+  margin-top: 10px;
+}
+.d-foot {
+  padding: 12px 18px 16px;
+  border-top: 1px solid var(--line);
+}
+.d-foot .d-form {
+  margin-top: 0;
+}
+.d-form label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink2);
+}
+.d-form textarea {
+  display: block;
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--line2);
+  color: var(--ink);
+  font: 15px/1.4 var(--body);
+  resize: none;
+}
+.d-form textarea:focus {
+  border-color: var(--accent);
+  outline: 0;
+}
+.d-form > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px 14px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.d-form > div > span {
+  flex: 1 1 180px;
+}
+.d-form .d-go {
+  flex: none;
+  padding: 8px 18px;
+  background: var(--accent);
+  border: 0;
+  color: #fff;
+  font: 600 14px var(--body);
+  cursor: pointer;
+}
+.d-form .d-go:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.d-panel button:focus-visible,
+.d-door:focus-visible,
+.d-file a:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+.f-done span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+}
+.d-setup {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--line2);
+  color: var(--ink);
+  font: 15px/1.5 var(--body);
+  resize: vertical;
+}
+.d-setup:focus {
+  border-color: var(--accent);
+  outline: 0;
+}
+.d-work {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  font-size: 13px;
+  color: var(--ink2);
+}
+.d-work li + li {
+  margin-top: 4px;
+}
+.d-work a,
+.d-gone a {
+  color: var(--ink2);
+  text-underline-offset: 3px;
+}
+.d-gone summary {
+  font-size: 13.5px;
+  color: var(--ink2);
+  cursor: pointer;
+}
+.d-gone summary u {
+  margin-left: 8px;
+  color: var(--muted);
+  text-underline-offset: 3px;
+}
+.d-gone details[open] .closed,
+.d-gone details:not([open]) .opened {
+  display: none;
+}
+.d-gone ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
 /* Votes and badges ("v-"). A count belongs to a post, and nothing is sorted by it. */
 :root {
   /* The color of a Breakthrough badge. Nothing else on the page uses it. */

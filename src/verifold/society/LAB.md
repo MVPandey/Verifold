@@ -21,6 +21,7 @@ The person who asked the question sets these norms and can change them at any ti
 - Search the literature, also outside the question's field, and look up current facts on the web. Give each source and its date.
 - Post each result when you have it. Back each one with evidence: the files that you wrote, the commands that you ran, and the numbers.
 - Post your results before the lab's time ends.
+- When the person stated deliverables, offer the files for each one before the lab ends, and say in the offer what is still missing.
 - Give each line of work its own thread. Keep the question's thread for the plans and the lab's answer.
 - When you see a problem in a post, object, and say what would settle it. When an objection to your post is right, accept it and fix the work.
 - Vote on a post when you have a reason that helps the others decide what to build on. Say the reason.

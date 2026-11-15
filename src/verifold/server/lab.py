@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Final, Self, assert_never
 
 from verifold.protocol.agents import Agent, Picture, Power, one_line
+from verifold.protocol.deliverables import Decision
 from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
@@ -13,6 +14,8 @@ from verifold.protocol.events import (
     AlarmSet,
     BadgeSet,
     CoordinatorSet,
+    DeliverableDecided,
+    DeliverableSet,
     Event,
     LabOpened,
     OnCallSet,
@@ -35,7 +38,7 @@ from verifold.protocol.events import (
     Voted,
     WatchSet,
 )
-from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import PostRequest
 from verifold.protocol.moves import (
     AddMove,
@@ -53,6 +56,7 @@ from verifold.protocol.posts import (
     Ask,
     Check,
     FileEvidence,
+    FileOffer,
     Mark,
     MoveRequest,
     PermissionShown,
@@ -65,6 +69,7 @@ from verifold.server.changes import wait_until
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.society.board import Board
 from verifold.society.coordinator import check_asks, permission_choice, power_covers, time_given
+from verifold.society.deliverables import accepted, check_decidable, live, offers_title, told_at
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
 from verifold.society.labels import awaits_model, is_numbered, label, plain
@@ -72,6 +77,7 @@ from verifold.society.lines import question_thread
 from verifold.society.names import check_name
 from verifold.society.reruns import open_take, open_to, wanted_reruns
 from verifold.society.reviewers import check_review, seats_line
+from verifold.society.standing import closing
 from verifold.society.votes import proposal, vote_of
 from verifold.store.record_file import RecordFile
 
@@ -316,6 +322,133 @@ class Lab:
             return None
         board = await self._commit(*_revision(self._board, question, note, PERSON))
         return board.revisions[-1]
+
+    async def state_deliverables(self, texts: tuple[str, ...]) -> None:
+        """
+        Record the deliverables that the person stated when the lab opened, before its agents join.
+
+        Raises:
+            RejectedEvent: An agent joined already, or the lab would have too many deliverables.
+
+        """
+        if texts:
+            await self._commit(*(_deliverable(None, text, told=False) for text in texts))
+
+    async def add_deliverable(self, text: str) -> DeliverableSet:
+        """
+        Record that the person stated one more deliverable, and return it.
+
+        It comes with a post of the person in the question's thread, which names nobody. So it reaches the agents
+        and opens a closed lab again, as the person's other words to the lab do.
+
+        Raises:
+            RejectedEvent: The lab has too many deliverables.
+
+        """
+        said = f'{STATED.format(id=_next_deliverable(self._board))}{text}'
+        board = await self._commit(*_told_lab(self._board, said), _deliverable(None, text))
+        return board.deliverables[-1]
+
+    async def change_deliverable(self, deliverable_id: DeliverableId, text: str) -> None:
+        """
+        Record that the person changed the sentence of a deliverable. The same sentence again records nothing.
+
+        The record keeps the earlier sentence. The offers for the deliverable stay, and so does an acceptance.
+        `_change` says when a post of the person tells the lab.
+
+        Raises:
+            RejectedEvent: The lab has no such deliverable.
+
+        """
+        if live(self._board, deliverable_id).text == text:
+            return
+        await self._change(f'{CHANGED.format(id=deliverable_id)}{text}', deliverable_id, text, removed=False)
+
+    async def remove_deliverable(self, deliverable_id: DeliverableId) -> None:
+        """
+        Record that the person removed a deliverable. Its offers stay on the board as posts.
+
+        Raises:
+            RejectedEvent: The lab has no such deliverable.
+
+        """
+        text = live(self._board, deliverable_id).text
+        await self._change(f'{REMOVED.format(id=deliverable_id)}{text}', deliverable_id, text, removed=True)
+
+    async def _change(self, said: str, deliverable_id: DeliverableId, text: str, *, removed: bool) -> None:
+        # A new sentence or a removal is no new work for the lab. So its post does not open a closed lab again:
+        # while a close stands, the record takes the change without a post. For the whole list, one such post
+        # goes out in `TOLD_WINDOW` at most. The agents read every change in `brief`.
+        board = self._board
+        last = told_at(board)
+        quiet = closing(board) is not None or (last is not None and self._clock() - last < TOLD_WINDOW)
+        tells = () if quiet else _told_lab(board, said)
+        await self._commit(*tells, _deliverable(deliverable_id, text, removed=removed, told=not quiet))
+
+    async def offer(  # noqa: PLR0913
+        self,
+        author: AgentId,
+        deliverable_id: DeliverableId,
+        evidence: tuple[FileEvidence, ...],
+        note: str,
+        body: str = '',
+        *,
+        helper: str = '',
+    ) -> Posted:
+        """
+        Post an agent's offer of files for a deliverable, and return the post.
+
+        The first offer for a deliverable opens the deliverable's thread, and every later offer goes there.
+
+        Raises:
+            RejectedEvent: The lab has no such deliverable, or the author cannot offer files.
+            pydantic.ValidationError: The note is no headline, the body is too long, or the offer names no file.
+
+        """
+        # No other change comes between this read of the board and the commit, so the first offer opens the thread.
+        stands = live(self._board, deliverable_id)
+        title = offers_title(deliverable_id, stands.text)
+        first = self._board.offers_thread(deliverable_id) is None
+
+        def post(board: Board, seq: int, at: datetime) -> Posted:
+            offered = FileOffer(
+                id=f'p-{len(board.posts) + 1}',
+                thread=board.offers_thread(deliverable_id) or board.threads[-1].thread.id,
+                author=author,
+                helper=helper,
+                text=note,
+                body=body,
+                deliverable=deliverable_id,
+                evidence=evidence,
+            )
+            return Posted(seq=seq, at=at, post=offered)
+
+        opens = (_open_thread(title, author, deliverable=deliverable_id),) if first else ()
+        board = await self._commit(*opens, post)
+        return board.posts[-1]
+
+    async def decide(self, deliverable_id: DeliverableId, decision: Decision, offer: PostId, text: str = '') -> None:
+        """
+        Record what the person decided about an offer: an acceptance, a request for changes, or an acceptance taken back.
+
+        The decision comes with a post of the person that replies to the offer, so the offer's author hears it.
+        With a request for changes, `text` holds the person's words, and they are that post. A deliverable has one
+        accepted offer at most: an acceptance of another offer first takes the standing one back, in the same
+        step, so that its author hears it too.
+
+        Raises:
+            RejectedEvent: The post is no offer for the deliverable, its author replaced it, or there is no
+                acceptance to take back.
+            pydantic.ValidationError: A request for changes has no words.
+
+        """
+        board = self._board
+        live(board, deliverable_id)
+        # The record refuses the same. This says so before the person's reply to another offer is built.
+        check_decidable(board, deliverable_id, decision, offer)
+        took = accepted(board, deliverable_id)
+        back = _decision(board, deliverable_id, 'taken_back', took.offer) if decision == 'accepted' and took else ()
+        await self._commit(*back, *_decision(board, deliverable_id, decision, offer, text))
 
     async def set_alarm(self, agent_id: AgentId, minutes: float, *, quiet: bool) -> AlarmSet:
         """Record that an agent wants to be woken. The alarm replaces the agent's last one, and zero minutes cancels it."""
@@ -774,6 +907,82 @@ NO: Final = 'Not now'
 """The person's answer to a request for a move, as the conversation shows it."""
 
 
+STATED: Final = 'The person stated a deliverable, {id}: '
+"""How the post that tells the lab of a new deliverable starts. The person's sentence follows it."""
+
+CHANGED: Final = 'The person changed the sentence of the deliverable {id} to: '
+"""How that post starts when the person changed a deliverable. The new sentence follows it."""
+
+REMOVED: Final = 'The person removed the deliverable {id}: '
+"""How that post starts when the person removed a deliverable. The sentence that it had follows it."""
+
+ACCEPTED: Final = 'The person accepted these files for the deliverable {id}.'
+"""The person's reply to an offer that they accepted."""
+
+TAKEN_BACK: Final = 'The person took back the acceptance of these files for the deliverable {id}.'
+"""The person's reply to an offer whose acceptance they took back."""
+
+DELIVERABLES_TITLE: Final = 'Deliverables'
+"""The title of the thread that holds the person's deliverables in a lab from before the question had a thread."""
+
+TOLD_WINDOW: Final = timedelta(seconds=60)
+"""How long after a post about a new sentence or a removal the next such change sends no post."""
+
+
+def _next_deliverable(board: Board) -> DeliverableId:
+    return f'd-{len({entry.deliverable for entry in board.deliverables}) + 1}'
+
+
+def _deliverable(deliverable_id: DeliverableId | None, text: str, *, removed: bool = False, told: bool = True) -> Build:
+    # Without an ID, the deliverable is a new one. With `told`, the board's newest post tells the lab of it.
+    return lambda board, seq, at: DeliverableSet(
+        seq=seq,
+        at=at,
+        deliverable=deliverable_id or _next_deliverable(board),
+        text=text,
+        removed=removed,
+        post=board.posts[-1].post.id if told else None,
+    )
+
+
+def _told_lab(board: Board, said: str) -> tuple[Build, ...]:
+    # The person's post that tells the lab of a deliverable, in the question's thread. A lab from before the
+    # question had a thread gets one thread for these posts.
+    thread = question_thread(board) or next(
+        (
+            opened.thread.id
+            for opened in board.threads
+            if opened.thread.title == DELIVERABLES_TITLE and opened.thread.opened_by == PERSON
+        ),
+        None,
+    )
+    opens = () if thread else (_open_thread(DELIVERABLES_TITLE, PERSON),)
+    request = PostRequest(kind='message', text=said, thread=thread, new_thread=None if thread else DELIVERABLES_TITLE)
+    return (*opens, _add_post(request, PERSON, ()))
+
+
+def _decision(
+    board: Board, deliverable_id: DeliverableId, decision: Decision, offer: PostId, text: str = ''
+) -> tuple[Build, ...]:
+    # The person's reply to the offer, and the decision after it.
+    entry = board.post(offer)
+    thread = entry.post.thread if entry else None
+    words = {'accepted': ACCEPTED, 'taken_back': TAKEN_BACK}
+    said = text if decision == 'changes_asked' else words[decision].format(id=deliverable_id)
+    reply = PostRequest(kind='message', text=said, thread=thread, reply_to=offer)
+    return (
+        _add_post(reply, PERSON, ()),
+        lambda board, seq, at: DeliverableDecided(
+            seq=seq,
+            at=at,
+            deliverable=deliverable_id,
+            decision=decision,
+            offer=offer,
+            post=board.posts[-1].post.id,
+        ),
+    )
+
+
 def _revision(board: Board, question: str, note: str, by: AgentId, *, requested: bool = False) -> tuple[Build, ...]:
     # The post that tells the lab of a revision, in the question's thread, and the revision after it. A lab from
     # before the question had a thread gets one thread for these posts, whoever revised the question first. With
@@ -949,6 +1158,7 @@ def _open_thread(  # noqa: PLR0913
     *,
     conversation: bool = False,
     for_person: bool = False,
+    deliverable: DeliverableId | None = None,
 ) -> Build:
     # The author is always in its own side thread, and comes first. An agent that names itself changes nothing.
     members = tuple(dict.fromkeys((opened_by, *between))) if between else ()
@@ -962,6 +1172,7 @@ def _open_thread(  # noqa: PLR0913
             carries=carries,
             conversation=conversation,
             for_person=for_person,
+            deliverable=deliverable,
         )
         return ThreadOpened(seq=seq, at=at, thread=thread)
 

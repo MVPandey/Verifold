@@ -43,6 +43,7 @@ from verifold.protocol.posts import Ask, Call, Check, Close, Objection, Plan, Pr
 from verifold.society.attention import left_line, watches_thread
 from verifold.society.board import Board
 from verifold.society.coordinator import request_waits
+from verifold.society.deliverables import deliverable_lines
 from verifold.society.errors import NotFound
 from verifold.society.identity import post_line, post_view, seat_label
 from verifold.society.lifecycle import (
@@ -75,6 +76,7 @@ def thread_view(board: Board, agent_id: AgentId, thread_id: ThreadId) -> ThreadV
         thread=opened.thread,
         watching=watches_thread(board, agent_id, thread_id),
         members=board.members(thread_id),
+        person_reaches=board.offer_listeners(thread_id) if board.holds_offers(thread_id) else None,
         posts=tuple(post_view(board, entry) for entry in board.posts if entry.post.thread == thread_id),
     )
 
@@ -360,6 +362,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
             RevisionLine(at=entry.at, note=entry.note, post=entry.post, by=entry.by, request=entry.request)
             for entry in board.revisions[-MAX_LEADS:]
         ),
+        deliverables=deliverable_lines(board),
         state=lab_state(board),
         close=close_line,
         close_agreed=agreed(board, done) if done else (),

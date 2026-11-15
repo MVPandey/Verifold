@@ -16,6 +16,7 @@ from verifold.runner.messages import (
     more_time_message,
     start_message,
 )
+from verifold.society.board import Board
 
 EVIDENCE = FileEvidence(path='bench.py', commit='c' * 40)
 SAME_MOMENT = 'The other agents got this question at the same moment'
@@ -110,8 +111,9 @@ def test_the_lab_norms_and_the_doorbell_are_short_and_plain() -> None:
     assert '`' not in NORMS_TEMPLATE
     # The limit was 2,800. It grew by 300 for the two norms that came out of Python and the norm on checks by rerun,
     # by 1,200 for the norms on the goal, on obstacles, on a human's limits, on reviewer seats, on the
-    # coordinator's strategy, and on a name, and by 300 for the close, the open coordinator seat, and the helpers.
-    assert len(NORMS_TEMPLATE) < 4_600
+    # coordinator's strategy, and on a name, by 300 for the close, the open coordinator seat, and the helpers, and
+    # by 150 for the norm on deliverables.
+    assert len(NORMS_TEMPLATE) < 4_750
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -271,6 +273,28 @@ def test_the_message_for_an_agent_that_comes_back_holds_facts_and_names_the_tool
     assert 'no end for your last turn' not in new
     assert 'any program' not in new
     assert new.splitlines()[-1] == 'Start.'
+
+
+def test_the_start_message_counts_the_deliverables_that_stand_and_names_none_without_them() -> None:
+    record = RecordBuilder().thread('t-1', opened_by='person', title=QUESTION_TITLE)
+    record.deliverable('d-1', 'A one-page answer.').join('ada')
+    one = record.board()
+    two = record.deliverable('d-2', 'A script.', 'p-1').deliverable('d-3', 'A list.', 'p-2').board()
+    removed = record.deliverable('d-3', 'A list.', 'p-3', removed=True).board()
+    ada = one.agents[0].agent
+
+    def line(board: Board) -> list[str]:
+        return [text for text in start_message(board, ada, Path('LAB.md')).splitlines() if 'deliverable' in text]
+
+    assert line(one) == [
+        (
+            'The person stated 1 deliverable: what the person wants to hold at the end of the lab. `brief` lists '
+            'each one with the files offered for it.'
+        )
+    ]
+    assert line(two)[0].startswith('The person stated 3 deliverables: ')
+    assert line(removed)[0].startswith('The person stated 2 deliverables: ')
+    assert line(RecordBuilder().join('ada').board()) == []
 
 
 def test_an_agent_that_starts_after_a_revision_gets_the_current_question() -> None:

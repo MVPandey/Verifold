@@ -302,6 +302,10 @@ class Host:
             lab=self._lab.board.settings if self._lab else None,
         )
 
+    def stop_exports(self) -> None:
+        """End every export of a clean copy that runs, as when the server stops. The takes that wait for one fail."""
+        self._copies.stop()
+
     async def file_text(self, post_id: PostId, path: str) -> FileText:
         """
         Return the text of a file that backs a post, at the commit that the post pins.
@@ -521,6 +525,7 @@ class Host:
         for prefix in request.allow:
             await lab.grant(prefix)
         await lab.open_question_thread()
+        await lab.state_deliverables(request.deliverables)
         self._lab = lab
         chosen = [choice for choice in request.agents for _ in range(choice.count)]
         for number, choice in enumerate(chosen, start=1):
@@ -1039,7 +1044,8 @@ async def serve(
                 await asyncio.Event().wait()
         finally:
             # The task group has stopped the agents' harnesses. Their processes stop next, and the web server last, also
-            # when the hook fails.
+            # when the hook fails. An export for a rerun that still runs ends now, so that its thread holds nothing.
+            host.stop_exports()
             try:
                 if (host.lab.board.settings if host.lab else opening).jobs.at_exit is AtExit.STOP:
                     hooks.swept(await asyncio.to_thread(sweep, project))

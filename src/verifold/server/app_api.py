@@ -24,6 +24,8 @@ from verifold.protocol.app import (
     BadgeRequest,
     ConversationView,
     CoordinatorSeat,
+    DeliverableDecision,
+    DeliverableRequest,
     FolderRequest,
     FolderView,
     Invitation,
@@ -47,8 +49,9 @@ from verifold.protocol.app import (
     TimeRequest,
     VoteRequest,
 )
+from verifold.protocol.deliverables import Decision
 from verifold.protocol.events import Reason, RerunRequested
-from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import AnswerView, FileText, PostRequest, PostView, ThreadSummary, ThreadView
 from verifold.protocol.moves import AddSeat
 from verifold.protocol.usage import Usage
@@ -59,6 +62,7 @@ from verifold.server.lab import Build, Lab
 from verifold.server.member import Member
 from verifold.server.status import agent_need, all_outcomes, in_turn, profile_edits, thread_needs, waits
 from verifold.society.board import Board
+from verifold.society.deliverables import deliverable_lines, removed_lines, told_at
 from verifold.society.errors import NotFound, SocietyError
 from verifold.society.identity import post_line, seat_label
 from verifold.society.lifecycle import alarm_line, close_count, lab_state
@@ -376,6 +380,7 @@ def _seat_routes(api: FastAPI, host: Host, activity: Activity, authorized: param
 
     _coordinator_routes(api, host, authorized)
     _vote_routes(api, host, authorized)
+    _deliverable_routes(api, host, activity, authorized)
 
 
 def _vote_routes(api: FastAPI, host: Host, authorized: params.Depends) -> None:
@@ -390,6 +395,40 @@ def _vote_routes(api: FastAPI, host: Host, authorized: params.Depends) -> None:
         return await Member(_lab(host), PERSON).badge(
             request.post, request.badge, request.action, request.reason, proof=request.proof, giver=request.giver
         )
+
+
+DECISIONS: dict[str, Decision] = {'accept': 'accepted', 'ask_changes': 'changes_asked', 'take_back': 'taken_back'}
+"""The decision that the record keeps for each of the person's buttons on an offer."""
+
+
+def _deliverable_routes(api: FastAPI, host: Host, activity: Activity, authorized: params.Depends) -> None:
+    """Add the person's actions on deliverables: state one, change it, remove it, and decide about an offer."""
+
+    @api.post('/deliverables', dependencies=[authorized])
+    async def add_deliverable(request: DeliverableRequest) -> LabView:
+        lab = _lab(host)
+        await lab.add_deliverable(request.text)
+        return _lab_view(lab.board, activity)
+
+    @api.post('/deliverables/{deliverable_id}', dependencies=[authorized])
+    async def change_deliverable(deliverable_id: DeliverableId, request: DeliverableRequest) -> LabView:
+        # The same sentence again records nothing.
+        lab = _lab(host)
+        await lab.change_deliverable(deliverable_id, request.text)
+        return _lab_view(lab.board, activity)
+
+    @api.delete('/deliverables/{deliverable_id}', dependencies=[authorized])
+    async def remove_deliverable(deliverable_id: DeliverableId) -> LabView:
+        lab = _lab(host)
+        await lab.remove_deliverable(deliverable_id)
+        return _lab_view(lab.board, activity)
+
+    @api.post('/deliverables/{deliverable_id}/decision', dependencies=[authorized])
+    async def decide(deliverable_id: DeliverableId, request: DeliverableDecision) -> LabView:
+        # The person's decision is also the person's reply to the offer, so the offer's author hears it.
+        lab = _lab(host)
+        await lab.decide(deliverable_id, DECISIONS[request.decision], request.offer, request.text)
+        return _lab_view(lab.board, activity)
 
 
 def _lab(host: Host) -> Lab:
@@ -448,6 +487,9 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
         ends_at=board.ends_at,
         out_of_time=board.out_of_time,
         settings=board.settings,
+        deliverables=deliverable_lines(board),
+        removed_deliverables=removed_lines(board),
+        deliverables_told_at=told_at(board),
     )
 
 

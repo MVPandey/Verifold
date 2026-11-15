@@ -109,12 +109,15 @@ def wakes(
     if post.author == agent_id or (reader and reader.agent.checks) or board.gone(agent_id):
         return False
     on_call = bool(reader) and board.on_call(agent_id)
-    if _tied(board, agent_id, post) or (_named(board, agent_id, post) and (not on_call or _addresses(post))):
+    offers = board.holds_offers(post.thread)
+    heard = offers and _to_listeners(board, agent_id, entry, on_call=on_call)
+    if heard or _tied(board, agent_id, post) or (_named(board, agent_id, post) and (not on_call or _addresses(post))):
         return True
     talk = post.thread == board.conversation
-    if talk or board.is_side(post.thread):
+    if talk or board.is_side(post.thread) or offers:
         # A side thread is for the members that watch it. No post in it is for every agent, the person's neither.
-        # The same holds for the conversation, where the person's words are for the coordinator, whatever it watches.
+        # The same holds for the conversation, where the person's words are for the coordinator, whatever it watches,
+        # and for the thread of the offers for a deliverable, which the person reads in the panel.
         told = talk and post.author == PERSON and agent_id == board.coordinator
         return told or watches_thread(board, agent_id, post.thread)
     if reader and on_call:
@@ -313,6 +316,18 @@ def _named_in(board: Board, text: str) -> frozenset[AgentId]:
     checkers = {joined.agent.id for joined in board.agents if joined.agent.checks}
     labels = tuple(dict.fromkeys((agent, label) for _, agent, label in board.labels if agent not in checkers))
     return _in_text(text, labels, board.chosen_names())
+
+
+def _to_listeners(board: Board, agent_id: AgentId, entry: Posted, *, on_call: bool) -> bool:
+    # The person's words in the thread of a deliverable's offers, which name nobody and reply to no post, are for
+    # the agents that offered files there or said that they watch it. When none of them is in the lab, the words
+    # are for the whole lab, so that somebody hears them. `closing` reads the same list, so only such words open
+    # a closed lab again.
+    post = entry.post
+    if post.author != PERSON or post.mentions or post.reply_to:
+        return False
+    heard = board.offer_listeners(post.thread, entry.seq)
+    return agent_id in heard or (not heard and not on_call)
 
 
 def _tied(board: Board, agent_id: AgentId, post: Post) -> bool:

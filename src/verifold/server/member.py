@@ -7,7 +7,7 @@ from pathlib import Path
 
 from verifold.protocol.agents import GUEST, Picture
 from verifold.protocol.events import AgentLeft, AlarmSet, Posted, RerunRequested, WatchSet
-from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
     MAX_MANIFEST,
     Brief,
@@ -27,6 +27,7 @@ from verifold.protocol.votes import Badge, BadgeAction, Direction
 from verifold.server.errors import CannotWake, EvidenceRejected, HasLeft, NoCleanCopy, OutOfTime, UnknownAgent
 from verifold.server.lab import Adds, Lab
 from verifold.society.attention import news, update
+from verifold.society.deliverables import live
 from verifold.society.errors import RejectedEvent
 from verifold.society.identity import post_view
 from verifold.society.reruns import open_take
@@ -162,6 +163,30 @@ class Member:
         # earlier version can post just after a revision, and its answer is then to that earlier version.
         seen = sum(self._seen >= told.seq for revision in board.revisions if (told := board.post(revision.post)))
         posted = await self._lab.post(request, self.agent_id, evidence, seen, take=taken.seq if taken else None)
+        return post_view(self._lab.board, posted)
+
+    async def offer(
+        self, deliverable_id: DeliverableId, files: tuple[str, ...], note: str, body: str = '', helper: str = ''
+    ) -> PostView:
+        """
+        Offer files of the agent's folder for a deliverable of the person, and return the offer as it stands.
+
+        `helper` names the helper of the agent that wrote the offer, as on any post.
+
+        Raises:
+            EvidenceRejected: This member cannot pin files, or a file is not in the folder.
+            RejectedEvent: The lab has no such deliverable, or the person removed it.
+            OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
+
+        """
+        self._check_in_time()
+        # The folder gets a commit only for an offer that the board can take.
+        live(self._lab.board, deliverable_id)
+        if self._pin is None:
+            raise EvidenceRejected('This lab cannot pin files for you.')
+        # A path that the call names twice is one file of the offer.
+        evidence = await self._pin(tuple(dict.fromkeys(files)))
+        posted = await self._lab.offer(self.agent_id, deliverable_id, evidence, note, body, helper=helper)
         return post_view(self._lab.board, posted)
 
     async def request(self, move: Move, text: str, body: str = '') -> PostView:

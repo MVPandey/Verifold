@@ -13,7 +13,11 @@ import type {
   ThreadSummary,
 } from '../api/types.ts';
 import { authorName, members } from '../model/agents.ts';
+import { coordinatorOf } from '../model/coordinator.ts';
+import type { Tab } from '../model/coordinator.ts';
 import { crossedLine, crossLines } from '../model/crossings.ts';
+import { deliverLine, isDocked } from '../model/deliverables.ts';
+import type { Docked } from '../model/deliverables.ts';
 import { clock, dayClock, duration, minutesBetween } from '../model/format.ts';
 import { clip, personMessage, standingChip } from '../model/posts.ts';
 import { isRevision, noteLabel, revisedBy, revisedLine } from '../model/question.ts';
@@ -28,6 +32,7 @@ import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
 import { Detail, Words } from './Markdown.tsx';
 import { CoordinatorSeat, OpenedForYou } from './Coordinator.tsx';
+import { DeliverDoor, Deliverables } from './Deliverables.tsx';
 import { ChipView, Composer, Exact, Files } from './parts.tsx';
 import { Who } from './Picture.tsx';
 import { Turns } from './Thread.tsx';
@@ -40,6 +45,8 @@ const LONG_QUESTION = 120;
 interface Place {
   readonly open: string | null;
   readonly post: string | null;
+  /** The panel that is docked beside the wall when the page opens. Without it, none is. */
+  readonly panel?: Tab | 'deliver' | undefined;
 }
 
 /**
@@ -97,6 +104,17 @@ export function Wall(
   const seen = readSeen(window.localStorage, lab.opened_at);
   const question = questionThread(threads);
   const questionId = question?.thread.id ?? null;
+  // The panel that is docked beside the wall: a tab of the panel for the coordinator, or the deliverables.
+  const [panel, setPanel] = useState<Docked>(props.panel ?? null);
+  const docked = isDocked(panel, coordinatorOf(lab.agents) !== null);
+  useEffect(() => {
+    // The page makes room for the docked panel, so the person reads the wall and the panel at once. This is
+    // the one place that does it: a switch from one panel to the other keeps the room.
+    document.body.classList.toggle('with-panel', docked);
+    return () => {
+      document.body.classList.remove('with-panel');
+    };
+  }, [docked]);
 
   const send = async (text: string, thread?: string): Promise<void> => {
     const request = personMessage(text, thread);
@@ -111,6 +129,7 @@ export function Wall(
         needs={needs}
         question={questionId}
         done={lab.state !== 'open'}
+        state={lab.state}
         reruns={lab.reruns_wanted}
         seats={lab.reviewer_seats}
         now={props.now}
@@ -127,8 +146,20 @@ export function Wall(
         {read.error ?? 'Loading the thread.'}
       </p>
     );
+  // The thread of the offers for a deliverable is no line of work, so it has no card. The panel for the
+  // deliverables links to it, and it shows as a card while it is open.
+  // The thread of a removed deliverable is a card again once a post comes there, so that work is not out of sight.
+  const surfaced = new Set(
+    lab.removed_deliverables.filter((item) => item.active).map((item) => item.thread),
+  );
   const cards = threads
     .filter((summary) => summary !== question && !isSide(summary))
+    .map((summary) =>
+      surfaced.has(summary.thread.id)
+        ? { ...summary, thread: { ...summary.thread, deliverable: null } }
+        : summary,
+    )
+    .filter((summary) => !summary.thread.deliverable || summary.thread.id === open)
     .sort((first, second) => number(first) - number(second));
   const side = threads.filter(isSide);
   const answerOpen = question !== null && open === questionId;
@@ -183,6 +214,27 @@ export function Wall(
               />
             </div>
           ) : null}
+          <DeliverDoor
+            list={lab.deliverables}
+            open={panel === 'deliver'}
+            onToggle={() => {
+              setPanel(panel === 'deliver' ? null : 'deliver');
+            }}
+          />
+          {panel === 'deliver' ? (
+            <Deliverables
+              api={api}
+              list={lab.deliverables}
+              removed={lab.removed_deliverables}
+              lab={lab}
+              agents={lab.agents}
+              now={props.now}
+              reload={data.reload}
+              onClose={() => {
+                setPanel(null);
+              }}
+            />
+          ) : null}
         </div>
         <div className="f-steer">
           <Waits lab={lab} now={props.now} />
@@ -192,9 +244,10 @@ export function Wall(
               href={href({ page: 'thread', id: lab.close.thread, post: lab.close.id })}
             >
               {done}
+              {deliverLine(lab.deliverables) ? <span>{deliverLine(lab.deliverables)}</span> : null}
             </a>
           ) : null}
-          <CoordinatorSeat {...props} />
+          <CoordinatorSeat {...props} tab={panel === 'deliver' ? null : panel} onTab={setPanel} />
           <Composer
             variant="steer"
             label="Steer the lab"
@@ -797,7 +850,7 @@ function Card(props: {
         <div className="f-card-st">
           {chip ? (
             <ChipView chip={chip} />
-          ) : (
+          ) : summary.thread.deliverable ? null : (
             <span className={`f-st fs-count-${status.edge}`}>{status.label}</span>
           )}
           {status.openAsks ? <span className="f-st fs-ask">{status.openAsks}</span> : null}

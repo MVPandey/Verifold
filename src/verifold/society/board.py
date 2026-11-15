@@ -11,6 +11,8 @@ from verifold.protocol.events import (
     AlarmSet,
     BadgeSet,
     CoordinatorSet,
+    DeliverableDecided,
+    DeliverableSet,
     LabOpened,
     OnCallSet,
     Posted,
@@ -29,7 +31,8 @@ from verifold.protocol.events import (
     Voted,
     WatchSet,
 )
-from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
+from verifold.protocol.posts import FileOffer
 from verifold.protocol.settings import Settings
 
 
@@ -85,6 +88,10 @@ class Board:
     """Each vote on a post, oldest first. `society.votes` says which of them stand."""
     badges: tuple[BadgeSet, ...] = ()
     """Each change to a badge on a post, oldest first."""
+    deliverables: tuple[DeliverableSet, ...] = ()
+    """Each time that the person stated, changed, or removed a deliverable, oldest first."""
+    decisions: tuple[DeliverableDecided, ...] = ()
+    """The person's decisions about offers of files for a deliverable, oldest first."""
 
     @property
     def question(self) -> str:
@@ -361,6 +368,42 @@ class Board:
         agents = {joined.agent.id for joined in self.agents if not joined.agent.checks}
         return tuple(dict.fromkeys((*opened.thread.between, *(agent for _, agent in came if agent in agents))))
 
+    def offers(self, deliverable_id: DeliverableId) -> tuple[Posted, ...]:
+        """Return the entries of the offers of files for a deliverable, oldest first."""
+        return _index(self.posts).offers.get(deliverable_id, ())
+
+    def offers_thread(self, deliverable_id: DeliverableId) -> ThreadId | None:
+        """Return the thread that holds the offers for a deliverable, or `None` until the first offer opens it."""
+        return next((entry.thread.id for entry in self.threads if entry.thread.deliverable == deliverable_id), None)
+
+    def thread_posts(self, thread_id: ThreadId) -> tuple[Posted, ...]:
+        """Return the entries of the posts of a thread, oldest first."""
+        return _index(self.posts).threads.get(thread_id, ())
+
+    def offer_listeners(self, thread_id: ThreadId, before: int | None = None) -> tuple[AgentId, ...]:
+        """
+        Return the agents that a post of the person in a thread of offers reaches when it names nobody.
+
+        They are the agents that offered files in the thread, and the agents that said that they watch it, without
+        the agents that left the lab. With `before`, the list is as it was just before that event. When it is
+        empty, such a post is for every agent that is not on call, as the person's words to the lab are.
+        """
+        ahead = lambda seq: before is None or seq < before
+        offered = (
+            entry.post.author
+            for entry in self.thread_posts(thread_id)
+            if isinstance(entry.post, FileOffer) and ahead(entry.seq)
+        )
+        said = {watch.agent: watch.watching for watch in self.watches if watch.thread == thread_id and ahead(watch.seq)}
+        gone = {left.agent for left in self.left if ahead(left.seq)}
+        every = dict.fromkeys((*offered, *(agent for agent, watching in said.items() if watching)))
+        return tuple(agent for agent in every if agent not in gone)
+
+    def holds_offers(self, thread_id: ThreadId) -> bool:
+        """Return whether a thread is the thread of the offers for a deliverable. No post there is for every agent."""
+        opened = self.thread(thread_id)
+        return bool(opened and opened.thread.deliverable)
+
     def take(self, agent_id: AgentId, post_id: PostId) -> RerunTaken | None:
         """Return the entry with which an agent took the rerun of a post, or `None`. An agent takes a post once."""
         return next((entry for entry in self.takes if entry.agent == agent_id and entry.post == post_id), None)
@@ -381,11 +424,13 @@ class Board:
 
 @dataclass(frozen=True, slots=True)
 class _Index:
-    """The posts of one board by the post that they reply to, and by the posts that they build on."""
+    """The posts of one board by the post that they reply to, by the posts that they build on, by thread, and the offers by deliverable."""
 
     posts: tuple[Posted, ...]
     replies: dict[PostId, tuple[Posted, ...]]
     builds: dict[PostId, tuple[Posted, ...]]
+    offers: dict[DeliverableId, tuple[Posted, ...]]
+    threads: dict[ThreadId, tuple[Posted, ...]]
 
 
 _indexes: list[_Index] = []
@@ -402,7 +447,12 @@ def _index(posts: tuple[Posted, ...]) -> _Index:
             return index
     replies: dict[PostId, list[Posted]] = {}
     builds: dict[PostId, list[Posted]] = {}
+    offers: dict[DeliverableId, list[Posted]] = {}
+    threads: dict[ThreadId, list[Posted]] = {}
     for entry in posts:
+        threads.setdefault(entry.post.thread, []).append(entry)
+        if isinstance(entry.post, FileOffer):
+            offers.setdefault(entry.post.deliverable, []).append(entry)
         if entry.post.reply_to:
             replies.setdefault(entry.post.reply_to, []).append(entry)
         for source in dict.fromkeys(entry.post.builds_on):
@@ -411,6 +461,8 @@ def _index(posts: tuple[Posted, ...]) -> _Index:
         posts=posts,
         replies={post: tuple(entries) for post, entries in replies.items()},
         builds={post: tuple(entries) for post, entries in builds.items()},
+        offers={deliverable: tuple(entries) for deliverable, entries in offers.items()},
+        threads={thread: tuple(entries) for thread, entries in threads.items()},
     )
     _indexes.append(index)
     del _indexes[:-_KEPT_INDEXES]

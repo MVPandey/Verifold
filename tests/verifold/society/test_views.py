@@ -563,7 +563,8 @@ def _largest() -> RecordBuilder:
 
 def test_the_largest_brief_is_no_larger_than_before_agents_had_profiles() -> None:
     # Before profiles, the brief of this board without the profiles had 107,984 characters, and its news 20,857.
-    # A line that leaves out its empty fields brought the brief to 96,320 characters.
+    # The mark of a thread that holds the offers for a deliverable brought it to 108,249. A line that leaves out
+    # its empty fields brought the brief to 96,718 characters.
     board = _largest().board()
 
     unseen = news(board, 'a0', 0)
@@ -572,7 +573,7 @@ def test_the_largest_brief_is_no_larger_than_before_agents_had_profiles() -> Non
     assert (len(unseen.for_you), len(unseen.others), len(view.agents), len(view.threads)) == (20, 20, 19, 20)
     assert [len(entries) for entries in (view.disputed, view.not_built_on, view.not_checked)] == [19, 10, 19]
     assert [len(entries) for entries in (view.open_asks, view.open_calls)] == [19, 19]
-    assert len(view.model_dump_json()) < 96_500
+    assert len(view.model_dump_json()) < 96_900
     assert len(unseen.model_dump_json()) < 28_000
     # Each author's name, seat, seat marks, and role stand once in the list of agents, and in each line of the news.
     assert all(line.by is not None and line.by.marks for line in (*unseen.for_you, *unseen.others))
@@ -581,7 +582,7 @@ def test_the_largest_brief_is_no_larger_than_before_agents_had_profiles() -> Non
 
 def test_the_largest_brief_with_votes_and_badges_on_every_post_is_no_larger_than_before_votes() -> None:
     # The same board, where every other agent and the person voted on every post with the longest reason, and
-    # every post has all three badges. Before votes, the brief of the board had 107,851 characters.
+    # every post has all three badges. Before votes, the brief of the board had 108,249 characters.
     record = _largest()
     why = 'w' * MAX_WHY
     voters = (*(f'a{number}' for number in range(20)), 'person')
@@ -608,6 +609,6 @@ def test_the_largest_brief_with_votes_and_badges_on_every_post_is_no_larger_than
         for _ in range(MAX_NOTES)
     )
     notes = News(seq=1, votes=votes, badges=badges).model_dump_json()
-    assert len(view.model_dump_json()) + len(notes) < 107_851
+    assert len(view.model_dump_json()) + len(notes) < 108_249
     # No reason of a vote or a badge is in the brief's lines.
     assert why not in view.model_dump_json()
