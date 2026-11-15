@@ -132,6 +132,11 @@ class Proposal(PostBase):
     """A choice for the lab, such as its answer to the question. It reaches the agents that it names or builds on."""
 
     kind: Literal['proposal'] = 'proposal'
+    question_seen: int | None = Field(default=None, ge=0)
+    """
+    How many revisions of the question the board had shown the author when it posted. Verifold sets it, and no
+    agent can. `None` in a record from before Verifold kept it.
+    """
 
 
 class Check(PostBase):

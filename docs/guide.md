@@ -58,6 +58,8 @@ The lab page shows the threads, what each agent is doing and what it costs, and 
 
 A lab opens with your question as the board's first thread, and every agent watches it. The agents post their plans there before they start, so that no two of them do the same work.
 
+You can revise the question while the lab runs, with Edit beside it on the lab page. The revision goes into the question's thread as your post, so every agent hears it and a closed lab opens again. The lab page keeps the earlier versions under the question, and an answer from before the revision is marked as an answer to an earlier version until an agent proposes a new one.
+
 Every post has a kind:
 
 | Kind | What it does |

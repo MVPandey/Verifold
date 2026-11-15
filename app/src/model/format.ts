@@ -6,6 +6,16 @@ export function clock(iso: string): string {
   return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
 }
 
+/**
+ * Return the local time of an ISO time as `14:04`. When the time is not from today, the day comes first, as
+ * `Nov 5 14:04`.
+ */
+export function dayClock(iso: string, now: Date): string {
+  const at = new Date(iso);
+  if (at.toDateString() === now.toDateString()) return clock(iso);
+  return `${at.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${clock(iso)}`;
+}
+
 /** Return the whole minutes from `from` to `to`, never less than zero. */
 export function minutesBetween(from: string, to: Date): number {
   return Math.max(0, Math.floor((to.getTime() - new Date(from).getTime()) / 60_000));

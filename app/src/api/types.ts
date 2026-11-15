@@ -95,8 +95,21 @@ export interface AgentView {
   readonly cost_usd: number | null;
 }
 
-export interface LabView {
+/** One version of the lab's question: the text that the lab opened with, or a revision by the person. */
+export interface QuestionVersion {
   readonly question: string;
+  readonly at: string;
+  /** Why the person revised the question, or an empty text. */
+  readonly note: string;
+  /** The person's post that told the lab of the revision, or `null` for the first text. */
+  readonly post: string | null;
+}
+
+export interface LabView {
+  /** The question that the lab works on now. */
+  readonly question: string;
+  /** Every version of the question, oldest first. The last one is the current question. */
+  readonly versions: readonly QuestionVersion[];
   readonly opened_at: string;
   readonly seq: number;
   readonly agents: readonly AgentView[];
@@ -329,6 +342,8 @@ export interface PostView {
 /** The lab's answer so far, and each post that it builds on with where it stands. */
 export interface AnswerView {
   readonly answer: PostView;
+  /** Whether the person revised the question after this answer. */
+  readonly to_earlier_question: boolean;
   readonly builds_on: readonly PostView[];
   /** How many of `builds_on` are results with files, which a blind checker can rerun. */
   readonly results: number;

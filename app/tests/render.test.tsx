@@ -12,7 +12,7 @@ import type {
   ThreadView,
 } from '../src/api/types.ts';
 import type { ThreadRead } from '../src/ui/hooks.ts';
-import { LabPage, Wall } from '../src/ui/LabPage.tsx';
+import { LabPage, QuestionForm, Wall } from '../src/ui/LabPage.tsx';
 import { Markdown } from '../src/ui/Markdown.tsx';
 import { SettingsForm } from '../src/ui/SettingsPage.tsx';
 import { SetupPage } from '../src/ui/SetupPage.tsx';
@@ -600,12 +600,100 @@ describe('the lab page', () => {
     );
   });
 
+  it('shows Edit beside the question, and no line about revisions while it has none', () => {
+    const html = page('{}');
+    assert.ok(
+      html.includes(
+        '<h1>Is sorted() faster?</h1><button type="button" class="linkbtn" aria-label="Edit the question">Edit</button></div>',
+      ),
+    );
+    assert.equal(html.includes('Revised'), false);
+  });
+
+  it('lists the versions of a revised question under it, oldest first, with the current one marked', () => {
+    const revised = labView({
+      question: 'Is sorted() faster on ARM?',
+      versions: [
+        { question: 'Is sorted() faster?', at: '2026-11-06T14:00:00Z', note: '', post: null },
+        {
+          question: 'Is sorted() <b>faster</b> on x86?',
+          at: '2026-11-06T14:10:00Z',
+          note: 'Name the chip.',
+          post: 'p-4',
+        },
+        {
+          question: 'Is sorted() faster on ARM?',
+          at: '2026-11-06T14:20:00Z',
+          note: '',
+          post: 'p-6',
+        },
+      ],
+    });
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    const html = renderToStaticMarkup(
+      <Wall
+        api={{} as Api}
+        data={{ ...data, lab: revised }}
+        now={now}
+        open={null}
+        post={null}
+        questionRead={none}
+        cardRead={none}
+      />,
+    );
+    assert.ok(html.includes('<h1>Is sorted() faster on ARM?</h1>'));
+    assert.ok(
+      html.includes(
+        'Revised 2 times. <span class="closed">Show earlier versions</span><span class="opened">Hide earlier versions</span>',
+      ),
+    );
+    const [first, second, current] = html.split('<li><time').slice(1);
+    assert.ok(first?.includes('<p>Is sorted() faster?</p>') && !first.includes('Current'));
+    // A version is text, and its note follows it.
+    assert.ok(second?.includes('<p>Is sorted() &lt;b&gt;faster&lt;/b&gt; on x86?</p>'));
+    assert.ok(second?.includes('<p class="dim">Why: Name the chip.</p>'));
+    assert.ok(current?.includes('<b>Current</b><p>Is sorted() faster on ARM?</p>'));
+  });
+
+  it('edits the question in a form on the page, with a line for why, Save, and Cancel', () => {
+    const html = renderToStaticMarkup(
+      <QuestionForm
+        question="Is sorted() faster?"
+        onSave={() => Promise.resolve()}
+        onClose={() => undefined}
+      />,
+    );
+    assert.ok(html.includes('>Is sorted() faster?</textarea>'));
+    assert.ok(html.includes('Why (optional)</label><input'));
+    assert.ok(html.includes('<button type="button" class="linkbtn">Cancel</button>'));
+    // The text is the question as it is, so there is nothing to save yet.
+    assert.ok(html.includes('<button type="submit" class="btn" disabled="">Save</button>'));
+    assert.ok(html.includes('Every agent gets the new question. The earlier versions stay.'));
+  });
+
+  it('says that the answer is to an earlier version of the question after a revision', () => {
+    const proposal = result('p-2', { kind: 'proposal', text: 'Yes, 12x.' });
+    const posts = [result('p-1', { kind: 'message', author: 'person', text: 'Faster?' }), proposal];
+    const answer: AnswerView = {
+      answer: postView({ ...proposal, thread: 't-1' }, 2),
+      to_earlier_question: true,
+      builds_on: [],
+      results: 0,
+      no_blind_rerun: [],
+    };
+    const line = '<p class="f-earlier">This answer is to an earlier version of the question.</p>';
+    assert.ok(wall('t-2', thread('t-1', 'person', posts), none, answer).includes(line));
+    const current = { ...answer, to_earlier_question: false };
+    assert.ok(!wall('t-2', thread('t-1', 'person', posts), none, current).includes(line));
+  });
+
   it('links the answer’s files, and says which results under it have no blind rerun', () => {
     const file = { type: 'file' as const, path: 'answer.md', commit: 'c'.repeat(40) };
     const proposal = result('p-2', { kind: 'proposal', text: 'Yes, 12x.', evidence: [file] });
     const posts = [result('p-1', { kind: 'message', author: 'person', text: 'Faster?' }), proposal];
     const answer: AnswerView = {
       answer: postView({ ...proposal, thread: 't-1' }, 2),
+      to_earlier_question: false,
       builds_on: [
         postView(
           result('p-7', { thread: 't-2', text: 'Rerun blind.', evidence: [file] }),
