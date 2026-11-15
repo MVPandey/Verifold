@@ -34,6 +34,7 @@ def test_a_plan_is_a_post_of_its_own_kind_and_becomes_one_line() -> None:
         'text': 'I take the small models.',
         'reply_to': 'p-1',
         'builds_on': (),
+        'for_person': False,
         'seq': 7,
     }
 

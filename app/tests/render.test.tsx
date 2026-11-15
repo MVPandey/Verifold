@@ -1176,6 +1176,45 @@ describe('the lab page', () => {
     assert.ok(current?.includes('<b>Current</b><p>Is sorted() faster on ARM?</p>'));
   });
 
+  it('says who made a version, and shows a note of the coordinator in a box of its own', () => {
+    const base = { at: '2026-11-06T14:10:00Z', post: 'p-4' };
+    const revised = labView({
+      question: 'Is it stable?',
+      versions: [
+        { question: 'Is sorted() faster?', at: '2026-11-06T14:00:00Z', note: '', post: null },
+        { ...base, question: 'Is it fast?\nOn ARM?', note: '', by: 'person', request: 'p-3' },
+        { ...base, question: 'Is it stable?', note: 'You said so.', by: 'agent-1', request: 'p-5' },
+      ],
+    });
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    const html = renderToStaticMarkup(
+      <Wall
+        api={{} as Api}
+        data={{ ...data, lab: revised }}
+        now={now}
+        open={null}
+        post={null}
+        questionRead={none}
+        cardRead={none}
+      />,
+    );
+    // The question's text keeps its line breaks: the stylesheet shows them.
+    assert.ok(html.includes('<p>Is it fast?\nOn ARM?</p>'));
+    assert.ok(html.includes('<p class="dim">Revised by you, at the coordinator’s request.</p>'));
+    assert.ok(
+      html.includes(
+        '<p class="dim">Revised by the coordinator, with the power “Revise the question”.</p>',
+      ),
+    );
+    // The coordinator's note never follows the app's own "Why:".
+    assert.ok(
+      html.includes(
+        '<figure class="exact"><figcaption>The coordinator’s reason</figcaption><pre>You said so.</pre></figure>',
+      ),
+    );
+    assert.equal(html.includes('Why: You said so.'), false);
+  });
+
   it('edits the question in a form on the page, with a line for why, Save, and Cancel', () => {
     const html = renderToStaticMarkup(
       <QuestionForm
@@ -1767,11 +1806,15 @@ describe('an agent’s picture', () => {
     }
   });
 
-  it('shows a dashed outline with the seat’s number for an agent that chose none', () => {
+  it('shows a dashed outline with the number of the agent’s ID for an agent that chose none', () => {
+    // The number at the end of the seat's label is not it: the agent's ID is unique in the lab.
     const html = draw({ picture: null, seat: 'Codex · gpt-6.1-sol 2' });
     assert.ok(html.includes('<svg class="i-pic none"'));
-    assert.ok(html.includes('<text x="12" y="16" text-anchor="middle">2</text>'));
-    assert.ok(draw({ picture: null }).includes('>1</text>'));
+    assert.ok(html.includes('<text x="12" y="16" text-anchor="middle">1</text>'));
+    const third = renderToStaticMarkup(
+      <Mark view={agentView('agent-3', { picture: null, seat: 'Codex · 6 Astra' })} />,
+    );
+    assert.ok(third.includes('>3</text>'));
   });
 
   it('is an outline on call, gray after the agent left, and has a dot in a turn or while it waits for the person', () => {

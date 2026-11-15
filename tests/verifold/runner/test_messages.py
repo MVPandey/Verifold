@@ -100,7 +100,7 @@ def test_a_lab_with_a_time_limit_tells_each_agent_when_it_ends_in_utc() -> None:
 
     message = start_message(board, board.agents[1].agent, Path('LAB.md'))
 
-    assert message.splitlines()[-1] == 'The lab ends at 2026-11-06 14:00 UTC, unless the person gives it more time.'
+    assert message.splitlines()[-1] == 'The lab ends at 2026-11-06 14:00 UTC, unless it gets more time.'
     assert more_time_message(ends_at, AtTimeLimit.FINISH).endswith('The lab now ends at 2026-11-06 14:00 UTC.')
     assert more_time_message(None, AtTimeLimit.FINISH) == (
         'Your last turn stopped when the lab ran out of time. The person gave the lab more time.'
@@ -330,7 +330,7 @@ def test_an_agent_that_starts_after_a_revision_gets_the_current_question_and_a_c
     assert lines[4:6] == [
         'Thread t-1 on the board holds this question.',
         (
-            'The person revised the question, last at 2026-11-06 12:05 UTC. The text above is the current one, and '
+            'The question was revised, last at 2026-11-06 12:05 UTC. The text above is the current one, and '
             '`brief` lists the posts that hold the revisions.'
         ),
     ]

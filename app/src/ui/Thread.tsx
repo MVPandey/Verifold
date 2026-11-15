@@ -10,6 +10,7 @@ import { href } from '../model/route.ts';
 import { sideReplyHint } from '../model/side.ts';
 import { act, isClaim, rows, standingIn } from '../model/turns.ts';
 import { messageOf } from '../api/client.ts';
+import { ForYou } from './Coordinator.tsx';
 import { Detail } from './Markdown.tsx';
 import { ChipView, Composer, HarnessAsk, Mark } from './parts.tsx';
 import { Name, Who } from './Picture.tsx';
@@ -124,6 +125,7 @@ export function Turn(
           )}
           {post.helper ? <span className="f-tag">helper {post.helper}</span> : null}
           {tag ? <span className="f-tag">{tag}</span> : null}
+          <ForYou marked={post.for_person} agents={agents} author={post.author} />
           {/* The coordinator's post for the whole lab woke every agent that is not on call. */}
           {post.to_lab && post.author !== PERSON ? (
             <span className="f-tag">to the whole lab</span>

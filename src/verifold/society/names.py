@@ -95,7 +95,8 @@ def model_words(board: Board) -> dict[str, str]:
     """
     Return the names of harnesses and models that no agent takes, by their skeleton, each with the text that it comes from.
 
-    They are each harness's key and title, each model's name, ID, and family, and the model that each harness
+    They are each harness's key and title, each model's name, ID, and family, but for the ID of a model that a
+    coordinator's move named and the harness did not list, and the model that each harness
     reported for a turn, whole. They are also each word of four or more letters of a harness's title, of a model's
     name as a harness shows it, and of a family: "Opus", "Sonnet", "Claude", "Codex", "Code". A shorter word, such
     as "Sol" or "Max", is a fragment of a model's ID and is free.
@@ -105,7 +106,12 @@ def model_words(board: Board) -> dict[str, str]:
     labels = (*parts, *(re.sub(r' \d+$', '', part) for part in parts))
     reported = tuple(start.model_name for start in board.starts)
     families = tuple(joined.agent.model.family for joined in board.agents)
-    ids = (word for joined in board.agents for word in (joined.agent.harness, joined.agent.model.name))
+    # The ID of a model that a coordinator named and the harness did not list reserves nothing: it is an agent's text.
+    ids = (
+        word
+        for joined in board.agents
+        for word in (joined.agent.harness, joined.agent.model.name if joined.agent.model_listed else None)
+    )
     shown = tuple(text for text in (*labels, *reported, *families) if text)
     whole = (*shown, *(text for text in (*ids, *(start.model for start in board.starts)) if text))
     # A word is a run of letters between spaces. A part of an ID, such as "mini" in "gpt-6.1-pro-mini", is none.

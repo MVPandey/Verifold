@@ -16,9 +16,10 @@ from verifold.protocol.join import (
     ThreadView,
     Update,
 )
+from verifold.protocol.moves import AddMove, AddSeat, Move
 from verifold.protocol.posts import FileEvidence
 from verifold.server.errors import BlindCheck, CannotWake, EvidenceRejected, HasLeft, OutOfTime, UnknownAgent
-from verifold.server.lab import Lab
+from verifold.server.lab import Adds, Lab
 from verifold.society.attention import news, update
 from verifold.society.identity import post_view
 from verifold.society.views import brief, profile_result, side_lines, thread_summaries, thread_view, work_threads
@@ -35,12 +36,26 @@ class Member:
     gets each post once, and a post that it got during a turn does not wake it later.
     """
 
-    def __init__(self, lab: Lab, agent_id: AgentId, pin: Pin | None = None, seen: int | None = None) -> None:
+    def __init__(  # noqa: PLR0913
+        self,
+        lab: Lab,
+        agent_id: AgentId,
+        pin: Pin | None = None,
+        seen: int | None = None,
+        *,
+        adds: Adds | None = None,
+        seat_ok: Callable[[AddSeat], None] | None = None,
+    ) -> None:
         """
         Seat an agent that has joined the lab. It has read everything up to now, or up to event `seen` when given.
 
         `pin` commits the agent's folder and pins the files that a post names. Without it, posts cannot name files.
+        `adds` starts an agent for the coordinator's move that adds one. Without it, the lab refuses such a move
+        while the coordinator's power over agents is on, and the request waits for the person otherwise.
+        `seat_ok` refuses a seat whose harness this computer does not have, when the coordinator asks for it.
         """
+        self._adds = adds
+        self._seat_ok = seat_ok
         self._lab = lab
         self.agent_id = agent_id
         self._seen = lab.board.seq if seen is None else seen
@@ -73,6 +88,10 @@ class Member:
         left = self._lab.board.gone(self.agent_id)
         if left:
             how = 'The person removed you from this lab' if left.by == PERSON else 'You left this lab'
+            if left.through:
+                how = f'{left.through}, the coordinator, removed you from this lab with a power that the person gave it'
+            elif left.request:
+                how = f"The person removed you from this lab, with a yes to the coordinator's request {left.request}"
             raise HasLeft(f'{how}, so the board takes no call from you. Your posts stay on it.')
 
     async def leave(self, reason: str = '') -> AgentLeft:
@@ -105,6 +124,24 @@ class Member:
         # earlier version can post just after a revision, and its answer is then to that earlier version.
         seen = sum(self._seen >= told.seq for revision in board.revisions if (told := board.post(revision.post)))
         posted = await self._lab.post(request, self.agent_id, evidence, seen)
+        return post_view(self._lab.board, posted)
+
+    async def request(self, move: Move, text: str, body: str = '') -> PostView:
+        """
+        Ask the person for a move as the lab's coordinator, and return the request as it stands.
+
+        While the person's power for this kind of move is on, the move takes effect with the request.
+
+        Raises:
+            RejectedEvent: The agent does not hold the coordinator seat, or the move cannot be made.
+            OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
+
+        """
+        self._check_in_time()
+        if isinstance(move, AddMove) and self._seat_ok:
+            # A seat whose harness this computer lacks is refused now, so it never waits for the person.
+            self._seat_ok(move.seat)
+        posted = await self._lab.request(move, text, body, self.agent_id, self._adds)
         return post_view(self._lab.board, posted)
 
     def news(self) -> News | None:

@@ -7,9 +7,9 @@ export const GONE_COLOR = '#8d8a9c';
 
 /** How an agent's picture shows: what it chose, and what the lab knows about its seat and its status. */
 export interface PictureLook {
-  /** The picture that the agent chose, or `null` for the dashed outline with the seat's number. */
+  /** The picture that the agent chose, or `null` for the dashed outline with the number of the agent's ID. */
   readonly picture: Picture | null;
-  /** The number of the agent's seat among the seats with the same label. */
+  /** The number of the agent's ID, such as 3 for `agent-3`. No two agents of a lab have the same one. */
   readonly number: number;
   /** Whether the picture is an outline: the agent is on call. */
   readonly hollow: boolean;
@@ -19,9 +19,14 @@ export interface PictureLook {
   readonly dot: 'live' | 'wait' | null;
 }
 
-/** Return the number at the end of a seat's label, such as 2 for "Codex · gpt-6.1-sol 2", or else 1. */
-export function seatNumber(seat: string): number {
-  const found = / ([1-9][0-9]*)$/.exec(seat)?.[1];
+/**
+ * Return the number at the end of an agent's ID, such as 3 for `agent-3`, or else 1.
+ *
+ * An ID is unique in its lab and never changes. The number at the end of a seat's label is neither: two seats
+ * with different labels both have none, and a chosen name has none at all.
+ */
+export function seatNumber(agentId: string): number {
+  const found = /-([1-9][0-9]*)$/.exec(agentId)?.[1];
   return found ? Number(found) : 1;
 }
 
@@ -30,7 +35,7 @@ export function pictureLook(view: AgentView): PictureLook {
   const waits = view.need === 'approval' || view.need === 'answer';
   return {
     picture: view.picture,
-    number: seatNumber(view.seat),
+    number: seatNumber(view.agent.id),
     hollow: view.on_call,
     gone: view.left !== null,
     dot: waits ? 'wait' : view.in_turn ? 'live' : null,

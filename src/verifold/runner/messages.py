@@ -14,6 +14,7 @@ from pathlib import Path
 
 from verifold.protocol.agents import Agent
 from verifold.protocol.events import AlarmSet
+from verifold.protocol.ids import PERSON
 from verifold.protocol.posts import Post
 from verifold.protocol.settings import AtTimeLimit
 from verifold.society.board import Board
@@ -106,8 +107,12 @@ def start_message(
         f'You are {agent.name} ({agent.id}) in a Verifold lab. {others}',
         BOARD,
     ]
-    if agent.given_role:
-        lines.append(f'The person gave your seat this role: {agent.given_role}')
+    # The role as it stands now: a later change of it, also one that cleared it, replaces the seat's first role.
+    changed = any(entry.agent == agent.id and entry.given_role is not None for entry in board.profiles)
+    role, giver = board.given_role(agent.id) if changed else (agent.given_role, PERSON)
+    if role:
+        who = 'The person' if giver == PERSON else f'{giver}, as the coordinator of the lab,'
+        lines.append(f'{who} gave your seat this role: {role}')
     if board.coordinator == agent.id:
         lines.append("You hold the lab's coordinator seat.")
     if board.on_call(agent.id):
@@ -116,14 +121,14 @@ def start_message(
         lines.append(f'Thread {thread} on the board holds this question.')
     if board.revisions:
         lines.append(
-            f'The person revised the question, last at {_utc(board.revisions[-1].at)}. The text above is the '
+            f'The question was revised, last at {_utc(board.revisions[-1].at)}. The text above is the '
             'current one, and `brief` lists the posts that hold the revisions.'
         )
     lines.append(f"{norms} holds the lab's norms, which the person sets and can change while the lab runs.")
     if writing:
         lines.append(f'{writing} says how the lab writes its answer for the person.')
     if board.ends_at:
-        lines.append(f'The lab ends at {_utc(board.ends_at)}, unless the person gives it more time.')
+        lines.append(f'The lab ends at {_utc(board.ends_at)}, unless it gets more time.')
     return '\n'.join(lines)
 
 

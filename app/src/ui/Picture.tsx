@@ -97,7 +97,7 @@ export function Picture(props: {
 }
 
 /**
- * A member's picture. An agent that chose none has a dashed outline with its seat's number. An on-call agent's
+ * A member's picture. An agent that chose none has a dashed outline with the number of its ID. An on-call agent's
  * picture is an outline, and the picture of an agent that left is gray. With `dot`, a green dot says that the
  * agent is in a turn, and a yellow dot that it waits for the person.
  *

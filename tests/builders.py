@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import psutil
 
-from verifold.protocol.agents import Agent, ModelSpec
+from verifold.protocol.agents import Agent, ModelSpec, Power
 from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
@@ -17,8 +17,10 @@ from verifold.protocol.events import (
     LabOpened,
     OnCallSet,
     Posted,
+    PowerSet,
     ProfileSet,
     QuestionRevised,
+    RequestAnswered,
     RerunRequested,
     ReviewerSet,
     SettingsSet,
@@ -29,7 +31,8 @@ from verifold.protocol.events import (
     TurnStarted,
     WatchSet,
 )
-from verifold.protocol.posts import Message, Post
+from verifold.protocol.moves import Move
+from verifold.protocol.posts import Ask, Message, MoveRequest, PermissionShown, Post
 from verifold.protocol.settings import ReviewerSettings, Settings
 from verifold.protocol.threads import Thread
 from verifold.protocol.usage import Usage
@@ -115,12 +118,59 @@ class RecordBuilder:
         return self
 
     def thread(
-        self, thread_id: str, opened_by: str, title: str = 'Subject', between: tuple[str, ...] = ()
+        self,
+        thread_id: str,
+        opened_by: str,
+        title: str = 'Subject',
+        between: tuple[str, ...] = (),
+        *,
+        conversation: bool = False,
+        for_person: bool = False,
     ) -> 'RecordBuilder':
         seq, at = self._stamp()
-        thread = Thread(id=thread_id, title=title, opened_by=opened_by, between=between)
+        thread = Thread(
+            id=thread_id,
+            title=title,
+            opened_by=opened_by,
+            between=between,
+            conversation=conversation,
+            for_person=for_person,
+        )
         self.events.append(ThreadOpened(seq=seq, at=at, thread=thread))
         return self
+
+    def power(self, power: Power, agent_id: str, *, on: bool = True) -> 'RecordBuilder':
+        seq, at = self._stamp()
+        self.events.append(PowerSet(seq=seq, at=at, power=power, on=on, agent=agent_id))
+        return self
+
+    def request(self, post_id: str, author: str, move: Move, thread_id: str = 't-2') -> 'RecordBuilder':
+        """Add a request of `author` for a move, in the conversation with the person."""
+        return self.post(MoveRequest(id=post_id, thread=thread_id, author=author, text='The lab needs it.', move=move))
+
+    def answered(
+        self, request: str, *, yes: bool = True, by: str = 'person', minutes: int | None = None
+    ) -> 'RecordBuilder':
+        seq, at = self._stamp()
+        self.events.append(RequestAnswered(seq=seq, at=at, request=request, yes=yes, by=by, minutes=minutes))
+        return self
+
+    def permission(self, post_id: str, author: str, thread_id: str = 't-1') -> 'RecordBuilder':
+        """Add a permission request of the harness of `author`, as the runner records it, with three answers."""
+        shown = PermissionShown(
+            kind='execute', command='./gpu train', ids=('once', 'always', 'no'), remembered=('Always allow',)
+        )
+        ask = Ask(
+            id=post_id,
+            thread=thread_id,
+            author=author,
+            text='Permission needed: a shell command',
+            mentions=('person',),
+            choices=('Allow once', 'Always allow', 'Reject'),
+            request='permission',
+            shown=shown,
+        )
+        return self.post(ask)
 
     def post(self, post: Post) -> 'RecordBuilder':
         seq, at = self._stamp()
@@ -184,9 +234,9 @@ class RecordBuilder:
         )
         return self
 
-    def time_set(self, ends_at: datetime) -> 'RecordBuilder':
+    def time_set(self, ends_at: datetime, request: str | None = None) -> 'RecordBuilder':
         seq, at = self._stamp()
-        self.events.append(TimeSet(seq=seq, at=at, ends_at=ends_at))
+        self.events.append(TimeSet(seq=seq, at=at, ends_at=ends_at, request=request))
         return self
 
     def ran_out(self) -> 'RecordBuilder':

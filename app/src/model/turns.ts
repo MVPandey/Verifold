@@ -17,6 +17,7 @@ const NOUNS = {
   report: 'report',
   call: 'call',
   close: 'close',
+  request: 'request',
 } as const satisfies Record<Post['kind'], string>;
 
 const CLAIMS: ReadonlySet<Post['kind']> = new Set(['result', 'proposal', 'ruled_out']);
@@ -45,6 +46,7 @@ export function tone(post: Post): MarkTone {
       return 'answer';
     case 'ask':
     case 'call':
+    case 'request':
       return 'ask';
     case 'close':
       return 'answer';
@@ -95,7 +97,15 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
       return `objected to ${theirs}`;
     case 'ask':
       return `asked a question${reply}`;
+    case 'request':
+      return 'asked you for a move';
     case 'answer':
+      // The answer that carries out a coordinator's request: the person said yes to it, or a power decided it.
+      if (post.for_request) {
+        return post.author === PERSON
+          ? `answered ${them}, with your yes to the coordinator’s request`
+          : `answered ${them} for you, with the power to answer permission requests`;
+      }
       if (post.accepts && to?.kind === 'close') return `agreed that the lab is done`;
       return post.accepts ? `accepted ${theirs}` : `answered ${them}`;
     case 'check': {

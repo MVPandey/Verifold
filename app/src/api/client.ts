@@ -1,6 +1,7 @@
 import type {
   AgentChoice,
   AnswerView,
+  ConversationView,
   FileText,
   FolderView,
   Invitation,
@@ -10,6 +11,7 @@ import type {
   NormsView,
   PostRequest,
   PostView,
+  Power,
   ProfileChange,
   SeatChange,
   SettingsChange,
@@ -76,6 +78,14 @@ export interface Api {
   removeAgent(agentId: string): Promise<LabView>;
   /** Start an agent that Verifold stopped because its harness failed too often. */
   startAgain(agentId: string): Promise<LabView>;
+  /** The conversation with the coordinator, the coordinator's powers, and what was done for the person. */
+  conversation(): Promise<ConversationView>;
+  /** Switch a power of the coordinator on or off. */
+  setPower(power: Power, on: boolean): Promise<ConversationView>;
+  /** Answer a request of the coordinator for a move. `minutes` gives another amount of time than the request names. */
+  answerRequest(postId: string, yes: boolean, minutes?: number): Promise<ConversationView>;
+  /** Take back the minutes that a request for more time gave the lab. */
+  takeMinutesBack(postId: string): Promise<ConversationView>;
   settings(): Promise<SettingsView>;
   changeSetting(change: SettingsChange): Promise<SettingsView>;
   /** The lab's norms files, or before a lab starts the defaults that the new lab gets. */
@@ -204,6 +214,14 @@ export function createApi(
     removeAgent: (agentId) =>
       request(`/agents/${encodeURIComponent(agentId)}`, undefined, 'DELETE'),
     startAgain: (agentId) => request(`/agents/${encodeURIComponent(agentId)}/start`, {}),
+    conversation: () => request('/conversation'),
+    setPower: (power, on) => request('/powers', { power, on }),
+    answerRequest: (postId, yes, minutes) =>
+      request(`/requests/${encodeURIComponent(postId)}`, {
+        yes,
+        ...(minutes === undefined ? {} : { minutes }),
+      }),
+    takeMinutesBack: (postId) => request(`/requests/${encodeURIComponent(postId)}/minutes`, {}),
     settings: () => request('/settings'),
     changeSetting: (change) => request('/settings', change),
     norms: () => request('/norms'),

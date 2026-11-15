@@ -16,7 +16,7 @@ import { authorName, members } from '../model/agents.ts';
 import { crossedLine, crossLines } from '../model/crossings.ts';
 import { clock, dayClock, duration, minutesBetween } from '../model/format.ts';
 import { clip, personMessage, standingChip } from '../model/posts.ts';
-import { isRevision, revisedLine } from '../model/question.ts';
+import { isRevision, noteLabel, revisedBy, revisedLine } from '../model/question.ts';
 import { href } from '../model/route.ts';
 import { hasNew, markSeen, readSeen } from '../model/seen.ts';
 import { NEED_WORDS, WAITS_ID, quietBand, waitGroups } from '../model/status.ts';
@@ -26,7 +26,8 @@ import { cardStatus, doneLine, headClaim, questionThread } from '../model/turns.
 import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
 import { Detail, Words } from './Markdown.tsx';
-import { ChipView, Composer, Files } from './parts.tsx';
+import { CoordinatorSeat, OpenedForYou } from './Coordinator.tsx';
+import { ChipView, Composer, Exact, Files } from './parts.tsx';
 import { Who } from './Picture.tsx';
 import { Turns } from './Thread.tsx';
 
@@ -183,6 +184,7 @@ export function Wall(
               {done}
             </a>
           ) : null}
+          <CoordinatorSeat {...props} />
           <Composer
             variant="steer"
             label="Steer the lab"
@@ -417,7 +419,12 @@ function Versions(props: {
             <time dateTime={version.at}>{dayClock(version.at, props.now)}</time>
             {index === props.versions.length - 1 ? <b>Current</b> : null}
             <p>{version.question}</p>
-            {version.note ? <p className="dim">Why: {version.note}</p> : null}
+            {revisedBy(version) ? <p className="dim">{revisedBy(version)}</p> : null}
+            {version.note && noteLabel(version) !== 'Why' ? (
+              <Exact label={noteLabel(version)} text={version.note} />
+            ) : version.note ? (
+              <p className="dim">Why: {version.note}</p>
+            ) : null}
           </li>
         ))}
       </ol>
@@ -752,6 +759,7 @@ function Card(props: {
             <span className={`o-st o-${props.need}`}>{NEED_WORDS[props.need]}</span>
           </div>
         ) : null}
+        <OpenedForYou summary={summary} agents={props.agents} />
         <Cross
           label="Builds on"
           links={summary.builds_on_threads}

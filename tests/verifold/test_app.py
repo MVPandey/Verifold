@@ -1391,7 +1391,15 @@ async def test_saved_choices_for_new_labs_fill_the_setup_and_leave_a_running_lab
     assert changed['project']['values'] == {'setup': written}
     # The setup names the file that its first choices come from, which here is the project's own.
     assert setup['defaults_from'] == changed['project']['path']
-    unset = {'effort': None, 'mode': None, 'role': '', 'on_call': False, 'coordinator': False, 'family': None}
+    unset = {
+        'effort': None,
+        'mode': None,
+        'role': '',
+        'on_call': False,
+        'coordinator': False,
+        'powers': [],
+        'family': None,
+    }
     assert changed['project']['defaults'] == {**written, 'agents': [{**written['agents'][0], **unset}]}
     assert setup['defaults'] == changed['project']['defaults']
     assert wrong.status_code == 400
@@ -1888,3 +1896,106 @@ async def test_the_person_opens_the_folders_of_the_labs_agents_and_gets_the_path
         f'{real / "agent-1"} is a link to another place, so Verifold does not open it.',
     )
     assert no_desktop == {'path': str(real), 'opened': False}
+
+
+async def test_an_invited_coordinator_adds_an_agent_under_its_power_and_asks_the_person_for_the_rest(
+    project: Path, log: Path
+) -> None:
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),), minutes=60)
+    invite = {'name': 'Lead', 'coordinator': True, 'powers': ['agents']}
+
+    async with serving(project, start, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
+        invited = (await client.post('/invitations', json=invite)).json()
+        url, token, _ = invited_parts(invited['text'])
+        ends_at = fold(record(project)).ends_at
+        async with board_of(url, token) as board:
+            added = await board.call_tool(
+                'request', {'move': 'add_agent', 'text': 'The run needs one more hand.', 'harness': 'fake'}
+            )
+            asked = await board.call_tool('request', {'move': 'time', 'text': 'The run is long.', 'minutes': 30})
+        # The host started the agent that the move added, as it starts an agent that the person adds.
+        await until(lambda: any(call['agent'] == 'agent-3' for call in calls(log)), timeout=60)
+        waiting = (await client.get('/conversation')).json()
+        assert asked.structured_content is not None
+        yes = await client.post(f'/requests/{asked.structured_content["post"]["id"]}', json={'yes': True})
+        done = yes.json()
+
+    board_now = fold(record(project))
+    assert added.structured_content is not None
+    assert added.structured_content['decision']['by'] == 'agent-2'
+    assert (board_now.powers, board_now.coordinator) == (frozenset({'agents'}), 'agent-2')
+    assert [joined.agent.id for joined in board_now.agents] == ['agent-1', 'agent-2', 'agent-3']
+    assert ends_at is not None
+    assert board_now.ends_at == ends_at + timedelta(minutes=30)
+    assert waiting['waits'] == [asked.structured_content['post']['id']]
+    assert [(deed['agent'], deed['undo']) for deed in done['deeds']] == [
+        (None, 'take_minutes'),
+        ('agent-3', 'remove_agent'),
+    ]
+
+
+async def test_a_coordinators_move_adds_a_seat_with_what_the_person_saw_and_nothing_else(
+    project: Path, log: Path
+) -> None:
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),), minutes=60)
+    invite = {'name': 'Lead', 'coordinator': True, 'powers': ['agents']}
+    powered = {'move': 'add_agent', 'text': 'The depth run needs a hand.', 'harness': 'fake'}
+    asked = {'move': 'add_agent', 'text': 'The maker side has one agent.', 'harness': 'fake'}
+
+    async with serving(project, start, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
+        invited = (await client.post('/invitations', json=invite)).json()
+        url, token, _ = invited_parts(invited['text'])
+        async with board_of(url, token) as board:
+            # A harness that this computer does not have is refused when the coordinator asks, so it never waits.
+            unknown = await board.call_tool('request', {**powered, 'harness': 'nope'})
+            # Verifold has not asked the harness what it offers, so the harness lists no model yet.
+            first = await board.call_tool('request', {**powered, 'model': 'small', 'role': 'depth run'})
+        await until(lambda: any(call['agent'] == 'agent-3' for call in calls(log)), timeout=60)
+        # The harness reports the model of the new agent, and the agent's name takes it from the harness.
+        await until(lambda: fold(record(project)).label('agent-3') == 'Fake · small', timeout=60)
+        await client.post('/offers', json={})
+        await probed_setup(client)
+        await client.post('/powers', json={'power': 'agents', 'on': False})
+        async with board_of(url, token) as board:
+            second = await board.call_tool(
+                'request', {**asked, 'model': 'small', 'effort': 'low', 'on_call': True, 'role': 'maker side'}
+            )
+            assert second.structured_content is not None
+            waits = second.structured_content['waits']
+            await client.post(f'/requests/{second.structured_content["post"]["id"]}', json={'yes': True})
+            brief = await board.call_tool('brief', {})
+
+    events = record(project)
+    board_now = fold(events)
+    joins = {event.agent.id: event.agent for event in events if isinstance(event, AgentJoined)}
+    assert unknown.is_error
+    assert 'This computer has no harness with the key `nope`. It has: fake.' in str(unknown.content)
+    assert first.structured_content is not None
+    assert (first.structured_content['decision']['by'], waits) == ('agent-2', True)
+    assert list(joins) == ['agent-1', 'agent-2', 'agent-3', 'agent-4']
+    for agent_id, role in (('agent-3', 'depth run'), ('agent-4', 'maker side')):
+        added = joins[agent_id]
+        # The lab's mode and the harness's family, and nothing that a move's seat never holds.
+        assert (added.mode, added.auto_mode, added.model.family, added.model.name) == (None, 'auto', 'test', 'small')
+        assert (added.given_role, added.recruited_by, added.checks) == ('', None, None)
+        assert board_now.given_role(agent_id) == (role, 'agent-2')
+        assert (board_now.coordinator, board_now.reviewer(agent_id)) == ('agent-2', False)
+    assert (joins['agent-4'].model.effort, board_now.on_call('agent-4'), board_now.on_call('agent-3')) == (
+        'low',
+        True,
+        False,
+    )
+    # The name holds the model's name only when the harness lists the model. Until then it says so, the ID of
+    # the model reserves no name, and the harness's own report names the model later.
+    assert (joins['agent-3'].name, joins['agent-3'].model_listed) == ('Fake · model not listed', False)
+    assert (joins['agent-4'].name, joins['agent-4'].model_listed) == ('Fake · small 2', True)
+    # The role is the coordinator's word: the new agent's start message and `brief` say who gave it.
+    starts = [call['text'] for call in calls(log) if call['event'] == 'prompt' and call['agent'] == 'agent-3']
+    assert 'agent-2, as the coordinator of the lab, gave your seat this role: depth run' in starts[0]
+    assert 'The person gave your seat this role' not in starts[0]
+    assert brief.structured_content is not None
+    lines = {line['id']: line for line in brief.structured_content['agents']}
+    assert (lines['agent-4']['given_role'], lines['agent-4']['given_by']) == ('maker side', 'agent-2')
+    assert (lines['agent-3']['given_role'], lines['agent-3']['given_by']) == ('depth run', 'agent-2')

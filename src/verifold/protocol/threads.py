@@ -13,6 +13,10 @@ QUESTION_TITLE: Final = 'The question'
 """The title of the thread that a lab opens with. It holds the person's question, the plans, and the lab's answer."""
 
 
+CONVERSATION_TITLE: Final = 'The person and the coordinator'
+"""The title of the thread where the person and the lab's coordinator talk."""
+
+
 type Carries = Literal['permission', 'question']
 """The kind of request of a harness that a thread carries to the person."""
 
@@ -36,3 +40,11 @@ class Thread(Record):
     an agent's own thread with a like title never gets a tracked ask. `None` for any other thread, and in a record
     from before Verifold kept it.
     """
+    conversation: bool = False
+    """
+    Whether this is the thread where the person and the lab's coordinator talk. A lab has one at most. Every agent
+    can read it. A post of the person there is for the agent that holds the coordinator seat, and a post of the
+    coordinator there is for the person.
+    """
+    for_person: bool = False
+    """Whether the lab's coordinator opened the thread for the person. Only the coordinator can mark a thread so."""

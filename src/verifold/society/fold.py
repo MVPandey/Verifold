@@ -16,8 +16,10 @@ from verifold.protocol.events import (
     OnCallSet,
     PermissionGranted,
     Posted,
+    PowerSet,
     ProfileSet,
     QuestionRevised,
+    RequestAnswered,
     RerunRequested,
     ReviewerSet,
     SettingsSet,
@@ -30,6 +32,7 @@ from verifold.protocol.events import (
     WentQuiet,
 )
 from verifold.society.board import Board
+from verifold.society.coordinator import check_answered, check_made, check_power
 from verifold.society.errors import RejectedEvent
 from verifold.society.rules import (
     check_agent,
@@ -52,7 +55,7 @@ from verifold.society.rules import (
 
 
 # One case with one return per event type keeps the match flat.
-def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
+def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR0915
     """
     Return the board after one more event.
 
@@ -112,6 +115,7 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
             return replace(board, seq=event.seq, reruns=(*board.reruns, event))
         case TimeSet():
             check_time(event)
+            check_made(board, event)
             return replace(board, seq=event.seq, times=(*board.times, event))
         case TimeRanOut():
             check_time_out(board, event)
@@ -120,10 +124,17 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912
             # A mark from an earlier version. It changes nothing on the board.
             return replace(board, seq=event.seq)
         case SettingsSet(settings=settings):
+            check_made(board, event)
             return replace(board, seq=event.seq, settings=settings)
         case PermissionGranted(prefix=prefix):
             grants = board.grants if prefix in board.grants else (*board.grants, prefix)
             return replace(board, seq=event.seq, grants=grants)
+        case PowerSet():
+            check_power(board, event)
+            return replace(board, seq=event.seq, power_sets=(*board.power_sets, event))
+        case RequestAnswered():
+            check_answered(board, event)
+            return replace(board, seq=event.seq, answers=(*board.answers, event))
         case _:
             assert_never(event)
 

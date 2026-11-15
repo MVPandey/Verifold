@@ -38,7 +38,13 @@ export function counted(agents: readonly AgentView[]): readonly AgentView[] {
 
 /** Return the state of a member that left: who caused it, and the reason when it has one. */
 export function leftLine(left: AgentLeft): StateLine {
-  const how = left.by === PERSON ? 'Left, removed by you' : 'Left by its own choice';
+  // The words of the coordinator's request never follow "removed by you": its reason is in the conversation.
+  const removed = left.through
+    ? 'Left, removed by the coordinator with the power “Add or remove agents”'
+    : left.request
+      ? 'Left, removed by you at the coordinator’s request'
+      : 'Left, removed by you';
+  const how = left.by === PERSON ? removed : 'Left by its own choice';
   return { text: left.reason ? `${how}: ${left.reason}` : how, dot: 'stop' };
 }
 

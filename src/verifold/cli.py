@@ -96,7 +96,8 @@ def _start(args: argparse.Namespace) -> StartRequest:
     `verifold run` starts at once, without showing the saved choices, and a project's file can come from someone else.
     So a project's file can make the lab stricter, not looser: it can turn auto mode off and shorten the time limit,
     and each of its seats gives only a harness, a count, a model, and an effort. Its modes, roles, families,
-    coordinator, and on-call marks are not used, and neither is its number of reviewer seats, and the command says so. Under `--ask-me`, no saved agent gets a mode.
+    coordinator, powers, and on-call marks are not used, and neither is its number of reviewer seats, and the command says so.
+    Under `--ask-me`, no saved agent gets a mode.
 
     Raises:
         SetupRejected: No harness that Verifold knows is on this computer.
@@ -149,7 +150,8 @@ def _saved_agents(
 ) -> tuple[AgentChoice, ...]:
     # A seat from a project's file gives only its harness, count, model, and effort. The rest could loosen the lab
     # or speak as the person: a family makes a rerun count as independent, a role reaches the agents as the
-    # person's word, a coordinator reads as the person's choice, and a lab of on-call seats starts nothing.
+    # person's word, a coordinator reads as the person's choice, its powers would hand the person's moves to an
+    # agent, and a lab of on-call seats starts nothing.
     dropped = PROJECT_DROPS if from_project else {'mode': None} if drop_modes else {}
     unused: set[str] = set()
     kept: list[AgentChoice] = []
@@ -179,8 +181,8 @@ def _saved_agents(
     return found
 
 
-PROJECT_DROPS: Mapping[str, str | bool | None] = MappingProxyType(
-    {'mode': None, 'role': '', 'family': None, 'coordinator': False, 'on_call': False}
+PROJECT_DROPS: Mapping[str, str | bool | tuple[()] | None] = MappingProxyType(
+    {'mode': None, 'role': '', 'family': None, 'coordinator': False, 'on_call': False, 'powers': ()}
 )
 """What `verifold run` sets back in a seat that comes from a project's settings file."""
 
@@ -206,6 +208,7 @@ def _agent_words(choice: AgentChoice) -> str:
             choice.family and f'{choice.family} family',
             choice.role and f'role: {choice.role}',
             choice.coordinator and 'coordinator',
+            f'powers: {", ".join(choice.powers)}' if choice.powers else None,
             choice.on_call and 'on call',
         )
         if detail

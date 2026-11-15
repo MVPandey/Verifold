@@ -1,6 +1,13 @@
 import { messageOf } from '../api/client.ts';
 import type { Api } from '../api/client.ts';
-import type { AnswerView, LabView, PostView, SetupView, ThreadSummary } from '../api/types.ts';
+import type {
+  AnswerView,
+  ConversationView,
+  LabView,
+  PostView,
+  SetupView,
+  ThreadSummary,
+} from '../api/types.ts';
 
 /** What the app knows about the folder's lab. */
 export interface LabData {
@@ -12,6 +19,8 @@ export interface LabData {
   readonly report: PostView | null;
   /** The lab's answer so far with what it builds on, or `null` when no agent has proposed one. */
   readonly answer: AnswerView | null;
+  /** The conversation with the coordinator, its powers, and what it did for the person. `null` before a lab starts. */
+  readonly conversation?: ConversationView | null;
   /** Rises with each full load, so a page that reads more of the lab can read it again. */
   readonly version: number;
   readonly error: string | null;
@@ -24,6 +33,7 @@ export const EMPTY: LabData = {
   needs: [],
   report: null,
   answer: null,
+  conversation: null,
   version: 0,
   error: null,
 };
@@ -128,14 +138,15 @@ export function createLoader(api: Api, apply: Apply): Loader {
 async function readLab(api: Api): Promise<Omit<LabData, 'version'>> {
   const setup = await api.setup();
   if (setup.question === null) return { ...EMPTY, setup };
-  const [lab, threads, needs, report, answer] = await Promise.all([
+  const [lab, threads, needs, report, answer, conversation] = await Promise.all([
     api.lab(),
     api.threads(),
     api.needs(),
     api.report(),
     api.answer(),
+    api.conversation(),
   ]);
-  return { setup, lab, threads, needs, report, answer, error: null };
+  return { setup, lab, threads, needs, report, answer, conversation, error: null };
 }
 
 /**

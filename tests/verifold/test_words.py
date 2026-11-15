@@ -230,7 +230,7 @@ async def test_no_tool_of_the_board_describes_itself_or_its_result_with_an_order
     async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
         tools = (await client.list_tools()).tools
 
-    assert len(tools) == 10
+    assert len(tools) == 11
     for tool in tools:
         assert tool.description, tool.name
         assert orders(tool.description) == [], tool.name
