@@ -265,5 +265,5 @@ def test_the_instructions_state_the_seats_as_facts_and_tell_no_agent_how_to_act_
     assert 'The person can give a seat a role.' in INSTRUCTIONS
     assert '`brief` names it in `coordinator`' in INSTRUCTIONS
     assert 'No post for every agent is for\n  an on-call agent' in INSTRUCTIONS
-    assert 'put its ID, such as `agent-2`, in `mentions`' in INSTRUCTIONS
+    assert '`mentions` names an agent by its ID, such as `agent-2`' in INSTRUCTIONS
     assert not any(word in seats for word in ('should', 'must', 'Use ', 'prefer', 'instead'))

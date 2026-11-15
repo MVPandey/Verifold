@@ -193,7 +193,7 @@ class FakeAgent(acp.Agent):
         # The doorbell can follow other news, such as a restart of Verifold.
         if text.endswith(DOORBELL):
             await self._answer_news()
-        elif text.startswith('Rerun this claim blind'):
+        elif ', a blind checker in a Verifold lab.' in text.partition('\n')[0]:
             await self._rerun(text)
         elif os.environ.get('FAKE_ACP_RESULT') == self._name:
             await self._post_result()
@@ -269,7 +269,7 @@ class FakeAgent(acp.Agent):
         if os.environ.get('FAKE_ACP_NO_CHECK'):
             return
         thread = re.search(r'thread (t-\d+)', text)
-        target = re.search(r'replies to (p-\d+)', text)
+        target = re.search(r'as a reply to (p-\d+)', text)
         claimed = (Path.cwd() / 'result.txt').read_text().strip()
         (Path.cwd() / 'rerun.txt').write_text(claimed)
         request: dict[str, object] = {

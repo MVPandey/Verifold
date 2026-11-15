@@ -94,6 +94,9 @@ export function Top(props: {
             </a>
           </>
         ) : null}
+        <a href={href({ page: 'norms' })} aria-current={current(route.page === 'norms')}>
+          Norms
+        </a>
         <a href={href({ page: 'settings' })} aria-current={current(route.page === 'settings')}>
           Settings
         </a>

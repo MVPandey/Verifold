@@ -22,11 +22,22 @@ from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import TypeAdapter
 
-from verifold.app import WRITING_TEMPLATE, Host, ServeHooks, ServeOptions, WebServer, _agent, _crew, _options, serve
+from verifold.app import (
+    NORMS_TEMPLATE,
+    WRITING_TEMPLATE,
+    Host,
+    ServeHooks,
+    ServeOptions,
+    WebServer,
+    _agent,
+    _crew,
+    _options,
+    serve,
+)
 from verifold.harnesses.catalog import CATALOG as BUILT_IN
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent, AgentChoice, ModelSpec
-from verifold.protocol.app import AgentView, LabView, StartRequest
+from verifold.protocol.app import AgentView, LabView, NormsView, StartRequest
 from verifold.protocol.events import (
     AgentJoined,
     AgentNamed,
@@ -188,7 +199,7 @@ async def test_the_person_starts_a_lab_from_the_setup_screen(
         'Does it hold?\n\nYou are Fake · small 2 (agent-2) in a Verifold lab. '
         'The other agents got this question at the same moment: Fake · small (agent-1, fake).'
     )
-    assert 'Thread t-1 on the board holds this question, and every agent watches it.' in first
+    assert 'Thread t-1 on the board holds this question.' in first
     board = fold(record(project))
     question = board.posts[0].post
     assert (board.threads[0].thread.title, question.author, question.text) == (
@@ -515,7 +526,7 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
     assert 'The lab is under way, and these agents work in it: Fake · default (agent-1, fake).' in invited['text']
     assert f"{project / '.verifold' / 'LAB.md'} holds the lab's norms" in invited['text']
     assert folder == project / '.verifold' / 'agents' / 'agent-2'
-    assert 'Keep the token and your MCP settings outside this folder.' in invited['text']
+    assert 'So a token or MCP settings in this folder reach those commits and each blind checker.' in invited['text']
     assert brief.structured_content is not None
     assert brief.structured_content['you'] == 'agent-2'
     assert (before, listening, after) == ('invited', True, 'here')
@@ -775,9 +786,118 @@ async def test_a_rerun_request_starts_a_blind_checker_from_another_family(
     assert ('agent-2', 'ask') in modes
     assert [mode for agent, mode in modes if agent == checker.id] == ['auto']
     assert checker.mode is None
+    # Verifold gives the checker no role. Its message holds facts and names the file with the person's norms.
+    assert checker.role == ''
+    (message,) = prompts_of(log, checker.id)
+    assert message.startswith(f'You are {checker.name} ({checker.id}), a blind checker in a Verifold lab.')
+    assert f'Your folder is {project / ".verifold" / "agents" / checker.id}.' in message
+    assert 'records that its author ran the files of the claim itself' in message
+    # The claim's author can write the norms file, so the checker's message does not name it.
+    assert 'LAB.md' not in message
 
 
 ONE_AGENT = StartRequest(question='Does it hold?', agents=(AgentChoice(harness='fake'),))
+
+
+async def save_norms(client: httpx2.AsyncClient, name: str, text: str) -> NormsView:
+    """Save a norms file as the page does: with the revision of the file as the page last read it."""
+    files = (await client.get('/norms')).json()['files']
+    read = next(file['revision'] for file in files if file['name'] == name)
+    saved = await client.post('/norms', json={'name': name, 'text': text, 'revision': read})
+    assert saved.status_code == 200, saved.text
+    return NormsView.model_validate(saved.json())
+
+
+async def test_the_norms_page_edits_what_a_new_lab_gets_and_a_change_in_a_lab_reaches_the_agents_once(
+    project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab_norms = project / '.verifold' / 'LAB.md'
+    async with serving(project, catalog={'fake': FAKE_HARNESS}) as client:
+        defaults = (await client.get('/norms')).json()
+        first = await save_norms(client, 'LAB.md', '# Our rules\n')
+        on_disk = lab_norms.read_text()
+        await client.post('/labs', json=ONE_AGENT.model_dump(mode='json'))
+        await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
+        before = len(record(project))
+        changed = await save_norms(client, 'LAB.md', '# Our rules\n\n- Be brief.\n')
+        same = await save_norms(client, 'LAB.md', '# Our rules\n\n- Be brief.\n')
+        # A second change within a minute puts no other post on the board. After the minute, a change posts again.
+        soon = await save_norms(client, 'WRITING.md', '# Short answers\n')
+        monkeypatch.setattr('verifold.app.NORMS_POST_SECONDS', 0)
+        writing = await save_norms(client, 'WRITING.md', '# Shorter answers\n')
+        # The post is for every agent, so the agent gets a doorbell and takes another turn.
+        await until(lambda: len(prompts_of(log, 'agent-1')) > 1, timeout=60)
+        # An agent writes the file. The page says so, and a save from the text that the page read is refused.
+        lab_norms.write_text('# Our rules\n\n- Be long.\n')
+        outside = (await client.get('/norms')).json()['files'][0]
+        stale = await client.post(
+            '/norms', json={'name': 'LAB.md', 'text': '# Mine\n', 'revision': changed.files[0].revision}
+        )
+        kept = lab_norms.read_text()
+        # An invited agent says that the lab is done. A post of the person would open the lab again.
+        invited = (await client.post('/invitations', json={})).json()
+        url, token, _ = invited_parts(invited['text'])
+        async with board_of(url, token) as board:
+            await board.call_tool('post', {'kind': 'close', 'text': 'Done.', 'thread': 't-1'})
+        quiet = await save_norms(client, 'LAB.md', '# Our rules\n')
+        state = (await client.get('/lab')).json()['state']
+
+    # Before the lab, a file that the folder lacks shows the default, and a save is what the new lab starts with.
+    assert [(file['name'], file['saved']) for file in defaults['files']] == [('LAB.md', False), ('WRITING.md', False)]
+    assert (defaults['files'][0]['text'], defaults['files'][0]['missing']) == (NORMS_TEMPLATE, [])
+    assert (first.told, first.no_post, first.files[0].saved, on_disk) == (
+        None,
+        'no_lab',
+        True,
+        '# Our rules\n',
+    )
+    assert (first.files[0].changed_by, first.files[0].changed_at is not None) == ('page', True)
+    assert (project / '.verifold' / 'WRITING.md').read_text() == '# Shorter answers\n'
+    # In the lab, a change is one post of the person in the question's thread, which names nobody.
+    after = [event.post for event in record(project)[before:] if isinstance(event, Posted)]
+    told = [post for post in after if post.author == 'person']
+    assert [post.id for post in told] == [changed.told, writing.told]
+    assert [(post.thread, post.kind, post.mentions) for post in told] == [('t-1', 'message', ())] * 2
+    assert told[0].text == f"The person changed the lab's norms. {lab_norms} holds them."
+    assert told[1].text == (
+        f'The person changed how the lab writes its answer. {project / ".verifold" / "WRITING.md"} holds the text.'
+    )
+    assert (changed.no_post, same.told, same.no_post) == (None, None, 'same')
+    assert (soon.told, soon.no_post) == (changed.told, 'told_already')
+    # The file that an agent wrote stays, and the person sees that it changed outside the page.
+    assert (outside['changed_by'], outside['text']) == ('outside', '# Our rules\n\n- Be long.\n')
+    assert (stale.status_code, kept) == (409, '# Our rules\n\n- Be long.\n')
+    # While a close stands, the file changes and no post goes out, so the lab stays as the agents left it.
+    assert (quiet.told, quiet.no_post, lab_norms.read_text(), state) == (None, 'close', '# Our rules\n', 'closed')
+
+
+async def test_a_lab_keeps_the_norms_file_that_it_has_and_the_page_shows_what_the_default_gained(
+    project: Path, log: Path
+) -> None:
+    folder = project / '.verifold'
+    folder.mkdir()
+    older = ''.join(line for line in NORMS_TEMPLATE.splitlines(keepends=True) if 'with a rerun' not in line)
+    (folder / 'LAB.md').write_text(older)
+    (folder / 'WRITING.md').symlink_to(project / 'elsewhere.md')
+
+    async with serving(project, ONE_AGENT, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
+        lab_file, writing = (await client.get('/norms')).json()['files']
+        refused = await client.post('/norms', json={'name': 'WRITING.md', 'text': '# Mine\n', 'revision': ''})
+        saved = await save_norms(client, 'LAB.md', older + '- One more.\n')
+
+    # Verifold adds nothing to the person's file. The page lists the line that the current default has.
+    assert (lab_file['text'], lab_file['saved'], lab_file['changed_by']) == (older, True, None)
+    assert len(lab_file['missing']) == 1
+    assert lab_file['missing'][0].startswith('- When you check a result with a rerun')
+    assert (folder / 'LAB.md').read_text() == older + '- One more.\n'
+    assert f"{folder / 'LAB.md'} holds the lab's norms" in prompts_of(log, 'agent-1')[0]
+    # A file that Verifold can't read shows its own error, and the other file stays readable and editable.
+    assert 'is a link' in writing['error']
+    assert (writing['text'], writing['revision'], refused.status_code) == ('', '', 400)
+    assert 'is a link' in (saved.files[1].error or '')
+    # The lab started through no link: nothing is at the place that the link names.
+    assert not (project / 'elsewhere.md').exists()
 
 
 async def test_a_checker_that_runs_too_long_stops_and_the_lab_goes_on(

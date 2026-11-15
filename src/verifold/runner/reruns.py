@@ -147,7 +147,7 @@ class Reruns:
             log=self._project / LAB_FOLDER / 'logs' / f'{checker_id}.log',
             token=self._members.add(member),
             options=options,
-            start=rerun_message(target.post),
+            start=rerun_message(target.post, checker, folder),
         )
         await self._supervise(member, setup, partial(_checked, agent_id=checker_id, post_id=request.post))
 
@@ -173,7 +173,6 @@ def _checker(request: RerunRequested, harness: HarnessEntry, options: SessionOpt
         name=f'Checker {request.seq}',
         harness=harness.name,
         model=ModelSpec(family=harness.family, name=options.model),
-        role='Checker',
         recruited_by=request.by,
         checks=request.post,
     )
