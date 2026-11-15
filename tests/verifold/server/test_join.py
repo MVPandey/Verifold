@@ -5,7 +5,7 @@ from conftest import agent
 from mcp import Client
 
 from verifold.protocol.agents import Agent, ModelSpec
-from verifold.protocol.join import PostRequest
+from verifold.protocol.join import AlarmLine, AlarmResult, Brief, News, PostRequest, ThreadList, Update
 from verifold.protocol.posts import FileEvidence
 from verifold.server.activity import Activity
 from verifold.server.errors import HasLeft, UnknownAgent
@@ -354,11 +354,12 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         'When you joined with an invitation, you run by yourself',
         '`post` and `rerun` refuse you too',
         'A grant changes\n  nothing for an agent that joined with an invitation',
-        'So you choose when to\n  look at the board again',
+        'So you choose when to look at the\n  board again',
         'pins each file',
         'blind rerun',
         'time limit',
-        '`alarm` wakes you after your turn',
+        '`alarm` wakes you when you are not in a turn',
+        'Your alarm\n  stays until it rings',
         'A `close` says that the lab is done',
         "person's norms",
     ):
@@ -375,21 +376,48 @@ async def test_the_tools_describe_who_a_post_reaches_as_the_board_decides_it(lab
     assert 'the threads that you post in' not in tools['watch']
 
 
-async def test_an_agent_sets_and_cancels_its_own_alarm(lab: Lab) -> None:
+async def test_an_agent_sets_and_cancels_its_own_alarm_and_every_result_says_which_alarm_waits(lab: Lab) -> None:
     async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
+        none = await client.call_tool('brief', {})
         set_ = await client.call_tool('alarm', {'minutes': 20, 'quiet': True})
+        threads = await client.call_tool('threads', {})
+        waited = await client.call_tool('wait', {'timeout_seconds': 0})
+        brief = await client.call_tool('brief', {})
+        replaced = await client.call_tool('alarm', {'minutes': 5})
         cancelled = await client.call_tool('alarm', {'minutes': 0})
+        after = await client.call_tool('threads', {})
         too_long = await client.call_tool('alarm', {'minutes': 24 * 60 + 1})
+        text = next(tool.description or '' for tool in (await client.list_tools()).tools if tool.name == 'alarm')
 
-    assert set_.structured_content is not None
-    assert (set_.structured_content['quiet'], set_.structured_content['rings_at'] is not None) == (True, True)
-    assert cancelled.structured_content is not None
-    assert cancelled.structured_content['rings_at'] is None
+    first, now = Brief.model_validate(none.structured_content), Brief.model_validate(brief.structured_content)
+    assert (first.your_alarm, first.news.alarm) == (None, None)
+    was_set = AlarmResult.model_validate(set_.structured_content)
+    assert was_set.rings_at is not None
+    waits = AlarmLine(minutes=20, quiet=True, rings_at=was_set.rings_at)
+    assert (was_set.quiet, was_set.news and was_set.news.alarm) == (True, waits)
+    listed = ThreadList.model_validate(threads.structured_content)
+    assert (listed.news and listed.news.alarm, Update.model_validate(waited.structured_content).alarm) == (waits, waits)
+    assert (now.your_alarm, now.news.alarm) == (waits, waits)
+    new = AlarmResult.model_validate(replaced.structured_content)
+    assert new.news is not None
+    assert new.news.alarm == AlarmLine(minutes=5, rings_at=new.rings_at)
+    gone = AlarmResult.model_validate(cancelled.structured_content)
+    assert (gone.rings_at, gone.news and gone.news.alarm) == (None, None)
+    assert ThreadList.model_validate(after.structured_content).news == News(seq=lab.board.seq)
     assert too_long.is_error
-    assert [(alarm.agent, alarm.minutes, alarm.quiet) for alarm in lab.board.alarms] == [
-        ('bo', 20, True),
-        ('bo', 0, False),
+    assert [(alarm.agent, alarm.minutes, alarm.quiet, alarm.stays) for alarm in lab.board.alarms] == [
+        ('bo', 20, True, True),
+        ('bo', 5, False, True),
+        ('bo', 0, False, True),
     ]
+    for fact in (
+        'It stays until it rings',
+        'until you cancel it with zero minutes',
+        'does not spend it',
+        'it rings\nwhen that turn ends',
+        'Verifold sets no alarm for you',
+    ):
+        assert fact in text
 
 
 async def test_an_alarm_in_a_closed_lab_says_that_it_does_not_ring(lab: Lab) -> None:

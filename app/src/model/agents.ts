@@ -1,6 +1,6 @@
 import { GUEST, PERSON } from '../api/types.ts';
 import type { AgentActivity, AgentLeft, AgentView, HarnessOption } from '../api/types.ts';
-import { duration, minutesBetween, money, tokens } from './format.ts';
+import { dayClock, duration, minutesBetween, money, tokens } from './format.ts';
 
 /** The dot before an agent's state. */
 export type Dot = 'live' | 'wait' | 'idle' | 'stop';
@@ -80,6 +80,30 @@ export function called(agents: readonly AgentView[], authorId: string): string {
 export function harnessTitle(harnesses: readonly HarnessOption[], name: string): string {
   if (name === GUEST) return 'Own harness';
   return harnesses.find((option) => option.name === name)?.title ?? name;
+}
+
+/**
+ * Return what a member does, in one line. For a member that is in no turn, the line says what wakes it: its alarm
+ * with the time, its alarm for a quiet board, or only a post. `resting` says that the lab is out of time or closed,
+ * where no alarm rings.
+ */
+export function memberLine(view: AgentView, resting: boolean, now: Date): StateLine {
+  if (view.left) return leftLine(view.left);
+  if (view.activity.state !== 'idle' || resting) return stateLine(view.activity, now);
+  if (view.alarm?.quiet) {
+    const quiet = duration(Math.round(view.alarm.minutes));
+    return { text: `Waits for its alarm: rings after ${quiet} with no new post.`, dot: 'idle' };
+  }
+  if (view.alarm?.rings_at) {
+    return { text: `Waits for its alarm at ${dayClock(view.alarm.rings_at, now)}.`, dot: 'idle' };
+  }
+  if (!view.turn_ended_at) return stateLine(view.activity, now);
+  const minutes = minutesBetween(view.turn_ended_at, now);
+  const ended = minutes > 0 ? `${duration(minutes)} ago` : 'just now';
+  return {
+    text: `Its last turn ended ${ended}, and no alarm is set. A post for it wakes it.`,
+    dot: 'idle',
+  };
 }
 
 /** Return what an agent is doing, in one line, with how long it has done it. */

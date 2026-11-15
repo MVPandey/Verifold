@@ -11,7 +11,7 @@ from conftest import ServedBoard, agent
 from fakes import FAKE_HARNESS
 
 from verifold.protocol.app import AgentState
-from verifold.protocol.events import TurnSummary
+from verifold.protocol.events import AlarmSet, TurnSummary
 from verifold.protocol.join import MAX_NEWS, PostRequest
 from verifold.protocol.settings import AtTimeLimit, JobSettings, Settings
 from verifold.protocol.usage import Usage
@@ -19,10 +19,13 @@ from verifold.runner import agent_loop
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
 from verifold.runner.git import git
 from verifold.runner.messages import (
+    CLOSED,
     DEPARTURE,
     DOORBELL,
     HARNESS_FAILED,
+    IN_TURN,
     JOBS_ENDED,
+    OUT_OF_TIME,
     RESTARTED,
     STARTED_AGAIN,
     alarm_message,
@@ -35,7 +38,7 @@ from verifold.runner.permissions import GrantAsks
 from verifold.runner.session import AgentSession, PermissionChoice, PermissionRequest, TurnResult
 from verifold.server.activity import Activity
 from verifold.society.board import Board
-from verifold.society.lifecycle import lab_state, pending_alarm
+from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
 from verifold.society.turns import before
 from verifold.society.views import needs_person
 
@@ -220,7 +223,7 @@ async def test_the_alarm_that_an_agent_set_in_its_turn_rings_once_after_the_turn
     served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     lab = served.lab
-    # An alarm from before this run of Verifold is spent: the turn that held it never ended.
+    # The alarm that the agent sets later replaces this one, so this one never rings.
     stale = await lab.set_alarm('bo', 0.03, quiet=False)
     # Every turn of this agent runs until Verifold cuts it short, so the test can set an alarm inside a turn.
     monkeypatch.setenv('FAKE_ACP_SLOW', '1')
@@ -239,9 +242,210 @@ async def test_the_alarm_that_an_agent_set_in_its_turn_rings_once_after_the_turn
     prompts = [call['text'] for call in calls(log, 'prompt')]
     assert prompts[:3] == ['Start.', cut, alarm_message(set_)]
     assert alarm_message(stale) not in prompts
+    # The start of the turn that the ring started says which alarm rang.
+    assert [start.rang for start in lab.board.starts[:3]] == [None, None, set_.seq]
 
 
-async def test_an_alarm_does_not_ring_in_a_lab_that_its_agents_closed(
+async def test_an_alarm_stays_through_a_turn_that_a_post_started_and_rings_once_at_its_time(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        # Each look at the lab's clock is one second, so the alarm is some looks ahead.
+        set_ = await lab.set_alarm('bo', 0.5, quiet=False)
+        await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+        await until(lambda: len(lab.board.turns) == 2)
+        assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL]
+        assert pending_alarm(lab.board, 'bo') == set_
+        while len(lab.board.turns) < 3:
+            # The loop looks at the clock again when the board changes.
+            await lab.post(PostRequest(kind='message', text='A side note.', thread='t-1'), 'ada')
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.5)
+    finally:
+        running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL, alarm_message(set_)]
+    assert ([start.rang for start in lab.board.starts], pending_alarm(lab.board, 'bo')) == (
+        [None, None, set_.seq],
+        None,
+    )
+
+
+async def test_an_alarm_whose_time_comes_while_its_agent_is_in_a_turn_rings_when_that_turn_ends(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    monkeypatch.setenv('FAKE_ACP_TURN_SECONDS', '0.5')
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        set_ = await lab.set_alarm('bo', 0.2, quiet=False)
+        await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+        await until(lambda: len(lab.board.starts) == 2)
+        # The time of the alarm passes while the turn for the post runs.
+        for _ in range(15):
+            lab.now()
+        assert (len(lab.board.turns), lab.now() > rings_at(lab.board, set_)) == (1, True)
+        await until(lambda: len(lab.board.turns) == 3)
+        await asyncio.sleep(0.3)
+    finally:
+        running.cancel()
+
+    # The message says why the alarm rings after its time.
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL, alarm_message(set_, IN_TURN)]
+
+
+async def test_an_alarm_for_a_quiet_board_stays_through_a_turn_that_a_post_started(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        set_ = await lab.set_alarm('bo', 0.5, quiet=True)
+        await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+        await until(lambda: len(lab.board.turns) == 2)
+        assert pending_alarm(lab.board, 'bo') == set_
+        step = 0
+        while len(lab.board.turns) < 3:
+            # The board changes without a post, so the loop looks at the clock and the board stays quiet.
+            step += 1
+            await lab.set_profile('ada', None, f'Step {step}.')
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.5)
+    finally:
+        running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL, alarm_message(set_)]
+    # It rang half a minute after the newest post before it, which came after the agent set it.
+    rang = lab.board.starts[-1]
+    quiet_from = max(entry.at for entry in lab.board.posts if entry.seq < rang.seq)
+    assert (rang.rang, quiet_from > set_.at, rang.at >= quiet_from + timedelta(seconds=30)) == (set_.seq, True, True)
+
+
+async def test_an_alarm_from_an_older_record_is_spent_when_a_post_starts_the_next_turn(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    monkeypatch.setenv('FAKE_ACP_TURN_SECONDS', '0.5')
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.starts) == 1)
+        # The record of an older Verifold says of no alarm that it stays.
+        await lab._commit(lambda _, seq, at: AlarmSet(seq=seq, at=at, agent='bo', minutes=0.5))
+        await until(lambda: len(lab.board.turns) == 1)
+        old = pending_alarm(lab.board, 'bo')
+        await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+        await until(lambda: len(lab.board.turns) == 2)
+        for _ in range(60):
+            lab.now()
+        await lab.post(PostRequest(kind='message', text='A side note.', thread='t-1'), 'ada')
+        await asyncio.sleep(1)
+    finally:
+        running.cancel()
+
+    assert old is not None
+    assert not old.stays
+    assert pending_alarm(lab.board, 'bo') is None
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL]
+
+
+async def test_a_harness_that_fails_in_the_turn_that_an_alarm_started_gets_the_alarm_again(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    prompts: list[str] = []
+
+    async def fail_once(_: AgentSession, message: str) -> TurnResult:
+        prompts.append(message)
+        if len(prompts) == 2:
+            raise BrokenPipeError('The harness closed its stdin.')
+        return TurnResult(stop_reason='end_turn', usage=Usage())
+
+    monkeypatch.setattr(AgentSession, 'send', fail_once)
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        set_ = await lab.set_alarm('bo', 0.02, quiet=False)
+        await until(lambda: len(prompts) == 3)
+        await asyncio.sleep(0.5)
+    finally:
+        running.cancel()
+
+    # The record says that the alarm rang when the failed turn started, so the next message carries it again.
+    assert prompts == ['Start.', alarm_message(set_), alarm_message(set_)]
+    assert [
+        (start.rang, turn.error is None) for start, turn in zip(lab.board.starts, lab.board.turns, strict=True)
+    ] == [
+        (None, True),
+        (set_.seq, False),
+        (None, True),
+    ]
+
+
+async def test_an_alarm_that_is_due_rings_with_the_message_about_more_time_when_the_time_limit_stopped_the_processes(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    await lab.set_settings(Settings(jobs=JobSettings(at_time_limit=AtTimeLimit.STOP)))
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        set_ = await lab.set_alarm('bo', 0.02, quiet=False)
+        await lab.set_time_left(timedelta(0))
+        await lab.run_out_of_time()
+        await asyncio.sleep(1)
+        await lab.set_time_left(timedelta(hours=1))
+        await until(lambda: len(lab.board.turns) == 2)
+        await asyncio.sleep(0.5)
+    finally:
+        running.cancel()
+
+    more = more_time_message(lab.board.ends_at, AtTimeLimit.STOP)
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', f'{more} {alarm_message(set_, OUT_OF_TIME)}']
+    assert lab.board.starts[-1].rang == set_.seq
+
+
+async def test_an_alarm_that_its_agent_cancelled_does_not_ring(served: ServedBoard, tmp_path: Path, log: Path) -> None:
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        await lab.set_alarm('bo', 0.02, quiet=False)
+        await lab.set_alarm('bo', 0, quiet=False)
+        await asyncio.sleep(2)
+    finally:
+        running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
+
+
+async def test_an_alarm_does_not_ring_in_a_lab_that_is_out_of_time_and_rings_once_after_more_time(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        set_ = await lab.set_alarm('bo', 0.02, quiet=False)
+        await lab.set_time_left(timedelta(0))
+        await lab.run_out_of_time()
+        await asyncio.sleep(2)
+        assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
+
+        await lab.set_time_left(timedelta(hours=1))
+        await until(lambda: len(lab.board.turns) == 2)
+        await asyncio.sleep(0.5)
+    finally:
+        running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', alarm_message(set_, OUT_OF_TIME)]
+
+
+async def test_an_alarm_does_not_ring_in_a_closed_lab_and_rings_with_the_doorbell_when_the_lab_is_open_again(
     served: ServedBoard, tmp_path: Path, log: Path
 ) -> None:
     lab = served.lab
@@ -250,15 +454,21 @@ async def test_an_alarm_does_not_ring_in_a_lab_that_its_agents_closed(
     activity = Activity()
     running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
     try:
-        await until(lambda: activity.of('bo').state == 'working')
-        await lab.set_alarm('bo', 0.02, quiet=False)
         await until(lambda: len(lab.board.turns) == 1)
+        set_ = await lab.set_alarm('bo', 0.02, quiet=False)
         await asyncio.sleep(3)
+        assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
+        # The alarm still waits. The person's post opens the lab again.
+        assert pending_alarm(lab.board, 'bo') == set_
+        await lab.post(PostRequest(kind='message', text='Go on with line B.', thread='t-1'), 'person')
+        await until(lambda: len(lab.board.turns) == 2)
+        await asyncio.sleep(0.5)
     finally:
         running.cancel()
 
-    assert lab.board.alarms[-1].seq < lab.board.turns[0].seq
-    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
+    # One message carries the doorbell and the alarm that is due, so the alarm wakes the agent once.
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', f'{DOORBELL} {alarm_message(set_, CLOSED)}']
+    assert (lab.board.starts[-1].rang, pending_alarm(lab.board, 'bo')) == (set_.seq, None)
 
 
 async def test_a_failed_turn_gives_the_agent_its_news_again(
@@ -994,26 +1204,27 @@ async def test_a_post_that_came_while_verifold_was_down_rings_one_doorbell_after
     assert posts_by(served, 'bo')[-1].startswith('Seen p-')
 
 
-async def test_an_agent_whose_turn_verifold_cut_off_goes_on_at_once_and_its_alarm_from_that_turn_is_spent(
+async def test_an_agent_whose_turn_verifold_cut_off_goes_on_at_once_and_its_alarm_from_that_turn_stays(
     served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     lab = served.lab
     monkeypatch.setenv('FAKE_ACP_SLOW', '1')
     first = asyncio.create_task(loop_for(served, tmp_path).run())
     await until(lambda: len(calls(log, 'prompt')) == 1)
-    await lab.set_alarm('bo', 0.01, quiet=False)
+    set_ = await lab.set_alarm('bo', 0.01, quiet=False)
     await stop(first)
     assert (len(lab.board.starts), len(lab.board.turns), before(lab.board, 'bo').cut_off) == (1, 0, True)
     monkeypatch.delenv('FAKE_ACP_SLOW')
 
     running = asyncio.create_task(loop_for(served, tmp_path).run())
     try:
-        await until(lambda: len(lab.board.turns) == 1)
-        await asyncio.sleep(1.5)
+        await until(lambda: len(lab.board.turns) == 2)
+        await asyncio.sleep(0.5)
     finally:
         await stop(running)
 
-    assert prompts(log) == ['Start.', back(tmp_path, cut_off=True)]
+    # The alarm rings once, after the turn that went on at once.
+    assert prompts(log) == ['Start.', back(tmp_path, cut_off=True), alarm_message(set_)]
 
 
 async def test_an_agent_whose_harness_loads_no_session_hears_that_its_conversation_is_new(
@@ -1084,6 +1295,29 @@ async def test_an_alarm_that_waited_when_verifold_stopped_rings_once_at_its_time
         await stop(running)
 
     assert prompts(log) == ['Start.', f'{back(tmp_path)}\n\n{alarm_message(set_)}']
+
+
+async def test_an_alarm_that_rang_before_verifold_stopped_does_not_ring_again_after_the_restart(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    first = asyncio.create_task(loop_for(served, tmp_path).run())
+    await until(lambda: len(lab.board.turns) == 1)
+    set_ = await lab.set_alarm('bo', 0.02, quiet=False)
+    await until(lambda: len(lab.board.turns) == 2)
+    await stop(first)
+    assert (prompts(log), lab.board.starts[-1].rang) == (['Start.', alarm_message(set_)], set_.seq)
+
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await asyncio.sleep(1.5)
+        # The agent waits again, and a change of the board makes the loop look at the clock.
+        await lab.post(PostRequest(kind='message', text='A side note.', thread='t-1'), 'ada')
+        await asyncio.sleep(0.5)
+    finally:
+        await stop(running)
+
+    assert (prompts(log), pending_alarm(lab.board, 'bo')) == (['Start.', alarm_message(set_)], None)
 
 
 async def test_an_agent_that_verifold_stopped_hears_that_the_person_started_it_again(

@@ -32,6 +32,7 @@ from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.join import MAX_NEWS, LeftLine, News, PostLine, Update
 from verifold.protocol.posts import Ask, Call, Check, Close, Post
 from verifold.society.board import Board
+from verifold.society.lifecycle import alarm_line
 from verifold.society.lines import lines_of
 
 type Names = tuple[tuple[AgentId, str], ...]
@@ -111,6 +112,7 @@ def update(board: Board, agent_id: AgentId, after: int) -> Update:
             if after < entry.seq <= reach and entry.agent.id != agent_id and board.here(entry)
         ),
         left=departures(board, agent_id, after, reach),
+        alarm=alarm_line(board, agent_id),
         ends_at=board.ends_at,
     )
 
@@ -131,6 +133,7 @@ def news(board: Board, agent_id: AgentId, after: int) -> News:
         others=tuple(PostLine.of(entry) for entry in others[-MAX_NEWS:]),
         left_out=max(len(others) - MAX_NEWS, 0),
         left=departures(board, agent_id, after, reach),
+        alarm=alarm_line(board, agent_id),
     )
 
 
