@@ -20,14 +20,13 @@ repository of the lab.
 
 import asyncio
 import tempfile
-from contextlib import suppress
 from pathlib import Path, PurePosixPath
 
 from verifold.protocol.ids import AgentId, CommitId
 from verifold.protocol.posts import FileEvidence
 from verifold.runner.errors import RunnerError
 from verifold.runner.folders import LAB_FOLDER, real_folder
-from verifold.runner.git import GitError, GitTimeout, git, own_git, own_repository, small_text
+from verifold.runner.git import GitCut, GitError, git, own_git, own_repository, unlock
 from verifold.server.errors import EvidenceRejected
 
 _AUTHOR = {
@@ -50,8 +49,9 @@ async def snapshot(project: Path, agent_id: AgentId) -> CommitId:
     The folder is the one that Verifold made for the agent in the lab of `project`. Verifold first checks that it
     is a real folder at its own place in the lab's folder, so a link there makes Verifold commit no other folder.
 
-    When Verifold ends a Git command of the snapshot, at its time limit or because the caller was cancelled, the
-    snapshot leaves nothing that stops a later one: its index goes, and so does the lock that Git left at the ref.
+    When a Git command of the snapshot is cut, at its time limit, because the caller was cancelled, or by a
+    signal, the snapshot leaves nothing that stops a later one: its index goes, and so does the lock that Git
+    left at the ref.
 
     Raises:
         NoAgentFolder: The agent's folder is not there, or it is a link or lies behind one.
@@ -79,22 +79,11 @@ async def snapshot(project: Path, agent_id: AgentId) -> CommitId:
     )
     try:
         await own_git(lab, 'update-ref', ref, commit)
-    except (GitTimeout, asyncio.CancelledError):
-        _unlock(own / f'{ref}.lock', commit)
+    except (GitCut, asyncio.CancelledError):
+        # With Git's lock left at the ref, no later snapshot could move the ref.
+        unlock(own / f'{ref}.lock', commit)
         raise
     return commit
-
-
-def _unlock(lock: Path, commit: CommitId) -> None:
-    """
-    Remove the lock that a Git command of Verifold's own left at an agent's ref, after Verifold ended that command.
-
-    With the lock there, no later snapshot could move the ref. Git writes the new commit's ID into the lock, so
-    a lock with another ID is the lock of another snapshot that runs now, and it stays.
-    """
-    with suppress(GitError, OSError):
-        if (small_text(lock) or '').strip() in ('', commit):
-            lock.unlink(missing_ok=True)
 
 
 async def _ignore_list(lab: Path) -> tuple[str, ...]:

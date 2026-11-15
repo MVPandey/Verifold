@@ -12,7 +12,7 @@ from pathlib import Path
 
 from verifold.protocol.ids import AgentId
 from verifold.runner.errors import NoAgentFolder, NoFileManager
-from verifold.runner.git import GitError, GitTimeout, commit_of, git
+from verifold.runner.git import GitCut, GitError, commit_of, git, unlock
 
 LAB_FOLDER = '.verifold'
 """The folder in the project that holds the lab: its record, the agents' folders, and their private files."""
@@ -132,16 +132,24 @@ async def agent_folder(project: Path, agent_id: AgentId) -> Path:
     Verifold makes the folder itself, empty, holds it open, and Git fills it. Git checks the files out with the
     project's and the person's own filters, and it fetches no object that the project's repository lacks.
 
-    When Git fails by itself, it removes what it made, and Verifold removes nothing but the folder that this call
-    made, when that folder is empty. When Verifold ends Git, at the time limit or because the caller was
-    cancelled, Verifold removes what this call made: the folder, the worktree's entry in the project's repository,
-    and the branch when the call made that too. Verifold never removes what was at the path before the call, or
-    another folder that came to the path meanwhile. A hard stop of Verifold itself during a call can leave a
-    folder that Git did not finish, and a later call returns that folder as it is.
+    When `git worktree add` fails by itself, it removes what it made, and Verifold removes nothing but the
+    folder that this call made, when that folder is empty. When Git is cut, Verifold removes what this call
+    made: the folder with what Git put there, the worktree's entry in the project's repository, and the branch
+    when the call made that too, with a lock that Git left at it. Git is cut when Verifold ends it, at the time
+    limit or because the caller was cancelled, and when a signal of another program ends it. After a `git init`
+    that failed in any way, the new folder goes with what Git put there. Verifold never removes what was at the
+    path before the call, or another folder that came to the path meanwhile.
+
+    Two things can stay. Git does not always clean up: it cannot when it is killed, and sometimes it leaves an
+    empty lock when the signal to end reaches it at the moment when it makes that lock. Then another lock of
+    Git's, such as `packed-refs.lock`, can stay in the project's repository, with the branch that the call
+    made, or an entry of the worktree without its folder. Git names what stands in its way in its next error,
+    and Verifold removes none of these. And when the computer stops, or Verifold is killed, in the middle of a
+    call, a folder that Git did not finish can stay, and a later call returns that folder as it is.
 
     Raises:
         OSError: The system could not say whether the folder is there, or something else made it at that moment.
-        GitTimeout: Git did not end in time, and Verifold ended it.
+        GitCut: Git did not end by itself: Verifold ended it at the time limit, or a signal ended it.
         GitError: Git could not make the folder. In a partial clone, the message says what makes it possible.
 
     """
@@ -154,8 +162,9 @@ async def agent_folder(project: Path, agent_id: AgentId) -> Path:
         with _made(folder) as made:
             try:
                 await git('init', '--quiet', cwd=folder)
-            except BaseException as error:
-                _remove(folder, made, whole=_ended_by_verifold(error))
+            except BaseException:
+                # Only Git put something into the folder, which this call made empty a moment ago.
+                _remove(folder, made, whole=True)
                 raise
         return folder
     await _exclude_lab_folder(project)
@@ -167,7 +176,7 @@ async def agent_folder(project: Path, agent_id: AgentId) -> Path:
             no_fetch = {'GIT_NO_LAZY_FETCH': '1'}
             await git('worktree', 'add', '--quiet', *names, cwd=project, env=no_fetch, seconds=WORKTREE_SECONDS)
         except BaseException as error:
-            if _ended_by_verifold(error):
+            if isinstance(error, GitCut | asyncio.CancelledError):
                 # Git made the branch at the project's last commit, when the call named a new one.
                 await _discard(project, folder, made, None if existing else (f'refs/heads/{branch}', head))
                 raise
@@ -211,7 +220,13 @@ def _made(folder: Path) -> Generator[_Made]:
         folder.mkdir()
     except FileExistsError as error:
         raise OSError(f'Something else made {folder} at the same moment, so Verifold leaves it as it is.') from error
-    handle = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        handle = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        # Without the handle the call cannot fill the folder, and an empty one would pass for the agent's later.
+        with suppress(OSError):
+            folder.rmdir()
+        raise
     try:
         yield handle
     finally:
@@ -228,20 +243,15 @@ def _mine(folder: Path, made: _Made) -> bool:
     return stat.S_ISDIR(now.st_mode) and (now.st_dev, now.st_ino) == (held.st_dev, held.st_ino)
 
 
-def _ended_by_verifold(error: BaseException) -> bool:
-    # Whether Git did not end by itself: Verifold ended it at its time limit, or because the caller was cancelled.
-    return isinstance(error, GitTimeout | asyncio.CancelledError)
-
-
 def _remove(folder: Path, made: _Made, *, whole: bool) -> None:
     """
     Remove the folder that this call made, when it is still at its path.
 
-    With `whole`, Verifold ended Git in the middle of its work, and the folder goes with what Git put there.
-    Verifold removes that through the folder's handle, so it removes nothing of another folder that takes the
-    path meanwhile. Without `whole`, Git failed by itself and removed what it made. The folder then goes only
-    when it is empty: Git also fails because something else put a file there, and that file is not this call's
-    to remove.
+    With `whole`, Git did not remove what it made: it was cut in the middle of its work, or it is `git init`,
+    which removes nothing. The folder then goes with what Git put there. Verifold removes that through the
+    folder's handle, so it removes nothing of another folder that takes the path meanwhile. Without `whole`,
+    `git worktree add` failed by itself and removed what it made. The folder then goes only when it is empty:
+    Git also fails because something else put a file there, and that file is not this call's to remove.
     """
     if not _mine(folder, made):
         return
@@ -257,21 +267,25 @@ def _remove(folder: Path, made: _Made, *, whole: bool) -> None:
 
 async def _discard(project: Path, folder: Path, made: _Made, branch: tuple[str, str] | None) -> None:
     """
-    Remove what this call made of a worktree, after Verifold ended `git worktree add`.
+    Remove what this call made of a worktree, after `git worktree add` was cut.
 
     That is the folder, the worktree's entry in the project's repository, which Git locks until the worktree is
     whole, and the branch, when Git made it for this call: `branch` holds its ref and the commit that Git made
     it at, and the ref goes only while it still names that commit. So the next call starts at the project's
-    last commit of then. Git removes the folder and the entry itself when SIGTERM ends it. Nothing goes when
-    another folder stands at the path.
+    last commit of then. A lock that Git left at that ref goes first, when it holds nothing or that commit:
+    with the lock there, no later call could make the branch. Git removes the folder and the entry itself when
+    SIGTERM ends it. Nothing goes when another folder stands at the path.
     """
     try:
         if _mine(folder, made) or not os.path.lexists(folder):
             with suppress(GitError):
                 await git('worktree', 'remove', '--force', '--force', str(folder), cwd=project)
             if branch:
+                ref, commit = branch
                 with suppress(GitError):
-                    await git('update-ref', '-d', *branch, cwd=project)
+                    held = await git('rev-parse', '--path-format=absolute', '--git-path', f'{ref}.lock', cwd=project)
+                    unlock(Path(held), commit)
+                    await git('update-ref', '-d', ref, commit, cwd=project)
     finally:
         _remove(folder, made, whole=True)
 

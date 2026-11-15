@@ -10,7 +10,7 @@ import pytest
 from builders import alive, until
 from plants import move_clock, process_ids, stand_in_git
 
-from verifold.runner.git import MAX_SMALL_FILE, GitError, GitTimeout, git, own_repository, small_text
+from verifold.runner.git import MAX_SMALL_FILE, GitCut, GitError, GitTimeout, git, own_repository, small_text
 
 CONFIG = '[core]\n\trepositoryformatversion = 0\n\tbare = true\n'
 
@@ -123,8 +123,8 @@ def a_git_with_a_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple
     return itself, child
 
 
-@pytest.mark.parametrize('cut', ['by a cancel', 'at the time limit'])
-async def test_git_ends_with_what_it_started_when_verifold_cuts_it(
+@pytest.mark.parametrize('cut', ['by a cancel', 'at the time limit', 'by a signal of another program'])
+async def test_git_ends_with_what_it_started_when_it_is_cut(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cut: str
 ) -> None:
     itself, child = a_git_with_a_child(tmp_path, monkeypatch)
@@ -137,11 +137,17 @@ async def test_git_ends_with_what_it_started_when_verifold_cuts_it(
         running.cancel()
         with pytest.raises(asyncio.CancelledError):
             await running
-    else:
+    elif cut == 'at the time limit':
         # The limit's time comes now. The error comes with it, and not when the program closes the output.
         move_clock(monkeypatch, 300)
         with pytest.raises(GitTimeout, match=r'git status did not end in 300 seconds, so Verifold ended it'):
             await running
+    else:
+        # Git itself is killed, and the program that it started runs on until Verifold ends it.
+        os.kill(both[0], signal.SIGKILL)
+        with pytest.raises(GitCut, match=r'git status was ended by signal 9 before it was done') as ended:
+            await running
+        assert not isinstance(ended.value, GitTimeout)
 
     await until(lambda: not any(alive(pid) for pid in both))
 

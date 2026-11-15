@@ -75,7 +75,15 @@ class GitError(RunnerError):
     """A Git command failed, or Verifold does not read what a repository holds. The message says which."""
 
 
-class GitTimeout(GitError):
+class GitCut(GitError):
+    """
+    A Git command did not end by itself: a signal ended it in the middle of its work.
+
+    Git then removed nothing of what it made half, so whoever started the command removes that.
+    """
+
+
+class GitTimeout(GitCut):
     """A Git command did not end in its time limit, and Verifold ended it."""
 
 
@@ -113,12 +121,14 @@ async def git(
 
     Git runs in a process group of its own. When this call ends while Git still runs, at the limit or because
     its caller was cancelled, Verifold ends the whole group, so the programs that Git started end with it,
-    unless one left the group. The group gets SIGTERM first, so that Git removes its locks and what it made
-    half, and SIGKILL after `SETTLE_SECONDS`. Verifold waits for Git's own end and never for a program that Git
-    started: such a program can hold Git's output open for good.
+    unless one left the group. It does the same when a signal of another program ended Git. The group gets
+    SIGTERM first, so that Git removes its locks and what it made half, and SIGKILL when it still runs after
+    `SETTLE_SECONDS`. Verifold never waits longer than that for a program that Git started: such a program
+    can hold Git's output open for good.
 
     Raises:
         GitTimeout: Git did not end in its time limit, and Verifold ended it.
+        GitCut: A signal ended Git.
         GitError: Git exited with an error.
 
     """
@@ -140,40 +150,71 @@ async def git(
         if not ended:
             # Git waits for ever for a pipe where it expects a file, such as an agent's `.gitignore`.
             raise GitTimeout(f'git {" ".join(args)} did not end in {limit:g} seconds, so Verifold ended it.')
-        # What Git wrote ends with Git, unless a program that Git started holds the output open.
-        await asyncio.wait([ran.closed], timeout=SETTLE_SECONDS)
+        if (transport.get_returncode() or 0) >= 0:
+            # What Git wrote ends with Git, unless a program that Git started holds the output open.
+            await asyncio.wait([ran.closed], timeout=SETTLE_SECONDS)
     finally:
-        if transport.get_returncode() is None:
-            await _end(transport, ran)
+        status = transport.get_returncode()
+        if status is None or status < 0:
+            # Git still runs, or a signal ended it: a program that it started can run on.
+            await _end(transport.get_pid(), ran)
         transport.close()
-    if transport.get_returncode():
+    if status and status < 0:
+        raise GitCut(f'git {" ".join(args)} was ended by signal {-status} before it was done.')
+    if status:
         raise GitError(f'git {" ".join(args)} failed: {bytes(ran.wrote[2]).decode(errors="replace").strip()}')
     # A file's name can hold bytes that are no UTF-8. Such a name stays a name, as it does for `os.fsdecode`.
     text = bytes(ran.wrote[1]).decode(errors='surrogateescape')
     return text.strip() if strip else text
 
 
-async def _end(transport: asyncio.SubprocessTransport, ran: _Git) -> None:
+async def _end(group: int, ran: _Git) -> None:
     """
-    End a Git process that still runs, with its process group.
+    End the process group of a Git process: of one that still runs, and of one that a signal ended.
 
     SIGTERM comes first. Git then removes its locks and what it made half, which it cannot do when it is killed:
-    a lock that stays at a branch or a ref stops every later command there. After `SETTLE_SECONDS`, or when this
-    wait is cancelled, the whole group gets SIGKILL. It gets that also when Git itself ended, because a program
-    that Git started can run on.
+    a lock that stays at a branch or a ref stops every later command there. The whole group has
+    `SETTLE_SECONDS` to end, because a program that Git started can still remove a lock when Git itself is gone.
+    A group that still runs then gets SIGKILL, and so does one whose wait is cancelled.
     """
+    gone = False
     try:
-        _signal(transport, signal.SIGTERM)
-        await asyncio.wait([ran.ended], timeout=SETTLE_SECONDS)
+        _signal(group, signal.SIGTERM)
+        with suppress(TimeoutError):
+            async with asyncio.timeout(SETTLE_SECONDS):
+                await asyncio.wait([ran.ended])
+                while _signal(group, 0):
+                    await asyncio.sleep(0.01)
+                gone = True
     finally:
-        _signal(transport, signal.SIGKILL)
+        if not gone:
+            _signal(group, signal.SIGKILL)
     await asyncio.wait([ran.ended], timeout=SETTLE_SECONDS)
 
 
-def _signal(transport: asyncio.SubprocessTransport, sent: signal.Signals) -> None:
-    # The group can be gone already. macOS also refuses a group whose last members are still exiting.
-    with suppress(ProcessLookupError, PermissionError):
-        os.killpg(transport.get_pid(), sent)
+def _signal(group: int, sent: int) -> bool:
+    """Send a signal to a process group, and return whether the group has a process. The signal 0 only asks."""
+    try:
+        os.killpg(group, sent)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # macOS refuses a group whose last members are still exiting.
+        return True
+    return True
+
+
+def unlock(lock: Path, commit: str) -> None:
+    """
+    Remove the lock that a Git command left at a ref, after that command was cut.
+
+    With the lock there, no later command could move the ref. Git writes the ref's new commit into its lock. So
+    the lock goes only when it holds nothing or the commit that the cut command gave the ref: a lock with
+    another commit is the lock of another command that runs now, and it stays.
+    """
+    with suppress(GitError, OSError):
+        if (small_text(lock) or '').strip() in ('', commit):
+            lock.unlink(missing_ok=True)
 
 
 async def commit_of(folder: Path, ref: str) -> str | None:

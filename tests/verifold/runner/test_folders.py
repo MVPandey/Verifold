@@ -2,10 +2,12 @@ import asyncio
 import errno
 import os
 import shutil
+import signal
 import sys
 from contextlib import suppress
 from pathlib import Path
 
+import psutil
 import pytest
 from builders import alive, until
 from plants import markers, move_clock, plain_git, plant, process_ids, program, stand_in_git
@@ -13,7 +15,7 @@ from plants import markers, move_clock, plain_git, plant, process_ids, program, 
 from verifold.runner import folders
 from verifold.runner.errors import NoAgentFolder, NoFileManager
 from verifold.runner.folders import PARTIAL_CLONE, agent_folder, open_folder, real_folder, tracked_lab_files
-from verifold.runner.git import GitError, GitTimeout, commit_of, git
+from verifold.runner.git import GitCut, GitError, GitTimeout, commit_of, git
 
 
 async def committed_project(path: Path) -> Path:
@@ -216,6 +218,97 @@ async def test_a_git_that_goes_on_is_killed_and_the_folder_of_the_call_goes_with
     assert not folder.exists()
 
 
+async def test_a_worktree_whose_git_another_program_killed_goes_as_after_a_cut(tmp_path: Path, home: Path) -> None:
+    project, started = await a_project_whose_checkout_never_ends(tmp_path, home)
+    folder, entries = project / '.verifold' / 'agents' / 'ada', project / '.git' / 'worktrees'
+    adding = asyncio.create_task(agent_folder(project, 'ada'))
+    await until(lambda: bool(process_ids(started)))
+    # The Git that this test's process started is the one that adds the worktree. It is in the checkout.
+    (adds,) = psutil.Process().children()
+    assert (folder.is_dir(), [entry.name for entry in entries.iterdir()]) == (True, ['ada'])
+
+    os.kill(adds.pid, signal.SIGKILL)
+    with pytest.raises(GitCut, match=r'git worktree add .* was ended by signal 9 before it was done'):
+        await adding
+
+    # Git removed nothing, and the filter that it started ran on. Verifold ended that, and removed what the
+    # call made: the folder, the worktree's entry, and the branch.
+    await until(lambda: not any(alive(pid) for pid in process_ids(started)))
+    assert not folder.exists()
+    assert not entries.exists() or list(entries.iterdir()) == []
+    assert await git('branch', '--list', 'verifold/ada', cwd=project) == ''
+    assert list((project / '.git').rglob('*.lock')) == []
+    (home / '.gitconfig').unlink()
+    assert (await agent_folder(project, 'ada') / 'data.csv').read_text() == 'x,y\n'
+
+
+@pytest.mark.parametrize('holds', ["the project's last commit", 'nothing', 'another commit'])
+async def test_a_cut_worktree_removes_the_lock_that_git_left_at_the_branch_of_the_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, holds: str
+) -> None:
+    project = await committed_project(tmp_path / 'project')
+    head = await git('rev-parse', 'HEAD', cwd=project)
+    folder, started = project / '.verifold' / 'agents' / 'ada', tmp_path / 'git.pid'
+    lock = project / '.git' / 'refs' / 'heads' / 'verifold' / 'ada.lock'
+    # A stand-in for Git that is Git itself, but for the command that adds the worktree. That one writes the
+    # lock of the new branch, as Git does, with the branch's commit in it or before it wrote that, and never ends.
+    written = {"the project's last commit": head, 'nothing': '', 'another commit': 'f' * 40}[holds]
+    script = (
+        'for word in "$@"; do\n'
+        '  if [ "$word" = add ]; then\n'
+        f'    mkdir -p "{lock.parent}"\n'
+        f'    printf "{written and written + "\\n"}" > "{lock}"\n'
+        f'    echo $$ > "{started}"\n'
+        '    exec sleep 600\n'
+        '  fi\n'
+        'done\n'
+        f'exec "{shutil.which("git")}" "$@"'
+    )
+    with monkeypatch.context() as patched:
+        stand_in_git(tmp_path, script, patched)
+        adding = asyncio.create_task(agent_folder(project, 'ada'))
+        await until(lambda: bool(process_ids(started)))
+        assert lock.read_text() == (written and f'{written}\n')
+
+        adding.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await adding
+
+    assert not folder.exists()
+    if holds == 'another commit':
+        # That lock is the one of another command that runs now, so it stays.
+        assert lock.read_text() == f'{written}\n'
+    else:
+        assert not lock.exists()
+        # So a later call makes the branch and the folder.
+        assert (await agent_folder(project, 'ada') / 'data.csv').read_text() == 'x,y\n1,2\n'
+        assert await git('rev-parse', 'verifold/ada', cwd=project) == head
+
+
+async def test_a_new_folder_that_verifold_cannot_hold_open_does_not_stay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = await committed_project(tmp_path / 'project')
+    folder = project / '.verifold' / 'agents' / 'ada'
+    open_file = os.open
+
+    def full(path: object, *more: object, **options: object) -> int:
+        # The process has too many files open at the moment when Verifold opens its new folder.
+        if path == folder:
+            raise OSError(errno.EMFILE, os.strerror(errno.EMFILE), str(path))
+        return open_file(path, *more, **options)  # ty: ignore[invalid-argument-type]
+
+    with monkeypatch.context() as patched:
+        patched.setattr(os, 'open', full)
+        with pytest.raises(OSError, match=os.strerror(errno.EMFILE)) as refused:
+            await agent_folder(project, 'ada')
+    assert refused.value.errno == errno.EMFILE
+
+    # No empty folder is left that a later call would take for the agent's own, and that call makes the worktree.
+    assert not folder.exists()
+    assert (await agent_folder(project, 'ada') / 'data.csv').read_text() == 'x,y\n1,2\n'
+
+
 async def test_a_cut_worktree_keeps_a_branch_that_was_there_before_the_call(tmp_path: Path, home: Path) -> None:
     project, started = await a_project_whose_checkout_never_ends(tmp_path, home)
     # The agent's branch is from an earlier lab.
@@ -314,12 +407,14 @@ async def test_a_new_repository_that_git_could_not_make_leaves_no_folder(
 ) -> None:
     project = tmp_path / 'project'
     project.mkdir()
-    # A stand-in for Git that fails.
-    stand_in_git(tmp_path, 'exit 1', monkeypatch)
+    # A stand-in for Git that fails, and that makes a part of the new repository before it does.
+    made = 'for word in "$@"; do if [ "$word" = init ]; then mkdir .git; echo half > .git/HEAD; fi; done'
+    stand_in_git(tmp_path, f'{made}\nexit 1', monkeypatch)
 
     with pytest.raises(GitError, match='git init --quiet failed'):
         await agent_folder(project, 'ada')
 
+    # The folder is gone with that part, so a later call does not take it for the agent's own.
     assert not (project / '.verifold' / 'agents' / 'ada').exists()
 
 
