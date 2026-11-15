@@ -642,11 +642,19 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
 
 
 async def test_a_record_that_another_program_replaces_stops_the_server_and_each_caller_reads_why(
-    project: Path, caplog: pytest.LogCaptureFixture, capfd: pytest.CaptureFixture[str]
+    project: Path, caplog: pytest.LogCaptureFixture, capfd: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),))
     path = project / '.verifold' / 'record.jsonl'
     kept = project / '.verifold' / 'record.kept.jsonl'
+    reads_ended: list[Host] = []
+    end_reads = Host.stop_reads
+
+    def noting(host: Host) -> None:
+        reads_ended.append(host)
+        end_reads(host)
+
+    monkeypatch.setattr(Host, 'stop_reads', noting)
     ready: asyncio.Future[str] = asyncio.get_running_loop().create_future()
     running = asyncio.create_task(
         serve(project, start, catalog={'fake': FAKE_HARNESS}, hooks=ServeHooks(ready=ready.set_result))
@@ -686,6 +694,8 @@ async def test_a_record_that_another_program_replaces_stops_the_server_and_each_
     assert stat.S_IMODE(kept.stat().st_mode) == 0o600
     assert path.read_bytes() == written.splitlines(keepends=True)[0]
     assert harness_pids() == []
+    # On this way out too, the server ends the reads of Git objects that run.
+    assert len(reads_ended) == 1
     # Nothing logs the error with its traceback: not the web server, and not the library that serves the tools.
     assert 'Traceback' not in caplog.text + capfd.readouterr().err
 
@@ -973,7 +983,7 @@ async def test_the_app_reads_a_few_files_at_the_same_time_and_the_others_wait(
         reads = [asyncio.create_task(client.get(place, params={'path': 'notes.md'})) for _ in range(5)]
         await until(lambda: len(reading) == 2)
         # No third read starts while two run.
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.05)
         waiting = len(reading)
         go_on.set()
         answers = await asyncio.gather(*reads)

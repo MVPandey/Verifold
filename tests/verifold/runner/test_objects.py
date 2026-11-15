@@ -376,7 +376,7 @@ async def test_a_pipe_in_the_object_store_ends_a_read_at_its_time_limit_and_a_st
     os.mkfifo(author / '.git' / 'objects' / 'info' / 'alternates')
 
     with pytest.raises(GitError, match='did not answer in time') as late:
-        file_bytes(replace(pinned, seconds=0.2), 'result.txt', LIMIT)
+        file_bytes(replace(pinned, seconds=0.05), 'result.txt', LIMIT)
     assert not isinstance(late.value, Missing | NoRepository)
     # After the server stopped, a read ends at once, long before its time limit.
     pinned.running.stop()
@@ -398,16 +398,45 @@ async def test_a_store_of_the_authors_own_takes_no_commit_away_that_the_projects
 
 
 @pytest.mark.parametrize('form', ['other bytes', 'a pipe', 'no commit'])
-async def test_the_next_store_gets_its_turn_when_one_fails_in_any_way(tmp_path: Path, form: str) -> None:
+async def test_the_next_store_gets_its_turn_when_one_fails_in_any_way(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, form: str
+) -> None:
     project = tmp_path / 'project'
     pinned = await a_pin(project)
     # The project becomes a repository after the author's folder. Its store comes first and does not give the commit.
     await git('init', '--quiet', cwd=project)
     if form != 'no commit':
         spoil(project / '.git' / 'objects', form, pinned.commit)
+    if form == 'a pipe':
+        # Git waits in the first store for its share of the time, which is a few hundredths of a second here.
+        monkeypatch.setattr(objects, 'FIRST_STORE_SHARE', 0.0001)
 
-    # A store that waits gets its share of the time limit, and the author's store the rest.
-    assert file_bytes(replace(pinned, seconds=3), 'result.txt', LIMIT) == b'11.8'
+    # The author's store has the rest of the time, which is long.
+    assert file_bytes(replace(pinned, seconds=600), 'result.txt', LIMIT) == b'11.8'
+
+
+async def test_the_authors_folder_is_looked_at_only_after_the_projects_store_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = await committed(tmp_path / 'project')
+    pinned = await a_pin(project)
+    author = pinned.project / '.verifold' / 'agents' / 'ada'
+    looked: list[Path] = []
+    store_of = objects._store
+
+    def noting(folder: Path) -> Path | None:
+        looked.append(folder)
+        return store_of(folder)
+
+    monkeypatch.setattr(objects, '_store', noting)
+
+    # The project's store gives the file, so the read looks at nothing in the author's folder.
+    assert file_bytes(pinned, 'result.txt', LIMIT) == b'11.8'
+    assert looked == [pinned.project]
+    # The project's store lacks a commit, and only then the read looks at the author's folder.
+    with pytest.raises(Missing, match='No repository of the lab has the commit deadbeef'):
+        file_bytes(replace(pinned, commit='deadbeef' * 5), 'result.txt', LIMIT)
+    assert looked == [pinned.project, pinned.project, author]
 
 
 async def test_the_error_of_stores_that_all_fail_is_the_one_that_says_most(tmp_path: Path) -> None:
