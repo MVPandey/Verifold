@@ -11,7 +11,7 @@ from typing import Annotated, Literal, Self, assert_never
 
 from pydantic import AfterValidator, Field, StringConstraints, model_validator
 
-from verifold.protocol.agents import Label, Power, Role, TypedId, ValueId, one_line
+from verifold.protocol.agents import Power, Role, TypedId, ValueId, one_line
 from verifold.protocol.ids import AgentId, PostId
 from verifold.protocol.record import Record
 from verifold.protocol.settings import MAX_MINUTES, JobSettings
@@ -57,7 +57,8 @@ class AddSeat(Record):
     power, and is no reviewer seat. Those stay with the person.
     """
 
-    harness: Label
+    harness: Annotated[TypedId, StringConstraints(max_length=40)]
+    """The key of a harness of this computer, as one printable line. A request names a harness that this computer has."""
     model: TypedId | None = None
     effort: TypedId | None = None
     on_call: bool = False

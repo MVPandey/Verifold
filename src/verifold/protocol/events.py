@@ -278,6 +278,8 @@ class TimeSet(EventBase):
 
     type: Literal['time_set'] = 'time_set'
     ends_at: AwareDatetime
+    request: PostId | None = None
+    """The coordinator's request for more time that set this end, with its yes just before. `None` for the person's own."""
 
 
 class TimeRanOut(EventBase):
@@ -374,6 +376,8 @@ class SettingsSet(EventBase):
 
     type: Literal['settings_set'] = 'settings_set'
     settings: Settings
+    request: PostId | None = None
+    """The coordinator's request for a setting that these settings came from, with its yes just before. `None` otherwise."""
 
 
 class PermissionGranted(EventBase):

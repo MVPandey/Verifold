@@ -38,7 +38,7 @@ import { personAnswer, split } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import type { PageProps } from './hooks.ts';
 import { Words } from './Markdown.tsx';
-import { HarnessAsk } from './parts.tsx';
+import { Exact, HarnessAsk } from './parts.tsx';
 import { Name, Who } from './Picture.tsx';
 
 const NO_VIEW: ConversationView = {
@@ -238,8 +238,10 @@ function Say(props: Shared & { readonly item: PostView }): ReactElement {
         <RequestBox {...props} />
       ) : (
         <>
-          <p className="k-text">{post.text}</p>
-          {post.body ? <Words text={post.body} /> : null}
+          <div className="k-words">
+            <p className="k-text">{post.text}</p>
+            {post.body ? <Words text={post.body} /> : null}
+          </div>
           {post.kind === 'ask' && waits ? (
             <Answer
               choices={post.choices}
@@ -253,6 +255,20 @@ function Say(props: Shared & { readonly item: PostView }): ReactElement {
         </>
       )}
     </li>
+  );
+}
+
+/**
+ * What the panel shows when the server refused something: the app's own sentence, and under it the server's
+ * words in a box of their own. The server's words can hold text of an agent, such as the key of a harness that an
+ * agent named, so they never stand inside a sentence of the app.
+ */
+export function Refused(props: { readonly text: string }): ReactElement {
+  return (
+    <div className="k-refused" role="alert">
+      <p className="error">Verifold did not do this.</p>
+      <Exact label="What the server said" text={props.text} />
+    </div>
   );
 }
 
@@ -299,7 +315,8 @@ export function RequestBox(props: Shared & { readonly item: PostView }): ReactEl
       </div>
       {asked && shown ? (
         <>
-          <HarnessAsk shown={shown} name={authorName(props.lab.agents, asked.post.author)} />
+          {/* The agent's name stands under its label above. The sentences of these boxes name no agent. */}
+          <HarnessAsk shown={shown} name="that agent" />
           <p className="k-note">
             <a href={href({ page: 'thread', id: asked.post.thread, post: asked.post.id })}>
               See the request in its thread
@@ -407,11 +424,7 @@ function Decide(props: Shared & { readonly item: PostView }): ReactElement | nul
           </button>
         </p>
       )}
-      {error ? (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      ) : null}
+      {error ? <Refused text={error} /> : null}
     </>
   );
 }
@@ -473,11 +486,7 @@ function Undo(props: Shared & { readonly deed: Deed }): ReactElement | null {
           </button>
         )}
       </p>
-      {error ? (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      ) : null}
+      {error ? <Refused text={error} /> : null}
     </>
   );
 }
@@ -525,11 +534,7 @@ function Answer(props: {
         button="Answer"
         onSend={(text) => send(null, text)}
       />
-      {error ? (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      ) : null}
+      {error ? <Refused text={error} /> : null}
     </>
   );
 }
@@ -575,17 +580,12 @@ function Write(props: {
         }}
       />
       <div>
-        {error ? (
-          <span className="error" role="alert">
-            {error}
-          </span>
-        ) : (
-          <span>{props.hint}</span>
-        )}
+        <span>{props.hint}</span>
         <button type="submit" disabled={!text.trim() || sending}>
           {sending ? 'Sending' : (props.button ?? 'Send')}
         </button>
       </div>
+      {error ? <Refused text={error} /> : null}
     </form>
   );
 }
@@ -648,11 +648,7 @@ function Powers(props: Shared & { readonly name: string }): ReactElement {
           );
         })}
       </ul>
-      {error ? (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      ) : null}
+      {error ? <Refused text={error} /> : null}
       <p className="k-foot">Stopping the lab stays with you. No switch gives it away.</p>
     </div>
   );

@@ -67,7 +67,7 @@ from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.attention import update
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
-from verifold.society.labels import label
+from verifold.society.labels import NOT_LISTED, label
 from verifold.society.lines import question_thread
 from verifold.society.standing import closing
 from verifold.society.turns import before
@@ -534,11 +534,21 @@ class Host:
         auto_mode: bool,
         first: tuple[Build, ...] = (),
         given: tuple[str, AgentId] | None = None,
+        asked: bool = False,
     ) -> Agent:
         # Add one agent of a seat to the record, with its name and the facts that the person gave the seat. `given`
-        # is a role that the coordinator gives the seat, which the record keeps as the coordinator's.
+        # is a role that the coordinator gives the seat, which the record keeps as the coordinator's. With `asked`,
+        # a coordinator's move named the seat.
         harness = self._catalog[choice.harness]
-        agent = _agent(number, harness, choice, self._offers.get(harness.name), _names(lab.board), auto_mode=auto_mode)
+        agent = _agent(
+            number,
+            harness,
+            choice,
+            self._offers.get(harness.name),
+            _names(lab.board),
+            auto_mode=auto_mode,
+            asked=asked,
+        )
         await lab.join(
             agent,
             on_call=choice.on_call,
@@ -714,17 +724,41 @@ class Host:
         mark, and no power. A role of the seat is recorded as given by `asked_by`, the coordinator that asked.
         The record takes `first` in the same step as the agent, before it.
         """
+        self.check_seat(seat)
         choice = AgentChoice(harness=seat.harness, model=seat.model, effort=seat.effort, on_call=seat.on_call)
-        await self.add_agents(choice, first, given=(seat.role, asked_by) if seat.role else None)
+        await self.add_agents(choice, first, given=(seat.role, asked_by) if seat.role else None, asked=True)
+
+    def check_seat(self, seat: AddSeat) -> None:
+        """
+        Check that this computer has the harness of a seat that a coordinator's move names.
+
+        The board calls it when the coordinator asks, so a request for a harness that cannot start never waits for
+        the person.
+
+        Raises:
+            SetupRejected: The harness is not in the catalog, or this computer does not have it.
+
+        """
+        entry = self._catalog.get(seat.harness)
+        if entry is None or not available(entry):
+            raise SetupRejected(
+                f'This computer has no harness with the key `{seat.harness}`. It has: '
+                f'{", ".join(name for name, known in self._catalog.items() if available(known))}.'
+            )
 
     async def add_agents(
         self,
         choice: AgentChoice,
         first: tuple[Build, ...] = (),
         given: tuple[str, AgentId] | None = None,
+        *,
+        asked: bool = False,
     ) -> None:
         """
         Add agents of one harness to the lab that runs, and start them.
+
+        With `asked`, the seat comes from a coordinator's move, so its model's ID is an agent's text: the agent's
+        name holds the model's name only when the harness lists the model.
 
         `first` are events that the record takes in the same step as the first agent, before it: the yes to the
         coordinator's request that asked for the agent. `given` is a role that the coordinator gives the seat.
@@ -755,7 +789,7 @@ class Host:
                 except (GitError, OSError) as error:
                     raise SetupRejected(f"Can't make the folder of agent-{number}: {error}") from error
                 agent = await self._join(
-                    lab, number, choice, auto_mode=lab.board.opened.auto_mode, first=first, given=given
+                    lab, number, choice, auto_mode=lab.board.opened.auto_mode, first=first, given=given, asked=asked
                 )
                 first = ()
                 await self._run_agent(lab, agent, under_way=True)
@@ -882,7 +916,12 @@ class Host:
         own = any(entry.post.author == agent.id for entry in board.posts)
         folder = await agent_folder(self._project, agent.id)
         member = Member(
-            lab, agent.id, pin=partial(pin, folder, agent.id), seen=before(board, agent.id).seen, adds=self.add_seat
+            lab,
+            agent.id,
+            pin=partial(pin, folder, agent.id),
+            seen=before(board, agent.id).seen,
+            adds=self.add_seat,
+            seat_ok=self.check_seat,
         )
         self._members.add_guest(member, digest)
         # A `brief` leaves no mark on the record, so an agent that only read the board shows as invited again.
@@ -907,7 +946,9 @@ class Host:
         # The seat starts at what the record says that the agent had seen. So after a restart, the posts for the
         # agent that came since reach it by the usual rules.
         seen = before(lab.board, agent.id).seen
-        member = Member(lab, agent.id, pin=partial(pin, folder, agent.id), seen=seen, adds=self.add_seat)
+        member = Member(
+            lab, agent.id, pin=partial(pin, folder, agent.id), seen=seen, adds=self.add_seat, seat_ok=self.check_seat
+        )
         setup = AgentSetup(
             agent=agent,
             harness=self._catalog[agent.harness],
@@ -1131,18 +1172,29 @@ def _agent(  # noqa: PLR0913
     taken: tuple[str, ...],
     *,
     auto_mode: bool,
+    asked: bool = False,
 ) -> Agent:
     # The agent's record keeps the harness's auto mode of today, so a later change of the catalog leaves this lab
-    # as it is.
+    # as it is. With `asked`, a coordinator's move named the seat. Its model's ID is then an agent's text, so the
+    # name holds the harness's own name for the model when the harness lists it, and "model not listed" when it
+    # does not, until the harness reports its model.
+    shown = _model_name(offer, choice.model)
+    listed = not asked or choice.model is None or _lists(offer, choice.model)
     return Agent(
         auto_mode=harness.auto_mode if auto_mode else None,
         id=f'agent-{number}',
-        name=label(harness.title, _model_name(offer, choice.model), taken),
+        name=label(harness.title, shown if listed else NOT_LISTED, taken),
         harness=harness.name,
         model=ModelSpec(family=choice.family or harness.family, name=choice.model, effort=choice.effort),
         mode=choice.mode,
         given_role=choice.role,
+        model_listed=listed,
     )
+
+
+def _lists(offer: Offer | None, model: str) -> bool:
+    # Whether the harness told Verifold that it offers a model.
+    return offer is not None and any(entry.value == model for entry in offer.models)
 
 
 def _model_name(offer: Offer | None, model: str | None) -> str | None:

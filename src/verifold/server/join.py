@@ -165,9 +165,11 @@ a close stands or such a post went out in the minute before.
   exists, and every agent can read it. `post` with `conversation: true` writes there, and the first such post
   opens the thread. A post from the person there is for the agent that holds the coordinator seat, and that agent
   watches the thread. A post there is for no other agent, unless it names the agent, replies to it, or builds on
-  its post. An `ask` from an agent there waits for the person in the app. The conversation takes no `proposal` and
-  no `close`, and a post from the person there does not open a closed lab again. When the seat changes, the
-  thread stays, and the person's posts there are for the new holder.
+  its post. An `ask` from the coordinator there waits for the person in the app, in the panel for the
+  coordinator. An `ask` from another agent there waits for the person when it names `person` in `mentions`, as
+  in any thread. The conversation takes no `proposal` and no `close`, and a post from the person there does
+  not open a closed lab again. When the seat changes, the thread stays, and the person's posts there are for the
+  new holder.
 - The coordinator can mark a post with `for_person: true`. The mark records that the coordinator says that the
   post is on the person's behalf. The words are the coordinator's, and the post's author stays the coordinator:
   a post of the person has `person` as its author. Each line of a post in `brief`, in the news, and in `wait` has
@@ -479,8 +481,10 @@ takes it from the agent that holds the coordinator seat, and refuses every other
   the order of its `choices`. Only an answer for this once counts. An answer that the harness remembers, and
   Verifold's grant for every agent, stay with the person. So does every request of your own harness. The
   request ends when that permission request gets its answer or ends.
-- `add_agent`: one more agent. `harness` names its harness, and `model`, `effort`, and `on_call` describe its
-  seat as far as the call has them. `role` is a role that the coordinator gives the seat: the board and the app
+- `add_agent`: one more agent. `harness` is the key of a harness that the person's computer has, and the board
+  refuses the call for any other. `model`, `effort`, and `on_call` describe its seat as far as the call has
+  them. The new agent's name holds the model's name only when the harness lists that model. For any other model,
+  the name says "model not listed" until the harness reports its model. `role` is a role that the coordinator gives the seat: the board and the app
   show it as given by the coordinator. The seat has the model family of its harness and the lab's own mode. A
   move states no family and no mode, and its seat is no coordinator seat and no reviewer seat.
 - `remove_agent`: the removal of `agent`, another agent of the lab. It is final for that agent.

@@ -27,7 +27,7 @@ import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
 import { Detail, Words } from './Markdown.tsx';
 import { CoordinatorSeat, OpenedForYou } from './Coordinator.tsx';
-import { ChipView, Composer, Files } from './parts.tsx';
+import { ChipView, Composer, Exact, Files } from './parts.tsx';
 import { Who } from './Picture.tsx';
 import { Turns } from './Thread.tsx';
 
@@ -420,10 +420,10 @@ function Versions(props: {
             {index === props.versions.length - 1 ? <b>Current</b> : null}
             <p>{version.question}</p>
             {revisedBy(version) ? <p className="dim">{revisedBy(version)}</p> : null}
-            {version.note ? (
-              <p className="dim">
-                {noteLabel(version)}: {version.note}
-              </p>
+            {version.note && noteLabel(version) !== 'Why' ? (
+              <Exact label={noteLabel(version)} text={version.note} />
+            ) : version.note ? (
+              <p className="dim">Why: {version.note}</p>
             ) : null}
           </li>
         ))}

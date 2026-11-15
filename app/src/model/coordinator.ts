@@ -64,7 +64,8 @@ export const POWER_WORDS: Readonly<
   },
   agents: {
     name: 'Add or remove agents',
-    what: (name) => `${name} adds an agent, or removes one.`,
+    what: (name) =>
+      `${name} adds an agent, or removes one. For an agent that it adds, ${name} picks the harness, the model, and the effort. The request and the log show them.`,
   },
   settings: {
     name: 'Change the lab’s settings',
@@ -228,6 +229,16 @@ export function details(
         seat.model
           ? { label: 'Model', value: seat.model, theirs: true }
           : { label: 'Model', value: 'The harness’s default' },
+        // The ID of a model that the harness does not list is the coordinator's text, so no name holds it.
+        ...(seat.model && !harness?.offer?.models.some((model) => model.value === seat.model)
+          ? [
+              {
+                label: 'About this model',
+                value:
+                  'The harness does not list this model. The agent’s name says “model not listed” until the harness reports its model.',
+              },
+            ]
+          : []),
         seat.effort
           ? { label: 'Effort', value: seat.effort, theirs: true }
           : { label: 'Effort', value: 'The harness’s default' },

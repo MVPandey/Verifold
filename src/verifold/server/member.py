@@ -16,7 +16,7 @@ from verifold.protocol.join import (
     ThreadView,
     Update,
 )
-from verifold.protocol.moves import Move
+from verifold.protocol.moves import AddMove, AddSeat, Move
 from verifold.protocol.posts import FileEvidence
 from verifold.server.errors import BlindCheck, CannotWake, EvidenceRejected, HasLeft, OutOfTime, UnknownAgent
 from verifold.server.lab import Adds, Lab
@@ -36,13 +36,15 @@ class Member:
     gets each post once, and a post that it got during a turn does not wake it later.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         lab: Lab,
         agent_id: AgentId,
         pin: Pin | None = None,
         seen: int | None = None,
+        *,
         adds: Adds | None = None,
+        seat_ok: Callable[[AddSeat], None] | None = None,
     ) -> None:
         """
         Seat an agent that has joined the lab. It has read everything up to now, or up to event `seen` when given.
@@ -50,8 +52,10 @@ class Member:
         `pin` commits the agent's folder and pins the files that a post names. Without it, posts cannot name files.
         `adds` starts an agent for the coordinator's move that adds one. Without it, the lab refuses such a move
         while the coordinator's power over agents is on, and the request waits for the person otherwise.
+        `seat_ok` refuses a seat whose harness this computer does not have, when the coordinator asks for it.
         """
         self._adds = adds
+        self._seat_ok = seat_ok
         self._lab = lab
         self.agent_id = agent_id
         self._seen = lab.board.seq if seen is None else seen
@@ -134,6 +138,9 @@ class Member:
 
         """
         self._check_in_time()
+        if isinstance(move, AddMove) and self._seat_ok:
+            # A seat whose harness this computer lacks is refused now, so it never waits for the person.
+            self._seat_ok(move.seat)
         posted = await self._lab.request(move, text, body, self.agent_id, self._adds)
         return post_view(self._lab.board, posted)
 

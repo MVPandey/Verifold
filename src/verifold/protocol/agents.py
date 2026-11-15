@@ -145,6 +145,12 @@ class Agent(Record):
     """
     mode: ValueId | None = None
     """The harness mode that the person chose for the agent. `None` follows the lab's auto mode choice."""
+    model_listed: bool = True
+    """
+    `False` for a seat that a coordinator's move added with a model that the harness did not list. Its model's ID
+    is the coordinator's text: it is in no name that Verifold builds, and it reserves no name, until the harness
+    reports the model. `True` for every other seat, and in a record from before this field.
+    """
     auto_mode: ValueId | None = None
     """
     The harness's own auto mode at the time the agent joined a lab in auto mode. The agent keeps it for the whole

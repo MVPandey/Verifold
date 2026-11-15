@@ -17,7 +17,15 @@ the harness remembers, never Verifold's grant, and never for the coordinator's o
 from datetime import datetime
 from typing import Literal
 
-from verifold.protocol.events import AgentLeft, Posted, PowerSet, QuestionRevised, RequestAnswered, TimeSet
+from verifold.protocol.events import (
+    AgentLeft,
+    Posted,
+    PowerSet,
+    QuestionRevised,
+    RequestAnswered,
+    SettingsSet,
+    TimeSet,
+)
 from verifold.protocol.ids import PERSON, AgentId
 from verifold.protocol.join import RequestEnd
 from verifold.protocol.moves import Move, PermissionMove, QuestionMove, RemoveMove, SettingMove, TimeMove, power_of
@@ -136,12 +144,39 @@ def check_answered(board: Board, event: RequestAnswered) -> None:
     own_yes = event.yes and event.by == request.author and event.by == board.coordinator
     if not by_person and not (own_yes and power_covers(board, request.move, event.at)):
         raise RejectedEvent(_not_covered(board, request.move, event.at))
+    # A request that ended takes no answer: no yes, and no "no" either.
+    end = request_end(board, entry)
+    if end == 'seat':
+        raise RejectedEvent(
+            f'The coordinator seat changed after {request.author} asked, so its request {event.request} ended.'
+        )
+    if end == 'ask' and isinstance(request.move, PermissionMove):
+        raise RejectedEvent(
+            f'The permission request {request.move.ask} waits for no answer now, so the request {event.request} ended.'
+        )
     if event.yes:
-        if request_end(board, entry) == 'seat':
-            raise RejectedEvent(
-                f'The coordinator seat changed after {request.author} asked, so its request {event.request} ended.'
-            )
         _check_move(board, request.move, request.author)
+
+
+def check_made(board: Board, event: TimeSet | SettingsSet) -> None:
+    """
+    Check a new end of the lab, or new settings, that names a request of the coordinator.
+
+    Such an event is the move of that request, just after its yes.
+
+    Raises:
+        RejectedEvent: The event before it is not the yes to such a request.
+
+    """
+    if event.request is None:
+        return
+    answered = _just_answered(board)
+    request = _request(board, answered) if answered else None
+    kind = TimeMove if isinstance(event, TimeSet) else SettingMove
+    if not (
+        answered and answered.yes and answered.request == event.request and request and isinstance(request.move, kind)
+    ):
+        raise RejectedEvent(f'Only the move of the request {event.request}, just after its yes, names that request.')
 
 
 def power_covers(board: Board, move: Move, at: datetime) -> bool:
@@ -302,7 +337,9 @@ def joined_by(board: Board, answered: RequestAnswered) -> AgentId | None:
 
 def time_given(board: Board, answered: RequestAnswered) -> TimeSet | None:
     """Return the new end of the lab that came with a yes to a request for more time, or `None`."""
-    return next((entry for entry in board.times if isinstance(entry, TimeSet) and entry.seq == answered.seq + 1), None)
+    return next(
+        (entry for entry in board.times if isinstance(entry, TimeSet) and entry.request == answered.request), None
+    )
 
 
 def undo_of(board: Board, answered: RequestAnswered) -> Undo | None:

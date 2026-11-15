@@ -234,9 +234,9 @@ class RecordBuilder:
         )
         return self
 
-    def time_set(self, ends_at: datetime) -> 'RecordBuilder':
+    def time_set(self, ends_at: datetime, request: str | None = None) -> 'RecordBuilder':
         seq, at = self._stamp()
-        self.events.append(TimeSet(seq=seq, at=at, ends_at=ends_at))
+        self.events.append(TimeSet(seq=seq, at=at, ends_at=ends_at, request=request))
         return self
 
     def ran_out(self) -> 'RecordBuilder':

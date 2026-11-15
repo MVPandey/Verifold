@@ -182,6 +182,10 @@ class Board:
         """The event of the latest change of the coordinator seat, or zero when the seat never changed."""
         return self.coordinators[-1].seq if self.coordinators else 0
 
+    def coordinator_at(self, seq: int) -> AgentId | None:
+        """Return the agent that the record named as the holder of the coordinator seat just before an event, or `None`."""
+        return next((entry.agent for entry in reversed(self.coordinators) if entry.seq < seq), None)
+
     @property
     def conversation(self) -> ThreadId | None:
         """The thread where the person and the lab's coordinator talk, or `None` while the lab has none."""

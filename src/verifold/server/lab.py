@@ -757,8 +757,8 @@ def _effects(board: Board, move: RecordedMove, by: AgentId, minutes: int | None 
 def _more_time(minutes: int) -> Build:
     def build(board: Board, seq: int, at: datetime) -> TimeSet:
         # The minutes count from the lab's end, or from now when the end has passed. So no move ends a lab earlier.
-        ends_at = board.ends_at or at
-        return TimeSet(seq=seq, at=at, ends_at=max(ends_at, at) + timedelta(minutes=minutes))
+        ends_at = max(board.ends_at or at, at) + timedelta(minutes=minutes)
+        return TimeSet(seq=seq, at=at, ends_at=ends_at, request=board.answers[-1].request)
 
     return build
 
@@ -797,7 +797,8 @@ def _setting(move: SettingMove) -> Build:
         # The section is validated again, so the setting holds a value of its own type.
         now = getattr(board.settings, section)
         changed = type(now).model_validate(now.model_dump() | {name: move.value})
-        return SettingsSet(seq=seq, at=at, settings=board.settings.model_copy(update={section: changed}))
+        settings = board.settings.model_copy(update={section: changed})
+        return SettingsSet(seq=seq, at=at, settings=settings, request=board.answers[-1].request)
 
     return build
 

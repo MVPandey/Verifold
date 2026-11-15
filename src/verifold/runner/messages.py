@@ -107,8 +107,9 @@ def start_message(
         f'You are {agent.name} ({agent.id}) in a Verifold lab. {others}',
         BOARD,
     ]
-    given, giver = board.given_role(agent.id)
-    role = given or agent.given_role
+    # The role as it stands now: a later change of it, also one that cleared it, replaces the seat's first role.
+    changed = any(entry.agent == agent.id and entry.given_role is not None for entry in board.profiles)
+    role, giver = board.given_role(agent.id) if changed else (agent.given_role, PERSON)
     if role:
         who = 'The person' if giver == PERSON else f'{giver}, as the coordinator of the lab,'
         lines.append(f'{who} gave your seat this role: {role}')

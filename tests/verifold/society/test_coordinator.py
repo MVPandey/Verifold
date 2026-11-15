@@ -5,7 +5,7 @@ from builders import START, RecordBuilder, lab
 from pydantic import TypeAdapter, ValidationError
 
 from verifold.protocol.agents import Power
-from verifold.protocol.events import AgentLeft, Event, QuestionRevised
+from verifold.protocol.events import AgentJoined, AgentLeft, Event, QuestionRevised, SettingsSet, TimeSet
 from verifold.protocol.join import News
 from verifold.protocol.moves import (
     AddMove,
@@ -19,13 +19,16 @@ from verifold.protocol.moves import (
     TimeMove,
 )
 from verifold.protocol.posts import Answer, Ask, Close, Message, Plan, Post, Proposal, Result
+from verifold.protocol.settings import Settings
 from verifold.protocol.threads import Thread
 from verifold.society.attention import left_line, news, wakes, watches_thread
 from verifold.society.coordinator import joined_by, permission_choice, time_given, undo_of
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import fold
+from verifold.society.labels import awaits_model
 from verifold.society.lifecycle import lab_state
 from verifold.society.lines import lines_of
+from verifold.society.names import model_words
 from verifold.society.standing import waits_for_person
 from verifold.society.views import brief, needs_person, post_view, thread_summaries, versions
 
@@ -224,8 +227,8 @@ def test_a_request_ends_for_good_when_the_seat_changes_also_when_its_author_gets
     assert needs_person(board) == ()
     ended = 'The coordinator seat changed after ada asked, so its request p-1 ended'
     refused(RecordBuilder(events=list(asked.events)).answered('p-1'), ended)
-    # The person can still say no to it.
-    assert RecordBuilder(events=list(asked.events)).answered('p-1', yes=False).board().answers
+    # An ended request takes no answer at all: a "no" is refused with the same sentence.
+    refused(RecordBuilder(events=list(asked.events)).answered('p-1', yes=False), ended)
     # The seat comes back to ada. Her request from before stays ended, also for her power.
     back = RecordBuilder(events=list(asked.events)).coordinator('ada').power('time', 'ada')
     again = back.board()
@@ -520,7 +523,8 @@ def test_a_request_to_answer_a_permission_request_ends_when_that_request_got_its
     assert asked is not None
     view = post_view(board, asked)
     assert (view.waits, view.ended) == (False, 'ask')
-    refused(record.answered('p-2'), 'p-1 waits for no answer now')
+    refused(RecordBuilder(events=list(record.events)).answered('p-2'), 'p-1 waits for no answer now')
+    refused(record.answered('p-2', yes=False), 'p-1 waits for no answer now, so the request p-2 ended')
 
 
 def test_the_coordinators_ask_in_the_conversation_waits_for_the_person_and_another_agents_does_not() -> None:
@@ -541,7 +545,7 @@ def test_the_coordinators_ask_in_the_conversation_waits_for_the_person_and_anoth
 
 
 def test_the_way_back_from_a_move_is_there_while_the_code_can_take_it() -> None:
-    record = talk().request('p-1', 'ada', MORE).answered('p-1').time_set(END + timedelta(minutes=120))
+    record = talk().request('p-1', 'ada', MORE).answered('p-1').time_set(END + timedelta(minutes=120), 'p-1')
     record.request('p-2', 'ada', AddMove(seat=AddSeat(harness='fake'))).answered('p-2').join('dee')
     record.request('p-3', 'ada', SettingMove(key='jobs.at_exit', value='keep')).answered('p-3')
 
@@ -609,3 +613,62 @@ def test_a_move_adds_a_seat_that_holds_nothing_but_its_harness_model_effort_on_c
         AddSeat.model_validate(seat | extra)
     with pytest.raises(ValidationError, match=next(iter(extra))):
         events.validate_python(posted(seat | extra))
+
+
+def test_a_new_end_or_new_settings_name_a_request_only_as_the_move_of_that_request() -> None:
+    record = talk().request('p-1', 'ada', MORE).request('p-2', 'ada', SettingMove(key='jobs.at_exit', value='keep'))
+    later = END + timedelta(minutes=120)
+
+    def settings(record: RecordBuilder, request: str) -> RecordBuilder:
+        seq, at = record._stamp()
+        record.events.append(SettingsSet(seq=seq, at=at, settings=Settings(), request=request))
+        return record
+
+    given = RecordBuilder(events=list(record.events)).answered('p-1').time_set(later, 'p-1').board()
+    changed = settings(RecordBuilder(events=list(record.events)).answered('p-2'), 'p-2').board()
+
+    assert given.times[-1].request == 'p-1'  # ty: ignore[unresolved-attribute]
+    assert changed.seq == len(record.events) + 2
+    why = 'just after its yes, names that request'
+    refused(RecordBuilder(events=list(record.events)).time_set(later, 'p-1'), why)
+    refused(RecordBuilder(events=list(record.events)).answered('p-1', yes=False).time_set(later, 'p-1'), why)
+    refused(RecordBuilder(events=list(record.events)).answered('p-2').time_set(later, 'p-2'), why)
+    refused(RecordBuilder(events=list(record.events)).answered('p-1').watch('bo', 't-1').time_set(later, 'p-1'), why)
+    refused(settings(RecordBuilder(events=list(record.events)), 'p-2'), why)
+    refused(settings(RecordBuilder(events=list(record.events)).answered('p-1'), 'p-1'), why)
+    # An event from before this field names no request, and it loads as it is.
+    old = TimeSet.model_validate({'seq': 2, 'at': '2026-11-06T12:00:00Z', 'ends_at': '2026-11-06T13:00:00Z'})
+    assert old.request is None
+
+
+def test_a_former_coordinators_ask_to_the_person_stays_when_the_seat_changes() -> None:
+    record = talk().post(Ask(id='p-1', thread='t-2', author='ada', text='Size or floor?')).coordinator('bo')
+
+    board = record.board()
+
+    assert [item.post.id for item in needs_person(board)] == ['p-1']
+    assert board.coordinator_at(board.posts[-1].seq) == 'ada'
+    # An ask of the new holder waits too, and an ask of an agent that never held the seat does not.
+    record.post(Ask(id='p-2', thread='t-2', author='bo', text='How long?'))
+    record.post(Ask(id='p-3', thread='t-2', author='cy', text='May I?'))
+    assert [item.post.id for item in needs_person(record.board())] == ['p-1', 'p-2']
+
+
+def test_an_unlisted_model_of_a_seat_that_a_move_added_reserves_no_name() -> None:
+    record = talk().join('dee', name='Fake · model not listed')
+    joined = record.events[-1]
+    assert isinstance(joined, AgentJoined)
+    spec = joined.agent.model.model_copy(update={'name': 'person'})
+    unlisted = joined.agent.model_copy(update={'model': spec, 'model_listed': False})
+    record.events[-1] = joined.model_copy(update={'agent': unlisted})
+    listed = RecordBuilder(
+        events=[
+            *record.events[:-1],
+            joined.model_copy(update={'agent': unlisted.model_copy(update={'model_listed': True})}),
+        ]
+    )
+
+    assert 'person' not in model_words(record.board()).values()
+    assert 'person' in model_words(listed.board()).values()
+    assert awaits_model('Fake · model not listed', 'Fake')
+    assert awaits_model('Fake · model not listed 2', 'Fake')

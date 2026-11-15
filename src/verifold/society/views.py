@@ -502,9 +502,10 @@ def _waits_for_person(board: Board, entry: Posted) -> bool:
     post = entry.post
     if not isinstance(post, Ask):
         return request_waits(board, entry)
-    # In the conversation, the coordinator's ask is to the person. Another agent's ask there is to the person
-    # only when it names the person, as in any thread.
-    talks = post.thread == board.conversation and post.author == board.coordinator
+    # In the conversation, the ask of the agent that held the coordinator seat when it asked is to the person, also
+    # after the seat changed. Another agent's ask there is to the person only when it names the person, as in any
+    # thread.
+    talks = post.thread == board.conversation and post.author == board.coordinator_at(entry.seq)
     to_person = PERSON in post.mentions or talks
     return to_person and waits_for_person(board, post.id) and not board.gone(post.author)
 

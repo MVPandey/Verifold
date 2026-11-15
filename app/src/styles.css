@@ -2928,6 +2928,22 @@ body.with-panel {
   background: var(--bg);
   border: 1px solid var(--line2);
 }
+/* A text of an agent keeps its own reading direction, so a mark in it turns nothing outside its box. */
+.k-fields dd.theirs,
+.k-reason,
+.k-refused pre {
+  unicode-bidi: isolate;
+}
+.k-refused {
+  margin-top: 10px;
+}
+.k-refused .error {
+  margin: 0 0 6px;
+}
+/* A version of the question keeps its line breaks. */
+.f-versions li > p:not(.dim) {
+  white-space: pre-wrap;
+}
 .k-reason .k-text {
   margin: 0;
 }

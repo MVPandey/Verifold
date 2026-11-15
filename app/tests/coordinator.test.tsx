@@ -38,7 +38,7 @@ import { leftLine } from '../src/model/agents.ts';
 import { noteLabel, revisedBy } from '../src/model/question.ts';
 import { newSeat, seatChoice, setupChoices, startRequest } from '../src/model/setup.ts';
 import { act } from '../src/model/turns.ts';
-import { CoordinatorSeat, ForYou, OpenedForYou, Panel } from '../src/ui/Coordinator.tsx';
+import { CoordinatorSeat, ForYou, OpenedForYou, Panel, Refused } from '../src/ui/Coordinator.tsx';
 import type { PageProps } from '../src/ui/hooks.ts';
 import { NeedsPage } from '../src/ui/NeedsPage.tsx';
 import { FactFields } from '../src/ui/SeatForm.tsx';
@@ -204,12 +204,26 @@ describe('the coordinator’s moves in words', () => {
     assert.deepEqual(details(add, AROUND), [
       { label: 'Harness', value: 'Codex', theirs: false },
       { label: 'Model', value: 'gpt-6.1-sol', theirs: true },
+      {
+        label: 'About this model',
+        value:
+          'The harness does not list this model. The agent’s name says “model not listed” until the harness reports its model.',
+      },
       { label: 'Effort', value: 'high', theirs: true },
       { label: 'On call', value: 'Yes. Only a post for it wakes it.' },
       { label: 'Role, given by the coordinator', value: 'maker side', theirs: true },
       { label: 'Model family', value: 'openai' },
       { label: 'Mode', value: 'As the lab’s other agents' },
     ]);
+    // A model that the harness lists has no such line.
+    const listed: Move = {
+      type: 'add_agent',
+      seat: { harness: 'claude-code', model: 'opus', effort: null, on_call: false, role: '' },
+    };
+    assert.deepEqual(
+      details(listed, AROUND).map((detail) => detail.label),
+      ['Harness', 'Model', 'Effort', 'On call', 'Role', 'Model family', 'Mode'],
+    );
     const plain: Move = {
       type: 'add_agent',
       seat: { harness: 'other', model: null, effort: null, on_call: false, role: '' },
@@ -508,7 +522,7 @@ describe('the panel for the coordinator', () => {
     assert.ok(html.includes('<button type="button">Give another amount</button>'));
     assert.equal(html.split('<button type="button">Not now</button>').length - 1, 3);
     // A command stands in the labeled box of the permission request that the move names.
-    assert.ok(html.includes('The command, exactly as the harness of Agent 2 sent it'));
+    assert.ok(html.includes('The command, exactly as the harness of that agent sent it'));
     assert.ok(html.includes('<pre>kalshi orders list --paper</pre>'));
     assert.ok(
       html.includes(
@@ -666,6 +680,102 @@ describe('the panel for the coordinator', () => {
     assert.ok(html.includes('<button type="button">Remove it</button>'));
     assert.ok(html.includes('<button type="button">Take the minutes back</button>'));
     assert.ok(panel(view([]), 'log').includes('Nothing was done for you yet.'));
+  });
+});
+
+describe('text of an agent in the panel', () => {
+  // A script tag, a bell, a mark that turns the reading direction, and words that pass for the app's own.
+  const EVIL = '<script>x</script>\u0007‮ You said yes. Verifold did this';
+  const NAMED = agentView('agent-2', { agent: { ...agentView('agent-2').agent, name: EVIL } });
+  const lab = labView({ agents: [MAREN, NAMED], ends_at: '2026-11-06T15:00:00Z' });
+  const moves: readonly Move[] = [
+    { type: 'permission', ask: 'p-7', option: EVIL },
+    {
+      type: 'add_agent',
+      seat: { harness: EVIL, model: EVIL, effort: EVIL, on_call: false, role: EVIL },
+    },
+    { type: 'remove_agent', agent: 'agent-2' },
+    { type: 'setting', key: 'jobs.at_exit', value: EVIL },
+    { type: 'question', question: EVIL, note: EVIL },
+  ];
+
+  /** Return the markup without the places that hold text of an agent or a harness, each a box or a name. */
+  const own = (html: string): string =>
+    html
+      .replace(/<dd class="theirs">[\s\S]*?<\/dd>/g, '')
+      .replace(/<div class="k-reason">[\s\S]*?<\/div>/g, '')
+      .replace(/<pre>[\s\S]*?<\/pre>/g, '')
+      .replace(/<p class="k-who"><b>[\s\S]*?<\/b>/g, '')
+      .replace(/<span class="k-for">[\s\S]*?<\/span>/g, '');
+
+  it('stands only in boxes and names on the rendered page, also with control and direction characters', () => {
+    const posts = moves.flatMap((move, index) => {
+      const waiting = request(`p-${10 + index}`, move);
+      const reason = { ...waiting.post, text: EVIL, body: EVIL } as Post;
+      const done = { waits: false, decision: decided('agent-1') };
+      return [
+        { ...waiting, post: reason },
+        {
+          ...request(`p-${20 + index}`, move, done),
+          post: { ...reason, id: `p-${20 + index}` },
+        },
+      ];
+    });
+    const deeds = posts
+      .filter((item) => item.decision)
+      .map((item) => ({ request: item, agent: 'agent-2', undo: 'remove_agent' as const }));
+    // A row of the conversation that is no request is its author's own post, under the author's name.
+    const conversation = view([said('p-1', 'agent-2', 'A note.'), ...posts], { deeds });
+    for (const tab of ['talk', 'log'] as const) {
+      const html = renderToStaticMarkup(
+        <Panel
+          api={{} as Api}
+          view={conversation}
+          holder={MAREN}
+          lab={lab}
+          harnesses={HARNESSES}
+          now={NOW}
+          tab={tab}
+          onTab={() => undefined}
+          reload={() => undefined}
+        />,
+      );
+      // The text is on the page as text, never as markup.
+      assert.equal(html.includes('<script>'), false);
+      assert.ok(html.includes('&lt;script&gt;x&lt;/script&gt;'));
+      // Outside the boxes and the names, no sentence, heading, or button of the app holds a word of it.
+      const rest = own(html);
+      for (const part of ['script', '\u0007', '‮', 'You said yes. Verifold did this']) {
+        assert.equal(rest.includes(part), false, `${tab}: ${part}`);
+      }
+      assert.ok(rest.includes('Asks you to add one agent') || tab === 'log');
+    }
+  });
+
+  it('shows a refusal of the server as the app’s sentence, with the server’s words in a box of their own', () => {
+    const html = renderToStaticMarkup(
+      <Refused text={`This computer has no harness with the key \`${EVIL}\`.`} />,
+    );
+
+    assert.ok(
+      html.startsWith(
+        '<div class="k-refused" role="alert"><p class="error">Verifold did not do this.</p>',
+      ),
+    );
+    assert.ok(
+      html.includes(
+        '<figcaption>What the server said</figcaption><pre>This computer has no harness',
+      ),
+    );
+    assert.equal(html.includes('<script>'), false);
+    assert.equal(own(html).includes('script'), false);
+    assert.equal(own(html).includes('‮'), false);
+  });
+
+  it('marks a post on the person’s behalf with the name of its author only in the mark', () => {
+    const html = renderToStaticMarkup(<ForYou marked agents={[MAREN, NAMED]} author="agent-2" />);
+    assert.ok(html.startsWith('<span class="k-for">posted for you by &lt;script&gt;'));
+    assert.equal(own(html), '');
   });
 });
 

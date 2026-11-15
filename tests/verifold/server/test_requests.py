@@ -344,6 +344,10 @@ async def test_a_move_adds_an_agent_in_one_step_with_its_yes(led: Lab, record_fi
         led.board, joined.agent, Path('LAB.md')
     )
 
+    # The start message states the role as it stands now: a role that the person cleared is not stated.
+    await led.change_profile('agent-1', 'person', given_role='')
+    assert 'gave your seat this role' not in start_message(led.board, joined.agent, Path('LAB.md'))
+
     await led.set_power('agents', on=True)
     seen = led.board.seq
     with pytest.raises(SetupRejected, match='cannot start an agent from here'):
@@ -445,6 +449,25 @@ async def test_the_person_takes_the_minutes_of_a_request_back_while_nothing_else
     await led.answer_request(last.post.id, yes=True)
     with pytest.raises(RejectedEvent, match='Without these minutes the lab ends now'):
         await led.take_minutes_back(last.post.id)
+
+
+async def test_a_seat_whose_harness_this_computer_lacks_is_refused_when_the_coordinator_asks(led: Lab) -> None:
+    def seat_ok(seat: AddSeat) -> None:
+        if seat.harness != 'fake':
+            raise SetupRejected(f'This computer has no harness with the key `{seat.harness}`.')
+
+    member = Member(led, 'ada', seat_ok=seat_ok)
+    seq = led.board.seq
+
+    with pytest.raises(SetupRejected, match='no harness with the key `nope`'):
+        await member.request(AddMove(seat=AddSeat(harness='nope')), 'One more.')
+    assert led.board.seq == seq
+    asked = await member.request(AddMove(seat=AddSeat(harness='fake')), 'One more.')
+    assert asked.waits
+    # The key of a harness is one printable line, as a model and an effort are.
+    for harness in ('fa\nke', 'fake\u202e', ' fake', 'x' * 41):
+        with pytest.raises(ValidationError):
+            AddSeat(harness=harness)
 
 
 async def test_an_invited_coordinator_asks_for_nothing_while_the_lab_is_out_of_time(lab: Lab) -> None:
