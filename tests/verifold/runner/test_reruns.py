@@ -584,19 +584,69 @@ async def test_a_server_that_stops_ends_an_export_and_a_caller_that_went_away_le
     assert loose_errors == []
 
 
-async def test_an_older_git_reads_no_repository_that_an_agent_can_write(
+async def test_an_older_git_reads_only_a_repository_whose_configuration_cannot_make_it_fetch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    risky = {
+        '[include]\n\tpath = /tmp/other\n': 'takes in other configuration',
+        '[INCLUDEIF "gitdir:/x/"] path = /tmp/other\n': 'takes in other configuration',
+        '[extensions]\n\tworktreeConfig = true\n': 'takes in other configuration',
+        '[Extensions]\n\tPartialClone = evil\n': 'names a remote for objects that it lacks',
+        '[extensions] partialclone = evil\n': 'names a remote for objects that it lacks',
+        '[remote "evil"]\n\turl = /x\n\tPROMISOR = true\n': 'names a remote for objects that it lacks',
+        '[remote.evil]\n\tpartialCloneFilter = blob:none\n': 'names a remote for objects that it lacks',
+        'not a line of a configuration\n': 'cannot read the configuration',
+        '[core]\n\tname = \xff\n': 'cannot read the configuration',
+    }
+    plain = tmp_path / 'plain'
+    claim = await a_claim(plain)
+    project = await committed(tmp_path / 'project')
+    in_project = await a_claim(project)
+    configs = {plain: plain / '.verifold' / 'agents' / 'ada' / '.git' / 'config', project: project / '.git' / 'config'}
+    kept = {folder: config.read_bytes() for folder, config in configs.items()}
+
+    # A Git of today fetches nothing when told so, and Verifold does not look at the configuration.
     assert fetches_nothing()
+    configs[plain].write_bytes(kept[plain] + b'[include]\n\tpath = /tmp/other\n')
+    assert everything(await clean_copy(plain, claim)) == FILES
+    configs[plain].write_bytes(kept[plain])
+
     monkeypatch.setattr(reruns, 'FETCHES_NOTHING_FROM', (99, 0))
     assert not fetches_nothing()
-    # An agent can write its own repository, and the project's own through its worktree. So an older Git reads
-    # neither: in a project without Git commits, and in one with them.
-    plain = tmp_path / 'plain'
-    project = await committed(tmp_path / 'project')
-    for folder in (plain, project):
-        with pytest.raises(NoCleanCopy, match=r'reads the pinned files only with Git 99\.0 or later'):
-            await clean_copy(folder, await a_claim(folder))
+    # An older Git with an ordinary configuration makes the copy: in a project without Git commits and with them.
+    assert everything(await clean_copy(plain, claim)) == FILES
+    assert everything(await clean_copy(project, in_project))['result.txt'] == '11.8'
+    # A value that goes on over lines, comments, and a remote of the usual kind are ordinary too.
+    usual = b'# note\n[remote "origin"]\n\turl = /x\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[alias]\n\tx = a \\\n[include]\n'
+    configs[plain].write_bytes(kept[plain] + usual)
+    assert everything(await clean_copy(plain, claim)) == FILES
+    # Each shape that can make it fetch, or that Verifold cannot read with confidence, refuses the copy.
+    for folder, post in ((plain, claim), (project, in_project)):
+        for added, why in risky.items():
+            configs[folder].write_bytes(kept[folder] + added.encode('latin-1'))
+            # Git itself cannot read some of these files, and Verifold then does not find the project's repository.
+            unread = folder == project and why.startswith('cannot read')
+            expected = f'{why}|No repository of the lab has the commit' if unread else why
+            with pytest.raises(NoCleanCopy, match=expected) as refused:
+                await clean_copy(folder, post)
+            assert 'No repository' in str(refused.value) or 'Git 99.0 or later fetches nothing' in str(refused.value)
+        configs[folder].write_bytes(kept[folder])
+    # So does a configuration that is a link, a pipe, too large, or gone.
+    outside = tmp_path / 'config'
+    outside.write_bytes(kept[plain])
+    for shape in ('link', 'pipe', 'large', 'gone'):
+        configs[plain].unlink()
+        if shape == 'link':
+            configs[plain].symlink_to(outside)
+        elif shape == 'pipe':
+            os.mkfifo(configs[plain])
+        elif shape == 'large':
+            configs[plain].write_bytes(kept[plain] + b'#' * (reruns.MAX_CONFIG_BYTES + 1))
+        with pytest.raises(NoCleanCopy, match='cannot read the configuration'):
+            await clean_copy(plain, claim)
+        if shape != 'gone':
+            configs[plain].unlink()
+        configs[plain].write_bytes(kept[plain])
     # A computer without Git reads none.
     monkeypatch.setenv('PATH', str(tmp_path))
     assert not fetches_nothing()

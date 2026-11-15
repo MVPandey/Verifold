@@ -73,7 +73,8 @@ GIT_OPTIONS = ('-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '
 """
 Options of every Git command for a rerun: no hook, no file watcher, and no transport. A repository's own
 `protocol.<name>.allow` overrides `protocol.allow`, so that option alone stops no fetch from a repository that an
-agent can write. `GIT_NO_LAZY_FETCH` does, and Verifold reads no repository with a Git that does not know it.
+agent can write. `GIT_NO_LAZY_FETCH` does. With a Git that does not know it, Verifold reads a repository's
+configuration itself first, and reads no repository whose configuration can make Git fetch.
 """
 
 GIT_ENVIRONMENT = {
@@ -404,14 +405,6 @@ def _pinned(job: _Job) -> tuple[_Objects, str]:
     that folder's `.git` only when it is a real folder, and follows no file or link that points elsewhere.
     """
     project, author, commit, seconds = job.project, job.author, job.commit, job.seconds
-    if not job.fetches_nothing:
-        # An agent of the lab can write the project's own repository too, through its worktree.
-        version = '.'.join(map(str, FETCHES_NOTHING_FROM))
-        raise GitError(
-            f'Verifold reads the pinned files only with Git {version} or later, the first that fetches no missing '
-            f'object when Verifold says so. An agent can write the repositories of the lab, and a repository can '
-            f'name a place to fetch from. This computer has an older Git.'
-        )
     lab = project / LAB_FOLDER
     found: list[Path] = []
     with suppress(OSError, subprocess.SubprocessError):
@@ -430,6 +423,14 @@ def _pinned(job: _Job) -> tuple[_Objects, str]:
     if _is_folder(folder) and _is_folder(theirs):
         found.append(theirs)
     for repository in found:
+        if not job.fetches_nothing and (why := fetch_risk(repository)):
+            # An agent of the lab can write its own repository, and the project's own through its worktree.
+            version = '.'.join(map(str, FETCHES_NOTHING_FROM))
+            raise GitError(
+                f'{why} This computer has a Git from before {version}, which can then fetch what the repository '
+                f'lacks from a place that the repository names, so Verifold does not read it. Git {version} or '
+                f'later fetches nothing when Verifold says so, and makes the copy.'
+            )
         objects = _Objects(repository, lab, seconds)
         job.running.add(objects)
         try:
@@ -446,6 +447,81 @@ def _pinned(job: _Job) -> tuple[_Objects, str]:
             raise
         return objects, said[1].decode()
     raise GitError(f'No repository of the lab has the commit {commit}. Verifold fetches nothing that is missing.')
+
+
+MAX_CONFIG_BYTES = 1024**2
+"""The most bytes of a repository's configuration that Verifold reads itself."""
+
+_SECTION = re.compile(r'\[\s*([A-Za-z0-9.-]+)(?:\s+"(?:[^"\\]|\\.)*")?\s*\](.*)')
+_KEY = re.compile(r'([A-Za-z][A-Za-z0-9-]*)\s*(=.*)?')
+
+
+_RISKS = {
+    'unread': 'Verifold cannot read the configuration of the repository {} with confidence.',
+    'includes': 'The configuration of the repository {} takes in other configuration.',
+    'remote': 'The configuration of the repository {} names a remote for objects that it lacks.',
+}
+
+
+def fetch_risk(repository: Path) -> str | None:
+    """
+    Return why a repository's configuration can make an older Git fetch, or `None` when it cannot.
+
+    Verifold reads the file itself, with no Git process: `config` in the Git directory, which for a worktree is
+    the common directory's. The configuration is a risk when it can pull in other configuration, with an
+    `include` or `includeIf` section or with `extensions.worktreeConfig`, and when it names a remote for missing
+    objects, with `extensions.partialClone` or a remote's `promisor` or `partialCloneFilter`. A file that Verifold
+    cannot read, or cannot read with confidence, is a risk too.
+    """
+    text = _config_text(repository)
+    risk = 'unread' if text is None else _risk(text)
+    return _RISKS[risk].format(repository) if risk else None
+
+
+def _config_text(repository: Path) -> str | None:
+    # The text of a repository's own configuration: a plain file of a bounded size, read through no link.
+    try:
+        file = os.open(repository / 'config', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        found = os.fstat(file)
+        if not stat.S_ISREG(found.st_mode) or found.st_size > MAX_CONFIG_BYTES:
+            return None
+        return os.read(file, MAX_CONFIG_BYTES + 1).decode()
+    except (OSError, UnicodeDecodeError):
+        return None
+    finally:
+        os.close(file)
+
+
+def _risk(text: str) -> str | None:
+    section, continued = '', False
+    for line in text.splitlines():
+        rest, was_continued = line.strip(), continued
+        continued = rest.endswith('\\')
+        if not rest or rest[0] in '#;' or was_continued:
+            # A line that goes on from the one before is part of a value.
+            continue
+        if header := _SECTION.fullmatch(rest):
+            section, rest = header[1].casefold(), header[2].strip()
+            if section in ('include', 'includeif'):
+                return 'includes'
+            if not rest or rest[0] in '#;':
+                continue
+        key = _KEY.fullmatch(rest)
+        if key is None or '\0' in rest:
+            return 'unread'
+        if risk := _key_risk(section, key[1].casefold()):
+            return risk
+    return None
+
+
+def _key_risk(section: str, name: str) -> str | None:
+    if section == 'extensions':
+        return {'worktreeconfig': 'includes', 'partialclone': 'remote'}.get(name)
+    remote = section == 'remote' or section.startswith('remote.')
+    return 'remote' if remote and name in ('promisor', 'partialclonefilter') else None
 
 
 def _is_folder(path: Path) -> bool:
