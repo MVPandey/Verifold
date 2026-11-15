@@ -9,7 +9,8 @@ import { isPermission, personAnswer } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { messageOf } from '../api/client.ts';
 import type { PageProps } from './hooks.ts';
-import { Body, FaceView } from './parts.tsx';
+import { Words } from './Markdown.tsx';
+import { FaceView } from './parts.tsx';
 
 /** Everything that waits for the person's answer. Requests that pause an agent come first. */
 export function NeedsPage({ api, data, now }: PageProps): ReactElement {
@@ -86,7 +87,7 @@ function NeedCard(props: {
         <p className="nq">
           {permission ? post.text.replace(/^Permission needed:\s*/, '') : post.text}
         </p>
-        {post.body ? <Body text={post.body} /> : null}
+        {post.body ? <Words text={post.body} /> : null}
         {paused ? (
           <p className="blocking">
             <span className="dot wait" /> {name} is paused until you answer.

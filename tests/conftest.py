@@ -29,6 +29,12 @@ def home(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPat
     return path
 
 
+@pytest.fixture(autouse=True)
+def no_file_manager(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Take away the command that opens a folder, so that no test opens a window on the person's desktop."""
+    monkeypatch.setattr('verifold.runner.folders.OPENERS', {})
+
+
 @pytest.fixture
 def record() -> RecordBuilder:
     """A fresh lab record from `builders.lab`."""

@@ -12,13 +12,15 @@ import {
   labTotal,
   leftLine,
   listed,
+  memberLine,
   members,
   ownName,
   present,
   stateLine,
   workingLine,
 } from '../src/model/agents.ts';
-import { dayClock, duration, minutesBetween, money, tokens } from '../src/model/format.ts';
+import { clock, dayClock, duration, minutesBetween, money, tokens } from '../src/model/format.ts';
+import { MAX_CHARS, MAX_LINES, linkHost, plainOnly } from '../src/model/markdown.ts';
 import { orderNeeds, pauses } from '../src/model/needs.ts';
 import { isRevision, revisedLine } from '../src/model/question.ts';
 import {
@@ -59,7 +61,6 @@ import { clockLine, endLine, MAX_MINUTES, moreTime } from '../src/model/time.ts'
 import type { ActContext } from '../src/model/turns.ts';
 import {
   act,
-  answerSoFar,
   doneLine,
   cardStatus,
   headClaim,
@@ -188,6 +189,34 @@ describe('posts', () => {
     assert.equal(personAnswer(asked, null, ''), null);
   });
 
+  it('parses no Markdown that would break the parser or keep it busy', () => {
+    assert.equal(plainOnly('Method: x\n- one\n  - two\n> 1. quoted\n\n| a |\n| - |'), false);
+    assert.equal(plainOnly(`${'> '.repeat(30)}x`), false);
+    assert.equal(plainOnly(`${'> '.repeat(31)}x`), true);
+    assert.equal(plainOnly(`  ${'- '.repeat(40)}x`), true);
+    assert.equal(plainOnly(`${'1. '.repeat(40)}x`), true);
+    assert.equal(plainOnly(`${'> - '.repeat(20)}x`), true);
+    // A rule line or a row of stars is no nesting.
+    assert.equal(plainOnly(`${'-'.repeat(120)}\n${'*'.repeat(120)}\n${'='.repeat(300)}`), false);
+    assert.equal(plainOnly('['.repeat(200)), true);
+    assert.equal(plainOnly('x'.repeat(MAX_CHARS)), false);
+    assert.equal(plainOnly('x'.repeat(MAX_CHARS + 1)), true);
+    assert.equal(plainOnly('a\n'.repeat(MAX_LINES)), true);
+  });
+
+  it('names the host of a link whose text is not its target', () => {
+    assert.equal(linkHost('the paper', 'https://arxiv.org/abs/2408.08292'), 'arxiv.org');
+    assert.equal(
+      linkHost('https://github.com/safe/repo', 'https://evil.example/x'),
+      'evil.example',
+    );
+    assert.equal(linkHost('https://example.com/a', 'https://example.com/a'), null);
+    // A bare address in the text gets its scheme from the parser.
+    assert.equal(linkHost('www.example.com', 'http://www.example.com'), null);
+    assert.equal(linkHost('example.com:8080', 'https://example.com:8080/'), null);
+    assert.equal(linkHost('x', 'http://'), 'http://');
+  });
+
   it('names standings, and gives every result a chip', () => {
     assert.deepEqual(standingChip(result('p-1'), 'open'), { label: 'Not checked', tone: 'none' });
     assert.deepEqual(standingChip(result('p-1'), 'held_up'), { label: 'Held up', tone: 'hold' });
@@ -297,6 +326,68 @@ describe('agents', () => {
     assert.equal(workingLine([rerun, rerun]), '0 of 0 members working, 2 blind reruns');
   });
 
+  it('says what wakes a member that is in no turn', () => {
+    const now = new Date('2026-11-06T14:12:00Z');
+    const rings = '2026-11-06T14:20:00Z';
+    const alarm = { minutes: 10, quiet: false, rings_at: rings };
+    const idle = { state: 'idle', detail: '', at: '2026-11-06T12:37:00Z' } as const;
+    const rested = agentView('agent-1', { activity: idle, turn_ended_at: '2026-11-06T12:37:00Z' });
+    assert.deepEqual(memberLine({ ...rested, alarm }, false, now), {
+      text: `Waits for its alarm at ${clock(rings)}.`,
+      dot: 'idle',
+    });
+    // An alarm whose time passed still waits: it rings when the agent's turn ends.
+    const past = '2026-11-06T14:05:00Z';
+    assert.equal(
+      memberLine({ ...rested, alarm: { ...alarm, rings_at: past } }, false, now).text,
+      `Waits for its alarm at ${clock(past)}.`,
+    );
+    // An alarm for another day shows the day.
+    const later = '2026-11-07T13:00:00Z';
+    assert.equal(
+      memberLine({ ...rested, alarm: { ...alarm, rings_at: later } }, false, now).text,
+      `Waits for its alarm at ${dayClock(later, now)}.`,
+    );
+    assert.match(dayClock(later, now), /^Nov \d{1,2} \d\d:\d\d$/);
+    assert.equal(dayClock(rings, now), clock(rings));
+    // The time of an alarm for a quiet board moves with each post, so the line gives the rule and no time.
+    const quiet = { minutes: 90, quiet: true, rings_at: rings };
+    assert.equal(
+      memberLine({ ...rested, alarm: quiet }, false, now).text,
+      'Waits for its alarm: rings after 1 h 30 min with no new post.',
+    );
+    assert.deepEqual(memberLine(rested, false, now), {
+      text: 'Its last turn ended 1 h 35 min ago, and no alarm is set. A post for it wakes it.',
+      dot: 'idle',
+    });
+    assert.equal(
+      memberLine({ ...rested, turn_ended_at: '2026-11-06T14:11:40Z' }, false, now).text,
+      'Its last turn ended just now, and no alarm is set. A post for it wakes it.',
+    );
+    // No alarm rings in a lab that is out of time or closed, so the line names none.
+    const held = { ...alarm, rings_at: null };
+    assert.equal(memberLine({ ...rested, alarm: held }, true, now).text, 'Idle, 1 h 35 min');
+    assert.equal(
+      memberLine({ ...rested, alarm: { ...held, quiet: true } }, true, now).text,
+      'Idle, 1 h 35 min',
+    );
+    // An agent that waits again after a restart and has no turn in the record keeps the plain line.
+    assert.equal(
+      memberLine(agentView('agent-1', { activity: idle }), false, now).text,
+      'Idle, 1 h 35 min',
+    );
+    // A member in a turn, a stopped member, and one that left keep their lines, with an alarm or without.
+    const working = { state: 'working', detail: 'Run pytest', at: '2026-11-06T14:10:00Z' } as const;
+    assert.equal(
+      memberLine({ ...rested, activity: working, alarm }, false, now).text,
+      'Run pytest, 2 min',
+    );
+    const stopped = { state: 'stopped', detail: '', at: null } as const;
+    assert.equal(memberLine({ ...rested, activity: stopped }, false, now).text, 'Stopped');
+    const left = { at: '2026-11-06T14:00:00Z', by: 'person', reason: '' };
+    assert.equal(memberLine({ ...rested, left }, false, now).text, 'Left, removed by you');
+  });
+
   it('says what an agent does and what it costs', () => {
     const now = new Date('2026-11-06T14:12:00Z');
     const working = { state: 'working', detail: 'Run pytest', at: '2026-11-06T14:10:00Z' } as const;
@@ -352,7 +443,7 @@ describe('turns', () => {
   const target = result('p-1', { author: 'agent-2' });
 
   it('writes a turn as one line from the post and the post that it answers', () => {
-    const context = { called: name, author: null, question: 't-1' };
+    const context = { called: name, author: null };
     const line = (kind: object, to: Post | null = target): string => act(reply(kind), to, context);
     assert.deepEqual(
       [
@@ -379,7 +470,7 @@ describe('turns', () => {
         'posted a result',
         'posted a result in reply to agent-2’s result',
         'proposed an answer in reply to agent-2’s result',
-        'made a proposal',
+        'proposed an answer',
         'posted a plan in reply to agent-2’s result',
         'ruled out a lead in reply to agent-2’s result',
         'objected to agent-2’s result',
@@ -405,7 +496,7 @@ describe('turns', () => {
       reply_to: 'p-1',
       accepts: true,
     });
-    const context = { called: () => 'Agent 1', author: null, question: 't-1' };
+    const context = { called: () => 'Agent 1', author: null };
     assert.equal(act(close, null, context), 'said that the lab is done');
     assert.equal(act(agree, close, context), 'agreed that the lab is done');
     assert.equal(doneLine({ state: 'open', close_agreed: 0, close_among: 0 }), null);
@@ -429,20 +520,19 @@ describe('turns', () => {
     const checker = (checks: string): object => ({
       called: name,
       author: { ...agentView('checker-7').agent, checks },
-      question: null,
     });
     const line = (context: object): string => act(rerun, target, context as ActContext);
     assert.equal(line(checker('p-1')), 'reran agent-2’s result blind: it fails');
     // A member reran it and saw the thread. A checker for another post is not blind to this one.
     assert.equal(
-      line({ called: name, author: agentView('agent-3').agent, question: null }),
+      line({ called: name, author: agentView('agent-3').agent }),
       'reran agent-2’s result: it fails',
     );
     assert.equal(line(checker('p-5')), 'reran agent-2’s result: it fails');
   });
 
   it('names a post that the page does not have as "a post"', () => {
-    const context = { called: name, author: null, question: null };
+    const context = { called: name, author: null };
     const line = (kind: object): string => act(reply(kind), null, context);
     assert.deepEqual(
       [
@@ -549,7 +639,7 @@ describe('turns', () => {
     assert.equal(isStatusNote(result('p-1'), 't-1'), false);
   });
 
-  it('finds what a thread stands on, and the answer so far', () => {
+  it('finds what a thread stands on', () => {
     const proposal = (id: string): Post => result(id, { kind: 'proposal' });
     const posts = [
       postView(result('p-1'), 1, 'checked'),
@@ -558,11 +648,7 @@ describe('turns', () => {
       postView(result('p-4', { kind: 'message' }), 4),
     ];
     assert.equal(headClaim(posts)?.post.id, 'p-2');
-    // The newest proposal is the answer, also when its author conceded it.
-    assert.equal(answerSoFar(posts)?.post.id, 'p-3');
     assert.equal(headClaim([postView(result('p-1'), 1, 'conceded')])?.post.id, 'p-1');
-    assert.equal(answerSoFar([postView(proposal('p-1'), 1, 'conceded')])?.post.id, 'p-1');
-    assert.equal(answerSoFar([]), null);
     assert.equal(headClaim([]), null);
     // A ruled-out lead is not what a thread stands on.
     const lead = postView(result('p-5', { kind: 'ruled_out' }), 5, 'checked');

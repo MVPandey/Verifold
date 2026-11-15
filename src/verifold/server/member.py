@@ -189,7 +189,7 @@ class Member:
 
     async def set_alarm(self, minutes: float, *, quiet: bool) -> AlarmSet:
         """
-        Ask Verifold to wake the agent after its turn ends, when no post for it wakes it first.
+        Ask Verifold to wake the agent when it is in no turn and no post for it wakes it first.
 
         Raises:
             CannotWake: The agent joined with an invitation, so Verifold cannot wake it.

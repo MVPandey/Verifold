@@ -173,17 +173,23 @@ MAX_ALARM_MINUTES = 24 * 60
 
 class AlarmSet(EventBase):
     """
-    An agent asked Verifold to wake it after its turn ends, when no post for it wakes it first.
+    An agent asked Verifold to wake it when it is not in a turn and no post for it wakes it first.
 
     With `quiet`, the alarm rings when the board got no post for `minutes`. Without, it rings `minutes` after the
-    agent set it. An agent has one alarm: a new one replaces it, and zero minutes cancels it. The alarm is spent
-    when the agent's next turn starts, whatever started that turn.
+    agent set it. An agent has one alarm: a new one replaces it, and zero minutes cancels it. The alarm stays until
+    it rings. A turn that starts for another reason does not spend it. When its time comes while a turn of the
+    agent runs, it rings when that turn ends.
     """
 
     type: Literal['alarm_set'] = 'alarm_set'
     agent: AgentId
     minutes: float = Field(ge=0, le=MAX_ALARM_MINUTES)
     quiet: bool = False
+    stays: bool = False
+    """
+    Whether the alarm stays until it rings. An alarm from before Verifold kept alarms across turns has `False`: it
+    is spent when the agent's next turn starts, as its agent was told, and the record does not say whether it rang.
+    """
 
 
 class RerunRequested(EventBase):
@@ -235,6 +241,8 @@ class TurnStarted(EventBase):
     session: SessionId
     seen: int = Field(ge=0)
     """The last event that the agent had got when the turn started."""
+    rang: int | None = Field(default=None, ge=1)
+    """The sequence number of the agent's alarm that rang with the message of this turn, or `None`."""
     model: ValueId | None = None
     """
     The model that the harness reported for the session when the turn started, as the harness's own ID for it.

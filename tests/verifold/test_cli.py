@@ -18,12 +18,13 @@ from builders import IGNORES_SIGTERM, SLEEP, alive, until
 from fakes import FAKE_HARNESS
 
 from verifold import DISTRIBUTION
-from verifold.app import ServeHooks, serve
+from verifold.app import ServeHooks, ServeOptions, serve
 from verifold.cli import OPEN_SIGNAL, _announce, _open_again, _until_stopped, main
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import StartRequest
 from verifold.runner.environment import harness_environment
+from verifold.runner.folders import open_folder
 from verifold.runner.jobs import Job, Sweep
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.store.record_file import RecordFile
@@ -46,14 +47,26 @@ def opened(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return links
 
 
+desktops: list[bool] = []
+"""Whether each stand-in server could open a folder in the file manager."""
+
+
 @pytest.fixture
 def serves(monkeypatch: pytest.MonkeyPatch) -> list[StartRequest | None]:
     """Replace the server with a stand-in that records the start request it gets."""
     starts: list[StartRequest | None] = []
+    desktops.clear()
 
-    async def serve(project: Path, start: StartRequest | None = None, hooks: ServeHooks | None = None) -> None:
+    async def serve(
+        project: Path,
+        start: StartRequest | None = None,
+        options: ServeOptions | None = None,
+        hooks: ServeHooks | None = None,
+    ) -> None:
         assert project == Path.cwd()
         assert hooks is not None
+        assert options is not None
+        desktops.append(options.desktop)
         hooks.ready('http://127.0.0.1:1234/#token=abc')
         starts.append(start)
 
@@ -69,6 +82,7 @@ def test_no_command_serves_the_folder_prints_the_link_and_opens_it(
     assert serves == [None]
     assert 'Open the lab: http://127.0.0.1:1234/#token=abc' in capsys.readouterr().out
     assert opened == ['http://127.0.0.1:1234/#token=abc']
+    assert desktops == [True]
 
 
 @pytest.mark.usefixtures('serves', 'project')
@@ -77,6 +91,8 @@ def test_no_browser_only_prints_the_link(argv: list[str], opened: list[str]) -> 
     main(argv)
 
     assert opened == []
+    # Such a server opens no folder in a file manager either.
+    assert desktops == [False]
 
 
 @pytest.mark.usefixtures('project')
@@ -691,3 +707,67 @@ def test_marking_leaves_no_half_written_server_file(tmp_path: Path) -> None:
 
     assert ServerProcess.model_validate_json(path.read_text()).opens
     assert [entry.name for entry in tmp_path.iterdir()] == ['server.json']
+
+
+@pytest.fixture
+def folders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    """A project with the folders of two agents, and the folders that the command opens, instead of opening them."""
+    for name in ('agent-1', 'agent-2'):
+        (tmp_path / '.verifold' / 'agents' / name).mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    shown: list[Path] = []
+    monkeypatch.setattr('verifold.cli.open_folder', shown.append)
+    return shown
+
+
+@pytest.mark.parametrize(('argv', 'folder'), [(['folder'], ''), (['folder', 'agent-2'], 'agent-2')])
+def test_folder_prints_where_the_agents_work_and_opens_it(
+    argv: list[str], folder: str, folders: list[Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    main(argv)
+
+    path = Path.cwd() / '.verifold' / 'agents' / folder
+    assert capsys.readouterr().out == f'{path}\n'
+    assert folders == [path]
+
+
+def test_folder_without_a_browser_or_a_file_manager_still_prints_the_path(
+    folders: list[Path], capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = Path.cwd() / '.verifold' / 'agents'
+
+    main(['--no-browser', 'folder'])
+    # The real opener finds no command, because the tests take it away.
+    monkeypatch.setattr('verifold.cli.open_folder', open_folder)
+    main(['folder'])
+
+    said = capsys.readouterr()
+    assert folders == []
+    assert said.out == f'{path}\n{path}\n'
+    assert (
+        said.err == 'verifold: This computer has no command that opens a folder in a file manager. The path is above.\n'
+    )
+
+
+@pytest.mark.usefixtures('folders')
+def test_folder_takes_only_the_folder_of_an_agent_of_this_lab(tmp_path: Path) -> None:
+    for name in ('agent-9', '..', '../..', str(tmp_path)):
+        with pytest.raises(SystemExit, match=r'No agent of this lab has the folder .* The folders: agent-1, agent-2\.'):
+            main(['folder', name])
+
+
+def test_folder_refuses_an_agents_folder_that_is_a_link_to_another_place(tmp_path: Path, folders: list[Path]) -> None:
+    program = tmp_path / 'Calculator.app'
+    program.mkdir()
+    (tmp_path / '.verifold' / 'agents' / 'agent-3').symlink_to(program, target_is_directory=True)
+
+    with pytest.raises(SystemExit, match='agent-3 is a link to another place, so Verifold does not open it'):
+        main(['folder', 'agent-3'])
+    assert folders == []
+
+
+def test_folder_says_when_the_project_has_no_lab(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit, match='No agent has a folder here yet'):
+        main(['folder'])

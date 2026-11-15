@@ -20,14 +20,25 @@ JOBS_ENDED = 'The processes that you left running when your turn ended have ende
 """The message that wakes an agent with one job, which ended its turn while its own processes still ran."""
 
 
-def alarm_message(alarm: AlarmSet) -> str:
-    """Return the message that wakes an agent when the alarm that it set rings."""
-    why = (
-        f'the board got no post for {alarm.minutes:g} minutes'
+IN_TURN = 'while you were in a turn'
+OUT_OF_TIME = 'while the lab was out of time'
+CLOSED = 'while the lab was closed'
+"""Why an alarm rings after its time, in the cases that Verifold knows."""
+
+
+def alarm_message(alarm: AlarmSet, late: str = '') -> str:
+    """
+    Return the message that wakes an agent when the alarm that it set rings.
+
+    `late` says why the alarm rings after its time, such as `IN_TURN`. It is empty when the alarm rings at its
+    time, and when Verifold does not know why it is late.
+    """
+    rung = (
+        f'The alarm that you set at {_utc(alarm.at)} has rung: the board got no post for {alarm.minutes:g} minutes.'
         if alarm.quiet
-        else f'{alarm.minutes:g} minutes passed since you set it'
+        else f'The alarm that you set at {_utc(alarm.at)} for {alarm.minutes:g} minutes has rung.'
     )
-    return f'The alarm that you set has rung: {why}.'
+    return f'{rung} Its time came {late}, so it rings now.' if late else rung
 
 
 def cut_short_message(reason: str) -> str:

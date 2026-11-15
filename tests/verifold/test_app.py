@@ -1436,3 +1436,51 @@ def test_a_checker_comes_from_each_harness_and_family_that_a_seat_states() -> No
         ('fake', 'test', 'small'),
         ('fake', 'other', 'small-model'),
     ]
+
+
+@pytest.mark.usefixtures('log')
+async def test_the_person_opens_the_folders_of_the_labs_agents_and_gets_the_path_when_nothing_opens(
+    project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The stand-in for the file manager writes down the folder that it got.
+    seen, script = tmp_path / 'opened.txt', tmp_path / 'opener'
+    script.write_text(f'#!/bin/sh\necho "$1" >> {seen}\n')
+    script.chmod(0o755)
+    monkeypatch.setattr('verifold.runner.folders.OPENERS', {sys.platform: str(script)})
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),))
+    agents = project / '.verifold' / 'agents'
+
+    async with serving(project) as client:
+        no_lab = await client.post('/folder', json={})
+    async with serving(project, start, CATALOG) as client:
+        await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
+        every = (await client.post('/folder', json={})).json()
+        one = (await client.post('/folder', json={'agent': 'agent-1'})).json()
+        unknown = await client.post('/folder', json={'agent': 'agent-9'})
+        monkeypatch.setattr('verifold.runner.folders.OPENERS', {})
+        no_opener = (await client.post('/folder', json={'agent': 'agent-1'})).json()
+        # A folder that is gone, or that became a link to another place, is not opened, and the lab says which one.
+        monkeypatch.setattr('verifold.runner.folders.OPENERS', {sys.platform: str(script)})
+        agents.rename(tmp_path / 'moved')
+        gone = await client.post('/folder', json={})
+        agents.symlink_to(tmp_path / 'moved', target_is_directory=True)
+        linked = await client.post('/folder', json={'agent': 'agent-1'})
+        agents.unlink()
+        (tmp_path / 'moved').rename(agents)
+    monkeypatch.setattr('verifold.runner.folders.OPENERS', {sys.platform: str(script)})
+    async with serving(project, options=ServeOptions(desktop=False)) as client:
+        no_desktop = (await client.post('/folder', json={})).json()
+
+    real = agents.resolve()
+    assert no_lab.status_code == 409
+    assert every == {'path': str(real), 'opened': True}
+    assert one == {'path': str(real / 'agent-1'), 'opened': True}
+    assert seen.read_text().splitlines() == [str(real), str(real / 'agent-1')]
+    assert (unknown.status_code, unknown.json()['detail']) == (404, 'The lab has no agent with the ID agent-9.')
+    assert no_opener == {'path': str(real / 'agent-1'), 'opened': False}
+    assert (gone.status_code, gone.json()['detail']) == (404, f'{real} is not a folder on this computer.')
+    assert (linked.status_code, linked.json()['detail']) == (
+        404,
+        f'{real / "agent-1"} is a link to another place, so Verifold does not open it.',
+    )
+    assert no_desktop == {'path': str(real), 'opened': False}

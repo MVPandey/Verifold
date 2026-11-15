@@ -20,6 +20,8 @@ from sse_starlette import EventSourceResponse
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import (
     AgentView,
+    FolderRequest,
+    FolderView,
     Invitation,
     InviteRequest,
     LabView,
@@ -42,7 +44,7 @@ from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
-from verifold.society.lifecycle import close_count, lab_state
+from verifold.society.lifecycle import alarm_line, close_count, lab_state
 from verifold.society.lines import lines_of
 from verifold.society.standing import agreed, closing
 from verifold.society.turns import before
@@ -88,6 +90,10 @@ class Host(Protocol):
         """Return the text of a file that backs a post, at the commit that the post pins."""
         ...
 
+    async def open_folder(self, agent_id: AgentId | None = None) -> FolderView:
+        """Open the folder where the lab's agents work, or one agent's folder, and return where it is."""
+        ...
+
     async def add_agents(self, choice: AgentChoice) -> None:
         """Add the agents of one seat to the lab that runs, and start them."""
         ...
@@ -96,8 +102,8 @@ class Host(Protocol):
         """Put an agent's seat on call or take it off, and give or take the lab's coordinator seat."""
         ...
 
-    def ask_harnesses(self) -> None:
-        """Ask the harnesses that Verifold did not ask yet what they offer, in the background."""
+    def ask_harnesses(self) -> SetupView:
+        """Ask the harnesses that Verifold did not ask yet what they offer, in the background, and return the setup."""
         ...
 
     async def invite(self, request: InviteRequest | None = None) -> Invitation:
@@ -144,8 +150,7 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     @api.post('/offers', dependencies=[authorized])
     async def offers() -> SetupView:
         # The form that adds an agent to a lab that was served again has no offers until the harnesses are asked.
-        host.ask_harnesses()
-        return host.setup()
+        return host.ask_harnesses()
 
     @api.post('/labs', dependencies=[authorized])
     async def start(request: StartRequest) -> SetupView:
@@ -232,6 +237,11 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     async def file(post_id: PostId, path: str) -> FileText:
         return await host.file_text(post_id, path)
 
+    @api.post('/folder', dependencies=[authorized])
+    async def folder(request: FolderRequest) -> FolderView:
+        # The request names an agent of the lab at most, never a path.
+        return await host.open_folder(request.agent)
+
     @api.get('/needs', dependencies=[authorized])
     async def needs() -> tuple[PostView, ...]:
         return needs_person(current().board)
@@ -307,6 +317,8 @@ def _agent_view(board: Board, activity: Activity, agent_id: str, working: dict[A
         # The record says so until the agent's next turn starts. The person's new start shows at once.
         stopped=before(board, agent_id).stopped and activity.of(agent_id).state == 'stopped',
         turns=len(turns),
+        turn_ended_at=next((turn.at for turn in reversed(turns) if not turn.no_turn), None),
+        alarm=alarm_line(board, agent_id),
         posts=sum(entry.post.author == agent_id for entry in board.posts),
         usage=Usage(
             input_tokens=sum(turn.usage.input_tokens for turn in turns),

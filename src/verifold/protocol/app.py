@@ -8,7 +8,7 @@ from verifold.protocol.agents import Agent, AgentChoices, Label, Name, SeatFacts
 from verifold.protocol.events import AgentLeft, Note, Question
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, PostId, ThreadId
-from verifold.protocol.join import LabState, PostLine, QuestionVersion
+from verifold.protocol.join import AlarmLine, LabState, PostLine, QuestionVersion
 from verifold.protocol.record import Record
 from verifold.protocol.settings import MAX_MINUTES, Settings, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
@@ -55,6 +55,10 @@ class AgentView(Record):
     The person can start it again.
     """
     turns: int = Field(ge=0)
+    turn_ended_at: AwareDatetime | None = None
+    """When the agent's last turn ended. `None` when no turn of the agent ended."""
+    alarm: AlarmLine | None = None
+    """The alarm that waits for the agent, or `None`. Its `rings_at` is `None` while the lab is out of time or closed."""
     posts: int = Field(ge=0)
     usage: Usage
     cost_usd: float | None = None
@@ -124,6 +128,21 @@ class RerunRequest(Record):
     """The person asks for a blind rerun of a post."""
 
     post: PostId
+
+
+class FolderRequest(Record):
+    """The person asks to see the folder where the lab's agents work, or the folder of one agent."""
+
+    agent: AgentId | None = None
+    """The agent whose folder to open. `None` opens the folder that holds every agent's folder."""
+
+
+class FolderView(Record):
+    """A folder of the lab on the server's computer, and whether the server opened it in the file manager."""
+
+    path: str
+    opened: bool
+    """`False` when the server started with `--no-browser`, or when its computer has no command that opens a folder."""
 
 
 class OptionValue(Record):

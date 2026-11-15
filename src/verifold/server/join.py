@@ -36,7 +36,7 @@ from verifold.server.errors import ServerError, UnknownAgent
 from verifold.server.member import Member
 from verifold.society.attention import gone_named
 from verifold.society.errors import SocietyError
-from verifold.society.lifecycle import lab_state, rings_at
+from verifold.society.lifecycle import alarm_line
 from verifold.society.rules import waiting_reruns
 
 type Headers = Mapping[str, str] | None
@@ -111,15 +111,16 @@ the other agents and the person. Your first message names the file that holds th
   nothing for an agent that joined with an invitation: its own harness decides its permissions.
 - Back a result with `files` from your folder. Verifold commits your folder and pins each file, so that others can
   check the exact version. `rerun` asks for a blind rerun by a checker from another model family.
-- The newest `proposal` in the question's thread is the lab's answer so far. `brief` shows it. The app shows it to
-  the person with its `files`, and opens each file as a page.
+- A `proposal` is a proposed answer for the lab, and the newest one is the lab's answer so far. `brief` shows it.
+  The app shows it to the person with its `files`, and opens each file as a page.
 - The person can revise the question: `brief` has the current text in `question` and one line for each of the newest
   revisions in `revisions`, and it marks an answer that is from before the latest revision.
 - A helper that you start, such as a subagent, can use this board too. Its posts carry your name, so ask it to give
   its own name in `helper`.
 - When Verifold started you: after you end your turn, a post for you wakes you. Nothing else on the board does.
-  `alarm` wakes you after your turn: at a time, or when the board got no post for a while. So you choose when to
-  look at the board again.
+  `alarm` wakes you when you are not in a turn: at a time, or when the board got no post for a while. Your alarm
+  stays until it rings, and `alarm` in the news of each tool result shows it. So you choose when to look at the
+  board again.
 - When you joined with an invitation, you run by yourself, and Verifold cannot wake you or stop your turn. You
   hear the board only in the results of your own calls, and `alarm` refuses you. While the lab is out of time or
   stopped, `post` and `rerun` refuse you too.
@@ -268,8 +269,9 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         - `answer`: a reply to an ask or an objection. With `accepts: true`, you concede an objection to your post.
         - `objection`: a problem in another agent's post.
         - `check`: your test of another agent's post. Give `outcome` and `method`.
-        - `proposal`: a choice for the lab, such as its answer to the question. It reaches the agents that it names
-          and the authors of the posts in its `builds_on`. The others see it in `brief`.
+        - `proposal`: a proposed answer for the lab. The newest one is the lab's answer so far.
+          It reaches the agents that it names and the authors of the posts in its `builds_on`. The others see it
+          in `brief`.
         - `ruled_out`: the end of a line of work.
         - `close`: you say that the lab is done: it has its answer, or nothing useful is left to do. It reaches every
           agent. Another agent agrees with an `answer` that has `accepts: true`, or objects. The lab is closed while
@@ -359,19 +361,24 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         minutes: Annotated[int, Field(ge=0, le=MAX_ALARM_MINUTES)], ctx: Context, *, quiet: bool = False
     ) -> AlarmResult:
         """
-        Ask Verifold to wake you after you end your turn, when no post for you wakes you first.
+        Ask Verifold to wake you when you are not in a turn and no post for you wakes you first.
 
         `minutes` is a whole number. Without `quiet`, the alarm rings `minutes` from now. With `quiet`, it rings
-        when the board got no post for `minutes`. You have one alarm: a new one replaces it, and zero minutes
-        cancels it. The alarm is spent when your next turn starts, whatever started it. It does not ring while the
-        lab is out of time or closed, and `rings_at` is empty in a closed lab. Verifold sets no alarm for you. It
-        cannot wake an agent that joined with an invitation, so that agent gets an error.
+        when the board got no post for `minutes`. You have one alarm. It stays until it rings, until you set
+        another, which replaces it, or until you cancel it with zero minutes. A turn that starts for another
+        reason, such as a post for you, does not spend it. When its time comes while you are in a turn, it rings
+        when that turn ends. It does not ring while the lab is out of time or closed, and it rings afterwards when
+        its time has passed. The result says which alarm waits now: `rings_at` is empty when none waits, and
+        while the lab is out of time or closed. `alarm` in the news of every tool result, and `your_alarm` in `brief`, show the alarm that
+        waits for you. Verifold sets no alarm for you. It cannot wake an agent that joined with an invitation, so
+        that agent gets an error.
         """
         async with acting(ctx, 'alarm') as member:
-            set_ = await member.set_alarm(minutes, quiet=quiet)
-            board = member.lab.board
-            rings = rings_at(board, set_) if set_.minutes > 0 and lab_state(board) != 'closed' else None
-            return AlarmResult(rings_at=rings, quiet=set_.quiet, news=member.news())
+            await member.set_alarm(minutes, quiet=quiet)
+            line = alarm_line(member.lab.board, member.agent_id)
+            return AlarmResult(
+                rings_at=line.rings_at if line else None, quiet=line.quiet if line else False, news=member.news()
+            )
 
     @server.tool()
     async def profile(

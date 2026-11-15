@@ -1,12 +1,74 @@
 """The folders where agents work."""
 
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 from verifold.protocol.ids import AgentId, CommitId
+from verifold.runner.errors import NoAgentFolder, NoFileManager
 from verifold.runner.git import GitError, commit_of, git
 
 LAB_FOLDER = '.verifold'
 """The folder in the project that holds the lab: its record, the agents' folders, and their private files."""
+
+OPENERS = {'darwin': 'open', 'linux': 'xdg-open'}
+"""The command that opens a folder in the file manager, for each platform that has one."""
+
+OPEN_SECONDS = 10.0
+"""How long the opener may take. Nobody knows what an opener that runs longer did, so it does not count as opened."""
+
+
+def real_folder(project: Path, agent_id: AgentId | None = None) -> Path:
+    """
+    Return the folder that holds every agent's folder, or the folder of one agent, when it is safe to open.
+
+    An agent can replace its folder with a link, for example to a program, which the file manager's opener would
+    start. So the folder must be a real folder at its own place in the lab's folder, with no link on the way to it.
+
+    Raises:
+        NoAgentFolder: The folder does not exist, or it is a link or lies behind one.
+
+    """
+    agents = agents_folder(project.resolve())
+    folder = agents / agent_id if agent_id else agents
+    if not folder.is_dir():
+        raise NoAgentFolder(f'{folder} is not a folder on this computer.')
+    if folder.resolve() != folder:
+        raise NoAgentFolder(f'{folder} is a link to another place, so Verifold does not open it.')
+    return folder
+
+
+def open_folder(folder: Path) -> None:
+    """
+    Open a folder in the file manager of this computer.
+
+    Raises:
+        NoFileManager: The platform has no command that opens a folder, or the command failed or did not end in
+            time, as on a computer without a desktop.
+
+    """
+    name = OPENERS.get(sys.platform)
+    command = shutil.which(name) if name else None
+    if command is None:
+        raise NoFileManager('This computer has no command that opens a folder in a file manager.')
+    try:
+        done = subprocess.run(
+            [command, str(folder)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=OPEN_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise NoFileManager(
+            f'{name} did not end in {OPEN_SECONDS:g} seconds, so the folder may not be open.'
+        ) from error
+    except OSError as error:
+        raise NoFileManager(f'{name} did not start: {error}') from error
+    if done.returncode:
+        raise NoFileManager(f'{name} could not open the folder. This computer may have no desktop.')
 
 
 async def tracked_lab_files(project: Path) -> tuple[str, ...]:

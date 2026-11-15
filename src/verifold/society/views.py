@@ -25,7 +25,7 @@ from verifold.protocol.posts import Ask, Call, Check, Close, Objection, Plan, Pr
 from verifold.society.attention import left_line, watches_thread
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
-from verifold.society.lifecycle import lab_state
+from verifold.society.lifecycle import alarm_line, lab_state
 from verifold.society.lines import lines_of, question_thread
 from verifold.society.rules import blind_checks
 from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing
@@ -278,6 +278,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
     return Brief(
         you=agent_id,
         your_line=_agent_line(board, you.agent, working) if you else None,
+        your_alarm=alarm_line(board, agent_id),
         how=how,
         question=board.question,
         revisions=tuple(
@@ -345,14 +346,18 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
 
 def answer(board: Board) -> Posted | None:
     """
-    Return the lab's answer so far: the newest proposal in the question's thread.
+    Return the lab's answer so far: the newest proposal, in whatever thread for the whole lab it is.
 
-    Where it stands says whether an agent disputes it or its author conceded it. An older proposal does not come
-    back as the answer, because the lab moved on from it.
+    The person steers the lab by opening threads, and an agent proposes where it was asked. A side thread takes no
+    proposal. Where the answer stands says whether an agent disputes it or its author conceded it. An older
+    proposal does not come back as the answer, because the lab moved on from it.
     """
-    thread = question_thread(board)
     return next(
-        (entry for entry in reversed(board.posts) if isinstance(entry.post, Proposal) and entry.post.thread == thread),
+        (
+            entry
+            for entry in reversed(board.posts)
+            if isinstance(entry.post, Proposal) and not board.is_side(entry.post.thread)
+        ),
         None,
     )
 

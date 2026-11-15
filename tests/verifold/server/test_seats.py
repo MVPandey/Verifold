@@ -89,7 +89,7 @@ async def test_a_name_that_waits_for_its_model_gets_it_once_and_keeps_clear_of_t
 
 
 async def test_a_turn_keeps_the_model_that_the_harness_reported(lab: Lab, record_file: RecordFile) -> None:
-    with_model = await lab.start_turn('ada', 'session-1', 3, 'opus-5-5', 'Opus 5.5')
+    with_model = await lab.start_turn('ada', 'session-1', 3, model='opus-5-5', model_name='Opus 5.5')
     without = await lab.start_turn('bo', 'session-2', 3)
 
     assert (with_model.model, with_model.model_name, without.model, without.model_name) == (

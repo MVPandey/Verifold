@@ -2,6 +2,7 @@ import type {
   AgentChoice,
   AnswerView,
   FileText,
+  FolderView,
   Invitation,
   InviteRequest,
   LabView,
@@ -42,6 +43,11 @@ export interface Api {
   answer(): Promise<AnswerView | null>;
   /** The text of a file that backs a post. */
   file(postId: string, path: string): Promise<FileText>;
+  /**
+   * Ask the server to open the folder where the agents work, or one agent's folder, in its file manager. The
+   * answer holds the path also when nothing opened.
+   */
+  openFolder(agentId?: string): Promise<FolderView>;
   post(request: PostRequest): Promise<PostView>;
   rerun(postId: string): Promise<void>;
   setTime(minutes: number): Promise<LabView>;
@@ -142,6 +148,7 @@ export function createApi(
       }),
     file: (postId, path) =>
       request(`/posts/${encodeURIComponent(postId)}/file?path=${encodeURIComponent(path)}`),
+    openFolder: (agentId) => request('/folder', agentId ? { agent: agentId } : {}),
     post: (post) => request('/posts', post),
     rerun: async (postId) => {
       await request('/reruns', { post: postId });

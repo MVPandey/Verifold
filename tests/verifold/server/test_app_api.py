@@ -10,6 +10,7 @@ from pydantic import SecretStr
 
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import (
+    FolderView,
     HarnessOption,
     Invitation,
     InviteRequest,
@@ -89,8 +90,9 @@ class Host:
             raise NotFound(f'The lab has no agent with the ID {agent_id}.')
         self.seats.append((agent_id, change))
 
-    def ask_harnesses(self) -> None:
+    def ask_harnesses(self) -> SetupView:
         self.asked += 1
+        return self.setup()
 
     async def invite(self, request: InviteRequest | None = None) -> Invitation:
         request = request or InviteRequest()
@@ -111,6 +113,11 @@ class Host:
     async def start_again(self, agent_id: str) -> None:
         if agent_id != 'bo':
             raise SetupRejected('Verifold did not stop Ada, so it needs no new start.')
+
+    async def open_folder(self, agent_id: str | None = None) -> FolderView:
+        if agent_id not in {None, 'ada'}:
+            raise NotFound(f'The lab has no agent with the ID {agent_id}.')
+        return FolderView(path=f'/project/.verifold/agents/{agent_id or ""}'.rstrip('/'), opened=agent_id is None)
 
     async def file_text(self, post_id: str, path: str) -> FileText:
         if path != 'answer.md':
@@ -247,6 +254,34 @@ async def test_the_lab_view_shows_each_agents_activity_and_cost(
     await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-2', accepts=True), 'bo')
     done = (await client.get('/lab')).json()
     assert (done['state'], done['close']['id'], done['close_agreed']) == ('closed', 'p-2', 1)
+
+
+async def test_the_lab_view_says_when_an_agent_ended_its_turn_and_when_its_alarm_rings(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    async def views() -> tuple[tuple[str | None, str | None], ...]:
+        agents = (await client.get('/lab')).json()['agents']
+        return tuple((view['turn_ended_at'], view['alarm'] and view['alarm']['rings_at']) for view in agents)
+
+    assert await views() == ((None, None), (None, None))
+
+    ended = await lab.end_turn(TurnSummary(agent='ada', seconds=3, usage=Usage()))
+    # A harness that fails outside a turn ends no turn.
+    await lab.end_turn(TurnSummary(agent='ada', seconds=0, usage=Usage(), error='It did not start.', no_turn=True))
+    set_ = await lab.set_alarm('ada', 10, quiet=False)
+    rings = (set_.at + timedelta(minutes=10)).isoformat().replace('+00:00', 'Z')
+    assert await views() == ((ended.at.isoformat().replace('+00:00', 'Z'), rings), (None, None))
+
+    # No alarm rings while the lab is out of time, or closed.
+    await lab.set_time_left(timedelta(0))
+    await lab.run_out_of_time()
+    held = (await client.get('/lab')).json()['agents'][0]['alarm']
+    assert held == {'minutes': 10, 'quiet': False, 'rings_at': None}
+    await lab.set_time_left(timedelta(hours=1))
+    assert (await views())[0][1] == rings
+    await lab.post(PostRequest(kind='close', text='The answer stands.', thread='t-1'), 'ada')
+    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-2', accepts=True), 'bo')
+    assert (await views())[0][1] is None
 
 
 async def test_threads_and_a_thread_read_as_the_person(client: httpx2.AsyncClient) -> None:
@@ -552,3 +587,22 @@ async def test_a_folder_with_no_lab_takes_no_revision(activity: Activity) -> Non
         refused = await client.post('/question', json={'question': 'Why?'})
 
     assert refused.status_code == 409
+
+
+async def test_the_person_opens_the_agents_folder_and_only_an_agent_of_the_lab_names_one(
+    client: httpx2.AsyncClient, lab: Lab, activity: Activity
+) -> None:
+    every = await client.post('/folder', json={})
+    one = await client.post('/folder', json={'agent': 'ada'})
+    unknown = await client.post('/folder', json={'agent': 'zed'})
+    path = await client.post('/folder', json={'agent': '../../etc'})
+    extra = await client.post('/folder', json={'path': '/etc'})
+    async with client_of(Host(lab), activity) as stranger:
+        stranger.headers.pop('Authorization')
+        refused = await stranger.post('/folder', json={})
+
+    assert every.json() == {'path': '/project/.verifold/agents', 'opened': True}
+    assert one.json() == {'path': '/project/.verifold/agents/ada', 'opened': False}
+    assert (unknown.status_code, unknown.json()['detail']) == (404, 'The lab has no agent with the ID zed.')
+    # An agent's ID has no slash and no dot, and the request has no field for a path.
+    assert (path.status_code, extra.status_code, refused.status_code) == (422, 422, 401)
