@@ -340,6 +340,14 @@ export interface AnswerView {
   readonly results: number;
   /** The results among them that no blind checker has rerun. */
   readonly no_blind_rerun: readonly string[];
+  /** The newest proposal after the answer, which is in another thread and so is not the answer, or `null`. */
+  readonly newer_proposal: PostLine | null;
+}
+
+/** A folder of the lab on the server's computer, and whether the server opened it in the file manager. */
+export interface FolderView {
+  readonly path: string;
+  readonly opened: boolean;
 }
 
 /** The text of one file that backs a post, at the commit that the post pins. */

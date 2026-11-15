@@ -25,6 +25,7 @@ import {
   builtOnLabel,
   isPermission,
   personAnswer,
+  postMarkdown,
   personMessage,
   split,
   standingChip,
@@ -53,7 +54,6 @@ import { clockLine, endLine, MAX_MINUTES, moreTime } from '../src/model/time.ts'
 import type { ActContext } from '../src/model/turns.ts';
 import {
   act,
-  answerSoFar,
   doneLine,
   cardStatus,
   headClaim,
@@ -180,6 +180,24 @@ describe('posts', () => {
       text: 'No, use pure Python.',
     });
     assert.equal(personAnswer(asked, null, ''), null);
+  });
+
+  it('keeps the lines and the arithmetic of a body that an agent wrote as plain text', () => {
+    // Two spaces at the end of a line are a Markdown line break.
+    assert.equal(
+      postMarkdown('Method: replay.\nResult: +0.02.'),
+      'Method: replay.  \nResult: +0.02.  ',
+    );
+    // A `*` between two terms multiplies. Markdown would take a pair of them as emphasis and drop both.
+    assert.equal(postMarkdown('fee = 0.07*P*(1-P)'), 'fee = 0.07\\*P\\*(1-P)  ');
+    // Emphasis, a bullet, and a power stay as the agent wrote them.
+    assert.equal(postMarkdown('* a **bold** word, x**2'), '* a **bold** word, x**2  ');
+    // Code passes unchanged: inline, and between fences, where a line end is a line end already.
+    assert.equal(postMarkdown('run `a*b*c` then 2*3'), 'run `a*b*c` then 2\\*3  ');
+    assert.equal(
+      postMarkdown('Run:\n```sh\npytest a*b*c\n```\nDone.'),
+      'Run:  \n```sh\npytest a*b*c\n```\nDone.  ',
+    );
   });
 
   it('names standings, and gives every result a chip', () => {
@@ -543,7 +561,7 @@ describe('turns', () => {
     assert.equal(isStatusNote(result('p-1'), 't-1'), false);
   });
 
-  it('finds what a thread stands on, and the answer so far', () => {
+  it('finds what a thread stands on', () => {
     const proposal = (id: string): Post => result(id, { kind: 'proposal' });
     const posts = [
       postView(result('p-1'), 1, 'checked'),
@@ -552,11 +570,7 @@ describe('turns', () => {
       postView(result('p-4', { kind: 'message' }), 4),
     ];
     assert.equal(headClaim(posts)?.post.id, 'p-2');
-    // The newest proposal is the answer, also when its author conceded it.
-    assert.equal(answerSoFar(posts)?.post.id, 'p-3');
     assert.equal(headClaim([postView(result('p-1'), 1, 'conceded')])?.post.id, 'p-1');
-    assert.equal(answerSoFar([postView(proposal('p-1'), 1, 'conceded')])?.post.id, 'p-1');
-    assert.equal(answerSoFar([]), null);
     assert.equal(headClaim([]), null);
     // A ruled-out lead is not what a thread stands on.
     const lead = postView(result('p-5', { kind: 'ruled_out' }), 5, 'checked');

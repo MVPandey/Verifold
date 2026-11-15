@@ -3,10 +3,10 @@ import { describe, it } from 'node:test';
 
 import { ApiError } from '../src/api/client.ts';
 import type { Api } from '../src/api/client.ts';
-import type { LabView } from '../src/api/types.ts';
-import { EMPTY, LOST, createLoader } from '../src/ui/loader.ts';
+import type { AnswerView, LabView } from '../src/api/types.ts';
+import { EMPTY, LOST, createLoader, inOrder } from '../src/ui/loader.ts';
 import type { LabData } from '../src/ui/loader.ts';
-import { DEFAULTS, labView } from './fixtures.ts';
+import { DEFAULTS, labView, postView, result } from './fixtures.ts';
 
 /** A server whose lab view answers only when the test says so, and whose other views answer at once. */
 function slowServer(): {
@@ -44,6 +44,7 @@ function slowServer(): {
     report: () => answer('report', null),
     answer: () => answer('answer', null),
     file: () => Promise.reject(new Error('unused')),
+    openFolder: () => Promise.reject(new Error('unused')),
     start: () => Promise.reject(new Error('unused')),
     thread: () => Promise.reject(new Error('unused')),
     post: () => Promise.reject(new Error('unused')),
@@ -127,6 +128,47 @@ describe('the loader', () => {
     ]);
     assert.equal(loader.stale(), false);
     assert.equal(state.data().error, null);
+  });
+
+  it('reads the answer so far again at every full read', async () => {
+    const server = slowServer();
+    const state = store();
+    const answers = ['Yes, 12x.', 'No: 3x at most.'].map((text, index): AnswerView => ({
+      answer: postView(result(`p-${index + 2}`, { kind: 'proposal', text }), index + 2),
+      to_earlier_question: false,
+      builds_on: [],
+      results: 0,
+      no_blind_rerun: [],
+      newer_proposal: null,
+    }));
+    const api = { ...server.api, answer: () => Promise.resolve(answers.shift() ?? null) };
+    const loader = createLoader(api, state.apply);
+
+    loader.full();
+    await settle();
+    server.answerLab(working);
+    await settle();
+    assert.equal(state.data().answer?.answer.post.text, 'Yes, 12x.');
+
+    // A new event on the board causes a full read, and the answer comes with it.
+    loader.full();
+    await settle();
+    server.answerLab(working);
+    await settle();
+    assert.equal(state.data().answer?.answer.post.text, 'No: 3x at most.');
+    assert.equal(state.data().version, 2);
+  });
+
+  it('shows a thread read that the next read overtakes, and never an older read after a newer one', () => {
+    const order = inOrder();
+    const [first, second, third] = [order(), order(), order()];
+
+    // The first read answers while the second is on its way: the thread moves on instead of waiting.
+    assert.equal(first(), true);
+    // The third answers before the second, so the second is old news.
+    assert.equal(third(), true);
+    assert.equal(second(), false);
+    assert.equal(third(), true);
   });
 
   it('keeps saying the connection is lost until the stream is back', async () => {

@@ -1243,3 +1243,45 @@ async def test_a_harness_that_fails_its_probe_offers_nothing_and_stops_probing(p
     assert setup['harnesses'] == [
         {'name': 'broken', 'title': 'Fake', 'family': 'test', 'available': True, 'probing': False, 'offer': None}
     ]
+
+
+@pytest.mark.usefixtures('log')
+async def test_the_person_opens_the_folders_of_the_labs_agents_and_gets_the_path_when_nothing_opens(
+    project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The stand-in for the file manager writes down the folder that it got.
+    seen, script = tmp_path / 'opened.txt', tmp_path / 'opener'
+    script.write_text(f'#!/bin/sh\necho "$1" >> {seen}\n')
+    script.chmod(0o755)
+    monkeypatch.setattr('verifold.runner.folders.OPENERS', {sys.platform: str(script)})
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),))
+    agents = project / '.verifold' / 'agents'
+
+    async with serving(project) as client:
+        no_lab = await client.post('/folder', json={})
+    async with serving(project, start, CATALOG) as client:
+        await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
+        every = (await client.post('/folder', json={})).json()
+        one = (await client.post('/folder', json={'agent': 'agent-1'})).json()
+        unknown = await client.post('/folder', json={'agent': 'agent-9'})
+        monkeypatch.setattr('verifold.runner.folders.OPENERS', {})
+        no_opener = (await client.post('/folder', json={'agent': 'agent-1'})).json()
+        # A folder that is gone is not opened, and the lab says which one.
+        agents.rename(tmp_path / 'moved')
+        gone = [await client.post('/folder', json=body) for body in ({}, {'agent': 'agent-1'})]
+        (tmp_path / 'moved').rename(agents)
+    monkeypatch.setattr('verifold.runner.folders.OPENERS', {sys.platform: str(script)})
+    async with serving(project, options=ServeOptions(desktop=False)) as client:
+        no_desktop = (await client.post('/folder', json={})).json()
+
+    assert no_lab.status_code == 409
+    assert every == {'path': str(agents), 'opened': True}
+    assert one == {'path': str(agents / 'agent-1'), 'opened': True}
+    assert seen.read_text().splitlines() == [str(agents), str(agents / 'agent-1')]
+    assert (unknown.status_code, unknown.json()['detail']) == (404, 'The lab has no agent with the ID agent-9.')
+    assert no_opener == {'path': str(agents / 'agent-1'), 'opened': False}
+    assert [(answer.status_code, answer.json()['detail']) for answer in gone] == [
+        (404, 'No agent of this lab has a folder on this computer.'),
+        (404, 'Agent 1 has no folder on this computer.'),
+    ]
+    assert no_desktop == {'path': str(agents), 'opened': False}

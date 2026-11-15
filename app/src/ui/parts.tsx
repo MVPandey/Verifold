@@ -43,7 +43,10 @@ export function ChipView(props: { readonly chip: Chip }): ReactElement {
   return <span className={`f-st fs-${props.chip.tone}`}>{props.chip.label}</span>;
 }
 
-/** Text that an agent or the person wrote, as paragraphs. It renders as text, never as HTML. */
+/**
+ * Text that an agent or the person wrote, as paragraphs of plain text, exactly as written. The Needs you page
+ * uses it, because a permission request shows a command, and Markdown would change a `*` or a `_` in one.
+ */
 export function Body(props: { readonly text: string }): ReactElement {
   const paragraphs = props.text.split(/\n\s*\n/).filter((paragraph) => paragraph.trim());
   return (

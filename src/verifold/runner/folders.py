@@ -1,12 +1,52 @@
 """The folders where agents work."""
 
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 from verifold.protocol.ids import AgentId, CommitId
+from verifold.runner.errors import NoFileManager
 from verifold.runner.git import GitError, commit_of, git
 
 LAB_FOLDER = '.verifold'
 """The folder in the project that holds the lab: its record, the agents' folders, and their private files."""
+
+OPENERS = {'darwin': 'open', 'linux': 'xdg-open'}
+"""The command that opens a folder in the file manager, for each platform that has one."""
+
+OPEN_SECONDS = 10.0
+"""How long the opener may take. An opener that runs longer has started the file manager and waits for it."""
+
+
+def open_folder(folder: Path) -> None:
+    """
+    Open a folder in the file manager of this computer.
+
+    Raises:
+        NoFileManager: The platform has no command that opens a folder, or the command failed, as it does on a
+            computer without a desktop.
+
+    """
+    name = OPENERS.get(sys.platform)
+    command = shutil.which(name) if name else None
+    if command is None:
+        raise NoFileManager('This computer has no command that opens a folder in a file manager.')
+    try:
+        done = subprocess.run(
+            [command, str(folder)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=OPEN_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return
+    except OSError as error:
+        raise NoFileManager(f'{name} did not start: {error}') from error
+    if done.returncode:
+        raise NoFileManager(f'{name} could not open the folder. This computer may have no desktop.')
 
 
 async def tracked_lab_files(project: Path) -> tuple[str, ...]:

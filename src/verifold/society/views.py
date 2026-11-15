@@ -387,12 +387,17 @@ def answer_view(board: Board) -> AnswerView | None:
         return None
     under = tuple(post for post_id in entry.post.builds_on if (post := board.post(post_id)))
     results = tuple(post for post in under if _can_rerun(post))
+    # The answer is the newest proposal in the question's thread, so a newer one is in another thread.
+    newer = next(
+        (other for other in reversed(board.posts) if isinstance(other.post, Proposal) and other.seq > entry.seq), None
+    )
     return AnswerView(
         answer=post_view(board, entry),
         to_earlier_question=to_earlier_question(board, entry),
         builds_on=tuple(post_view(board, post) for post in under),
         results=len(results),
         no_blind_rerun=tuple(post.post.id for post in _not_rerun(board, results)),
+        newer_proposal=PostLine.of(newer) if newer else None,
     )
 
 

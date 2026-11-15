@@ -367,6 +367,11 @@ class AnswerView(Record):
     """How many of `builds_on` are results with files, which a blind checker can rerun."""
     no_blind_rerun: tuple[PostId, ...] = ()
     """The results among them that no blind checker has rerun."""
+    newer_proposal: PostLine | None = None
+    """
+    The newest proposal that came after the answer, or `None`. It is in another thread, so it is not the lab's answer,
+    and the person sees that the lab wrote one.
+    """
 
 
 class FileText(Record):

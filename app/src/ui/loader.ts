@@ -137,3 +137,23 @@ async function readLab(api: Api): Promise<Omit<LabData, 'version'>> {
   ]);
   return { setup, lab, threads, needs, report, answer, error: null };
 }
+
+/**
+ * Return a function that numbers each read of one thread. The function that it returns says, when the read's
+ * answer comes, whether no later read has answered yet, and then counts this answer.
+ *
+ * So a read that the next load overtakes still shows when it answers first. In a busy lab the loads follow each
+ * other faster than a long thread reads, and dropping every overtaken read would leave the thread as it was.
+ */
+export function inOrder(): () => () => boolean {
+  let started = 0;
+  let shown = 0;
+  return () => {
+    const ticket = ++started;
+    return () => {
+      if (ticket < shown) return false;
+      shown = ticket;
+      return true;
+    };
+  };
+}

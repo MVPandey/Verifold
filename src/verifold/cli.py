@@ -15,13 +15,13 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from verifold import DISTRIBUTION
-from verifold.app import SERVER_FILE, ServeHooks, serve, stop_lab
+from verifold.app import SERVER_FILE, ServeHooks, ServeOptions, serve, stop_lab
 from verifold.harnesses.catalog import CATALOG, HarnessEntry, available, catalog_with
 from verifold.protocol.agents import MAX_AGENTS, AgentChoice
 from verifold.protocol.app import StartRequest
 from verifold.protocol.settings import SettingsLevel, SetupDefaults
-from verifold.runner.errors import RunnerError
-from verifold.runner.folders import LAB_FOLDER
+from verifold.runner.errors import NoFileManager, RunnerError
+from verifold.runner.folders import LAB_FOLDER, agents_folder, open_folder
 from verifold.runner.jobs import Job, Sweep
 from verifold.server.errors import ServerError, SetupRejected
 from verifold.store.errors import SettingsInvalid, StoreError
@@ -42,7 +42,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     Parse the arguments and run the command.
 
     `verifold` serves the folder: the setup screen, or the lab that the folder holds. `verifold run` starts a lab on a
-    question from the command line. `verifold stop` stops the folder's lab from another terminal.
+    question from the command line. `verifold stop` stops the folder's lab from another terminal. `verifold folder`
+    shows where the lab's agents work.
 
     Args:
         argv: The arguments after the program name. `None` reads them from `sys.argv`.
@@ -55,6 +56,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.command == 'open':
         _open()
         return
+    if args.command == 'folder':
+        _folder(args.agent, open_it=not args.no_browser)
+        return
     try:
         start = _start(args) if args.command == 'run' else None
     except (ValidationError, SettingsInvalid, SetupRejected) as error:
@@ -63,7 +67,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     try:
         links: list[str] = []
         announce = partial(_announce, links, open_browser=not args.no_browser, plan=_plan(start) if start else None)
-        serving = serve(Path.cwd(), start, hooks=ServeHooks(ready=announce, swept=_report))
+        options = ServeOptions(desktop=not args.no_browser)
+        serving = serve(Path.cwd(), start, options=options, hooks=ServeHooks(ready=announce, swept=_report))
         asyncio.run(_until_stopped(serving, partial(_open_again, links, open_browser=not args.no_browser)))
     except KeyboardInterrupt:
         pass  # Ctrl+C came before the event loop took over the signal.
@@ -266,6 +271,30 @@ def _open() -> None:
     )
 
 
+def _folder(agent: str | None, *, open_it: bool) -> None:
+    """
+    Print the folder where the lab's agents work, or the folder of one agent, and open it in the file manager.
+
+    It reads only the project's folder, so it needs no server. With `--no-browser` it only prints the path.
+    """
+    folder = agents_folder(Path.cwd())
+    agents = sorted(entry.name for entry in folder.iterdir() if entry.is_dir()) if folder.is_dir() else []
+    if not agents:
+        sys.exit('verifold: No agent has a folder here yet. Run `verifold` here and start a lab first.')
+    if agent is not None:
+        # The name must be one of the folders, so that no argument leads out of the lab's folder.
+        if agent not in agents:
+            sys.exit(f'verifold: No agent of this lab has the folder {agent}. The folders: {", ".join(agents)}.')
+        folder /= agent
+    _say(str(folder))
+    if not open_it:
+        return
+    try:
+        open_folder(folder)
+    except NoFileManager as error:
+        print(f'verifold: {error} The path is above.', file=sys.stderr)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='verifold', description='Run your coding agents as a research society.')
     parser.add_argument('--version', action='version', version=f'%(prog)s {version(DISTRIBUTION)}')
@@ -298,6 +327,10 @@ def _parser() -> argparse.ArgumentParser:
         help='Let every agent run commands that start with COMMAND, such as ./gpu, without a question to you. Give it once for each command. You can also give a grant on the board when an agent asks.',
     )
     commands.add_parser('open', help="Open this folder's running lab in the browser again, from another terminal.")
+    folder = commands.add_parser(
+        'folder', help="Print the folder where this folder's agents work, and open it in the file manager."
+    )
+    folder.add_argument('agent', nargs='?', help="An agent's ID, such as agent-3, for that agent's folder only.")
     commands.add_parser(
         'stop', help="Stop this folder's lab from another terminal: its server, its agents, and their processes."
     )

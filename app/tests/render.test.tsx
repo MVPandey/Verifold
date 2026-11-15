@@ -17,7 +17,7 @@ import { Markdown } from '../src/ui/Markdown.tsx';
 import { SettingsForm } from '../src/ui/SettingsPage.tsx';
 import { SetupPage } from '../src/ui/SetupPage.tsx';
 import { Turns } from '../src/ui/Thread.tsx';
-import { InvitationText, Top } from '../src/ui/Top.tsx';
+import { FolderLine, InvitationText, Top } from '../src/ui/Top.tsx';
 import {
   DEFAULTS,
   HARNESSES,
@@ -65,6 +65,93 @@ describe('agent text', () => {
     assert.ok(html.includes('<p>Second paragraph</p>'));
     assert.ok(html.includes('Not checked'));
     assert.ok(html.includes('9a41d07'));
+  });
+
+  const bodyOf = (body: string): string => {
+    const thread: ThreadView = {
+      thread: { id: 't-1', title: 'A', opened_by: 'agent-1' },
+      watching: false,
+      members: [],
+      posts: [postView(result('p-1', { text: 'A `headline` with **marks**', body }))],
+    };
+    return renderToStaticMarkup(
+      <Turns
+        view={thread}
+        agents={[agentView('agent-1')]}
+        harnesses={HARNESSES}
+        needs={[]}
+        question={null}
+        onRerun={() => Promise.resolve()}
+        onSend={() => Promise.resolve()}
+      />,
+    );
+  };
+
+  it('shows a post’s body as Markdown, with space between its parts, and its headline as plain text', () => {
+    const html = bodyOf(
+      [
+        'Method: replay of **450** combos.',
+        'Result: no edge.',
+        '',
+        'Buckets:',
+        '- 0-2c: 62',
+        '- 2-10c: 55',
+        '',
+        '| Bucket | n |',
+        '| --- | --- |',
+        '| 50c+ | 15 |',
+        '',
+        '```sh',
+        'python3 -I verify.py',
+        '--strict',
+        '```',
+        '',
+        'See [the paper](https://arxiv.org/abs/2408.08292) and [a script](javascript:alert(1)).',
+      ].join('\n'),
+    );
+    // The headline is one line of text, whatever marks it holds.
+    assert.ok(html.includes('<p class="f-say-text">A `headline` with **marks**</p>'));
+    // A line end inside a paragraph stays a line end. A blank line starts a new paragraph.
+    assert.ok(
+      html.includes('<p>Method: replay of <strong>450</strong> combos.<br/>\nResult: no edge.</p>'),
+    );
+    assert.match(
+      html,
+      /<p>Buckets:<\/p>\s*<ul>\s*<li>0-2c: 62<\/li>\s*<li>2-10c: 55<\/li>\s*<\/ul>/,
+    );
+    assert.ok(html.includes('<div class="md-table"><table>'));
+    assert.ok(html.includes('<td>50c+</td>'));
+    // Code keeps its lines as they are, with no break marks in it.
+    assert.ok(
+      html.includes('<pre><code class="language-sh">python3 -I verify.py\n--strict\n</code></pre>'),
+    );
+    assert.ok(html.includes('rel="noreferrer noopener">the paper</a>'));
+    assert.ok(html.includes('<span>a script</span>') && !html.includes('javascript:'));
+  });
+
+  it('keeps what an agent wrote as plain text: arithmetic, a tilde for "about", names, and long strings', () => {
+    const hash = 'a1b2c3d4'.repeat(16);
+    const html = bodyOf(
+      `Fee is 0.07*P*(1-P) on ~10 fills and ~20 trades in my_module_name.py.\nsha256 ${hash}`,
+    );
+    assert.ok(
+      html.includes('Fee is 0.07*P*(1-P) on ~10 fills and ~20 trades in my_module_name.py.'),
+    );
+    assert.ok(!html.includes('<em>') && !html.includes('<del>'));
+    // A long string stays whole in the text. The style sheet wraps it.
+    assert.ok(html.includes(`sha256 ${hash}`));
+  });
+
+  it('shows where a folder is after the person asked to open it, also when nothing opened', () => {
+    const path = '/Users/me/project/.verifold/agents/agent-3';
+    assert.equal(
+      renderToStaticMarkup(<FolderLine folder={{ path, opened: true }} />),
+      `<span role="status">Opened <code>${path}</code></span>`,
+    );
+    assert.equal(
+      renderToStaticMarkup(<FolderLine folder={{ path, opened: false }} />),
+      `<span role="status">No file manager opened. The folder is <code>${path}</code></span>`,
+    );
   });
 });
 
@@ -379,6 +466,16 @@ describe('the lab page', () => {
       />,
     );
   };
+  /** The server's answer view for a proposal in the question's thread. */
+  const answerOf = (proposal: Post, changes: Partial<AnswerView> = {}): AnswerView => ({
+    answer: postView({ ...proposal, thread: 't-1' }, 2),
+    to_earlier_question: false,
+    builds_on: [],
+    results: 0,
+    no_blind_rerun: [],
+    newer_proposal: null,
+    ...changes,
+  });
   const thread = (id: string, opener: string, posts: readonly Post[]): ThreadRead => ({
     view: {
       thread: { id, title: id, opened_by: opener },
@@ -578,15 +675,30 @@ describe('the lab page', () => {
   });
 
   it('opens the question’s thread under the seat, with the answer so far in full', () => {
+    const proposal = result('p-2', {
+      kind: 'proposal',
+      text: 'Yes, 12x.',
+      body: 'Three runs agree.\nThe seed is 7.',
+    });
     const posts = [
       result('p-1', { kind: 'message', author: 'person', text: 'Is sorted() faster?' }),
-      result('p-2', { kind: 'proposal', text: 'Yes, 12x.' }),
+      proposal,
     ];
-    const html = wall('t-1', thread('t-1', 'person', posts), none);
+    const answer = answerOf(proposal);
+    const html = wall('t-1', thread('t-1', 'person', posts), none, answer);
     assert.ok(html.includes('<a class="f-label" href="#/" aria-expanded="true">'));
     assert.ok(html.includes('<div class="f-answer on">'));
     assert.ok(html.includes('<p>Yes, 12x.</p>'));
     assert.ok(html.includes('<span class="f-st fs-none">Not checked</span>'));
+    // The fixture's posts are from 14:04, and the page's clock says 14:26.
+    assert.ok(html.includes('<span class="f-by">Agent 1 proposed it <time'));
+    assert.ok(html.includes('>22 min ago</time>'));
+    // Open, the answer shows its detail, and each line of it stays a line.
+    assert.ok(
+      html.includes(
+        '<div class="f-words"><div class="md"><p>Three runs agree.<br/>\nThe seed is 7.</p></div></div>',
+      ),
+    );
     assert.ok(
       html.includes(
         '<section id="card-t-1" class="f-card open f-answer-thread" aria-label="The question">',
@@ -595,9 +707,48 @@ describe('the lab page', () => {
     assert.ok(html.includes('proposed an answer'));
     assert.ok(html.includes('aria-label="Message to everyone in this thread"'));
     // Closed, the seat clamps the answer.
+    const closed = wall('t-2', thread('t-1', 'person', posts), none, answer);
+    assert.ok(closed.includes('<p class="clamp">Yes, 12x.</p>'));
+    assert.equal(closed.includes('Three runs agree.'), false);
+  });
+
+  it('takes the answer so far from the lab’s own answer, not from its read of the question’s thread', () => {
+    const old = result('p-2', { kind: 'proposal', text: 'Yes, 12x.' });
+    const newest = result('p-9', { kind: 'proposal', text: 'No: 3x at most.', author: 'agent-2' });
+    // The thread's read is behind, as while a long thread loads, or has not come at all.
+    const behind = thread('t-1', 'person', [old]);
+    for (const read of [behind, none, { view: null, error: 'No connection.' }]) {
+      const html = wall('t-2', read, none, answerOf(newest));
+      assert.ok(html.includes('<p class="clamp">No: 3x at most.</p>'));
+      assert.ok(html.includes('Agent 2 proposed it'));
+      assert.equal(html.includes('Yes, 12x.'), false);
+      assert.equal(html.includes('Loading the answer.'), false);
+    }
+    // No agent has proposed an answer, whatever the thread's read holds.
+    assert.ok(wall('t-2', behind, none).includes('<p class="dim">No answer proposed yet.</p>'));
+  });
+
+  it('says when an agent wrote a newer proposal in another thread, and leads to it', () => {
+    const proposal = result('p-2', { kind: 'proposal', text: 'Yes, 12x.' });
+    const newer = {
+      id: 'p-12',
+      thread: 't-3',
+      author: 'agent-2',
+      kind: 'proposal' as const,
+      text: 'Updated answer.',
+      reply_to: null,
+      seq: 12,
+      at: '2026-11-06T14:20:00Z',
+    };
+    const html = wall('t-2', none, none, answerOf(proposal, { newer_proposal: newer }));
     assert.ok(
-      wall('t-2', thread('t-1', 'person', posts), none).includes('<p class="clamp">Yes, 12x.</p>'),
+      html.includes(
+        '<p class="f-earlier">Agent 2 wrote a newer proposal in another thread: ' +
+          '<a href="#/thread/t-3/p-12">Merge sort</a>. The answer here changes when an agent ' +
+          'proposes it in the question’s thread.</p>',
+      ),
     );
+    assert.equal(wall('t-2', none, none, answerOf(proposal)).includes('newer proposal'), false);
   });
 
   it('shows Edit beside the question, and no line about revisions while it has none', () => {
@@ -674,13 +825,7 @@ describe('the lab page', () => {
   it('says that the answer is to an earlier version of the question after a revision', () => {
     const proposal = result('p-2', { kind: 'proposal', text: 'Yes, 12x.' });
     const posts = [result('p-1', { kind: 'message', author: 'person', text: 'Faster?' }), proposal];
-    const answer: AnswerView = {
-      answer: postView({ ...proposal, thread: 't-1' }, 2),
-      to_earlier_question: true,
-      builds_on: [],
-      results: 0,
-      no_blind_rerun: [],
-    };
+    const answer = answerOf(proposal, { to_earlier_question: true });
     const line = '<p class="f-earlier">This answer is to an earlier version of the question.</p>';
     assert.ok(wall('t-2', thread('t-1', 'person', posts), none, answer).includes(line));
     const current = { ...answer, to_earlier_question: false };
@@ -691,9 +836,7 @@ describe('the lab page', () => {
     const file = { type: 'file' as const, path: 'answer.md', commit: 'c'.repeat(40) };
     const proposal = result('p-2', { kind: 'proposal', text: 'Yes, 12x.', evidence: [file] });
     const posts = [result('p-1', { kind: 'message', author: 'person', text: 'Faster?' }), proposal];
-    const answer: AnswerView = {
-      answer: postView({ ...proposal, thread: 't-1' }, 2),
-      to_earlier_question: false,
+    const answer = answerOf(proposal, {
       builds_on: [
         postView(
           result('p-7', { thread: 't-2', text: 'Rerun blind.', evidence: [file] }),
@@ -705,7 +848,7 @@ describe('the lab page', () => {
       ],
       results: 2,
       no_blind_rerun: ['p-8'],
-    };
+    });
     const closed = wall('t-2', thread('t-1', 'person', posts), none, answer);
     assert.ok(closed.includes('href="#/file/p-2/answer.md"'));
     assert.ok(closed.includes('Builds on 3 posts. 1 of 2 results with files has no blind rerun.'));
@@ -725,9 +868,6 @@ describe('the lab page', () => {
     };
     const plain = wall('t-2', thread('t-1', 'person', posts), none, reading);
     assert.ok(plain.includes('Builds on 1 post.') && !plain.includes('blind rerun'));
-    // An answer from before the newest proposal says nothing about this one.
-    const stale = { ...answer, answer: postView({ ...proposal, id: 'p-1' }, 1) };
-    assert.ok(!wall('t-1', thread('t-1', 'person', posts), none, stale).includes('Builds on'));
   });
 
   it('shows a Markdown file as a page of text, with no image, HTML, or script link', () => {
@@ -815,6 +955,12 @@ describe('the lab page', () => {
     assert.ok(html.includes('Works in <a href="#/thread/t-1">A · sorted() against merge sort</a>'));
     assert.ok(html.includes('$0.50 over 2 turns'));
     assert.ok(html.includes('3 posts in 1 thread'));
+    // Each member has the way to its folder, and the lab has one way to the folder of them all.
+    assert.equal(
+      html.split('<button class="linkbtn" type="button">Open folder</button>').length - 1,
+      2,
+    );
+    assert.equal(html.split('>Open the agents’ folder</button>').length - 1, 1);
     assert.ok(html.includes('Lab total <b>$0.50</b>'));
     // The person can add an agent of a harness that this computer has.
     assert.ok(html.includes('Add an agent'));

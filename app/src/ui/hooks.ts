@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { Api } from '../api/client.ts';
 import { watchChanges } from '../api/events.ts';
@@ -7,7 +7,7 @@ import { messageOf } from '../api/client.ts';
 import type { LabView, ThreadView } from '../api/types.ts';
 import { parseRoute } from '../model/route.ts';
 import type { Route } from '../model/route.ts';
-import { EMPTY, createLoader } from './loader.ts';
+import { EMPTY, createLoader, inOrder } from './loader.ts';
 import type { LabData } from './loader.ts';
 
 /** What each page of a started lab gets: the API, the lab, and the current time. */
@@ -76,16 +76,21 @@ export interface ThreadRead {
 /** Return thread `id` and read it again at each full load of the lab. `null` reads nothing. */
 export function useThread(api: Api, id: string | null, version: number): ThreadRead {
   const [read, setRead] = useState<(ThreadRead & { readonly id: string }) | null>(null);
+  const order = useMemo(() => inOrder(), []);
+  const wanted = useRef(id);
   useEffect(() => {
+    wanted.current = id;
     if (id === null) return;
-    let current = true;
+    const newest = order();
+    // An answer for a thread that the page left is dropped.
+    const shows = (): boolean => wanted.current === id && newest();
     api.thread(id).then(
       (view) => {
-        if (current) setRead({ id, view, error: null });
+        if (shows()) setRead({ id, view, error: null });
       },
       (failure: unknown) => {
         // A failed read keeps the thread that the page already shows.
-        if (current) {
+        if (shows()) {
           setRead((old) => ({
             id,
             view: old?.id === id ? old.view : null,
@@ -94,10 +99,7 @@ export function useThread(api: Api, id: string | null, version: number): ThreadR
         }
       },
     );
-    return () => {
-      current = false;
-    };
-  }, [api, id, version]);
+  }, [api, id, version, order]);
   return read?.id === id ? read : { view: null, error: null };
 }
 

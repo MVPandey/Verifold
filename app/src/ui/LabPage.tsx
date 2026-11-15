@@ -21,10 +21,11 @@ import { href } from '../model/route.ts';
 import { hasNew, markSeen, readSeen } from '../model/seen.ts';
 import { betweenLine, isSide, sideHeading, sideLines } from '../model/side.ts';
 import { messageOf } from '../api/client.ts';
-import { answerSoFar, cardStatus, doneLine, headClaim, questionThread } from '../model/turns.ts';
+import { cardStatus, doneLine, headClaim, questionThread } from '../model/turns.ts';
 import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
-import { Body, ChipView, Composer, FaceView, Files } from './parts.tsx';
+import { Markdown } from './Markdown.tsx';
+import { ChipView, Composer, FaceView, Files } from './parts.tsx';
 import { Turns } from './Thread.tsx';
 
 /** A question longer than this gets smaller type, so it does not fill the screen. */
@@ -46,7 +47,8 @@ export function LabPage(props: PageProps & Place): ReactElement {
   const questionId = questionThread(threads)?.thread.id ?? null;
   // A link can name a thread that the lab does not have. Reading it would fail again at every load.
   const known = threads.some((summary) => summary.thread.id === open);
-  // The seat needs the question's thread at every load. An open card needs its own.
+  // The seat shows who posted in the question's thread, so it reads the thread at every load. An open card needs
+  // its own. The answer so far does not come from this read: it comes with the lab, in `data.answer`.
   const questionRead = useThread(api, questionId, version);
   const cardRead = useThread(api, known && open !== questionId ? open : null, version);
   const loaded = (open === questionId ? questionRead : cardRead).view;
@@ -116,8 +118,6 @@ export function Wall(
     .filter((summary) => summary !== question && !isSide(summary))
     .sort((first, second) => number(first) - number(second));
   const side = threads.filter(isSide);
-  const answer = questionRead.view ? answerSoFar(questionRead.view.posts) : null;
-  const chip = answer ? standingChip(answer.post, answer.standing) : null;
   const answerOpen = question !== null && open === questionId;
   const crossing = crossedLine(threads);
   const done = doneLine(lab);
@@ -152,29 +152,16 @@ export function Wall(
                 </a>
                 {hasNew(question, seen) && !answerOpen ? <New /> : null}
               </div>
-              {answer ? (
-                <>
-                  <p className={answerOpen ? undefined : 'clamp'}>{answer.post.text}</p>
-                  <div className="f-card-st">
-                    <ChipView chip={chip ?? { label: 'Not checked', tone: 'none' }} />
-                  </div>
-                  {data.answer?.answer.post.id === answer.post.id &&
-                  data.answer.to_earlier_question ? (
-                    <p className="f-earlier">
-                      This answer is to an earlier version of the question.
-                    </p>
-                  ) : null}
-                  <Files post={answer.post.id} files={answer.post.evidence} />
-                  {data.answer?.answer.post.id === answer.post.id ? (
-                    <Under view={data.answer} open={answerOpen} />
-                  ) : null}
-                </>
+              {data.answer ? (
+                <Answer
+                  view={data.answer}
+                  open={answerOpen}
+                  threads={threads}
+                  agents={lab.agents}
+                  now={props.now}
+                />
               ) : (
-                <p className="dim">
-                  {questionRead.view
-                    ? 'No answer proposed yet.'
-                    : (questionRead.error ?? 'Loading the answer.')}
-                </p>
+                <p className="dim">No answer proposed yet.</p>
               )}
               <Faces faces={authors(questionRead.view?.posts ?? [], lab.agents)} />
             </div>
@@ -528,12 +515,65 @@ function ReportCard(props: {
             <span className="opened">Hide the detail</span>
           </summary>
           <div className="f-words">
-            {post.body ? <Body text={post.body} /> : null}
+            {post.body ? <Markdown text={post.body} post /> : null}
             <Files post={post.id} files={post.evidence} />
           </div>
         </details>
       ) : null}
     </section>
+  );
+}
+
+/**
+ * The lab's answer so far, as the server has it now: its headline, where it stands, who proposed it and how long
+ * ago, its files, and what it builds on. With `open`, the headline is whole and the detail follows it.
+ *
+ * Only a proposal in the question's thread is the answer. When an agent wrote a newer proposal in another thread,
+ * a line says so and leads to it, so the person does not take the answer for the lab's last word.
+ */
+function Answer(props: {
+  readonly view: AnswerView;
+  readonly open: boolean;
+  readonly threads: readonly ThreadSummary[];
+  readonly agents: readonly AgentView[];
+  readonly now: Date;
+}): ReactElement {
+  const { answer, newer_proposal: newer } = props.view;
+  const { post, at, standing } = answer;
+  const minutes = minutesBetween(at, props.now);
+  const title = props.threads.find((summary) => summary.thread.id === newer?.thread)?.thread.title;
+  return (
+    <>
+      <p className={props.open ? undefined : 'clamp'}>{post.text}</p>
+      <div className="f-card-st">
+        <ChipView chip={standingChip(post, standing) ?? { label: 'Not checked', tone: 'none' }} />
+        <span className="f-by">
+          {authorName(props.agents, post.author)} proposed it{' '}
+          <time dateTime={at} title={clock(at)}>
+            {minutes < 1 ? 'just now' : `${duration(minutes)} ago`}
+          </time>
+        </span>
+      </div>
+      {props.view.to_earlier_question ? (
+        <p className="f-earlier">This answer is to an earlier version of the question.</p>
+      ) : null}
+      {newer ? (
+        <p className="f-earlier">
+          {authorName(props.agents, newer.author)} wrote a newer proposal in another thread:{' '}
+          <a href={href({ page: 'thread', id: newer.thread, post: newer.id })}>
+            {title ?? newer.text}
+          </a>
+          . The answer here changes when an agent proposes it in the question’s thread.
+        </p>
+      ) : null}
+      {props.open && post.body ? (
+        <div className="f-words">
+          <Markdown text={post.body} post />
+        </div>
+      ) : null}
+      <Files post={post.id} files={post.evidence} />
+      <Under view={props.view} open={props.open} />
+    </>
   );
 }
 

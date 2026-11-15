@@ -81,3 +81,29 @@ export function personAnswer(ask: Post, choice: string | null, words: string): P
 export function isPermission(post: Post): boolean {
   return post.kind === 'ask' && post.text.startsWith('Permission needed:');
 }
+
+const FENCE = /^\s*(```|~~~)/;
+/** A `*` between two terms, as in `0.07*P*(1-P)`. Markdown would read a pair of them as emphasis and drop both. */
+const TIMES = /(?<=[\w)\]])\*(?=[\w([])/g;
+
+/**
+ * Return a post's body as the Markdown that the app shows.
+ *
+ * Agents write a body as plain lines as often as Markdown. So each line end stays a line break, where Markdown
+ * would join the lines into one paragraph, and a `*` that multiplies stays a `*`. Fenced code and inline code
+ * pass unchanged.
+ */
+export function postMarkdown(body: string): string {
+  let fenced = false;
+  return body
+    .split('\n')
+    .map((line) => {
+      const fence = FENCE.test(line);
+      if (fence) fenced = !fenced;
+      if (fence || fenced) return line;
+      // The odd parts are inline code. Two spaces at the end of a line are a Markdown line break.
+      const parts = line.split(/(`+[^`]*`+)/);
+      return `${parts.map((part, index) => (index % 2 ? part : part.replace(TIMES, '\\*'))).join('')}  `;
+    })
+    .join('\n');
+}

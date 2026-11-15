@@ -10,7 +10,8 @@ import { href } from '../model/route.ts';
 import { sideReplyHint } from '../model/side.ts';
 import { act, isClaim, rows, standingIn } from '../model/turns.ts';
 import { messageOf } from '../api/client.ts';
-import { Body, ChipView, Composer, FaceView, Files, Mark } from './parts.tsx';
+import { Markdown } from './Markdown.tsx';
+import { ChipView, Composer, FaceView, Files, Mark } from './parts.tsx';
 
 /** What every turn of a thread needs from the lab. */
 interface Around {
@@ -158,7 +159,7 @@ export function Turn(
               <span className="opened">Hide the detail</span>
             </summary>
             <div className="f-words">
-              {post.body ? <Body text={post.body} /> : null}
+              {post.body ? <Markdown text={post.body} post /> : null}
               <Files post={post.id} files={post.evidence} />
             </div>
           </details>

@@ -396,6 +396,17 @@ def test_the_answer_is_the_newest_proposal_in_the_questions_thread_with_what_it_
     told = brief(record.board(), 'cy', News(seq=0))
     assert (told.answer and told.answer.id, told.answer_standing) == ('p-7', 'conceded')
 
+    # A newer proposal in another thread is not the answer. The view names it, so the person sees that it exists.
+    assert conceded.newer_proposal is None
+    record.post(Proposal(id='p-11', thread='t-2', author='cy', text='An update, in the wrong thread.'))
+    elsewhere = answer_view(record.board())
+    assert elsewhere is not None
+    assert (elsewhere.answer.post.id, elsewhere.newer_proposal and elsewhere.newer_proposal.id) == ('p-7', 'p-11')
+    record.post(Proposal(id='p-12', thread='t-1', author='cy', text='The update, in the question thread.'))
+    moved = answer_view(record.board())
+    assert moved is not None
+    assert (moved.answer.post.id, moved.newer_proposal) == ('p-12', None)
+
 
 def test_the_brief_gives_an_agent_its_own_line(record: RecordBuilder) -> None:
     record.thread('t-2', opened_by='bo', title='Line B')

@@ -1,8 +1,10 @@
+import sys
 from pathlib import Path
 
 import pytest
 
-from verifold.runner.folders import agent_folder, checker_folder, tracked_lab_files
+from verifold.runner.errors import NoFileManager
+from verifold.runner.folders import agent_folder, checker_folder, open_folder, tracked_lab_files
 from verifold.runner.git import GitError, commit_of, git
 from verifold.runner.snapshots import snapshot, snapshot_ref
 
@@ -98,3 +100,56 @@ async def test_tracked_lab_files_are_found_in_any_case_and_the_settings_file_is_
     # A file system that ignores case checks this out into `.verifold/`, so it counts as a lab file.
     await track(project, '.VERIFOLD/record.jsonl')
     assert await tracked_lab_files(project) == ('.VERIFOLD/record.jsonl',)
+
+
+def opener(monkeypatch: pytest.MonkeyPatch, command: str) -> None:
+    """Make `command` this platform's command that opens a folder."""
+    monkeypatch.setattr('verifold.runner.folders.OPENERS', {sys.platform: command})
+
+
+def test_a_folder_opens_with_the_platforms_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # `touch` stands in for the file manager: it changes the folder's time and opens nothing.
+    before = tmp_path.stat().st_mtime_ns
+    opener(monkeypatch, 'touch')
+
+    open_folder(tmp_path)
+
+    assert tmp_path.stat().st_mtime_ns >= before
+
+
+def test_a_computer_without_an_opener_or_without_a_desktop_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(NoFileManager, match='no command that opens a folder'):
+        open_folder(tmp_path)
+
+    opener(monkeypatch, 'verifold-no-such-opener')
+    with pytest.raises(NoFileManager, match='no command that opens a folder'):
+        open_folder(tmp_path)
+
+    # `false` fails as an opener does on a computer without a desktop.
+    opener(monkeypatch, 'false')
+    with pytest.raises(NoFileManager, match='may have no desktop'):
+        open_folder(tmp_path)
+
+
+def test_an_opener_that_waits_for_the_file_manager_counts_as_opened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = tmp_path / 'slow-opener'
+    script.write_text('#!/bin/sh\nsleep 5\n')
+    script.chmod(0o755)
+    opener(monkeypatch, str(script))
+    monkeypatch.setattr('verifold.runner.folders.OPEN_SECONDS', 0.2)
+
+    open_folder(tmp_path)
+
+
+def test_an_opener_that_cannot_start_says_why(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    script = tmp_path / 'broken-opener'
+    script.write_text('#!/no/such/interpreter\n')
+    script.chmod(0o755)
+    opener(monkeypatch, str(script))
+
+    with pytest.raises(NoFileManager, match='did not start'):
+        open_folder(tmp_path)

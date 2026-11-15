@@ -21,6 +21,7 @@ from pydantic import Field, JsonValue
 from verifold.harnesses.catalog import CATALOG, NPX_PROJECT, HarnessEntry, available, catalog_with
 from verifold.protocol.agents import GUEST, MAX_AGENTS, UNKNOWN_FAMILY, Agent, AgentChoice, ModelSpec
 from verifold.protocol.app import (
+    FolderView,
     HarnessOption,
     Invitation,
     Offer,
@@ -37,7 +38,8 @@ from verifold.protocol.record import Record
 from verifold.protocol.settings import AtExit, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
-from verifold.runner.folders import LAB_FOLDER, agent_folder, agents_folder, tracked_lab_files
+from verifold.runner.errors import NoFileManager
+from verifold.runner.folders import LAB_FOLDER, agent_folder, agents_folder, open_folder, tracked_lab_files
 from verifold.runner.git import GitError, git
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, running_jobs, sweep
 from verifold.runner.messages import invitation, start_message
@@ -98,6 +100,8 @@ class ServeOptions(Record):
     turn_timeout: float = Field(default=2 * 3_600, gt=0)
     web: Path = WEB_FOLDER
     """The folder of the built app."""
+    desktop: bool = True
+    """Whether the server may open a folder in the file manager. `--no-browser` says that it has no desktop to use."""
 
 
 def _ignore(_: object) -> None:
@@ -145,6 +149,7 @@ class Host:
     ) -> None:
         """Prepare a host for the folder at `project`. Call `attach` before a lab starts."""
         self._project = project
+        self._desktop = True
         self._record = record
         self._catalog = catalog
         self._members = members
@@ -165,8 +170,20 @@ class Host:
         """The folder's lab, or `None` before it starts."""
         return self._lab
 
-    def attach(self, group: asyncio.TaskGroup, settings: LoopSettings, swept: Callable[[Sweep], None]) -> None:
-        """Run the lab's agents in `group`, with `settings`, from now on. `swept` gets what each pause or stop did."""
+    def attach(
+        self,
+        group: asyncio.TaskGroup,
+        settings: LoopSettings,
+        swept: Callable[[Sweep], None],
+        *,
+        desktop: bool = True,
+    ) -> None:
+        """
+        Run the lab's agents in `group`, with `settings`, from now on. `swept` gets what each pause or stop did.
+
+        Without `desktop`, the host opens no folder in the file manager and only says where the folder is.
+        """
+        self._desktop = desktop
         self._group = group
         self._settings = settings
         self._swept = swept
@@ -249,6 +266,37 @@ class Host:
         except (GitError, OSError, ValueError) as error:
             raise NotFound(f'{path} is not in the folder of {entry.post.author} at {file.commit[:8]}.') from error
         return FileText(path=file.path, commit=file.commit, text=text)
+
+    async def open_folder(self, agent_id: AgentId | None = None) -> FolderView:
+        """
+        Open the folder where the lab's agents work, or the folder of one agent, in the file manager.
+
+        The path comes from the lab and never from the request: `agent_id` must be an agent of the lab. The answer
+        holds the path also when nothing opened, so the person can go there by hand.
+
+        Raises:
+            NoLab: The folder has no lab.
+            NotFound: The lab has no such agent, or the agent has no folder on this computer, as an invited agent.
+
+        """
+        if self._lab is None:
+            raise NoLab('This folder has no lab yet. Start one from the setup screen.')
+        folder = agents_folder(self._project)
+        if agent_id is not None:
+            joined = self._lab.board.agent(agent_id)
+            if joined is None:
+                raise NotFound(f'The lab has no agent with the ID {agent_id}.')
+            folder /= agent_id
+            if not folder.is_dir():
+                raise NotFound(f'{joined.agent.name} has no folder on this computer.')
+        elif not folder.is_dir():
+            raise NotFound('No agent of this lab has a folder on this computer.')
+        opened = False
+        if self._desktop:
+            with suppress(NoFileManager):
+                await asyncio.to_thread(open_folder, folder)
+                opened = True
+        return FolderView(path=str(folder), opened=opened)
 
     async def change_settings(self, change: SettingsChange) -> SettingsView:
         """
@@ -687,7 +735,7 @@ async def serve(
             port = await _bound_port(server)
             settings = LoopSettings(mcp_url=f'http://127.0.0.1:{port}/mcp', turn_timeout=options.turn_timeout)
             async with asyncio.TaskGroup() as group:
-                host.attach(group, settings, hooks.swept)
+                host.attach(group, settings, hooks.swept, desktop=options.desktop)
                 if resuming:
                     await host.resume()
                 elif start:
