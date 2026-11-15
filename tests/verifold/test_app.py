@@ -812,7 +812,7 @@ async def test_the_norms_page_edits_what_a_new_lab_gets_and_a_change_in_a_lab_re
     project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     lab_norms = project / '.verifold' / 'LAB.md'
-    async with serving(project, catalog={'fake': FAKE_HARNESS}) as client:
+    async with serving(project, catalog={'fake': FAKE_HARNESS}, options=FAST) as client:
         defaults = (await client.get('/norms')).json()
         first = await save_norms(client, 'LAB.md', '# Our rules\n')
         on_disk = lab_norms.read_text()
