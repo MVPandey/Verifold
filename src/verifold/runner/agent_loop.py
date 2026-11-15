@@ -518,7 +518,8 @@ class AgentLoop:
         while (left := deadline - loop.time()) > 0:
             seq = lab.board.seq
             await lab.wait_for_change(seq, min(settings.quiet, left))
-            if lab.board.seq == seq:
+            # An agent that left the lab waits for nothing: its harness ends now, not when the board is quiet.
+            if lab.board.seq == seq or self._left():
                 return
 
     async def _permission(self, request: PermissionRequest) -> str | None:

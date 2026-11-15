@@ -97,11 +97,20 @@ MAX_FILE_BYTES = 1_000_000
 
 
 class ServeOptions(Record):
-    """How the server runs: its port on 127.0.0.1, how long one agent turn may take, and the app that it serves."""
+    """
+    How the server runs.
+
+    It holds the port on 127.0.0.1, how long one agent turn may take, how long a doorbell waits for a quiet board,
+    and the app that the server serves.
+    """
 
     port: int = Field(default=0, ge=0, le=65_535)
     """0 picks a free port."""
     turn_timeout: float = Field(default=2 * 3_600, gt=0)
+    quiet: float = Field(default=10, ge=0)
+    """Seconds without a new event on the board before an agent's doorbell rings."""
+    max_quiet: float = Field(default=45, ge=0)
+    """The most seconds that a doorbell waits for the board to go quiet."""
     web: Path = WEB_FOLDER
     """The folder of the built app."""
     desktop: bool = True
@@ -816,7 +825,12 @@ async def serve(
         serving = asyncio.create_task(server.serve())
         try:
             port = await _bound_port(server)
-            settings = LoopSettings(mcp_url=f'http://127.0.0.1:{port}/mcp', turn_timeout=options.turn_timeout)
+            settings = LoopSettings(
+                mcp_url=f'http://127.0.0.1:{port}/mcp',
+                turn_timeout=options.turn_timeout,
+                quiet=options.quiet,
+                max_quiet=options.max_quiet,
+            )
             async with asyncio.TaskGroup() as group:
                 host.attach(group, settings, hooks.swept, desktop=options.desktop)
                 if resuming:
