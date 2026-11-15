@@ -67,7 +67,7 @@ from verifold.society.fold import apply, fold
 from verifold.society.labels import awaits_model, is_numbered, label, plain
 from verifold.society.lines import question_thread
 from verifold.society.names import check_name
-from verifold.society.reruns import open_to, wanted_reruns
+from verifold.society.reruns import open_take, open_to, wanted_reruns
 from verifold.society.reviewers import check_review, seats_line
 from verifold.store.record_file import RecordFile
 
@@ -458,9 +458,12 @@ class Lab:
         board = await self._commit(build)
         return board.reruns[-1]
 
-    async def take_rerun(self, agent_id: AgentId, post_id: PostId) -> RerunTaken:
+    async def take_rerun(self, agent_id: AgentId, post_id: PostId, manifest: str | None = None) -> RerunTaken:
         """
-        Record that an agent takes the rerun of a post, and return the take. A second call returns the first take.
+        Record that an agent takes the rerun of a post, and return the take.
+
+        `manifest` is the SHA-256 of the clean copy's manifest that the agent got. A second call returns the first
+        take, also when it comes while the first one is being recorded.
 
         Raises:
             RejectedEvent: The agent cannot take the rerun, as `check_take` says.
@@ -468,7 +471,13 @@ class Lab:
         """
         if taken := self._board.take(agent_id, post_id):
             return taken
-        board = await self._commit(_take(agent_id, post_id))
+        try:
+            board = await self._commit(_take(agent_id, post_id, manifest))
+        except RejectedEvent:
+            # Two calls of one agent at the same time are one take.
+            if taken := self._board.take(agent_id, post_id):
+                return taken
+            raise
         return board.takes[-1]
 
     def check_take(self, agent_id: AgentId, post_id: PostId) -> None:
@@ -844,7 +853,7 @@ def _setting(move: SettingMove) -> Build:
     return build
 
 
-def _take(agent_id: AgentId, post_id: PostId) -> Build:
+def _take(agent_id: AgentId, post_id: PostId, manifest: str | None = None) -> Build:
     def build(board: Board, seq: int, at: datetime) -> RerunTaken:
         target = board.post(post_id)
         if target is None or not target.post.evidence:
@@ -857,7 +866,8 @@ def _take(agent_id: AgentId, post_id: PostId) -> Build:
                 f"The rerun of another agent's post takes a reviewer seat while an agent in such a seat can take "
                 f'it. {seats_line(board)}'
             )
-        return RerunTaken(seq=seq, at=at, agent=agent_id, post=post_id, commit=target.post.evidence[0].commit)
+        commit = target.post.evidence[0].commit
+        return RerunTaken(seq=seq, at=at, agent=agent_id, post=post_id, commit=commit, manifest=manifest)
 
     return build
 
@@ -909,8 +919,10 @@ def _add_post(  # noqa: PLR0913
         # A new thread, and a conversation that this step opens, is the board's newest thread.
         talk = board.conversation if request.conversation else None
         thread_id = request.thread or talk or board.threads[-1].thread.id
-        # No field of a request holds a take either, so only the seat that pinned the files can give one.
-        post = request.to_post(f'p-{len(board.posts) + 1}', thread_id, author, evidence, question_seen, take=take)
+        # No field of a request holds a take either, so only the seat that pinned the files can give one. A take
+        # has one check: when another check of the same take came first, this one is a check like any other.
+        still = take if request.reply_to and open_take(board, author, request.reply_to) else None
+        post = request.to_post(f'p-{len(board.posts) + 1}', thread_id, author, evidence, question_seen, take=still)
         # No field of a request holds a mark, so no agent and no person's post can carry one.
         if isinstance(post, Answer) and mark == 'ends_request':
             post = post.model_copy(update={'ends_request': True})

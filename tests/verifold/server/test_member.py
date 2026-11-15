@@ -6,7 +6,7 @@ from conftest import agent
 from fakes import FakeCopies
 
 from verifold.protocol.agents import Agent, ModelSpec
-from verifold.protocol.join import PostRequest
+from verifold.protocol.join import ManifestLine, PostRequest
 from verifold.protocol.posts import FileEvidence
 from verifold.server.errors import EvidenceRejected, NoCleanCopy, OutOfTime
 from verifold.server.lab import Lab
@@ -280,6 +280,51 @@ async def test_a_clean_copy_that_fails_records_no_take_and_the_agent_can_take_th
     copies.fails = False
     assert (await bo.take_rerun('p-2')).folder == str(copies.folder / 'p-2')
     assert len(lab.board.takes) == 1
+
+
+async def test_a_take_returns_the_manifest_of_the_copy_and_the_record_keeps_its_digest(lab: Lab) -> None:
+    await a_claim(lab)
+    await Member(lab, 'ada').rerun('p-2')
+    copies = FakeCopies()
+    bo = Member(lab, 'bo', copies=copies)
+
+    taken = await bo.take_rerun('p-2')
+
+    assert [(line.path, line.size, line.sha256) for line in taken.manifest] == [('bench.json', 4, 'ab' * 32)]
+    assert (taken.manifest_files, taken.manifest_sha256) == (1, 'cd' * 32)
+    assert taken.manifest_file == str(copies.folder / 'p-2.manifest')
+    assert lab.board.takes[0].manifest == 'cd' * 32
+    # A manifest of very many files is in its file only, and the result says how many it has.
+    copies.files = tuple(ManifestLine(path=f'f{number}', size=1, sha256='ab' * 32) for number in range(201))
+    many = await bo.take_rerun('p-2')
+    assert (many.manifest, many.manifest_files) == ((), 201)
+
+
+async def test_two_calls_of_one_agent_at_the_same_time_are_one_take_and_one_check_of_it(lab: Lab) -> None:
+    async def pin(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+        # The pin takes a moment, so both checks start before either is posted.
+        await asyncio.sleep(0.01)
+        return tuple(FileEvidence(path=path, commit='a' * 40) for path in paths)
+
+    await a_claim(lab)
+    await Member(lab, 'ada').rerun('p-2')
+    bo = Member(lab, 'bo', pin=pin, copies=FakeCopies())
+
+    first, second = await asyncio.gather(bo.take_rerun('p-2'), bo.take_rerun('p-2'))
+
+    assert (first, len(lab.board.takes)) == (second, 1)
+    # The first check is the check of the take. The second posts as a check like any other, and is not refused.
+    checks = await asyncio.gather(bo.post(rerun_check()), bo.post(rerun_check()))
+    assert [check.post.model_dump()['take'] for check in checks] == [lab.board.takes[0].seq, None]
+    # With reviewer seats, the second one follows the seat rule, as any other check does.
+    await lab.join(agent('cy'))
+    await Member(lab, 'person').rerun('p-2')
+    cy = Member(lab, 'cy', pin=pin, copies=FakeCopies())
+    await cy.take_rerun('p-2')
+    both = await asyncio.gather(cy.post(rerun_check()), cy.post(rerun_check()), return_exceptions=True)
+    assert both[0].post.model_dump()['take'] == lab.board.takes[1].seq  # ty: ignore[unresolved-attribute]
+    assert isinstance(both[1], RejectedEvent)
+    assert 'takes a reviewer seat' in str(both[1])
 
 
 async def test_a_second_take_of_the_same_post_gives_the_same_copy_and_records_nothing(lab: Lab) -> None:

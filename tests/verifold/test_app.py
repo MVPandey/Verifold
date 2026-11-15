@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -785,8 +786,12 @@ async def test_an_agent_of_another_family_takes_a_wanted_rerun_in_a_clean_copy_a
     assert [(entry.agent, entry.post) for entry in board.takes] == [('agent-2', result.id)]
     # The clean copy is an export in Verifold's own folder, with the claim's pinned file, and Verifold put nothing
     # for the rerun into the taker's folder. The check's file is the taker's own, pinned from its own folder.
-    (copy,) = (project / '.verifold' / 'reruns' / result.id).iterdir()
+    (copy,) = (path for path in (project / '.verifold' / 'reruns' / result.id).iterdir() if path.is_dir())
     assert (copy / 'result.txt').read_text() == '11.8\n'
+    # The record keeps the digest of the manifest that the taker got, and the manifest's file has that digest.
+    listed = (copy.parent / f'{copy.name}.manifest').read_bytes()
+    assert board.takes[0].manifest == hashlib.sha256(listed).hexdigest()
+    assert listed.decode() == f'{hashlib.sha256(b"11.8\n").hexdigest()}  result.txt\n'
     assert not (project / '.verifold' / 'agents' / 'agent-2' / '.verifold').exists()
     assert (project / '.verifold' / 'agents' / 'agent-2' / 'rerun.txt').read_text() == '11.8'
     assert (check.author, check.text, check.model_dump()['take']) == (

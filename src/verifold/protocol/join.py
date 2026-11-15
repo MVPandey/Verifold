@@ -554,6 +554,18 @@ class RerunResult(Record):
     news: News | None = None
 
 
+MAX_MANIFEST = 200
+"""The most files whose lines the result of `take_rerun` holds. A longer manifest is in its file only."""
+
+
+class ManifestLine(Record):
+    """One file of a clean copy: its path in the copy, its size in bytes, and the SHA-256 of its bytes."""
+
+    path: str
+    size: int
+    sha256: str
+
+
 class RerunTake(Record):
     """
     What the `take_rerun` tool returns: the claim, and where the clean copy of its files is.
@@ -574,8 +586,22 @@ class RerunTake(Record):
     folder: str
     """
     The clean copy: a folder of Verifold's own, outside every agent's folder, with the author's files at `commit`
-    as plain files that nobody writes, and nothing else. Every agent that takes this rerun gets the same folder.
+    as plain files, and nothing else. Every agent that takes this rerun gets the same folder.
     """
+    manifest: tuple[ManifestLine, ...] = ()
+    """
+    Each file of the clean copy with its size and the SHA-256 of its bytes, as Verifold computed them from the
+    pinned commit's objects at this call. Empty when the copy has more than `MAX_MANIFEST` files.
+    """
+    manifest_files: int = 0
+    """How many files the clean copy has."""
+    manifest_file: str = ''
+    """
+    A file of Verifold's own, beside the copy, with one line for each file: the SHA-256, two spaces, and the path,
+    in the order of the paths. `shasum -a 256 -c` reads that form.
+    """
+    manifest_sha256: str = ''
+    """The SHA-256 of the bytes of `manifest_file` as Verifold wrote it at this call. The record holds it with the take."""
     news: News | None = None
 
 

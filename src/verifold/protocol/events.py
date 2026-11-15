@@ -287,6 +287,11 @@ class RerunTaken(EventBase):
     post: PostId
     commit: CommitId
     """The commit that the post pins its files to, which the clean copy holds."""
+    manifest: Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')] | None = None
+    """
+    The SHA-256 of the clean copy's manifest as Verifold gave it to the agent: one line for each file, with the
+    SHA-256 of the file's bytes and its path. `None` in a record from before Verifold kept it.
+    """
 
 
 class TimeSet(EventBase):

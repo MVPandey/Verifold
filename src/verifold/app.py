@@ -53,7 +53,7 @@ from verifold.runner.git import GitError, git
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
 from verifold.runner.messages import invitation, start_message
 from verifold.runner.permissions import Refusals
-from verifold.runner.reruns import clean_copy
+from verifold.runner.reruns import CleanCopies
 from verifold.runner.session import Place, SessionOptions, offer_of
 from verifold.runner.snapshots import pin
 from verifold.server.activity import Activity
@@ -184,6 +184,8 @@ class Host:
     ) -> None:
         """Prepare a host for the folder at `project`. Call `attach` before a lab starts."""
         self._project = project
+        self._copies = CleanCopies(project)
+        """Gives the clean copies for reruns, each verified against the pinned commit at every take."""
         self._desktop = True
         self._record = record
         self._catalog = catalog
@@ -913,7 +915,7 @@ class Host:
             agent.id,
             pin=partial(pin, folder, agent.id),
             seen=before(board, agent.id).seen,
-            copies=partial(clean_copy, self._project),
+            copies=self._copies,
             adds=self.add_seat,
             seat_ok=self.check_seat,
         )
@@ -942,7 +944,7 @@ class Host:
             agent.id,
             pin=partial(pin, folder, agent.id),
             seen=before(lab.board, agent.id).seen,
-            copies=partial(clean_copy, self._project),
+            copies=self._copies,
             adds=self.add_seat,
             seat_ok=self.check_seat,
         )

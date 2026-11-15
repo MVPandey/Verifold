@@ -4,7 +4,9 @@ from pathlib import Path
 
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.events import Posted
+from verifold.protocol.join import ManifestLine
 from verifold.server.errors import NoCleanCopy
+from verifold.server.member import MadeCopy
 
 FAKE_HARNESS = HarnessEntry(
     name='fake',
@@ -26,9 +28,11 @@ class FakeCopies:
     """The post and the author of each copy that a seat asked for."""
     fails: bool = False
     """Whether no copy can be made."""
+    files: tuple[ManifestLine, ...] = (ManifestLine(path='bench.json', size=4, sha256='ab' * 32),)
 
-    async def __call__(self, claim: Posted) -> Path:
+    async def __call__(self, claim: Posted) -> MadeCopy:
         if self.fails:
             raise NoCleanCopy(f'Verifold could not make the clean copy of post {claim.post.id}: no space left.')
         self.made.append((claim.post.id, claim.post.author))
-        return self.folder / claim.post.id
+        copy = self.folder / claim.post.id
+        return MadeCopy(folder=copy, files=self.files, listing=copy.with_suffix('.manifest'), digest='cd' * 32)

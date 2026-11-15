@@ -2,13 +2,16 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from verifold.protocol.agents import GUEST, Picture
 from verifold.protocol.events import AgentLeft, AlarmSet, Posted, RerunRequested, WatchSet
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import (
+    MAX_MANIFEST,
     Brief,
+    ManifestLine,
     News,
     PostRequest,
     PostView,
@@ -32,8 +35,24 @@ type Pin = Callable[[tuple[str, ...]], Awaitable[tuple[FileEvidence, ...]]]
 """Commits an agent's folder and returns each named file pinned to that commit."""
 
 
-type CleanCopy = Callable[[Posted], Awaitable[Path]]
-"""Returns the clean copy of the files that a post pins, in a folder of Verifold's own, and makes it when it is not there."""
+@dataclass(frozen=True, slots=True)
+class MadeCopy:
+    """The clean copy of the files that a post pins, as Verifold verified it for one take."""
+
+    folder: Path
+    files: tuple[ManifestLine, ...]
+    """Each file of the copy with its size and the SHA-256 of its bytes, in the order of the paths."""
+    listing: Path
+    """The file beside the copy that holds the manifest."""
+    digest: str
+    """The SHA-256 of that file's bytes."""
+
+
+type CleanCopy = Callable[[Posted], Awaitable[MadeCopy]]
+"""
+Returns the clean copy of the files that a post pins, in a folder of Verifold's own. It makes the copy when it is
+not there, and it checks at each call that the copy is exactly the pinned commit's files.
+"""
 
 
 class Member:
@@ -221,7 +240,8 @@ class Member:
         Take the rerun of a post that somebody asked for, and return the claim with the clean copy of its files.
 
         The copy is in a folder of Verifold's own, and the take is recorded when the copy is there. So a copy that
-        fails records nothing. A second call returns the same copy.
+        fails records nothing. Each call checks the copy again and returns its manifest. A second call records
+        nothing more.
 
         Raises:
             RejectedEvent: The agent cannot take the rerun: the post does not exist or is its own, no rerun of it
@@ -238,8 +258,8 @@ class Member:
             raise NoCleanCopy('This lab cannot make a clean copy for you.')
         if self._lab.board.take(self.agent_id, post_id) is None:
             self._lab.check_take(self.agent_id, post_id)
-        folder = await self._copies(claim)
-        taken = await self._lab.take_rerun(self.agent_id, post_id)
+        made = await self._copies(claim)
+        taken = await self._lab.take_rerun(self.agent_id, post_id, made.digest)
         return RerunTake(
             post=post_id,
             thread=claim.post.thread,
@@ -248,7 +268,11 @@ class Member:
             body=claim.post.body,
             files=tuple(file.path for file in claim.post.evidence),
             commit=taken.commit,
-            folder=str(folder),
+            folder=str(made.folder),
+            manifest=made.files if len(made.files) <= MAX_MANIFEST else (),
+            manifest_files=len(made.files),
+            manifest_file=str(made.listing),
+            manifest_sha256=made.digest,
         )
 
     def _is_guest(self) -> bool:
