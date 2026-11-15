@@ -14,6 +14,7 @@ from verifold.runner.permissions import (
     ask_the_person,
     ask_the_question,
     decide,
+    declines,
     fenced,
     grant_choice,
     named,
@@ -131,6 +132,46 @@ def test_a_typed_yes_allows_once_also_when_the_harness_lists_allow_always_first(
 
     assert (chosen('yes', always_first), chosen('Yes', no_once)) == ('once', None)
     assert (chosen('Allow always', no_once), chosen('no', no_once)) == ('always', 'no')
+
+
+STOP = PermissionChoice(id='cancel', name='No, and tell the agent what to do differently', kind='reject_once')
+
+
+@pytest.mark.parametrize(
+    ('choices', 'clean'),
+    [
+        ((ONCE, NO), 'yes'),
+        ((ONCE, STOP), 'no'),
+        ((ONCE, STOP.model_copy(update={'id': 'Abort-Turn'})), 'no'),
+        ((ONCE, ALWAYS), 'no'),
+        ((ONCE, STOP, PermissionChoice(id='decline', name='No', kind='reject_once')), 'yes'),
+        ((ONCE, PermissionChoice(id='block_host', name='No, never', kind='reject_always')), 'yes'),
+    ],
+)
+def test_a_harness_declines_cleanly_only_with_a_no_that_does_not_stop_the_turn(
+    choices: tuple[PermissionChoice, ...], clean: str
+) -> None:
+    assert declines(MAKE.model_copy(update={'choices': choices})) is (clean == 'yes')
+
+
+async def test_an_ask_says_when_the_harness_cannot_decline_without_stopping_the_turn(lab: Lab) -> None:
+    bo = Member(lab, 'bo')
+    request = COMMAND.model_copy(update={'choices': (ONCE, STOP)})
+    long = request.model_copy(update={'command': f'./gpu {"x" * 30_000}'})
+    asking = asyncio.create_task(ask_the_person(bo, request))
+    await until(lambda: bool(asks(lab)))
+    await answered(lab, 'no')
+    stopped = await asking
+    refused = await ask_the_person(bo, long)
+
+    asked, told = asks(lab)
+    fact = "The agent's harness offers no way to decline this request without stopping the agent's turn."
+    assert (stopped, refused) == ('cancel', 'cancel')
+    assert isinstance(asked.shown, PermissionShown)
+    assert isinstance(told.shown, PermissionShown)
+    assert (asked.shown.notes, told.shown.notes) == (('no_decline',), ('too_long', 'no_decline'))
+    assert asked.body.startswith(f'{fact} So an answer that rejects it stops the turn.')
+    assert f'{fact} So an answer that rejects it stops the turn. So this refusal stopped the turn.' in told.body
 
 
 def test_without_a_reject_option_a_no_cancels() -> None:

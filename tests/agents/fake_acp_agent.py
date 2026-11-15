@@ -3,7 +3,7 @@ A fake ACP agent for tests. It reaches the lab's board over MCP with its token, 
 
 The first message makes it post in a new thread. The doorbell makes it read its posts with `wait` and answer each ask.
 Environment variables change its behavior: `FAKE_ACP_LOG` logs each call, `FAKE_ACP_PERMISSION` asks permission
-first, `FAKE_ACP_COMMAND` asks permission for that shell command, which the request names by its call's ID only, `FAKE_ACP_QUESTION` asks its user which branch to take, as a form, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, `FAKE_ACP_SLOW_AGENT` does the
+first, `FAKE_ACP_COMMAND` asks permission for that shell command, which the request names by its call's ID only, `FAKE_ACP_ABORT` makes the only "no" to that request an answer that stops the turn, `FAKE_ACP_QUESTION` asks its user which branch to take, as a form, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, `FAKE_ACP_SLOW_AGENT` does the
 same for an agent whose name starts with its value, and `FAKE_ACP_CHILD` starts a
 child that holds the agent's pipes open and writes its process ID to that path. `FAKE_ACP_JOB` starts a job in a
 session of its own, the way that a harness starts a background command, and writes its process ID to that path.
@@ -231,7 +231,9 @@ class FakeAgent(acp.Agent):
                 tool_call=schema.ToolCallUpdate(tool_call_id='call-1', title=None if command else 'run make'),
                 options=[
                     schema.PermissionOption(option_id='yes', name='Allow once', kind='allow_once'),
-                    schema.PermissionOption(option_id='no', name='Reject', kind='reject_once'),
+                    schema.PermissionOption(option_id='cancel', name='No, and stop', kind='reject_once')
+                    if os.environ.get('FAKE_ACP_ABORT')
+                    else schema.PermissionOption(option_id='no', name='Reject', kind='reject_once'),
                 ],
             )
             outcome = response.outcome

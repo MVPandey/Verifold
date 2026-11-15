@@ -69,9 +69,11 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
                 executable='codex',
                 command=_adapter('@agentclientprotocol/codex-acp@2.5.0'),
                 family='openai',
-                # Not the mode `agent`: there the harness's own reviewer decides, and a refusal never reaches the
-                # person. In this mode each request comes to Verifold, which follows the person's grants.
-                auto_mode='workspace-write',
+                # The adapter's own default mode: Codex works in its sandbox, and Codex's own reviewer decides each
+                # request to leave it, as when the person runs Codex with auto review. Not `workspace-write`: that
+                # mode sends each such request to Verifold, and the only "no" that the adapter offers for many of
+                # them stops the agent's turn. In both modes the adapter turns the sandbox's network off.
+                auto_mode='agent',
                 names_mcp_server=True,
             ),
         )

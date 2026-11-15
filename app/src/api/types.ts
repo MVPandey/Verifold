@@ -356,7 +356,7 @@ export type Post =
     });
 
 /** A fact about a request that Verifold states. The app writes the sentence. */
-export type RequestNote = 'refused' | 'unclear' | 'too_long';
+export type RequestNote = 'refused' | 'unclear' | 'too_long' | 'no_decline';
 
 /** What a harness asks a permission for, as Verifold read it, with hidden characters written as code points. */
 export interface PermissionShown {

@@ -13,7 +13,7 @@ from fakes import FAKE_HARNESS
 from verifold.protocol.app import AgentState
 from verifold.protocol.events import AlarmSet, TurnSummary
 from verifold.protocol.join import MAX_NEWS, PostRequest
-from verifold.protocol.posts import Ask, QuestionShown
+from verifold.protocol.posts import Ask, PermissionShown, QuestionShown
 from verifold.protocol.settings import AtTimeLimit, JobSettings, PermissionSettings, Settings, WhileYouDecide
 from verifold.protocol.usage import Usage
 from verifold.runner import agent_loop
@@ -736,6 +736,33 @@ async def test_in_a_lab_with_auto_mode_or_by_the_persons_choice_a_command_is_ref
     assert [ask.text for ask in asks] == ['Permission needed: a shell command']
     assert asks[0].choices == ('Allow once', 'Reject', 'Allow `./gpu` for every agent')
     assert [view.post.id for view in needs_person(lab.board)] == [asks[0].id]
+
+
+@pytest.mark.usefixtures('log')
+async def test_a_request_whose_only_no_stops_the_turn_waits_for_the_person_also_when_agents_do_not_wait(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_COMMAND', './gpu python3 train.py')
+    monkeypatch.setenv('FAKE_ACP_ABORT', '1')
+    lab = served.lab
+    await lab.set_settings(NO_WAIT)
+    running = asyncio.create_task(loop_for(served, tmp_path, refusals=Refusals(lab)).run())
+    try:
+        await until(lambda: any(entry.post.kind == 'ask' for entry in lab.board.posts))
+        asked = lab.board.posts[-1].post
+        await asyncio.sleep(0.3)
+        waited = [text for text in posts_by(served, 'bo') if text.startswith('Permission:')]
+        await lab.post(PostRequest(kind='answer', text='Allow once', thread=asked.thread, reply_to=asked.id), 'person')
+        await until(lambda: 'Permission: yes.' in posts_by(served, 'bo'))
+        await until(lambda: len(lab.board.turns) == 1)
+    finally:
+        running.cancel()
+
+    assert isinstance(asked, Ask)
+    assert isinstance(asked.shown, PermissionShown)
+    assert (waited, asked.shown.notes, asked.choices[1]) == ([], ('no_decline',), 'No, and stop')
+    assert "offers no way to decline this request without stopping the agent's turn" in asked.body
+    assert [turn.error for turn in lab.board.turns] == [None]
 
 
 @pytest.mark.usefixtures('log')

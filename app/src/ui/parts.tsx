@@ -108,6 +108,15 @@ export function HarnessAsk(props: {
           applies when {name} asks for the same again within an hour.
         </p>
       ) : null}
+      {shown.notes.includes('no_decline') ? (
+        <p className="says">
+          The harness of {name} offers no way to decline this request without stopping the turn of{' '}
+          {name}.{' '}
+          {long
+            ? 'So this refusal stopped the turn.'
+            : 'So an answer that rejects it stops the turn.'}
+        </p>
+      ) : null}
       {shown.command === null ? null : (
         <Exact
           label={

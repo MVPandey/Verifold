@@ -57,6 +57,8 @@ _NO = frozenset(
 )
 """The answers in the person's own words that reject. The whole answer must be one of them."""
 _ONCE = frozenset({'allow_once', 'reject_once'})
+_STOPS = re.compile(r'abort|cancel|interrupt|stop')
+"""What the ID of an answer holds when the answer stops the agent's turn. ACP has no kind of answer for that."""
 _KINDS = frozenset({'read', 'edit', 'delete', 'move', 'search', 'execute', 'think', 'fetch', 'switch_mode', 'other'})
 """ACP's kinds of tool. Only these words of a harness go in a headline."""
 
@@ -80,6 +82,10 @@ _SAID: dict[RequestNote, str] = {
     'too_long': (
         'Verifold refused this request of the agent, because an ask cannot hold all of it, and you cannot allow '
         'what you cannot read. Nothing ran. This ask is for your information: an answer to it allows nothing.'
+    ),
+    'no_decline': (
+        "The agent's harness offers no way to decline this request without stopping the agent's turn. So an answer "
+        'that rejects it stops the turn.'
     ),
 }
 """Verifold's sentence for each note, in the body that agents read. The app writes its own from the note."""
@@ -138,6 +144,19 @@ def settled(board: Board, request: PermissionRequest) -> str | None:
 def refusal(request: PermissionRequest) -> str | None:
     """Return the ID of the answer that refuses the request once, or `None`, which cancels it."""
     return next((choice.id for choice in request.choices if choice.kind == 'reject_once'), None)
+
+
+def declines(request: PermissionRequest) -> bool:
+    """
+    Return whether the harness offers an answer that declines the request and lets the agent's turn go on.
+
+    A harness can offer, as its only "no", an answer that stops the turn. ACP gives that answer the same kind as an
+    ordinary "no", so Verifold goes by the answer's ID: `cancel`, `abort`, `interrupt`, or `stop` in it means that
+    the turn stops. With no reject answer at all, Verifold can only cancel the request, which stops the turn too.
+    """
+    return any(
+        choice.kind.startswith('reject') and not _STOPS.search(choice.id.casefold()) for choice in request.choices
+    )
 
 
 def grant_choice(prefix: str) -> str:
@@ -236,6 +255,7 @@ def _present(request: PermissionRequest, prefix: str | None, *notes: RequestNote
     """
     offers = _offers(request, prefix)
     harness = [offer for offer in offers if offer.choice]
+    notes = notes if declines(request) else (*notes, 'no_decline')
     grant = (grant_choice(prefix),) if prefix else ()
     buttons = (*(offer.label for offer in harness[: MAX_CHOICES - len(grant)]), *grant)
     listed = len(offers) > len(buttons) or any(offer.choice and offer.label != offer.choice.name for offer in harness)
@@ -631,11 +651,13 @@ async def _tell_too_long(member: Member, request: PermissionRequest) -> None:
         kind=request.kind if request.kind in _KINDS else '',
         command=start if request.command else None,
         given='' if request.command else start,
-        notes=('too_long',),
+        notes=('too_long',) if declines(request) else ('too_long', 'no_decline'),
         size=len(whole),
     )
+    stopped = '' if declines(request) else f' {_SAID["no_decline"]} So this refusal stopped the turn.'
     body = (
-        f'{_SAID["too_long"]} It has {len(whole):,} characters. It starts with:\n\n{fenced(start)}\n\nThe rest is cut.'
+        f'{_SAID["too_long"]}{stopped} It has {len(whole):,} characters. It starts with:\n\n{fenced(start)}\n\n'
+        'The rest is cut.'
     )
     board = member.lab.board
     told = any(

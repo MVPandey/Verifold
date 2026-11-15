@@ -47,7 +47,15 @@ from verifold.runner.messages import (
     more_time_message,
     time_facts,
 )
-from verifold.runner.permissions import Refusals, ask_the_person, ask_the_question, named, refusal, settled
+from verifold.runner.permissions import (
+    Refusals,
+    ask_the_person,
+    ask_the_question,
+    declines,
+    named,
+    refusal,
+    settled,
+)
 from verifold.runner.session import (
     AgentSession,
     Answers,
@@ -529,7 +537,8 @@ class AgentLoop:
         if allowed := settled(board, request):
             return allowed
         # The person's setting, or else their choice of auto mode, says whether the request waits for their answer.
-        if self._refusals and not agent_waits(board):
+        # A refusal that would stop the agent's turn is no way to let the agent go on, so that request waits too.
+        if self._refusals and not agent_waits(board) and declines(request):
             return await self._refusals.decide(self._member, request)
         async with self._asks(named(request)):
             return await ask_the_person(self._member, request, self._turn_over)
