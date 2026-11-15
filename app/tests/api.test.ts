@@ -44,6 +44,23 @@ describe('the API client', () => {
     assert.equal(read?.init.method, 'GET');
   });
 
+  it('reads the norms and saves one file by its name', async () => {
+    const server = serverThatAnswers(200, '{"files": [], "told": "p-4"}');
+    const api = createApi('secret', server.fetcher);
+
+    await api.norms();
+    const saved = await api.saveNorms('LAB.md', '# Norms');
+
+    assert.equal(saved.told, 'p-4');
+    assert.deepEqual(
+      server.calls.map((call) => [call.input, call.init.method, call.init.body]),
+      [
+        ['/api/norms', 'GET', undefined],
+        ['/api/norms', 'POST', '{"name":"LAB.md","text":"# Norms"}'],
+      ],
+    );
+  });
+
   it('asks for an invitation with a name, or with none', async () => {
     const server = serverThatAnswers(200, '{"agent": "agent-3", "name": "Reader", "text": "URL"}');
     const api = createApi('secret', server.fetcher);

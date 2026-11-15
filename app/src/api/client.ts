@@ -5,6 +5,8 @@ import type {
   FolderView,
   Invitation,
   LabView,
+  NormsName,
+  NormsView,
   PostRequest,
   PostView,
   SettingsChange,
@@ -63,6 +65,10 @@ export interface Api {
   startAgain(agentId: string): Promise<LabView>;
   settings(): Promise<SettingsView>;
   changeSetting(change: SettingsChange): Promise<SettingsView>;
+  /** The lab's norms files, or before a lab starts the defaults that the new lab gets. */
+  norms(): Promise<NormsView>;
+  /** Save a new text for one norms file. In a lab, a post from the person tells the agents of the change. */
+  saveNorms(name: NormsName, text: string): Promise<NormsView>;
 }
 
 type Fetch = (input: string, init: RequestInit) => Promise<Response>;
@@ -154,6 +160,8 @@ export function createApi(
     startAgain: (agentId) => request(`/agents/${encodeURIComponent(agentId)}/start`, {}),
     settings: () => request('/settings'),
     changeSetting: (change) => request('/settings', change),
+    norms: () => request('/norms'),
+    saveNorms: (name, text) => request('/norms', { name, text }),
   };
 }
 

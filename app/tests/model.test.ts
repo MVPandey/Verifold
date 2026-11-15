@@ -396,7 +396,10 @@ describe('agents', () => {
       usage: { input_tokens: 461_000, cached_input_tokens: 0, output_tokens: 2_000 },
     });
     assert.equal(costLine(priced), '$0.37 over 4 turns');
-    assert.equal(costLine(unpriced), '461k tokens in, 2k out over 3 turns. No price.');
+    assert.equal(
+      costLine(unpriced),
+      '461k tokens in, 2k out over 3 turns. Cost not reported by the harness.',
+    );
     assert.equal(costLine(agentView('agent-3')), 'No turns yet');
     // An invited agent runs by itself. Verifold sees its board calls and nothing else.
     const guest = agentView('agent-4', {
@@ -426,7 +429,13 @@ describe('agents', () => {
       stateLine({ state: 'here', detail: '', at: '2026-11-06T14:11:30Z' }, now).text,
       'Last board call just now',
     );
-    assert.equal(labTotal([priced, unpriced]), '$0.37 and 463k tokens');
+    assert.equal(
+      labTotal([priced, unpriced]),
+      '$0.37, and 463k tokens with cost not reported by the harness',
+    );
+    // A harness that reports tokens and no cost never shows as $0.
+    assert.equal(labTotal([unpriced]), '463k tokens with cost not reported by the harness');
+    assert.equal(labTotal([]), 'No cost reported yet');
     assert.equal(labTotal([priced]), '$0.37');
   });
 });
@@ -873,6 +882,8 @@ describe('settings', () => {
     assert.equal(valueAt({}, 'jobs.at_exit'), undefined);
     assert.equal(labelOf(AT_EXIT, 'keep'), 'Keep them');
     assert.deepEqual(parseRoute('#/settings'), { page: 'settings' });
+    assert.deepEqual(parseRoute('#/norms'), { page: 'norms' });
+    assert.equal(href({ page: 'norms' }), '#/norms');
     assert.equal(href({ page: 'settings' }), '#/settings');
   });
 

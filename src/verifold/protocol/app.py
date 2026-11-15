@@ -245,6 +245,41 @@ class SettingsChange(Record):
     """
 
 
+type NormsName = Literal['LAB.md', 'WRITING.md']
+"""The files of the lab folder that hold the norms. The app reads and writes these two names and no other path."""
+
+NORMS_NAMES: tuple[NormsName, ...] = ('LAB.md', 'WRITING.md')
+
+MAX_NORMS = 100_000
+"""The most characters in a norms file that the app shows or saves."""
+
+
+class NormsFile(Record):
+    """One norms file as the Norms page shows it."""
+
+    name: NormsName
+    path: str
+    """Where the file is, with `~` for the home folder."""
+    text: str
+    saved: bool
+    """`False` when the folder has no such file yet, so `text` is the default that a new lab gets."""
+
+
+class NormsView(Record):
+    """The lab's norms: how the person wants the work done, and how the lab writes its answer."""
+
+    files: tuple[NormsFile, ...]
+    told: PostId | None = None
+    """After a change: the person's post that told the agents of it, or `None` when no post went out."""
+
+
+class NormsChange(Record):
+    """The person saves a new text for one norms file."""
+
+    name: NormsName
+    text: Annotated[str, StringConstraints(max_length=MAX_NORMS)]
+
+
 class QuestionRequest(Record):
     """The person revises the lab's question."""
 

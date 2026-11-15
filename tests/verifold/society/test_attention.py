@@ -270,7 +270,7 @@ def test_news_has_one_line_for_each_unseen_post_and_says_which_are_for_the_agent
     ]
     assert [(line.id, line.author, line.text) for line in unseen.others] == [('p-4', 'bo', 'Which seeds?')]
     assert (unseen.seq, unseen.more, unseen.left_out) == (board.seq, 0, 0)
-    assert news(board, 'ada', after=board.seq) == News(seq=board.seq)
+    assert news(board, 'ada', after=board.seq).model_copy(update={'no_alarm': ''}) == News(seq=board.seq)
 
 
 def test_news_keeps_the_newest_of_the_other_posts_and_counts_the_ones_that_it_leaves_out() -> None:

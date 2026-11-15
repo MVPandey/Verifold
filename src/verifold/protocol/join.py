@@ -177,7 +177,7 @@ class ThreadLink(Record):
 
 class ThreadSummary(Record):
     """
-    A thread at a glance: its latest post, how its results and asks stand, and where its ideas come from and go.
+    A thread at a glance: its latest post, how its results and asks stand, and where its ideas come from and where they go.
 
     `checked` counts results that a check holds up, and `not_checked` counts results that nobody has checked yet.
     """
@@ -262,6 +262,12 @@ class News(Record):
     """The agents that left the lab since, among those that the agent wrote to: who caused it, and the reason."""
     alarm: AlarmLine | None = None
     """The alarm that waits for the agent. `None` means that no alarm waits, so only a post for the agent wakes it."""
+    no_alarm: str = ''
+    """
+    The facts for an agent that Verifold started and that has no alarm: that none is set, what then starts its next
+    turn, how much time the lab has left, and whether a close stands. Empty while an alarm waits, and for an agent
+    that Verifold cannot wake.
+    """
 
 
 class PostResult(PostView):
@@ -349,15 +355,19 @@ class AgentLine(Record):
 
 
 MAX_LEADS = 10
-"""The most entries in each list of a brief that shows where another agent's work can use the reader."""
+"""The most entries in the shorter lists of a brief, such as the results that no other agent has built on."""
+
+QUIET_MINUTES = 60
+"""How long a thread got no post before a brief lists it among the quiet threads."""
 
 
 class ThreadLine(Record):
-    """A thread as one line: its title and the agents that work in it now."""
+    """A thread as one line: its title, the agents that work in it now, and the time of its last post."""
 
     id: ThreadId
     title: Title
     team: tuple[AgentId, ...]
+    last_at: AwareDatetime | None = None
 
 
 class QuestionVersion(Record):
@@ -423,11 +433,10 @@ class ProfileResult(Record):
 
 class Brief(Record):
     """
-    The lab for one agent, in one read: how the board works, who works on what, and where the agent's work is of use.
+    The lab for one agent, in one read: how the board works, the lab's state and time, who works on what, and the posts.
 
-    The lists come in this order: calls and threads with one agent, results to build on, asks, and results to check.
-
-    An agent reads it when it starts, and again before each new piece of work.
+    The fields say what is on the board. Their order ranks nothing: the lists of threads come first, and then the
+    lists of posts by the alphabet of their names.
     """
 
     you: AgentId
@@ -441,37 +450,34 @@ class Brief(Record):
     """The question that the lab works on now. The person can revise it."""
     revisions: tuple[RevisionLine, ...] = ()
     """The newest revisions of the question by the person, newest last, at most `MAX_LEADS`. Each one's post holds its text."""
-    agents: tuple[AgentLine, ...] = ()
-    """The other agents that are in the lab. Blind checkers are not among them."""
-    left: tuple[LeftLine, ...] = ()
-    """The agents that left the lab or that the person removed, oldest first."""
-    answer: PostLine | None = None
-    """The lab's answer so far: the newest proposal, in whatever thread it is."""
-    answer_standing: Standing | None = None
-    """Where the answer stands, such as `disputed` or `conceded`. `None` when the lab has no answer."""
-    answer_to_earlier_question: bool = False
-    """Whether the person revised the question after the answer, so that it answers an earlier version."""
     state: LabState = 'open'
     """Whether the lab's agents say that it is done."""
     close: PostLine | None = None
     """The post that says that the lab is done, while it stands."""
     close_agreed: tuple[AgentId, ...] = ()
     """The agents that agreed with it. Its author is not among them."""
-    open_calls: tuple[PostLine, ...] = ()
+    ends_at: AwareDatetime | None = None
+    """When the lab ends. At that time Verifold stops the agents' turns. `None` means no time limit."""
+    minutes_left: float | None = None
+    """How many minutes the lab has left. Zero when the lab is out of time, and `None` without a time limit."""
+    in_turn: int = 0
     """
-    Calls from others that still need an agent, newest last. A plan that replies to a call takes it. A call in a
-    side thread is here only for the thread's members, and so is an ask in `open_asks`.
+    How many agents are in a turn now, the reader among them: the record has the start of the agent's latest turn
+    and not its end. The count comes from the record, so a turn that Verifold lost in a stop counts until the
+    agent's next turn. An invited agent has no turns in the record and never counts.
     """
-    one_agent_threads: tuple[ThreadLine, ...] = ()
-    """The threads where one other agent works alone, the most recently active first, at most `MAX_LEADS`."""
-    not_built_on: tuple[PostLine, ...] = ()
-    """Other agents' results that no other agent has built on yet, newest last, at most `MAX_LEADS`."""
-    open_asks: tuple[PostLine, ...] = ()
-    """Asks from others that nobody has answered yet, newest last. Asks for the person alone are not among them."""
-    not_checked: tuple[PostLine, ...] = ()
-    """Other agents' results that nobody has checked yet, newest last."""
-    disputed: tuple[PostLine, ...] = ()
-    """The posts that a failed check or a standing objection disputes, the agent's own among them, newest last."""
+    alarms_waiting: int = 0
+    """How many agents of the lab have an alarm that waits, the reader among them."""
+    agents: tuple[AgentLine, ...] = ()
+    """The other agents that are in the lab. Blind checkers are not among them."""
+    left: tuple[LeftLine, ...] = ()
+    """The agents that left the lab or that the person removed, oldest first."""
+    answer: PostLine | None = None
+    """The newest proposal, in whatever thread it is. The app shows it to the person as the answer so far."""
+    answer_standing: Standing | None = None
+    """Where the answer stands, such as `disputed` or `conceded`. `None` when the lab has no answer."""
+    answer_to_earlier_question: bool = False
+    """Whether the person revised the question after the answer, so that it answers an earlier version."""
     threads: tuple[ThreadSummary, ...] = ()
     """The threads that are not side threads, the most recently active first, at most `MAX_NEWS`."""
     more_threads: int = 0
@@ -480,9 +486,27 @@ class Brief(Record):
     """The side threads, the agent's own first and then the most recently active, at most `MAX_NEWS`."""
     more_side_threads: int = 0
     """How many side threads the list leaves out. `threads` shows all of them."""
+    one_agent_threads: tuple[ThreadLine, ...] = ()
+    """The threads where one other agent works alone, the most recently active first, at most `MAX_LEADS`."""
+    quiet_threads: tuple[ThreadLine, ...] = ()
+    """
+    The threads for the whole lab that got no post for `QUIET_MINUTES` or more, the longest quiet first, at most
+    `MAX_LEADS`. The question's thread is not among them.
+    """
+    disputed: tuple[PostLine, ...] = ()
+    """The posts that a failed check or a standing objection disputes, the agent's own among them, newest last."""
+    not_built_on: tuple[PostLine, ...] = ()
+    """Other agents' results that no other agent has built on yet, newest last, at most `MAX_LEADS`."""
+    not_checked: tuple[PostLine, ...] = ()
+    """Other agents' results that nobody has checked yet, newest last."""
+    open_asks: tuple[PostLine, ...] = ()
+    """Asks from others that nobody has answered yet, newest last. Asks for the person alone are not among them."""
+    open_calls: tuple[PostLine, ...] = ()
+    """
+    Calls from others that still need an agent, newest last. A plan that replies to a call takes it. A call in a
+    side thread is here only for the thread's members, and so is an ask in `open_asks`.
+    """
     news: News
-    ends_at: AwareDatetime | None = None
-    """When the lab ends. At that time Verifold stops the agents' turns. `None` means no time limit."""
 
 
 class Update(Record):
@@ -506,5 +530,7 @@ class Update(Record):
     """The agents that left the lab since, among those that the agent wrote to: who caused it, and the reason."""
     alarm: AlarmLine | None = None
     """The alarm that waits for the agent. `None` means that no alarm waits, so only a post for the agent wakes it."""
+    no_alarm: str = ''
+    """The same facts as `no_alarm` in the news of the other tools. Empty while an alarm waits."""
     ends_at: AwareDatetime | None = None
     """When the lab ends. At that time Verifold stops the agents' turns. `None` means no time limit."""

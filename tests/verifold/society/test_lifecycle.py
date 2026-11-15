@@ -6,15 +6,17 @@ from builders import START, RecordBuilder, lab
 
 from verifold.protocol.events import AlarmSet
 from verifold.protocol.join import AlarmLine, News
-from verifold.protocol.posts import Answer, Close, Message, Objection, Result, RuledOut
+from verifold.protocol.posts import Answer, Close, FileEvidence, Message, Objection, Result, RuledOut
 from verifold.runner.messages import start_message
 from verifold.society.attention import news, update, wakes
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply
-from verifold.society.lifecycle import alarm_line, lab_state, pending_alarm, rings_at
+from verifold.society.lifecycle import alarm_line, lab_state, no_alarm_line, pending_alarm, rings_at
 from verifold.society.lines import lines_of
 from verifold.society.standing import agreed, closing
 from verifold.society.views import brief
+
+EVIDENCE = FileEvidence(path='bench.py', commit='c' * 40)
 
 
 def test_the_lab_closes_when_more_than_half_of_its_agents_stand_behind_a_close(record: RecordBuilder) -> None:
@@ -255,3 +257,52 @@ def test_an_invited_agent_that_has_not_posted_is_no_peer_in_a_brief_an_update_or
     assert [line.id for line in brief(came, 'ada', News(seq=0)).agents] == ['bo', 'guest']
     assert [agent.id for agent in update(came, 'ada', 0).agents] == ['bo', 'guest']
     assert 'Bo (bo, fake), Guest (guest, guest).' in start_message(came, ada, Path('LAB.md'))
+
+
+NO_ALARM = (
+    'No alarm is set for you. After your turn ends, your next turn starts only when a post for you arrives or when '
+    'an agent that you named or answered leaves.'
+)
+
+
+def test_an_agent_without_an_alarm_reads_what_wakes_it_the_time_left_and_whether_a_close_stands(
+    record: RecordBuilder,
+) -> None:
+    board = record.board()
+    assert no_alarm_line(board, 'bo') == f'{NO_ALARM} The lab has no time limit. No close stands.'
+    assert (news(board, 'bo', 0).no_alarm, update(board, 'bo', 0).no_alarm) == (no_alarm_line(board, 'bo'),) * 2
+
+    # The time counts from the clock that the caller gives, and from the newest post without one.
+    record.post(Close(id='p-1', thread='t-1', author='ada', text='Done.'))
+    ends_at = record.at(len(record.events)) + timedelta(hours=2)
+    board = record.time_set(ends_at).board()
+    stands = 'A close stands: p-1 by ada. 1 of 3 agents stand behind it, so the lab is closing.'
+    assert no_alarm_line(board, 'bo') == (
+        f'{NO_ALARM} The lab ends at 2026-11-06 14:05 UTC, 120 minutes from now. {stands}'
+    )
+    late = no_alarm_line(board, 'bo', ends_at - timedelta(minutes=7, seconds=20))
+    assert late == f'{NO_ALARM} The lab ends at 2026-11-06 14:05 UTC, 7 minutes from now. {stands}'
+    assert news(board, 'bo', 0, ends_at - timedelta(minutes=7, seconds=20)).no_alarm == late
+
+    record.post(Answer(id='p-2', thread='t-1', author='bo', text='Agreed.', reply_to='p-1', accepts=True))
+    closed = record.time_set(record.at(len(record.events) + 1)).ran_out().board()
+    assert no_alarm_line(closed, 'cy') == (
+        f'{NO_ALARM} The lab is out of time. '
+        'A close stands: p-1 by ada. 2 of 3 agents stand behind it, so the lab is closed.'
+    )
+
+
+def test_the_line_is_empty_while_an_alarm_waits_and_for_an_agent_that_verifold_cannot_wake(
+    record: RecordBuilder,
+) -> None:
+    set_alarm(record, 15)
+    record.post(Result(id='p-1', thread='t-1', author='ada', text='It holds.', evidence=(EVIDENCE,)))
+    record.join('guest', harness='guest').join('dee', family='other', checks='p-1').leave('cy')
+    board = record.board()
+
+    # The news shows the alarm that waits, so it needs no second line.
+    assert (news(board, 'bo', 0).alarm is not None, news(board, 'bo', 0).no_alarm) == (True, '')
+    assert [no_alarm_line(board, agent) for agent in ('guest', 'dee', 'cy', 'nobody')] == ['', '', '', '']
+    assert no_alarm_line(board, 'ada').startswith(NO_ALARM)
+    # The line states facts and gives no advice.
+    assert not any(word in no_alarm_line(board, 'ada') for word in ('should', 'keep working', 'set an alarm'))

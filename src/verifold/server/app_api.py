@@ -25,6 +25,8 @@ from verifold.protocol.app import (
     Invitation,
     InviteRequest,
     LabView,
+    NormsChange,
+    NormsView,
     QuestionRequest,
     RerunRequest,
     SettingsChange,
@@ -55,7 +57,7 @@ from verifold.society.views import (
     thread_view,
     versions,
 )
-from verifold.store.errors import SettingsChanged, SettingsInvalid, SettingsUnwritable
+from verifold.store.errors import NormsUnreadable, SettingsChanged, SettingsInvalid, SettingsUnwritable
 
 HEARTBEAT = 15.0
 """Seconds between messages on a quiet event stream, so that proxies and browsers keep it open."""
@@ -83,6 +85,14 @@ class Host(Protocol):
 
     async def change_settings(self, change: SettingsChange) -> SettingsView:
         """Change one setting, and apply the change to the folder's lab."""
+        ...
+
+    def norms(self) -> NormsView:
+        """Return the lab's norms files, or the defaults that a new lab gets."""
+        ...
+
+    async def change_norms(self, change: NormsChange) -> NormsView:
+        """Save a new text for one norms file, and tell the lab's agents that it changed."""
         ...
 
     async def file_text(self, post_id: PostId, path: str) -> FileText:
@@ -126,6 +136,7 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     @api.exception_handler(SettingsInvalid)
     @api.exception_handler(SettingsChanged)
     @api.exception_handler(SettingsUnwritable)
+    @api.exception_handler(NormsUnreadable)
     @api.exception_handler(ValidationError)
     async def _refused(_: Request, error: Exception) -> JSONResponse:
         conflict = isinstance(error, NoLab | LabExists | SettingsChanged)
@@ -150,6 +161,15 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     @api.post('/settings', dependencies=[authorized])
     async def change_settings(change: SettingsChange) -> SettingsView:
         return await host.change_settings(change)
+
+    @api.get('/norms', dependencies=[authorized])
+    async def norms() -> NormsView:
+        return host.norms()
+
+    @api.post('/norms', dependencies=[authorized])
+    async def change_norms(change: NormsChange) -> NormsView:
+        # The request names one of two files, never a path.
+        return await host.change_norms(change)
 
     @api.get('/lab', dependencies=[authorized])
     async def lab() -> LabView:

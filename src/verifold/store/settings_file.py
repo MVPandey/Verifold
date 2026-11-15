@@ -137,8 +137,20 @@ def change_setting(
 
 
 def _write(path: Path, values: SettingsValues) -> None:
-    # A link could take the write to any file, so Verifold writes only a regular file. A link that appears after this
-    # check is replaced, not followed.
+    write_regular(path, json.dumps(values, indent=2) + '\n')
+
+
+def write_regular(path: Path, text: str) -> None:
+    """
+    Write `text` to the regular file at `path`, all at once, and keep the file's mode.
+
+    A link could take the write to any file, so Verifold writes only a regular file. A link that appears after the
+    check is replaced, not followed.
+
+    Raises:
+        SettingsUnwritable: The path is a link, or the file can't be written.
+
+    """
     if path.is_symlink():
         raise SettingsUnwritable(
             f'{path} is a link. Verifold changes only a regular file, so edit the file that it links to.'
@@ -153,7 +165,7 @@ def _write(path: Path, values: SettingsValues) -> None:
     written = Path(name)
     try:
         with os.fdopen(descriptor, 'w') as file:
-            file.write(json.dumps(values, indent=2) + '\n')
+            file.write(text)
             file.flush()
             os.fsync(file.fileno())
         if mode is not None:

@@ -22,7 +22,7 @@ from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import TypeAdapter
 
-from verifold.app import WRITING_TEMPLATE, ServeHooks, ServeOptions, WebServer, serve
+from verifold.app import NORMS_TEMPLATE, WRITING_TEMPLATE, ServeHooks, ServeOptions, WebServer, serve
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent, AgentChoice, ModelSpec
 from verifold.protocol.app import StartRequest
@@ -416,7 +416,7 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
     assert 'The lab is under way, and these agents work in it: Agent 1 (agent-1, fake).' in invited['text']
     assert f"{project / '.verifold' / 'LAB.md'} holds the lab's norms" in invited['text']
     assert folder == project / '.verifold' / 'agents' / 'agent-2'
-    assert 'Keep the token and your MCP settings outside this folder.' in invited['text']
+    assert 'So a token or MCP settings in this folder reach those commits and each blind checker.' in invited['text']
     assert brief.structured_content is not None
     assert brief.structured_content['you'] == 'agent-2'
     assert (before, listening, after) == ('invited', True, 'here')
@@ -675,9 +675,59 @@ async def test_a_rerun_request_starts_a_blind_checker_from_another_family(
     assert ('agent-2', 'ask') in modes
     assert [mode for agent, mode in modes if agent == checker.id] == ['auto']
     assert checker.mode is None
+    # Verifold gives the checker no role. Its message holds facts and names the file with the person's norms.
+    assert checker.role == ''
+    (message,) = prompts_of(log, checker.id)
+    assert message.startswith(f'You are {checker.name} ({checker.id}), a blind checker in a Verifold lab.')
+    assert f'Your folder is {project / ".verifold" / "agents" / checker.id}.' in message
+    assert f"{project / '.verifold' / 'LAB.md'} holds the lab's norms" in message
+    assert 'do not trust' not in message
 
 
 ONE_AGENT = StartRequest(question='Does it hold?', agents=(AgentChoice(harness='fake'),))
+
+
+async def test_the_norms_page_edits_what_a_new_lab_gets_and_a_change_in_a_lab_reaches_the_agents_once(
+    project: Path, log: Path
+) -> None:
+    lab_norms = project / '.verifold' / 'LAB.md'
+    async with serving(project, catalog={'fake': FAKE_HARNESS}) as client:
+        defaults = (await client.get('/norms')).json()
+        first = (await client.post('/norms', json={'name': 'LAB.md', 'text': '# Our rules\n'})).json()
+        on_disk = lab_norms.read_text()
+        await client.post('/labs', json=ONE_AGENT.model_dump(mode='json'))
+        await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
+        before = len(record(project))
+        changed = (await client.post('/norms', json={'name': 'LAB.md', 'text': '# Our rules\n\n- Be brief.\n'})).json()
+        same = (await client.post('/norms', json={'name': 'LAB.md', 'text': '# Our rules\n\n- Be brief.\n'})).json()
+        writing = (await client.post('/norms', json={'name': 'WRITING.md', 'text': '# Short answers\n'})).json()
+        # The post is for every agent, so the agent gets a doorbell and takes another turn.
+        await until(lambda: len(prompts_of(log, 'agent-1')) > 1, timeout=60)
+        # An invited agent says that the lab is done. A post of the person would open the lab again.
+        invited = (await client.post('/invitations', json={})).json()
+        url, token, _ = invited_parts(invited['text'])
+        async with board_of(url, token) as board:
+            await board.call_tool('post', {'kind': 'close', 'text': 'Done.', 'thread': 't-1'})
+        quiet = (await client.post('/norms', json={'name': 'LAB.md', 'text': '# Our rules\n'})).json()
+        state = (await client.get('/lab')).json()['state']
+
+    # Before the lab, a file that the folder lacks shows the default, and a save is what the new lab starts with.
+    assert [(file['name'], file['saved']) for file in defaults['files']] == [('LAB.md', False), ('WRITING.md', False)]
+    assert defaults['files'][0]['text'] == NORMS_TEMPLATE
+    assert (first['told'], first['files'][0]['saved'], on_disk) == (None, True, '# Our rules\n')
+    assert (project / '.verifold' / 'WRITING.md').read_text() == '# Short answers\n'
+    # In the lab, each change is one post of the person in the question's thread, which names nobody.
+    after = [event.post for event in record(project)[before:] if isinstance(event, Posted)]
+    told = [post for post in after if post.author == 'person']
+    assert [post.id for post in told] == [changed['told'], writing['told']]
+    assert [(post.thread, post.kind, post.mentions) for post in told] == [('t-1', 'message', ())] * 2
+    assert told[0].text == f"The person changed the lab's norms. {lab_norms} holds them."
+    assert told[1].text == (
+        f'The person changed how the lab writes its answer. {project / ".verifold" / "WRITING.md"} holds the text.'
+    )
+    assert same['told'] is None
+    # While a close stands, the file changes and no post goes out, so the lab stays as the agents left it.
+    assert (quiet['told'], lab_norms.read_text(), state) == (None, '# Our rules\n', 'closed')
 
 
 async def test_a_checker_that_runs_too_long_stops_and_the_lab_goes_on(

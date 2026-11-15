@@ -22,7 +22,11 @@ class SettingsInvalid(StoreError):
 
 
 class SettingsUnwritable(StoreError):
-    """A settings file can't be written, for example because its folder is a file or the disk is full."""
+    """A settings file or a norms file can't be written, for example because its folder is a file or the disk is full."""
+
+
+class NormsUnreadable(StoreError):
+    """A norms file is a link, is not text, or is too large to show."""
 
 
 class SettingsChanged(StoreError):

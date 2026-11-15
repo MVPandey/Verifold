@@ -1076,6 +1076,13 @@ details[open] > summary .opened {
   max-width: 40ch;
   overflow-wrap: anywhere;
 }
+/* A closed card is one glance, so a long headline stops after four lines. The opened thread has all of it. */
+.f-card:not(.open) .f-head {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .f-card.open .f-head {
   order: 2;
 }
@@ -2009,4 +2016,32 @@ a.file:hover {
 .md th {
   background: var(--card);
   font-weight: 600;
+}
+
+/* The Norms page: each file as a page, and a plain text area to change it. */
+.norms-file label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.norms-text {
+  width: 100%;
+  background: var(--card);
+  border: 1px solid var(--line2);
+  color: var(--ink);
+  padding: 10px 12px;
+  font: 14px/1.5 var(--mono);
+  resize: vertical;
+}
+.norms-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 12px 0 0;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+.norms-row span {
+  flex: 1;
 }

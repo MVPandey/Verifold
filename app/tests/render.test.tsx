@@ -18,6 +18,7 @@ import { LabPage, QuestionForm, Wall } from '../src/ui/LabPage.tsx';
 import { Failed } from '../src/ui/App.tsx';
 import { Boundary, Markdown, Words } from '../src/ui/Markdown.tsx';
 import { NeedsPage } from '../src/ui/NeedsPage.tsx';
+import { NormsForm, savedLine } from '../src/ui/NormsPage.tsx';
 import { SettingsForm } from '../src/ui/SettingsPage.tsx';
 import { SetupPage } from '../src/ui/SetupPage.tsx';
 import { Turns } from '../src/ui/Thread.tsx';
@@ -1104,6 +1105,7 @@ describe('the lab page', () => {
     assert.ok(html.includes('Stop the lab'));
     assert.ok(html.includes('<a href="#/needs">Needs you<span class="count">1</span></a>'));
     assert.ok(html.includes('<a href="#/settings">Settings</a>'));
+    assert.ok(html.includes('<a href="#/norms">Norms</a>'));
     assert.ok(html.includes('<a href="#/" aria-current="page">Lab</a>'));
   });
 });
@@ -1427,5 +1429,59 @@ describe('the settings page', () => {
     );
     assert.equal(html.includes('Use Verifold&#x27;s defaults'), false);
     assert.ok(html.includes('This project has saved choices of its own, and they win over these.'));
+  });
+});
+
+describe('the norms page', () => {
+  const file = {
+    name: 'LAB.md',
+    path: '~/code/sort-bench/.verifold/LAB.md',
+    text: "# The lab's norms\n\n- You work as a group.\n- <img src=x onerror=alert(1)>",
+    saved: true,
+  } as const;
+  const form = (editing: boolean, saved = true): string =>
+    renderToStaticMarkup(
+      <NormsForm
+        file={{ ...file, saved }}
+        labOpen
+        editing={editing}
+        onSave={() => Promise.resolve(null)}
+      />,
+    );
+
+  it('shows a norms file as a page, with its path and Edit', () => {
+    const html = form(false);
+
+    assert.ok(html.includes('How the agents work'));
+    assert.ok(html.includes('<code>~/code/sort-bench/.verifold/LAB.md</code>'));
+    assert.ok(html.includes('<li>You work as a group.</li>'));
+    assert.ok(html.includes('<button type="button" class="btn">Edit</button>'));
+    // The file's text is the person's own, and it still shows as text, never as HTML.
+    assert.equal(html.includes('<img'), false);
+    assert.equal(html.includes('<textarea'), false);
+  });
+
+  it('edits the text in a plain text area with Save and Cancel, and Save is off until the text changes', () => {
+    const html = form(true);
+
+    assert.ok(html.includes('<textarea'));
+    assert.ok(html.includes('- You work as a group.'));
+    assert.ok(html.includes('<button type="button" class="linkbtn">Cancel</button>'));
+    assert.ok(html.includes('<button type="submit" class="btn" disabled="">Save</button>'));
+  });
+
+  it('says that a file which does not exist yet shows the text that a new lab gets', () => {
+    assert.ok(
+      form(false, false).includes('does not exist yet. This is the text that a new lab gets.'),
+    );
+  });
+
+  it('says after a save whether the agents heard of the change', () => {
+    assert.equal(savedLine(false, null), 'Saved. The lab that you start gets this text.');
+    assert.match(
+      savedLine(true, 'p-9'),
+      /A post from you in the thread of the question tells the agents/,
+    );
+    assert.match(savedLine(true, null), /No post went to the agents/);
   });
 });

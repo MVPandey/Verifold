@@ -9,7 +9,6 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
-from importlib.resources import files
 from pathlib import Path
 from typing import override
 from urllib.parse import urlsplit
@@ -21,9 +20,13 @@ from pydantic import Field, JsonValue
 from verifold.harnesses.catalog import CATALOG, NPX_PROJECT, HarnessEntry, available, catalog_with
 from verifold.protocol.agents import GUEST, MAX_AGENTS, UNKNOWN_FAMILY, Agent, AgentChoice, ModelSpec
 from verifold.protocol.app import (
+    NORMS_NAMES,
     FolderView,
     HarnessOption,
     Invitation,
+    NormsChange,
+    NormsFile,
+    NormsView,
     Offer,
     SettingsChange,
     SettingsFileView,
@@ -33,7 +36,7 @@ from verifold.protocol.app import (
 )
 from verifold.protocol.events import TurnSummary
 from verifold.protocol.ids import PERSON, AgentId, PostId
-from verifold.protocol.join import FileText
+from verifold.protocol.join import FileText, PostRequest
 from verifold.protocol.record import Record
 from verifold.protocol.settings import AtExit, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
@@ -57,9 +60,12 @@ from verifold.server.timekeeper import keep_time
 from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
+from verifold.society.lines import question_thread
+from verifold.society.standing import closing
 from verifold.society.turns import before
 from verifold.store.errors import GuestsInvalid, SettingsInvalid
 from verifold.store.guests_file import GUESTS_FILE, Guests, drop_guest, keep_guest, read_guests
+from verifold.store.norms_file import DEFAULTS, read_norms, write_norms
 from verifold.store.record_file import RecordFile
 from verifold.store.server_file import running_server, server_file
 from verifold.store.settings_file import (
@@ -84,12 +90,17 @@ PROBE_TIMEOUT = 60.0
 SERVER_STOP_GRACE = 30.0
 """Seconds that `stop_lab` gives a server to stop its agents and exit, before it kills the server."""
 
-NORMS_TEMPLATE = files('verifold.society').joinpath('LAB.md').read_text()
+NORMS_TEMPLATE = DEFAULTS['LAB.md']
 """The norms that a new lab starts with. The person edits the copy in the lab's folder."""
-WRITING_TEMPLATE = files('verifold.society').joinpath('WRITING.md').read_text()
+WRITING_TEMPLATE = DEFAULTS['WRITING.md']
 """How the lab writes its answer for the person. A lab folder gets a copy, which the person can change."""
 MAX_FILE_BYTES = 1_000_000
 """The largest file that the app shows as text."""
+NORMS_CHANGED = {
+    'LAB.md': "The person changed the lab's norms. {path} holds them.",
+    'WRITING.md': 'The person changed how the lab writes its answer. {path} holds the text.',
+}
+"""The person's post that tells the agents of a change to a norms file. It states the change and where the text is."""
 
 
 class ServeOptions(Record):
@@ -293,6 +304,56 @@ class Host:
                 await asyncio.to_thread(open_folder, folder)
                 opened = True
         return FolderView(path=str(folder), opened=opened)
+
+    def norms(self, told: PostId | None = None) -> NormsView:
+        """
+        Return the lab's two norms files as they are in the lab folder.
+
+        Before a lab starts, a file that the folder lacks shows Verifold's default, which the new lab gets.
+
+        Raises:
+            NormsUnreadable: A file is a link, is not text, or is too large.
+
+        """
+        folder = self._project / LAB_FOLDER
+        read = {name: read_norms(folder, name) for name in NORMS_NAMES}
+        return NormsView(
+            files=tuple(
+                NormsFile(name=name, path=_shown(folder / name), text=text, saved=saved)
+                for name, (text, saved) in read.items()
+            ),
+            told=told,
+        )
+
+    async def change_norms(self, change: NormsChange) -> NormsView:
+        """
+        Save the person's new text for one norms file, and tell the lab's agents that it changed.
+
+        The file's name is one of two fixed names in the lab folder, so no request reaches another path. Before a
+        lab starts, the saved file is what the new lab gets, because a lab writes only the files that are missing.
+
+        In a lab, a post of the person in the question's thread says that the file changed and where it is. It
+        names nobody, so it reaches every agent once, by the path that the person's other words take. No post goes
+        out when the text is the same, when the lab has no question thread, or when a close stands: a post of the
+        person would open that lab again, and the person did not ask for that.
+
+        Raises:
+            NormsUnreadable: The file is a link, is not text, or is too large.
+            SettingsUnwritable: The file is a link, or it can't be written.
+
+        """
+        folder = self._project / LAB_FOLDER
+        before_text, saved = read_norms(folder, change.name)
+        if saved and before_text == change.text:
+            return self.norms()
+        write_norms(folder, change.name, change.text)
+        lab = self._lab
+        thread = question_thread(lab.board) if lab else None
+        if lab is None or thread is None or closing(lab.board):
+            return self.norms()
+        text = NORMS_CHANGED[change.name].format(path=folder / change.name)
+        posted = await lab.post(PostRequest(kind='message', text=text, thread=thread), PERSON)
+        return self.norms(told=posted.post.id)
 
     async def change_settings(self, change: SettingsChange) -> SettingsView:
         """

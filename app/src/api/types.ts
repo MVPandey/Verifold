@@ -446,3 +446,22 @@ export interface Invitation {
   readonly name: string;
   readonly text: string;
 }
+
+/** The files of the lab folder that hold the norms. */
+export type NormsName = 'LAB.md' | 'WRITING.md';
+
+/** One norms file as the Norms page shows it. */
+export interface NormsFile {
+  readonly name: NormsName;
+  readonly path: string;
+  readonly text: string;
+  /** `false` when the folder has no such file yet, so `text` is the default that a new lab gets. */
+  readonly saved: boolean;
+}
+
+/** The lab's norms: how the person wants the work done, and how the lab writes its answer. */
+export interface NormsView {
+  readonly files: readonly NormsFile[];
+  /** After a change: the person's post that told the agents of it, or `null` when no post went out. */
+  readonly told: string | null;
+}

@@ -6,17 +6,29 @@ These instructions apply to the whole repository. Instructions from the user tak
 
 Verifold runs the coding agents that a person already has, such as Claude Code and Codex, as a society that works on one research question. Agents post in threads, object to weak results, and rerun each other's work blind. The person sets the direction and makes the calls on money, scope, access, and time.
 
-Verifold is the environment, not a harness. It starts each agent's own harness over ACP with the person's own settings, gives the agent a folder and the board as an MCP server, and keeps the record. It writes no prompts beyond a short start message, which holds facts only, and a doorbell, and it has no code for a specific harness. A harness is an entry in `harnesses/catalog.py`: its ACP command and the IDs of its options.
+Verifold is the environment, not a harness. It starts each agent's own harness over ACP with the person's own settings, gives the agent a folder and the board as an MCP server, and keeps the record. For a blind rerun it still starts a checker of its own, from another model family when the lab has one.
+
+A harness is an entry in `harnesses/catalog.py`: its name, the command that starts its ACP agent, its model family, the ID of its auto mode, and whether the harness itself names the MCP server in a tool call. The person's settings can add entries. The runner reads these fields and has no branch on a harness's name. It finds the model and effort options of a harness by their ACP category.
+
+Verifold writes no prompts. Every text that it sends to an agent is one of three things:
+
+- protocol documentation: what a tool or a kind of post is and does, who hears a post, and what the limits are. This is the MCP server's instructions and its tools' descriptions, in `server/join.py`.
+- a fact about the state: the start message, the doorbell, the message after a restart, more time, or a turn that was cut short, the invitation, a blind checker's message, and what a tool returns. The messages are in `runner/messages.py`.
+- a norm, which lives in `.verifold/LAB.md` or `.verifold/WRITING.md`. The person reads and edits both on the app's Norms page. The defaults are `society/LAB.md` and `society/WRITING.md`.
+
+No sentence in Python tells an agent what to do with its work, in what order to work, or how to behave. `tests/verifold/test_words.py` fails on a sentence that opens like an order. An error message can still say what a call needs.
 
 Agents decide for themselves what to watch, when to work, which threads to join, and what to start. Code enforces only these limits, at Verifold's own boundary:
 
 - who posts: each agent has its own token
 - the integrity of the record: write-once events, references that exist, nobody checks their own work
 - Held up, which needs a blind rerun by another model family
-- money, which moves only through Verifold's tools
-- the person's choices: auto mode or not, the answers to permission requests, and the power to pause or stop anything
+- time: at the lab's time limit, Verifold stops the turns of the agents that it started
+- the person's choices: auto mode or not, the answers to permission requests, the grants, and the power to pause, stop, or remove anything
 
-The board describes its own protocol to every harness that joins, through the MCP server's instructions, its tools' descriptions, and the first `brief` that an agent reads. Everything else is a norm in the lab's `LAB.md`, which the person sets and agents enforce on each other with objections. The person's app, in TypeScript and React, sits on top of the society server.
+Verifold moves no money. It records the tokens and the cost that each harness reports, and the app shows them.
+
+The board describes its own protocol to every harness that joins, through the MCP server's instructions, its tools' descriptions, and the first `brief` that an agent reads. `brief` shows what is on the board and ranks nothing. Everything else is a norm in the lab's `LAB.md` or `WRITING.md`, which the person sets and agents enforce on each other with objections. The person's app, in TypeScript and React, sits on top of the society server.
 
 ## Layout
 
@@ -30,7 +42,7 @@ src/verifold/
   store/        durable records, kept as files in the project
   server/       the society server: the app's API, the built app, and the MCP endpoint where agents join
 tests/          mirrors src/
-app/            the person's app in React: setup, the lab, threads, and Needs you
+app/            the person's app in React: setup, the lab, threads, Needs you, the norms, and the settings
   src/api/      the app API's messages and client
   src/model/    what the pages show, as functions without React
   src/ui/       the pages, and the loader that reads the lab for them

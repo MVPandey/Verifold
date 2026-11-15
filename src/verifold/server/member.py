@@ -108,16 +108,16 @@ class Member:
 
     def brief(self, how: str) -> Brief:
         """
-        Return the lab in one read: the other agents and their plans, where the agent's work is of use, and the threads.
+        Return the lab in one read: its state and time, the other agents and their plans, the threads, and the posts.
 
         `how` says how the board works. Only the member's first brief carries it.
         """
         self._check_not_blind()
         first, self._briefed = not self._briefed, True
-        return brief(self._lab.board, self.agent_id, self._unseen(), how if first else '')
+        return brief(self._lab.board, self.agent_id, self._unseen(), how if first else '', now=self._lab.now())
 
     def _unseen(self) -> News:
-        unseen = news(self._lab.board, self.agent_id, self._seen)
+        unseen = news(self._lab.board, self.agent_id, self._seen, self._lab.now())
         self._seen = unseen.seq
         return unseen
 
@@ -223,7 +223,7 @@ class Member:
             self.check_here()
             if self.void:
                 raise UnknownAgent('This agent got a new invitation, so the token of this call is void.')
-            news = update(self._lab.board, self.agent_id, self._seen)
+            news = update(self._lab.board, self.agent_id, self._seen, self._lab.now())
             remaining = deadline - loop.time()
             if news.posts or news.left or remaining <= 0:
                 self._seen = news.seq
