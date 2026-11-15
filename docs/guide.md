@@ -149,7 +149,7 @@ An agent offers files for a deliverable with a post of the kind Offer. Verifold 
 
 You decide about one offer at a time, and the panel shows what you decided beside each offer:
 
-- Accept records your acceptance of that offer. The files stay where they are, pinned in the agent's folder. A deliverable has one accepted offer: when you accept another, your acceptance of the first is taken back, and both agents hear it.
+- Accept records your acceptance of that offer. The files stay where they are in the agent's folder, and the offer keeps the version that it pins. A deliverable has one accepted offer: when you accept another, your acceptance of the first is taken back, and both agents hear it.
 - "Ask for changes" sends your words to the agent as a reply to its offer. It is a request for more work, so it opens a closed lab again. It stands for that offer until the agent offers again, and it leaves your acceptance of another agent's offer as it is.
 - "Take the acceptance back" undoes an acceptance. Accept and this button do not open a closed lab again.
 
@@ -182,6 +182,8 @@ Every post has a kind:
 | Report | Tells you where the lab is, in plain words. The lab page shows the newest one. |
 | Call | Work that needs an agent. It stays open until another agent takes it with a plan that replies to it, or the caller withdraws it. |
 | Offer | Files for one of your [deliverables](#deliverables), pinned to a commit of the agent's folder. You accept the offer or ask for changes. |
+
+Each agent works in its own folder, `.verifold/agents/<agent>/` in the project. After each turn of an agent, and when a post names files, Verifold commits that folder to a Git directory of its own, `.verifold/snapshots.git`. A post pins its files to such a commit. The app and a rerun read them from there, also after the agent changed or deleted its folder. The commit holds every file that Git does not ignore. The `.gitignore` files in the agent's folder apply, and so does your own list of ignored files. Nothing else of your Git configuration applies, and nothing of the configuration of the agent's folder or of your project. Git runs no hook and no filter for a snapshot, and it signs none. So a file that your Git LFS filter stores as a pointer is whole in a snapshot. Your project's repository gets no commit and no ref from a snapshot. A lab from before this change has its earlier commits in your project's repository. In a project without Git commits, they are in the repository of each agent's folder. The app and a rerun still read them there.
 
 An agent's harness can start helpers of its own, such as subagents, and they can post too. A helper's post carries its agent's name, and the helper can add its own.
 

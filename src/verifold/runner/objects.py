@@ -1,5 +1,5 @@
 """
-The objects of the commit that a post pins, read from a repository of the lab and checked.
+The objects of the commit that a post pins, read from an object store of the lab and checked.
 
 Verifold trusts the record, which holds the commit's ID, and nothing that a repository says. It reads the commit,
 its trees, and its files as objects, and computes the ID of each one itself: the commit's must be the ID in the
@@ -8,14 +8,16 @@ itself. Verifold reads the clean copy for a rerun and the file that the app show
 
 Git reads the objects through a Git directory of Verifold's own, `.verifold/snapshots.git`, with the working
 directory in Verifold's own folder. So Git reads the configuration that Verifold wrote there, and no configuration
-of a repository of the lab. `GIT_OBJECT_DIRECTORY` names the object store that Git reads. Verifold finds the
-stores itself, without Git: from the `.git` of the project and of the author's folder, through a `gitdir:` file
-and a `commondir` file where they are. It reads the project's store first, and it looks for the author's store
-only when that one fails. An agent can write the store of its own folder, and can point these files at any other
-store. Git reads a store's files as data, and Verifold checks the ID of every object that it takes from one. Git
-fetches nothing that is missing, uses no transport, replaces no object, runs no hook and no file watcher, and
-reads no configuration of the person or the system. The Git processes of one read end at one time limit, and
-when the server stops.
+of a repository of the lab. `GIT_OBJECT_DIRECTORY` names the object store that Git reads. The first store is the
+one of Verifold's own directory, which holds every snapshot that Verifold makes. A commit from before Verifold
+kept the snapshots there is in the project's repository or in the author's. Verifold finds those stores itself,
+without Git: from the `.git` of the project and of the author's folder, through a `gitdir:` file and a
+`commondir` file where they are. It reads the project's store before the author's, and it looks for each store
+only when the ones before it failed. An agent can write the store of its own folder, and can point these files at
+any other store. Git reads a store's files as data, and Verifold checks the ID of every object that it takes from
+one. Git fetches nothing that is missing, uses no transport, replaces no object, runs no hook and no file
+watcher, and reads no configuration of the person or the system. The Git processes of one read end at one time
+limit, and when the server stops.
 """
 
 import hashlib
@@ -40,8 +42,9 @@ READ_SECONDS = 30.0
 
 FIRST_STORE_SHARE = 0.8
 """
-The share of a read's time that the project's store gets while the author's folder can still come after it. A
-store where Git waits then leaves the rest of the time for the next one.
+The share of the time that a read has left that a store gets while another store can still come after it. A store
+where Git waits then leaves the rest of the time for the next one. A store that lacks the commit says so at once,
+so the store after it gets nearly the same time.
 """
 
 MAX_TREE_BYTES = 16 * 1024**2
@@ -77,7 +80,7 @@ class _Digest(Protocol):
 
 
 class Missing(GitError):
-    """The repositories of the lab that Verifold read lack an object, or the pinned commit has nothing at a path."""
+    """The object stores that Verifold read lack an object, or the pinned commit has nothing at a path."""
 
 
 class NoRepository(GitError):
@@ -271,17 +274,18 @@ def read_pinned[T](pinned: PinnedCommit, take: Callable[[Objects, str], T]) -> T
     """
     Return what `take` makes of the pinned commit, from an object store that has it.
 
-    `take` gets the store's objects and the ID of the commit's tree. Verifold reads the project's store first and
-    the author's after it, each through Verifold's own Git directory. When a store fails in any way, the next one
-    gets its turn, and `take` starts again there: the store lacks an object, holds a changed one, or does not
-    answer in its share of the read's time limit. Verifold looks for the author's store only then. So an agent
-    that changes its own folder takes no commit away that the project's repository has, and holds no read that
-    the project's store can give. In a project without Git commits, the author's store is the only one. Its
-    author can withhold or change an object there, and the read then fails. Nothing can prevent that.
+    `take` gets the store's objects and the ID of the commit's tree. Verifold reads the store of its own Git
+    directory first, then the project's, and then the author's, each through Verifold's own Git directory. When a
+    store fails in any way, the next one gets its turn, and `take` starts again there: the store lacks an object,
+    holds a changed one, or does not answer in its share of the read's time limit. Verifold looks for the store
+    of a folder only then. So an agent that changes its own folder takes no commit away that Verifold's own store
+    or the project's repository has, and holds no read that those stores can give. A commit from before Verifold
+    kept the snapshots in its own directory, in a project without Git commits, is in the author's store alone.
+    Its author can withhold or change an object there, and the read then fails. Nothing can prevent that.
 
     Raises:
-        NoRepository: Verifold found no object store, or could not read a file that names one, and every store
-            that it read lacks the commit.
+        NoRepository: Verifold found no repository of the lab, or could not read a file that names one, and
+            every store that it read lacks the commit.
         Missing: Every store lacks the commit, or the store that has it lacks an object or the path that `take`
             asks for.
         GitError: What the stores hold is not what the commit names, or Git did not answer in time. Of the
@@ -290,24 +294,29 @@ def read_pinned[T](pinned: PinnedCommit, take: Callable[[Objects, str], T]) -> T
     """
     ends = time.monotonic() + pinned.seconds
     commit, lab = pinned.commit, pinned.project / LAB_FOLDER
-    folders = _folders(pinned)
+    # Verifold's own store comes first, and `None` stands for it.
+    folders = (None, *_folders(pinned))
     read: set[Path] = set()
     unread: list[str] = []
     failed: list[tuple[bool, GitError]] = []
     for at, folder in enumerate(folders):
-        # The store of a folder is looked for only here, after every store before it failed.
-        try:
-            store = _store(folder)
-        except GitError as error:
-            unread.append(str(error))
-            continue
-        if store is None or store in read:
-            continue
-        read.add(store)
+        own = own_repository(lab)
+        if folder is None:
+            store = own / 'objects'
+        else:
+            # The store of a folder is looked for only here, after every store before it failed.
+            try:
+                store = _store(folder)
+            except GitError as error:
+                unread.append(str(error))
+                continue
+            if store is None or store in read:
+                continue
+            read.add(store)
         # The last folder's store gets all the time that is left, and one before it a share of that time.
         left = ends - time.monotonic()
         seconds = left if at == len(folders) - 1 else left * FIRST_STORE_SHARE
-        objects = Objects(own_repository(lab), store, lab, seconds)
+        objects = Objects(own, store, lab, seconds)
         pinned.running.add(objects)
         has_commit = False
         try:
@@ -324,6 +333,7 @@ def read_pinned[T](pinned: PinnedCommit, take: Callable[[Objects, str], T]) -> T
     has_commit, most = max(failed, key=lambda one: (one[0], not isinstance(one[1], Missing)), default=(False, None))
     if most is not None and (has_commit or not isinstance(most, Missing)):
         raise most
+    # Verifold's own store is no repository of the lab, so `read` does not hold it.
     if unread or not read:
         found = f'Verifold found no repository of the lab that it can read and that has the commit {commit}.'
         raise NoRepository(' '.join((found, *unread)))
@@ -342,6 +352,7 @@ def _folders(pinned: PinnedCommit) -> tuple[Path, ...]:
     """
     Return the folders whose repositories can have the pinned commit: the project's, and then the author's.
 
+    They can have a commit from before Verifold kept the snapshots in its own Git directory, and no later one.
     In a project with Git commits, every agent's folder is a worktree of the project, so both lead to the
     project's store. In any other project, the author's folder is a repository of its own. Verifold looks at
     nothing in the author's folder here.

@@ -12,16 +12,16 @@ from pathlib import Path
 
 import pytest
 from builders import START, until
-from plants import BEFORE, FORMS, PLAIN_GIT, SENTENCE, fires, mine, no_fetch_switch, plant
+from plants import BEFORE, FORMS, SENTENCE, fires, mine, no_fetch_switch, old_pin, old_snapshot, plain_git, plant
 
 from verifold.protocol.events import Posted
 from verifold.protocol.posts import FileEvidence, Result
 from verifold.runner import reruns
 from verifold.runner.folders import agent_folder
-from verifold.runner.git import git
+from verifold.runner.git import GitError, git, own_git
 from verifold.runner.reruns import LEFTOVER_SECONDS, CleanCopies
 from verifold.runner.snapshots import pin, snapshot
-from verifold.server.errors import EvidenceRejected, NoCleanCopy
+from verifold.server.errors import NoCleanCopy
 
 FILES = {'notes.txt': 'How I got there.', 'result.txt': '11.8'}
 
@@ -35,16 +35,21 @@ async def committed(path: Path) -> Path:
     return path
 
 
-async def a_claim(project: Path, post_id: str = 'p-4') -> Posted:
-    """Give ada a result file that a post pins, with later work after it, and return the post."""
+async def a_claim(project: Path, post_id: str = 'p-4', *, own: bool = False) -> Posted:
+    """
+    Give ada a result file that a post pins, with later work after it, and return the post.
+
+    The post is one from before Verifold kept the snapshots in its own Git directory, so the pinned commit is in
+    the project's repository or in the author's own. With `own`, Verifold pins the file as it does now.
+    """
     project.mkdir(exist_ok=True)
     author = await agent_folder(project, 'ada')
     (author / 'result.txt').write_text('11.8')
     (author / 'notes.txt').write_text('How I got there.')
-    pinned = await pin(author, 'ada', ('result.txt',))
+    pinned = await (pin(project, 'ada', ('result.txt',)) if own else old_pin(author, 'ada', ('result.txt',)))
     (author / 'result.txt').write_text('changed later')
     (author / 'later.txt').write_text('Work from after the post.')
-    await snapshot(author, 'ada')
+    await (snapshot(project, 'ada') if own else old_snapshot(author, 'ada'))
     return Posted(seq=7, at=START, post=Result(id=post_id, thread='t-1', author='ada', text='11.8x.', evidence=pinned))
 
 
@@ -93,6 +98,23 @@ async def test_a_clean_copy_is_an_export_of_the_pinned_commit_in_verifolds_own_f
     assert await clean_copy(project, claim) == copy
 
 
+@pytest.mark.parametrize('with_commits', [True, False])
+async def test_a_post_that_verifold_pinned_in_its_own_directory_exports_after_the_author_deleted_the_whole_folder(
+    tmp_path: Path, *, with_commits: bool
+) -> None:
+    project = await committed(tmp_path / 'project') if with_commits else tmp_path / 'project'
+    claim = await a_claim(project, own=True)
+    author = project / '.verifold' / 'agents' / 'ada'
+    # No repository of the lab has the commit: Git itself, in the author's folder, does not find it.
+    with pytest.raises(GitError):
+        await plain_git('cat-file', '-e', claim.post.evidence[0].commit, cwd=author)
+    shutil.rmtree(author)
+
+    copy = await clean_copy(project, claim)
+
+    assert everything(copy) == FILES | ({'data.csv': 'x,y\n1,2\n'} if with_commits else {})
+
+
 async def test_the_copy_holds_the_bytes_that_git_stores_and_a_link_as_a_plain_file(tmp_path: Path) -> None:
     project = tmp_path / 'project'
     project.mkdir()
@@ -106,7 +128,7 @@ async def test_the_copy_holds_the_bytes_that_git_stores_and_a_link_as_a_plain_fi
     (author / 'run.sh').chmod(0o755)
     (author / 'out').mkdir()
     (author / 'out' / 'a.json').write_text('{}')
-    pinned = await pin(author, 'ada', ('lines.txt',))
+    pinned = await pin(project, 'ada', ('lines.txt',))
     claim = Posted(seq=7, at=START, post=Result(id='p-4', thread='t-1', author='ada', text='So.', evidence=pinned))
 
     copy = await clean_copy(project, claim)
@@ -147,7 +169,7 @@ async def test_taking_a_rerun_writes_nothing_and_runs_nothing_in_any_agents_fold
     # Git itself runs each of them when it checks the commit out of a copy of that repository.
     shutil.copytree(author, tmp_path / 'unguarded', symlinks=True)
     out = str(tmp_path / 'checked-out')
-    await git('worktree', 'add', '--detach', out, commit, cwd=tmp_path / 'unguarded', env=PLAIN_GIT)
+    await plain_git('worktree', 'add', '--detach', out, commit, cwd=tmp_path / 'unguarded')
     assert sorted(path.name for path in tmp_path.glob('ran*')) == [
         'ran-fsmonitor',
         'ran-post-checkout',
@@ -364,7 +386,7 @@ async def test_an_object_that_is_not_the_one_that_its_id_names_is_refused(tmp_pa
     refused = 'is not the object that its ID names|Git ended before it gave every object'
 
     # Git is told to give another object in the place of the pinned commit, of its tree, and of a file.
-    other = await pin(author, 'ada', ('later.txt',))
+    other = await old_pin(author, 'ada', ('later.txt',))
     await git('replace', commit, other[0].commit, cwd=author)
     assert everything(await clean_copy(project, claim)) == FILES
     shutil.rmtree(project / '.verifold' / 'reruns')
@@ -462,7 +484,7 @@ async def test_a_pipe_in_the_authors_repository_ends_at_the_time_limit_and_holds
     author = project / '.verifold' / 'agents' / 'ada'
     other = await agent_folder(project, 'cy')
     (other / 'fine.txt').write_text('ok')
-    pinned = await pin(other, 'cy', ('fine.txt',))
+    pinned = await pin(project, 'cy', ('fine.txt',))
     fine = Posted(seq=8, at=START, post=Result(id='p-5', thread='t-1', author='cy', text='Ok.', evidence=pinned))
     blob = await git('rev-parse', f'{claim.post.evidence[0].commit}:result.txt', cwd=author)
     lab = CleanCopies(project, seconds=1)
@@ -716,26 +738,18 @@ async def test_takes_at_the_same_time_make_one_copy_and_leave_no_other_folder(tm
     assert sorted(path.name for path in copies[0].parent.iterdir()) == [copies[0].name, f'{copies[0].name}.manifest']
 
 
-async def test_a_pin_that_git_cannot_make_is_an_error_that_the_agent_reads(tmp_path: Path) -> None:
-    plain = tmp_path / 'plain'
-    plain.mkdir()
-    (plain / 'a.txt').write_text('a')
-
-    with pytest.raises(EvidenceRejected, match='Verifold could not commit your folder, so it pinned no file'):
-        await pin(plain, 'bo', ('a.txt',))
-
-
 async def test_a_second_check_of_one_agent_keeps_the_files_of_its_first_check_readable(tmp_path: Path) -> None:
     project = tmp_path / 'project'
     project.mkdir()
     taker = await agent_folder(project, 'bo')
     (taker / 'rerun.txt').write_text('11.8')
-    first = await pin(taker, 'bo', ('rerun.txt',))
+    first = await pin(project, 'bo', ('rerun.txt',))
     (taker / 'rerun.txt').write_text('11.9')
 
-    second = await pin(taker, 'bo', ('rerun.txt',))
+    second = await pin(project, 'bo', ('rerun.txt',))
 
-    # Both checks are pinned by the pin that every post uses, onto one chain of snapshots in the agent's folder.
-    assert await git('show', f'{first[0].commit}:rerun.txt', cwd=taker) == '11.8'
-    assert await git('show', f'{second[0].commit}:rerun.txt', cwd=taker) == '11.9'
-    assert await git('rev-list', '--count', second[0].commit, cwd=taker) == '2'
+    # Both checks are pinned by the pin that every post uses, onto one chain of snapshots of the agent's folder.
+    lab = project / '.verifold'
+    assert await own_git(lab, 'show', f'{first[0].commit}:rerun.txt') == '11.8'
+    assert await own_git(lab, 'show', f'{second[0].commit}:rerun.txt') == '11.9'
+    assert await own_git(lab, 'rev-list', '--count', second[0].commit) == '2'

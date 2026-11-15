@@ -23,8 +23,9 @@ def real_folder(project: Path, agent_id: AgentId | None = None) -> Path:
     """
     Return the folder that holds every agent's folder, or the folder of one agent, when it is safe to open.
 
-    An agent can replace its folder with a link, for example to a program, which the file manager's opener would
-    start. So the folder must be a real folder at its own place in the lab's folder, with no link on the way to it.
+    An agent can replace its folder with a link: to a program, which the file manager's opener would start, or to
+    another folder, whose files a snapshot would hold. So the folder must be a real folder at its own place in the
+    lab's folder, with no link on the way to it.
 
     Raises:
         NoAgentFolder: The folder does not exist, or it is a link or lies behind one.

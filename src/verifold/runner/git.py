@@ -13,12 +13,20 @@ from types import MappingProxyType
 from verifold.runner.environment import clean_environment
 from verifold.runner.errors import RunnerError
 
-GIT_OPTIONS = ('-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.sshCommand=false', '-c', 'protocol.allow=never')  # fmt: skip
+HOOKS_OFF = ('-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false')
+"""Options of every Git command that Verifold runs: no hook and no file watcher, whatever a repository says."""
+
+_TRANSPORT_OFF = ('-c', 'core.sshCommand=false', '-c', 'protocol.allow=never')
+"""No transport. Only a command on the Git directory of Verifold's own gets these, with the options above."""
+
+GIT_OPTIONS = (*HOOKS_OFF, *_TRANSPORT_OFF)
 """
-Options of every Git command that reads the objects of a pinned commit: no hook, no file watcher, and no transport.
-Such a command reads its configuration from the Git directory of Verifold's own, so no repository of the lab
-changes these options.
+Options of every Git command on the Git directory of Verifold's own: no hook, no file watcher, and no transport.
+Such a command reads its configuration from that directory, so no repository of the lab changes these options.
 """
+
+GIT_SECONDS = 300.0
+"""How long one Git command may run before Verifold ends it."""
 
 GIT_ENVIRONMENT: Mapping[str, str] = MappingProxyType(
     {
@@ -34,8 +42,9 @@ GIT_ENVIRONMENT: Mapping[str, str] = MappingProxyType(
 
 OWN_REPOSITORY = 'snapshots.git'
 """
-The Git directory of Verifold's own, in the lab's folder. Git reads the objects of the lab's repositories through
-it, so Git reads the configuration that Verifold wrote there and no configuration of a repository.
+The Git directory of Verifold's own, in the lab's folder. It holds the snapshots of the agents' folders. Git also
+reads the objects of the lab's repositories through it, so Git reads the configuration that Verifold wrote there
+and no configuration of a repository.
 """
 
 MAX_SMALL_FILE = 4096
@@ -55,14 +64,16 @@ async def git(*args: str, cwd: Path, env: Mapping[str, str] | None = None, strip
     """
     Run `git` with `args` in `cwd`, and return its standard output, stripped unless `strip` is false.
 
-    `env` adds variables to the clean environment, such as a temporary `GIT_INDEX_FILE`.
+    Every command has hooks and the file watcher off. `env` adds variables to the clean environment, such as a
+    temporary `GIT_INDEX_FILE`.
 
     Raises:
-        GitError: Git exited with an error.
+        GitError: Git exited with an error, or it did not end in `GIT_SECONDS` and Verifold ended it.
 
     """
     process = await asyncio.create_subprocess_exec(
         'git',
+        *HOOKS_OFF,
         *args,
         cwd=cwd,
         env=clean_environment() | dict(env or {}),
@@ -70,7 +81,14 @@ async def git(*args: str, cwd: Path, env: Mapping[str, str] | None = None, strip
         stdout=PIPE,
         stderr=PIPE,
     )
-    output, errors = await process.communicate()
+    try:
+        output, errors = await asyncio.wait_for(process.communicate(), GIT_SECONDS)
+    except TimeoutError:
+        # Git waits for ever for a pipe where it expects a file, such as an agent's `.gitignore`.
+        with suppress(ProcessLookupError):
+            process.kill()
+        await process.wait()
+        raise GitError(f'git {" ".join(args)} did not end in {GIT_SECONDS:g} seconds, so Verifold ended it.') from None
     if process.returncode:
         raise GitError(f'git {" ".join(args)} failed: {errors.decode(errors="replace").strip()}')
     text = output.decode()
@@ -85,12 +103,36 @@ async def commit_of(folder: Path, ref: str) -> str | None:
         return None
 
 
+async def own_git(lab: Path, *args: str, env: Mapping[str, str] | None = None) -> str:
+    """
+    Run `git` with `args` on the Git directory of Verifold's own, from the lab's folder, and return its output.
+
+    Git reads the configuration that Verifold wrote there, and none of the person, of the system, or of a
+    repository of the lab. `GIT_COMMON_DIR` keeps it there also when a file in the directory names another one.
+    Git uses no transport, fetches no object, and replaces none.
+
+    Raises:
+        GitError: The directory is not a folder of this user's, Git exited with an error, or it did not end in time.
+
+    """
+    own = own_repository(lab)
+    return await git(
+        *_TRANSPORT_OFF,
+        f'--git-dir={own}',
+        *args,
+        cwd=lab,
+        env={**GIT_ENVIRONMENT, 'GIT_COMMON_DIR': str(own), **(env or {})},
+    )
+
+
 def own_repository(lab: Path) -> Path:
     """
     Return the Git directory of Verifold's own in the lab's folder, and make it when it is not there.
 
     Verifold writes the directory itself, so Git reads no template and no configuration of the person to make it.
-    Each call checks `HEAD` and `config`, and writes one again when it is not the text that Verifold wrote.
+    Each call checks `HEAD` and `config`, and writes one again when it is not the text that Verifold wrote. It
+    removes a `commondir` file: Git keeps its refs in the directory that such a file names, whatever
+    `GIT_COMMON_DIR` says.
 
     Raises:
         GitError: The path holds a link or something that is no folder, the folder is not this user's, or Verifold
@@ -98,7 +140,7 @@ def own_repository(lab: Path) -> Path:
 
     """
     home = lab / OWN_REPOSITORY
-    refused = f'{home} is not a folder of yours, so Verifold reads no Git objects through it.'
+    refused = f'{home} is not a folder of yours, so Verifold does not use it as its Git directory.'
     try:
         with suppress(FileExistsError):
             home.mkdir(0o700)
@@ -115,6 +157,8 @@ def own_repository(lab: Path) -> Path:
         for name, wanted in _OWN_FILES.items():
             if _own_text(handle, name) != wanted:
                 _write_own(handle, name, wanted)
+        with suppress(FileNotFoundError):
+            os.unlink('commondir', dir_fd=handle)
     except OSError as error:
         raise GitError(f'Verifold cannot write its own Git directory {home}: {error}') from error
     finally:

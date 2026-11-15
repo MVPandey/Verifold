@@ -1,7 +1,9 @@
+import shutil
 import sys
 from pathlib import Path
 
 import pytest
+from plants import markers, plain_git, program
 
 from verifold.runner.errors import NoAgentFolder, NoFileManager
 from verifold.runner.folders import agent_folder, open_folder, real_folder, tracked_lab_files
@@ -62,6 +64,60 @@ async def test_an_existing_agent_branch_is_reused(tmp_path: Path) -> None:
     assert await git('branch', '--show-current', cwd=folder) == 'verifold/bo'
     exclude = Path(await git('rev-parse', '--path-format=absolute', '--git-path', 'info/exclude', cwd=project))
     assert exclude.read_text().count('/.verifold/') == 1
+
+
+@pytest.mark.parametrize(
+    'hook', ["in the repository's own folder of hooks", 'in a folder that its configuration names']
+)
+async def test_git_in_the_project_runs_no_hook_and_no_file_watcher_that_its_repository_names(
+    tmp_path: Path, hook: str
+) -> None:
+    project = await committed_project(tmp_path / 'project')
+    # The project's repository names a file watcher, and it has a hook that Git runs after a checkout.
+    watcher = program(tmp_path / 'watcher', tmp_path / 'ran-fsmonitor')
+    named = f'[core]\n\tfsmonitor = {watcher}\n'
+    if hook == "in the repository's own folder of hooks":
+        program(project / '.git' / 'hooks' / 'post-checkout', tmp_path / 'ran-post-checkout')
+    else:
+        program(tmp_path / 'hooks' / 'post-checkout', tmp_path / 'ran-post-checkout')
+        named += f'[core]\n\thooksPath = {tmp_path / "hooks"}\n'
+    config = project / '.git' / 'config'
+    config.write_text(config.read_text() + named)
+    # Git itself, in a copy of the project, asks the watcher when it lists files, and it runs the hook too when
+    # it adds a worktree.
+    unguarded = tmp_path / 'unguarded'
+    shutil.copytree(project, unguarded)
+    await plain_git('ls-files', cwd=unguarded)
+    assert markers(tmp_path) == ['ran-fsmonitor']
+    await plain_git('worktree', 'add', '--quiet', '-b', 'verifold/ada', str(tmp_path / 'out'), cwd=unguarded)
+    assert markers(tmp_path) == ['ran-fsmonitor', 'ran-post-checkout']
+
+    # Verifold's commands at a start and for a new agent run neither.
+    assert await tracked_lab_files(project) == ()
+    folder = await agent_folder(project, 'ada')
+
+    assert markers(tmp_path) == []
+    # The agent's folder is a worktree with the project's files.
+    assert (folder / 'data.csv').read_text() == 'x,y\n1,2\n'
+    assert await git('branch', '--show-current', cwd=folder) == 'verifold/ada'
+
+
+async def test_the_persons_own_checkout_filter_still_runs_for_an_agents_worktree(tmp_path: Path, home: Path) -> None:
+    # The person's own Git configuration has a filter for a checkout, as Git LFS has, and the project uses it.
+    (home / '.gitconfig').write_text('[filter "mine"]\n\tsmudge = tr a-z A-Z\n')
+    project = tmp_path / 'project'
+    project.mkdir()
+    (project / '.gitattributes').write_text('*.csv filter=mine\n')
+    (project / 'data.csv').write_text('x,y\n')
+    await git('init', '--quiet', '--initial-branch=main', cwd=project)
+    await git('add', '.', cwd=project)
+    await git(
+        '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--quiet', '-m', 'Start', cwd=project
+    )
+
+    folder = await agent_folder(project, 'ada')
+
+    assert (folder / 'data.csv').read_text() == 'X,Y\n'
 
 
 async def track(project: Path, name: str) -> None:

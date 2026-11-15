@@ -364,7 +364,10 @@ class TurnSummary(Record):
     cost_usd: float | None = None
     error: str | None = None
     snapshot: CommitId | None = None
-    """The commit of the agent's folder after the turn, which other agents and checks can read."""
+    """
+    The commit of the agent's folder after the turn. It is in the Git directory of Verifold's own. In a record from
+    before that directory held the snapshots, it is in the repository of the agent's folder.
+    """
     rerun_failed: bool = False
     """
     In a record from before agents took reruns: whether the rerun of a checker that Verifold started ended here

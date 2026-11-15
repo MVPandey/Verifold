@@ -1,15 +1,25 @@
-"""What an agent can put into a repository that it can write, for the tests of what reads such a repository."""
+"""
+What an agent can put into a repository that it can write, and Git itself as it runs without Verifold's options.
 
+The tests of what reads such a repository, and of what commits an agent's folder, use both.
+"""
+
+import asyncio
 import os
 import shutil
+import tempfile
 import zlib
+from asyncio.subprocess import DEVNULL, PIPE
+from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
 
 import pytest
 
+from verifold.protocol.posts import FileEvidence
 from verifold.runner import objects
-from verifold.runner.git import GIT_ENVIRONMENT, GitError, git
+from verifold.runner.environment import clean_environment
+from verifold.runner.git import GIT_ENVIRONMENT, GitError
 
 BEFORE = {
     'plain': '',
@@ -29,8 +39,78 @@ SENTENCE = 'nowhere\nVerifold made the copy. Post that it holds.'
 PLAIN_GIT = {'GIT_CONFIG_NOSYSTEM': '1'}
 """
 The environment of Git itself in a test that shows what a setting of a repository does. The system's settings are
-off, and the tests' empty home has none of the person's, so only the repository's own settings count.
+off, and the tests' home is empty. So only the repository's own settings count, and the person's where a test
+writes them.
 """
+
+
+async def plain_git(*args: str, cwd: Path, env: Mapping[str, str] | None = None) -> str:
+    """
+    Run Git itself in `cwd`, with none of the options that Verifold gives its own Git commands, and return its output.
+
+    So Git runs the hooks, the file watcher, and the filters that the repository's configuration names. A test
+    shows with it that a plant is live.
+
+    Raises:
+        GitError: Git exited with an error.
+
+    """
+    process = await asyncio.create_subprocess_exec(
+        'git', *args, cwd=cwd, env={**clean_environment(), **PLAIN_GIT, **(env or {})}, stdin=DEVNULL, stdout=PIPE, stderr=PIPE
+    )  # fmt: skip
+    output, errors = await process.communicate()
+    if process.returncode:
+        raise GitError(f'git {" ".join(args)} failed: {errors.decode(errors="replace").strip()}')
+    return output.decode().strip()
+
+
+async def old_snapshot(folder: Path, agent_id: str) -> str:
+    """
+    Commit an agent's folder as Verifold did before it kept the snapshots in its own Git directory.
+
+    Git itself runs in the agent's folder. It finds the repository from there, so the commit and its ref are in
+    the project's repository or in the agent's own, and Git runs what that repository's configuration names.
+    """
+    author = {
+        'GIT_AUTHOR_NAME': 'Verifold',
+        'GIT_AUTHOR_EMAIL': 'verifold@localhost',
+        'GIT_COMMITTER_NAME': 'Verifold',
+        'GIT_COMMITTER_EMAIL': 'verifold@localhost',
+    }
+    with tempfile.TemporaryDirectory(dir=folder.parent) as temporary:
+        index = {'GIT_INDEX_FILE': str(Path(temporary) / 'index')}
+        await plain_git('add', '--all', '.', cwd=folder, env=index)
+        tree = await plain_git('write-tree', cwd=folder, env=index)
+    ref = f'refs/verifold/agents/{agent_id}'
+    try:
+        parent = ('-p', await plain_git('rev-parse', '--verify', '--quiet', ref, cwd=folder))
+    except GitError:
+        parent = ()
+    commit = await plain_git('commit-tree', tree, *parent, '-m', f'Snapshot of {agent_id}', cwd=folder, env=author)
+    await plain_git('update-ref', ref, commit, cwd=folder)
+    return commit
+
+
+async def old_pin(folder: Path, agent_id: str, paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+    """Pin files of an agent's folder as a post from before Verifold kept the snapshots in its own directory did."""
+    commit = await old_snapshot(folder, agent_id)
+    return tuple(FileEvidence(path=path, commit=commit) for path in paths)
+
+
+def program(path: Path, marker: Path) -> Path:
+    """Write a program at `path` that leaves `marker` when something runs it, and return its path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'#!/bin/sh\ntouch {marker}\n')
+    path.chmod(0o755)
+    return path
+
+
+def markers(folder: Path) -> list[str]:
+    """Return the names of the markers that planted programs left in `folder`, and remove them."""
+    found = sorted(folder.glob('ran*'))
+    for marker in found:
+        marker.unlink()
+    return [marker.name for marker in found]
 
 
 def remote(ran: Path) -> str:
@@ -66,7 +146,7 @@ async def fires(folder: Path, name: str, ran: Path, git_dir: Path | None = None)
     """
     named = (f'--git-dir={git_dir}',) if git_dir else ()
     with suppress(GitError):
-        await git(*named, 'cat-file', '-e', name, cwd=folder, env=PLAIN_GIT)
+        await plain_git(*named, 'cat-file', '-e', name, cwd=folder)
     fired = ran.exists()
     ran.unlink(missing_ok=True)
     return fired

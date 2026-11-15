@@ -1,7 +1,9 @@
 import os
 import stat
+import sys
 from pathlib import Path
 
+import psutil
 import pytest
 
 from verifold.runner.git import MAX_SMALL_FILE, GitError, git, own_repository, small_text
@@ -49,12 +51,34 @@ def test_a_file_of_the_own_directory_that_somebody_changed_is_written_again(tmp_
     # Nothing went through the link, and no unfinished file is left.
     assert outside.read_text() == '[core]\n\tfsmonitor = true\n'
     assert sorted(path.name for path in own.iterdir()) == ['HEAD', 'config', 'objects', 'refs']
+    # A file that names another directory for the refs is removed.
+    (own / 'commondir').write_text(f'{tmp_path}\n')
+    own_repository(tmp_path)
+    assert sorted(path.name for path in own.iterdir()) == ['HEAD', 'config', 'objects', 'refs']
     # A folder where the configuration belongs cannot be replaced, and the directory is then not used.
     (own / 'config').unlink()
     (own / 'config').mkdir()
     with pytest.raises(GitError, match='Verifold cannot write its own Git directory'):
         own_repository(tmp_path)
     assert sorted(path.name for path in own.iterdir()) == ['HEAD', 'config', 'objects', 'refs']
+
+
+async def test_a_git_that_does_not_end_is_stopped_at_the_time_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A stand-in for Git that runs for ten minutes.
+    stand_in = tmp_path / 'bin' / 'git'
+    stand_in.parent.mkdir()
+    stand_in.write_text(f'#!{sys.executable}\nimport time\n\ntime.sleep(600)\n')
+    stand_in.chmod(0o755)
+    monkeypatch.setenv('PATH', f'{stand_in.parent}{os.pathsep}{os.environ["PATH"]}')
+    monkeypatch.setattr('verifold.runner.git.GIT_SECONDS', 0.05)
+
+    with pytest.raises(GitError, match=r'git status did not end in 0\.05 seconds, so Verifold ended it'):
+        await git('status', cwd=tmp_path)
+
+    # The process is gone: no child of this test runs the stand-in.
+    assert not [child for child in psutil.Process().children(recursive=True) if str(stand_in) in child.cmdline()]
 
 
 def test_a_link_or_a_file_where_the_own_directory_belongs_is_refused(tmp_path: Path) -> None:

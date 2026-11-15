@@ -18,7 +18,7 @@ from verifold.protocol.settings import AtTimeLimit, JobSettings, PermissionSetti
 from verifold.protocol.usage import Usage
 from verifold.runner import agent_loop
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
-from verifold.runner.git import git
+from verifold.runner.git import own_git
 from verifold.runner.messages import (
     CLOSED,
     DEPARTURE,
@@ -55,6 +55,11 @@ def calls(log: Path, event: str) -> list[dict[str, object]]:
     return [call for call in map(json.loads, lines) if call['event'] == event]
 
 
+def folder_of(tmp_path: Path) -> Path:
+    """Return the folder of `bo` in the lab that `tmp_path` holds, where Verifold commits it after each turn."""
+    return tmp_path / '.verifold' / 'agents' / 'bo'
+
+
 def loop_for(
     served: ServedBoard,
     tmp_path: Path,
@@ -65,8 +70,8 @@ def loop_for(
     member, token = served.seat('bo')
     joined = served.lab.board.agent('bo')
     assert joined is not None
-    folder = tmp_path / 'bo'
-    folder.mkdir(exist_ok=True)
+    folder = folder_of(tmp_path)
+    folder.mkdir(parents=True, exist_ok=True)
     setup = AgentSetup(
         agent=joined.agent,
         harness=FAKE_HARNESS,
@@ -794,17 +799,18 @@ async def test_a_granted_command_runs_without_a_question(
 @pytest.mark.usefixtures('log')
 async def test_each_turn_records_a_snapshot_of_the_agents_folder(served: ServedBoard, tmp_path: Path) -> None:
     loop = loop_for(served, tmp_path)
-    await git('init', '--quiet', cwd=tmp_path / 'bo')
-    (tmp_path / 'bo' / 'notes.md').write_text('benchmark plan')
+    (folder_of(tmp_path) / 'notes.md').write_text('benchmark plan')
     running = asyncio.create_task(loop.run())
     try:
         await until(lambda: len(served.lab.board.turns) == 1)
     finally:
         running.cancel()
 
+    # The commit is in Verifold's own Git directory, and the agent's folder got no repository for it.
     commit = served.lab.board.turns[0].snapshot
     assert commit is not None
-    assert await git('show', f'{commit}:notes.md', cwd=tmp_path / 'bo') == 'benchmark plan'
+    assert await own_git(tmp_path / '.verifold', 'show', f'{commit}:notes.md') == 'benchmark plan'
+    assert not (folder_of(tmp_path) / '.git').exists()
 
 
 class Recorded(Activity):
@@ -981,13 +987,13 @@ async def test_under_stop_a_stop_while_the_turn_is_recorded_still_reaches_the_ag
     await lab.set_settings(Settings(jobs=JobSettings(at_time_limit=AtTimeLimit.STOP)))
     record_snapshot = agent_loop.snapshot
 
-    async def slow_snapshot(folder: Path, agent_id: str) -> str | None:
+    async def slow_snapshot(project: Path, agent_id: str) -> str | None:
         # The lab stops and gets more time while the first turn's snapshot runs, as in a large folder.
         if not lab.board.turns:
             await lab.set_time_left(timedelta(0))
             await lab.run_out_of_time()
             await lab.set_time_left(timedelta(hours=1))
-        return await record_snapshot(folder, agent_id)
+        return await record_snapshot(project, agent_id)
 
     monkeypatch.setattr(agent_loop, 'snapshot', slow_snapshot)
     running = asyncio.create_task(loop_for(served, tmp_path).run())
@@ -1276,7 +1282,7 @@ async def test_a_rerun_that_the_agent_can_take_wakes_it_and_it_takes_the_rerun_i
         'p-2',
         ['rerun.txt'],
     )
-    assert (pinned, (tmp_path / 'bo' / 'rerun.txt').read_text()) == ([('rerun.txt',)], '11.8')
+    assert (pinned, (folder_of(tmp_path) / 'rerun.txt').read_text()) == ([('rerun.txt',)], '11.8')
     assert lab.board.posts[-1].post.model_dump()['take'] == lab.board.takes[0].seq
 
 
@@ -1297,7 +1303,7 @@ async def one_turn(served: ServedBoard, tmp_path: Path) -> None:
 def back(tmp_path: Path, why: str = RESTARTED, *, kept: bool = True, cut_off: bool = False) -> str:
     # The lab's settings stop the agents' processes when Verifold stops, so a restart says so.
     stopped = why == RESTARTED
-    return back_message(why, 'Start.', tmp_path / 'bo', kept=kept, cut_off=cut_off, jobs_stopped=stopped)
+    return back_message(why, 'Start.', folder_of(tmp_path), kept=kept, cut_off=cut_off, jobs_stopped=stopped)
 
 
 def prompts(log: Path) -> list[object]:
