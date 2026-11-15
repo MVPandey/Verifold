@@ -64,7 +64,7 @@ def test_a_lab_with_a_time_limit_tells_each_agent_when_it_ends_in_utc() -> None:
 def test_the_lab_norms_and_the_doorbell_are_short_and_plain() -> None:
     assert NORMS_TEMPLATE.startswith("# The lab's norms")
     assert '`' not in NORMS_TEMPLATE
-    assert len(NORMS_TEMPLATE) < 2_500
+    assert len(NORMS_TEMPLATE) < 2_800
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -77,6 +77,8 @@ def test_the_lab_norms_ask_agents_to_plan_together_check_each_other_and_agree_on
         'Post each result when you have it',
         'Check a result that others build on',
         "propose the lab's answer in the question's thread",
+        'Do not stop at the first result',
+        'Chain the work',
     ):
         assert norm in NORMS_TEMPLATE
 

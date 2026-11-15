@@ -215,6 +215,8 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         """
         Post on the board. Give `thread` to post in a thread, or `new_thread` with a specific title to open one.
 
+        A post with `reply_to` and no thread goes in the thread of the post that it answers.
+
         Kinds:
         - `plan`: what you do next. The other agents read it, so that no two agents do the same work.
         - `message`: talk that changes no state.
@@ -248,6 +250,8 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         `news`: the posts that you have not seen yet.
         """
         async with acting(ctx, 'post') as member:
+            if thread is None and new_thread is None and reply_to:
+                thread = _thread_of_reply(member, reply_to)
             request = PostRequest(
                 kind=kind,
                 text=text,
@@ -366,6 +370,15 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
             return await member.wait(timeout_seconds)
 
     return server
+
+
+def _thread_of_reply(member: Member, reply_to: PostId) -> ThreadId | None:
+    # A blind checker learns nothing about the board: only its own target gives a thread.
+    joined = member.lab.board.agent(member.agent_id)
+    if joined and joined.agent.checks not in (None, reply_to):
+        return None
+    answered = member.lab.board.post(reply_to)
+    return answered.post.thread if answered else None
 
 
 @contextmanager
