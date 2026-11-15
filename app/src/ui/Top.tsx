@@ -24,11 +24,11 @@ import {
 } from '../model/agents.ts';
 import { href } from '../model/route.ts';
 import type { Route } from '../model/route.ts';
-import { modelSummary, newSeat, seatChoice } from '../model/setup.ts';
+import { modelSummary, needsModel, newSeat, seatChoice } from '../model/setup.ts';
 import { stopLine } from '../model/settings.ts';
 import { clockLine, endLine, moreTime } from '../model/time.ts';
 import { FaceView } from './parts.tsx';
-import { FactFields, SeatControls, SeatFields } from './SeatForm.tsx';
+import { CoordinatorSeat, FactFields, SeatControls, SeatFields } from './SeatForm.tsx';
 import type { Facts } from './SeatForm.tsx';
 
 /** What the top bar shows for a started lab. */
@@ -171,6 +171,7 @@ function Members(props: {
           <SeatControls api={props.api} view={view} onChange={props.onChange} />
         ) : null}
         <p className="f-where">{costLine(view)}</p>
+        {view.error && !view.left ? <p className="f-where">Last failure: {view.error}</p> : null}
         {view.agent.harness === GUEST && !view.left ? (
           <InviteAgain
             api={props.api}
@@ -228,6 +229,9 @@ function Members(props: {
             </li>
           ) : null}
         </ul>
+        {lab.agents.some((view) => view.coordinator) ? null : (
+          <CoordinatorSeat api={props.api} open={lab.coordinator_open} onChange={props.onChange} />
+        )}
         <p className="f-total">
           <span>
             {lab.posts} {lab.posts === 1 ? 'post' : 'posts'} in {lab.threads}{' '}
@@ -323,7 +327,7 @@ function AddAgent(props: {
           ))}
         </select>
       </label>
-      <button type="button" onClick={add} disabled={busy}>
+      <button type="button" onClick={add} disabled={busy || needsModel(seat)}>
         {busy ? 'Adding' : 'Add'}
       </button>
       <details

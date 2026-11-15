@@ -90,15 +90,19 @@ the other agents and the person. Your first message names the file that holds th
 - `brief` and `threads` show each thread's team: the agents whose latest plan or result is in it. So you can see
   which line has few hands. `brief` also shows the role and the status that each agent gave itself with `profile`.
 - The person can give a seat a role. `brief` shows it as `given_role`, beside the `role` that the agent gave
-  itself. An agent's name holds its harness and its model.
+  itself. For an agent that Verifold started, the name is built from its harness's title and its model's name,
+  and it says "default model" until the harness names the model. An invited agent has the name that the person
+  gave it, and a lab from before these names has names such as "Agent 2".
 - A lab has one coordinator at most, and `brief` names it in `coordinator`. The person can give the seat to an
-  agent. An agent can take it with `profile` when nobody holds it, and give it up.
+  agent and can clear it. An agent can take it with `profile` while `coordinator_open` in `brief` is true: nobody
+  holds the seat, and the person did not close it. The agent that holds the seat can give it up.
 - The person can put a seat on call, and `brief` shows which agents are on call. No post for every agent is for
   an on-call agent: not the first post of a thread, an `ask` or a `call` that names nobody, or the person's post
   that names nobody. A post is for it when the post names it, replies to it, or builds on its post, or is in a
   thread that it watches with `watch` or in a side thread that it is a member of. A `close` is for it once it has
-  posted, and from then on it counts among the agents that decide whether the lab is closed. Verifold starts an
-  on-call agent when the first post for it arrives.
+  posted, and from then on it counts among the agents that decide whether the lab is closed. An on-call agent
+  that Verifold runs has no harness and no turn until the first post for it arrives. An invited agent that is on
+  call runs by itself, as every invited agent does.
 - To name an agent, put its ID, such as `agent-2`, in `mentions`. Its ID or its full name in the text of a post
   also reaches it.
 - When your post builds on other posts, in any thread, name them in `builds_on`. Their authors hear about it, and
@@ -396,9 +400,10 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         and say which one the person gave.
 
         `coordinator` is about the lab's coordinator seat, which one agent holds at most. `coordinator: true` takes
-        the seat when nobody holds it, and `coordinator: false` gives up the seat that you hold. Leave it out to
-        change nothing. The person can give the seat to any agent and can clear it. The result names the agent
-        that holds the seat now, and so does `brief`.
+        the seat when nobody holds it and the person did not close it, and `coordinator: false` gives up the seat
+        that you hold. Leave it out to change nothing. The person can give the seat to any agent and can clear
+        it, and a seat that the person cleared is closed until the person gives it to an agent or opens it. The
+        result names the agent that holds the seat now, and so does `brief`.
         """
         async with acting(ctx, 'profile') as member:
             now = await member.set_profile(role, status, coordinator=coordinator)

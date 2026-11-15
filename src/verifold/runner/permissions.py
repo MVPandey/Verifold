@@ -204,18 +204,23 @@ def _contains(words: tuple[str, ...], phrase: tuple[str, ...]) -> bool:
     return bool(phrase) and any(words[start : start + len(phrase)] == phrase for start in range(len(words)))
 
 
+PERMISSION_THREAD = 'Permission requests from '
+"""How the title of an agent's thread for its permission requests starts. The agent's name follows."""
+
+
 def _thread_title(member: Member) -> str:
     joined = member.lab.board.agent(member.agent_id)
-    return f'Permission requests from {joined.agent.name if joined else member.agent_id}'
+    return f'{PERMISSION_THREAD}{joined.agent.name if joined else member.agent_id}'
 
 
 def _permission_thread(member: Member) -> str | None:
-    title = _thread_title(member)
+    # The thread is the agent's own, whatever name the agent had when the thread opened. So an agent whose name
+    # changed keeps one thread.
     return next(
         (
             entry.thread.id
             for entry in member.lab.board.threads
-            if entry.thread.opened_by == member.agent_id and entry.thread.title == title
+            if entry.thread.opened_by == member.agent_id and entry.thread.title.startswith(PERMISSION_THREAD)
         ),
         None,
     )

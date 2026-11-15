@@ -96,7 +96,11 @@ export function firstSeats(
  * coordinator's holds one agent, and no other seat is the coordinator's.
  */
 export function withSeat(seats: readonly Seat[], index: number, changed: Seat): readonly Seat[] {
-  const seat = changed.coordinator ? { ...changed, count: 1 } : changed;
+  // A seat with no agent takes one only while the lab has room for it.
+  const room = MAX_AGENTS - agentCount(seats.filter((_, at) => at !== index));
+  const seat = changed.coordinator
+    ? { ...changed, count: Math.min(1, room, Math.max(changed.count, 1)) }
+    : changed;
   return seats.map((old, at) =>
     at === index ? seat : seat.coordinator ? { ...old, coordinator: false } : old,
   );
@@ -126,6 +130,17 @@ export function step(seats: readonly Seat[], index: number, change: number): rea
     const most = seat.coordinator ? 1 : Math.max(room, seat.count);
     return { ...seat, count: Math.max(0, Math.min(most, seat.count + change)) };
   });
+}
+
+/** Return whether a seat asks for a typed model and has none yet. A blank ID would start the harness's default model. */
+export function needsModel(seat: Seat): boolean {
+  return seat.typed && seat.count > 0 && seat.model.trim() === '';
+}
+
+/** Return whether the seats start agents and every one of them is on call, so that no agent starts by itself. */
+export function allOnCall(seats: readonly Seat[]): boolean {
+  const chosen = seats.filter((seat) => seat.count > 0);
+  return chosen.length > 0 && chosen.every((seat) => seat.onCall);
 }
 
 /** Return how many agents the seats start. */

@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Final, Self
 
-from verifold.protocol.agents import Agent
+from verifold.protocol.agents import Agent, one_line
 from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
@@ -39,7 +39,7 @@ from verifold.server.errors import LabExists
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
-from verifold.society.labels import awaits_model, label
+from verifold.society.labels import awaits_model, is_numbered, label, plain
 from verifold.society.lines import question_thread
 from verifold.society.rules import waiting_reruns
 from verifold.store.record_file import RecordFile
@@ -128,20 +128,37 @@ class Lab:
         """
         Record the name of the model that an agent's harness reported, and return the agent's name after it.
 
-        Only a name that says "default model" for the model of the harness `title` changes, and it changes once.
-        The new name keeps clear of every name that an agent of the lab has or had.
+        Only a name that Verifold built before the harness named the model changes: one that says "default model",
+        or one that holds the ID of the model that the person chose. Among the agents of the harness that have the
+        same name but for the number, the agent that joined first has no number, whichever one reported its model
+        first. So this step can also give another agent of the harness a new number.
         """
         joined = self._board.agent(agent_id)
-        if joined is None or not model.strip() or not awaits_model(joined.agent.name, title):
+        if joined is None or not one_line(model):
             return joined.agent.name if joined else agent_id
-
-        def build(board: Board, seq: int, at: datetime) -> AgentNamed:
-            others = (entry.agent.name for entry in board.agents if entry.agent.id != agent_id)
-            former = (before for _, before in board.renames)
-            return AgentNamed(seq=seq, at=at, agent=agent_id, name=label(title, model, (*others, *former)))
-
-        board = await self._commit(build)
-        return board.renames[-1][0].name
+        agent, base = joined.agent, plain(title, model)
+        if is_numbered(agent.name, base) or not awaits_model(agent.name, title, agent.model.name):
+            return agent.name
+        # The agents of the harness that share the new name, in the order that they joined.
+        group = tuple(
+            entry.agent
+            for entry in self._board.agents
+            if entry.agent.harness == agent.harness
+            and (entry.agent.id == agent_id or is_numbered(entry.agent.name, base))
+        )
+        members = {member.id for member in group}
+        taken = [entry.agent.name for entry in self._board.agents if entry.agent.id not in members]
+        builds: list[Build] = []
+        for member in group:
+            name = label(title, model, taken)
+            taken.append(name)
+            if name != member.name:
+                builds.append(_named(member.id, name))
+        # The numbers already rise in the order that the agents joined. So the agents after this one move up by one
+        # name each, the last one first, and no two agents have one name at any event.
+        board = await self._commit(*reversed(builds))
+        renamed = board.agent(agent_id)
+        return renamed.agent.name if renamed else agent_id
 
     async def set_on_call(self, agent_id: AgentId, *, on_call: bool) -> None:
         """
@@ -155,22 +172,25 @@ class Lab:
             return
         await self._commit(lambda _, seq, at: OnCallSet(seq=seq, at=at, agent=agent_id, on_call=on_call))
 
-    async def set_coordinator(self, agent_id: AgentId | None, by: AgentId) -> AgentId | None:
+    async def set_coordinator(self, agent_id: AgentId | None, by: AgentId, *, free: bool = False) -> AgentId | None:
         """
         Record who holds the lab's coordinator seat, and return the holder after the change.
 
         `by` is the person, who can give the seat to any agent or clear it with `None`, or an agent, which can take
-        the seat for itself when nobody holds it and give up the seat that it holds. A change that leaves the seat
-        as it is records nothing.
+        the seat for itself when nobody holds it and the person did not close it, and give up the seat that it
+        holds. When the person clears the seat, `free` says whether an agent may take it by itself. A change that
+        leaves the seat as it is records nothing.
 
         Raises:
             RejectedEvent: The change breaks one of these rules.
 
         """
         known = agent_id is None or self._board.agent(agent_id)
-        if known and self._board.coordinator == agent_id and by in (PERSON, agent_id):
+        same = self._board.coordinator == agent_id and (agent_id is not None or self._board.coordinator_open == free)
+        if known and same and by in (PERSON, agent_id):
             return agent_id
-        board = await self._commit(lambda _, seq, at: CoordinatorSet(seq=seq, at=at, agent=agent_id, by=by))
+        opens = free and agent_id is None and by == PERSON
+        board = await self._commit(lambda _, seq, at: CoordinatorSet(seq=seq, at=at, agent=agent_id, by=by, open=opens))
         return board.coordinator
 
     async def leave(self, agent_id: AgentId, by: AgentId, reason: str = '') -> AgentLeft:
@@ -392,6 +412,10 @@ REVISED: Final = 'The person revised the question: '
 
 REVISED_TITLE: Final = 'The question, revised'
 """The title of the thread that holds the revisions in a lab from before the question had a thread."""
+
+
+def _named(agent_id: AgentId, name: str) -> Build:
+    return lambda _, seq, at: AgentNamed(seq=seq, at=at, agent=agent_id, name=name)
 
 
 def _headline(text: str) -> str:

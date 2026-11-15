@@ -42,7 +42,9 @@ import {
   defaultsLine,
   effortsOf,
   addSeat,
+  allOnCall,
   firstSeats,
+  needsModel,
   newSeat,
   removeSeat,
   seatChoice,
@@ -850,6 +852,32 @@ describe('setup', () => {
       withSeat(moved, 0, { ...newSeat('claude-code', 3), role: 'driver' })[1],
       moved[1],
     );
+    // An empty seat that becomes the coordinator's takes one agent only while the lab has room.
+    const empty = { ...newSeat('codex', 0), coordinator: true };
+    assert.equal(
+      withSeat([newSeat('claude-code', 19), newSeat('codex', 0)], 1, empty)[1]?.count,
+      1,
+    );
+    assert.equal(
+      withSeat([newSeat('claude-code', 20), newSeat('codex', 0)], 1, empty)[1]?.count,
+      0,
+    );
+  });
+
+  it('asks for the ID of a typed model, and says when every seat is on call', () => {
+    const typed = { ...newSeat('claude-code'), typed: true };
+    assert.deepEqual(
+      [typed, { ...typed, model: ' ' }, { ...typed, model: 'fable' }, { ...typed, count: 0 }].map(
+        needsModel,
+      ),
+      [true, true, false, false],
+    );
+    const called = { ...newSeat('codex'), onCall: true };
+    assert.equal(allOnCall([called, { ...called, harness: 'claude-code' }]), true);
+    assert.equal(allOnCall([called, newSeat('claude-code')]), false);
+    // A seat with no agent starts nothing, so it does not count.
+    assert.equal(allOnCall([called, newSeat('claude-code', 0)]), true);
+    assert.equal(allOnCall([newSeat('claude-code', 0)]), false);
   });
 
   it('lets the person type a model that the harness does not list', () => {

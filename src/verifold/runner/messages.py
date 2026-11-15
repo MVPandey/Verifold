@@ -53,6 +53,14 @@ BOARD = (
 """The line of the start message that points an agent at the board. It names the server, so no agent tries a shell."""
 
 
+ON_CALL = (
+    'The person put your seat on call. A post is for you when it names you, replies to you, or builds on your post, '
+    'and when it is in a thread that you watch with `watch` or in a side thread that you are a member of. A close '
+    'is for you once you have posted. No other post is for you.'
+)
+"""What the start message says to an on-call agent. It holds for an agent that Verifold runs and for an invited one."""
+
+
 def start_message(
     board: Board, agent: Agent, norms: Path, writing: Path | None = None, *, under_way: bool = False
 ) -> str:
@@ -91,10 +99,7 @@ def start_message(
     if board.coordinator == agent.id:
         lines.append("You hold the lab's coordinator seat.")
     if board.on_call(agent.id):
-        lines.append(
-            'The person put your seat on call. So Verifold starts you when a post for you arrives: one that names '
-            'you, replies to you, or builds on your post. No post for every agent is for you.'
-        )
+        lines.append(ON_CALL)
     if thread := question_thread(board):
         lines.append(f'Thread {thread} on the board holds this question, and every agent watches it.')
     if board.revisions:

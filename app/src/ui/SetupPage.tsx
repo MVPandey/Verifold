@@ -8,9 +8,11 @@ import {
   MAX_AGENTS,
   addSeat,
   agentCount,
+  allOnCall,
   firstSeats,
   initials,
   modelSummary,
+  needsModel,
   removeSeat,
   setupChoices,
   startRequest,
@@ -189,13 +191,22 @@ export function SetupPage(props: {
         <button
           className="btn primary"
           type="button"
-          disabled={starting || total === 0 || !question.trim()}
+          disabled={starting || total === 0 || !question.trim() || picks.some(needsModel)}
           onClick={start}
         >
           {starting ? 'Starting' : `Start lab with ${total} ${total === 1 ? 'agent' : 'agents'}`}
         </button>
         <span className="quiet">You can stop the lab at any time.</span>
       </div>
+      {picks.some(needsModel) ? (
+        <p className="quiet">A seat with “Other…” needs a model ID before the lab starts.</p>
+      ) : null}
+      {allOnCall(picks) ? (
+        <p className="quiet">
+          Every seat is on call, so no agent starts until a post names one. Your first post in the
+          lab can do that.
+        </p>
+      ) : null}
       <p className="savechoices">
         <span className="quiet">Save these choices for the next labs:</span>
         <button

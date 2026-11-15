@@ -79,9 +79,9 @@ class RecordBuilder:
         self.events.append(OnCallSet(seq=seq, at=at, agent=agent_id, on_call=on_call))
         return self
 
-    def coordinator(self, agent_id: str | None, by: str = 'person') -> 'RecordBuilder':
+    def coordinator(self, agent_id: str | None, by: str = 'person', *, free: bool = False) -> 'RecordBuilder':
         seq, at = self._stamp()
-        self.events.append(CoordinatorSet(seq=seq, at=at, agent=agent_id, by=by))
+        self.events.append(CoordinatorSet(seq=seq, at=at, agent=agent_id, by=by, open=free))
         return self
 
     def leave(self, agent_id: str, by: str | None = None, reason: str = '') -> 'RecordBuilder':

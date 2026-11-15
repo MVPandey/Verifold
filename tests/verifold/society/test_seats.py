@@ -101,6 +101,32 @@ def test_an_on_call_agent_counts_for_a_close_and_hears_it_only_once_it_has_poste
     assert lab_state(late) == 'closing'
 
 
+def test_a_switch_of_a_seat_after_the_close_changes_neither_the_count_nor_whether_the_lab_is_closed() -> None:
+    close = Close(id='p-2', thread='t-1', author='ada', text='The answer stands.')
+    agreed = Answer(id='p-3', thread='t-1', author='bo', text='Agreed.', reply_to='p-1', accepts=True)
+
+    # Two of three agents stand behind the close, with cy off call at the close. The lab is closed, and it stays
+    # closed when the person puts cy on call or takes cy off call again.
+    closed = lab().post(RESULT).post(close).post(agreed.model_copy(update={'reply_to': 'p-2'}))
+    assert lab_state(closed.board()) == 'closed'
+    assert lab_state(closed.on_call('cy').board()) == 'closed'
+    assert close_count(closed.board(), closed.board().posts[1]) == (2, 3)
+
+    # One of three agents stands behind the close. The lab is closing, and it does not become closed because the
+    # person puts the two other agents on call after the close.
+    closing = lab().post(RESULT).post(close)
+    assert lab_state(closing.board()) == 'closing'
+    assert lab_state(closing.on_call('bo').on_call('cy').board()) == 'closing'
+    assert close_count(closing.board(), closing.board().posts[1]) == (1, 3)
+
+    # With cy on call and silent at the close, two agents decide and one stands behind it. A lab that the two closed
+    # stays closed when the person takes cy off call after the close.
+    two = on_call().post(close).post(agreed.model_copy(update={'reply_to': 'p-2'}))
+    assert (lab_state(two.board()), close_count(two.board(), two.board().posts[1])) == ('closed', (2, 2))
+    off = two.on_call('cy', on_call=False).board()
+    assert (lab_state(off), close_count(off, off.posts[1])) == ('closed', (2, 2))
+
+
 def test_the_brief_says_who_is_on_call_who_coordinates_and_which_role_the_person_gave() -> None:
     record = on_call().coordinator('bo')
     board = record.board()
@@ -151,11 +177,37 @@ def test_an_agent_takes_the_coordinator_seat_only_when_it_is_free_and_the_person
     assert free.coordinator('cy', by='cy').board().coordinator == 'cy'
 
 
-def test_a_coordinator_that_left_holds_the_seat_no_longer_so_another_agent_can_take_it() -> None:
+def test_a_coordinator_that_left_by_itself_leaves_the_seat_open_for_another_agent() -> None:
     record = lab().coordinator('ada').leave('ada')
+    board = record.board()
 
-    assert record.board().coordinator is None
+    assert (board.coordinator, board.coordinator_open) == (None, True)
     assert record.coordinator('bo', by='bo').board().coordinator == 'bo'
+
+
+def test_the_persons_clear_of_the_seat_holds_until_the_person_gives_or_opens_it() -> None:
+    assert lab().board().coordinator_open
+    cleared = lab().coordinator('ada', by='ada').coordinator(None)
+    assert not cleared.board().coordinator_open
+    assert not brief(cleared.board(), 'bo', News(seq=0)).coordinator_open
+
+    # No agent takes the seat by itself after the person cleared it: not the agent that held it, and no other.
+    for agent in ('ada', 'bo'):
+        with pytest.raises(RejectedEvent, match='The person closed the coordinator seat'):
+            RecordBuilder(events=list(cleared.events)).coordinator(agent, by=agent).board()
+    # The person removed the holder, so the seat is closed in the same way.
+    removed = lab().coordinator('ada').leave('ada', by='person')
+    assert not removed.board().coordinator_open
+    with pytest.raises(RejectedEvent, match='The person closed the coordinator seat'):
+        removed.coordinator('bo', by='bo').board()
+
+    # The person gives the seat to an agent, or opens it for the agents.
+    given = RecordBuilder(events=list(cleared.events)).coordinator('cy')
+    assert given.board().coordinator == 'cy'
+    assert given.coordinator(None, by='cy').coordinator('bo', by='bo').board().coordinator == 'bo'
+    opened = RecordBuilder(events=list(cleared.events)).coordinator(None, free=True)
+    assert opened.board().coordinator_open
+    assert opened.coordinator('bo', by='bo').board().coordinator == 'bo'
 
 
 def test_an_agent_gets_the_name_of_its_model_once_known_and_a_post_reaches_it_under_both_names() -> None:
@@ -187,11 +239,21 @@ def test_an_agent_gets_the_name_of_its_model_once_known_and_a_post_reaches_it_un
         ('claude code · opus 5.5 in small letters is no name.', set()),
         ('Codex and Opus 5.5 are parts of names.', set()),
         ('agent-3 and AGENT-2 by their IDs.', {'agent-2', 'agent-3'}),
+        # A name does not end inside a longer model name: a dot, a digit, or a hyphen goes on with the word.
+        ('Codex · gpt-6.1-sol is not in this lab.', set()),
+        ('Codex · gpt-6-mini and Codex · gpt-65 are other models.', set()),
+        ('Claude Code · Opus 5.5.1 would be faster.', set()),
+        ('Ask Opus Five · Opus 5.5 instead.', set()),
+        ('Ask Opus Five · Opus 5.', {'agent-5'}),
+        # The dot that ends a sentence ends a name too.
+        ('I asked Codex · gpt-6. It agreed with Claude Code · Opus 5.5.', {'agent-1', 'agent-3'}),
+        ('Codex · gpt-6: please rerun (Codex · gpt-6 2, you too).', {'agent-1', 'agent-2'}),
     ],
 )
 def test_a_full_name_with_spaces_and_a_dot_in_the_text_reaches_its_agent(text: str, named: set[str]) -> None:
     record = RecordBuilder().join('agent-1', name='Codex · gpt-6').join('agent-2', name='Codex · gpt-6 2')
     record.join('agent-3', name='Claude Code · Opus 5.5').join('agent-4', name='Agent 4')
+    record.join('agent-5', name='Opus Five · Opus 5')
     record.thread('t-1', opened_by='agent-4').post(RESULT.model_copy(update={'author': 'agent-4'}))
 
     assert woken(record, Message(id='p-2', thread='t-1', author='agent-4', text=text)) == named
@@ -210,3 +272,34 @@ def test_a_rerun_holds_up_the_post_of_an_invited_agent_only_when_the_person_stat
         return standing(record.board(), 'p-1')
 
     assert (checked('unknown'), checked('anthropic'), checked('openai')) == ('checked', 'held_up', 'checked')
+    # A family is the same whatever its capitals and the spaces around it.
+    assert (checked(' OpenAI '), checked('Anthropic')) == ('checked', 'held_up')
+
+
+def test_a_name_from_before_that_another_agent_has_now_names_only_that_agent() -> None:
+    record = (
+        RecordBuilder().join('agent-1', name='Codex · default model').join('agent-2', name='Codex · default model 2')
+    )
+    record.thread('t-1', opened_by='agent-1').post(RESULT.model_copy(update={'author': 'agent-1'}))
+    # The second agent's model was known first, and then the first agent took the name without a number.
+    record.named('agent-2', 'Codex · gpt-6').named('agent-2', 'Codex · gpt-6 2').named('agent-1', 'Codex · gpt-6')
+    record.join('agent-3', name='Agent 3')
+
+    def named(text: str) -> set[str]:
+        copy = RecordBuilder(events=list(record.events))
+        return woken(copy, Message(id='p-2', thread='t-2', author='agent-3', text=text)) - {'agent-1'}
+
+    record.thread('t-2', opened_by='agent-3').post(Message(id='p-9', thread='t-2', author='agent-3', text='Notes.'))
+    assert woken(
+        RecordBuilder(events=list(record.events)),
+        Message(id='p-2', thread='t-2', author='agent-3', text='Codex · gpt-6?'),
+    ) == {'agent-1'}
+    assert named('Codex · gpt-6 2?') == {'agent-2'}
+    assert named('Codex · default model 2?') == {'agent-2'}
+
+
+def test_the_brief_says_why_an_agents_harness_failed_last() -> None:
+    record = on_call().turn('cy', error='RequestError: The model fable-9 is not available.').turn('bo')
+    lines = {line.id: line for line in brief(record.board(), 'ada', News(seq=0)).agents}
+
+    assert (lines['cy'].error, lines['bo'].error) == ('RequestError: The model fable-9 is not available.', None)

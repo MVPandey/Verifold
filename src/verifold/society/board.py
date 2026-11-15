@@ -23,7 +23,7 @@ from verifold.protocol.events import (
     TurnStarted,
     WatchSet,
 )
-from verifold.protocol.ids import AgentId, PostId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.settings import Settings
 
 
@@ -102,17 +102,28 @@ class Board:
 
         An agent does when it is known to be in the lab. An on-call agent does from its first post, by the rule
         for an invited agent: until then no post for every agent reached it, so the lab does not wait for its word.
+        With `before`, the seat counts as it was at that event. So a switch of the seat after a close changes
+        neither who counted for the close nor whether the lab is closed.
         """
-        if self.on_call(joined.agent.id):
+        if self.on_call(joined.agent.id, before):
             return self._posted(joined.agent.id, before)
         return self.came(joined, before)
 
     def _posted(self, agent_id: AgentId, before: int | None) -> bool:
         return any(entry.post.author == agent_id and (before is None or entry.seq < before) for entry in self.posts)
 
-    def on_call(self, agent_id: AgentId) -> bool:
-        """Return whether the person put an agent's seat on call, and did not take it off since."""
-        latest = next((entry for entry in reversed(self.on_calls) if entry.agent == agent_id), None)
+    def on_call(self, agent_id: AgentId, before: int | None = None) -> bool:
+        """
+        Return whether the person put an agent's seat on call, and did not take it off since.
+
+        With `before`, return whether the seat was on call just before that event.
+        """
+        switches = (
+            entry
+            for entry in reversed(self.on_calls)
+            if entry.agent == agent_id and (before is None or entry.seq < before)
+        )
+        latest = next(switches, None)
         return bool(latest and latest.on_call)
 
     @property
@@ -120,6 +131,23 @@ class Board:
         """The agent that holds the lab's coordinator seat, or `None`. An agent that left the lab holds it no longer."""
         holder = self.coordinators[-1].agent if self.coordinators else None
         return holder if holder and not self.gone(holder) else None
+
+    @property
+    def coordinator_open(self) -> bool:
+        """
+        Whether an agent may take the coordinator seat by itself now.
+
+        It may while nobody holds the seat and the person did not close it: nobody ever held it, its holder gave it
+        up or left the lab by itself, or the person said that agents may take it. The person closes the seat when
+        they clear it or remove its holder.
+        """
+        if not self.coordinators:
+            return True
+        last = self.coordinators[-1]
+        if last.agent is None:
+            return last.by != PERSON or last.open
+        left = self.gone(last.agent)
+        return left is not None and left.by == last.agent
 
     def gone(self, agent_id: AgentId) -> AgentLeft | None:
         """Return the entry that says that an agent left the lab, or `None` while it is in the lab."""
@@ -135,6 +163,11 @@ class Board:
         role = next((entry.role for entry in reversed(mine) if entry.role is not None), '')
         status = next((entry.status for entry in reversed(mine) if entry.status is not None), '')
         return role, status
+
+    def failure(self, agent_id: AgentId) -> str | None:
+        """Return why an agent's latest turn, or the latest start of its harness, failed, or `None` when it did not."""
+        latest = next((turn for turn in reversed(self.turns) if turn.agent == agent_id), None)
+        return latest.error if latest else None
 
     def thread(self, thread_id: ThreadId) -> ThreadOpened | None:
         """Return the entry of a thread, or `None`."""

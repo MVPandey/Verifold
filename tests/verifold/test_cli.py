@@ -160,17 +160,52 @@ def test_run_refuses_two_coordinators() -> None:
         main(['run', 'Does it hold?', '--agent', 'codex,coordinator', '--agent', 'claude-code,coordinator'])
 
 
-def test_a_role_from_a_projects_file_does_not_reach_the_agents_as_the_persons_word(
-    serves: list[StartRequest | None], project: Path
+def test_a_projects_file_gives_a_seat_only_its_harness_count_model_and_effort(
+    serves: list[StartRequest | None], project: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    seat = {'harness': 'codex', 'role': 'driver', 'on_call': True, 'family': 'other'}
-    global_settings(project, {'setup': {'agents': [seat]}})
+    facts = {'role': 'driver', 'family': 'other', 'mode': 'plan'}
+    seats = [
+        {'harness': 'codex', 'model': 'mini', 'effort': 'low', 'count': 2, 'on_call': True, **facts},
+        {'harness': 'codex', 'coordinator': True, 'on_call': True, 'family': 'other'},
+    ]
+    global_settings(project, {'setup': {'agents': seats}})
     main(['run', 'Does it hold?'])
-    project_settings(project, {'setup': {'agents': [seat]}})
+    own = capsys.readouterr().out
+    project_settings(project, {'setup': {'agents': seats}})
+    main(['run', 'Does it hold?'])
+    cloned = capsys.readouterr().out
+
+    mine = (
+        AgentChoice(harness='codex', model='mini', effort='low', count=2, on_call=True, **facts),
+        AgentChoice(harness='codex', coordinator=True, on_call=True, family='other'),
+    )
+    # A project's file can come from someone else. A family from it would make a rerun by the same model count as
+    # independent, a coordinator would read as the person's choice, and on-call seats would start nothing.
+    plain = (AgentChoice(harness='codex', model='mini', effort='low', count=2), AgentChoice(harness='codex'))
+    assert [start.agents for start in serves if start] == [mine, plain]
+    assert 'Did not use' not in own
+    assert 'Every seat is on call, so no agent starts until a post names one.' in own
+    assert (
+        "Did not use mode, role, family, coordinator, on call from this project's saved choices for new labs: "
+        "`verifold run` takes only the harness, count, model, and effort of a seat from a project's file."
+    ) in cloned
+    assert 'Every seat is on call' not in cloned
+
+
+def test_a_projects_file_without_facts_says_nothing_about_them(
+    serves: list[StartRequest | None], project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project_settings(project, {'setup': {'agents': [{'harness': 'codex', 'model': 'mini'}]}})
     main(['run', 'Does it hold?'])
 
-    own = AgentChoice(harness='codex', role='driver', on_call=True, family='other')
-    assert [start.agents for start in serves if start] == [(own,), (own.model_copy(update={'role': ''}),)]
+    assert [start.agents for start in serves if start] == [(AgentChoice(harness='codex', model='mini'),)]
+    assert 'Did not use' not in capsys.readouterr().out
+
+
+@pytest.mark.usefixtures('project')
+def test_run_refuses_a_model_id_that_is_not_one_printable_line() -> None:
+    with pytest.raises(SystemExit, match='is not one printable line'):
+        main(['run', 'Does it hold?', '--agent', 'codex:gpt\u202e6'])
 
 
 def test_run_takes_grants_for_every_agent(serves: list[StartRequest | None]) -> None:

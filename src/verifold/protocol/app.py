@@ -63,6 +63,8 @@ class AgentView(Record):
     usage: Usage
     cost_usd: float | None = None
     """The cost that the harness reported. `None` when the harness reports tokens only."""
+    error: str | None = None
+    """Why the agent's latest turn, or the latest start of its harness, failed. `None` when it did not fail."""
 
 
 class LabView(Record):
@@ -70,6 +72,8 @@ class LabView(Record):
 
     question: str
     """The question that the lab works on now."""
+    coordinator_open: bool = True
+    """Whether an agent may take the coordinator seat by itself: nobody holds it, and the person did not close it."""
     versions: tuple[QuestionVersion, ...] = ()
     """Every version of the question, oldest first: the text that the lab opened with, and then each revision."""
     opened_at: AwareDatetime
@@ -113,6 +117,12 @@ class SeatChange(Record):
     """Put the seat on call, or take it off."""
     coordinator: bool | None = None
     """Give the agent the lab's coordinator seat, or take the seat from the agent that holds it."""
+
+
+class CoordinatorSeat(Record):
+    """The person leaves the coordinator seat without a holder, and says whether an agent may take it by itself."""
+
+    open: bool
 
 
 class Invitation(Record):

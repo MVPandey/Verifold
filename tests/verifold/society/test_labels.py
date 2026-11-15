@@ -15,11 +15,12 @@ def test_a_name_invents_no_model_and_keeps_a_long_model_name_short() -> None:
 
     assert unknown == f'Codex · {DEFAULT_MODEL}'
     assert label('Codex', '  ', (unknown,)) == 'Codex · default model 2'
-    assert (long.startswith('Codex · model xxx'), long.endswith('…'), len(long)) == (
-        True,
-        True,
-        len('Codex · ') + MAX_MODEL,
-    )
+    assert (long.startswith('Codex · model xxx'), len(long)) == (True, len('Codex · ') + MAX_MODEL)
+    # Two long names that differ only at the end stay apart, and a name is one printable line.
+    family = 'us.vendor.very-long-provider-prefix-for-a-model-of-the-family-that-we-test-'
+    assert label('Codex', f'{family}small-v1', ()) != label('Codex', f'{family}large-v1', ())
+    assert label('Codex', f'{family}small-v1', ()).endswith('test-small-v1')
+    assert label('Codex', 'gpt\u202e-6\u200b\tsol', ()) == 'Codex · gpt -6 sol'
 
 
 def test_only_a_name_that_verifold_built_without_a_model_waits_for_one() -> None:
@@ -30,3 +31,6 @@ def test_only_a_name_that_verifold_built_without_a_model_waits_for_one() -> None
     assert not awaits_model('Codex · default model x', 'Codex')
     # A record from before these names holds names such as "Agent 3", which stay.
     assert not awaits_model('Agent 3', 'Codex')
+    # A name that holds the ID of the model that the person chose waits for the harness's own name for it.
+    assert awaits_model('Codex · gpt-6.1-sol 2', 'Codex', 'gpt-6.1-sol')
+    assert not awaits_model('Codex · GPT 6.1 Sol', 'Codex', 'gpt-6.1-sol')

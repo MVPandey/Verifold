@@ -11,6 +11,7 @@ from contextlib import suppress
 from functools import partial
 from importlib.metadata import version
 from pathlib import Path
+from types import MappingProxyType
 
 from pydantic import ValidationError
 
@@ -93,8 +94,8 @@ def _start(args: argparse.Namespace) -> StartRequest:
 
     `verifold run` starts at once, without showing the saved choices, and a project's file can come from someone else.
     So a project's file can make the lab stricter, not looser: it can turn auto mode off and shorten the time limit,
-    and its agents get no modes and no roles, because a role reaches the agents as the person's word. Under
-    `--ask-me`, no saved agent gets a mode.
+    and each of its seats gives only a harness, a count, a model, and an effort. Its modes, roles, families,
+    coordinator, and on-call marks are not used, and the command says so. Under `--ask-me`, no saved agent gets a mode.
 
     Raises:
         SetupRejected: No harness that Verifold knows is on this computer.
@@ -114,9 +115,7 @@ def _start(args: argparse.Namespace) -> StartRequest:
             == settings_path(SettingsLevel.ALL, project).resolve()
         )
         from_project = not own and isinstance(saved, dict) and 'agents' in saved
-        agents = _saved_agents(
-            here, catalog_with(files.harnesses), drop_modes=args.ask_me or from_project, drop_roles=from_project
-        )
+        agents = _saved_agents(here, catalog_with(files.harnesses), drop_modes=args.ask_me, from_project=from_project)
     shorter = min((minutes for minutes in (everywhere.minutes, here.minutes) if minutes is not None), default=None)
     return StartRequest(
         question=args.question,
@@ -128,16 +127,29 @@ def _start(args: argparse.Namespace) -> StartRequest:
 
 
 def _saved_agents(
-    defaults: SetupDefaults, catalog: Mapping[str, HarnessEntry], *, drop_modes: bool, drop_roles: bool
+    defaults: SetupDefaults, catalog: Mapping[str, HarnessEntry], *, drop_modes: bool, from_project: bool
 ) -> tuple[AgentChoice, ...]:
-    dropped = ({'mode': None} if drop_modes else {}) | ({'role': ''} if drop_roles else {})
+    # A seat from a project's file gives only its harness, count, model, and effort. The rest could loosen the lab
+    # or speak as the person: a family makes a rerun count as independent, a role reaches the agents as the
+    # person's word, a coordinator reads as the person's choice, and a lab of on-call seats starts nothing.
+    dropped = PROJECT_DROPS if from_project else {'mode': None} if drop_modes else {}
+    unused: set[str] = set()
     kept: list[AgentChoice] = []
     for choice in defaults.agents or ():
         entry = catalog.get(choice.harness)
         if entry is None or not available(entry):
             _say(f'Skipped {choice.harness} from your saved choices for new labs: it is not on this computer.')
             continue
-        kept.append(choice.model_copy(update=dropped))
+        used = choice.model_copy(update=dropped)
+        unused |= {name for name in dropped if getattr(used, name) != getattr(choice, name)}
+        kept.append(used)
+    if unused and from_project:
+        _say(
+            f'Did not use {", ".join(name.replace("_", " ") for name in dropped if name in unused)} from this '
+            "project's saved choices "
+            'for new labs: `verifold run` takes only the harness, count, model, and effort of a seat from a '
+            "project's file."
+        )
     if kept:
         return tuple(kept)
     found = tuple(AgentChoice(harness=name) for name, entry in catalog.items() if available(entry))[:MAX_AGENTS]
@@ -149,11 +161,21 @@ def _saved_agents(
     return found
 
 
+PROJECT_DROPS: Mapping[str, str | bool | None] = MappingProxyType(
+    {'mode': None, 'role': '', 'family': None, 'coordinator': False, 'on_call': False}
+)
+"""What `verifold run` sets back in a seat that comes from a project's settings file."""
+
+NOTHING_STARTS = 'Every seat is on call, so no agent starts until a post names one'
+"""What `verifold run` adds when the lab that it starts has only on-call seats."""
+
+
 def _plan(start: StartRequest) -> str:
     # What `verifold run` starts, in words, so that the person sees the saved choices that it used.
     agents = ', '.join(_agent_words(choice) for choice in start.agents)
     time = f'a time limit of {start.minutes} min' if start.minutes else 'no time limit'
-    return f'{agents}; {"auto mode" if start.auto_mode else "no auto mode"}; {time}'
+    waits = f'. {NOTHING_STARTS}' if all(choice.on_call for choice in start.agents) else ''
+    return f'{agents}; {"auto mode" if start.auto_mode else "no auto mode"}; {time}{waits}'
 
 
 def _agent_words(choice: AgentChoice) -> str:

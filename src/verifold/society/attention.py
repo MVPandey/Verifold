@@ -90,7 +90,7 @@ def wakes(
         return watches_thread(board, agent_id, post.thread)
     if reader and board.on_call(agent_id):
         # No post for every agent is for an on-call agent, but a close is once the agent counts for it.
-        if isinstance(post, Close) and board.counts(reader):
+        if isinstance(post, Close) and board.counts(reader, before=entry.seq):
             return True
     elif _for_everyone(board, entry) or (post.author == PERSON and not post.mentions and not post.reply_to):
         # The person's words that name nobody are for every agent, whoever watches the thread.
@@ -212,9 +212,11 @@ def _page(
 
 def _workers(board: Board) -> Names:
     # Each agent with its name, and with each name that it had before, so that an older post still names it.
+    # A name from before that another agent has now is that agent's name only.
     checkers = {joined.agent.id for joined in board.agents if joined.agent.checks}
     now = tuple((joined.agent.id, joined.agent.name) for joined in board.agents)
-    former = tuple((event.agent, before) for event, before in board.renames)
+    taken = {name for _, name in now}
+    former = tuple((event.agent, before) for event, before in board.renames if before not in taken)
     return tuple(pair for pair in (*now, *former) if pair[0] not in checkers)
 
 
@@ -253,10 +255,12 @@ def _in_text(text: str, names: Names) -> frozenset[AgentId]:
         if re.search(rf'(?<![\w/.-]){re.escape(agent_id)}(?![\w/-])', text, re.IGNORECASE)
     }
     # A display name matches whole and with its capitals: "Agent 1" is not in "Agent 12" or "the agent 1 run". The
-    # longest name goes first and leaves the text, so "Codex · gpt-6 2" does not also name "Codex · gpt-6".
+    # longest name goes first and leaves the text, so "Codex · gpt-6 2" does not also name "Codex · gpt-6". A name
+    # does not end where its last word goes on, as "Codex · gpt-6" in "Codex · gpt-6.1-sol": a dot ends a name only
+    # when no letter or digit follows it.
     rest = text
     for agent_id, name in sorted(names, key=lambda pair: len(pair[1]), reverse=True):
-        whole = rf'(?<![\w-]){re.escape(name)}(?![\w-])'
+        whole = rf'(?<![\w-]){re.escape(name)}(?![\w-]|\.\w)'
         if re.search(whole, rest):
             found.add(agent_id)
             rest = re.sub(whole, ' ', rest)

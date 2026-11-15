@@ -112,6 +112,8 @@ export interface AgentView {
   readonly usage: Usage;
   /** `null` when the harness reports tokens only. */
   readonly cost_usd: number | null;
+  /** Why the agent's latest turn, or the latest start of its harness, failed, or `null`. */
+  readonly error: string | null;
 }
 
 /** One version of the lab's question: the text that the lab opened with, or a revision by the person. */
@@ -127,6 +129,8 @@ export interface QuestionVersion {
 export interface LabView {
   /** The question that the lab works on now. */
   readonly question: string;
+  /** Whether an agent may take the coordinator seat by itself: nobody holds it, and the person did not close it. */
+  readonly coordinator_open: boolean;
   /** Every version of the question, oldest first. The last one is the current question. */
   readonly versions: readonly QuestionVersion[];
   readonly opened_at: string;

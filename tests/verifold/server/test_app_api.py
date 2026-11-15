@@ -465,6 +465,42 @@ async def test_the_person_adds_a_seat_with_its_facts_changes_a_seat_and_asks_the
     assert host.requests == [InviteRequest(role='reads', family='openai', coordinator=True)]
 
 
+async def test_the_person_closes_and_opens_a_coordinator_seat_that_nobody_holds(
+    client: httpx2.AsyncClient, lab: Lab, activity: Activity
+) -> None:
+    await lab.set_coordinator('ada', 'ada')
+    first = (await client.get('/lab')).json()
+    closed = await client.post('/coordinator', json={'open': False})
+    opened = await client.post('/coordinator', json={'open': True})
+    async with client_of(Host(None), activity) as nowhere:
+        no_lab = await nowhere.post('/coordinator', json={'open': True})
+
+    # A seat with a holder is not open, and the person's clear takes the holder and closes the seat.
+    assert (first['coordinator_open'], [view['coordinator'] for view in first['agents']]) == (False, [True, False])
+    assert (closed.json()['coordinator_open'], [view['coordinator'] for view in closed.json()['agents']]) == (
+        False,
+        [False, False],
+    )
+    assert opened.json()['coordinator_open'] is True
+    assert no_lab.status_code == 409
+    assert [(entry.agent, entry.by, entry.open) for entry in lab.board.coordinators[1:]] == [
+        (None, 'person', False),
+        (None, 'person', True),
+    ]
+
+
+async def test_the_lab_view_says_why_an_agents_harness_failed_last(client: httpx2.AsyncClient, lab: Lab) -> None:
+    refused = 'RequestError: The model fable-9 is not available.'
+    await lab.end_turn(TurnSummary(agent='bo', seconds=0, usage=Usage(), error=refused, no_turn=True))
+    await lab.end_turn(TurnSummary(agent='ada', seconds=1, usage=Usage(), error='It broke.'))
+    await lab.end_turn(TurnSummary(agent='ada', seconds=1, usage=Usage()))
+
+    ada, bo = (await client.get('/lab')).json()['agents']
+
+    # A turn that ended well after a failure clears it.
+    assert (ada['error'], bo['error']) == (None, refused)
+
+
 async def test_the_lab_view_says_who_is_on_call_who_coordinates_and_which_role_the_person_gave(
     client: httpx2.AsyncClient, lab: Lab
 ) -> None:

@@ -123,6 +123,7 @@ function Offered(props: {
             value={pick.model}
             onChange={(event) => props.onPick({ ...pick, model: event.target.value })}
           />
+          {pick.model.trim() ? null : <p>Type the model’s ID, or choose a model from the list.</p>}
         </>
       ) : null}
       <Menu
@@ -199,6 +200,49 @@ function Typed(props: {
       />
       <p>Leave a field blank to keep your own setting for {props.title}.</p>
     </>
+  );
+}
+
+/**
+ * What the member list says when no agent holds the coordinator seat, and the person's switch for it: agents may
+ * take the seat, or the person closed it.
+ */
+export function CoordinatorSeat(props: {
+  readonly api: Api;
+  readonly open: boolean;
+  readonly onChange: () => void;
+}): ReactElement {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const change = (): void => {
+    setBusy(true);
+    setError(null);
+    props.api.setCoordinatorSeat(!props.open).then(
+      () => {
+        setBusy(false);
+        props.onChange();
+      },
+      (failure: unknown) => {
+        setBusy(false);
+        setError(messageOf(failure));
+      },
+    );
+  };
+  return (
+    <p className="f-where">
+      {props.open
+        ? 'No coordinator. Agents may take the seat.'
+        : 'No coordinator. You closed the seat.'}{' '}
+      <button className="linkbtn" type="button" disabled={busy} onClick={change}>
+        {props.open ? 'Close the seat' : 'Let agents take it'}
+      </button>
+      {error ? (
+        <span className="error" role="alert">
+          {' '}
+          {error}
+        </span>
+      ) : null}
+    </p>
   );
 }
 

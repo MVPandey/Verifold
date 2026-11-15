@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from verifold.protocol.agents import MAX_AGENTS, Agent, AgentChoice
+from verifold.protocol.agents import MAX_AGENTS, Agent, AgentChoice, ModelSpec
 from verifold.protocol.app import InviteRequest, StartRequest
 from verifold.protocol.settings import SettingsFile, SetupDefaults
 
@@ -46,6 +46,33 @@ def test_saved_choices_and_records_from_before_seats_still_load() -> None:
 
     assert (seat.role, seat.on_call, seat.coordinator, seat.family) == ('', False, False, None)
     assert (agent.name, agent.given_role, agent.role) == ('Agent 1', '', 'Planner')
+
+
+def test_names_roles_families_and_typed_ids_are_one_printable_line() -> None:
+    seat = AgentChoice(harness='codex', role='dri\u202ever\u200b\n now', family=' Other\tVendor ')
+    agent = Agent(id='agent-1', name=' Codex ·\x1b[31m gpt-6\n', harness='codex', model=ModelSpec(family='openai'))
+
+    # A role, a family, and a name lose what does not print, as the role that an agent gives itself does.
+    assert (seat.role, seat.family, agent.name) == ('dri ver now', 'Other Vendor', 'Codex · [31m gpt-6')
+    # A typed ID goes to the harness as it is, so one that is not a printable line is refused, not changed.
+    for field in ('model', 'effort', 'mode'):
+        for value in ('gpt\u202e-6', 'gpt 6\n', ' gpt-6', 'gpt\x00-6', 'gpt\u200b-6'):
+            with pytest.raises(ValidationError, match='is not one printable line'):
+                AgentChoice.model_validate({'harness': 'codex', field: value})
+    assert AgentChoice(harness='codex', model='us.vendor.gpt-6.1-sol:2026 preview').model is not None
+    with pytest.raises(ValidationError, match='is not one printable line'):
+        SettingsFile.model_validate({'setup': {'agents': [{'harness': 'codex', 'model': 'a\nb'}]}})
+    with pytest.raises(ValidationError):
+        Agent(id='agent-1', name='\u200b', harness='codex', model=ModelSpec(family='openai'))
+
+
+def test_a_stated_family_is_never_the_word_for_a_family_that_nobody_stated() -> None:
+    for family in ('unknown', ' Unknown ', 'UNKNOWN'):
+        with pytest.raises(ValidationError, match='is how Verifold records a family that nobody stated'):
+            InviteRequest(family=family)
+        with pytest.raises(ValidationError, match='Leave the family out'):
+            AgentChoice(harness='codex', family=family)
+    assert InviteRequest(family='unknown-labs').family == 'unknown-labs'
 
 
 def test_an_invitation_takes_the_facts_of_the_seat() -> None:

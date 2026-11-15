@@ -75,6 +75,7 @@ describe('the API client', () => {
     await api.changeSeat('agent 2', { on_call: true });
     await api.changeSeat('agent-1', { coordinator: false });
     await api.askOffers();
+    await api.setCoordinatorSeat(false);
 
     assert.deepEqual(
       server.calls.map((call) => [call.input, call.init.body]),
@@ -82,6 +83,7 @@ describe('the API client', () => {
         ['/api/agents/agent%202/seat', '{"on_call":true}'],
         ['/api/agents/agent-1/seat', '{"coordinator":false}'],
         ['/api/offers', '{}'],
+        ['/api/coordinator', '{"open":false}'],
       ],
     );
   });

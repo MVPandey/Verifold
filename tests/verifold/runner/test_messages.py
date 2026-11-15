@@ -9,6 +9,7 @@ from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.runner.messages import (
     DOORBELL,
+    ON_CALL,
     RESTARTED,
     back_message,
     invitation,
@@ -53,11 +54,21 @@ def test_the_start_message_states_the_role_that_the_person_gave_and_the_seat_as_
         BOARD,
         'The person gave your seat this role: direction creator',
         "You hold the lab's coordinator seat.",
-        (
-            'The person put your seat on call. So Verifold starts you when a post for you arrives: one that names '
-            'you, replies to you, or builds on your post. No post for every agent is for you.'
-        ),
+        ON_CALL,
     ]
+    # The sentence holds for an invited agent too, which Verifold never starts.
+    assert 'Verifold starts you' not in ON_CALL
+    assert all(
+        part in ON_CALL
+        for part in (
+            'names you',
+            'replies to you',
+            'builds on your post',
+            'a thread that you watch',
+            'side thread',
+            'close',
+        )
+    )
     # An agent with no role from the person and a plain seat reads nothing about either.
     assert plain.splitlines()[2:] == [
         f'You are Codex · gpt-6 (bo) in a Verifold lab. {SAME_MOMENT}: Ada (ada, fake).',

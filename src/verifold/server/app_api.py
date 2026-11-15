@@ -12,7 +12,7 @@ from collections.abc import AsyncGenerator, Callable
 from datetime import timedelta
 from typing import Annotated, Protocol
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, params
 from fastapi.responses import JSONResponse
 from pydantic import SecretStr, ValidationError
 from sse_starlette import EventSourceResponse
@@ -20,6 +20,7 @@ from sse_starlette import EventSourceResponse
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import (
     AgentView,
+    CoordinatorSeat,
     FolderRequest,
     FolderView,
     Invitation,
@@ -147,11 +148,6 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     async def setup() -> SetupView:
         return host.setup()
 
-    @api.post('/offers', dependencies=[authorized])
-    async def offers() -> SetupView:
-        # The form that adds an agent to a lab that was served again has no offers until the harnesses are asked.
-        return host.ask_harnesses()
-
     @api.post('/labs', dependencies=[authorized])
     async def start(request: StartRequest) -> SetupView:
         await host.start(request)
@@ -172,11 +168,6 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     @api.post('/agents', dependencies=[authorized])
     async def add_agents(choice: AgentChoice) -> LabView:
         await host.add_agents(choice)
-        return _lab_view(current().board, activity)
-
-    @api.post('/agents/{agent_id}/seat', dependencies=[authorized])
-    async def change_seat(agent_id: AgentId, change: SeatChange) -> LabView:
-        await host.change_seat(agent_id, change)
         return _lab_view(current().board, activity)
 
     @api.post('/agents/{agent_id}/start', dependencies=[authorized])
@@ -258,7 +249,36 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     async def events() -> EventSourceResponse:
         return EventSourceResponse(_changes(host, activity))
 
+    _seat_routes(api, host, activity, authorized)
     return api
+
+
+def _seat_routes(api: FastAPI, host: Host, activity: Activity, authorized: params.Depends) -> None:
+    """Add the person's actions on seats: what the harnesses offer, one agent's seat, and the coordinator seat."""
+
+    @api.post('/offers', dependencies=[authorized])
+    async def offers() -> SetupView:
+        # The form that adds an agent to a lab that was served again has no offers until the harnesses are asked.
+        return host.ask_harnesses()
+
+    @api.post('/agents/{agent_id}/seat', dependencies=[authorized])
+    async def change_seat(agent_id: AgentId, change: SeatChange) -> LabView:
+        await host.change_seat(agent_id, change)
+        return _lab_view(_lab(host).board, activity)
+
+    @api.post('/coordinator', dependencies=[authorized])
+    async def coordinator(seat: CoordinatorSeat) -> LabView:
+        # The seat has no holder after this. A seat that the person closes stays free until the person gives it.
+        lab = _lab(host)
+        await lab.set_coordinator(None, PERSON, free=seat.open)
+        return _lab_view(lab.board, activity)
+
+
+def _lab(host: Host) -> Lab:
+    lab = host.lab
+    if lab is None:
+        raise NoLab('This folder has no lab yet. Start one from the setup screen.')
+    return lab
 
 
 def new_person_token() -> SecretStr:
@@ -285,6 +305,7 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
         close_agreed=len(agreed(board, done)) if done else 0,
         close_among=close_count(board, done)[1] if done else 0,
         question=board.question,
+        coordinator_open=board.coordinator_open,
         versions=versions(board),
         opened_at=board.opened.at,
         seq=board.seq,
@@ -326,6 +347,7 @@ def _agent_view(board: Board, activity: Activity, agent_id: str, working: dict[A
             output_tokens=sum(turn.usage.output_tokens for turn in turns),
         ),
         cost_usd=sum(costs) if costs else None,
+        error=board.failure(agent_id),
     )
 
 

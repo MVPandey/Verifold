@@ -1100,6 +1100,46 @@ describe('the lab page', () => {
     assert.ok(html.includes('Take off call'));
     assert.ok(html.includes('Remove as coordinator'));
     assert.ok(html.includes('No turns yet'));
+    // An agent holds the coordinator seat, so the list says nothing about a seat without a holder.
+    assert.equal(html.includes('No coordinator.'), false);
+  });
+
+  it('says whether agents may take a coordinator seat that nobody holds, and why a harness failed', () => {
+    const [first, second] = lab.agents;
+    assert.ok(first && second);
+    const list = (open: boolean): string =>
+      renderToStaticMarkup(
+        <Top
+          folder="~/code/sort-bench"
+          route={{ page: 'lab' }}
+          open={{
+            lab: {
+              ...lab,
+              coordinator_open: open,
+              agents: [
+                first,
+                { ...second, error: 'RequestError: The model fable-9 is not available.' },
+              ],
+            },
+            threads: [summary()],
+            harnesses: HARNESSES,
+            needs: 0,
+            now,
+            api: {} as Api,
+            onChange: () => undefined,
+          }}
+        />,
+      );
+
+    assert.ok(list(true).includes('No coordinator. Agents may take the seat.'));
+    assert.ok(list(true).includes('Close the seat'));
+    assert.ok(list(false).includes('No coordinator. You closed the seat.'));
+    assert.ok(list(false).includes('Let agents take it'));
+    assert.equal(
+      list(true).split('Last failure: RequestError: The model fable-9 is not available.').length -
+        1,
+      1,
+    );
   });
 
   it('keeps the members, their state and cost, the lab total, and the time in the top bar', () => {
@@ -1382,6 +1422,8 @@ describe('the setup screen', () => {
     assert.ok(html.includes('Coordinator. A lab has one.'));
     assert.ok(html.includes('Add a seat with another model'));
     assert.equal(html.includes('Remove seat'), false);
+    assert.equal(html.includes('Every seat is on call'), false);
+    assert.equal(html.includes('needs a model ID'), false);
   });
 
   it('shows each saved seat of a harness, with a typed model for one that the harness does not list', () => {
@@ -1425,6 +1467,26 @@ describe('the setup screen', () => {
     assert.equal(html.split('Remove seat').length - 1, 2);
     // Only what the harness reported is offered: it said nothing about the effort levels of this model.
     assert.equal(html.split('>Effort</label>').length - 1, 1);
+  });
+
+  it('says that nothing starts by itself when every seat is on call', () => {
+    const seat = { harness: 'claude-code', count: 1, model: null, effort: null, mode: null };
+    const html = renderToStaticMarkup(
+      <SetupPage
+        api={{} as Api}
+        setup={{
+          folder: '~/code',
+          harnesses: HARNESSES,
+          question: null,
+          defaults: { agents: [{ ...seat, on_call: true }], auto_mode: true, minutes: null },
+          defaults_from: null,
+        }}
+        onStarted={() => undefined}
+        onRefresh={() => undefined}
+      />,
+    );
+
+    assert.ok(html.includes('Every seat is on call, so no agent starts until a post names one.'));
   });
 
   it('waits for a harness that Verifold still asks, and takes typed choices from one that did not answer', () => {

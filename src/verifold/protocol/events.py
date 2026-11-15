@@ -98,9 +98,12 @@ class CoordinatorSet(EventBase):
     """
     The lab's coordinator changed: an agent holds the seat now, or nobody does.
 
-    A lab has one coordinator at most. The person can give the seat to any agent and can clear it. An agent can
-    take the seat for itself when nobody holds it, and the agent that holds it can give it up. The code acts on
-    nothing but who holds the seat: what a coordinator does is for the lab to decide.
+    A lab has one coordinator at most. The person can give the seat to any agent and can clear it. The agent that
+    holds the seat can give it up. An agent can take the seat for itself while the seat is free and open: nobody
+    ever held it, its holder gave it up or left the lab by itself, or the person said that agents may take it. A
+    seat that the person cleared, or whose holder the person removed, is closed to the agents until the person
+    gives it to an agent or opens it. The code acts on nothing but who holds the seat: what a coordinator does is
+    for the lab to decide.
     """
 
     type: Literal['coordinator_set'] = 'coordinator_set'
@@ -108,6 +111,8 @@ class CoordinatorSet(EventBase):
     """The agent that holds the seat from now on, or `None` when nobody does."""
     by: AgentId
     """Who caused it: the person, or the agent itself."""
+    open: bool = False
+    """With no holder and from the person: whether an agent may take the seat by itself. It means nothing else."""
 
 
 type Reason = Annotated[str, AfterValidator(one_line), StringConstraints(max_length=200)]

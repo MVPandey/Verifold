@@ -54,6 +54,7 @@ function slowServer(): {
     addAgents: () => Promise.reject(new Error('unused')),
     changeSeat: () => Promise.reject(new Error('unused')),
     askOffers: () => Promise.reject(new Error('unused')),
+    setCoordinatorSeat: () => Promise.reject(new Error('unused')),
     invite: () => Promise.reject(new Error('unused')),
     inviteAgain: () => Promise.reject(new Error('unused')),
     removeAgent: () => Promise.reject(new Error('unused')),

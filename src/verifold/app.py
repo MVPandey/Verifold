@@ -494,8 +494,9 @@ class Host:
 
     def _crew(self, lab: Lab) -> Crew:
         # A checker takes the model of an on-call seat only when the lab has no other seat of that family.
-        workers = sorted(self._workers(lab), key=lambda agent: lab.board.on_call(agent.id))
-        return _crew(tuple(workers), self._catalog, auto_mode=lab.board.opened.auto_mode)
+        workers = self._workers(lab)
+        on_call = frozenset(agent.id for agent in workers if lab.board.on_call(agent.id))
+        return _crew(workers, self._catalog, auto_mode=lab.board.opened.auto_mode, on_call=on_call)
 
     async def _run_agent(self, lab: Lab, agent: Agent, *, under_way: bool) -> None:
         group, settings = self._group, self._settings
@@ -520,15 +521,27 @@ class Host:
         # An on-call agent that never worked has no harness and no turn. It starts when the first post for it
         # arrives, or when the person takes its seat off call. Its first message then holds the facts of that
         # moment. After a restart the wait starts again from the agent's join, so a post from before still counts.
+        # No harness starts while the lab is out of time, because no turn can run then.
         seen = before(lab.board, agent.id).seen
         while True:
             board = lab.board
             if board.gone(agent.id):
                 return
-            if not board.on_call(agent.id) or update(board, agent.id, seen).posts:
+            called = not board.on_call(agent.id) or update(board, agent.id, seen).posts
+            if called and not board.out_of_time:
                 break
             await lab.wait_for_change(board.seq)
-        member, setup = await self._seat(lab, agent, self._start_message(lab, agent, under_way=True))
+        try:
+            member, setup = await self._seat(lab, agent, self._start_message(lab, agent, under_way=True))
+        except (GitError, OSError) as error:
+            # One agent that cannot start must not stop the lab. The record keeps why, the member list shows it,
+            # and the person can start the agent again.
+            failed = f"Verifold can't start {agent.name}: {error}"
+            await lab.end_turn(
+                TurnSummary(agent=agent.id, seconds=0, usage=Usage(), error=failed, stopped=True, no_turn=True)
+            )
+            await self._activity.set(agent.id, 'stopped')
+            return
         await self._activity.set(agent.id, 'starting')
         await AgentLoop(member, setup, settings, shared=self._shared()).run()
 
@@ -976,20 +989,27 @@ def _options(agent: Agent, *, auto_mode: bool) -> SessionOptions:
     return SessionOptions(model=agent.model.name, effort=agent.model.effort, mode=agent.mode, auto_mode=auto_mode)
 
 
-def _crew(agents: tuple[Agent, ...], catalog: Mapping[str, HarnessEntry], *, auto_mode: bool) -> Crew:
-    # One entry for each harness and model family, in the order given, with the model and effort of the first
-    # agent that has both. The entry carries that agent's family, which the person can state for a seat. Checkers
-    # come from this crew. A checker follows the auto mode answer, not a worker's mode, because it must be able to
-    # run the work again.
+def _crew(
+    agents: tuple[Agent, ...],
+    catalog: Mapping[str, HarnessEntry],
+    *,
+    auto_mode: bool,
+    on_call: frozenset[AgentId] = frozenset(),
+) -> Crew:
+    # One entry for each harness and model family, with the model and effort of the first agent that has both. The
+    # agents of on-call seats come last, so a checker takes the model of an on-call seat only when no other seat has
+    # that family. The entry carries the agent's family, which the person can state for a seat. Checkers come from
+    # this crew. A checker follows the auto mode answer, not a worker's mode, because it must be able to run the
+    # work again.
     first: dict[tuple[str, str], Agent] = {}
-    for agent in agents:
-        first.setdefault((agent.harness, agent.model.family), agent)
+    for agent in sorted(agents, key=lambda agent: agent.id in on_call):
+        first.setdefault((agent.harness, agent.model.family.strip().casefold()), agent)
     return tuple(
         (
-            catalog[harness].model_copy(update={'family': family}),
+            catalog[harness].model_copy(update={'family': agent.model.family}),
             _options(agent.model_copy(update={'mode': None}), auto_mode=auto_mode),
         )
-        for (harness, family), agent in first.items()
+        for (harness, _), agent in first.items()
     )
 
 

@@ -58,17 +58,18 @@ def check_named(board: Board, named: AgentNamed) -> str:
     """
     Check that an agent can get a new name, and return the name that it has now.
 
+    An agent can get a name that another agent had before: when two agents turn out to run one model, the one
+    that joined first gets the name without a number.
+
     Raises:
-        RejectedEvent: The agent is not in the lab, or another agent has or had the name.
+        RejectedEvent: The agent is not in the lab, or another agent has the name.
 
     """
     joined = board.agent(named.agent)
     if not joined:
         raise RejectedEvent(f'{named.agent} is not an agent in this lab.')
     folded = named.name.casefold()
-    others = (entry.agent.name for entry in board.agents if entry.agent.id != named.agent)
-    former = (before for event, before in board.renames if event.agent != named.agent)
-    if any(name.casefold() == folded for name in (*others, *former)):
+    if any(entry.agent.name.casefold() == folded for entry in board.agents if entry.agent.id != named.agent):
         raise RejectedEvent(f'Another agent has the name {named.name}.')
     return joined.agent.name
 
@@ -89,11 +90,12 @@ def check_coordinator(board: Board, event: CoordinatorSet) -> None:
     Check that the lab's coordinator can change.
 
     The person can give the seat to any agent of the lab and can clear it. An agent can take the seat for itself
-    when nobody holds it, and give up the seat that it holds.
+    when nobody holds it and the person did not close it, and give up the seat that it holds.
 
     Raises:
         RejectedEvent: The agent is not in the lab, left it, or is a blind checker, an agent names another agent,
-            an agent takes a seat that somebody holds, or an agent gives up a seat that it does not hold.
+            an agent takes a seat that somebody holds or that the person closed, or an agent gives up a seat that
+            it does not hold.
 
     """
     if event.agent:
@@ -111,7 +113,12 @@ def check_coordinator(board: Board, event: CoordinatorSet) -> None:
     if holder and holder != event.by:
         raise RejectedEvent(
             f'{holder} is the coordinator of this lab. The seat is free when {holder} gives it up or the person '
-            'clears it.'
+            'gives it to another agent.'
+        )
+    if not holder and not board.coordinator_open:
+        raise RejectedEvent(
+            'The person closed the coordinator seat, so no agent takes it by itself. The person can give it to an '
+            'agent or open it.'
         )
 
 

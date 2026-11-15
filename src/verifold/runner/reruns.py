@@ -7,7 +7,7 @@ from functools import partial
 from pathlib import Path
 
 from verifold.harnesses.catalog import HarnessEntry
-from verifold.protocol.agents import UNKNOWN_FAMILY, Agent, ModelSpec
+from verifold.protocol.agents import UNKNOWN_FAMILY, Agent, ModelSpec, same_family
 from verifold.protocol.events import RerunRequested, TurnSummary
 from verifold.protocol.posts import Check
 from verifold.protocol.usage import Usage
@@ -129,7 +129,7 @@ class Reruns:
             )
             raise NoCrew('The lab has no agent that Verifold started, so no blind checker can start.')
         harness, options = next(
-            ((entry, options) for entry, options in crew if entry.family != author.agent.model.family),
+            ((entry, options) for entry, options in crew if not same_family(entry.family, author.agent.model.family)),
             crew[0],
         )
         checker_id = _checker_id(request)

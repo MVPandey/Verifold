@@ -355,6 +355,8 @@ class AgentLine(Record):
     plan: PostLine | None = None
     latest: PostLine | None = None
     """The agent's latest post, when that is not its plan."""
+    error: str | None = None
+    """Why the agent's latest turn, or the latest start of its harness, failed. `None` when it did not fail."""
 
 
 MAX_LEADS = 10
@@ -461,6 +463,8 @@ class Brief(Record):
     """The other agents that are in the lab. Blind checkers are not among them."""
     coordinator: AgentId | None = None
     """The agent that holds the lab's coordinator seat, or `None` when nobody does."""
+    coordinator_open: bool = True
+    """Whether an agent may take the seat with `profile`: nobody holds it, and the person did not close it."""
     left: tuple[LeftLine, ...] = ()
     """The agents that left the lab or that the person removed, oldest first."""
     answer: PostLine | None = None

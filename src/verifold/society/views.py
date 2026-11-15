@@ -286,6 +286,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         ),
         agents=tuple(_agent_line(board, agent, working) for agent in others),
         coordinator=board.coordinator,
+        coordinator_open=board.coordinator_open,
         left=tuple(left_line(board, entry) for entry in board.left),
         answer=PostLine.of(proposed) if proposed else None,
         answer_standing=standing(board, proposed.post.id) if proposed else None,
@@ -324,6 +325,7 @@ def _agent_line(board: Board, agent: Agent, working: dict[AgentId, ThreadId | No
         thread=working.get(agent.id),
         plan=PostLine.of(plan) if plan else None,
         latest=PostLine.of(posts[-1]) if posts and posts[-1] is not plan else None,
+        error=board.failure(agent.id),
     )
 
 

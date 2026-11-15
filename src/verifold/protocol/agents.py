@@ -2,15 +2,45 @@
 
 from typing import Annotated, Self
 
-from pydantic import AfterValidator, Field, StringConstraints, model_validator
+from pydantic import AfterValidator, Field, StringConstraints, field_validator, model_validator
 
 from verifold.protocol.ids import AgentId, PostId
 from verifold.protocol.record import Record
 
 type Label = Annotated[str, StringConstraints(min_length=1, max_length=40)]
 
-type Name = Annotated[str, StringConstraints(min_length=1, max_length=120)]
-"""An agent's display name. A name that Verifold builds holds the harness's title and the model's name."""
+type ValueId = Annotated[str, StringConstraints(min_length=1, max_length=200)]
+"""The ID of a value that a harness offers, such as a model. A cloud provider's model IDs can be long."""
+
+
+def _printable(text: str) -> str:
+    if one_line(text) != text:
+        raise ValueError(
+            f'{text!r} is not one printable line. Give it without line breaks, control characters, invisible '
+            'characters, or spaces at its ends or in a row.'
+        )
+    return text
+
+
+type TypedId = Annotated[ValueId, AfterValidator(_printable)]
+"""
+A model, an effort, or a mode that the person typed or saved, as the harness names it. It is one printable line,
+because an agent's name can show it. A value that is not one is refused, not changed: the harness would get another ID.
+"""
+
+type Name = Annotated[str, AfterValidator(one_line), StringConstraints(min_length=1, max_length=120)]
+"""
+An agent's display name, as one printable line. A name that Verifold builds holds the harness's title and the
+model's name.
+"""
+
+type Family = Annotated[str, AfterValidator(one_line), StringConstraints(min_length=1, max_length=40)]
+"""A model family that the person states, as one printable line."""
+
+
+def same_family(one: str, other: str) -> bool:
+    """Return whether two model families are the same, whatever their capitals and the spaces around them."""
+    return one.strip().casefold() == other.strip().casefold()
 
 
 def one_line(text: str) -> str:
@@ -24,9 +54,6 @@ type Role = Annotated[str, AfterValidator(one_line), StringConstraints(max_lengt
 
 type Status = Annotated[str, AfterValidator(one_line), StringConstraints(max_length=140)]
 """What an agent says that it does now, in one line."""
-
-type ValueId = Annotated[str, StringConstraints(min_length=1, max_length=200)]
-"""The ID of a value that a harness offers, such as a model. A cloud provider's model IDs can be long."""
 
 
 class ModelSpec(Record):
@@ -96,8 +123,21 @@ class SeatFacts(Record):
     """
     coordinator: bool = False
     """Whether the seat's agent is the lab's coordinator. A lab has one coordinator at most."""
-    family: Label | None = None
-    """The model family of the seat's model. `None` takes the family of the harness's entry."""
+    family: Family | None = None
+    """
+    The model family of the seat's model. `None` takes the family of the harness's entry, or for an invited agent
+    says that nobody stated one.
+    """
+
+    @field_validator('family')
+    @classmethod
+    def _a_stated_family(cls, family: str | None) -> str | None:
+        if family is not None and same_family(family, UNKNOWN_FAMILY):
+            raise ValueError(
+                f'`{UNKNOWN_FAMILY}` is how Verifold records a family that nobody stated. Leave the family out, or '
+                'state the family.'
+            )
+        return family
 
 
 class AgentChoice(SeatFacts):
@@ -109,9 +149,9 @@ class AgentChoice(SeatFacts):
 
     harness: Label
     count: int = Field(default=1, ge=1, le=MAX_AGENTS)
-    model: ValueId | None = None
-    effort: ValueId | None = None
-    mode: ValueId | None = None
+    model: TypedId | None = None
+    effort: TypedId | None = None
+    mode: TypedId | None = None
     """One of the harness's own modes. `None` follows the lab's auto mode choice."""
 
     @model_validator(mode='after')

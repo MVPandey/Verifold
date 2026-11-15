@@ -57,6 +57,8 @@ export interface Api {
   addAgents(choice: AgentChoice): Promise<LabView>;
   /** Put an agent's seat on call or take it off, and give or take the lab's coordinator seat. */
   changeSeat(agentId: string, change: SeatChange): Promise<LabView>;
+  /** Leave the coordinator seat without a holder, open for an agent to take or closed. */
+  setCoordinatorSeat(open: boolean): Promise<LabView>;
   /** Ask the harnesses that Verifold did not ask yet what they offer. The setup shows the answers when they come. */
   askOffers(): Promise<SetupView>;
   /** Invite an agent that runs by itself. Without a name, it gets the next one, such as "Agent 3". */
@@ -103,6 +105,7 @@ export function createApi(
       request<LabView>('/lab').then((lab) => ({
         ...lab,
         versions: lab.versions ?? [],
+        coordinator_open: lab.coordinator_open ?? true,
         state: lab.state ?? 'open',
         close: lab.close ?? null,
         close_agreed: lab.close_agreed ?? 0,
@@ -113,6 +116,7 @@ export function createApi(
           role: view.role ?? '',
           on_call: view.on_call ?? false,
           coordinator: view.coordinator ?? false,
+          error: view.error ?? null,
           status: view.status ?? '',
           thread: view.thread ?? null,
           left: view.left ?? null,
@@ -157,6 +161,7 @@ export function createApi(
     reviseQuestion: (question, note) => request('/question', { question, note }),
     addAgents: (choice) => request('/agents', choice),
     changeSeat: (agentId, change) => request(`/agents/${encodeURIComponent(agentId)}/seat`, change),
+    setCoordinatorSeat: (open) => request('/coordinator', { open }),
     askOffers: () => request('/offers', {}),
     invite: (invitation) => request('/invitations', invitation ?? {}),
     inviteAgain: (agentId) => request(`/invitations/${encodeURIComponent(agentId)}`, {}),

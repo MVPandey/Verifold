@@ -22,7 +22,7 @@ from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import TypeAdapter
 
-from verifold.app import WRITING_TEMPLATE, ServeHooks, ServeOptions, WebServer, _crew, serve
+from verifold.app import WRITING_TEMPLATE, Host, ServeHooks, ServeOptions, WebServer, _crew, serve
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent, AgentChoice, ModelSpec
 from verifold.protocol.app import AgentView, LabView, StartRequest
@@ -40,12 +40,15 @@ from verifold.protocol.events import (
 )
 from verifold.protocol.settings import AtExit, AtTimeLimit
 from verifold.protocol.usage import Usage
+from verifold.runner.agent_loop import AgentSetup
 from verifold.runner.environment import harness_environment
 from verifold.runner.git import GitError, git
 from verifold.runner.jobs import Sweep, sweep
 from verifold.runner.messages import DOORBELL, RESTARTED, STARTED_AGAIN
+from verifold.runner.messages import ON_CALL as ON_CALL_FACT
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.server.lab import Lab
+from verifold.server.member import Member
 from verifold.server.web import web_app
 from verifold.society.attention import update
 from verifold.society.fold import fold
@@ -1402,6 +1405,67 @@ async def test_an_on_call_agent_that_was_never_called_has_no_turn_after_a_restar
     assert [start.model for start in board.starts if start.agent == 'agent-1'][:1] == ['default']
 
 
+async def test_an_on_call_agent_that_a_post_names_while_the_lab_is_out_of_time_starts_when_the_lab_has_time(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seated: list[tuple[str, bool]] = []
+    seat = Host._seat
+
+    async def watched(host: Host, lab: Lab, agent: Agent, start: str) -> tuple[Member, AgentSetup]:
+        seated.append((agent.id, lab.board.out_of_time))
+        return await seat(host, lab, agent, start)
+
+    monkeypatch.setattr(Host, '_seat', watched)
+    async with serving(project, ON_CALL, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: turns_of(project, 'agent-1') == 1, timeout=60)
+        await client.post('/time', json={'minutes': 0})
+        ask = {'kind': 'ask', 'text': 'A hard one.', 'thread': 't-1', 'mentions': ['agent-2']}
+        assert (await client.post('/posts', json=ask)).status_code == 200
+        idle = await state_of(client, 'agent-2')
+        await client.post('/time', json={'minutes': 5})
+        await until(lambda: turns_of(project, 'agent-2') == 1, timeout=60)
+
+    # No harness starts for the agent while no turn can run. It starts once, when the lab has time again.
+    assert idle == 'idle'
+    assert [out_of_time for agent, out_of_time in seated if agent == 'agent-2'] == [False]
+
+
+async def test_an_on_call_agent_that_cannot_start_does_not_stop_the_lab_and_the_person_starts_it_again(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    failed: list[str] = []
+    seat = Host._seat
+
+    async def broken_once(host: Host, lab: Lab, agent: Agent, start: str) -> tuple[Member, AgentSetup]:
+        if agent.id == 'agent-2' and not failed:
+            failed.append(agent.id)
+            raise GitError('fatal: the worktree is gone')
+        return await seat(host, lab, agent, start)
+
+    monkeypatch.setattr(Host, '_seat', broken_once)
+    async with serving(project, ON_CALL, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: turns_of(project, 'agent-1') == 1, timeout=60)
+        ask = {'kind': 'ask', 'text': 'A hard one.', 'thread': 't-1', 'mentions': ['agent-2']}
+        await client.post('/posts', json=ask)
+        await until(lambda: turns_of(project, 'agent-2') == 1)
+        stopped = (await views(client))['agent-2']
+        again = await client.post('/agents/agent-2/start')
+        # The ask still waits for the agent, so it starts at once.
+        await until(lambda: turns_of(project, 'agent-2') == 2, timeout=60)
+        started_again = (await views(client))['agent-2']
+
+    entry = next(turn for turn in turns(project) if turn.agent == 'agent-2')
+    assert (entry.error, entry.stopped, entry.no_turn) == (
+        "Verifold can't start Fake · small: fatal: the worktree is gone",
+        True,
+        True,
+    )
+    # The member list says why, and the person starts the agent again from there.
+    assert (stopped.stopped, stopped.error, stopped.activity.state) == (True, entry.error, 'stopped')
+    assert (again.status_code, started_again.error, started_again.stopped) == (200, None, False)
+    assert 'agent-2' in started(project)
+
+
 async def test_the_person_adds_an_on_call_seat_and_invites_an_agent_with_the_facts_of_its_seat(project: Path) -> None:
     start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),))
     seat = {'harness': 'fake', 'model': 'small', 'effort': 'low', 'role': 'lit review', 'on_call': True}
@@ -1434,6 +1498,9 @@ async def test_the_person_adds_an_on_call_seat_and_invites_an_agent_with_the_fac
     assert folder == project / '.verifold' / 'agents' / 'agent-3'
     assert 'The person gave your seat this role: reads papers' in invited['text']
     assert "You hold the lab's coordinator seat." in invited['text']
+    # Verifold never starts an invited agent, and its invitation does not say that it does.
+    assert ON_CALL_FACT in invited['text']
+    assert 'Verifold starts you' not in invited['text']
     # An invitation without facts is as before: a numbered name, and a family that nobody knows.
     assert (plain['name'], lab['agent-4'].agent.model.family, lab['agent-4'].on_call) == (
         'Agent 4',
@@ -1479,6 +1546,14 @@ def test_a_checker_comes_from_each_harness_and_family_that_a_seat_states() -> No
         ('fake', 'test', 'small'),
         ('fake', 'other', 'small-model'),
     ]
+    # A family is the same whatever its capitals. An on-call seat gives its model only when no other seat has its family.
+    spared = _crew(
+        (seat(1, 'test', 'strong'), seat(2, ' Test ', 'small'), seat(3, 'other', 'strong')),
+        {'fake': FAKE_HARNESS},
+        auto_mode=True,
+        on_call=frozenset({'agent-1', 'agent-3'}),
+    )
+    assert [(entry.family, options.model) for entry, options in spared] == [(' Test ', 'small'), ('other', 'strong')]
 
 
 @pytest.mark.usefixtures('log')

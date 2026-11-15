@@ -3,6 +3,7 @@ import asyncio
 import pytest
 from builders import until
 
+from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import Ask
 from verifold.runner.permissions import GrantAsks, ask_the_person, choose, grant_choice, refusal, settled
@@ -75,6 +76,26 @@ async def test_later_requests_use_the_same_thread_and_wait_for_the_persons_answe
     asks = [entry.post for entry in lab.board.posts if entry.post.kind == 'ask']
     assert len(asks) == 2
     assert asks[0].thread == asks[1].thread
+
+
+async def test_an_agent_whose_name_changed_keeps_its_one_thread_for_permission_requests(lab: Lab) -> None:
+    await lab.join(Agent(id='agent-9', name='Fake · default model', harness='fake', model=ModelSpec(family='test')))
+    member = Member(lab, 'agent-9')
+    request = PermissionRequest(title='run make', choices=CHOICES)
+    for round_ in (1, 2):
+        asking = asyncio.create_task(ask_the_person(member, request))
+        await until(lambda round_=round_: sum(entry.post.kind == 'ask' for entry in lab.board.posts) == round_)
+        asked = lab.board.posts[-1].post
+        await lab.post(PostRequest(kind='answer', text='Allow once', thread=asked.thread, reply_to=asked.id), 'person')
+        await asking
+        # The harness names the agent's model after its first request.
+        await lab.name_by_model('agent-9', 'Fake', 'small')
+
+    asks = [entry.post for entry in lab.board.posts if entry.post.kind == 'ask']
+    assert lab.board.agents[-1].agent.name == 'Fake · small'
+    assert asks[0].thread == asks[1].thread
+    titles = [opened.thread.title for opened in lab.board.threads if opened.thread.opened_by == 'agent-9']
+    assert titles == ['Permission requests from Fake · default model']
 
 
 async def test_the_whole_answer_decides_not_only_its_first_line(lab: Lab) -> None:

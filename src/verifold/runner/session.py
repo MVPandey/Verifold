@@ -422,26 +422,29 @@ async def _begin(
     else:
         opened = await connection.new_session(cwd=str(folder), mcp_servers=servers)
         session_id, offered = opened.session_id, opened.config_options
+    silent = False
     for category, value in (('model', options.model), ('thought_level', options.effort)):
         if value:
             option = _option_id(offered or [], category, harness)
             changed = await connection.set_config_option(session_id=session_id, config_id=option, value=value)
             # A model can have its own effort levels. ACP answers a change with the full set of options, so a later
             # option comes from that answer. An empty answer says nothing, so the options from before stay.
+            silent = silent or (category == 'model' and not changed.config_options)
             offered = changed.config_options or offered
     # The mode comes last, so that a switch of model can't change it.
     if mode := options.mode or (harness.auto_mode if options.auto_mode else None):
         await connection.set_session_mode(session_id=session_id, mode_id=mode)
-    return session_id, loaded is not None, _model_now(offered, options.model)
+    return session_id, loaded is not None, _model_now(offered, options.model if silent else None)
 
 
 def _model_now(offered: Sequence[ConfigOption] | None, chosen: str | None) -> OptionValue | None:
     """
     Return the session's model, with the name that the harness shows for it, or `None` when the harness names none.
 
-    The harness reports its models in the session option of the ACP category `model`. `chosen` is the model that
-    the lab set, which is the session's model also when the harness answered the change with no options. A model
-    that the harness accepted and does not list has its ID for a name.
+    The harness reports its models in the session option of the ACP category `model`, and the option's current
+    value is the session's model. `chosen` is the model that the lab set when the harness answered that change
+    with no options: the options are then from before the change, so the session's model is the chosen one. A
+    model that the harness does not list has its ID for a name.
     """
     option = _by_category(offered).get('model')
     if option is None:
