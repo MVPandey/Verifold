@@ -59,7 +59,7 @@ type Status = Annotated[str, AfterValidator(one_line), StringConstraints(max_len
 
 MIN_CHOSEN_NAME = 2
 MAX_CHOSEN_NAME = 24
-_CHOSEN = re.compile(r"[^\W_]+(?:[ '-][^\W_]+)*")
+_CHOSEN = re.compile(r"[A-Za-z0-9]+(?:[ '-][A-Za-z0-9]+)*")
 
 
 def _chosen(name: str) -> str:
@@ -70,15 +70,17 @@ def _chosen(name: str) -> str:
         raise ValueError(f'A name has {MIN_CHOSEN_NAME} to {MAX_CHOSEN_NAME} characters, and {name!r} has {len(name)}.')
     if not _CHOSEN.fullmatch(name):
         raise ValueError(
-            f'{name!r} is not a name. A name holds letters and digits, with one space, hyphen, or apostrophe between them.'
+            f'{name!r} is not a name. A name holds the letters a to z and digits, with one space, hyphen, or '
+            'apostrophe between them.'
         )
     return name
 
 
 type ChosenName = Annotated[str, AfterValidator(one_line), AfterValidator(_chosen)]
 """
-The name that an agent chooses for itself, as one printable line of 2 to 24 characters: letters and digits, with
-single spaces, hyphens, and apostrophes between them. An empty text takes the chosen name back.
+The name that an agent chooses for itself, as one printable line of 2 to 24 characters: the letters a to z in
+either case and digits, with single spaces, hyphens, and apostrophes between them. Only these characters, so that
+no name looks like another through a letter of another alphabet. An empty text takes the chosen name back.
 """
 
 MAX_ABOUT = 240

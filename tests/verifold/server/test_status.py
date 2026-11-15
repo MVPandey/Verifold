@@ -10,6 +10,7 @@ from verifold.server.status import (
     APPROVAL_OTHER,
     HARNESS_QUESTION,
     agent_need,
+    in_turn,
     outcomes,
     profile_edits,
     thread_needs,
@@ -76,13 +77,30 @@ async def test_an_agent_has_the_first_status_that_applies_in_the_order_of_who_ne
         'answer',
         'answer',
     )
+    # A harness that starts is about to run a turn, so it does not show as idle.
     assert [need('cy', state) for state in ('working', 'waiting', 'idle', 'starting', 'stopped', 'void')] == [
         'working',
         'working',
         'idle',
-        'idle',
+        'working',
         'stopped',
         'stopped',
+    ]
+    # An agent that waits for more time, or for a process that it left running, is in no turn.
+    for waits_for, expected in (('person', 'working'), ('time', 'idle'), ('process', 'idle'), (None, 'working')):
+        activity = AgentActivity(state='waiting', waits_for=waits_for)
+        assert (agent_need(lab.board, activity, 'cy', waiting), in_turn(activity)) == (expected, expected == 'working')
+    assert (
+        need('eve', 'waiting'),
+        agent_need(lab.board, AgentActivity(state='waiting', waits_for='time'), 'eve', waiting),
+    ) == (
+        'working',
+        'waiting',
+    )
+    assert [in_turn(AgentActivity.model_validate({'state': state})) for state in ('working', 'starting', 'idle')] == [
+        True,
+        False,
+        False,
     ]
     # An ask that names an agent waits on that agent, an ask for every agent does not, and an open `wait` call does.
     assert (need('eve', 'idle'), need('eve', 'working'), need('eve', 'stopped')) == ('waiting', 'working', 'stopped')
@@ -93,9 +111,32 @@ async def test_an_agent_has_the_first_status_that_applies_in_the_order_of_who_ne
         'idle',
     )
     assert (need('gus', 'working'), need('gus', 'idle')) == ('left', 'left')
-    # The answer ends the wait on the other agent, and so does the leaving of the agent that the ask names.
+    # The wait ends when the named agent replies to the ask or builds on it, whatever the kind of its post.
     await lab.post(PostRequest(kind='answer', text='No.', thread='t-1', reply_to='p-4'), 'dee')
     assert need('eve', 'idle') == 'idle'
+    for fields in ({'kind': 'answer'}, {'kind': 'message'}, {'kind': 'result', 'builds': True}):
+        await lab.post(PostRequest(kind='ask', text='Dee, and this?', thread='t-1', mentions=('dee',)), 'eve')
+        asked = lab.board.posts[-1].post.id
+        assert need('eve', 'idle') == 'waiting'
+        link = {'builds_on': (asked,)} if fields.get('builds') else {'reply_to': asked}
+        reply = PostRequest.model_validate({'kind': fields['kind'], 'text': 'It is 3.', 'thread': 't-1'} | link)
+        await lab.post(reply, 'dee')
+        assert need('eve', 'idle') == 'idle'
+    # The asker's own answer to its ask ends the wait too.
+    await lab.post(PostRequest(kind='ask', text='Again?', thread='t-1', mentions=('dee',)), 'eve')
+    own = PostRequest(kind='answer', text='Never mind.', thread='t-1', reply_to=lab.board.posts[-1].post.id)
+    await lab.post(own, 'eve')
+    assert need('eve', 'idle') == 'idle'
+    # Another agent's reply ends nothing, the asker's own answer does, and so does the leaving of every named agent.
+    await lab.post(PostRequest(kind='ask', text='Cy or dee?', thread='t-1', mentions=('cy', 'dee')), 'fay')
+    await lab.post(
+        PostRequest(kind='message', text='Not me.', thread='t-1', reply_to=lab.board.posts[-1].post.id), 'bo'
+    )
+    assert need('fay', 'idle') == 'waiting'
+    await lab.leave('cy', 'person')
+    assert need('fay', 'idle') == 'waiting'
+    await lab.leave('dee', 'dee')
+    assert need('fay', 'idle') == 'idle'
     assert NEEDS == ('approval', 'answer', 'working', 'waiting', 'idle', 'stopped', 'left')
 
 
@@ -144,6 +185,7 @@ async def test_a_thread_has_the_first_status_of_its_asks_to_the_person_and_of_it
 
 async def test_what_became_of_an_agents_posts_is_lists_of_posts_and_no_score(lab: Lab) -> None:
     await lab.join(agent('cy'))
+    await lab.set_reviewer('bo', 'bo', reviewer=True)
     await lab.post(PostRequest(kind='result', text='Second.', thread='t-1'), 'ada')
     await lab.post(PostRequest(kind='result', text='Third.', thread='t-1'), 'ada')
     await lab.post(PostRequest(kind='result', text='On top.', thread='t-1', builds_on=('p-1',)), 'bo')

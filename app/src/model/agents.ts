@@ -104,6 +104,16 @@ export function stateLine(activity: AgentActivity, now: Date): StateLine {
     case 'working':
       return { text: `${activity.detail || 'Working'}${since}`, dot: 'live' };
     case 'waiting':
+      // An agent that waits for more time or for its own process is in no turn. The line is the server's own.
+      if (activity.waits_for === 'time') {
+        return { text: activity.detail || 'The lab is out of time.', dot: 'idle' };
+      }
+      if (activity.waits_for === 'process') {
+        return {
+          text: activity.detail || 'Waits for a process that it left running.',
+          dot: 'idle',
+        };
+      }
       return { text: `${activity.detail || 'Waiting for you'}${since}`, dot: 'wait' };
     case 'idle':
       return { text: `Idle${since}`, dot: 'idle' };

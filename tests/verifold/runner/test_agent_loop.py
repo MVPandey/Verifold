@@ -10,7 +10,7 @@ from builders import until
 from conftest import ServedBoard, agent
 from fakes import FAKE_HARNESS
 
-from verifold.protocol.app import AgentState
+from verifold.protocol.app import AgentState, WaitsFor
 from verifold.protocol.events import AlarmSet, TurnSummary
 from verifold.protocol.join import MAX_NEWS, PostRequest
 from verifold.protocol.posts import Ask, PermissionShown, QuestionShown
@@ -731,7 +731,7 @@ async def test_a_question_of_the_harness_waits_for_the_persons_answer_on_the_boa
     assert isinstance(asked, Ask)
     assert (asked.text, asked.choices, asked.mentions) == ('A question from the harness', ('main', 'dev'), ('person',))
     assert asked.shown == QuestionShown(message='Which branch?', field='Branch', kind='choice')
-    assert (state.state, state.detail) == ('waiting', 'Asks you: a question of its harness')
+    assert (state.state, state.detail, state.waits_for) == ('waiting', 'Asks you: a question of its harness', 'person')
 
 
 @pytest.mark.usefixtures('log')
@@ -904,10 +904,12 @@ class Recorded(Activity):
     def __init__(self) -> None:
         super().__init__()
         self.changes: list[tuple[str, str, str]] = []
+        self.waits: list[WaitsFor | None] = []
 
-    async def set(self, agent_id: str, state: AgentState, detail: str = '') -> None:
+    async def set(self, agent_id: str, state: AgentState, detail: str = '', waits_for: WaitsFor | None = None) -> None:
         self.changes.append((agent_id, state, detail))
-        await super().set(agent_id, state, detail)
+        self.waits.append(waits_for)
+        await super().set(agent_id, state, detail, waits_for)
 
 
 @pytest.mark.usefixtures('log')
@@ -954,8 +956,10 @@ async def test_running_out_of_time_stops_the_turn_until_the_person_gives_more_ti
         lab.board.ends_at, lab.board.settings.jobs.at_time_limit
     )
     assert activity.of('bo').detail == ''
-    assert ('waiting', 'The lab is out of time. The person can give it more.') in [
-        (state, detail) for _, state, detail in activity.changes
+    # The activity says what the agent waits for, so that the app does not take the wait for a turn.
+    assert ('waiting', 'The lab is out of time. The person can give it more.', 'time') in [
+        (state, detail, waits_for)
+        for (_, state, detail), waits_for in zip(activity.changes, activity.waits, strict=True)
     ]
 
 

@@ -3,8 +3,8 @@ from builders import START, RecordBuilder, lab
 from pydantic import ValidationError
 
 from verifold.protocol.events import ProfileSet
-from verifold.protocol.posts import Message, Result
-from verifold.society.attention import news, update
+from verifold.protocol.posts import Message, Plan, Result
+from verifold.society.attention import news, update, wakes
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 from verifold.society.identity import GUEST_LABEL, byline, post_line, seat_label
@@ -189,7 +189,7 @@ def test_a_line_of_a_post_carries_the_authors_name_seat_marks_and_role_within_a_
         'keeps the map',
     )
     # A long label is cut in a line, and a thread shows all of it.
-    assert (len(mine.by.seat), mine.by.seat[-1]) == (40, '…')
+    assert (len(mine.by.seat), mine.by.seat[-1]) == (28, '…')
     whole = thread_view(board, 'agent-2', 't-1').posts[0].by
     assert whole is not None
     assert whole.seat == long
@@ -216,15 +216,126 @@ def test_the_brief_shows_each_agents_name_seat_about_line_and_seats() -> None:
     assert (view.reviewers, view.reviewer_seats, view.reviewer_seats_free) == (('agent-3',), 1, 0)
 
 
-def test_a_chosen_name_and_the_seats_label_in_a_text_both_reach_the_agent() -> None:
-    record = seats().profile('agent-2', name='Tessel').profile('agent-2', name='Quill')
-    old = Message(id='p-1', thread='t-1', author='agent-3', text='Tessel, is the bound tight?')
-    new = Message(id='p-2', thread='t-1', author='agent-3', text='And Quill? Not Quillon or tessellate.')
-    label = Message(id='p-3', thread='t-1', author='agent-3', text='Ask Codex · gpt-6.1-sol 2 about it.')
-    other = Message(id='p-4', thread='t-1', author='agent-3', text='Quillon and tessellate name nobody.')
-    board = record.post(old).post(new).post(label).post(other).board()
+def test_a_chosen_name_reaches_its_agent_only_after_an_at_sign_and_a_seats_label_as_before() -> None:
+    record = seats().profile('agent-2', name='Tessel').profile('agent-2', name='We')
+    record.post(RESULT.model_copy(update={'author': 'agent-1'}))
+    plain = Plan(id='p-2', thread='t-1', author='agent-3', text='We test the bound first. Tessel knows why.')
+    former = Message(id='p-3', thread='t-1', author='agent-3', text='What does @Tessel think?')
+    now = Message(id='p-4', thread='t-1', author='agent-3', text='And @we, at the end of a sentence: @We.')
+    label = Message(id='p-5', thread='t-1', author='agent-3', text='Ask Codex · gpt-6.1-sol 2 about it.')
+    other = Message(id='p-6', thread='t-1', author='agent-3', text='mail@We.example, @Weston and a@We name nobody.')
+    start = record.board().seq
+    board = record.post(plain).post(former).post(now).post(label).post(other).board()
 
-    assert [line.id for line in news(board, 'agent-2', 0).for_you] == ['p-1', 'p-2', 'p-3']
+    # A name can be a common word, so the name alone names nobody.
+    assert not any(wakes(board, joined.agent.id, board.posts[1]) for joined in board.agents[1:])
+    assert [line.id for line in news(board, 'agent-2', start).for_you] == ['p-3', 'p-4', 'p-5']
+    # A name that the person took back still reaches its agent after the sign, and still wakes nobody without it.
+    back = record.copy().profile('agent-2', by='person', name='')
+    back.post(Message(id='p-7', thread='t-1', author='agent-3', text='We found it.'))
+    back.post(Message(id='p-8', thread='t-1', author='agent-3', text='@We found it.'))
+    assert [line.id for line in news(back.board(), 'agent-2', board.seq).for_you] == ['p-8']
+
+
+@pytest.mark.parametrize(
+    'name',
+    [
+        *('tessel', 'TESSEL', 'Tessel 2', 'Tesse1', 'TesseI', 'Tes sel', 'Tessel-2', "Tessel's", 'Te55el'),
+        *('Opus', 'Opus 5', 'Claude', 'Claude Code', 'Claude Code 2', 'Codex 2', 'Codex', 'GPT', 'gpt-6', 'Sonnet 5'),
+        *('Anthropic', 'OpenAI', 'System', 'Human', 'User', 'The Person', 'Verifold Server', 'Admin', 'Everyone'),
+        *('Lab', 'Coordinator 2', 'The Coordinator', 'Reviewer 1', 'Moderator', 'You', 'Agent 9', 'agent-99'),
+        *('Agent', 'person', 'Checker', 'Guest', 'On call', 'Helper', 'A11', 'Verif0ld', 'Per5on', 'C0dex'),
+    ],
+)
+def test_the_board_refuses_a_name_that_looks_like_another_name_or_holds_a_reserved_word(name: str) -> None:
+    record = seats().join('agent-4', name='Claude Code · Sonnet 5', family='Anthropic')
+    record.join('agent-5', name='Codex · gpt-6', family='OpenAI').profile('agent-2', name='Tessel')
+
+    with pytest.raises(RejectedEvent, match=r'looks like|begins with'):
+        record.profile('agent-3', name=name).board()
+
+
+@pytest.mark.parametrize('name', ['Persοn', 'Verifοld', 'Ｔｅｓｓｅｌ', 'Теssel', '𝐓essel', 'Opus 5.5', 'T'])  # noqa: RUF001
+def test_a_name_holds_only_the_letters_a_to_z_and_digits(name: str) -> None:
+    with pytest.raises(ValidationError):
+        ProfileSet(seq=9, at=START, agent='ada', name=name)
+
+
+@pytest.mark.parametrize('name', ['Maren', 'Quill', 'We', 'Plan', 'Result', 'The', "O'Neil-2", 'Tess', 'p-1'])
+def test_the_board_takes_a_name_that_is_no_other_name_and_holds_no_reserved_word(name: str) -> None:
+    record = seats().profile('agent-2', name='Tessel')
+
+    assert name_of(record.profile('agent-3', name=name).board(), 'agent-3') == name
+
+
+def test_an_agent_chooses_a_name_five_times_at_most_in_a_lab() -> None:
+    record = seats()
+    for name in ('Alpha', 'Beta', 'Gamma', 'Delta', 'Zeta'):
+        record.profile('agent-1', name=name)
+
+    with pytest.raises(RejectedEvent, match=r'at most 5 times in a lab, and you chose 5\. Your name stays Zeta'):
+        record.copy().profile('agent-1', name='Omega').board()
+    # The agent can still take its name back, and the names that it held stay its own.
+    assert name_of(record.copy().profile('agent-1', name='').board(), 'agent-1') == 'Codex · gpt-6.1-sol'
+    with pytest.raises(RejectedEvent, match='Another agent has or had the name Alpha'):
+        record.copy().profile('agent-2', name='Alpha').board()
+
+
+def test_a_rename_is_news_for_the_other_agents_once_and_the_brief_keeps_the_former_names() -> None:
+    record = seats().profile('agent-2', name='Tessel')
+    seen = record.board().seq
+    record.profile('agent-2', name='Quill').named('agent-3', 'Claude Code · Opus 6')
+    record.profile('agent-1', name='Maren').profile('agent-1', name='')
+    board = record.board()
+
+    told = news(board, 'agent-1', seen)
+    assert [(line.id, line.name, line.was) for line in told.renamed] == [
+        ('agent-2', 'Quill', 'Tessel'),
+        ('agent-3', 'Claude Code · Opus 6', 'Claude Code · Opus 5.5'),
+    ]
+    # The agent's own change is no news for it, a name that came and went is none, and the next news has none.
+    assert [line.id for line in update(board, 'agent-2', seen).renamed] == ['agent-3']
+    assert news(board, 'agent-1', board.seq).renamed == ()
+    assert [line.was for line in news(board, 'agent-3', seats().board().seq).renamed] == ['Codex · gpt-6.1-sol 2']
+    lines = {line.id: line for line in brief(board, 'agent-3', news(board, 'agent-3', 0)).agents}
+    assert (lines['agent-2'].former_names, lines['agent-1'].former_names) == (('Tessel',), ('Maren',))
+
+
+def test_the_brief_says_who_wrote_an_about_line() -> None:
+    record = seats().coordinator('agent-1').profile('agent-2', about='I am the best.')
+    own = brief(record.board(), 'agent-3', news(record.board(), 'agent-3', 0)).agents[1]
+    board = record.profile('agent-2', by='agent-1', about='Runs numbers twice.').board()
+    rewritten = brief(board, 'agent-3', news(board, 'agent-3', 0)).agents[1]
+
+    assert (own.about_by, rewritten.about, rewritten.about_by) == ('agent-2', 'Runs numbers twice.', 'agent-1')
+    assert (board.about_by('agent-3'), profile_result(board, 'agent-2').about_by) == (None, 'agent-1')
+    assert record.copy().profile('agent-2', by='person', about='').board().about_by('agent-2') is None
+
+
+def test_the_person_takes_back_the_name_the_about_line_and_the_picture_of_an_agent_that_left() -> None:
+    record = seats().profile('agent-2', name='Overlord', about='I rule.', picture=PICTURE).leave('agent-2')
+    board = record.copy().profile('agent-2', by='person', name='', about='', no_picture=True).board()
+
+    assert (name_of(board, 'agent-2'), board.about('agent-2'), board.picture('agent-2')) == (
+        'Codex · gpt-6.1-sol 2',
+        '',
+        None,
+    )
+    # Nobody gives a role to an agent that left, and it changes nothing itself.
+    for fields in ({'by': 'person', 'given_role': 'driver'}, {'name': 'Again'}):
+        with pytest.raises(RejectedEvent, match='left this lab'):
+            record.copy().profile('agent-2', **fields).board()
+
+
+def test_a_derived_label_keeps_the_number_of_its_seat() -> None:
+    record = seats().start('agent-1', seen=1, model_name='gpt-7').start('agent-2', seen=1, model_name='gpt-7')
+    board = record.start('agent-3', seen=1, model_name='Opus 6').board()
+
+    assert [seat_label(board, agent) for agent in ('agent-1', 'agent-2', 'agent-3')] == [
+        'Codex · gpt-7',
+        'Codex · gpt-7 2',
+        'Claude Code · Opus 6',
+    ]
 
 
 def test_the_person_takes_back_what_an_agent_chose_and_gives_its_seat_a_role_at_any_time() -> None:

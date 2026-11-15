@@ -1,4 +1,4 @@
-import { useContext, useEffect, useId, useState } from 'react';
+import { useContext, useEffect, useId, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
@@ -13,6 +13,7 @@ import type {
   ThreadSummary,
 } from '../api/types.ts';
 import { costLine } from '../model/agents.ts';
+import { wrapFocus } from '../model/focus.ts';
 import { dayClock } from '../model/format.ts';
 import {
   ROLE_LIMIT,
@@ -33,7 +34,8 @@ import { Mark, MarksAndRoles, Picture, Profiles } from './Picture.tsx';
 /**
  * Everything about one member, over the page: who it is, what it does now, what became of its posts, what the
  * person or a coordinator changed, and what the person can do to its seat. It opens from a press on any name or
- * picture. Escape closes it, and so does a press outside it.
+ * picture. Escape closes it, and so does a press outside it. While it is open, Tab stays inside it, and when it
+ * closes, focus goes back to the control that opened it.
  */
 export function ProfileSheet(props: {
   readonly view: AgentView;
@@ -53,20 +55,38 @@ export function ProfileSheet(props: {
   const thread = props.threads.find((summary) => summary.thread.id === view.thread)?.thread;
   const member = agent.checks === null && !view.left;
   const chose = seat !== null || view.about !== '' || view.picture !== null;
+  const sheet = useRef<HTMLDivElement>(null);
+  const closer = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    const close = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', close);
+    const opener = document.activeElement;
+    closer.current?.focus();
     return () => {
-      document.removeEventListener('keydown', close);
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+    };
+  }, []);
+
+  useEffect(() => {
+    const keys = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onClose();
+      if (event.key !== 'Tab' || !sheet.current) return;
+      const controls = [...sheet.current.querySelectorAll<HTMLElement>(FOCUSABLE)];
+      const at = controls.findIndex((control) => control === document.activeElement);
+      const next = wrapFocus(controls.length, at, event.shiftKey);
+      if (next === null) return;
+      event.preventDefault();
+      controls[next]?.focus();
+    };
+    document.addEventListener('keydown', keys);
+    return () => {
+      document.removeEventListener('keydown', keys);
     };
   }, [onClose]);
 
   return (
     <div className="i-over" onClick={onClose}>
       <div
+        ref={sheet}
         className="i-profile"
         role="dialog"
         aria-modal="true"
@@ -82,12 +102,17 @@ export function ProfileSheet(props: {
             {seat ? <p className="i-prov">{seat}</p> : null}
             <MarksAndRoles view={view} />
           </div>
-          <button className="i-x" type="button" autoFocus onClick={onClose}>
+          <button ref={closer} className="i-x" type="button" onClick={onClose}>
             Close
           </button>
         </div>
         {view.about ? (
-          <p className="i-about">{view.about}</p>
+          <>
+            <p className="i-about">{view.about}</p>
+            {view.about_by !== null && view.about_by !== agent.id ? (
+              <p className="i-prov">Written by the coordinator.</p>
+            ) : null}
+          </>
         ) : (
           <p className="i-about none">
             {chose
@@ -208,6 +233,13 @@ export function ProfileSheet(props: {
           </div>
         ) : (
           <div className="i-acts">
+            {/* What an agent chose stays on its posts after it left, so the person can still take it back. */}
+            {agent.checks === null && takeBacks(view).length > 0 ? (
+              <>
+                <h3>What you can do</h3>
+                <Acts api={api} actions={takeBacks(view)} onChange={onChange} />
+              </>
+            ) : null}
             <OpenFolder api={api} agent={agent} />
           </div>
         )}
@@ -215,6 +247,10 @@ export function ProfileSheet(props: {
     </div>
   );
 }
+
+/** The controls of the sheet that Tab reaches. */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), summary';
 
 /**
  * The profile sheet of the agent that the app shows now, or nothing. It reads the agent from the lab at every

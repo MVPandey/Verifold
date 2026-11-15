@@ -11,7 +11,7 @@ from typing import Literal
 from verifold.protocol.app import NEEDS, AgentActivity, Need, Outcomes, PostRef, ProfileEdit, Wait
 from verifold.protocol.events import Posted, ProfileSet
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
-from verifold.protocol.posts import Ask, Check, Close, Objection, Report, Result, RuledOut
+from verifold.protocol.posts import Answer, Ask, Check, Close, Objection, Report, Result, RuledOut
 from verifold.society.board import Board
 from verifold.society.lines import lines_of, withdraws
 from verifold.society.standing import is_answered, standing
@@ -47,6 +47,16 @@ def _what(ask: Ask) -> str:
     return HARNESS_QUESTION if ask.request else ask.text
 
 
+def in_turn(activity: AgentActivity) -> bool:
+    """
+    Return whether a turn of an agent runs now, by its harness's live updates.
+
+    A turn in which the harness waits for the person's answer runs. An agent that waits for more time for the lab,
+    or for a process that it left running, is in no turn.
+    """
+    return activity.state == 'working' or (activity.state == 'waiting' and activity.waits_for in ('person', None))
+
+
 def agent_need(board: Board, activity: AgentActivity, agent_id: AgentId, waiting: tuple[Wait, ...]) -> Need:
     """Return the one status of an agent: the first of `NEEDS` that applies."""
     mine = {wait.kind for wait in waiting if wait.agent == agent_id}
@@ -55,7 +65,8 @@ def agent_need(board: Board, activity: AgentActivity, agent_id: AgentId, waiting
             return kind
     if board.gone(agent_id):
         return 'left'
-    if activity.state in ('working', 'waiting'):
+    # A harness that starts is about to run a turn, so it does not show as idle.
+    if in_turn(activity) or activity.state == 'starting':
         return 'working'
     if activity.state in ('stopped', 'void'):
         return 'stopped'
@@ -63,14 +74,26 @@ def agent_need(board: Board, activity: AgentActivity, agent_id: AgentId, waiting
 
 
 def _asks_an_agent(board: Board, agent_id: AgentId) -> bool:
-    # An ask of the agent that names an agent of the lab and has no answer yet.
+    # An ask of the agent that names an agent of the lab, and that still waits for one of them.
     return any(
-        isinstance(entry.post, Ask)
-        and entry.post.author == agent_id
-        and any(named != PERSON and not board.gone(named) for named in entry.post.mentions)
-        and not is_answered(board, entry.post.id)
+        isinstance(entry.post, Ask) and entry.post.author == agent_id and _waits_on(board, entry)
         for entry in board.posts
     )
+
+
+def _waits_on(board: Board, ask: Posted) -> bool:
+    """
+    Return whether an ask still waits for an agent that it names.
+
+    The wait ends when a named agent replies to the ask or builds on it, when every named agent left the lab, and
+    when the asker's own answer or ruled-out lead replies to the ask.
+    """
+    named = {agent for agent in ask.post.mentions if agent != PERSON}
+    if not any(not board.gone(agent) for agent in named):
+        return False
+    replies = board.replies(ask.post.id)
+    own = any(entry.post.author == ask.post.author and isinstance(entry.post, Answer | RuledOut) for entry in replies)
+    return not own and not any(entry.post.author in named for entry in (*replies, *board.built_on(ask.post.id)))
 
 
 def thread_needs(board: Board, needs: dict[AgentId, Need], waiting: tuple[Wait, ...]) -> dict[ThreadId, Need]:
@@ -96,31 +119,42 @@ def thread_needs(board: Board, needs: dict[AgentId, Need], waiting: tuple[Wait, 
 
 def outcomes(board: Board, agent_id: AgentId) -> Outcomes:
     """Return what became of an agent's posts, as lists of posts, each oldest first."""
-    mine = tuple(entry for entry in board.posts if entry.post.author == agent_id)
-    results = tuple((entry, standing(board, entry.post.id)) for entry in mine if isinstance(entry.post, Result))
+    return all_outcomes(board).get(agent_id, Outcomes())
+
+
+def all_outcomes(board: Board) -> dict[AgentId, Outcomes]:
+    """
+    Return what became of each author's posts, in one pass over the board.
+
+    Each result is looked at once, and the replies to a post and the posts that build on it come from the board's
+    index, so the time grows with the number of posts and not with its square.
+    """
     workers = {joined.agent.id for joined in board.agents if not joined.agent.checks}
-
-    def built(entry: Posted) -> bool:
-        return any(
-            other.post.author != agent_id
-            and other.post.author in workers
-            and not isinstance(other.post, Report | Check | Objection | Close)
-            for other in board.built_on(entry.post.id)
-        )
-
-    return Outcomes(
-        built_on=_refs(entry for entry, _ in results if built(entry)),
-        held=_refs(entry for entry, state in results if state in ('checked', 'held_up')),
-        refuted=_refs(
-            entry
-            for entry in mine
-            if (isinstance(entry.post, Result) and standing(board, entry.post.id) in ('disputed', 'conceded'))
-            or (isinstance(entry.post, RuledOut) and not withdraws(board, entry.post))
-        ),
-        open_asks=_refs(
-            entry for entry in mine if isinstance(entry.post, Ask) and not is_answered(board, entry.post.id)
-        ),
-    )
+    found: dict[AgentId, dict[str, list[Posted]]] = {}
+    for entry in board.posts:
+        post = entry.post
+        lists = found.setdefault(post.author, {'built_on': [], 'held': [], 'refuted': [], 'open_asks': []})
+        if isinstance(post, Result):
+            state = standing(board, post.id)
+            if state in ('checked', 'held_up'):
+                lists['held'].append(entry)
+            if state in ('disputed', 'conceded'):
+                lists['refuted'].append(entry)
+            if any(
+                other.post.author != post.author
+                and other.post.author in workers
+                and not isinstance(other.post, Report | Check | Objection | Close)
+                for other in board.built_on(post.id)
+            ):
+                lists['built_on'].append(entry)
+        elif isinstance(post, RuledOut) and not withdraws(board, post):
+            lists['refuted'].append(entry)
+        elif isinstance(post, Ask) and not is_answered(board, post.id):
+            lists['open_asks'].append(entry)
+    return {
+        author: Outcomes.model_validate({name: _refs(entries) for name, entries in lists.items()})
+        for author, lists in found.items()
+    }
 
 
 def _refs(entries: Iterable[Posted]) -> tuple[PostRef, ...]:

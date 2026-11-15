@@ -1,10 +1,12 @@
 import asyncio
+import time
 from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import override
 
 import httpx2
 import pytest
+from builders import RecordBuilder
 from conftest import agent
 from pydantic import SecretStr
 
@@ -26,11 +28,11 @@ from verifold.protocol.app import (
 )
 from verifold.protocol.events import TurnSummary
 from verifold.protocol.join import FileText, PostRequest
-from verifold.protocol.posts import FileEvidence, PermissionShown
+from verifold.protocol.posts import Ask, FileEvidence, Objection, PermissionShown, Result
 from verifold.protocol.settings import Settings
 from verifold.protocol.usage import Usage
 from verifold.server.activity import Activity
-from verifold.server.app_api import _changes, app_api
+from verifold.server.app_api import _changes, _lab_view, app_api
 from verifold.server.errors import LabExists, NoLab, SetupRejected
 from verifold.server.lab import Lab
 from verifold.society.errors import NotFound
@@ -728,6 +730,7 @@ async def test_the_lab_view_holds_each_agents_identity_status_and_what_waits_for
     await lab.start_turn('ada', 'session-1', 0, model_name='Opus 5.5')
     await activity.set('ada', 'working', 'Run pytest')
     await activity.set('bo', 'idle')
+    await activity.invite('agent-3', 'invited')
     await lab.post(
         PostRequest(kind='ask', text='Permission needed', new_thread='Permission requests', mentions=('person',)),
         'ada',
@@ -825,3 +828,90 @@ async def test_the_person_sets_the_number_of_reviewer_seats_of_the_lab(client: h
     assert many.status_code == 422
     # The other settings of the lab stay as they are.
     assert lab.board.settings.jobs == Settings().jobs
+
+
+async def test_an_agent_that_waits_for_more_time_or_its_own_process_is_in_no_turn_and_one_that_asks_the_person_is(
+    client: httpx2.AsyncClient, lab: Lab, activity: Activity
+) -> None:
+    await lab.join(Agent(id='cy', name='Cy', harness='fake', model=ModelSpec(family='anthropic')))
+    await lab.set_time_left(timedelta(0))
+    await lab.run_out_of_time()
+    await activity.set('ada', 'waiting', 'The lab is out of time. The person can give it more.', 'time')
+    await activity.set('bo', 'waiting', 'Waits for a process that it left running.', 'process')
+    await activity.set('cy', 'waiting', 'Asks you: a permission', 'person')
+
+    view = (await client.get('/lab')).json()
+
+    # An out-of-time lab shows no agent as working, so the app shows that the lab is out of time.
+    assert view['out_of_time'] is True
+    assert [(agent['need'], agent['in_turn'], agent['activity']['waits_for']) for agent in view['agents']] == [
+        ('idle', False, 'time'),
+        ('idle', False, 'process'),
+        ('working', True, 'person'),
+    ]
+    # An approval inside a turn that runs is still a turn that runs.
+    ask = PostRequest(kind='ask', text='Permission needed', new_thread='Permission requests', mentions=('person',))
+    await lab.post(ask, 'cy', mark=PermissionShown(command='ls'))
+    (cy,) = [agent for agent in (await client.get('/lab')).json()['agents'] if agent['agent']['id'] == 'cy']
+    assert (cy['need'], cy['in_turn']) == ('approval', True)
+
+
+async def test_the_person_takes_back_the_name_of_an_agent_that_left_and_the_view_says_who_wrote_an_about_line(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    await lab.set_coordinator('ada', 'person')
+    await lab.set_profile('bo', name='Overlord', about='I rule.')
+    await lab.change_profile('bo', 'ada', about='Runs numbers twice.')
+    written = (await client.get('/lab')).json()['agents']
+    await lab.leave('bo', 'person')
+
+    reset = await client.post('/agents/bo/profile', json={'reset_name': True, 'reset_about': True})
+    role = await client.post('/agents/bo/profile', json={'role': 'driver'})
+
+    assert [(view['about'], view['about_by']) for view in written] == [('', None), ('Runs numbers twice.', 'ada')]
+    assert (reset.status_code, role.status_code) == (200, 400)
+    bo = reset.json()['agents'][1]
+    assert (bo['agent']['name'], bo['chosen_name'], bo['about'], bo['about_by'], bo['need']) == (
+        'Bo',
+        '',
+        '',
+        None,
+        'left',
+    )
+
+
+async def test_the_lab_view_of_a_long_record_takes_time_that_grows_with_the_record_and_not_with_its_square(
+    activity: Activity,
+) -> None:
+    # Fourteen agents and 3,000 events: results that build on each other, objections, and asks. The view took 0.3
+    # seconds on such a board when it scanned every post for each result, and takes about 0.02 seconds with the
+    # board's index. The bound is a hundred times that, so that only a scan of that kind fails it, on any machine.
+    record = RecordBuilder()
+    names = [f'agent-{number}' for number in range(1, 15)]
+    for name in names:
+        record.join(name)
+    record.thread('t-1', opened_by='agent-1')
+    results: list[str] = []
+    authors: dict[str, str] = {}
+    for number in range(1, 2_985):
+        author, post = names[number % 14], f'p-{number}'
+        if number % 3 == 0 and results:
+            target = results[(number * 2_654_435_761 >> 7) % len(results)]
+            other = names[(number + 1) % 14] if authors[target] == author else author
+            record.post(Objection(id=post, thread='t-1', author=other, text='No.', reply_to=target))
+        elif number % 3 == 1:
+            record.post(Result(id=post, thread='t-1', author=author, text='Holds.', builds_on=tuple(results[-2:])))
+            results.append(post)
+            authors[post] = author
+        else:
+            record.post(Ask(id=post, thread='t-1', author=author, text='Who?', mentions=(names[(number + 3) % 14],)))
+    board = record.board()
+    assert board.seq == 3_000
+
+    started = time.perf_counter()
+    view = _lab_view(board, activity)
+    taken = time.perf_counter() - started
+
+    assert len(view.agents) == 14
+    assert sum(len(agent.outcomes.refuted) for agent in view.agents) > 100
+    assert taken < 2.0, f'The lab view of 3,000 events took {taken:.2f} seconds.'

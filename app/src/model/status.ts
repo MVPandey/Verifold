@@ -44,14 +44,13 @@ export interface TurnLine {
 
 /**
  * Return how many members are in a turn, such as "3 of 7 agents in a turn, 2 blind reruns", or "No agent in a
- * turn, 7 in the lab". A member that left does not count, and an invited agent counts from its first post.
+ * turn, 7 in the lab". A member that left does not count, and an invited agent counts from its first post. A turn
+ * in which the harness waits for the person's answer still runs, so its agent counts as in a turn.
  */
 export function turnLine(agents: readonly AgentView[]): TurnLine {
   const all = counted(agents);
-  const busy = all.filter((view) => view.need === 'working').length;
-  const reruns = agents.filter(
-    (view) => view.agent.checks !== null && view.need === 'working',
-  ).length;
+  const busy = all.filter((view) => view.in_turn).length;
+  const reruns = agents.filter((view) => view.agent.checks !== null && view.in_turn).length;
   const line =
     busy > 0
       ? `${busy} of ${all.length} ${all.length === 1 ? 'agent' : 'agents'} in a turn`
@@ -162,7 +161,7 @@ export interface Quiet {
  */
 export function quietBand(lab: LabView, now: Date): Quiet | null {
   const here = counted(lab.agents);
-  if (here.length === 0 || lab.agents.some((view) => view.need === 'working')) return null;
+  if (here.length === 0 || lab.agents.some((view) => view.in_turn)) return null;
   const ended = here
     .map((view) => view.turn_ended_at)
     .filter((at) => at !== null)

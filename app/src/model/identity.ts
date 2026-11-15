@@ -33,7 +33,7 @@ export function pictureLook(view: AgentView): PictureLook {
     number: seatNumber(view.seat),
     hollow: view.on_call,
     gone: view.left !== null,
-    dot: waits ? 'wait' : view.need === 'working' ? 'live' : null,
+    dot: waits ? 'wait' : view.in_turn ? 'live' : null,
   };
 }
 

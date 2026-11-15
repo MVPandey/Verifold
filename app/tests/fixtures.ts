@@ -87,6 +87,8 @@ export function agentView(id: string, changes: Partial<AgentView> = {}): AgentVi
     seat: name,
     chosen_name: '',
     about: '',
+    about_by: null,
+    in_turn: false,
     picture: null,
     given_role: '',
     given_by: null,

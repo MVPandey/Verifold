@@ -135,6 +135,8 @@ export function createApi(
           seat: view.seat || (view.agent.name ?? ''),
           chosen_name: view.chosen_name ?? '',
           about: view.about ?? '',
+          about_by: view.about_by ?? null,
+          in_turn: view.in_turn ?? view.activity?.state === 'working',
           picture: view.picture ?? null,
           given_role: view.given_role ?? view.agent.given_role ?? '',
           given_by: view.given_by ?? null,

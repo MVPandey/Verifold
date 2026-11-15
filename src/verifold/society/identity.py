@@ -6,6 +6,8 @@ model's name, and it stays a fact of its own beside a chosen name. A post shows 
 was written, so an older post keeps the model that wrote it.
 """
 
+import re
+
 from verifold.protocol.agents import GUEST, SeatMark
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import PERSON, AgentId
@@ -43,7 +45,12 @@ def seat_label(board: Board, agent_id: AgentId, before: int | None = None) -> st
     if start is None or not dot:
         return label
     reported = plain(title, start.model_name or start.model)
-    return label if is_numbered(label, reported) else reported
+    if is_numbered(label, reported):
+        return label
+    # The seat keeps its number: the second seat of a model is still the second when both report another model.
+    number = re.search(r' (\d+)$', label)
+    second = number is not None and any(text == label[: number.start()] for _, _, text in board.labels)
+    return f'{reported}{number.group(0)}' if number and second else reported
 
 
 def seat_marks(board: Board, agent_id: AgentId) -> tuple[SeatMark, ...]:

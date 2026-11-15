@@ -36,8 +36,8 @@ def test_an_agent_takes_a_free_reviewer_seat_and_gives_it_up_and_the_person_give
     board = record.board()
 
     assert (holders(board), free_seats(board), board.reviewer('bo'), board.reviewer('ada')) == (('bo',), 0, True, False)
-    assert seats_line(board) == 'The lab has 1, held by bo; 0 are free.'
-    with pytest.raises(RejectedEvent, match=r'No reviewer seat is free\. The lab has 1, held by bo; 0 are free\.'):
+    assert seats_line(board) == 'The lab has 1: held by bo; 0 are free.'
+    with pytest.raises(RejectedEvent, match=r'No reviewer seat is free\. The lab has 1: held by bo; 0 are free\.'):
         record.copy().reviewer('cy').board()
     with pytest.raises(RejectedEvent, match='Only the person gives one to another'):
         record.copy().reviewer('ada', by='cy').board()
@@ -51,7 +51,7 @@ def test_an_agent_takes_a_free_reviewer_seat_and_gives_it_up_and_the_person_give
     assert free_seats(record.copy().reviewer('bo', reviewer=False).board()) == 1
     left = record.copy().leave('bo').board()
     assert (holders(left), left.reviewer('bo')) == ((), False)
-    assert seats_line(lab().board()) == 'The lab has 1, held by nobody; 1 is free.'
+    assert seats_line(lab().board()) == 'The lab has 1: held by nobody; 1 is free.'
 
 
 def test_a_reviewer_seat_is_for_an_agent_of_the_lab() -> None:
@@ -64,29 +64,23 @@ def test_a_reviewer_seat_is_for_an_agent_of_the_lab() -> None:
         record.copy().leave('bo').reviewer('bo', by='person').board()
 
 
-def test_a_check_takes_a_reviewer_seat_unless_the_agents_work_or_the_labs_answer_builds_on_the_post() -> None:
+def test_a_check_and_a_rerun_request_on_another_agents_post_take_a_reviewer_seat() -> None:
     record = lab().post(RESULT).post(Result(id='p-2', thread='t-1', author='ada', text='Also.'))
     board = record.board()
 
     assert not may_review(board, 'bo', 'p-1')
     assert may_review(board, 'person', 'p-1')
     assert may_review(record.copy().reviewer('bo').board(), 'bo', 'p-1')
-    # A post that the agent's own post builds on or replies to takes no seat.
-    built = record.copy().post(Result(id='p-3', thread='t-1', author='bo', text='More.', builds_on=('p-1',))).board()
-    assert (may_review(built, 'bo', 'p-1'), may_review(built, 'bo', 'p-2'), may_review(built, 'cy', 'p-1')) == (
-        True,
-        False,
-        False,
-    )
-    replied = record.copy().post(Message(id='p-3', thread='t-1', author='bo', text='How?', reply_to='p-2')).board()
-    assert may_review(replied, 'bo', 'p-2')
-    # What the lab's answer builds on takes no seat, and neither does the answer.
-    answer = Proposal(id='p-3', thread='t-1', author='ada', text='It holds.', builds_on=('p-1',))
-    proposed = record.copy().post(answer).board()
-    assert [may_review(proposed, 'cy', post) for post in ('p-1', 'p-2', 'p-3')] == [True, False, True]
-    # A newer proposal is the answer, so the older one's posts take a seat again.
-    newer = record.copy().post(answer).post(Proposal(id='p-4', thread='t-1', author='bo', text='No.')).board()
-    assert [may_review(newer, 'cy', post) for post in ('p-1', 'p-3', 'p-4')] == [False, False, True]
+    # An agent asks for a blind rerun of its own post without a seat.
+    assert may_review(board, 'ada', 'p-1')
+    # No post of the agent opens the gate: not one that builds on the post, not a reply, and not the lab's answer.
+    for post in (
+        Result(id='p-3', thread='t-1', author='bo', text='More.', builds_on=('p-1',)),
+        Message(id='p-3', thread='t-1', author='bo', text='How?', reply_to='p-1'),
+        Proposal(id='p-3', thread='t-1', author='cy', text='It holds.', builds_on=('p-1',)),
+    ):
+        after = record.copy().post(post).board()
+        assert [may_review(after, 'bo', target) for target in ('p-1', 'p-3')] == [False, post.author == 'bo']
 
 
 def test_a_lab_without_reviewer_seats_and_a_blind_checker_are_not_limited() -> None:

@@ -174,7 +174,7 @@ async def test_an_agent_takes_a_reviewer_seat_with_profile_and_the_person_gives_
         taken.structured_content['reviewer_seats_free'],
     ) == (False, ['bo'], 1, 0)
     assert (lab.board.seq, full.is_error, none.is_error) == (seq, True, True)
-    assert 'No reviewer seat is free. The lab has 1, held by bo; 0 are free.' in error(full)
+    assert 'No reviewer seat is free. The lab has 1: held by bo; 0 are free.' in error(full)
     await lab.set_reviewer('cy', 'person', reviewer=True)
     await lab.set_reviewer('bo', 'person', reviewer=False)
     assert [
@@ -198,26 +198,32 @@ async def test_an_agent_takes_a_reviewer_seat_with_profile_and_the_person_gives_
 async def test_a_check_and_a_rerun_request_take_a_reviewer_seat_and_an_objection_takes_none(lab: Lab) -> None:
     await lab.join(agent('cy'))
     check = PostRequest(kind='check', text='Holds.', reply_to='p-1', thread='t-1', outcome='holds', method='code_read')
-    fact = 'on a post that your work does not build on takes a reviewer seat. The lab has 1, held by nobody; 1 is free.'
+    fact = (
+        "another agent's post takes a reviewer seat. The lab has 1: held by nobody; 1 is free. An objection needs "
+        'no seat.'
+    )
 
-    with pytest.raises(RejectedEvent, match=f'A check {fact}'):
+    with pytest.raises(RejectedEvent, match=f'A check on {fact}'):
         await lab.post(check, 'bo')
-    with pytest.raises(RejectedEvent, match=f'A request for a blind rerun {fact}'):
+    with pytest.raises(RejectedEvent, match=f'A request for a blind rerun of {fact}'):
         await lab.request_rerun('bo', 'p-1')
     posts = len(lab.board.posts)
-    # An objection is open to every agent, and so is every move of the person.
+    # An objection is open to every agent, and so is a result that builds on the post. Neither opens the gate.
     await lab.post(PostRequest(kind='objection', text='A leak.', reply_to='p-1', thread='t-1'), 'cy')
+    await lab.post(PostRequest(kind='result', text='I got the same.', thread='t-1', builds_on=('p-1',)), 'cy')
+    with pytest.raises(RejectedEvent, match='takes a reviewer seat'):
+        await lab.post(check, 'cy')
+    # The person is not limited, and a reviewer checks.
     await lab.post(check, 'person')
-    # A reviewer checks, and so does an agent whose own post builds on the post.
     await lab.set_reviewer('bo', 'bo', reviewer=True)
     await lab.post(check, 'bo')
-    await lab.post(PostRequest(kind='result', text='More.', thread='t-1', builds_on=('p-1',)), 'cy')
-    await lab.post(check, 'cy')
-    assert len(lab.board.posts) == posts + 5
-    # The refusal names who holds the seats.
-    await lab.join(agent('dee'))
-    with pytest.raises(RejectedEvent, match='The lab has 1, held by bo; 0 are free'):
-        await lab.post(check, 'dee')
+    assert len(lab.board.posts) == posts + 4
+    # The refusal names who holds the seats. The author of a post asks for a rerun of it without a seat: the
+    # board gets as far as the post's files.
+    with pytest.raises(RejectedEvent, match='The lab has 1: held by bo; 0 are free'):
+        await lab.post(check, 'cy')
+    with pytest.raises(RejectedEvent, match='has no files as evidence'):
+        await lab.request_rerun('ada', 'p-1')
 
 
 async def test_a_lab_of_two_agents_or_with_zero_seats_limits_no_check_and_a_record_from_before_loads(
@@ -270,3 +276,32 @@ async def test_an_agent_that_chose_a_name_keeps_it_when_its_harness_names_the_mo
     # A name that the board refuses changes no seat.
     refused = await call(lab, 'bo', 'profile', {'name': 'Tessel', 'coordinator': True, 'reviewer': True})
     assert (refused.is_error, lab.board.coordinator, lab.board.reviewer('bo')) == (True, None, False)
+
+
+async def test_the_board_records_a_whole_profile_call_or_nothing(lab: Lab) -> None:
+    await lab.join(agent('cy'))
+    await lab.set_reviewer('cy', 'cy', reviewer=True)
+    await lab.set_coordinator('cy', 'person')
+    seq = lab.board.seq
+
+    no_seat = await call(lab, 'bo', 'profile', {'name': 'Quill', 'role': 'builder', 'reviewer': True})
+    held = await call(lab, 'bo', 'profile', {'about': 'A lens.', 'coordinator': True})
+    none = await call(lab, 'bo', 'profile', {'status': 'Reading.', 'reviewer': False})
+
+    assert (no_seat.is_error, held.is_error, none.is_error) == (True, True, True)
+    assert 'No reviewer seat is free' in error(no_seat)
+    # The board refused the seat, so it kept nothing of each call: no name, no role, no about line, no status.
+    assert (lab.board.seq, name_of(lab.board, 'bo'), lab.board.profile('bo'), lab.board.about('bo')) == (
+        seq,
+        'Bo',
+        ('', ''),
+        '',
+    )
+    # A call whose parts all hold is recorded in one step.
+    done = await call(lab, 'cy', 'profile', {'name': 'Quill', 'reviewer': False, 'coordinator': False})
+    assert (done.is_error, name_of(lab.board, 'cy'), lab.board.reviewer('cy'), lab.board.coordinator) == (
+        False,
+        'Quill',
+        False,
+        None,
+    )

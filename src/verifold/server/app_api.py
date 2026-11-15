@@ -9,6 +9,7 @@ the person on this local server.
 import asyncio
 import secrets
 from collections.abc import AsyncGenerator, Callable
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Annotated, Protocol
 
@@ -29,6 +30,7 @@ from verifold.protocol.app import (
     Need,
     NormsChange,
     NormsView,
+    Outcomes,
     ProfileChange,
     QuestionRequest,
     RerunRequest,
@@ -48,7 +50,7 @@ from verifold.server.activity import Activity
 from verifold.server.errors import LabExists, NoLab, ServerError, SetupRejected
 from verifold.server.lab import Lab
 from verifold.server.member import Member
-from verifold.server.status import agent_need, outcomes, profile_edits, thread_needs, waits
+from verifold.server.status import agent_need, all_outcomes, in_turn, profile_edits, thread_needs, waits
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
 from verifold.society.identity import post_line, seat_label
@@ -359,10 +361,12 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
     working = lines_of(board)
     done = closing(board)
     waiting = waits(board)
+    became = all_outcomes(board)
     needs = {
         entry.agent.id: agent_need(board, activity.of(entry.agent.id), entry.agent.id, waiting)
         for entry in board.agents
     }
+    around = _Around(working=working, needs=needs, became=became)
     return LabView(
         state=lab_state(board),
         close=post_line(board, done) if done else None,
@@ -373,7 +377,7 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
         versions=versions(board),
         opened_at=board.opened.at,
         seq=board.seq,
-        agents=tuple(_agent_view(board, activity, entry.agent.id, working, needs) for entry in board.agents),
+        agents=tuple(_agent_view(board, activity, entry.agent.id, around) for entry in board.agents),
         threads=len(board.threads),
         posts=len(board.posts),
         needs_you=len(waiting),
@@ -387,12 +391,20 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _Around:
+    """What the lab view works out once for all its agents."""
+
+    working: dict[AgentId, ThreadId | None]
+    needs: dict[AgentId, Need]
+    became: dict[AgentId, Outcomes]
+
+
 def _agent_view(
     board: Board,
     activity: Activity,
     agent_id: str,
-    working: dict[AgentId, ThreadId | None],
-    needs: dict[AgentId, Need],
+    lab: '_Around',
 ) -> AgentView:
     joined = board.agent(agent_id)
     if joined is None:
@@ -413,14 +425,16 @@ def _agent_view(
         reviewer=board.reviewer(agent_id),
         flag=flag.flag or '' if flag else '',
         edits=profile_edits(board, agent_id),
-        need=needs[agent_id],
-        outcomes=outcomes(board, agent_id),
+        need=lab.needs[agent_id],
+        in_turn=in_turn(activity.of(agent_id)),
+        about_by=board.about_by(agent_id),
+        outcomes=lab.became.get(agent_id, Outcomes()),
         turns_started=sum(start.agent == agent_id for start in board.starts),
         role=role,
         on_call=board.on_call(agent_id),
         coordinator=board.coordinator == agent_id,
         status=status,
-        thread=working.get(agent_id),
+        thread=lab.working.get(agent_id),
         activity=activity.of(agent_id),
         left=board.gone(agent_id),
         # The record says so until the agent's next turn starts. The person's new start shows at once.

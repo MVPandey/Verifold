@@ -220,7 +220,8 @@ class Member:
         Record the agent's own profile, and return it after the change.
 
         With `coordinator`, the agent takes the lab's coordinator seat, or gives it up. With `reviewer`, it takes a
-        reviewer seat, or gives it up. With nothing, the call returns the profile as it is.
+        reviewer seat, or gives it up. The record takes the whole call or nothing. With nothing, the call returns
+        the profile as it is.
 
         Raises:
             RejectedEvent: The agent takes a seat that is not free, gives up a seat that it does not hold, or
@@ -228,12 +229,16 @@ class Member:
 
         """
         self._check_not_blind()
-        # The profile comes first: a name that the board refuses then changes no seat.
-        await self._lab.set_profile(self.agent_id, role, status, name=name, about=about, picture=picture)
-        if coordinator is not None:
-            await self._lab.set_coordinator(self.agent_id if coordinator else None, self.agent_id)
-        if reviewer is not None:
-            await self._lab.set_reviewer(self.agent_id, self.agent_id, reviewer=reviewer)
+        await self._lab.set_profile(
+            self.agent_id,
+            role,
+            status,
+            name=name,
+            about=about,
+            picture=picture,
+            coordinator=coordinator,
+            reviewer=reviewer,
+        )
         return profile_result(self._lab.board, self.agent_id)
 
     async def change_profile(

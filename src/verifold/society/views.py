@@ -18,6 +18,7 @@ from verifold.protocol.events import (
 )
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.join import (
+    MAX_FORMER_NAMES,
     MAX_LEADS,
     MAX_LINKS,
     MAX_NEWS,
@@ -403,7 +404,11 @@ def _agent_line(board: Board, agent: Agent, working: dict[AgentId, ThreadId | No
         name=agent.name,
         seat='' if seat == agent.name else seat,
         harness=agent.harness,
+        former_names=tuple(name for holder, name in board.chosen_names() if holder == agent.id and name != agent.name)[
+            -MAX_FORMER_NAMES:
+        ],
         about=board.about(agent.id),
+        about_by=board.about_by(agent.id),
         role=role,
         given_role=given,
         given_by=giver if given else None,
@@ -438,6 +443,7 @@ def profile_result(board: Board, agent_id: AgentId) -> ProfileResult:
         name=joined.agent.name if joined else agent_id,
         seat=seat_label(board, agent_id),
         about=board.about(agent_id),
+        about_by=board.about_by(agent_id),
         picture=board.picture(agent_id),
         role=role,
         status=status,

@@ -299,15 +299,19 @@ class Lab:
         name: str | None = None,
         about: str | None = None,
         picture: Picture | None = None,
+        coordinator: bool | None = None,
+        reviewer: bool | None = None,
     ) -> tuple[str, str]:
         """
         Record what an agent says that it is and does, and return its role and status after the change.
 
-        A call that changes nothing records nothing, so an agent can read its own profile with no arguments, and one
-        that repeats its status does not fill the record.
+        With `coordinator` or `reviewer`, the agent takes that seat or gives it up in the same step. The record
+        takes the whole call or nothing: when the board refuses one part, such as a seat that is not free, no part
+        is recorded. A part that changes nothing records nothing, so an agent can read its own profile with no
+        arguments, and one that repeats its status does not fill the record.
 
         Raises:
-            RejectedEvent: The name is taken, reserved, or the name of a harness or a model.
+            RejectedEvent: The name is taken, reserved, or the name of a harness or a model, or a seat is not free.
 
         """
         board = self._board
@@ -319,11 +323,21 @@ class Lab:
             'about': None if about == board.about(agent_id) else about,
             'picture': None if picture == board.picture(agent_id) else picture,
         }
-        if board.agent(agent_id) and all(value is None for value in fresh.values()):
-            return now_role, now_status
-        board = await self._commit(
-            lambda _, seq, at: ProfileSet.model_validate({'seq': seq, 'at': at, 'agent': agent_id} | fresh)
-        )
+        builds: list[Build] = []
+        if not board.agent(agent_id) or any(value is not None for value in fresh.values()):
+            builds.append(
+                lambda _, seq, at: ProfileSet.model_validate({'seq': seq, 'at': at, 'agent': agent_id} | fresh)
+            )
+        holder = agent_id if coordinator else None
+        # An agent that gives up a seat that it does not hold gets the reason.
+        if coordinator is not None and not (coordinator and board.coordinator == agent_id):
+            builds.append(lambda _, seq, at: CoordinatorSet(seq=seq, at=at, agent=holder, by=agent_id))
+        if reviewer is not None and not (reviewer and board.reviewer(agent_id)):
+            builds.append(
+                lambda _, seq, at: ReviewerSet(seq=seq, at=at, agent=agent_id, reviewer=bool(reviewer), by=agent_id)
+            )
+        if builds:
+            board = await self._commit(*builds)
         return board.profile(agent_id)
 
     async def change_profile(  # noqa: PLR0913
@@ -401,7 +415,7 @@ class Lab:
                 raise RejectedEvent(f'You asked for a blind rerun of {post_id} already. Its check will come to you.')
             # An older record holds requests from before the reviewer seats, so this rule is here too.
             if board.post(post_id):
-                check_review(board, by, post_id, 'A request for a blind rerun')
+                check_review(board, by, post_id, 'A request for a blind rerun of')
             return RerunRequested(seq=seq, at=at, by=by, post=post_id)
 
         board = await self._commit(build)
@@ -536,7 +550,7 @@ def _add_post(
         # An older record holds checks from before the reviewer seats, so this rule is here and not in the record's
         # rules.
         if isinstance(post, Check) and board.post(post.reply_to):
-            check_review(board, author, post.reply_to, 'A check')
+            check_review(board, author, post.reply_to, 'A check on')
         return Posted(seq=seq, at=at, post=post)
 
     return build

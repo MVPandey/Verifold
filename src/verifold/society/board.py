@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from heapq import merge
 
 from verifold.protocol.agents import GUEST, Picture
 from verifold.protocol.events import (
@@ -84,7 +85,7 @@ class Board:
         """Whether the lab reached its end, and the person has not set a new end since."""
         return bool(self.times) and isinstance(self.times[-1], TimeRanOut)
 
-    # ponytail: lookups scan the tuples. Index them if a board grows past about 10,000 posts.
+    # ponytail: the lookups of agents and threads scan the tuples. The posts have an index.
     def agent(self, agent_id: AgentId) -> AgentJoined | None:
         """Return the entry of a joined agent, or `None`."""
         return next((entry for entry in self.agents if entry.agent.id == agent_id), None)
@@ -183,9 +184,20 @@ class Board:
         An agent's names are each label that its seat had and each name that it chose. A name stays its agent's
         for ever, so a name in an older post means the same agent.
         """
-        labels = ((seq, agent, text) for seq, agent, text in self.labels)
+        # Both lists are in the order of the record, so one merge keeps that order.
         chosen = ((entry.seq, entry.agent, entry.name) for entry in self.profiles if entry.name)
-        return tuple(dict.fromkeys((agent, text) for _, agent, text in sorted((*labels, *chosen))))
+        return tuple(dict.fromkeys((agent, text) for _, agent, text in merge(self.labels, chosen)))
+
+    def chosen_names(self) -> tuple[tuple[AgentId, str], ...]:
+        """Return every name that an agent chose, now or before, each with its agent, oldest first."""
+        return tuple(dict.fromkeys((entry.agent, entry.name) for entry in self.profiles if entry.name))
+
+    def about_by(self, agent_id: AgentId) -> AgentId | None:
+        """Return who wrote an agent's about line: the agent itself or a coordinator. `None` when it has none."""
+        latest = next(
+            (entry for entry in reversed(self.profiles) if entry.agent == agent_id and entry.about is not None), None
+        )
+        return (latest.by or agent_id) if latest and latest.about else None
 
     def chosen_name(self, agent_id: AgentId) -> str:
         """Return the name that an agent chose and still has, or an empty text when its seat's label is its name."""
@@ -300,12 +312,51 @@ class Board:
 
     def post(self, post_id: PostId) -> Posted | None:
         """Return the entry of a post, or `None`."""
+        # The fold asks this for every new post, and each of its boards has other posts, so no index pays here.
         return next((entry for entry in self.posts if entry.post.id == post_id), None)
 
     def replies(self, post_id: PostId) -> tuple[Posted, ...]:
         """Return the entries of the posts that reply to a post, oldest first."""
-        return tuple(entry for entry in self.posts if entry.post.reply_to == post_id)
+        return _index(self.posts).replies.get(post_id, ())
 
     def built_on(self, post_id: PostId) -> tuple[Posted, ...]:
         """Return the entries of the posts that build on a post, oldest first."""
-        return tuple(entry for entry in self.posts if post_id in entry.post.builds_on)
+        return _index(self.posts).builds.get(post_id, ())
+
+
+@dataclass(frozen=True, slots=True)
+class _Index:
+    """The posts of one board by the post that they reply to, and by the posts that they build on."""
+
+    posts: tuple[Posted, ...]
+    replies: dict[PostId, tuple[Posted, ...]]
+    builds: dict[PostId, tuple[Posted, ...]]
+
+
+_indexes: list[_Index] = []
+"""The indexes of the boards that were read last. A board never changes, so its index holds for as long as it lives."""
+
+_KEPT_INDEXES = 4
+
+
+def _index(posts: tuple[Posted, ...]) -> _Index:
+    # A view asks for the replies to every post, and a scan of all posts for each one costs time that grows with
+    # the square of the record. The index is built once for a board's posts, which are one tuple that no code changes.
+    for index in _indexes:
+        if index.posts is posts:
+            return index
+    replies: dict[PostId, list[Posted]] = {}
+    builds: dict[PostId, list[Posted]] = {}
+    for entry in posts:
+        if entry.post.reply_to:
+            replies.setdefault(entry.post.reply_to, []).append(entry)
+        for source in dict.fromkeys(entry.post.builds_on):
+            builds.setdefault(source, []).append(entry)
+    index = _Index(
+        posts=posts,
+        replies={post: tuple(entries) for post, entries in replies.items()},
+        builds={post: tuple(entries) for post, entries in builds.items()},
+    )
+    _indexes.append(index)
+    del _indexes[:-_KEPT_INDEXES]
+    return index

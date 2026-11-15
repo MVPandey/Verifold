@@ -511,8 +511,8 @@ class Host:
         # A broken settings file must refuse the start before the record holds anything.
         settings = load_settings(self._project).lab_settings()
         if request.reviewer_seats is not None:
-            reviewers = settings.reviewers.model_copy(update={'seats': request.reviewer_seats})
-            settings = settings.model_copy(update={'reviewers': reviewers})
+            seats = None if request.reviewer_seats == 'size' else request.reviewer_seats
+            settings = settings.model_copy(update={'reviewers': settings.reviewers.model_copy(update={'seats': seats})})
         lab = Lab.create(self._record, request.question, auto_mode=request.auto_mode, time_left=time_left)
         await lab.set_settings(settings)
         for prefix in request.allow:

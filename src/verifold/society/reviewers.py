@@ -2,14 +2,12 @@
 The lab's reviewer seats: how many it has, who holds them, and what takes one.
 
 Exploring and testing is every agent's work, and a few agents hold reviewer seats for the rest. A check of another
-agent's result and a request for a blind rerun take a reviewer seat, with three exceptions: a post that the
-agent's own post builds on or replies to, a post that the lab's answer builds on, and the answer itself. An
-objection takes no seat. The person is never limited, and neither is a blind checker, which is no agent of the lab.
-A lab with no reviewer seats limits nobody.
+agent's post and a request for a blind rerun of another agent's post take a reviewer seat. An objection takes no
+seat, and neither does a result that reproduces another's: that is building. The person is never limited, and
+neither is a blind checker, which is no agent of the lab. A lab with no reviewer seats limits nobody.
 """
 
 from verifold.protocol.ids import PERSON, AgentId, PostId
-from verifold.protocol.posts import Proposal
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 
@@ -60,33 +58,26 @@ def seats_line(board: Board) -> str:
     held = holders(board)
     names = ', '.join(held) if held else 'nobody'
     count, free = seats(board), free_seats(board)
-    return f'The lab has {count}, held by {names}; {free} {"is" if free == 1 else "are"} free.'
+    return f'The lab has {count}: held by {names}; {free} {"is" if free == 1 else "are"} free.'
 
 
 def may_review(board: Board, agent_id: AgentId, post_id: PostId) -> bool:
     """Return whether an agent can check a post, or ask for a blind rerun of it, as the module's note says."""
     joined = board.agent(agent_id)
-    if agent_id == PERSON or (joined and joined.agent.checks) or seats(board) == 0 or board.reviewer(agent_id):
-        return True
-    own = any(
-        entry.post.author == agent_id and (post_id in entry.post.builds_on or entry.post.reply_to == post_id)
-        for entry in board.posts
+    target = board.post(post_id)
+    own = target is not None and target.post.author == agent_id
+    return (
+        agent_id == PERSON
+        or own
+        or bool(joined and joined.agent.checks)
+        or seats(board) == 0
+        or board.reviewer(agent_id)
     )
-    # The lab's answer is its newest proposal in a thread for the whole lab, as `answer` in `views` has it.
-    answer = next(
-        (
-            entry.post
-            for entry in reversed(board.posts)
-            if isinstance(entry.post, Proposal) and not board.is_side(entry.post.thread)
-        ),
-        None,
-    )
-    return own or bool(answer and (post_id == answer.id or post_id in answer.builds_on))
 
 
 def check_review(board: Board, agent_id: AgentId, post_id: PostId, what: str) -> None:
     """
-    Check that an agent can check a post or ask for a blind rerun of it. `what` names the move, such as "A check".
+    Check that an agent can check a post or ask for a blind rerun of it. `what` names the move, such as "A check on".
 
     Raises:
         RejectedEvent: The move takes a reviewer seat, and the agent holds none.
@@ -94,5 +85,5 @@ def check_review(board: Board, agent_id: AgentId, post_id: PostId, what: str) ->
     """
     if not may_review(board, agent_id, post_id):
         raise RejectedEvent(
-            f'{what} on a post that your work does not build on takes a reviewer seat. {seats_line(board)}'
+            f"{what} another agent's post takes a reviewer seat. {seats_line(board)} An objection needs no seat."
         )

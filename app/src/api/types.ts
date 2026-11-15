@@ -128,11 +128,20 @@ export interface Agent {
   readonly checks: string | null;
 }
 
+/**
+ * What an agent in the state `waiting` waits for. `person`: its harness waits for the person's answer inside a
+ * turn that runs. `time`: the lab is out of time. `process`: the agent ended its turn and waits for a process
+ * that it left running.
+ */
+export type WaitsFor = 'person' | 'time' | 'process';
+
 export interface AgentActivity {
   readonly state: AgentState;
   /** The latest step that the harness reported, such as a tool call's title. */
   readonly detail: string;
   readonly at: string | null;
+  /** With the state `waiting`: what the agent waits for. */
+  readonly waits_for?: WaitsFor | null;
 }
 
 export interface Usage {
@@ -167,6 +176,13 @@ export interface AgentView {
   readonly chosen_name: string;
   /** What lens the agent brings, in its own words. */
   readonly about: string;
+  /** Who wrote the about line: the agent itself, or the coordinator that rewrote it. `null` without one. */
+  readonly about_by: string | null;
+  /**
+   * Whether a turn of the agent runs now. A turn in which the harness waits for the person's answer runs. An
+   * agent that waits for more time or for its own process is in no turn.
+   */
+  readonly in_turn: boolean;
   /** The picture that the agent chose, or `null`. */
   readonly picture: Picture | null;
   /** The role that somebody gave the agent's seat, or an empty string. */

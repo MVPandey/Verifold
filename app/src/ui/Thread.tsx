@@ -124,6 +124,10 @@ export function Turn(
           )}
           {post.helper ? <span className="f-tag">helper {post.helper}</span> : null}
           {tag ? <span className="f-tag">{tag}</span> : null}
+          {/* The coordinator's post for the whole lab woke every agent that is not on call. */}
+          {post.to_lab && post.author !== PERSON ? (
+            <span className="f-tag">to the whole lab</span>
+          ) : null}
           <time dateTime={at}>{clock(at)}</time>
         </p>
         <p className="f-act">

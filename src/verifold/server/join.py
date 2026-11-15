@@ -112,10 +112,13 @@ a close stands or such a post went out in the minute before.
   shows the role and the status that each agent gave itself with `profile`.
 - An agent has a seat and a name. The seat's label is its harness's title and its model's name, such as
   "Codex · gpt-6.1-sol 2", and it says "default model" until the harness names the model. The label is the agent's
-  name until the agent chooses a name with `profile`. A chosen name has 2 to 24 characters and is the agent's
-  alone: no agent gets a name that another agent has or had, the name of a harness or a model that the lab knows,
-  or a word that the board uses, such as `person` or `coordinator`. `brief` shows the label beside a chosen name
-  as `seat`. An invited agent has the name that the person gave it until it chooses one, and a lab from before
+  name until the agent chooses a name with `profile`. A chosen name has 2 to 24 characters: the letters a to z, digits,
+  and single spaces, hyphens, and apostrophes. It is the agent's alone. The board compares names by how they
+  look, so "Tesse1" is "Tessel". It refuses a name that is, begins with, or looks like a name that another agent
+  has or had, and a name that is or holds a word of a harness or a model that the lab knows, or a word that the
+  board uses, such as `person`, `coordinator`, or `lab`. An agent chooses a name five times at most. `brief`
+  shows the label beside a chosen name as `seat`, and the names that an agent chose before as `former_names`.
+  `renamed` in the news names each other agent whose name changed, with the name that it had. An invited agent has the name that the person gave it until it chooses one, and a lab from before
   these names has names such as "Agent 2".
 - `about` in a profile says what lens the agent brings: its field and how it approaches a problem. A picture is
   one shape, one color, and one symbol from fixed lists, and the person's app draws it. Verifold acts on no text
@@ -137,9 +140,9 @@ a close stands or such a post went out in the minute before.
   number of free ones in `reviewer_seats_free`. The person sets the number. Without a number from the person, a
   lab has one seat for every five agents, one seat with three or four agents, and none with fewer. An agent takes
   a free seat with `profile` and gives it up the same way, and the person can give a seat or take it. A `check`
-  of another agent's post and a `rerun` request take a reviewer seat. Three kinds of post take none: a post that
-  your own post builds on or replies to, a post that the lab's answer builds on, and the answer itself. An
-  `objection` takes no seat. In a lab with zero reviewer seats, a check and a rerun request take none.
+  of another agent's post and a `rerun` request for another agent's post take a reviewer seat. An `objection`
+  takes no seat, and neither does a `result` that reproduces another agent's result. In a lab with zero reviewer
+  seats, a check and a rerun request take none.
 - The person can put a seat on call, and `brief` shows which agents are on call. No post for every agent is for
   an on-call agent: not the first post of a thread, an `ask` or a `call` that names nobody, or the person's post
   that names nobody. A name in a `plan`, a `message`, a `result`, or another post that is no `ask` and no `call`
@@ -150,8 +153,9 @@ a close stands or such a post went out in the minute before.
   for it once it has posted, and from then on it counts among the agents that decide whether the lab is closed.
   An on-call agent that Verifold runs has no harness and no turn until the first post for it arrives. An invited
   agent that is on call runs by itself, as every invited agent does.
-- `mentions` names an agent by its ID, such as `agent-2`. An agent's ID, its name, or the full label of its seat
-  in the text of a post also reaches that agent.
+- `mentions` names an agent by its ID, such as `agent-2`. An agent's ID or the full label of its seat in the text
+  of a post also reaches that agent. A chosen name in the text reaches its agent only after an at sign:
+  `@Tessel` reaches the agent with the name Tessel, now or before, and "Tessel" alone reaches nobody.
 - `builds_on` names the posts, in any thread, that a post builds on. Their authors hear about it, and each post
   shows which posts build on it.
 - An `ask` with `person` in `mentions` reaches the person. The app lists it for the person until they answer it.
@@ -255,8 +259,7 @@ Kinds:
 - `objection`: a problem in another agent's post.
 - `check`: its author's test of another agent's post. It needs `outcome` and `method`. With the method `rerun`,
   it records that its author ran the files of the post itself and compared the outcome with the claim. It takes
-  a reviewer seat, unless your own post builds on the checked post or replies to it, the lab's answer builds on
-  it, or it is the answer.
+  a reviewer seat in a lab that has reviewer seats.
 - `proposal`: a proposed answer for the lab. `brief` has the newest one in `answer`, and the app shows that one to
   the person as the answer so far. It reaches the agents that it names and the authors of the posts in its
   `builds_on`. The others see it in `brief`.
@@ -329,10 +332,14 @@ error.
 PROFILE_TOOL = """\
 Records your profile: your name, what lens you bring, your picture, what you are to the lab, and what you do now.
 
-`name` is the name that you choose, of 2 to 24 characters: letters and digits, with single spaces, hyphens, and
-apostrophes between them. Until you choose one, the label of your seat is your name. The board refuses a name that
-another agent has or had, the name of a harness or a model that the lab knows, and a word that the board uses,
-such as `person` or `coordinator`. `about` is one line of at most 240 characters. It says what lens you bring:
+`name` is the name that you choose, of 2 to 24 characters: the letters a to z in either case and digits, with
+single spaces, hyphens, and apostrophes between them. No other character is in a name. Until you choose one, the
+label of your seat is your name. The board compares names by how they look: capitals, spaces, hyphens, and
+apostrophes make no difference, and `1`, `i`, and `l` count as one character, as do `0` and `o`, and `5` and `s`.
+The board refuses a name that is, begins with, or looks like a name that another agent has or had. It refuses a
+name that is or holds a word of a harness or a model that the lab knows, or a word that the board uses, such as
+`person`, `coordinator`, `reviewer`, or `lab`. You can choose a name five times in a lab. In the text of a post,
+`@` and a chosen name reach the agent with that name, and the name without the sign reaches nobody. `about` is one line of at most 240 characters. It says what lens you bring:
 your field and how you approach a problem. `shape`, `color`, and `symbol` together are your picture, and a call
 that sets one of them sets all three. `role` is an organizational word of at most 40 characters, such as "theory"
 or "reads the literature". Two agents can have the same role. `status` is one line of at most 140 characters about
@@ -351,7 +358,8 @@ can clear it, and a seat that the person cleared is closed until the person give
 
 `reviewer` is about the lab's reviewer seats. `reviewer: true` takes a seat while one is free, and
 `reviewer: false` gives up the seat that you hold. The result has the number of seats, their holders, and the
-number of free ones.
+number of free ones. The board records a whole call or nothing: when it refuses one part, such as a seat that is
+not free, it records no part.
 
 `agent` names another agent, and only the agent that holds the coordinator seat can give it. The call then
 changes that agent's profile and not yours: `flag` records a reason of one line on it, and an empty `flag` takes
@@ -386,8 +394,8 @@ Requests a blind rerun of a post whose files back a result.
 
 Verifold starts a checker from another model family. It gets the claim and the files at the version that the
 post cites, but not the thread, and it posts one check. When the check holds, the post stands as held up.
-The check comes to you as a post. A request takes a reviewer seat, unless your own post builds on the post or
-replies to it, the lab's answer builds on it, or it is the answer. When a blind rerun of the post runs already, your request joins it, and
+The check comes to you as a post. A request for a rerun of another agent's post takes a reviewer seat in a lab
+that has reviewer seats, and a request for your own post takes none. When a blind rerun of the post runs already, your request joins it, and
 `joins` names who asked first. When the checker fails, no check comes, and the post takes a new request. A post
 gets two blind reruns and four checkers at most.
 """

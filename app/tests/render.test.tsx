@@ -412,6 +412,16 @@ describe('an opened thread', () => {
         'class="i-name">Tessel</button><span class="i-prov">Codex · gpt-6.1-sol</span>',
       ),
     );
+    // A post that an agent marked for the whole lab says so, and no other post does.
+    const toLab = turns({ ...postView({ ...post, to_lab: true }), by });
+    assert.ok(
+      toLab.includes(
+        '<span class="f-tag">leads this thread</span><span class="f-tag">to the whole lab</span><time',
+      ),
+    );
+    assert.equal(earlier.includes('to the whole lab'), false);
+    const own = turns(postView(result('p-2', { author: 'person', kind: 'message', to_lab: true })));
+    assert.equal(own.includes('to the whole lab'), false);
     // The picture opens the profile too. The name beside it is the control that a keyboard reaches.
     assert.ok(
       earlier.includes('<button type="button" class="i-open" tabindex="-1" aria-hidden="true">'),
@@ -475,7 +485,13 @@ describe('the lab page', () => {
   const working = { state: 'working', detail: 'Run pytest', at: null } as const;
   const lab = labView({
     agents: [
-      agentView('agent-1', { activity: working, need: 'working', turns: 2, cost_usd: 0.5 }),
+      agentView('agent-1', {
+        activity: working,
+        need: 'working',
+        in_turn: true,
+        turns: 2,
+        cost_usd: 0.5,
+      }),
       agentView('agent-2', { need: 'answer' }),
     ],
     waits: [
@@ -1372,9 +1388,9 @@ describe('the lab page', () => {
       ...lab,
       agents: [
         agentView('agent-1', { need: 'idle' }),
-        agentView('agent-2', { need: 'working' }),
+        agentView('agent-2', { need: 'working', in_turn: true }),
         agentView('agent-3', { need: 'approval' }),
-        agentView('agent-4', { need: 'working' }),
+        agentView('agent-4', { need: 'working', in_turn: true }),
       ],
     });
     const headings = [...html.matchAll(/<li class="o-group o-(\w+)">([^<]+)<\/li>/g)].map(
@@ -1528,6 +1544,85 @@ describe('the lab page', () => {
     assert.ok(html.includes('value="driver"'));
     assert.ok(html.includes('aria-label="Open the folder of Tessel"'));
     assert.ok(!html.includes('cannot come back'));
+  });
+
+  it('says who wrote the about line when a coordinator rewrote it', () => {
+    const about = 'I test claims.';
+    const note =
+      '<p class="i-about">I test claims.</p><p class="i-prov">Written by the coordinator.</p>';
+    assert.ok(sheet({ ...first, about, about_by: 'agent-2' }).includes(note));
+    // The agent's own line, and a line from a server that does not say who wrote it, have no such note.
+    assert.equal(sheet({ ...first, about, about_by: 'agent-1' }).includes('Written by'), false);
+    assert.equal(sheet({ ...first, about, about_by: null }).includes('Written by'), false);
+    assert.equal(sheet({ ...first, about_by: 'agent-2' }).includes('Written by'), false);
+  });
+
+  it('counts an approval inside a turn as in a turn, and shows the band of a lab that is out of time', () => {
+    const asking = {
+      state: 'waiting',
+      detail: 'Asks you: run pytest',
+      at: null,
+      waits_for: 'person',
+    } as const;
+    const inside = {
+      ...lab,
+      agents: [
+        agentView('agent-1'),
+        { ...second, need: 'approval' as const, in_turn: true, activity: asking },
+      ],
+    };
+    const bar = top(inside);
+    assert.ok(bar.includes('<span class="dot live"></span> 1 of 2 agents in a turn<u>'));
+    // The picture keeps the yellow dot: the person's answer comes first.
+    assert.ok(bar.includes('<i class="i-dot wait"></i>'));
+    assert.equal(bar.includes('i-dot live'), false);
+    const wallOf = (shown: LabView): string => {
+      Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+      return renderToStaticMarkup(
+        <LabPage
+          api={{} as Api}
+          data={{ ...data, lab: shown }}
+          now={now}
+          open={null}
+          post={null}
+        />,
+      );
+    };
+    assert.equal(wallOf(inside).includes('o-quiet'), false);
+
+    const waiting = {
+      state: 'waiting',
+      detail: 'The lab is out of time. The person can give it more.',
+      at: null,
+      waits_for: 'time',
+    } as const;
+    const stopped = {
+      ...lab,
+      out_of_time: true,
+      waits: [],
+      agents: lab.agents.map((view) => ({
+        ...view,
+        activity: waiting,
+        need: 'idle' as const,
+        in_turn: false,
+      })),
+    };
+    const still = top(stopped);
+    assert.ok(
+      still.includes(
+        '<summary class="f-live still"><span class="dot still"></span> No agent in a turn, 2 in the lab<u>',
+      ),
+    );
+    assert.equal(still.includes('i-dot'), false);
+    assert.equal(
+      still.split('<p class="f-where">The lab is out of time. The person can give it more.</p>')
+        .length - 1,
+      2,
+    );
+    const band = wallOf(stopped);
+    assert.ok(band.includes('<section class="o-quiet" aria-label="The lab is out of time">'));
+    assert.ok(band.includes('No agent starts a turn until you give the lab more time.'));
+    assert.ok(band.includes('<dt>Time left</dt><dd>None</dd>'));
   });
 
   it('says so in the profile of an agent that chose nothing, and offers nothing to take back', () => {
@@ -1686,12 +1781,12 @@ describe('an agent’s picture', () => {
     assert.ok(gone.includes('<svg class="i-pic faded"'));
     assert.ok(gone.includes('<g fill="#8d8a9c"'));
     assert.equal(gone.includes('#e3b341'), false);
-    assert.ok(draw({ need: 'working' }).includes('<i class="i-dot live"></i>'));
+    assert.ok(draw({ need: 'working', in_turn: true }).includes('<i class="i-dot live"></i>'));
     assert.ok(draw({ need: 'approval' }).includes('<i class="i-dot wait"></i>'));
     assert.ok(draw({ need: 'answer' }).includes('<i class="i-dot wait"></i>'));
     assert.equal(draw({ need: 'waiting' }).includes('i-dot'), false);
     // A post and the profile show the picture without a dot.
-    assert.equal(draw({ need: 'working' }, false).includes('i-dot'), false);
+    assert.equal(draw({ need: 'working', in_turn: true }, false).includes('i-dot'), false);
     // The name and the seat are the picture's title.
     assert.ok(
       draw({ seat: 'Claude Code · Fable 5.2' }).includes(
@@ -1925,8 +2020,29 @@ describe('a member that left', () => {
       assert.equal(left.includes('>Remove</button>'), false);
       assert.equal(left.includes('>Invite again</button>'), false);
       assert.equal(left.includes('Put on call'), false);
+      assert.equal(left.includes('Role that you give'), false);
+      assert.equal(left.includes('Take back'), false);
+      assert.equal(left.includes('What you can do'), false);
       assert.ok(left.includes('>Open folder</button>'));
     }
+    // What it chose stays on its posts, so the person can still take that back, and nothing else.
+    const chose = profile({
+      ...gone,
+      agent: { ...gone.agent, name: 'Overlord' },
+      chosen_name: 'Overlord',
+      about: 'I win.',
+      picture: { shape: 'hex', color: '#f08c3a', symbol: 'orbit' },
+      given_role: 'driver',
+      given_by: 'person',
+    });
+    assert.deepEqual(
+      [...chose.matchAll(/<button class="linkbtn" type="button"[^>]*>([^<]+)<\/button>/g)].map(
+        (match) => match[1],
+      ),
+      ['Take back the name', 'Take back the about line', 'Take back the picture', 'Open folder'],
+    );
+    assert.ok(chose.includes('<h3>What you can do</h3>'));
+    assert.equal(chose.includes('Role that you give'), false);
     // Only the member that is in the lab can be removed. The first press asks before anything happens.
     const here = profile(agentView('agent-2'));
     assert.equal(here.split('>Remove</button>').length, 2);

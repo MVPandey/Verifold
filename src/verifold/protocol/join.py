@@ -112,7 +112,7 @@ class PostRequest(Record):
         )
 
 
-MAX_SEAT = 40
+MAX_SEAT = 28
 """The most characters of a seat's label that a post's line shows. A longer label is cut, and `brief` has it whole."""
 
 
@@ -321,6 +321,14 @@ class ProfileNote(Record):
     """The reason of a flag on the profile, when the change set one. An empty text takes the flag back."""
 
 
+class RenameLine(Record):
+    """An agent that has another name than before: the name that it has now, and the name that it had."""
+
+    id: AgentId
+    name: str
+    was: str
+
+
 class News(Record):
     """
     The posts that an agent has not seen yet, oldest first, with the agent's alarm.
@@ -345,6 +353,8 @@ class News(Record):
     """The agents that left the lab since, among those that the agent wrote to: who caused it, and the reason."""
     profile: tuple[ProfileNote, ...] = ()
     """The changes that the person or the coordinator made to the agent's own profile since, oldest first."""
+    renamed: tuple[RenameLine, ...] = ()
+    """The other agents whose name changed since, each once, with its name now and the name that it had before."""
     alarm: AlarmLine | None = None
     """The alarm that waits for the agent. `None` means that no alarm waits."""
 
@@ -413,6 +423,10 @@ class RerunResult(Record):
     news: News | None = None
 
 
+MAX_FORMER_NAMES = 2
+"""The most former names in an agent's line: the newest ones. An `@` and an older name still reach the agent."""
+
+
 class AgentLine(Record):
     """An agent of the lab at a glance: who it is, the seats that it holds, the plan that it posted last, and its latest post."""
 
@@ -425,8 +439,12 @@ class AgentLine(Record):
     an invited agent it says that the agent runs in its own harness. Empty when the label is the agent's name.
     """
     harness: Label
+    former_names: tuple[str, ...] = ()
+    """The names that the agent chose before and has no longer, newest last, at most `MAX_FORMER_NAMES`."""
     about: About = ''
-    """What lens the agent brings, in its own words: its field and how it approaches a problem."""
+    """What lens the agent brings: its field and how it approaches a problem."""
+    about_by: AgentId | None = None
+    """Who wrote `about`: the agent itself, or the coordinator that rewrote it. `None` without an about line."""
     role: str = ''
     """What the agent says that it is to the lab, in its own words."""
     given_role: str = ''
@@ -541,6 +559,8 @@ class ProfileResult(Record):
     seat: str = ''
     """The label of the agent's seat: its harness's title and its model's name."""
     about: str = ''
+    about_by: AgentId | None = None
+    """Who wrote `about`: the agent itself, or the coordinator that rewrote it."""
     picture: Picture | None = None
     role: str
     status: str
@@ -678,6 +698,8 @@ class Update(Record):
     """The agents that left the lab since, among those that the agent wrote to: who caused it, and the reason."""
     profile: tuple[ProfileNote, ...] = ()
     """The changes that the person or the coordinator made to the agent's own profile since, oldest first."""
+    renamed: tuple[RenameLine, ...] = ()
+    """The other agents whose name changed since, each once, with its name now and the name that it had before."""
     alarm: AlarmLine | None = None
     """The alarm that waits for the agent. `None` means that no alarm waits."""
     no_alarm: str = ''

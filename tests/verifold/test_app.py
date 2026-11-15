@@ -1227,7 +1227,7 @@ async def test_a_lab_starts_with_its_reviewer_seats_and_the_settings_page_change
     folder.mkdir(exist_ok=True)
     (folder / 'settings.json').write_text(json.dumps({'reviewers': {'seats': 4}}))
 
-    # The start's own number wins over the files, as `verifold run` gives one when a project's file would raise it.
+    # The start's own number wins over the files, as `verifold run` gives one in place of a project's number.
     async with serving(project, ONE_AGENT.model_copy(update={'reviewer_seats': 2})) as client:
         await until(lambda: any(isinstance(event, SettingsSet) for event in record(project)))
         started = (await client.get('/lab')).json()

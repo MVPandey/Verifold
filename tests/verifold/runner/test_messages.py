@@ -111,9 +111,9 @@ def test_the_lab_norms_and_the_doorbell_are_short_and_plain() -> None:
     assert NORMS_TEMPLATE.startswith("# The lab's norms")
     assert '`' not in NORMS_TEMPLATE
     # The limit was 2,800. It grew by 300 for the two norms that came out of Python and the norm on checks by rerun,
-    # and by 1,200 for the norms on the goal, on obstacles, on a human's limits, on reviewer seats, on the
-    # coordinator's strategy, and on a name.
-    assert len(NORMS_TEMPLATE) < 4_300
+    # by 1,200 for the norms on the goal, on obstacles, on a human's limits, on reviewer seats, on the
+    # coordinator's strategy, and on a name, and by 300 for the close, the open coordinator seat, and the helpers.
+    assert len(NORMS_TEMPLATE) < 4_600
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -124,7 +124,8 @@ def test_the_lab_norms_ask_agents_to_plan_together_check_each_other_and_agree_on
         'Give each line of work its own thread',
         'Read the board before each new piece of work',
         'Post each result when you have it',
-        "propose the lab's answer. The newest proposal is the answer",
+        "propose the lab's answer. Another agent can propose a different one; the newest proposal is the answer that shows",
+        'Object to the proposal when you see a problem in it.',
         'Chain the work',
     ):
         assert norm in NORMS_TEMPLATE
@@ -139,31 +140,40 @@ def test_the_lab_norms_hold_the_goal_the_obstacle_the_reviewer_seats_and_the_nam
         "Do not assume a human's limits.",
         'Revisit what you ruled out as too slow or too much work.',
         'Before you rule a method out, search what is published on it.',
-        "Exploring and testing is everyone's main work. Checking is a side activity",
-        "check what you are about to build on, and what the lab's answer rests on",
-        'A few agents hold reviewer seats for the rest.',
+        "Exploring and testing is everyone's main work. Before you build on a result, look at it yourself",
+        'A check that the lab relies on comes from an agent in a reviewer seat.',
+        'Take a reviewer seat only when checking is the work you want; leave it free when you would rather build.',
+        'When the agents agree that nothing useful is left to try, one of them posts a close.',
+        'When no agent holds the seat and it is open, an agent that wants this work can take it.',
         'A lead gets a champion and a forward test before it gets an audit.',
-        "The coordinator owns the lab's strategy: which bets are open, which are missing, and what to try next.",
+        "When the lab has a coordinator, it owns the lab's strategy: which bets are open, which are missing, and what to try next.",
         'It can hand this to one agent.',
         'looks across fields, chains results from different threads, and opens the next line when one closes',
         'Choose a name, and say in one line the lens you bring.',
     ):
         assert norm in NORMS_TEMPLATE
     # A live lab showed seven agents that opened with the same doubt, and rival answers are allowed.
-    for gone in ('or a doubt', 'Do not post an answer of your own beside it', 'Do this before you check'):
+    for gone in (
+        'or a doubt',
+        'Do not post an answer of your own beside it',
+        'Do this before you check',
+        'Check the proposal',
+        'Agree on one answer',
+    ):
         assert gone not in NORMS_TEMPLATE
 
 
 def test_the_lab_norms_ask_agents_to_take_other_sides_say_when_they_are_stuck_and_carry_ideas_across() -> None:
     for norm in (
         'Look at the question from a side that no other plan covers',
-        'Change sides when the work calls for it, or start a helper that takes one',
+        'Change sides when the work calls for it.',
         'Open a line that nobody has, join one that is short of hands, or try a long shot',
         'Look for a result to build on, and for a problem that you can help with',
         'When you are stuck, post an ask that says what you tried',
         "post it in that agent's thread, also when it comes from another field",
         'When you build on a post, name it',
-        'Use your own helpers and searches as you see fit',
+        "Use your harness's own helpers for work that can run beside yours, such as a literature search, a side experiment or a second look.",
+        'Post what they find, or let them post under their own name.',
     ):
         assert norm in NORMS_TEMPLATE
 

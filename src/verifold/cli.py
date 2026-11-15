@@ -12,6 +12,7 @@ from functools import partial
 from importlib.metadata import version
 from pathlib import Path
 from types import MappingProxyType
+from typing import Literal
 
 from pydantic import ValidationError
 
@@ -25,7 +26,6 @@ from verifold.runner.errors import NoAgentFolder, NoFileManager, RunnerError
 from verifold.runner.folders import LAB_FOLDER, agents_folder, open_folder, real_folder
 from verifold.runner.jobs import Job, Sweep
 from verifold.server.errors import ServerError, SetupRejected
-from verifold.society.reviewers import default_seats
 from verifold.store.errors import SettingsInvalid, StoreError
 from verifold.store.server_file import mark_opens, named_server, running_server
 from verifold.store.settings_file import SettingsValues, read_settings_file, settings_of, settings_path
@@ -94,10 +94,9 @@ def _start(args: argparse.Namespace) -> StartRequest:
     Return what `verifold run` starts: the command line's choices, and the saved choices for new labs for the rest.
 
     `verifold run` starts at once, without showing the saved choices, and a project's file can come from someone else.
-    So a project's file can make the lab stricter, not looser: it can turn auto mode off, shorten the time limit, and
-    lower the number of reviewer seats,
+    So a project's file can make the lab stricter, not looser: it can turn auto mode off and shorten the time limit,
     and each of its seats gives only a harness, a count, a model, and an effort. Its modes, roles, families,
-    coordinator, and on-call marks are not used, and the command says so. Under `--ask-me`, no saved agent gets a mode.
+    coordinator, and on-call marks are not used, and neither is its number of reviewer seats, and the command says so. Under `--ask-me`, no saved agent gets a mode.
 
     Raises:
         SetupRejected: No harness that Verifold knows is on this computer.
@@ -122,23 +121,27 @@ def _start(args: argparse.Namespace) -> StartRequest:
         auto_mode=everywhere.auto_mode and here.auto_mode and not args.ask_me,
         minutes=shorter if args.minutes is None else args.minutes,
         allow=tuple(args.allow or ()),
-        reviewer_seats=_reviewer_seats(values, sum(agent.count for agent in agents), own=own),
+        reviewer_seats=_reviewer_seats(values, own=own),
     )
 
 
-def _reviewer_seats(values: Mapping[SettingsLevel, SettingsValues], agents: int, *, own: bool) -> int | None:
+def _reviewer_seats(values: Mapping[SettingsLevel, SettingsValues], *, own: bool) -> int | Literal['size'] | None:
     """
     Return the number of reviewer seats that `verifold run` starts with, or `None` for what the files add up to.
 
-    A project's file can lower the number and cannot raise it: a number above the person's own, or above the
-    number for the lab's size when the person set none, counts as that number.
+    `verifold run` does not use the number in a project's file, and says so. A higher number lets more agents
+    check, and zero turns the reviewer seats off, so no number from somebody else's file is the stricter one. The
+    lab then has the person's own number, or follows its size.
     """
-    theirs = settings_of(values).reviewers.seats
     project = values[SettingsLevel.PROJECT].get('reviewers')
-    if own or theirs is None or not (isinstance(project, dict) and 'seats' in project):
+    if own or not (isinstance(project, dict) and 'seats' in project):
         return None
+    _say(
+        "Did not use the number of reviewer seats from this project's settings file: `verifold run` takes it only "
+        'from your settings for all projects.'
+    )
     mine = settings_of({SettingsLevel.ALL: values[SettingsLevel.ALL]}).reviewers.seats
-    return min(theirs, default_seats(agents) if mine is None else mine)
+    return 'size' if mine is None else mine
 
 
 def _saved_agents(

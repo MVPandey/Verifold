@@ -7,8 +7,9 @@ here.
 """
 
 import re
+import unicodedata
 
-from verifold.protocol.agents import GUEST, Agent
+from verifold.protocol.agents import Agent
 from verifold.protocol.events import (
     AgentLeft,
     AgentNamed,
@@ -80,51 +81,108 @@ def _held_by_another(board: Board, agent_id: AgentId, name: str) -> bool:
     return any(agent != agent_id and text.casefold() == folded for agent, text in board.names())
 
 
-RESERVED_NAMES = frozenset({'you', 'person', 'coordinator', 'verifold', 'agent', 'checker', 'reviewer', GUEST})
-"""The names that no agent chooses, because the app and the board use them for something else."""
+RESERVED_WORDS = (
+    'you',
+    'person',
+    'human',
+    'user',
+    'admin',
+    'system',
+    'verifold',
+    'server',
+    'coordinator',
+    'reviewer',
+    'moderator',
+    'everyone',
+    'all',
+    'lab',
+    'agent',
+    'checker',
+    'guest',
+    'helper',
+    'on call',
+)
+"""The words that no chosen name holds, because the app and the board use them for the person, a seat, or the lab."""
 
-NUMBERED_NAME = re.compile(r'(agent|checker)[ -]?\d+')
-"""The form of the names and IDs that Verifold gives, such as "Agent 3", "agent-3", and "Checker 12"."""
+MAX_CHOSEN_NAMES = 5
+"""How many times an agent can choose a name in one lab."""
+
+_ALIKE = str.maketrans({'1': 'l', 'i': 'l', '0': 'o', '5': 's'})
+
+
+def skeleton(name: str) -> str:
+    """
+    Return a name as two names that look alike share it.
+
+    It has no capitals, spaces, hyphens, or apostrophes, and characters that look alike are one: `1`, `i`, and
+    `l`, then `0` and `o`, then `5` and `s`, and `rn` reads as `m`. So "Tesse1", "TesseI", and "Tes sel" are
+    "Tessel".
+    """
+    plain = unicodedata.normalize('NFKC', name).casefold()
+    return re.sub(r"[ '-]", '', plain).replace('rn', 'm').translate(_ALIKE)
 
 
 def known_words(board: Board) -> frozenset[str]:
     """
-    Return the words that the lab knows as a harness or a model, casefolded.
+    Return the skeletons of the words that the lab knows as a harness or a model.
 
-    They are each harness's key and title, each model's name, ID, and family, and the model that each harness
-    reported for a turn. A seat's label gives the title and the model's name: "Codex · gpt-6.1-sol 2" gives
-    "Codex" and "gpt-6.1-sol". No agent takes one of them as its name, so no agent passes as a model that it is not.
+    They are each word of each harness's key and title, of each model's name, ID, and family, and of the model
+    that each harness reported for a turn, and each of these names whole. A seat's label gives the title and the
+    model's name. A word of digits alone is none. No agent takes one of them as its name or as a word of its name,
+    so no agent passes as a model that it is not.
     """
-    # A label can end with the number of a second seat, and a model's own name can end with a number too.
-    named = tuple(text.partition(' · ')[2] for _, _, text in board.labels)
-    models = (*named, *(re.sub(r' \d+$', '', model) for model in named))
-    titles = (text.partition(' · ')[0] for _, _, text in board.labels if ' · ' in text)
+    labels = (part for _, _, text in board.labels if ' · ' in text for part in text.split(' · '))
     specs = (
         word
         for joined in board.agents
         for word in (joined.agent.harness, joined.agent.model.family, joined.agent.model.name)
     )
     reported = (word for start in board.starts for word in (start.model, start.model_name))
-    return frozenset(word.casefold() for word in (*models, *titles, *specs, *reported) if word)
+    whole = tuple(word for word in (*labels, *specs, *reported) if word)
+    words = (word for text in whole for word in re.split(r'[^A-Za-z0-9]+', text) if word and not word.isdecimal())
+    return frozenset(skeleton(word) for word in (*whole, *words))
 
 
 def check_name(board: Board, agent_id: AgentId, name: str) -> None:
     """
     Check that an agent can choose a name.
 
+    Names compare by their skeleton, so a name that only looks like another is the same name.
+
     Raises:
-        RejectedEvent: Another agent has or had the name, the name is one that Verifold or the app uses, it has
-            the form of an agent's ID, or it is a harness or a model that the lab knows.
+        RejectedEvent: The name is, or begins with, a name that another agent has or had. The name or one of
+            its words is a word that Verifold or the app uses, has the form of an agent's ID, or is a word of a
+            harness or a model that the lab knows. Or the agent chose a name `MAX_CHOSEN_NAMES` times already.
 
     """
-    folded = name.casefold()
-    if _held_by_another(board, agent_id, name):
-        raise RejectedEvent(f'Another agent has or had the name {name}. A name stays with the agent that held it.')
-    ids = {joined.agent.id for joined in board.agents}
-    if folded in RESERVED_NAMES or folded in ids or NUMBERED_NAME.fullmatch(folded):
-        raise RejectedEvent(f'{name} is a word that the board uses for the person, for a seat, or for an agent ID.')
-    if folded in known_words(board):
-        raise RejectedEvent(f'{name} is the name of a harness or a model in this lab, and a name is not a model.')
+    mine = skeleton(name)
+    chosen = sum(entry.agent == agent_id and bool(entry.name) and entry.by is None for entry in board.profiles)
+    if chosen >= MAX_CHOSEN_NAMES:
+        raise RejectedEvent(
+            f'An agent chooses a name at most {MAX_CHOSEN_NAMES} times in a lab, and you chose {chosen}. Your name '
+            f'stays {board.chosen_name(agent_id) or board.label(agent_id)}.'
+        )
+    others = (skeleton(text) for agent, text in board.names() if agent != agent_id and ' · ' not in text)
+    if any(mine.startswith(other) for other in others if other):
+        raise RejectedEvent(
+            f'Another agent has or had the name {name}, or a name that {name} begins with or looks like. A name '
+            'stays with the agent that held it.'
+        )
+    words = {mine, *(skeleton(word) for word in re.split(r"[ '-]", name))}
+    ids = {skeleton(joined.agent.id) for joined in board.agents}
+    if words & {skeleton(word) for word in RESERVED_WORDS} or mine in ids or NUMBERED_NAME.fullmatch(name.casefold()):
+        raise RejectedEvent(
+            f'{name} is, holds, or looks like a word that the board uses for the person, for a seat, or for an '
+            'agent ID.'
+        )
+    if words & known_words(board):
+        raise RejectedEvent(
+            f'{name} is, holds, or looks like the name of a harness or a model in this lab, and a name is not a model.'
+        )
+
+
+NUMBERED_NAME = re.compile(r'(agent|checker)[ -]?\d+')
+"""The form of the names and IDs that Verifold gives, such as "Agent 3", "agent-3", and "Checker 12"."""
 
 
 def check_on_call(board: Board, event: OnCallSet) -> None:
@@ -315,7 +373,10 @@ def check_profile(board: Board, profile: ProfileSet) -> None:
     joined = board.agent(profile.agent)
     if not joined:
         raise RejectedEvent(f'{profile.agent} is not an agent in this lab.')
-    _check_here(board, profile.agent)
+    # The person can still take back what an agent that left chose: its posts keep showing it.
+    resets = profile.by == PERSON and profile.given_role is None
+    if not resets:
+        _check_here(board, profile.agent)
     if joined.agent.checks:
         raise RejectedEvent('A blind checker has no role and no status.')
     own = (profile.role, profile.status, profile.name, profile.about, profile.picture)

@@ -147,6 +147,7 @@ describe('the API client', () => {
       ['', '', null, '', null, false],
     );
     assert.deepEqual([old?.need, old?.flag, old?.edits], ['idle', '', []]);
+    assert.deepEqual([old?.in_turn, old?.about_by, old?.chosen_name], [false, null, '']);
     assert.deepEqual(old?.outcomes, { built_on: [], held: [], refuted: [], open_asks: [] });
     assert.deepEqual(
       [read.waits, read.thread_needs, read.reviewer_seats, read.reviewer_seats_set],

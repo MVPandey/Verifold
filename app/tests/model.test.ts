@@ -61,6 +61,7 @@ import {
   waitsLine,
   whereLine,
 } from '../src/model/status.ts';
+import { wrapFocus } from '../src/model/focus.ts';
 import { AT_EXIT, labelOf, seatsValue, stopLine, valueAt } from '../src/model/settings.ts';
 import {
   agentCount,
@@ -280,7 +281,12 @@ describe('agents', () => {
       need: 'left',
       left: { at, by: 'person', reason: '' },
     });
-    const agents = [gone, agentView('agent-2', { need: 'working' }), removed, agentView('agent-4')];
+    const agents = [
+      gone,
+      agentView('agent-2', { need: 'working', in_turn: true }),
+      removed,
+      agentView('agent-4'),
+    ];
 
     assert.deepEqual(
       present(agents).map((view) => view.agent.id),
@@ -340,14 +346,17 @@ describe('agents', () => {
   });
 
   it('counts the members and the blind reruns that are in a turn, and says so when none is', () => {
-    const checker = agentView('checker-7', { need: 'working' });
+    const checker = agentView('checker-7', { need: 'working', in_turn: true });
     const rerun = { ...checker, agent: { ...checker.agent, checks: 'p-1' } };
-    assert.deepEqual(turnLine([agentView('agent-1', { need: 'working' }), agentView('agent-2')]), {
-      text: '1 of 2 agents in a turn',
-      live: true,
-    });
+    assert.deepEqual(
+      turnLine([agentView('agent-1', { need: 'working', in_turn: true }), agentView('agent-2')]),
+      {
+        text: '1 of 2 agents in a turn',
+        live: true,
+      },
+    );
     assert.equal(
-      turnLine([agentView('agent-1', { need: 'working' })]).text,
+      turnLine([agentView('agent-1', { need: 'working', in_turn: true })]).text,
       '1 of 1 agent in a turn',
     );
     // With no agent in a turn, the dot is hollow and the line counts who is in the lab.
@@ -355,7 +364,7 @@ describe('agents', () => {
       text: 'No agent in a turn, 2 in the lab',
       live: false,
     });
-    // An agent that waits for the person is in no turn.
+    // An ask that waits for the person puts no agent in a turn by itself.
     assert.equal(
       turnLine([
         agentView('agent-1', { need: 'approval' }),
@@ -363,6 +372,22 @@ describe('agents', () => {
       ]).live,
       false,
     );
+    // A turn in which the harness waits for the person's approval still runs, so its agent counts.
+    const asking = {
+      state: 'waiting',
+      detail: 'Asks you: run pytest',
+      at: null,
+      waits_for: 'person',
+    } as const;
+    assert.deepEqual(
+      turnLine([
+        agentView('agent-1', { need: 'approval', in_turn: true, activity: asking }),
+        agentView('agent-2'),
+      ]),
+      { text: '1 of 2 agents in a turn', live: true },
+    );
+    // A status alone counts nobody: the count follows the live turn.
+    assert.equal(turnLine([agentView('agent-1', { need: 'working' })]).live, false);
     assert.deepEqual(turnLine([agentView('agent-1'), rerun]), {
       text: 'No agent in a turn, 1 in the lab, 1 blind rerun',
       live: true,
@@ -1353,12 +1378,16 @@ describe('an agent’s identity', () => {
     assert.equal(pictureLook({ ...maren, on_call: true }).hollow, true);
     const left = { at: '2026-11-06T14:00:00Z', by: 'person', reason: '' };
     assert.equal(pictureLook({ ...maren, left, need: 'left' }).gone, true);
+    // The green dot comes from the live turn, and no status alone gives it.
     assert.deepEqual(
       (['approval', 'answer', 'working', 'waiting', 'idle', 'stopped', 'left'] as const).map(
         (need) => pictureLook({ ...maren, need }).dot,
       ),
-      ['wait', 'wait', 'live', null, null, null, null],
+      ['wait', 'wait', null, null, null, null, null],
     );
+    assert.equal(pictureLook({ ...maren, need: 'working', in_turn: true }).dot, 'live');
+    // An agent whose turn waits for the person's approval keeps the yellow dot, which comes first.
+    assert.equal(pictureLook({ ...maren, need: 'approval', in_turn: true }).dot, 'wait');
   });
 
   it('puts the seat marks in one order, before the given role with who gave it and the agent’s own role', () => {
@@ -1520,16 +1549,16 @@ describe('one status', () => {
   });
 
   it('groups the members by status in the order of who needs the person, and leaves out a blind rerun', () => {
-    const checker = agentView('checker-7', { need: 'working' });
+    const checker = agentView('checker-7', { need: 'working', in_turn: true });
     const agents = [
       agentView('agent-1', { need: 'left' }),
       agentView('agent-2', { need: 'stopped' }),
       agentView('agent-3', { need: 'idle' }),
       agentView('agent-4', { need: 'waiting' }),
-      agentView('agent-5', { need: 'working' }),
+      agentView('agent-5', { need: 'working', in_turn: true }),
       agentView('agent-6', { need: 'answer' }),
       agentView('agent-7', { need: 'approval' }),
-      agentView('agent-8', { need: 'working' }),
+      agentView('agent-8', { need: 'working', in_turn: true }),
       { ...checker, agent: { ...checker.agent, checks: 'p-1' } },
     ];
     assert.deepEqual(
@@ -1595,7 +1624,12 @@ describe('one status', () => {
       waits: [wait('approval', 'agent-1', 'Asks to run a command', '2026-11-06T14:26:00Z')],
     });
     assert.equal(
-      whereLine(agentView('agent-2', { activity: working, need: 'working' }), lab, now, 'Baseline'),
+      whereLine(
+        agentView('agent-2', { activity: working, need: 'working', in_turn: true }),
+        lab,
+        now,
+        'Baseline',
+      ),
       'Run pytest, 3 min. Works in “Baseline”.',
     );
     // A member that waits for the person says for what, and for how long.
@@ -1613,7 +1647,12 @@ describe('one status', () => {
     assert.equal(ON_CALL, 'On call. An ask or a call that names it wakes it.');
     assert.equal(whereLine({ ...rested, on_call: true }, lab, now, null), ON_CALL);
     assert.equal(
-      whereLine({ ...rested, on_call: true, activity: working, need: 'working' }, lab, now, null),
+      whereLine(
+        { ...rested, on_call: true, activity: working, need: 'working', in_turn: true },
+        lab,
+        now,
+        null,
+      ),
       'Run pytest, 3 min.',
     );
     // In a lab that is out of time, nothing wakes an agent, so the row names no alarm and no call.
@@ -1729,15 +1768,79 @@ describe('a quiet lab', () => {
     const [first, ...rest] = lab.agents;
     assert.ok(first);
     assert.equal(
-      quietBand({ ...lab, agents: [{ ...first, need: 'working' }, ...rest] }, now),
+      quietBand({ ...lab, agents: [{ ...first, need: 'working', in_turn: true }, ...rest] }, now),
       null,
     );
-    const checker = agentView('checker-7', { need: 'working' });
+    const checker = agentView('checker-7', { need: 'working', in_turn: true });
     const rerun = { ...checker, agent: { ...checker.agent, checks: 'p-1' } };
     assert.equal(quietBand({ ...lab, agents: [...lab.agents, rerun] }, now), null);
     assert.equal(quietBand(labView(), now), null);
-    // An agent that waits for the person is in no turn, so the lab is quiet.
+    // An agent with an ask to the person and no turn leaves the lab quiet.
     assert.ok(quietBand({ ...lab, agents: [{ ...first, need: 'answer' }, ...rest] }, now));
+    // An approval inside a turn that runs hides the band: the turn goes on when the person answers.
+    const asking = {
+      state: 'waiting',
+      detail: 'Asks you: run pytest',
+      at: null,
+      waits_for: 'person',
+    } as const;
+    assert.equal(
+      quietBand(
+        {
+          ...lab,
+          agents: [{ ...first, need: 'approval', in_turn: true, activity: asking }, ...rest],
+        },
+        now,
+      ),
+      null,
+    );
+  });
+
+  it('shows the band of a lab that is out of time, where every agent waits for more time', () => {
+    const waiting = {
+      state: 'waiting',
+      detail: 'The lab is out of time. The person can give it more.',
+      at: '2026-11-06T14:20:00Z',
+      waits_for: 'time',
+    } as const;
+    const agents = lab.agents.map((view) => ({
+      ...view,
+      activity: waiting,
+      need: 'idle' as const,
+      in_turn: false,
+      alarm: view.alarm ? { ...view.alarm, rings_at: null } : null,
+    }));
+    const stopped = { ...lab, agents, out_of_time: true };
+    assert.deepEqual(turnLine(agents), { text: 'No agent in a turn, 3 in the lab', live: false });
+    assert.equal(quietBand(stopped, now)?.title, 'The lab is out of time');
+    const [one] = agents;
+    assert.ok(one);
+    assert.equal(pictureLook(one).dot, null);
+    // The row says what the server says, with no time after it.
+    assert.equal(
+      whereLine(one, stopped, now, 'Baseline'),
+      'The lab is out of time. The person can give it more. Works in “Baseline”.',
+    );
+    const process = {
+      state: 'waiting',
+      detail: 'Waits for a process that it left running.',
+      at: '2026-11-06T14:20:00Z',
+      waits_for: 'process',
+    } as const;
+    assert.equal(
+      whereLine({ ...one, activity: process }, lab, now, null),
+      'Waits for a process that it left running.',
+    );
+    assert.equal(
+      stateLine({ ...process, detail: '' }, now).text,
+      'Waits for a process that it left running.',
+    );
+    assert.equal(stateLine({ ...waiting, detail: '' }, now).text, 'The lab is out of time.');
+    // A harness that waits for the person inside its turn keeps the time.
+    assert.equal(
+      stateLine({ ...waiting, detail: 'Asks you: run pytest', waits_for: 'person' }, now).text,
+      'Asks you: run pytest, 10 min',
+    );
   });
 
   it('says what the person can do in a lab that is out of time or done, where no alarm rings', () => {
@@ -1763,5 +1866,20 @@ describe('a quiet lab', () => {
     const bare = labView({ agents: [rested('agent-1')] });
     assert.equal(quietBand({ ...bare, out_of_time: true }, now)?.next, 'No turn starts now');
     assert.equal(quietBand({ ...bare, state: 'closed' }, now)?.next, 'No alarm is set');
+  });
+});
+
+describe('focus in the profile', () => {
+  it('goes from the last control to the first with Tab, and back with Shift+Tab', () => {
+    assert.equal(wrapFocus(4, 3, false), 0);
+    assert.equal(wrapFocus(4, 0, true), 3);
+    // Between the edges, the browser's own Tab stays inside.
+    assert.equal(wrapFocus(4, 1, false), null);
+    assert.equal(wrapFocus(4, 2, true), null);
+    // Focus that got outside comes back in.
+    assert.equal(wrapFocus(4, -1, false), 0);
+    assert.equal(wrapFocus(4, -1, true), 3);
+    assert.equal(wrapFocus(1, 0, false), 0);
+    assert.equal(wrapFocus(0, -1, false), null);
   });
 });

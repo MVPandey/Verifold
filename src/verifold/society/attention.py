@@ -3,7 +3,8 @@ Who hears what.
 
 A post is for an agent when it names the agent, replies to one of the agent's posts, builds on one of them, or
 lands in a thread that the agent watches. A post names an agent in `mentions`, or in its text with the agent's ID,
-the name that it chose, or the full label of its seat. An agent watches the
+the full label of its seat, or the name that it chose after an at sign, such as "@Tessel". A chosen name without
+the sign names nobody, because it can be a common word. An agent watches the
 threads that it opens and the thread where it works now, which is the thread of its latest plan or result, until it
 says otherwise. Nobody watches the question's thread by default, so a post there is for the agents that it names.
 
@@ -42,7 +43,7 @@ from functools import lru_cache
 
 from verifold.protocol.events import AgentLeft, Posted
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
-from verifold.protocol.join import MAX_NEWS, LeftLine, News, ProfileNote, Update
+from verifold.protocol.join import MAX_NEWS, LeftLine, News, ProfileNote, RenameLine, Update
 from verifold.protocol.posts import Ask, Call, Check, Close, Post
 from verifold.society.board import Board
 from verifold.society.identity import post_line, post_view
@@ -134,6 +135,7 @@ def update(board: Board, agent_id: AgentId, after: int, now: datetime | None = N
         ),
         left=departures(board, agent_id, after, reach),
         profile=profile_notes(board, agent_id, after, reach),
+        renamed=renames(board, agent_id, after, reach),
         alarm=alarm_line(board, agent_id),
         no_alarm=no_alarm_line(board, agent_id, now),
         ends_at=board.ends_at,
@@ -157,6 +159,7 @@ def news(board: Board, agent_id: AgentId, after: int) -> News:
         left_out=max(len(others) - MAX_NEWS, 0),
         left=departures(board, agent_id, after, reach),
         profile=profile_notes(board, agent_id, after, reach),
+        renamed=renames(board, agent_id, after, reach),
         alarm=alarm_line(board, agent_id),
     )
 
@@ -181,6 +184,40 @@ def profile_notes(board: Board, agent_id: AgentId, after: int, reach: int) -> tu
         for entry in board.profiles
         if after < entry.seq <= reach and entry.agent == agent_id and entry.by not in (None, agent_id)
     )
+
+
+def renames(board: Board, agent_id: AgentId, after: int, reach: int) -> tuple[RenameLine, ...]:
+    """
+    Return the other agents whose name changed after event `after`, up to event `reach`, each once.
+
+    A line has the agent's name at `reach` and the name that it had at `after`. An agent that chose a name and
+    took it back in between has none, and neither has a blind checker or an agent that left.
+    """
+    changed = dict.fromkeys(
+        (
+            *(entry.agent for entry in board.profiles if after < entry.seq <= reach and entry.name is not None),
+            *(agent for seq, agent, _ in board.labels if after < seq <= reach),
+        )
+    )
+    lines = (
+        RenameLine(id=agent, name=_name_at(board, agent, reach), was=_name_at(board, agent, after))
+        for agent in changed
+        if agent != agent_id and (joined := board.agent(agent)) and joined.seq <= after and board.here(joined)
+    )
+    return tuple(line for line in lines if line.name != line.was)[-MAX_NEWS:]
+
+
+def _name_at(board: Board, agent_id: AgentId, seq: int) -> str:
+    # The agent's name after event `seq`: the name that it chose last by then, or else the label of its seat.
+    chosen = next(
+        (
+            entry.name
+            for entry in reversed(board.profiles)
+            if entry.agent == agent_id and entry.seq <= seq and entry.name is not None
+        ),
+        '',
+    )
+    return chosen or board.label(agent_id, before=seq + 1)
 
 
 def left_line(board: Board, left: AgentLeft) -> LeftLine:
@@ -211,14 +248,13 @@ def gone_named(board: Board, post: Post) -> tuple[LeftLine, ...]:
 
 
 def _wrote_to(board: Board, agent_id: AgentId, left: AgentLeft) -> bool:
-    name = left_line(board, left).name
     return any(
         entry.post.author == agent_id
         and entry.seq < left.seq
         and (
             left.agent in entry.post.mentions
             or bool((answered := board.post(entry.post.reply_to or '')) and answered.post.author == left.agent)
-            or left.agent in _in_text(f'{entry.post.text}\n{entry.post.body}', ((left.agent, name),))
+            or left.agent in _named_in(board, f'{entry.post.text}\n{entry.post.body}')
         )
         for entry in board.posts
     )
@@ -244,11 +280,11 @@ def _page(
     return shown, tuple(entry for entry in rest if entry.seq <= reach), reach
 
 
-def _workers(board: Board) -> Names:
-    # Each agent with every name that it has or had: its seat's labels and the names that it chose. So an older
-    # post still names it.
+def _named_in(board: Board, text: str) -> frozenset[AgentId]:
+    # The agents that a text names: by an ID, by the label of a seat, or by a chosen name after an at sign.
     checkers = {joined.agent.id for joined in board.agents if joined.agent.checks}
-    return tuple(pair for pair in board.names() if pair[0] not in checkers)
+    labels = tuple(dict.fromkeys((agent, label) for _, agent, label in board.labels if agent not in checkers))
+    return _in_text(text, labels, board.chosen_names())
 
 
 def _tied(board: Board, agent_id: AgentId, post: Post) -> bool:
@@ -269,7 +305,7 @@ def _named(board: Board, agent_id: AgentId, post: Post) -> bool:
     # An ask that carries a harness's request shows a command or a tool's input. A name in that text names nobody.
     if isinstance(post, Ask) and post.request:
         return False
-    return agent_id in _in_text(f'{post.text}\n{post.body}', _workers(board))
+    return agent_id in _named_in(board, f'{post.text}\n{post.body}')
 
 
 def _addresses(post: Post) -> bool:
@@ -291,25 +327,33 @@ def _for_everyone(board: Board, entry: Posted) -> bool:
 
 
 @lru_cache(maxsize=512)
-def _in_text(text: str, names: Names) -> frozenset[AgentId]:
+def _in_text(text: str, labels: Names, chosen: Names) -> frozenset[AgentId]:
     # Agents write a name or "agent-2" in their text more often than they fill `mentions`. Every reader asks
     # about the same post, so the scan of a long body runs once.
     # An ID matches whole and outside a path: "agent-3" is not in "agents/agent-3/out.json".
     found = {
         agent_id
-        for agent_id, _ in names
+        for agent_id, _ in labels
         if re.search(rf'(?<![\w/.-]){re.escape(agent_id)}(?![\w/-])', text, re.IGNORECASE)
     }
-    # A name matches whole and with its capitals: "Agent 1" is not in "Agent 12" or "the agent 1 run". The
-    # longest name goes first and leaves the text, so "Codex · gpt-6 2" does not also name "Codex · gpt-6". A name
-    # does not end where its last word goes on, as "Codex · gpt-6" in "Codex · gpt-6.1-sol": a dot ends a name only
+    # A seat's label matches whole and with its capitals: "Agent 1" is not in "Agent 12" or "the agent 1 run". The
+    # longest label goes first and leaves the text, so "Codex · gpt-6 2" does not also name "Codex · gpt-6". A label
+    # does not end where its last word goes on, as "Codex · gpt-6" in "Codex · gpt-6.1-sol": a dot ends a label only
     # when no letter or digit follows it.
     rest = text
-    for agent_id, name in sorted(names, key=lambda pair: len(pair[1]), reverse=True):
-        whole = rf'(?<![\w-]){re.escape(name)}(?![\w-]|\.\w)'
+    for agent_id, label in sorted(labels, key=lambda pair: len(pair[1]), reverse=True):
+        whole = rf'(?<![\w-]){re.escape(label)}(?![\w-]|\.\w)'
         if re.search(whole, rest):
             found.add(agent_id)
             rest = re.sub(whole, ' ', rest)
+    # A chosen name can be a common word, such as "We" or "Plan", so it names its agent only after an at sign:
+    # "@Tessel". A name that the agent had before still does. Capitals do not matter here, because no two names
+    # differ by them.
+    for agent_id, name in sorted(chosen, key=lambda pair: len(pair[1]), reverse=True):
+        whole = rf'(?<![\w@])@{re.escape(name)}(?![\w-]|\.\w)'
+        if re.search(whole, rest, re.IGNORECASE):
+            found.add(agent_id)
+            rest = re.sub(whole, ' ', rest, flags=re.IGNORECASE)
     return frozenset(found)
 
 

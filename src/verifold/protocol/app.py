@@ -23,6 +23,14 @@ no digest of its token, so only a new invitation lets it join.
 """
 
 
+type WaitsFor = Literal['person', 'time', 'process']
+"""
+What an agent in the state `waiting` waits for. `person`: its harness waits for the person's answer inside a turn
+that runs. `time`: the lab is out of time, and the agent's turn starts when the person gives it more. `process`:
+the agent ended its turn while a process that it started still ran, and its turn starts when the process ends.
+"""
+
+
 class AgentActivity(Record):
     """What an agent is doing now, from its harness's live updates. It is not part of the record."""
 
@@ -30,6 +38,8 @@ class AgentActivity(Record):
     detail: str = ''
     """The latest step that the harness reported, such as a tool call's title."""
     at: AwareDatetime | None = None
+    waits_for: WaitsFor | None = None
+    """With the state `waiting`: what the agent waits for. `None` in any other state."""
 
 
 type Need = Literal['approval', 'answer', 'working', 'waiting', 'idle', 'stopped', 'left']
@@ -38,10 +48,11 @@ The one status of an agent or a thread, in the order of who needs the person. Th
 
 - `approval`: a permission request of the agent's harness waits for the person.
 - `answer`: another ask of the agent to the person waits.
-- `working`: the agent is in a turn, by its harness's live updates.
+- `working`: the agent is in a turn, by its harness's live updates, or its harness starts.
 - `waiting`: the agent is in no turn, and it waits for another agent: an ask of it that names an agent has no
   answer, or its `wait` call is open.
-- `idle`: the agent is in no turn and waits for nobody.
+- `idle`: the agent is in no turn and waits for nobody. An agent that waits for more time for the lab, or for a
+  process that it left running, is idle too, and its activity says what it waits for.
 - `stopped`: Verifold stopped the agent, or its harness is not running and cannot start.
 - `left`: the agent left the lab.
 
@@ -123,6 +134,13 @@ class AgentView(Record):
     """The changes that the person or a coordinator made to the agent's profile, oldest first."""
     need: Need = 'idle'
     """The agent's one status."""
+    in_turn: bool = False
+    """
+    Whether a turn of the agent runs now, by its harness's live updates. A turn in which the harness waits for the
+    person's answer runs. An agent that waits for more time or for its own process is in no turn.
+    """
+    about_by: AgentId | None = None
+    """Who wrote the about line: the agent itself, or the coordinator that rewrote it. `None` without one."""
     outcomes: Outcomes = Outcomes()
     turns_started: int = 0
     """How many turns of the agent started. It is above `turns` while a turn runs."""
@@ -339,8 +357,11 @@ class StartRequest(Record):
     """How long the agents may work. `None` means no time limit."""
     allow: tuple[Grant, ...] = ()
     """The starts of the commands that every agent may run from the first minute, such as `./gpu`."""
-    reviewer_seats: int | None = Field(default=None, ge=0, le=MAX_REVIEWER_SEATS)
-    """How many reviewer seats the lab has. `None` takes the number from the person's settings files."""
+    reviewer_seats: Annotated[int, Field(ge=0, le=MAX_REVIEWER_SEATS)] | Literal['size'] | None = None
+    """
+    How many reviewer seats the lab has. `size` follows the size of the lab, whatever the settings files say, and
+    `None` takes the number from the person's settings files.
+    """
 
 
 class SettingsFileView(Record):
