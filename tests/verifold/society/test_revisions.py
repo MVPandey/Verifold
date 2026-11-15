@@ -109,3 +109,38 @@ def test_a_revision_needs_the_persons_post_that_tells_the_lab_just_before_it() -
     # A board with no post takes no revision.
     with pytest.raises(RejectedEvent, match='Post p-1 is not the post of the person'):
         apply(RecordBuilder().board(), QuestionRevised(seq=2, at=record.at(2), question='Why?', post='p-1'))
+
+
+def test_a_proposal_that_says_what_its_author_had_seen_goes_by_that_and_an_older_one_by_its_place() -> None:
+    record = asked().revise('Does it hold on ARM?', 'p-2')
+    # Both come after the revision. The first is from a record that does not say what its author had seen.
+    old = record.post(Proposal(id='p-3', thread='t-1', author='ada', text='It holds.')).board()
+    unseen = record.post(Proposal(id='p-4', thread='t-1', author='bo', text='It holds.', question_seen=0)).board()
+    seen = record.post(Proposal(id='p-5', thread='t-1', author='bo', text='It holds.', question_seen=1)).board()
+
+    assert [brief(board, 'cy', News(seq=0)).answer_to_earlier_question for board in (old, unseen, seen)] == [
+        False,
+        True,
+        False,
+    ]
+
+
+def test_an_answer_to_a_text_that_the_question_has_again_is_still_to_an_earlier_version() -> None:
+    record = asked().post(Proposal(id='p-2', thread='t-1', author='ada', text='It holds.', question_seen=0))
+    board = record.revise('Does it hold on ARM?', 'p-3').revise('Does it hold?', 'p-4').board()
+
+    view = answer_view(board)
+
+    assert view is not None
+    assert (board.question, view.to_earlier_question) == (board.opened.question, True)
+
+
+def test_the_brief_lists_the_newest_ten_revisions() -> None:
+    record = asked()
+    for number in range(12):
+        record.revise(f'Does it hold on chip {number}?', f'p-{number + 2}')
+
+    view = brief(record.board(), 'ada', News(seq=0))
+
+    assert [line.post for line in view.revisions] == [f'p-{number}' for number in range(4, 14)]
+    assert view.question == 'Does it hold on chip 11?'

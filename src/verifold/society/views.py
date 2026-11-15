@@ -354,8 +354,19 @@ def answer(board: Board) -> Posted | None:
 
 
 def to_earlier_question(board: Board, proposed: Posted) -> bool:
-    """Return whether the person revised the question after a proposal, so that it answers an earlier version."""
-    return bool(board.revisions) and proposed.seq < board.revisions[-1].seq
+    """
+    Return whether a proposal answers an earlier version of the question.
+
+    It does when the board had shown its author fewer revisions than the question has now. So the proposal of an
+    agent that posts just after a revision, before it read the revision, answers the earlier version. A proposal
+    from before Verifold kept that count answers an earlier version when it came before the latest revision. The
+    count goes by revisions, not by text: after the person goes back to an earlier text, an answer from the first
+    time that the question had that text is still marked.
+    """
+    seen = proposed.post.question_seen if isinstance(proposed.post, Proposal) else None
+    if seen is None:
+        return bool(board.revisions) and proposed.seq < board.revisions[-1].seq
+    return seen < len(board.revisions)
 
 
 def versions(board: Board) -> tuple[QuestionVersion, ...]:

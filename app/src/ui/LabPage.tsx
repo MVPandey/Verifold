@@ -13,7 +13,7 @@ import type {
 import { authorName, face, ownName } from '../model/agents.ts';
 import type { Face } from '../model/agents.ts';
 import { crossedLine, crossLines } from '../model/crossings.ts';
-import { clock, duration, minutesBetween } from '../model/format.ts';
+import { clock, dayClock, duration, minutesBetween } from '../model/format.ts';
 import { orderNeeds } from '../model/needs.ts';
 import { isPermission, personMessage, standingChip } from '../model/posts.ts';
 import { isRevision, revisedLine } from '../model/question.ts';
@@ -129,9 +129,11 @@ export function Wall(
         <div>
           <Question
             lab={lab}
+            now={props.now}
             onRevise={async (text, note) => {
-              await api.reviseQuestion(text, note);
+              const revised = await api.reviseQuestion(text, note);
               data.reload();
+              return revised;
             }}
           />
           {question ? (
@@ -293,15 +295,21 @@ export function Wall(
  */
 function Question(props: {
   readonly lab: LabView;
-  readonly onRevise: (question: string, note: string) => Promise<void>;
+  readonly now: Date;
+  /** Revise the question, and return the lab as it is after the revision. */
+  readonly onRevise: (question: string, note: string) => Promise<LabView>;
 }): ReactElement {
-  const { question, versions } = props.lab;
   const [editing, setEditing] = useState(false);
+  // The answer to a save is newer than the page's lab until the page reads the lab again.
+  const [saved, setSaved] = useState<LabView | null>(null);
+  const { question, versions } = saved && saved.seq > props.lab.seq ? saved : props.lab;
   if (editing) {
     return (
       <QuestionForm
         question={question}
-        onSave={(text, note) => props.onRevise(text, note)}
+        onSave={async (text, note) => {
+          setSaved(await props.onRevise(text, note));
+        }}
         onClose={() => {
           setEditing(false);
         }}
@@ -321,7 +329,7 @@ function Question(props: {
       >
         Edit
       </button>
-      <Versions versions={versions} />
+      <Versions versions={versions} now={props.now} />
     </div>
   );
 }
@@ -391,7 +399,10 @@ export function QuestionForm(props: {
 }
 
 /** The line that says how often the person revised the question. It unfolds the versions, oldest first. */
-function Versions(props: { readonly versions: readonly QuestionVersion[] }): ReactElement | null {
+function Versions(props: {
+  readonly versions: readonly QuestionVersion[];
+  readonly now: Date;
+}): ReactElement | null {
   const line = revisedLine(props.versions);
   if (line === null) return null;
   return (
@@ -403,7 +414,7 @@ function Versions(props: { readonly versions: readonly QuestionVersion[] }): Rea
       <ol>
         {props.versions.map((version, index) => (
           <li key={version.post ?? 'first'}>
-            <time dateTime={version.at}>{clock(version.at)}</time>
+            <time dateTime={version.at}>{dayClock(version.at, props.now)}</time>
             {index === props.versions.length - 1 ? <b>Current</b> : null}
             <p>{version.question}</p>
             {version.note ? <p className="dim">Why: {version.note}</p> : null}

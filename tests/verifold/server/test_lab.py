@@ -11,8 +11,10 @@ from verifold.protocol.posts import MAX_HEADLINE, FileEvidence
 from verifold.protocol.usage import Usage
 from verifold.server.errors import LabExists
 from verifold.server.lab import Lab
+from verifold.server.member import Member
 from verifold.society.attention import wakes
 from verifold.society.errors import RejectedEvent
+from verifold.society.views import answer_view
 from verifold.store.record_file import RecordFile
 
 
@@ -244,10 +246,50 @@ async def test_a_lab_that_is_out_of_time_takes_a_revision(record_file: RecordFil
     assert (lab.board.out_of_time, lab.board.question) == (True, 'Does it hold on ARM?')
 
 
-async def test_a_lab_from_before_the_question_had_a_thread_gets_a_thread_for_the_revision(lab: Lab) -> None:
+async def test_the_same_text_with_spaces_around_it_is_no_revision(lab: Lab) -> None:
+    seq = lab.board.seq
+
+    assert await lab.revise_question('  Does it hold? ') is None
+    assert lab.board.seq == seq
+
+
+async def test_a_lab_from_before_the_question_had_a_thread_gets_one_thread_for_its_revisions(lab: Lab) -> None:
+    await lab.revise_question('Does it hold on x86?')
+    assert lab.board.posts[-1].post.thread == 't-2'
     await lab.revise_question('Does it hold on ARM?')
+    assert len(lab.board.threads) == 2
 
     opened, told = lab.board.threads[-1].thread, lab.board.posts[-1]
     assert (opened.id, opened.title, opened.opened_by, opened.between) == ('t-2', 'The question, revised', 'person', ())
     assert (told.post.thread, lab.board.revisions[-1].post) == ('t-2', told.post.id)
     assert wakes(lab.board, 'bo', told)
+
+
+async def test_a_proposal_from_an_agent_that_had_not_seen_the_revision_answers_the_earlier_version(
+    record_file: RecordFile,
+) -> None:
+    lab = Lab.create(record_file, 'Does it hold?')
+    await lab.open_question_thread()
+    await lab.join(Agent(id='ada', name='Ada', harness='fake', model=ModelSpec(family='anthropic')))
+    ada = Member(lab, 'ada')
+    proposal = PostRequest(kind='proposal', text='It holds.', thread='t-1')
+
+    # Ada works on the first question, the person revises it, and Ada posts the answer that it wrote before.
+    await lab.revise_question('Does it hold on ARM?')
+    late = await ada.post(proposal)
+    raced = answer_view(lab.board)
+    # The result of that post showed Ada the revision, so its next proposal is to the current question.
+    news = ada.news()
+    assert news is not None
+    assert [line.id for line in news.for_you] == ['p-2']
+    read = await ada.post(proposal)
+    current = answer_view(lab.board)
+
+    assert (late.post.kind, late.seq > lab.board.revisions[-1].seq) == ('proposal', True)
+    assert raced is not None
+    assert current is not None
+    assert (raced.answer.post.id, raced.to_earlier_question) == ('p-3', True)
+    assert (current.answer.post.id, current.to_earlier_question) == ('p-4', False)
+    assert [getattr(entry.post, 'question_seen', None) for entry in lab.board.posts] == [None, None, 0, 1]
+    assert read.post.id == 'p-4'
+    assert Lab.load(record_file).board == lab.board

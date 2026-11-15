@@ -79,10 +79,17 @@ class PostRequest(Record):
         return self
 
     def to_post(
-        self, post_id: PostId, thread_id: ThreadId, author: AgentId, evidence: tuple[FileEvidence, ...] = ()
+        self,
+        post_id: PostId,
+        thread_id: ThreadId,
+        author: AgentId,
+        evidence: tuple[FileEvidence, ...] = (),
+        question_seen: int | None = None,
     ) -> Post:
         """
         Return the post that this request describes, with the evidence that Verifold pinned for its files.
+
+        `question_seen` is how many revisions of the question the author had been shown. Only a proposal keeps it.
 
         Raises:
             pydantic.ValidationError: The kind does not accept a field of the request, or misses one that it needs.
@@ -93,6 +100,8 @@ class PostRequest(Record):
         unused = {'thread', 'new_thread', 'between', 'files'} | (set() if self.accepts else {'accepts'})
         unused |= set() if self.choices else {'choices'}
         fields = self.model_dump(exclude=unused, exclude_none=True)
+        if self.kind == 'proposal' and question_seen is not None:
+            fields['question_seen'] = question_seen
         return _posts.validate_python(
             fields | {'id': post_id, 'thread': thread_id, 'author': author, 'evidence': evidence}
         )
@@ -401,7 +410,7 @@ class Brief(Record):
     question: Question
     """The question that the lab works on now. The person can revise it."""
     revisions: tuple[RevisionLine, ...] = ()
-    """The person's revisions of the question, newest last, at most `MAX_LEADS`. Each one's post holds its text."""
+    """The newest revisions of the question by the person, newest last, at most `MAX_LEADS`. Each one's post holds its text."""
     agents: tuple[AgentLine, ...] = ()
     """The other agents that are in the lab. Blind checkers are not among them."""
     left: tuple[LeftLine, ...] = ()

@@ -18,7 +18,7 @@ import {
   stateLine,
   workingLine,
 } from '../src/model/agents.ts';
-import { duration, minutesBetween, money, tokens } from '../src/model/format.ts';
+import { dayClock, duration, minutesBetween, money, tokens } from '../src/model/format.ts';
 import { orderNeeds, pauses } from '../src/model/needs.ts';
 import { isRevision, revisedLine } from '../src/model/question.ts';
 import {
@@ -102,6 +102,14 @@ describe('format', () => {
     );
     assert.equal(minutesBetween('2026-11-06T14:00:00Z', new Date('2026-11-06T14:26:59Z')), 26);
     assert.equal(minutesBetween('2026-11-06T14:00:00Z', new Date('2026-11-06T13:00:00Z')), 0);
+  });
+});
+
+describe('a time with its day', () => {
+  it('gives the time of day for today, and the day too for another day', () => {
+    const now = new Date(2026, 10, 6, 15, 0);
+    assert.equal(dayClock(new Date(2026, 10, 6, 14, 4).toISOString(), now), '14:04');
+    assert.equal(dayClock(new Date(2026, 10, 5, 14, 4).toISOString(), now), 'Nov 5 14:04');
   });
 });
 
