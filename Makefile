@@ -1,8 +1,8 @@
 .DEFAULT_GOAL := help
-.PHONY: help install app format validate
+.PHONY: help install app format validate lint test validate-app
 
 help: ## Show the targets
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN { FS = ":.*## " } { printf "  %-10s %s\n", $$1, $$2 }'
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN { FS = ":.*## " } { printf "  %-13s %s\n", $$1, $$2 }'
 
 install: ## Install the locked Python and app environments, and use the tracked Git hooks
 	uv sync --locked
@@ -18,10 +18,16 @@ format: ## Fix lint findings and format the code
 	npm --prefix app run lint:fix
 	npm --prefix app run format
 
-validate: ## Check the lock file, lint, format, types, tests, and the app without changing files
+validate: lint test validate-app ## Check the lock file, lint, format, types, tests, and the app without changing files
+
+lint: ## Check the lock file, lint, format, and types of the Python code
 	uv lock --check
 	uv run ruff check --no-fix
 	uv run ruff format --check
 	uv run ty check
+
+test: ## Run the Python tests in parallel, with coverage
 	uv run pytest
+
+validate-app: ## Check the app's format, lint, types, tests, and build
 	npm --prefix app run validate
