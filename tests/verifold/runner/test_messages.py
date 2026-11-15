@@ -77,7 +77,7 @@ def test_the_lab_norms_ask_agents_to_plan_together_check_each_other_and_agree_on
         'Post each result when you have it',
         'Check a result that others build on',
         "propose the lab's answer in the question's thread",
-        'Do not stop at the first answer',
+        'Do not stop at the first result',
         'Chain the work',
     ):
         assert norm in NORMS_TEMPLATE

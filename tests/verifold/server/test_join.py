@@ -206,12 +206,15 @@ async def test_a_blind_checker_posts_its_check_and_gets_no_news(lab: Lab) -> Non
     async with Client(join_server(lambda _: Member(lab, 'dee'))) as client:
         posted = await client.call_tool('post', check | {'method': 'rerun'})
         lost = await client.call_tool('post', {'kind': 'message', 'text': 'Where?', 'reply_to': 'p-99'})
+        other = await client.call_tool('post', {'kind': 'message', 'text': 'Where?', 'reply_to': 'p-1'})
         refused = await client.call_tool('brief', {})
 
     assert posted.structured_content is not None
     assert [entry.post.thread for entry in lab.board.posts if entry.post.author == 'dee'] == ['t-1']
     assert lost.is_error
     assert 'Give thread' in str(lost.content)
+    # A post that exists and one that does not look the same to a blind checker.
+    assert str(other.content) == str(lost.content)
     assert (posted.structured_content['standing'], posted.structured_content['news']) == ('open', None)
     assert refused.is_error
     assert 'rerun p-2 blind' in str(refused.content)
