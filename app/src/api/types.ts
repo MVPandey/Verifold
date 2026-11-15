@@ -31,7 +31,8 @@ export type PostKind =
   | 'report'
   | 'call'
   | 'close'
-  | 'request';
+  | 'request'
+  | 'offer';
 export type Standing = 'open' | 'checked' | 'held_up' | 'disputed' | 'conceded';
 
 export interface ModelSpec {
@@ -280,7 +281,42 @@ export interface LabView {
   readonly close_among: number;
   /** The settings that the lab follows. */
   readonly settings: Settings;
+  /** What the person wants to hold at the end of the lab, each with its state and the offers for it. */
+  readonly deliverables: readonly Deliverable[];
 }
+
+/** Where a deliverable stands, by the lab's record. Only the person's acceptance makes it `accepted`. */
+export type DeliverableState = 'none' | 'offered' | 'changes_asked' | 'accepted';
+
+/** One agent's offer of files for a deliverable, as it stands. */
+export interface DeliverableOffer {
+  /** The post that holds the offer. Each file opens at the commit that the post pins. */
+  readonly post: string;
+  readonly by: string;
+  readonly at: string;
+  /** The agent's note on the offer. */
+  readonly note: string;
+  readonly files: readonly string[];
+  /** How many earlier offers of the same agent for this deliverable this one replaced. */
+  readonly revised: number;
+  /** Whether this is the offer that the person accepted. */
+  readonly accepted: boolean;
+}
+
+/** A deliverable: the person's sentence, its state, and each agent's newest offer. */
+export interface Deliverable {
+  readonly id: string;
+  readonly text: string;
+  readonly state: DeliverableState;
+  /** When the person accepted an offer or asked for changes, while the state says so. */
+  readonly decided_at: string | null;
+  /** The thread that holds the offers, or `null` until the first offer opens it. */
+  readonly thread: string | null;
+  readonly offers: readonly DeliverableOffer[];
+}
+
+/** What the person decides about an offer. */
+export type DeliverableDecision = 'accept' | 'ask_changes' | 'take_back';
 
 /** What happens to the processes that agents left running when the lab's time ends, or the person stops it. */
 export type AtTimeLimit = 'pause' | 'stop' | 'finish';
@@ -482,6 +518,8 @@ export interface StartRequest {
   readonly agents: readonly AgentChoice[];
   readonly auto_mode: boolean;
   readonly minutes?: number;
+  /** What the person wants to hold at the end of the lab, each as one sentence. */
+  readonly deliverables?: readonly string[];
 }
 
 export interface Thread {
@@ -597,6 +635,11 @@ export type Post =
       /** The coordinator's request to the person for a move. `text` and `body` hold the reason. */
       readonly kind: 'request';
       readonly move: Move;
+    })
+  | (PostBase & {
+      /** An agent's offer of files for a deliverable of the person. `text` is the agent's note. */
+      readonly kind: 'offer';
+      readonly deliverable: string;
     })
   | (PostBase & {
       readonly kind: 'check';

@@ -49,6 +49,7 @@ export function SetupPage(props: {
 }): ReactElement {
   const { defaults } = props.setup;
   const [question, setQuestion] = useState('');
+  const [deliverables, setDeliverables] = useState('');
   const [picks, setPicks] = useState(() => firstSeats(props.setup.harnesses, defaults));
   const [autoMode, setAutoMode] = useState(defaults.auto_mode);
   const [minutes, setMinutes] = useState<number | null>(defaults.minutes);
@@ -103,7 +104,7 @@ export function SetupPage(props: {
     setStarting(true);
     setError(null);
     props.api
-      .start(startRequest(question, picks, autoMode, minutes))
+      .start(startRequest(question, picks, autoMode, minutes, deliverables))
       .then(props.onStarted, (failure: unknown) => {
         setError(messageOf(failure));
         setStarting(false);
@@ -130,6 +131,22 @@ export function SetupPage(props: {
           </>
         ) : null}
       </p>
+
+      <section className="section">
+        <h2 id="setup-deliverables">What do you want to hold at the end?</h2>
+        <p className="sub">
+          Optional. One sentence on each line, such as “A one-page answer” or “A script that runs
+          the result again”. The agents read the list and offer files for each one. You accept them,
+          and you can change the list while the lab runs.
+        </p>
+        <textarea
+          className="d-setup"
+          aria-labelledby="setup-deliverables"
+          rows={3}
+          value={deliverables}
+          onChange={(event) => setDeliverables(event.target.value)}
+        />
+      </section>
 
       <section className="section">
         <h2>Agents</h2>

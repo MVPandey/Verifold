@@ -154,19 +154,33 @@ export function agentCount(seats: readonly Seat[]): number {
   return seats.reduce((sum, seat) => sum + seat.count, 0);
 }
 
-/** Return the request that starts a lab with the person's choices. */
+/**
+ * Return the request that starts a lab with the person's choices. `deliverables` is the text of the setup's field,
+ * with one sentence on each line.
+ */
 export function startRequest(
   question: string,
   seats: readonly Seat[],
   autoMode: boolean,
   minutes: number | null,
+  deliverables = '',
 ): StartRequest {
+  const wanted = sentences(deliverables);
   return {
     question: question.trim(),
     agents: chosenAgents(seats),
     auto_mode: autoMode,
     ...(minutes ? { minutes } : {}),
+    ...(wanted.length > 0 ? { deliverables: wanted } : {}),
   };
+}
+
+/** Return the deliverables that the setup's field holds: one sentence on each line that has text. */
+export function sentences(text: string): readonly string[] {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
 }
 
 /**

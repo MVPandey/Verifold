@@ -786,17 +786,26 @@ describe('the coordinator in the seat', () => {
         api={{} as Api}
         data={pageData(view([request('p-3', { type: 'time', minutes: 5 })]))}
         now={NOW}
+        tab={null}
+        onTab={() => undefined}
       />,
     );
     const open = renderToStaticMarkup(
-      <CoordinatorSeat api={{} as Api} data={pageData(null)} now={NOW} start="powers" />,
+      <CoordinatorSeat
+        api={{} as Api}
+        data={pageData(null)}
+        now={NOW}
+        tab="powers"
+        onTab={() => undefined}
+      />,
     );
     const none = renderToStaticMarkup(
       <CoordinatorSeat
         api={{} as Api}
         data={pageData(null, { lab: labView({ agents: [TESSEL] }) })}
         now={NOW}
-        start="talk"
+        tab="talk"
+        onTab={() => undefined}
       />,
     );
 

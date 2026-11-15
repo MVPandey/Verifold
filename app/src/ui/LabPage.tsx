@@ -13,7 +13,9 @@ import type {
   ThreadSummary,
 } from '../api/types.ts';
 import { authorName, members } from '../model/agents.ts';
+import type { Tab } from '../model/coordinator.ts';
 import { crossedLine, crossLines } from '../model/crossings.ts';
+import { deliverLine } from '../model/deliverables.ts';
 import { clock, dayClock, duration, minutesBetween } from '../model/format.ts';
 import { clip, personMessage, standingChip } from '../model/posts.ts';
 import { isRevision, noteLabel, revisedBy, revisedLine } from '../model/question.ts';
@@ -27,6 +29,7 @@ import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
 import { Detail, Words } from './Markdown.tsx';
 import { CoordinatorSeat, OpenedForYou } from './Coordinator.tsx';
+import { DeliverDoor, Deliverables } from './Deliverables.tsx';
 import { ChipView, Composer, Exact, Files } from './parts.tsx';
 import { Who } from './Picture.tsx';
 import { Turns } from './Thread.tsx';
@@ -38,6 +41,8 @@ const LONG_QUESTION = 120;
 interface Place {
   readonly open: string | null;
   readonly post: string | null;
+  /** The panel that is docked beside the wall when the page opens. Without it, none is. */
+  readonly panel?: Tab | 'deliver' | undefined;
 }
 
 /**
@@ -95,6 +100,8 @@ export function Wall(
   const seen = readSeen(window.localStorage, lab.opened_at);
   const question = questionThread(threads);
   const questionId = question?.thread.id ?? null;
+  // The panel that is docked beside the wall: a tab of the panel for the coordinator, or the deliverables.
+  const [panel, setPanel] = useState<Tab | 'deliver' | null>(props.panel ?? null);
 
   const send = async (text: string, thread?: string): Promise<void> => {
     const request = personMessage(text, thread);
@@ -173,6 +180,25 @@ export function Wall(
               />
             </div>
           ) : null}
+          <DeliverDoor
+            list={lab.deliverables}
+            open={panel === 'deliver'}
+            onToggle={() => {
+              setPanel(panel === 'deliver' ? null : 'deliver');
+            }}
+          />
+          {panel === 'deliver' ? (
+            <Deliverables
+              api={api}
+              list={lab.deliverables}
+              agents={lab.agents}
+              now={props.now}
+              reload={data.reload}
+              onClose={() => {
+                setPanel(null);
+              }}
+            />
+          ) : null}
         </div>
         <div className="f-steer">
           <Waits lab={lab} now={props.now} />
@@ -182,9 +208,10 @@ export function Wall(
               href={href({ page: 'thread', id: lab.close.thread, post: lab.close.id })}
             >
               {done}
+              {deliverLine(lab.deliverables) ? <span>{deliverLine(lab.deliverables)}</span> : null}
             </a>
           ) : null}
-          <CoordinatorSeat {...props} />
+          <CoordinatorSeat {...props} tab={panel === 'deliver' ? null : panel} onTab={setPanel} />
           <Composer
             variant="steer"
             label="Steer the lab"
