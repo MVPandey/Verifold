@@ -422,7 +422,7 @@ async def test_the_person_reads_why_a_post_failed_when_another_program_changed_t
     why = f'Another program replaced or removed the record {record_file.path}, so Verifold stops.'
     assert (failed.status_code, failed.json()['detail']) == (
         500,
-        f'{why} What Verifold wrote is in {record_file.kept}.',
+        f'{why} What Verifold wrote is in {record_file.path.with_name("record.kept.jsonl")}.',
     )
 
 

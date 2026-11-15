@@ -406,7 +406,7 @@ async def test_a_write_that_finds_the_record_changed_tells_what_stops_the_server
 
     assert heard == [refused.value]
     assert lab.board == board
-    assert len(record_file.kept.read_bytes().splitlines()) == board.seq == 2
+    assert len(record_file.path.with_name('record.kept.jsonl').read_bytes().splitlines()) == board.seq == 2
 
 
 def test_a_new_lab_tells_what_stops_the_server_when_its_first_write_finds_the_record_changed(

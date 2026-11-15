@@ -264,9 +264,9 @@ def removed(record: RecordFile) -> None:
     record.path.unlink()
 
 
-def removed_and_no_place_for_a_copy(record: RecordFile) -> None:
-    record.kept.mkdir()
-    record.path.unlink()
+def rewritten_and_moved_away(record: RecordFile) -> None:
+    record.path.write_bytes(b'{}\n')
+    record.path.rename(record.path.with_name('moved away'))
 
 
 def rewritten(record: RecordFile) -> None:
@@ -279,7 +279,7 @@ def added_and_no_place_for_it(record: RecordFile) -> None:
         other.write(b'{}\n')
 
 
-@pytest.mark.parametrize('change', [removed, removed_and_no_place_for_a_copy, rewritten, added_and_no_place_for_it])
+@pytest.mark.parametrize('change', [removed, rewritten_and_moved_away, rewritten, added_and_no_place_for_it])
 def test_what_an_agent_reads_when_another_program_changed_the_record_holds_no_order(
     tmp_path: Path, change: Callable[[RecordFile], None]
 ) -> None:

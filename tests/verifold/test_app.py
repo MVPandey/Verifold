@@ -59,6 +59,7 @@ from verifold.runner.git import GitError, git
 from verifold.runner.jobs import Sweep, sweep
 from verifold.runner.messages import DOORBELL, RESTARTED, STARTED_AGAIN
 from verifold.runner.messages import ON_CALL as ON_CALL_FACT
+from verifold.runner.session import _Client
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.server.lab import Lab
 from verifold.server.member import Member
@@ -686,6 +687,48 @@ async def test_a_record_that_another_program_replaces_stops_the_server_and_each_
     assert harness_pids() == []
     # Nothing logs the error with its traceback: not the web server, and not the library that serves the tools.
     assert 'Traceback' not in caplog.text + capfd.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ('asks', 'auto_mode'),
+    [('FAKE_ACP_PERMISSION', False), ('FAKE_ACP_PERMISSION', True), ('FAKE_ACP_QUESTION', False)],
+)
+async def test_a_request_of_a_harness_that_finds_the_record_replaced_stops_the_server_without_a_traceback(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    capfd: pytest.CaptureFixture[str],
+    asks: str,
+    *,
+    auto_mode: bool,
+) -> None:
+    monkeypatch.setenv(asks, '1')
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),), auto_mode=auto_mode)
+    path = project / '.verifold' / 'record.jsonl'
+
+    def after_another_program_saved_the_record(name: str) -> None:
+        answer = getattr(_Client, name)
+
+        async def answered(client: _Client, *given: object, **named: object) -> object:
+            # The harness's request is the first to write after this save.
+            saved = path.with_name('saved')
+            saved.write_bytes(path.read_bytes())
+            saved.replace(path)
+            return await answer(client, *given, **named)
+
+        monkeypatch.setattr(_Client, name, answered)
+
+    after_another_program_saved_the_record('request_permission')
+    after_another_program_saved_the_record('create_elicitation')
+
+    with pytest.raises(ExceptionGroup) as stopped:
+        async with asyncio.timeout(60):
+            await serve(project, start, catalog={'fake': FAKE_HARNESS})
+
+    assert stopped.group_contains(RecordChanged, match='replaced or removed the record')
+    # The library that speaks to the harness logs no error of a request, and nothing else logs one.
+    assert 'Traceback' not in caplog.text + capfd.readouterr().err
+    assert harness_pids() == []
 
 
 async def test_an_agent_that_left_stops_for_good_and_an_invited_one_loses_its_token(project: Path) -> None:

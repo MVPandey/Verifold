@@ -341,7 +341,7 @@ async def test_an_agent_reads_that_another_program_changed_the_record_and_that_v
     why = f'Another program replaced or removed the record {record_file.path}, so Verifold stops.'
     assert result.is_error
     assert [part.text for part in result.content if isinstance(part, TextContent)] == [
-        f'Error executing tool post: {why} What Verifold wrote is in {record_file.kept}.'
+        f'Error executing tool post: {why} What Verifold wrote is in {record_file.path.with_name("record.kept.jsonl")}.'
     ]
 
 

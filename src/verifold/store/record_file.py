@@ -22,8 +22,11 @@ How many of the record's last bytes are compared before each write. A change by 
 bytes and the record's length is not seen.
 """
 
-_OWN_FILE = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
-"""How a file beside the record opens: at its end, through no link, and without a wait for a pipe's reader."""
+_SIDE_FILE = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+"""How the file for another program's bytes opens: at its end, through no link, and without a wait for a pipe."""
+
+_NEW_FILE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+"""How a kept copy opens: as a new file. The open fails when the path holds anything, also a link."""
 
 _NOT_OWN = 'the path holds a link, a file with a second name, or no regular file'
 
@@ -43,7 +46,8 @@ class RecordFile:
 
     - Bytes that another program added after that end go to `foreign`, a file beside the record.
     - A file that another program replaced, removed, shortened, or rewrote gets no write, now or later. When the
-      path names another file or none, the record as this object wrote it goes to `kept`, a file beside the record.
+      path names another file or none, the record as this object wrote it goes to a new file beside the record,
+      `record.kept.jsonl` or the first free name after it.
 
     The check sees the path, the record's length, and its last `TAIL` bytes. It sees no other change.
     """
@@ -69,11 +73,6 @@ class RecordFile:
     def foreign(self) -> Path:
         """The file beside the record that keeps what another program added to the record."""
         return self._path.with_suffix('.foreign.jsonl')
-
-    @property
-    def kept(self) -> Path:
-        """The file beside the record that keeps the record as this object wrote it, once the path names another."""
-        return self._path.with_suffix('.kept.jsonl')
 
     @property
     def moved(self) -> int:
@@ -104,6 +103,8 @@ class RecordFile:
         except BaseException:
             file.close()
             raise
+        # What an earlier open of this object found says nothing about the file that is open now.
+        self._moved, self._refusal = 0, None
         self._file = file
         return self
 
@@ -141,26 +142,38 @@ class RecordFile:
 
         """
         file = self._opened()
-        if self._refusal is None:
-            self._refusal = self._check(file)
-        if self._refusal:
-            raise RecordChanged(self._refusal)
         data = b''.join(_events.dump_json(event) + b'\n' for event in events)
+        # Another program can write between the check and the write. The write then takes its bytes back, and one
+        # more check moves that program's bytes like any that it added.
+        for _ in range(2):
+            self._refusal = self._refusal or self._check(file)
+            if self._refusal:
+                raise RecordChanged(self._refusal)
+            if self._put(file, data):
+                self._end += len(data)
+                self._tail = (self._tail + data)[-TAIL:]
+                return
+        self._refusal = self._unmoved('the program went on adding')
+        raise RecordChanged(self._refusal)
+
+    def _put(self, file: FileIO, data: bytes) -> bool:
+        # Write `data` at the end of the file, and wait until it is on disk. Return whether it is at the record's
+        # end. When another program wrote since the check, it is not, and the file keeps none of it.
         written = 0
         try:
             # A full disk can take only a part of the data. The next call then raises the disk's error.
             while written < len(data):
                 written += file.write(data[written:])
+            if written and file.tell() - written != self._end:
+                file.truncate(file.tell() - written)
+                return False
             _sync(file)
         except OSError:
             if written:
-                # Another program can have written since the check, so only this write's own bytes go.
+                # Only this write's own bytes go: another program can have written before them.
                 file.truncate(file.tell() - written)
             raise
-        # When another program wrote since the check, its bytes are before these. The next check then finds that
-        # the record does not end with what this object wrote.
-        self._end += written
-        self._tail = (self._tail + data)[-TAIL:]
+        return True
 
     def _check(self, file: FileIO) -> str | None:
         # Move what another program added after the record's end to `foreign`. Return why the record takes no more
@@ -172,12 +185,12 @@ class RecordFile:
             same = False
         if not same:
             return self._keep(file)
-        copied, why = self._end, None
+        copied = self._end
         # More can arrive while the bytes move, so the size is read again after each move. A program that never
         # stops must not hold the server here.
         for _ in range(_MOVES):
             # The record's own bytes are compared before each look at the size, and so also just before the cut.
-            if os.pread(descriptor, len(self._tail), self._end - len(self._tail)) != self._tail:
+            if not self._ends_as_written(descriptor):
                 return f'Another program shortened or rewrote the record {self._path}, so Verifold stops.'
             size = os.fstat(descriptor).st_size
             if size <= copied:
@@ -189,26 +202,39 @@ class RecordFile:
             try:
                 _add(self.foreign, added)
             except OSError as error:
-                why = error.strerror
-                break
+                return self._unmoved(error.strerror)
             copied += len(added)
+        return self._unmoved('the program went on adding')
+
+    def _unmoved(self, why: str | None) -> str:
         return (
             f'Another program added to the record {self._path}, and Verifold could not move what it added to '
-            f'{self.foreign}: {why or "the program went on adding"}. Verifold stops, and what the program added '
-            'is still at the end of the record.'
+            f'{self.foreign}: {why}. Verifold stops, and what the program added is still at the end of the record.'
         )
+
+    def _ends_as_written(self, descriptor: int) -> bool:
+        return os.pread(descriptor, len(self._tail), self._end - len(self._tail)) == self._tail
 
     def _keep(self, file: FileIO) -> str:
         # The path names another file or none, so only this process still has the record as it wrote it. Copy it to
-        # a file that outlives the process, and return what happened in one line.
+        # a new file that outlives the process, and return what happened in one line.
         gone = f'Another program replaced or removed the record {self._path}, so Verifold stops.'
         if not self._end:
             return gone
-        try:
-            _add(self.kept, self._written(file))
-        except OSError as error:
-            return f'{gone} Verifold could not keep what it wrote in {self.kept}: {error.strerror}.'
-        return f'{gone} What Verifold wrote is in {self.kept}.'
+        if not self._ends_as_written(file.fileno()):
+            return f'{gone} That program also changed the file that Verifold wrote, so Verifold kept no copy of it.'
+        written, number = self._written(file), 1
+        while True:
+            kept = self._path.with_suffix('.kept.jsonl' if number == 1 else f'.kept.{number}.jsonl')
+            try:
+                _new(kept, written)
+            except FileExistsError:
+                # An earlier copy keeps its name and its bytes. This one gets the first name that is free.
+                number += 1
+            except OSError as error:
+                return f'{gone} Verifold could not keep what it wrote in {kept}: {error.strerror}.'
+            else:
+                return f'{gone} What Verifold wrote is in {kept}.'
 
     def _written(self, file: FileIO) -> bytes:
         file.seek(0)
@@ -230,10 +256,10 @@ class RecordFile:
 
 
 def _add(path: Path, data: bytes) -> None:
-    # Write at the end of a file of Verifold's own beside the record. A link, or a second name of another file,
-    # could take the bytes to any file. So the file is a regular file with one name, and only its owner reads it.
+    # Write at the end of the file for another program's bytes. A link, or a second name of another file, could
+    # take the bytes to any file. So the file is a regular file with one name, and only its owner reads it.
     try:
-        descriptor = os.open(path, _OWN_FILE, 0o600)
+        descriptor = os.open(path, _SIDE_FILE, 0o600)
     except OSError as error:
         if error.errno == errno.ELOOP:
             raise OSError(errno.ELOOP, _NOT_OWN) from error
@@ -246,6 +272,19 @@ def _add(path: Path, data: bytes) -> None:
         file.write(data)
         file.flush()
         _sync(file)
+
+
+def _new(path: Path, data: bytes) -> None:
+    # Write a new file that only its owner reads. A copy that the disk cuts short does not stay.
+    descriptor = os.open(path, _NEW_FILE, 0o600)
+    try:
+        with os.fdopen(descriptor, 'wb') as file:
+            file.write(data)
+            file.flush()
+            _sync(file)
+    except OSError:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def _sync(file: IO[bytes]) -> None:

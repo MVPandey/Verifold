@@ -1,5 +1,6 @@
 import errno
 import os
+import re
 import resource
 import stat
 from collections.abc import Callable
@@ -63,7 +64,7 @@ def test_a_line_that_is_no_event_is_an_error_that_gives_the_line(tmp_path: Path)
 
     with (
         RecordFile(path) as record,
-        pytest.raises(CorruptRecord, match=rf'^Line 3 of the record {path} is not a valid event\. Another program can'),
+        pytest.raises(CorruptRecord, match=rf'^Line 3 of the record {re.escape(str(path))} is not a valid event\. '),
     ):
         record.read()
 
@@ -272,18 +273,19 @@ def test_a_record_that_another_program_rewrote_in_place_gets_no_write_and_stays_
 ) -> None:
     first, second, third, fourth, *_ = lab().events
     path = tmp_path / 'record.jsonl'
+    there = re.escape(str(path))
 
     with RecordFile(path) as record:
         record.append(first, second, third)
         for content in saves(path.read_bytes()):
             rewrite(path, content)
 
-            with pytest.raises(RecordChanged, match=rf'^Another program shortened or rewrote the record {path}, so'):
+            with pytest.raises(RecordChanged, match=rf'^Another program shortened or rewrote the record {there}, so'):
                 record.append(fourth)
             assert path.read_bytes() == content
         assert record.moved == 0
         assert not record.foreign.exists()
-        assert not record.kept.exists()
+        assert not kept(path).exists()
 
 
 def test_a_long_record_compares_its_last_bytes_and_sees_no_change_of_the_same_length_before_them(
@@ -315,6 +317,11 @@ def replace(path: Path) -> None:
     saved.replace(path)
 
 
+def kept(path: Path, number: int = 1) -> Path:
+    """Return the file beside the record that holds the `number`-th copy of what a record wrote."""
+    return path.with_name('record.kept.jsonl' if number == 1 else f'record.kept.{number}.jsonl')
+
+
 @pytest.mark.parametrize('change', [replace, Path.unlink])
 def test_a_record_that_another_program_replaced_or_removed_gets_no_write_and_what_was_written_is_kept(
     tmp_path: Path, change: Callable[[Path], None]
@@ -333,13 +340,49 @@ def test_a_record_that_another_program_replaced_or_removed_gets_no_write_and_wha
                 record.append(third)
         assert str(refused.value) == (
             f'Another program replaced or removed the record {path}, so Verifold stops. '
-            f'What Verifold wrote is in {tmp_path / "record.kept.jsonl"}.'
+            f'What Verifold wrote is in {kept(path)}.'
         )
         assert (path.read_bytes() if path.exists() else None) == after
         # The copy is made once, also when a second write is refused.
-        assert record.kept.read_bytes() == written
-        assert stat.S_IMODE(record.kept.stat().st_mode) == 0o600
+        assert kept(path).read_bytes() == written
+        assert stat.S_IMODE(kept(path).stat().st_mode) == 0o600
+        assert not kept(path, 2).exists()
         assert not record.foreign.exists()
+
+
+def an_earlier_copy(path: Path) -> None:
+    kept(path).write_bytes(b'an earlier copy\n')
+    path.unlink()
+
+
+def a_link(path: Path) -> None:
+    kept(path).symlink_to(path.with_name('elsewhere'))
+    path.unlink()
+
+
+def the_record_itself(path: Path) -> None:
+    path.rename(kept(path))
+
+
+@pytest.mark.parametrize('taken', [an_earlier_copy, a_link, the_record_itself])
+def test_a_kept_copy_is_a_new_file_with_the_first_free_name_and_holds_the_record_once(
+    tmp_path: Path, taken: Callable[[Path], None]
+) -> None:
+    first, second, third, *_ = lab().events
+    path = tmp_path / 'record.jsonl'
+
+    with RecordFile(path) as record:
+        record.append(first, second)
+        written = path.read_bytes()
+        taken(path)
+        there = kept(path).read_bytes() if kept(path).exists() else None
+
+        with pytest.raises(RecordChanged, match=rf'What Verifold wrote is in {re.escape(str(kept(path, 2)))}\.$'):
+            record.append(third)
+        assert kept(path, 2).read_bytes() == written
+        # What had the first name is as it was, and a link there leads to nothing still.
+        assert (kept(path).read_bytes() if kept(path).exists() else None) == there
+        assert not (tmp_path / 'elsewhere').exists()
 
 
 def test_a_record_that_holds_nothing_leaves_no_copy_when_another_program_removes_it(tmp_path: Path) -> None:
@@ -350,26 +393,49 @@ def test_a_record_that_holds_nothing_leaves_no_copy_when_another_program_removes
 
         with pytest.raises(RecordChanged, match=r'replaced or removed the record .*, so Verifold stops\.$'):
             record.append(lab().events[0])
-        assert not record.kept.exists()
+        assert not kept(path).exists()
 
 
-def test_a_copy_that_cannot_be_kept_is_named_with_the_reason(tmp_path: Path) -> None:
+def test_a_record_that_another_program_rewrote_and_then_moved_away_leaves_no_copy_and_the_line_says_so(
+    tmp_path: Path,
+) -> None:
     first, second, *_ = lab().events
     path = tmp_path / 'record.jsonl'
-    elsewhere = tmp_path / 'elsewhere'
 
     with RecordFile(path) as record:
         record.append(first)
-        record.kept.symlink_to(elsewhere)
+        rewrite(path, *longer(path.read_bytes()))
+        path.rename(tmp_path / 'moved away')
+
+        with pytest.raises(RecordChanged) as refused:
+            record.append(second)
+        assert str(refused.value) == (
+            f'Another program replaced or removed the record {path}, so Verifold stops. '
+            'That program also changed the file that Verifold wrote, so Verifold kept no copy of it.'
+        )
+        assert not kept(path).exists()
+
+
+def test_a_copy_that_the_disk_refuses_is_named_with_the_disks_reason_and_no_part_of_it_stays(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first, second, *_ = lab().events
+    path = tmp_path / 'record.jsonl'
+
+    def full_disk(_: object) -> None:
+        raise OSError(errno.ENOSPC, 'No space left on device')
+
+    with RecordFile(path) as record:
+        record.append(first)
         path.unlink()
+        monkeypatch.setattr(record_file, '_sync', full_disk)
 
         with pytest.raises(RecordChanged) as refused:
             record.append(second)
         assert str(refused.value).endswith(
-            f'so Verifold stops. Verifold could not keep what it wrote in {record.kept}: '
-            'the path holds a link, a file with a second name, or no regular file.'
+            f'so Verifold stops. Verifold could not keep what it wrote in {kept(path)}: No space left on device.'
         )
-        assert not elsewhere.exists()
+        assert not kept(path).exists()
 
 
 def link(side: Path, record: Path) -> None:
@@ -415,6 +481,21 @@ def test_a_side_file_that_is_a_link_a_second_name_or_no_regular_file_is_refused_
         assert record.moved == 0
 
 
+def test_a_side_file_that_does_not_open_is_named_with_the_reason(tmp_path: Path) -> None:
+    first, second, *_ = lab().events
+    path = tmp_path / 'record.jsonl'
+
+    with RecordFile(path) as record:
+        record.append(first)
+        record.foreign.mkdir()
+        add(path, b'a line\n')
+        before = path.read_bytes()
+
+        with pytest.raises(RecordChanged, match=r': Is a directory\. Verifold stops, and what the program added'):
+            record.append(second)
+        assert path.read_bytes() == before
+
+
 def test_a_side_file_that_the_disk_refuses_is_named_with_the_disks_reason_and_gets_the_bytes_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -446,30 +527,57 @@ def test_a_side_file_that_the_disk_refuses_is_named_with_the_disks_reason_and_ge
         assert record.moved == 0
 
 
-def test_what_another_program_writes_between_the_check_and_the_write_is_found_at_the_next_write(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    first, second, third, *_ = lab().events
-    path = tmp_path / 'record.jsonl'
+def lands_after_the_check(path: Path, monkeypatch: pytest.MonkeyPatch, lines: list[bytes]) -> None:
+    """Make each of `lines` land in the record after one check of it, as a write of another program can."""
     check = RecordFile._check
 
     def and_then_a_line_arrives(self: RecordFile, file: FileIO) -> str | None:
         found = check(self, file)
-        add(path, b'a line\n')
+        if lines:
+            add(path, lines.pop(0))
         return found
+
+    monkeypatch.setattr(RecordFile, '_check', and_then_a_line_arrives)
+
+
+def test_what_another_program_writes_between_the_check_and_the_write_moves_like_any_addition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first, second, third, *_ = lab().events
+    path = tmp_path / 'record.jsonl'
+    # A line with the number of the next event, which lands just before the record writes that event.
+    foreign = second.model_dump_json().encode() + b'\n'
 
     with RecordFile(path) as record:
         record.append(first)
-        with monkeypatch.context() as patched:
-            patched.setattr(RecordFile, '_check', and_then_a_line_arrives)
-            record.append(second)
-        content = path.read_bytes()
+        lands_after_the_check(path, monkeypatch, [foreign])
+        record.append(second)
+        record.append(third)
 
-        with pytest.raises(RecordChanged, match='shortened or rewrote'):
-            record.append(third)
-        assert content.count(b'a line\n') == 1
-        assert path.read_bytes() == content
-        assert not record.foreign.exists()
+        assert record.read() == (first, second, third)
+        assert len(path.read_bytes().splitlines()) == 3
+        assert record.foreign.read_bytes() == foreign
+        assert record.moved == len(foreign)
+    with RecordFile(path) as record:
+        assert fold(record.read()).seq == 3
+
+
+def test_a_program_that_writes_before_each_write_of_the_record_stops_it_and_keeps_its_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first, second, *_ = lab().events
+    path = tmp_path / 'record.jsonl'
+
+    with RecordFile(path) as record:
+        record.append(first)
+        written = path.read_bytes()
+        lands_after_the_check(path, monkeypatch, [b'one\n', b'two\n'])
+
+        with pytest.raises(RecordChanged, match=r': the program went on adding\. Verifold stops, and what'):
+            record.append(second)
+        # The first line moved at the second check. The second one came after it, and the record's event is gone.
+        assert path.read_bytes() == written + b'two\n'
+        assert record.foreign.read_bytes() == b'one\n'
 
 
 def test_a_write_that_fails_removes_its_own_bytes_and_none_that_another_program_wrote_before_them(
@@ -477,24 +585,19 @@ def test_a_write_that_fails_removes_its_own_bytes_and_none_that_another_program_
 ) -> None:
     first, second, *_ = lab().events
     path = tmp_path / 'record.jsonl'
-    check = RecordFile._check
-
-    def and_then_a_line_arrives(self: RecordFile, file: FileIO) -> str | None:
-        found = check(self, file)
-        add(path, b'a line\n')
-        return found
-
-    def full_disk(_: object) -> None:
-        raise OSError(errno.ENOSPC, 'No space left on device')
 
     with RecordFile(path) as record:
         record.append(first)
         written = path.read_bytes()
-        with monkeypatch.context() as patched:
-            patched.setattr(RecordFile, '_check', and_then_a_line_arrives)
-            patched.setattr(record_file, '_sync', full_disk)
-            with pytest.raises(OSError, match='No space'):
+        lands_after_the_check(path, monkeypatch, [b'a line\n'])
+        soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+        # The file takes the other program's line and ten bytes more, so the record's write stops after its start.
+        resource.setrlimit(resource.RLIMIT_FSIZE, (len(written) + len(b'a line\n') + 10, hard))
+        try:
+            with pytest.raises(OSError, match='large'):
                 record.append(second)
+        finally:
+            resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
 
         assert path.read_bytes() == written + b'a line\n'
         # The line is after the record's end, so the next write moves it.

@@ -24,6 +24,7 @@ from verifold.protocol.usage import Usage
 from verifold.runner.environment import harness_environment
 from verifold.runner.errors import ModelRefused, RunnerError
 from verifold.runner.processes import STOP_GRACE, start, stop
+from verifold.store.errors import RecordChanged
 
 
 class PermissionChoice(Record):
@@ -194,7 +195,11 @@ class _Client(acp.Client):
             if key and isinstance(call.given, dict)
             else '',
         )
-        chosen = await self._hooks.permissions(request)
+        try:
+            chosen = await self._hooks.permissions(request)
+        except RecordChanged:
+            # Verifold stops now, so nobody decides the request. It is cancelled, as when the agent's turn ends.
+            chosen = None
         outcome = (
             schema.AllowedOutcome(option_id=chosen, outcome='selected')
             if chosen
@@ -268,7 +273,11 @@ class _Client(acp.Client):
                     'details': 'Verifold shows a form with text, number, yes-or-no, and choice fields. It cannot show this.'
                 }
             )
-        answers = await self._hooks.questions(question)
+        try:
+            answers = await self._hooks.questions(question)
+        except RecordChanged:
+            # Verifold stops now, so nobody answers the question. It is cancelled, as when the agent's turn ends.
+            answers = None
         if answers is None:
             return schema.CancelElicitationResponse(action='cancel')
         return schema.AcceptElicitationResponse(action='accept', content=dict(answers))

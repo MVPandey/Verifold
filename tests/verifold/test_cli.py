@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 from collections.abc import Iterator
+from contextlib import suppress
 from functools import partial
 from importlib.metadata import version
 from pathlib import Path
@@ -543,7 +544,11 @@ def test_a_record_that_another_program_replaces_stops_the_lab_with_one_line_and_
                 fake = ServeHooks(ready=ready, swept=hooks.swept)
                 await serve(folder, start, options=options, catalog={'fake': FAKE_HARNESS}, hooks=fake)
         finally:
-            await acting
+            if not link.done():
+                # The server failed before it was ready, so the other program has nothing to wait for.
+                acting.cancel()
+            with suppress(asyncio.CancelledError):
+                await acting
 
     monkeypatch.setattr('verifold.cli.serve', serve_a_lab)
 
