@@ -95,8 +95,9 @@ def known_words(board: Board) -> frozenset[str]:
     reported for a turn. A seat's label gives the title and the model's name: "Codex · gpt-6.1-sol 2" gives
     "Codex" and "gpt-6.1-sol". No agent takes one of them as its name, so no agent passes as a model that it is not.
     """
-    parts = (text.partition(' · ') for _, agent, text in board.labels)
-    models = (re.sub(r' \d+$', '', model) for _, _, model in parts)
+    # A label can end with the number of a second seat, and a model's own name can end with a number too.
+    named = tuple(text.partition(' · ')[2] for _, _, text in board.labels)
+    models = (*named, *(re.sub(r' \d+$', '', model) for model in named))
     titles = (text.partition(' · ')[0] for _, _, text in board.labels if ' · ' in text)
     specs = (
         word

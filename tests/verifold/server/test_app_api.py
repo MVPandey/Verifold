@@ -754,6 +754,7 @@ async def test_the_lab_view_holds_each_agents_identity_status_and_what_waits_for
         'answer',
     )
     assert bo['picture'] == {'shape': 'hex', 'color': '#f08c3a', 'symbol': 'orbit'}
+    assert (ada['chosen_name'], bo['chosen_name'], guest['chosen_name']) == ('', 'Tessel', '')
     assert (guest['agent']['name'], guest['seat'], guest['need']) == (
         'Sorrel',
         'Own harness · model not reported',

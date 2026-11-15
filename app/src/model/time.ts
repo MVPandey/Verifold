@@ -24,7 +24,8 @@ export function moreTime(lab: LabView, add: number, now: Date): number {
   return Math.min(MAX_MINUTES, minutesLeft(lab, now) + add);
 }
 
-function minutesLeft(lab: LabView, now: Date): number {
+/** Return the whole minutes until the lab's time ends, or zero for a lab with no limit or out of time. */
+export function minutesLeft(lab: LabView, now: Date): number {
   if (lab.ends_at === null || lab.out_of_time) return 0;
   return Math.max(0, Math.ceil((new Date(lab.ends_at).getTime() - now.getTime()) / 60_000));
 }

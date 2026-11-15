@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import type { ReactElement } from 'react';
 
-import type { AgentView, HarnessOption, PostView, ThreadView } from '../api/types.ts';
+import type { AgentView, PostView, ThreadView } from '../api/types.ts';
 import { PERSON } from '../api/types.ts';
-import { authorName, called, face, harnessTitle } from '../model/agents.ts';
+import { author, authorName, called } from '../model/agents.ts';
 import { clock } from '../model/format.ts';
 import { builtOnLabel, standingChip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
@@ -11,13 +11,13 @@ import { sideReplyHint } from '../model/side.ts';
 import { act, isClaim, rows, standingIn } from '../model/turns.ts';
 import { messageOf } from '../api/client.ts';
 import { Detail } from './Markdown.tsx';
-import { ChipView, Composer, FaceView, HarnessAsk, Mark } from './parts.tsx';
+import { ChipView, Composer, HarnessAsk, Mark } from './parts.tsx';
+import { Name, Who } from './Picture.tsx';
 
 /** What every turn of a thread needs from the lab. */
 interface Around {
   readonly view: ThreadView;
   readonly agents: readonly AgentView[];
-  readonly harnesses: readonly HarnessOption[];
   /** The asks that wait for the person. */
   readonly needs: readonly PostView[];
   /** The ID of the question's thread, or `null` when the lab has none. */
@@ -70,7 +70,11 @@ export function Turns(
   );
 }
 
-/** One turn: who wrote it, what it does in one line, the words, and the detail on request. */
+/**
+ * One turn: who wrote it, what it does in one line, the words, and the detail on request. The first line has the
+ * author's name, its seat as it was when it wrote the post, and what it is to the thread. Roles are in the member
+ * list and the profile.
+ */
 export function Turn(
   props: Around & { readonly item: PostView; readonly depth: 0 | 1 | 2 },
 ): ReactElement {
@@ -78,12 +82,12 @@ export function Turn(
   const { post, standing, at } = props.item;
   const find = (id: string | null): PostView | undefined =>
     view.posts.find((item) => item.post.id === id);
-  const member = agents.find((entry) => entry.agent.id === post.author) ?? null;
-  const agent = member?.agent ?? null;
+  const agent = agents.find((entry) => entry.agent.id === post.author)?.agent ?? null;
   const to = find(post.reply_to)?.post ?? null;
   const toFamily = agents.find((entry) => entry.agent.id === to?.author)?.agent.model.family;
   const tag = standingIn(agent, view.thread, props.question, toFamily ?? null);
-  const who = face(agents, post.author);
+  const who = author(agents, post.author);
+  const { by } = props.item;
   const chip = standingChip(post, standing);
   const claim = isClaim(post);
   const canRerun =
@@ -109,20 +113,16 @@ export function Turn(
   );
   return (
     <li id={post.id} className={`f-turn${claim ? ' claim' : ''} d${props.depth}`}>
-      <FaceView face={who} />
+      <Who agents={agents} id={post.author} size={36} dot={false} />
       <div>
         <p className="f-turn-line">
-          <b className={`f-who ${who.kind === 'member' ? `m${who.color}` : who.kind}`}>
-            {who.name}
-          </b>
+          {who.kind === 'member' ? (
+            // A post keeps the seat that wrote it. A post from before bylines shows the seat of now.
+            <Name view={who.view} seat={by ? by.seat : undefined} />
+          ) : (
+            <b className={`f-who ${who.kind}`}>{who.name}</b>
+          )}
           {post.helper ? <span className="f-tag">helper {post.helper}</span> : null}
-          {/* The agent's own word for what it is, or else the role that the person gave its seat. */}
-          {member?.role || member?.agent.given_role ? (
-            <span className="f-role">{member.role || member.agent.given_role}</span>
-          ) : null}
-          {agent ? (
-            <span className="f-tag">{harnessTitle(props.harnesses, agent.harness)}</span>
-          ) : null}
           {tag ? <span className="f-tag">{tag}</span> : null}
           <time dateTime={at}>{clock(at)}</time>
         </p>

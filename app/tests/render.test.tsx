@@ -13,8 +13,10 @@ import type {
   NormsFile,
   PermissionShown,
   Post,
+  PostView,
   QuestionShown,
   SettingsView,
+  ThreadSummary,
   ThreadView,
 } from '../src/api/types.ts';
 import { clock, dayClock } from '../src/model/format.ts';
@@ -25,10 +27,12 @@ import { Boundary, Markdown, Words } from '../src/ui/Markdown.tsx';
 import { NeedsPage } from '../src/ui/NeedsPage.tsx';
 import { NormsForm, savedLine } from '../src/ui/NormsPage.tsx';
 import { HarnessAsk } from '../src/ui/parts.tsx';
+import { Mark } from '../src/ui/Picture.tsx';
 import { SettingsForm } from '../src/ui/SettingsPage.tsx';
 import { SetupPage } from '../src/ui/SetupPage.tsx';
 import { Turns } from '../src/ui/Thread.tsx';
-import { FolderLine, InvitationText, Top } from '../src/ui/Top.tsx';
+import { FolderLine, InvitationText, ProfileSheet } from '../src/ui/Profile.tsx';
+import { Top } from '../src/ui/Top.tsx';
 import {
   DEFAULTS,
   HARNESSES,
@@ -62,7 +66,6 @@ describe('agent text', () => {
       <Turns
         view={thread}
         agents={[agentView('agent-1')]}
-        harnesses={HARNESSES}
         needs={[]}
         question={null}
         onRerun={() => Promise.resolve()}
@@ -126,7 +129,6 @@ describe('agent text', () => {
       <Turns
         view={thread}
         agents={[agentView('agent-1')]}
-        harnesses={HARNESSES}
         needs={[]}
         question={null}
         onRerun={() => Promise.resolve()}
@@ -275,6 +277,9 @@ describe('agent text', () => {
     );
     const block = `<pre><code class="language-sh">${command.replace('&&', '&amp;&amp;')}\n</code></pre>`;
     assert.ok(needs.includes(block));
+    // The agent that asks shows with its picture and its name, which opens its profile.
+    assert.ok(needs.includes('<svg class="i-pic none"'));
+    assert.ok(needs.includes('<button type="button" class="i-name">Agent 2</button>'));
     assert.ok(words(asked.post.body).includes(block));
   });
 
@@ -338,7 +343,6 @@ describe('an opened thread', () => {
         posts,
       }}
       agents={agents}
-      harnesses={HARNESSES}
       needs={[postView(asked, 6)]}
       question={null}
       onRerun={() => Promise.resolve()}
@@ -358,7 +362,66 @@ describe('an opened thread', () => {
     assert.ok(html.includes('visiting'));
     assert.ok(html.includes('outside checker, other model family'));
     assert.ok(html.includes('Blind rerun'));
-    assert.ok(html.includes('Claude Code'));
+  });
+
+  it('puts on a post’s first line the name, the seat as it was when the post was written, and no role', () => {
+    const tessel = agentView('agent-1', {
+      agent: { ...agentView('agent-1').agent, name: 'Tessel' },
+      seat: 'Codex · gpt-6.1-sol',
+      role: 'Builder',
+      given_role: 'driver',
+      given_by: 'person',
+    });
+    const by = { name: 'Tessel', seat: 'Claude Code · Sonnet 5.5', marks: [], role: 'Builder' };
+    const turns = (item: PostView): string =>
+      renderToStaticMarkup(
+        <Turns
+          view={{
+            thread: { id: 't-1', title: 'A', opened_by: 'agent-1' },
+            watching: false,
+            members: [],
+            posts: [item],
+          }}
+          agents={[tessel]}
+          needs={[]}
+          question={null}
+          onRerun={() => Promise.resolve()}
+          onSend={() => Promise.resolve()}
+        />,
+      );
+    const post = result('p-1', { helper: 'pricer' });
+    // An older post keeps the model that wrote it, also after another model took the seat.
+    const earlier = turns({ ...postView(post), by });
+    assert.ok(
+      earlier.includes(
+        '<button type="button" class="i-name">Tessel</button>' +
+          '<span class="i-prov">Claude Code · Sonnet 5.5</span>' +
+          '<span class="f-tag">helper pricer</span><span class="f-tag">leads this thread</span><time',
+      ),
+    );
+    assert.equal(earlier.includes('<span class="i-prov">Codex · gpt-6.1-sol'), false);
+    // Roles are in the member list and the profile, never on a post's first line.
+    assert.equal(earlier.includes('Builder'), false);
+    assert.equal(earlier.includes('driver'), false);
+    // A post whose seat's label was its author's name shows no seat.
+    const named = turns({ ...postView(post), by: { ...by, seat: '' } });
+    assert.ok(named.includes('class="i-name">Tessel</button><span class="f-tag">helper pricer'));
+    // A post from before bylines shows the seat of now.
+    assert.ok(
+      turns(postView(post)).includes(
+        'class="i-name">Tessel</button><span class="i-prov">Codex · gpt-6.1-sol</span>',
+      ),
+    );
+    // The picture opens the profile too. The name beside it is the control that a keyboard reaches.
+    assert.ok(
+      earlier.includes('<button type="button" class="i-open" tabindex="-1" aria-hidden="true">'),
+    );
+    // The person and a blind rerun keep what they had: "You", and a dashed circle with no name of its own.
+    assert.ok(html.includes('<span class="f-face rerun" aria-hidden="true"></span>'));
+    assert.ok(html.includes('<b class="f-who rerun">Blind rerun</b>'));
+    const mine = turns(postView(result('p-2', { author: 'person', kind: 'message' })));
+    assert.ok(mine.includes('<span class="f-face person" aria-hidden="true">You</span>'));
+    assert.ok(mine.includes('<b class="f-who person">You</b>'));
   });
 
   it('keeps what the person can do in a thread', () => {
@@ -397,7 +460,6 @@ describe('an opened thread', () => {
           posts: [postView(note('p-1')), postView(note('p-2'))],
         }}
         agents={agents}
-        harnesses={HARNESSES}
         needs={[]}
         question="t-1"
         onRerun={() => Promise.resolve()}
@@ -413,9 +475,20 @@ describe('the lab page', () => {
   const working = { state: 'working', detail: 'Run pytest', at: null } as const;
   const lab = labView({
     agents: [
-      agentView('agent-1', { activity: working, turns: 2, cost_usd: 0.5 }),
-      agentView('agent-2'),
+      agentView('agent-1', { activity: working, need: 'working', turns: 2, cost_usd: 0.5 }),
+      agentView('agent-2', { need: 'answer' }),
     ],
+    waits: [
+      {
+        kind: 'answer',
+        agent: 'agent-2',
+        what: 'Which seed counts?',
+        since: '2026-11-06T14:04:00Z',
+        post: 'p-8',
+        thread: 't-2',
+      },
+    ],
+    thread_needs: { 't-1': 'idle', 't-2': 'answer', 't-3': 'working' },
     ends_at: '2026-11-06T15:00:00Z',
   });
   const threads = [
@@ -456,17 +529,51 @@ describe('the lab page', () => {
     assert.ok(html.includes('<h1>Is sorted() faster?</h1>'));
     assert.ok(html.includes('<a class="f-label" href="#/thread/t-1" aria-expanded="false">'));
     assert.ok(html.includes('Steer the lab'));
-    assert.ok(html.includes('<a class="f-need" href="#/needs"><b>Agent 2 needs you</b>'));
-    assert.ok(html.includes('Which seed counts?'));
+    // What waits for the person is a list in the seat, and a row goes to the Needs you page.
+    assert.ok(
+      html.includes(
+        '<div class="o-waits" id="waits"><div><p class="o-waits-head">Needs your answer (1)</p>' +
+          '<a class="o-wait" href="#/needs"><span><b>Agent 2</b> Which seed counts?</span>' +
+          '<time dateTime="2026-11-06T14:04:00Z">22 min</time><em>Answer</em></a></div></div>',
+      ),
+    );
+    assert.equal(html.includes('f-need'), false);
     // The cards come in the order that the threads opened, and none repeats the question's thread.
     assert.ok(html.indexOf('Sorted input') < html.indexOf('Merge sort'));
+    // Each card has one status line under its pictures. A status moves no card.
+    assert.ok(
+      html.includes(
+        '<div class="o-card-need"><span class="o-st o-answer">Needs your answer</span></div>',
+      ),
+    );
+    assert.ok(html.includes('<span class="o-st o-working">Working</span>'));
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    const urgent = renderToStaticMarkup(
+      <LabPage
+        api={{} as Api}
+        data={{
+          ...data,
+          lab: { ...lab, thread_needs: { 't-2': 'idle', 't-3': 'approval' } },
+        }}
+        now={now}
+        open={null}
+        post={null}
+      />,
+    );
+    assert.ok(urgent.includes('<span class="o-st o-approval">Needs your approval</span>'));
+    assert.ok(urgent.indexOf('Sorted input') < urgent.indexOf('Merge sort'));
+    // An agent is in a turn, so the lab is not quiet.
+    assert.equal(html.includes('o-quiet'), false);
     assert.equal(html.includes('id="card-t-1"'), false);
     assert.ok(html.includes('<section id="card-t-3" class="f-card c-bad">'));
     assert.ok(html.includes('<a href="#/thread/t-2" aria-expanded="false">Sorted input</a>'));
     assert.ok(html.includes('<span class="f-st fs-count-good">Checked</span>'));
     assert.ok(html.includes('<span class="f-st fs-count-bad">1 disputed</span>'));
     assert.equal(html.split('<span class="f-new">New</span>').length - 1, 3);
-    assert.ok(html.includes('role="img" aria-label="Agent 2"'));
+    // A picture that stands alone is a button with the agent's name, and it opens the profile.
+    assert.ok(
+      html.includes('<button type="button" class="i-open" aria-label="Profile of Agent 2">'),
+    );
     // A closed card never shows a post's text.
     assert.equal(html.includes('Reran it.'), false);
   });
@@ -559,8 +666,94 @@ describe('the lab page', () => {
     assert.ok(html.includes('<div class="f-faces" role="group" aria-label="The team">'));
     // Both members show at full strength: nobody in a team is a faint face.
     const faces = html.slice(html.indexOf('aria-label="The team"'));
-    assert.ok(faces.includes('aria-label="Agent 2"') && faces.includes('aria-label="Agent 1"'));
+    assert.ok(
+      faces.includes('aria-label="Profile of Agent 2"') &&
+        faces.includes('aria-label="Profile of Agent 1"'),
+    );
     assert.equal(faces.slice(0, faces.indexOf('<time')).includes('ghost'), false);
+    assert.equal(html.includes('o-plus'), false);
+  });
+
+  it('shows five pictures on a card, and then how many more there are', () => {
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    const ids = [1, 2, 3, 4, 5, 6, 7].map((number) => `agent-${number}`);
+    const crowded = [
+      summary({ thread: { id: 't-3', title: 'Merge sort', opened_by: 'agent-2' }, team: ids }),
+    ];
+    const html = renderToStaticMarkup(
+      <LabPage
+        api={{} as Api}
+        data={{
+          ...data,
+          lab: { ...lab, agents: ids.map((id) => agentView(id)) },
+          threads: crowded,
+        }}
+        now={now}
+        open={null}
+        post={null}
+      />,
+    );
+    const team = html.slice(html.indexOf('aria-label="The team"'));
+    assert.equal(team.split('class="i-open"').length - 1, 5);
+    assert.ok(team.includes('aria-label="Profile of Agent 5"'));
+    assert.equal(team.includes('aria-label="Profile of Agent 6"'), false);
+    assert.ok(team.includes('<span class="o-plus">+2</span>'));
+  });
+
+  it('shows a band above the wall when no agent is in a turn, with no control that wakes agents', () => {
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    const ended = '2026-11-06T14:08:00Z';
+    const rings = '2026-11-06T14:41:00Z';
+    const quiet = {
+      ...lab,
+      agents: [
+        agentView('agent-1', {
+          turn_ended_at: ended,
+          alarm: { minutes: 30, quiet: false, rings_at: rings },
+        }),
+        agentView('agent-2', { need: 'answer' }),
+      ],
+    };
+    const band = (shown: LabView): string => {
+      const html = renderToStaticMarkup(
+        <LabPage
+          api={{} as Api}
+          data={{ ...data, lab: shown }}
+          now={now}
+          open={null}
+          post={null}
+        />,
+      );
+      const from = html.indexOf('<section class="o-quiet"');
+      return from < 0 ? '' : html.slice(from, html.indexOf('</section>', from));
+    };
+    const html = band(quiet);
+    assert.ok(html.startsWith('<section class="o-quiet" aria-label="The lab is quiet">'));
+    assert.ok(
+      html.includes(
+        '<h2>The lab is quiet</h2><p>No agent has been in a turn for 18 min. An agent starts a ' +
+          'turn when a post is for it, or when its alarm rings.</p>',
+      ),
+    );
+    assert.ok(html.includes('<div class="hot"><dt>Wait for you</dt><dd>1</dd></div>'));
+    assert.ok(
+      html.includes(`<dt>Alarms set</dt><dd>1</dd><span>The next rings at ${clock(rings)}</span>`),
+    );
+    assert.ok(html.includes('<dt>Time left</dt><dd>34 min</dd>'));
+    assert.equal(html.includes('<button'), false);
+    // Without an alarm, only a post starts a turn. Without a wait, the count has no highlight.
+    const bare = band({
+      ...quiet,
+      waits: [],
+      ends_at: null,
+      agents: [agentView('agent-1', { turn_ended_at: ended }), agentView('agent-2')],
+    });
+    assert.ok(bare.includes('<div><dt>Wait for you</dt><dd>0</dd></div>'));
+    assert.ok(
+      bare.includes('<dt>Alarms set</dt><dd>0</dd><span>Only a post starts a turn now</span>'),
+    );
+    assert.ok(bare.includes('<dt>Time left</dt><dd>No limit</dd>'));
+    assert.ok(band({ ...quiet, out_of_time: true }).includes('<h2>The lab is out of time</h2>'));
   });
 
   it('shows when each thread was last active, and names a checker that asks by its own name', () => {
@@ -572,7 +765,20 @@ describe('the lab page', () => {
         api={{} as Api}
         data={{
           ...data,
-          lab: { ...lab, agents: [...lab.agents, asking] },
+          lab: {
+            ...lab,
+            agents: [...lab.agents, asking],
+            waits: [
+              {
+                kind: 'approval',
+                agent: 'checker-12',
+                what: 'Asks to run a command',
+                since: '2026-11-06T14:20:00Z',
+                post: 'p-9',
+                thread: 't-2',
+              },
+            ],
+          },
           needs: [postView(ask('p-9', 'checker-12'))],
         }}
         now={now}
@@ -580,7 +786,9 @@ describe('the lab page', () => {
         post={null}
       />,
     );
-    assert.ok(html.includes('<b>Checker 12 asks for permission</b>'));
+    assert.ok(html.includes('<span><b>Checker 12</b> Asks to run a command</span>'));
+    assert.ok(html.includes('<p class="o-waits-head">Needs your approval (1)</p>'));
+    assert.ok(html.includes('<em>Decide</em>'));
     assert.equal(html.split('<time dateTime="2026-11-06T14:09:00Z"').length - 1, 2);
   });
 
@@ -669,7 +877,11 @@ describe('the lab page', () => {
       />,
     );
     // The group is closed until the person opens it, and a side thread is no card.
-    assert.ok(html.includes('<details class="f-side"><summary>1 side thread</summary>'));
+    assert.ok(
+      html.includes(
+        '<details class="f-side o-side"><summary>1 side thread between two agents. <u class="closed">Show</u><u class="opened">Hide</u></summary>',
+      ),
+    );
     assert.equal(html.includes('id="card-t-5"'), false);
     assert.ok(
       html.includes(
@@ -677,7 +889,7 @@ describe('the lab page', () => {
           '<small>2 posts</small></a></li>',
       ),
     );
-    assert.ok(html.indexOf('class="f-wall"') < html.indexOf('class="f-side"'));
+    assert.ok(html.indexOf('class="f-wall"') < html.indexOf('class="f-side o-side"'));
     // A lab without one has no such group.
     assert.equal(page('{}').includes('f-side'), false);
   });
@@ -698,7 +910,11 @@ describe('the lab page', () => {
         cardRead={none}
       />,
     );
-    assert.ok(html.includes('<summary>1 side thread<span class="f-new">New</span></summary>'));
+    assert.ok(
+      html.includes(
+        '<summary>1 side thread between two agents. <u class="closed">Show</u><u class="opened">Hide</u><span class="f-new">New</span></summary>',
+      ),
+    );
     assert.ok(html.includes('</a><span class="f-new">New</span></li>'));
     assert.equal(html.split('<span class="f-new">New</span>').length - 1, 2);
   });
@@ -719,7 +935,11 @@ describe('the lab page', () => {
       />,
     );
     // A link to a side thread, or to a post in it, unfolds the group.
-    assert.ok(html.includes('<details class="f-side" open=""><summary>1 side thread</summary>'));
+    assert.ok(
+      html.includes(
+        '<details class="f-side o-side" open=""><summary>1 side thread between two agents. <u class="closed">Show</u><u class="opened">Hide</u></summary>',
+      ),
+    );
     assert.ok(html.includes('<li><section id="card-t-5" class="f-card c-none open">'));
     assert.ok(html.includes('<p class="f-by">Agent 2 opened it</p>'));
     assert.ok(
@@ -1057,148 +1277,14 @@ describe('the lab page', () => {
     assert.equal(html.split('<span class="f-new">New</span>').length - 1, 1);
   });
 
-  it('shows the name with the harness and the model, the role that the person gave, the coordinator, and who is on call', () => {
-    const [first, second] = lab.agents;
-    assert.ok(first && second);
-    const html = renderToStaticMarkup(
+  const top = (shown: LabView, list: readonly ThreadSummary[] = [summary()]): string =>
+    renderToStaticMarkup(
       <Top
         folder="~/code/sort-bench"
         route={{ page: 'lab' }}
         open={{
-          lab: {
-            ...lab,
-            agents: [
-              {
-                ...first,
-                agent: { ...first.agent, name: 'Claude Code · Opus 5.5', given_role: 'driver' },
-                role: 'theory',
-                coordinator: true,
-              },
-              {
-                ...second,
-                agent: { ...second.agent, name: 'Reader', given_role: 'reads' },
-                role: 'reads',
-                on_call: true,
-              },
-            ],
-          },
-          threads: [summary()],
-          harnesses: HARNESSES,
-          needs: 0,
-          now,
-          api: {} as Api,
-          onChange: () => undefined,
-        }}
-      />,
-    );
-    // A name that holds the harness's title gets no second harness tag. An older or a given name keeps the tag.
-    assert.ok(
-      html.includes(
-        '<b>Claude Code · Opus 5.5</b><span class="f-role">Coordinator</span><span class="f-role">driver (given by you)</span><span class="f-role">theory</span></p>',
-      ),
-    );
-    // A role that the agent repeats shows once, as the person's.
-    assert.ok(
-      html.includes(
-        '<b>Reader</b><span class="f-role">reads (given by you)</span><span class="f-tag">Codex</span>',
-      ),
-    );
-    assert.equal(html.split('On call. A post that names it wakes it.').length - 1, 1);
-    assert.ok(html.includes('Take off call'));
-    assert.ok(html.includes('Remove as coordinator'));
-    assert.ok(html.includes('No turns yet'));
-    // An agent holds the coordinator seat, so the list says nothing about a seat without a holder.
-    assert.equal(html.includes('No coordinator.'), false);
-  });
-
-  it('says whether agents may take a coordinator seat that nobody holds, and why a harness failed', () => {
-    const [first, second] = lab.agents;
-    assert.ok(first && second);
-    const list = (open: boolean): string =>
-      renderToStaticMarkup(
-        <Top
-          folder="~/code/sort-bench"
-          route={{ page: 'lab' }}
-          open={{
-            lab: {
-              ...lab,
-              coordinator_open: open,
-              agents: [
-                first,
-                { ...second, error: 'RequestError: The model fable-9 is not available.' },
-              ],
-            },
-            threads: [summary()],
-            harnesses: HARNESSES,
-            needs: 0,
-            now,
-            api: {} as Api,
-            onChange: () => undefined,
-          }}
-        />,
-      );
-
-    assert.ok(list(true).includes('No coordinator. Agents may take the seat.'));
-    assert.ok(list(true).includes('Close the seat'));
-    assert.ok(list(false).includes('No coordinator. You closed the seat.'));
-    assert.ok(list(false).includes('Let agents take it'));
-    assert.equal(
-      list(true).split('Last failure: RequestError: The model fable-9 is not available.').length -
-        1,
-      1,
-    );
-  });
-
-  it('shows the start of a long failure as text, with the whole of it to open, and a coordinator that has not come', () => {
-    const [first, second] = lab.agents;
-    assert.ok(first && second);
-    const error = `GitError: <b>fatal</b>\n${'x'.repeat(400)} the end`;
-    const list = (agents: readonly AgentView[]): string =>
-      renderToStaticMarkup(
-        <Top
-          folder="~/code/sort-bench"
-          route={{ page: 'lab' }}
-          open={{
-            lab: { ...lab, agents },
-            threads: [summary()],
-            harnesses: HARNESSES,
-            needs: 0,
-            now,
-            api: {} as Api,
-            onChange: () => undefined,
-          }}
-        />,
-      );
-    const html = list([
-      { ...first, coordinator: true },
-      { ...second, error },
-    ]);
-
-    // The harness's text is text, never markup, and the row holds only its start until the person opens it.
-    assert.ok(html.includes('<summary>Last failure: GitError: &lt;b&gt;fatal&lt;/b&gt; xxx'));
-    assert.ok(html.includes('the end</pre>'));
-    assert.equal(html.includes('<b>fatal</b>'), false);
-    // The first agent has turns in the record, so it came. Only an agent with no turn and no post has not.
-    assert.equal(html.includes('has not come yet'), false);
-    const waiting = list([first, { ...second, coordinator: true, on_call: true }]);
-    assert.equal(waiting.split('Holds the coordinator seat and has not come yet.').length - 1, 1);
-  });
-
-  it('keeps the members, their state and cost, the lab total, and the time in the top bar', () => {
-    const html = renderToStaticMarkup(
-      <Top
-        folder="~/code/sort-bench"
-        route={{ page: 'lab' }}
-        open={{
-          lab: {
-            ...lab,
-            agents: lab.agents.map((view, index) =>
-              index === 0
-                ? { ...view, role: 'theory', status: 'Deriving the bound.', thread: 't-1' }
-                : view,
-            ),
-          },
-          threads: [summary()],
+          lab: shown,
+          threads: list,
           harnesses: HARNESSES,
           needs: 1,
           now,
@@ -1207,34 +1293,317 @@ describe('the lab page', () => {
         }}
       />,
     );
-    assert.ok(html.includes('sort-bench'));
-    assert.ok(html.includes('1 of 2 members working'));
-    assert.ok(html.includes('Run pytest'));
-    // The role and the status are the agent's own words, and the thread is where it works now.
-    assert.ok(html.includes('<span class="f-role">theory</span>'));
-    assert.ok(html.includes('<p class="f-own">Deriving the bound.</p>'));
-    assert.ok(html.includes('Works in <a href="#/thread/t-1">A · sorted() against merge sort</a>'));
-    assert.ok(html.includes('$0.50 over 2 turns'));
-    assert.ok(html.includes('3 posts in 1 thread'));
-    // Each member has the way to its folder, and the lab has one way to the folder of them all.
+  const sheet = (view: AgentView, shown: LabView = lab): string =>
+    renderToStaticMarkup(
+      <ProfileSheet
+        view={view}
+        lab={shown}
+        threads={[summary()]}
+        now={now}
+        api={{} as Api}
+        invitation={null}
+        onInvitation={() => undefined}
+        onChange={() => undefined}
+        onClose={() => undefined}
+      />,
+    );
+  const [first, second] = lab.agents;
+  assert.ok(first && second);
+
+  it('shows the name with the seat when they differ, the seat marks before the roles, and who is on call', () => {
+    const html = top({
+      ...lab,
+      agents: [
+        {
+          ...first,
+          agent: { ...first.agent, name: 'Maren' },
+          seat: 'Claude Code · Opus 5.5',
+          given_role: 'driver',
+          given_by: 'person',
+          role: 'theory',
+          coordinator: true,
+          reviewer: true,
+        },
+        {
+          ...second,
+          agent: { ...second.agent, name: 'Codex · gpt-6.1-sol 2' },
+          seat: 'Codex · gpt-6.1-sol 2',
+          given_role: 'reads',
+          given_by: 'agent-1',
+          role: 'reads',
+          on_call: true,
+          need: 'idle',
+          activity: { state: 'idle', detail: '', at: null },
+        },
+      ],
+    });
     assert.ok(
       html.includes(
-        '<button class="linkbtn" type="button" aria-label="Open the folder of Agent 1">Open folder</button><span role="status"></span>',
+        '<p><button type="button" class="i-name">Maren</button>' +
+          '<span class="i-prov">Claude Code · Opus 5.5</span></p><p class="i-marks">' +
+          '<span class="i-seat coord">Coordinator</span><span class="i-seat">Reviewer seat</span>' +
+          '<span class="f-role">driver (given by you)</span><span class="f-role">theory</span></p>',
       ),
     );
-    assert.equal(html.split('>Open folder</button>').length - 1, 2);
+    // An agent that chose no name shows its seat's label once, as its name. A role that it repeats shows once.
+    assert.ok(
+      html.includes(
+        '<p><button type="button" class="i-name">Codex · gpt-6.1-sol 2</button></p>' +
+          '<p class="i-marks"><span class="i-seat">On call</span>' +
+          '<span class="f-role">reads (given by the coordinator)</span></p>',
+      ),
+    );
+    assert.equal(html.split('On call. An ask or a call that names it wakes it.').length - 1, 1);
+    // The person's actions are in the profile, not in the rows.
+    for (const action of [
+      'Take off call',
+      'Remove as coordinator',
+      '>Remove</button>',
+      'Open folder<',
+    ]) {
+      assert.equal(html.includes(action), false);
+    }
+    // An agent holds the coordinator seat, so the list says nothing about a seat without a holder.
+    assert.equal(html.includes('No coordinator.'), false);
+  });
+
+  it('groups the member list by status, with one heading for each group and a row that opens the profile', () => {
+    const html = top({
+      ...lab,
+      agents: [
+        agentView('agent-1', { need: 'idle' }),
+        agentView('agent-2', { need: 'working' }),
+        agentView('agent-3', { need: 'approval' }),
+        agentView('agent-4', { need: 'working' }),
+      ],
+    });
+    const headings = [...html.matchAll(/<li class="o-group o-(\w+)">([^<]+)<\/li>/g)].map(
+      (match) => [match[1], match[2]],
+    );
+    assert.deepEqual(headings, [
+      ['approval', 'Needs your approval (1)'],
+      ['working', 'Working (2)'],
+      ['idle', 'Idle (1)'],
+    ]);
+    assert.ok(html.indexOf('i-name">Agent 3<') < html.indexOf('i-name">Agent 2<'));
+    assert.ok(html.indexOf('i-name">Agent 4<') < html.indexOf('i-name">Agent 1<'));
+    assert.equal(html.split('<li class="i-row">').length - 1, 4);
+    // A picture in the list has a yellow dot while its agent waits for the person, and a green one in a turn.
+    assert.equal(html.split('<i class="i-dot wait"></i>').length - 1, 1);
+    assert.equal(html.split('<i class="i-dot live"></i>').length - 1, 2);
+  });
+
+  it('says whether agents may take a coordinator seat that nobody holds, and why a harness failed', () => {
+    const list = (open: boolean): string => top({ ...lab, coordinator_open: open });
+
+    assert.ok(list(true).includes('No coordinator. Agents may take the seat.'));
+    assert.ok(list(true).includes('Close the seat'));
+    assert.ok(list(false).includes('No coordinator. You closed the seat.'));
+    assert.ok(list(false).includes('Let agents take it'));
+    // Why a harness failed is in the member's profile.
+    const failed = { ...second, error: 'RequestError: The model fable-9 is not available.' };
+    assert.equal(top({ ...lab, agents: [first, failed] }).includes('Last failure'), false);
+    assert.equal(
+      sheet(failed).split('Last failure: RequestError: The model fable-9 is not available.')
+        .length - 1,
+      1,
+    );
+  });
+
+  it('shows the start of a long failure as text, with the whole of it to open, and a coordinator that has not come', () => {
+    const error = `GitError: <b>fatal</b>\n${'x'.repeat(400)} the end`;
+    const html = sheet({ ...second, error });
+
+    // The harness's text is text, never markup, and the profile holds only its start until the person opens it.
+    assert.ok(html.includes('<summary>Last failure: GitError: &lt;b&gt;fatal&lt;/b&gt; xxx'));
+    assert.ok(html.includes('the end</pre>'));
+    assert.equal(html.includes('<b>fatal</b>'), false);
+    // The first agent has turns in the record, so it came. Only an agent with no turn and no post has not.
+    assert.equal(sheet({ ...first, coordinator: true }).includes('has not come yet'), false);
+    const waiting = sheet({ ...second, coordinator: true, on_call: true });
+    assert.equal(waiting.split('Holds the coordinator seat and has not come yet.').length - 1, 1);
+  });
+
+  it('shows everything about one member in its profile, with what became of its posts and no score', () => {
+    const at = '2026-11-06T13:10:00Z';
+    const tessel: AgentView = {
+      ...first,
+      agent: { ...first.agent, name: 'Tessel' },
+      seat: 'Codex · gpt-6.1-sol',
+      chosen_name: 'Tessel',
+      about: 'I trust a number after I have run it <b>twice</b>.',
+      picture: { shape: 'square', color: '#3d9be9', symbol: 'bars' },
+      coordinator: true,
+      reviewer: true,
+      on_call: true,
+      given_role: 'driver',
+      given_by: 'person',
+      role: 'Builder',
+      status: 'Re-pricing the pairs',
+      thread: 't-1',
+      flag: 'The name claimed a rank.',
+      outcomes: {
+        built_on: [
+          { id: 'p-4', thread: 't-2' },
+          { id: 'p-9', thread: 't-3' },
+        ],
+        held: [{ id: 'p-4', thread: 't-2' }],
+        refuted: [],
+        open_asks: [{ id: 'p-12', thread: 't-2' }],
+      },
+      edits: [
+        { at, by: 'person', part: 'name', before: 'Overlord', after: '' },
+        { at, by: 'agent-2', part: 'about', before: 'I win.', after: 'I test.' },
+      ],
+    };
+    const html = sheet(tessel);
+    assert.ok(
+      html.includes(
+        '<div class="i-profile" role="dialog" aria-modal="true" aria-label="Profile of Tessel">',
+      ),
+    );
+    assert.ok(html.startsWith('<div class="i-over">'));
+    assert.ok(html.includes('<svg class="i-pic" width="52" height="52"'));
+    assert.ok(
+      html.includes(
+        '<p class="i-profile-name">Tessel</p><p class="i-prov">Codex · gpt-6.1-sol</p>' +
+          '<p class="i-marks"><span class="i-seat coord">Coordinator</span>' +
+          '<span class="i-seat">Reviewer seat</span><span class="i-seat">On call</span>' +
+          '<span class="f-role">driver (given by you)</span><span class="f-role">Builder</span></p>',
+      ),
+    );
+    assert.ok(html.includes('>Close</button>'));
+    // The about line is the agent's own words, so it reaches the page as text.
+    assert.ok(
+      html.includes(
+        '<p class="i-about">I trust a number after I have run it &lt;b&gt;twice&lt;/b&gt;.</p>',
+      ),
+    );
+    assert.ok(
+      html.includes(
+        '<p class="i-flag"><b>Flagged by the coordinator.</b> The name claimed a rank.</p>',
+      ),
+    );
+    assert.ok(
+      html.includes(
+        '<dt>Status</dt><dd>Re-pricing the pairs</dd><dt>Now</dt><dd>Run pytest.</dd>' +
+          '<dt>Model family</dt><dd>anthropic</dd><dt>Works in</dt>' +
+          '<dd><a href="#/thread/t-1">A · sorted() against merge sort</a></dd>' +
+          '<dt>Cost</dt><dd>$0.50 over 2 turns</dd>',
+      ),
+    );
+    // Plain counts with links to the posts. A count of zero shows as zero.
+    assert.ok(
+      html.includes(
+        '<dt>Results built on</dt><dd><b>2</b><a href="#/thread/t-2/p-4">p-4</a>' +
+          '<a href="#/thread/t-3/p-9">p-9</a></dd>',
+      ),
+    );
+    assert.ok(
+      html.includes('<dt>Checked and held</dt><dd><b>1</b><a href="#/thread/t-2/p-4">p-4</a></dd>'),
+    );
+    assert.ok(html.includes('<dt>Refuted or ruled out</dt><dd><b>0</b></dd>'));
+    assert.ok(
+      html.includes('<dt>Open asks</dt><dd><b>1</b><a href="#/thread/t-2/p-12">p-12</a></dd>'),
+    );
+    for (const word of ['score', 'Score']) assert.equal(html.includes(word), false);
+    assert.ok(html.includes('<span>You took back the name “Overlord”.</span>'));
+    assert.ok(html.includes('<span>The coordinator rewrote the about line. Before: I win.</span>'));
+    // The person's actions are here: what to take back, the role, the three seats, the folder, and the removal.
+    const buttons = [
+      ...html.matchAll(/<button class="linkbtn" type="button"[^>]*>([^<]+)<\/button>/g),
+    ].map((match) => match[1]);
+    assert.deepEqual(buttons, [
+      'Take back the name',
+      'Take back the about line',
+      'Take back the picture',
+      'Take back the role',
+      'Take off call',
+      'Remove as coordinator',
+      'Take back the reviewer seat',
+      'Open folder',
+      'Remove',
+    ]);
+    assert.ok(html.includes('maxLength="40"'));
+    assert.ok(html.includes('value="driver"'));
+    assert.ok(html.includes('aria-label="Open the folder of Tessel"'));
+    assert.ok(!html.includes('cannot come back'));
+  });
+
+  it('says so in the profile of an agent that chose nothing, and offers nothing to take back', () => {
+    const html = sheet(second);
+    assert.ok(
+      html.includes(
+        '<p class="i-about none">This agent has not chosen a name, a picture or an about line.</p>',
+      ),
+    );
+    assert.equal(html.includes('i-prov'), false);
+    assert.equal(html.includes('i-marks'), false);
+    assert.equal(html.includes('Take back'), false);
+    assert.equal(html.includes('<dt>Status</dt>'), false);
+    assert.equal(html.includes('Changes by you'), false);
+    assert.ok(html.includes('<dt>Now</dt><dd>Waits for your answer, 22 min.</dd>'));
+    assert.ok(html.includes('>Put on call</button>'));
+    assert.ok(html.includes('>Make coordinator</button>'));
+    assert.ok(html.includes('>Give a reviewer seat</button>'));
+    // The seat's number stands in the picture's place.
+    assert.ok(html.includes('<svg class="i-pic none" width="52" height="52"'));
+  });
+
+  it('keeps the members, their state, the lab total, and the time in the top bar', () => {
+    const shown = {
+      ...lab,
+      reviewer_seats: 2,
+      agents: lab.agents.map((view, index) =>
+        index === 0
+          ? {
+              ...view,
+              role: 'theory',
+              status: 'Deriving the bound.',
+              thread: 't-1',
+              reviewer: true,
+            }
+          : view,
+      ),
+    };
+    const html = top(shown);
+    assert.ok(html.includes('sort-bench'));
+    // The count of what waits shows on every page, and goes to the list in the seat.
+    assert.ok(html.includes('<a class="o-count" href="#/">1 thing waits for you</a>'));
+    assert.ok(
+      html.includes(
+        '<summary class="f-live"><span class="dot live"></span> 1 of 2 agents in a turn<u>',
+      ),
+    );
+    // The role and the status are the agent's own words, and the thread is where it works now.
+    assert.ok(html.includes('<span class="f-role">theory</span>'));
+    assert.ok(html.includes('<p class="f-status">Deriving the bound.</p>'));
+    assert.ok(
+      html.includes(
+        '<p class="f-where">Run pytest. Works in “A · sorted() against merge sort”.</p>',
+      ),
+    );
+    assert.ok(html.includes('3 posts in 1 thread'));
+    // What a member cost and the way to its folder are in its profile. The lab has one way to the folder of all.
+    assert.equal(html.includes('$0.50 over 2 turns'), false);
+    assert.equal(html.split('>Open folder</button>').length - 1, 0);
     assert.equal(html.split('>Open the agents’ folder</button>').length - 1, 1);
     assert.ok(html.includes('Lab total <b>$0.50</b>'));
+    // The reviewer seats have one line, with the way to set their number.
+    assert.ok(
+      html.includes(
+        '<summary>2 reviewer seats, 1 free. The number follows the lab’s size. <u>Change</u></summary>',
+      ),
+    );
+    assert.ok(html.includes('type="number" min="0" max="20" value="2"/>'));
+    assert.equal(html.includes('Follow the lab’s size'), false);
+    assert.ok(top({ ...shown, reviewer_seats_set: 2 }).includes('>Follow the lab’s size</button>'));
     // The person can add an agent of a harness that this computer has, with the seat form of the setup screen.
     assert.ok(html.includes('Add an agent'));
     assert.ok(html.includes('<button type="button">Add</button>'));
     assert.ok(html.includes('<summary>Opus, High effort (your default)</summary>'));
     assert.ok(html.includes('Other…</option>'));
     assert.ok(html.includes('<summary>Its seat</summary>'));
-    // Each member has the two switches of its seat.
-    assert.ok(html.includes('Put on call'));
-    assert.ok(html.includes('Make coordinator'));
-    assert.equal(html.includes('On call. A post that names it wakes it.'), false);
     // The person can also invite an agent that they run themselves. No invitation shows before they ask for one.
     assert.ok(html.includes('Invite an agent'));
     assert.ok(html.includes('<button type="button">Invite</button>'));
@@ -1247,6 +1616,89 @@ describe('the lab page', () => {
     assert.ok(html.includes('<a href="#/settings">Settings</a>'));
     assert.ok(html.includes('<a href="#/norms">Norms</a>'));
     assert.ok(html.includes('<a href="#/" aria-current="page">Lab</a>'));
+    // No profile shows until the person presses a name or a picture.
+    assert.equal(html.includes('role="dialog"'), false);
+  });
+
+  it('shows a hollow dot and who is in the lab when no agent is in a turn, and no count when nothing waits', () => {
+    const html = top({
+      ...lab,
+      waits: [],
+      agents: [agentView('agent-1'), agentView('agent-2')],
+    });
+    assert.ok(
+      html.includes(
+        '<summary class="f-live still"><span class="dot still"></span> No agent in a turn, 2 in the lab<u>',
+      ),
+    );
+    assert.equal(html.includes('o-count'), false);
+    const many = top({ ...lab, waits: [...lab.waits, ...lab.waits, ...lab.waits] });
+    assert.ok(many.includes('<a class="o-count" href="#/">3 things wait for you</a>'));
+  });
+});
+
+describe('an agent’s picture', () => {
+  const picture = { shape: 'arch', color: '#e3b341', symbol: 'arrow' } as const;
+  const draw = (changes: Partial<AgentView>, dot = true): string =>
+    renderToStaticMarkup(
+      <Mark view={agentView('agent-1', { picture, ...changes })} size={34} dot={dot} />,
+    );
+
+  it('draws the shape in the color with the symbol on it, as an inline drawing and no image', () => {
+    const html = draw({});
+    assert.ok(html.includes('<svg class="i-pic" width="34" height="34" viewBox="0 0 24 24"'));
+    assert.ok(html.includes('<g fill="#e3b341" stroke="none" stroke-width="1.6"><path d="M2 22.5'));
+    assert.ok(html.includes('<path d="M8 16l8-8M9.5 8H16v6.5"></path>'));
+    assert.equal(html.includes('<img'), false);
+    assert.equal(html.includes('i-dot'), false);
+    // Each of the six shapes and the ten symbols draws something.
+    for (const shape of ['square', 'circle', 'hex', 'diamond', 'arch', 'triangle'] as const) {
+      for (const symbol of [
+        'wave',
+        'dots',
+        'arrow',
+        'fork',
+        'bars',
+        'ring',
+        'plus',
+        'zigzag',
+        'orbit',
+        'slashes',
+      ] as const) {
+        const one = draw({ picture: { shape, color: '#3d9be9', symbol } });
+        assert.match(one, /<g fill="#3d9be9"[^>]*><(rect|circle|polygon|path) /);
+        assert.match(one, /<g class="i-symbol"[^>]*><(path|circle|g) /);
+      }
+    }
+  });
+
+  it('shows a dashed outline with the seat’s number for an agent that chose none', () => {
+    const html = draw({ picture: null, seat: 'Codex · gpt-6.1-sol 2' });
+    assert.ok(html.includes('<svg class="i-pic none"'));
+    assert.ok(html.includes('<text x="12" y="16" text-anchor="middle">2</text>'));
+    assert.ok(draw({ picture: null }).includes('>1</text>'));
+  });
+
+  it('is an outline on call, gray after the agent left, and has a dot in a turn or while it waits for the person', () => {
+    assert.ok(draw({ on_call: true }).includes('<g fill="none" stroke="#e3b341"'));
+    const left = { at: '2026-11-06T14:10:00Z', by: 'person', reason: '' };
+    const gone = draw({ left, need: 'left' });
+    assert.ok(gone.includes('<svg class="i-pic faded"'));
+    assert.ok(gone.includes('<g fill="#8d8a9c"'));
+    assert.equal(gone.includes('#e3b341'), false);
+    assert.ok(draw({ need: 'working' }).includes('<i class="i-dot live"></i>'));
+    assert.ok(draw({ need: 'approval' }).includes('<i class="i-dot wait"></i>'));
+    assert.ok(draw({ need: 'answer' }).includes('<i class="i-dot wait"></i>'));
+    assert.equal(draw({ need: 'waiting' }).includes('i-dot'), false);
+    // A post and the profile show the picture without a dot.
+    assert.equal(draw({ need: 'working' }, false).includes('i-dot'), false);
+    // The name and the seat are the picture's title.
+    assert.ok(
+      draw({ seat: 'Claude Code · Fable 5.2' }).includes(
+        'title="Agent 1, Claude Code · Fable 5.2"',
+      ),
+    );
+    assert.ok(draw({}).includes('title="Agent 1"'));
   });
 });
 
@@ -1273,14 +1725,30 @@ describe('an invitation', () => {
   it('shows an invited agent by its own calls, with no turns and no cost', () => {
     const guest = agentView('agent-3', {
       agent: { ...agentView('agent-3').agent, harness: 'guest' },
+      seat: 'Own harness · model not reported',
       activity: { state: 'invited', detail: '', at: null },
     });
+    const lab = labView({ agents: [agentView('agent-1'), guest] });
+    const profile = (view: AgentView): string =>
+      renderToStaticMarkup(
+        <ProfileSheet
+          view={view}
+          lab={lab}
+          threads={[]}
+          now={new Date('2026-11-06T14:12:00Z')}
+          api={{} as Api}
+          invitation={{ agent: 'agent-3', name: 'Agent 3', text: 'URL: http://127.0.0.1:8123/mcp' }}
+          onInvitation={() => undefined}
+          onChange={() => undefined}
+          onClose={() => undefined}
+        />,
+      );
     const html = renderToStaticMarkup(
       <Top
         folder="~/code/sort-bench"
         route={{ page: 'lab' }}
         open={{
-          lab: labView({ agents: [agentView('agent-1'), guest] }),
+          lab,
           threads: [],
           harnesses: HARNESSES,
           needs: 0,
@@ -1290,13 +1758,24 @@ describe('an invitation', () => {
         }}
       />,
     );
-    assert.ok(html.includes('<span class="f-tag">Own harness</span>'));
-    assert.ok(html.includes('Invited, not joined yet'));
-    assert.ok(html.includes('Runs by itself, so Verifold sees no turns and no cost.'));
+    // Verifold does not know the harness of an invited agent, so its seat says so.
+    assert.ok(
+      html.includes(
+        'class="i-name">Agent 3</button><span class="i-prov">Own harness · model not reported</span>',
+      ),
+    );
+    assert.ok(html.includes('<p class="f-where">Invited, not joined yet.</p>'));
     assert.ok(!html.includes('Starting'));
-    // Only an invited agent has the way to a new invitation, and it is no member in the count before it posts.
-    assert.equal(html.split('>Invite again</button>').length, 2);
-    assert.ok(html.includes('0 of 1 member working'));
+    // It is no member in the count before it posts.
+    assert.ok(html.includes('No agent in a turn, 1 in the lab'));
+    // Only an invited agent has the way to a new invitation, in its profile, where its invitation shows too.
+    const own = profile(guest);
+    assert.ok(own.includes('Runs by itself, so Verifold sees no turns and no cost.'));
+    assert.equal(own.split('>Invite again</button>').length, 2);
+    assert.ok(own.includes('<b>Invitation for Agent 3</b>'));
+    const other = profile(agentView('agent-1'));
+    assert.equal(other.includes('>Invite again</button>'), false);
+    assert.equal(other.includes('Invitation for'), false);
   });
 });
 
@@ -1330,9 +1809,7 @@ describe('a member that is in no turn', () => {
 
   it('shows the time of its alarm, or that only a post wakes it', () => {
     const html = list(labView({ agents }));
-    assert.ok(
-      html.includes(`<span class="dot idle"></span> Waits for its alarm at ${clock(rings)}.</p>`),
-    );
+    assert.ok(html.includes(`<p class="f-where">Waits for its alarm at ${clock(rings)}.</p>`));
     assert.ok(
       html.includes(
         'Its last turn ended 1 h 35 min ago, and no alarm is set. A post for it wakes it.</p>',
@@ -1347,7 +1824,7 @@ describe('a member that is in no turn', () => {
     ]) {
       const html = list(lab);
       assert.ok(!html.includes('alarm'));
-      assert.equal(html.split('<span class="dot idle"></span> Idle, 1 h 35 min</p>').length, 3);
+      assert.equal(html.split('<p class="f-where">Idle, 1 h 35 min.</p>').length, 3);
     }
   });
 });
@@ -1363,6 +1840,7 @@ describe('a member that Verifold stopped', () => {
             agents: [
               agentView('agent-1', {
                 stopped: true,
+                need: 'stopped',
                 activity: { state: 'stopped', detail: '', at: null },
               }),
               agentView('agent-2'),
@@ -1377,7 +1855,8 @@ describe('a member that Verifold stopped', () => {
         }}
       />,
     );
-    assert.ok(html.includes('<span class="dot stop"></span> Stopped</p>'));
+    assert.ok(html.includes('<li class="o-group o-stopped">Stopped (1)</li>'));
+    assert.ok(html.includes('<p class="f-where">Stopped.</p>'));
     assert.ok(html.includes('Its harness failed too often, so Verifold stopped it.'));
     assert.equal(html.split('>Start again</button>').length, 2);
   });
@@ -1388,9 +1867,11 @@ describe('a member that left', () => {
     const at = '2026-11-06T14:10:00Z';
     const guest = agentView('agent-3', {
       agent: { ...agentView('agent-3').agent, harness: 'guest', name: 'Reader' },
+      need: 'left',
       left: { at, by: 'agent-3', reason: 'Read <b>it</b> all.' },
     });
     const checker = agentView('checker-1');
+    const gone = agentView('agent-1', { need: 'left', left: { at, by: 'person', reason: '' } });
     const html = renderToStaticMarkup(
       <Top
         folder="~/code/sort-bench"
@@ -1398,7 +1879,7 @@ describe('a member that left', () => {
         open={{
           lab: labView({
             agents: [
-              agentView('agent-1', { left: { at, by: 'person', reason: '' } }),
+              gone,
               agentView('agent-2'),
               guest,
               { ...checker, agent: { ...checker.agent, checks: 'p-1' } },
@@ -1413,16 +1894,43 @@ describe('a member that left', () => {
         }}
       />,
     );
-    assert.ok(html.includes('0 of 1 member working'));
-    assert.ok(html.includes('<span class="dot stop"></span> Left, removed by you</p>'));
+    assert.ok(html.includes('No agent in a turn, 1 in the lab'));
+    assert.ok(html.includes('<li class="o-group o-left">Left (2)</li>'));
+    assert.ok(html.includes('<p class="f-where">Left, removed by you.</p>'));
     // The reason is the agent's own words, so it reaches the page as text.
     assert.ok(html.includes('Left by its own choice: Read &lt;b&gt;it&lt;/b&gt; all.'));
-    assert.ok(html.indexOf('<b>Agent 2</b>') < html.indexOf('<b>Agent 1</b>'));
-    assert.ok(html.indexOf('<b>Agent 1</b>') < html.indexOf('<b>Reader</b>'));
+    assert.ok(
+      html.indexOf('class="i-name">Agent 2<') < html.indexOf('class="i-name gone">Agent 1<'),
+    );
+    assert.ok(
+      html.indexOf('class="i-name gone">Agent 1<') < html.indexOf('class="i-name gone">Reader<'),
+    );
+    // Its picture is gray, and its profile has no way to remove it, to change its seat, or to invite it again.
+    assert.ok(html.includes('<svg class="i-pic none faded"'));
+    const profile = (view: AgentView): string =>
+      renderToStaticMarkup(
+        <ProfileSheet
+          view={view}
+          lab={labView({ agents: [gone, agentView('agent-2'), guest] })}
+          threads={[]}
+          now={new Date('2026-11-06T14:12:00Z')}
+          api={{} as Api}
+          invitation={null}
+          onInvitation={() => undefined}
+          onChange={() => undefined}
+          onClose={() => undefined}
+        />,
+      );
+    for (const left of [profile(gone), profile(guest)]) {
+      assert.equal(left.includes('>Remove</button>'), false);
+      assert.equal(left.includes('>Invite again</button>'), false);
+      assert.equal(left.includes('Put on call'), false);
+      assert.ok(left.includes('>Open folder</button>'));
+    }
     // Only the member that is in the lab can be removed. The first press asks before anything happens.
-    assert.equal(html.split('>Remove</button>').length, 2);
-    assert.ok(!html.includes('cannot come back'));
-    assert.ok(!html.includes('>Invite again</button>'));
+    const here = profile(agentView('agent-2'));
+    assert.equal(here.split('>Remove</button>').length, 2);
+    assert.ok(!here.includes('cannot come back'));
   });
 });
 
@@ -1568,6 +2076,7 @@ describe('the settings page', () => {
     version: 1,
     jobs: { at_time_limit: 'pause', at_exit: 'stop' },
     permissions: { while_you_decide: 'wait' },
+    reviewers: { seats: null },
   } as const;
   const view: SettingsView = {
     all_projects: {
@@ -1671,6 +2180,68 @@ describe('the settings page', () => {
     );
     assert.equal(html.includes('Use Verifold&#x27;s defaults'), false);
     assert.ok(html.includes('This project has saved choices of its own, and they win over these.'));
+  });
+
+  it('takes the number of reviewer seats, or an empty field for a number that follows the lab’s size', () => {
+    const project = page('project');
+    assert.ok(project.includes('<h3>Reviewer seats</h3>'));
+    assert.ok(
+      project.includes(
+        'Leave the field empty, and the number follows the lab’s size: one seat for every five ' +
+          'agents, one with three or four, none with fewer.',
+      ),
+    );
+    assert.ok(
+      project.includes(
+        'type="number" min="0" max="20" placeholder="Same as all projects" value=""/>',
+      ),
+    );
+    assert.ok(
+      project.includes(
+        '<p class="note">Same as all projects. Now: the number follows the lab’s size.</p>',
+      ),
+    );
+    // A project's file can be another person's, so `verifold run` takes no higher number from it.
+    assert.ok(
+      project.includes(
+        '<code>verifold run</code> does not take a higher number from this project’s file.',
+      ),
+    );
+    // Save is off until the field differs from the file.
+    assert.ok(
+      project.includes('<button class="btn small" type="button" disabled="">Save</button>'),
+    );
+
+    const seats = (values: SettingsView['all_projects'], own: boolean): string =>
+      renderToStaticMarkup(
+        <SettingsForm
+          view={{
+            ...view,
+            all_projects: values,
+            project: own ? { ...view.project, values: { reviewers: { seats: 1 } } } : view.project,
+          }}
+          level="all"
+          labOpen
+          harnesses={HARNESSES}
+          disabled={false}
+          onChange={() => undefined}
+        />,
+      );
+    const set = {
+      ...view.all_projects,
+      values: { reviewers: { seats: 3 } },
+      settings: { ...view.all_projects.settings, reviewers: { seats: 3 } },
+    };
+    const all = seats(set, true);
+    assert.ok(
+      all.includes(
+        'type="number" min="0" max="20" placeholder="Follows the lab’s size" value="3"/>',
+      ),
+    );
+    assert.ok(all.includes('<p class="note">Now: 3 seats.</p>'));
+    assert.ok(all.includes('This project has its own number, and it wins over this one.'));
+    assert.equal(all.includes('verifold run'), false);
+    assert.equal(seats(set, false).includes('has its own number'), false);
   });
 });
 
@@ -1788,7 +2359,6 @@ describe('a request of a harness', () => {
           posts: [postView(tracked)],
         }}
         agents={lab.agents}
-        harnesses={HARNESSES}
         needs={[]}
         question={null}
         onRerun={() => Promise.resolve()}

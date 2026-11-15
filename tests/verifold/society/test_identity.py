@@ -87,13 +87,16 @@ def test_a_name_and_an_about_line_are_one_printable_line_and_a_picture_takes_onl
         'Codex',
         'claude code',
         'gpt-7',
+        'Opus 5',
+        'Opus 5 2',
         'fake',
         'Anthropic',
         'Sonnet 5',
     ],
 )
 def test_no_agent_takes_a_word_of_the_board_an_agent_id_a_harness_or_a_model_as_its_name(name: str) -> None:
-    record = seats().join('agent-4', name='Codex · gpt-7').start('agent-3', seen=1, model_name='Sonnet 5')
+    record = seats().join('agent-4', name='Codex · gpt-7').join('agent-5', name='Claude Code · Opus 5 2')
+    record.start('agent-3', seen=1, model_name='Sonnet 5')
 
     with pytest.raises(RejectedEvent, match=r'word that the board uses|name of a harness or a model'):
         record.copy().profile('agent-1', name=name).board()

@@ -105,6 +105,8 @@ class AgentView(Record):
     """The agent as the record has it. Its `name` is the name that it chose, or else the label of its seat."""
     seat: str = ''
     """The label of the agent's seat: its harness's title and its model's name, or what stands for an invited agent."""
+    chosen_name: str = ''
+    """The name that the agent chose, or an empty text while its seat's label or the person's name for it is its name."""
     about: str = ''
     """What lens the agent brings, in its own words."""
     picture: Picture | None = None

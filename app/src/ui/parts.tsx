@@ -2,36 +2,11 @@ import { useId, useState } from 'react';
 import type { FormEvent, ReactElement } from 'react';
 
 import type { FileEvidence, PermissionShown, Post, QuestionShown } from '../api/types.ts';
-import type { Face } from '../model/agents.ts';
 import { gaps } from '../model/posts.ts';
 import type { Chip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { tone } from '../model/turns.ts';
 import { messageOf } from '../api/client.ts';
-
-/**
- * An author's face: two letters on the member's color, or a dashed circle for a blind rerun.
- *
- * `alone` gives the face its name for a screen reader, for the places that show no name beside it. `ghost` is
- * the small faint face of an author who posted before the latest one.
- */
-export function FaceView(props: {
-  readonly face: Face;
-  readonly alone?: boolean;
-  readonly ghost?: boolean;
-}): ReactElement {
-  const { kind, color, initials, name } = props.face;
-  const classes = `f-face ${kind === 'member' ? `m${color}` : kind}${props.ghost ? ' ghost' : ''}`;
-  return props.alone ? (
-    <span className={classes} role="img" aria-label={name} title={name}>
-      {initials}
-    </span>
-  ) : (
-    <span className={classes} aria-hidden="true">
-      {initials}
-    </span>
-  );
-}
 
 /** The mark for a turn's kind. The act line beside it says the same in words. */
 export function Mark(props: { readonly post: Post }): ReactElement {

@@ -405,6 +405,7 @@ def _agent_view(
     return AgentView(
         agent=joined.agent,
         seat=seat_label(board, agent_id),
+        chosen_name=board.chosen_name(agent_id),
         about=board.about(agent_id),
         picture=board.picture(agent_id),
         given_role=given,
