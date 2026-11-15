@@ -589,6 +589,74 @@ details[open] > summary .opened {
   letter-spacing: -0.015em;
   max-width: 52ch;
 }
+.f-seat .f-question h1 {
+  margin-bottom: 4px;
+}
+.f-question {
+  margin-bottom: 18px;
+}
+.f-versions ol {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+  max-width: 68ch;
+  font-size: 14px;
+}
+.f-versions time,
+.f-versions b {
+  margin-right: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.f-versions p {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.f-revise {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 18px;
+  max-width: 68ch;
+}
+.f-revise label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.f-revise textarea,
+.f-revise input {
+  background: var(--card);
+  border: 1px solid var(--line2);
+  color: var(--ink);
+  padding: 10px 12px;
+  font-size: 15px;
+  line-height: 1.4;
+}
+.f-revise textarea {
+  resize: vertical;
+  field-sizing: content;
+  min-height: 88px;
+  max-height: 320px;
+}
+.f-revise-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+.f-revise-row span {
+  flex: 1;
+}
+.f-answer p.f-earlier {
+  margin-top: 8px;
+  font: 600 13px/1.4 var(--body);
+  letter-spacing: 0;
+  color: var(--muted);
+}
 .f-label {
   display: block;
   font-size: 13px;

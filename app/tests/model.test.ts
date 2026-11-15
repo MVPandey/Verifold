@@ -20,6 +20,7 @@ import {
 } from '../src/model/agents.ts';
 import { duration, minutesBetween, money, tokens } from '../src/model/format.ts';
 import { orderNeeds, pauses } from '../src/model/needs.ts';
+import { isRevision, revisedLine } from '../src/model/question.ts';
 import {
   builtOnLabel,
   isPermission,
@@ -886,6 +887,23 @@ describe('crossings', () => {
       crossedLine([summary({ crossed: 4 }), summary({ crossed: 2 })]),
       '6 posts build on another agent’s work in another thread.',
     );
+  });
+});
+
+describe('the question', () => {
+  const version = { question: 'Faster?', at: '2026-11-06T14:00:00Z', note: '', post: null };
+
+  it('says how often the person revised it, and nothing while they did not', () => {
+    assert.equal(revisedLine([]), null);
+    assert.equal(revisedLine([version]), null);
+    assert.equal(revisedLine([version, version]), 'Revised 1 time.');
+    assert.equal(revisedLine([version, version, version]), 'Revised 2 times.');
+  });
+
+  it('takes a new text as a revision, and not an empty text or the question as it is', () => {
+    assert.equal(isRevision('Faster?', 'Faster on ARM?'), true);
+    assert.equal(isRevision('Faster?', ' Faster? '), false);
+    assert.equal(isRevision('Faster?', '  '), false);
   });
 });
 

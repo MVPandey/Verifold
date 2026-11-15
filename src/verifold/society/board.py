@@ -11,6 +11,7 @@ from verifold.protocol.events import (
     LabOpened,
     Posted,
     ProfileSet,
+    QuestionRevised,
     RerunRequested,
     ThreadOpened,
     TimeRanOut,
@@ -33,6 +34,8 @@ class Board:
 
     opened: LabOpened
     seq: int
+    revisions: tuple[QuestionRevised, ...] = ()
+    """The person's revisions of the question, oldest first."""
     agents: tuple[AgentJoined, ...] = ()
     left: tuple[AgentLeft, ...] = ()
     """The agents that left the lab or that the person removed, oldest first."""
@@ -52,6 +55,11 @@ class Board:
     """The person's settings for the lab: the latest that the record holds, or the defaults."""
     grants: tuple[str, ...] = ()
     """The starts of the commands that the person lets every agent run."""
+
+    @property
+    def question(self) -> str:
+        """The question that the lab works on now: the person's latest revision, or the text that the lab opened with."""
+        return self.revisions[-1].question if self.revisions else self.opened.question
 
     @property
     def ends_at(self) -> datetime | None:

@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Self
+from typing import Final, Self
 
 from verifold.protocol.agents import Agent
 from verifold.protocol.events import (
@@ -15,6 +15,7 @@ from verifold.protocol.events import (
     PermissionGranted,
     Posted,
     ProfileSet,
+    QuestionRevised,
     RerunRequested,
     SettingsSet,
     ThreadOpened,
@@ -35,6 +36,7 @@ from verifold.server.errors import LabExists
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
+from verifold.society.lines import question_thread
 from verifold.society.rules import waiting_reruns
 from verifold.store.record_file import RecordFile
 
@@ -143,11 +145,38 @@ class Lab:
         body.
         """
         question = self._board.opened.question
-        # A question can start with a separator that `splitlines` breaks on and the schema's strip keeps.
-        first = next((line.strip() for line in question.splitlines() if line.strip()), QUESTION_TITLE)
-        headline = first if len(first) <= MAX_HEADLINE else f'{first[: MAX_HEADLINE - 1]}…'
+        headline = _headline(question)
         body = '' if headline == question else question
         return await self.post(PostRequest(kind='message', text=headline, body=body, new_thread=QUESTION_TITLE), PERSON)
+
+    async def revise_question(self, question: str, note: str = '') -> QuestionRevised | None:
+        """
+        Record that the person revised the question, and return the revision, or `None` when the text is the same.
+
+        The revision comes with a post of the person in the question's thread, which names nobody. So it reaches
+        the agents and opens a closed lab again as the person's other words to the lab do, and the thread shows
+        each version in order. A lab from before the question had a thread gets a new thread for the post.
+        """
+        if question == self._board.question:
+            return None
+        whole = f'{REVISED}{question}'
+        text = _headline(whole)
+        # A question that fits in the headline is not repeated in the body.
+        parts = ('' if text == whole else question, f'Why: {note}' if note else '')
+        body = '\n\n'.join(part for part in parts if part)
+        thread = question_thread(self._board)
+        request = PostRequest(
+            kind='message', text=text, body=body, thread=thread, new_thread=None if thread else REVISED_TITLE
+        )
+        opens = (_open_thread(REVISED_TITLE, PERSON),) if thread is None else ()
+        board = await self._commit(
+            *opens,
+            _add_post(request, PERSON, ()),
+            lambda board, seq, at: QuestionRevised(
+                seq=seq, at=at, question=question, note=note, post=board.posts[-1].post.id
+            ),
+        )
+        return board.revisions[-1]
 
     async def set_alarm(self, agent_id: AgentId, minutes: float, *, quiet: bool) -> AlarmSet:
         """Record that an agent wants to be woken after its turn. Zero minutes cancels its alarm."""
@@ -254,6 +283,20 @@ class Lab:
             self._board = board
             self._changed.notify_all()
             return board
+
+
+REVISED: Final = 'The person revised the question: '
+"""How the post that tells the lab of a revision starts. The new question follows it."""
+
+REVISED_TITLE: Final = 'The question, revised'
+"""The title of the thread that holds a revision in a lab from before the question had a thread."""
+
+
+def _headline(text: str) -> str:
+    # The first line with text, cut to a headline. A question can start with a separator that `splitlines` breaks
+    # on and the schema's strip keeps.
+    first = next((line.strip() for line in text.splitlines() if line.strip()), QUESTION_TITLE)
+    return first if len(first) <= MAX_HEADLINE else f'{first[: MAX_HEADLINE - 1]}…'
 
 
 def _open_thread(title: str, opened_by: AgentId, between: tuple[AgentId, ...] = ()) -> Build:

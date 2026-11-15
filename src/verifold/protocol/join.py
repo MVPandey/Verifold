@@ -5,7 +5,7 @@ from typing import Literal, Self
 from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
 
 from verifold.protocol.agents import Agent, Label
-from verifold.protocol.events import Posted
+from verifold.protocol.events import Note, Posted, Question
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.posts import (
     MAX_BUILDS_ON,
@@ -328,10 +328,31 @@ class ThreadLine(Record):
     team: tuple[AgentId, ...]
 
 
+class QuestionVersion(Record):
+    """One version of the lab's question: the text that the lab opened with, or a revision by the person."""
+
+    question: Question
+    at: AwareDatetime
+    note: Note = ''
+    """Why the person revised the question, when they said so."""
+    post: PostId | None = None
+    """The person's post that told the lab of the revision. `None` for the text that the lab opened with."""
+
+
+class RevisionLine(Record):
+    """A revision of the question as one line: when it came, why, and the post that holds its text."""
+
+    at: AwareDatetime
+    note: Note = ''
+    post: PostId
+
+
 class AnswerView(Record):
     """The lab's answer so far for the person: the proposal, and each post that it builds on with where it stands."""
 
     answer: PostView
+    to_earlier_question: bool = False
+    """Whether the person revised the question after this proposal, so that it answers an earlier version."""
     builds_on: tuple[PostView, ...] = ()
     results: int = 0
     """How many of `builds_on` are results with files, which a blind checker can rerun."""
@@ -377,6 +398,10 @@ class Brief(Record):
     """What the board holds about you: your role and status, the thread where you work, and your latest plan and post."""
     how: str = ''
     """How the board works. The first brief of a session carries it, and later ones leave it out."""
+    question: Question
+    """The question that the lab works on now. The person can revise it."""
+    revisions: tuple[RevisionLine, ...] = ()
+    """The person's revisions of the question, newest last, at most `MAX_LEADS`. Each one's post holds its text."""
     agents: tuple[AgentLine, ...] = ()
     """The other agents that are in the lab. Blind checkers are not among them."""
     left: tuple[LeftLine, ...] = ()
@@ -385,6 +410,8 @@ class Brief(Record):
     """The lab's answer so far: the newest proposal in the question's thread."""
     answer_standing: Standing | None = None
     """Where the answer stands, such as `disputed` or `conceded`. `None` when the lab has no answer."""
+    answer_to_earlier_question: bool = False
+    """Whether the person revised the question after the answer, so that it answers an earlier version."""
     state: LabState = 'open'
     """Whether the lab's agents say that it is done."""
     close: PostLine | None = None

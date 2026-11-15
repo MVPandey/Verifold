@@ -1,11 +1,12 @@
-import { useEffect } from 'react';
-import type { ReactElement } from 'react';
+import { useEffect, useId, useState } from 'react';
+import type { FormEvent, ReactElement } from 'react';
 
 import type {
   AgentView,
   AnswerView,
   LabView,
   PostView,
+  QuestionVersion,
   ThreadLink,
   ThreadSummary,
 } from '../api/types.ts';
@@ -15,9 +16,11 @@ import { crossedLine, crossLines } from '../model/crossings.ts';
 import { clock, duration, minutesBetween } from '../model/format.ts';
 import { orderNeeds } from '../model/needs.ts';
 import { isPermission, personMessage, standingChip } from '../model/posts.ts';
+import { isRevision, revisedLine } from '../model/question.ts';
 import { href } from '../model/route.ts';
 import { hasNew, markSeen, readSeen } from '../model/seen.ts';
 import { betweenLine, isSide, sideHeading, sideLines } from '../model/side.ts';
+import { messageOf } from '../api/client.ts';
 import { answerSoFar, cardStatus, doneLine, headClaim, questionThread } from '../model/turns.ts';
 import { useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
@@ -124,9 +127,13 @@ export function Wall(
     <>
       <section className="f-seat">
         <div>
-          <h1 className={lab.question.length > LONG_QUESTION ? 'long' : undefined}>
-            {lab.question}
-          </h1>
+          <Question
+            lab={lab}
+            onRevise={async (text, note) => {
+              await api.reviseQuestion(text, note);
+              data.reload();
+            }}
+          />
           {question ? (
             <div className={`f-answer${answerOpen ? ' on' : ''}`}>
               <div className="f-card-title">
@@ -149,6 +156,12 @@ export function Wall(
                   <div className="f-card-st">
                     <ChipView chip={chip ?? { label: 'Not checked', tone: 'none' }} />
                   </div>
+                  {data.answer?.answer.post.id === answer.post.id &&
+                  data.answer.to_earlier_question ? (
+                    <p className="f-earlier">
+                      This answer is to an earlier version of the question.
+                    </p>
+                  ) : null}
                   <Files post={answer.post.id} files={answer.post.evidence} />
                   {data.answer?.answer.post.id === answer.post.id ? (
                     <Under view={data.answer} open={answerOpen} />
@@ -271,6 +284,133 @@ export function Wall(
         ) : null}
       </div>
     </>
+  );
+}
+
+/**
+ * The lab's question, with the control that revises it and, when the person revised it, its versions. Edit
+ * puts the form in the question's place.
+ */
+function Question(props: {
+  readonly lab: LabView;
+  readonly onRevise: (question: string, note: string) => Promise<void>;
+}): ReactElement {
+  const { question, versions } = props.lab;
+  const [editing, setEditing] = useState(false);
+  if (editing) {
+    return (
+      <QuestionForm
+        question={question}
+        onSave={(text, note) => props.onRevise(text, note)}
+        onClose={() => {
+          setEditing(false);
+        }}
+      />
+    );
+  }
+  return (
+    <div className="f-question">
+      <h1 className={question.length > LONG_QUESTION ? 'long' : undefined}>{question}</h1>
+      <button
+        type="button"
+        className="linkbtn"
+        aria-label="Edit the question"
+        onClick={() => {
+          setEditing(true);
+        }}
+      >
+        Edit
+      </button>
+      <Versions versions={versions} />
+    </div>
+  );
+}
+
+/**
+ * The form that revises the question: the text, an optional line that says why, Save, and Cancel. Save is off
+ * until the text differs from the question. `onClose` runs after a save and on Cancel.
+ */
+export function QuestionForm(props: {
+  readonly question: string;
+  readonly onSave: (question: string, note: string) => Promise<void>;
+  readonly onClose: () => void;
+}): ReactElement {
+  const [text, setText] = useState(props.question);
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const id = useId();
+  const ready = isRevision(props.question, text) && !saving;
+
+  const save = (event: FormEvent): void => {
+    event.preventDefault();
+    if (!ready) return;
+    setSaving(true);
+    setError(null);
+    props.onSave(text.trim(), note.trim()).then(props.onClose, (failure: unknown) => {
+      setError(messageOf(failure));
+      setSaving(false);
+    });
+  };
+
+  return (
+    <form className="f-revise" onSubmit={save}>
+      <label htmlFor={`${id}-text`}>The question</label>
+      <textarea
+        id={`${id}-text`}
+        value={text}
+        rows={3}
+        maxLength={4000}
+        onChange={(event) => {
+          setText(event.target.value);
+        }}
+      />
+      <label htmlFor={`${id}-why`}>Why (optional)</label>
+      <input
+        id={`${id}-why`}
+        type="text"
+        value={note}
+        maxLength={200}
+        onChange={(event) => {
+          setNote(event.target.value);
+        }}
+      />
+      <div className="f-revise-row">
+        <span className={error ? 'error' : undefined} role={error ? 'alert' : undefined}>
+          {error ?? 'Every agent gets the new question. The earlier versions stay.'}
+        </span>
+        <button type="button" className="linkbtn" onClick={props.onClose}>
+          Cancel
+        </button>
+        <button type="submit" className="btn" disabled={!ready}>
+          {saving ? 'Saving' : 'Save'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** The line that says how often the person revised the question. It unfolds the versions, oldest first. */
+function Versions(props: { readonly versions: readonly QuestionVersion[] }): ReactElement | null {
+  const line = revisedLine(props.versions);
+  if (line === null) return null;
+  return (
+    <details className="f-versions">
+      <summary className="f-open">
+        {line} <span className="closed">Show earlier versions</span>
+        <span className="opened">Hide earlier versions</span>
+      </summary>
+      <ol>
+        {props.versions.map((version, index) => (
+          <li key={version.post ?? 'first'}>
+            <time dateTime={version.at}>{clock(version.at)}</time>
+            {index === props.versions.length - 1 ? <b>Current</b> : null}
+            <p>{version.question}</p>
+            {version.note ? <p className="dim">Why: {version.note}</p> : null}
+          </li>
+        ))}
+      </ol>
+    </details>
   );
 }
 

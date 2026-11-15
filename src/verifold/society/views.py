@@ -13,6 +13,8 @@ from verifold.protocol.join import (
     News,
     PostLine,
     PostView,
+    QuestionVersion,
+    RevisionLine,
     SideLine,
     ThreadLine,
     ThreadLink,
@@ -277,10 +279,15 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '') -> Brief:
         you=agent_id,
         your_line=_agent_line(board, you.agent, working) if you else None,
         how=how,
+        question=board.question,
+        revisions=tuple(
+            RevisionLine(at=entry.at, note=entry.note, post=entry.post) for entry in board.revisions[-MAX_LEADS:]
+        ),
         agents=tuple(_agent_line(board, agent, working) for agent in others),
         left=tuple(left_line(board, entry) for entry in board.left),
         answer=PostLine.of(proposed) if proposed else None,
         answer_standing=standing(board, proposed.post.id) if proposed else None,
+        answer_to_earlier_question=bool(proposed) and to_earlier_question(board, proposed),
         state=lab_state(board),
         close=PostLine.of(done) if done else None,
         close_agreed=agreed(board, done) if done else (),
@@ -346,6 +353,22 @@ def answer(board: Board) -> Posted | None:
     )
 
 
+def to_earlier_question(board: Board, proposed: Posted) -> bool:
+    """Return whether the person revised the question after a proposal, so that it answers an earlier version."""
+    return bool(board.revisions) and proposed.seq < board.revisions[-1].seq
+
+
+def versions(board: Board) -> tuple[QuestionVersion, ...]:
+    """Return every version of the question, oldest first: the text that the lab opened with, then each revision."""
+    return (
+        QuestionVersion(question=board.opened.question, at=board.opened.at),
+        *(
+            QuestionVersion(question=entry.question, at=entry.at, note=entry.note, post=entry.post)
+            for entry in board.revisions
+        ),
+    )
+
+
 def answer_view(board: Board) -> AnswerView | None:
     """Return the lab's answer so far with the posts that it builds on, or `None` when no agent proposed one."""
     entry = answer(board)
@@ -355,6 +378,7 @@ def answer_view(board: Board) -> AnswerView | None:
     results = tuple(post for post in under if _can_rerun(post))
     return AnswerView(
         answer=post_view(board, entry),
+        to_earlier_question=to_earlier_question(board, entry),
         builds_on=tuple(post_view(board, post) for post in under),
         results=len(results),
         no_blind_rerun=tuple(post.post.id for post in _not_rerun(board, results)),

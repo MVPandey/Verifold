@@ -23,6 +23,7 @@ from verifold.protocol.app import (
     Invitation,
     InviteRequest,
     LabView,
+    QuestionRequest,
     RerunRequest,
     SettingsChange,
     SettingsView,
@@ -44,7 +45,14 @@ from verifold.society.lifecycle import close_count, lab_state
 from verifold.society.lines import lines_of
 from verifold.society.standing import agreed, closing
 from verifold.society.turns import before
-from verifold.society.views import answer_view, latest_report, needs_person, thread_summaries, thread_view
+from verifold.society.views import (
+    answer_view,
+    latest_report,
+    needs_person,
+    thread_summaries,
+    thread_view,
+    versions,
+)
 from verifold.store.errors import SettingsChanged, SettingsInvalid, SettingsUnwritable
 
 HEARTBEAT = 15.0
@@ -171,6 +179,13 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     async def invite_again(agent_id: AgentId) -> Invitation:
         return await host.invite_again(agent_id)
 
+    @api.post('/question', dependencies=[authorized])
+    async def revise_question(request: QuestionRequest) -> LabView:
+        # A text that is the same as the question records nothing.
+        running = current()
+        await running.revise_question(request.question, request.note)
+        return _lab_view(running.board, activity)
+
     @api.post('/time', dependencies=[authorized])
     async def time(request: TimeRequest) -> LabView:
         running = current()
@@ -239,7 +254,8 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
         close=PostLine.of(done) if done else None,
         close_agreed=len(agreed(board, done)) if done else 0,
         close_among=close_count(board, done)[1] if done else 0,
-        question=board.opened.question,
+        question=board.question,
+        versions=versions(board),
         opened_at=board.opened.at,
         seq=board.seq,
         agents=tuple(_agent_view(board, activity, entry.agent.id, working) for entry in board.agents),

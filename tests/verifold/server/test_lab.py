@@ -11,6 +11,7 @@ from verifold.protocol.posts import MAX_HEADLINE, FileEvidence
 from verifold.protocol.usage import Usage
 from verifold.server.errors import LabExists
 from verifold.server.lab import Lab
+from verifold.society.attention import wakes
 from verifold.society.errors import RejectedEvent
 from verifold.store.record_file import RecordFile
 
@@ -198,3 +199,55 @@ async def test_a_grant_is_recorded_once_and_survives_a_reload(lab: Lab, record_f
 
     assert lab.board.grants == ('./gpu', 'make')
     assert Lab.load(record_file).board.grants == ('./gpu', 'make')
+
+
+async def test_a_revision_goes_in_the_questions_thread_as_the_persons_post_and_survives_a_reload(
+    record_file: RecordFile,
+) -> None:
+    lab = Lab.create(record_file, 'Does it hold?', clock=lambda: START)
+    await lab.open_question_thread()
+    await lab.join(Agent(id='ada', name='Ada', harness='fake', model=ModelSpec(family='anthropic')))
+
+    revised = await lab.revise_question('Does it hold on ARM?', 'x86 only so far.')
+    same = await lab.revise_question('Does it hold on ARM?', 'Another reason.')
+
+    assert revised is not None
+    assert same is None
+    assert [event.type for event in record_file.read()][-2:] == ['posted', 'question_revised']
+    told = lab.board.posts[-1]
+    assert (told.post.id, told.post.thread, told.post.author, told.post.kind) == ('p-2', 't-1', 'person', 'message')
+    assert told.post.text == 'The person revised the question: Does it hold on ARM?'
+    assert told.post.body == 'Why: x86 only so far.'
+    assert (revised.post, revised.note, lab.board.question) == ('p-2', 'x86 only so far.', 'Does it hold on ARM?')
+    assert wakes(lab.board, 'ada', told)
+    assert Lab.load(record_file).board == lab.board
+
+
+async def test_a_long_revision_keeps_all_of_its_text_in_the_body_of_its_post(record_file: RecordFile) -> None:
+    lab = Lab.create(record_file, 'Does it hold?')
+    await lab.open_question_thread()
+    question = f'{"Why " * 100}?\nUse the GPU.'
+
+    await lab.revise_question(question)
+
+    post = lab.board.posts[-1].post
+    assert (len(post.text), post.text[-1], post.body) == (MAX_HEADLINE, '…', question)
+
+
+async def test_a_lab_that_is_out_of_time_takes_a_revision(record_file: RecordFile) -> None:
+    lab = Lab.create(record_file, 'Does it hold?', time_left=timedelta(0), clock=lambda: START)
+    await lab.open_question_thread()
+    await lab.run_out_of_time()
+
+    await lab.revise_question('Does it hold on ARM?')
+
+    assert (lab.board.out_of_time, lab.board.question) == (True, 'Does it hold on ARM?')
+
+
+async def test_a_lab_from_before_the_question_had_a_thread_gets_a_thread_for_the_revision(lab: Lab) -> None:
+    await lab.revise_question('Does it hold on ARM?')
+
+    opened, told = lab.board.threads[-1].thread, lab.board.posts[-1]
+    assert (opened.id, opened.title, opened.opened_by, opened.between) == ('t-2', 'The question, revised', 'person', ())
+    assert (told.post.thread, lab.board.revisions[-1].post) == ('t-2', told.post.id)
+    assert wakes(lab.board, 'bo', told)
