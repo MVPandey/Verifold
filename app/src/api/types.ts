@@ -46,6 +46,8 @@ export interface Agent {
   readonly model: ModelSpec;
   readonly role: string;
   readonly brief: string;
+  /** The role that the person gave the agent's seat, or an empty string. */
+  readonly given_role: string;
   /** The harness mode that the person chose. `null` follows the lab's auto mode choice. */
   readonly mode: string | null;
   readonly recruited_by: string | null;
@@ -88,6 +90,10 @@ export interface AgentView {
   readonly agent: Agent;
   /** What the agent says that it is to the lab, in its own words. */
   readonly role: string;
+  /** Whether the person put the agent's seat on call, so that only a post for the agent itself wakes it. */
+  readonly on_call: boolean;
+  /** Whether the agent holds the lab's coordinator seat. */
+  readonly coordinator: boolean;
   /** What the agent says that it does now. */
   readonly status: string;
   /** The thread where the agent works now, or `null` when it works in none. */
@@ -106,6 +112,8 @@ export interface AgentView {
   readonly usage: Usage;
   /** `null` when the harness reports tokens only. */
   readonly cost_usd: number | null;
+  /** Why the agent's latest turn, or the latest start of its harness, failed, or `null`. */
+  readonly error: string | null;
 }
 
 /** One version of the lab's question: the text that the lab opened with, or a revision by the person. */
@@ -121,6 +129,8 @@ export interface QuestionVersion {
 export interface LabView {
   /** The question that the lab works on now. */
   readonly question: string;
+  /** Whether an agent may take the coordinator seat by itself: nobody holds it, and the person did not close it. */
+  readonly coordinator_open: boolean;
   /** Every version of the question, oldest first. The last one is the current question. */
   readonly versions: readonly QuestionVersion[];
   readonly opened_at: string;
@@ -154,9 +164,17 @@ export interface JobSettings {
   readonly at_exit: AtExit;
 }
 
+/** What an agent's harness gets while its permission request waits for the person's answer on the board. */
+export type WhileYouDecide = 'auto' | 'wait' | 'refuse';
+
+export interface PermissionSettings {
+  readonly while_you_decide: WhileYouDecide;
+}
+
 export interface Settings {
   readonly version: number;
   readonly jobs: JobSettings;
+  readonly permissions: PermissionSettings;
 }
 
 /** Where a setting lives: in one project's file, which wins, or in the file for all projects. */
@@ -182,7 +200,8 @@ export interface SettingsView {
 }
 
 /** The settings that the app changes. */
-export type SettingKey = 'jobs.at_time_limit' | 'jobs.at_exit' | 'setup';
+export type SettingKey =
+  'jobs.at_time_limit' | 'jobs.at_exit' | 'permissions.while_you_decide' | 'setup';
 
 /**
  * The person changes one setting. A `null` value removes it, so the one for all projects, or Verifold's default,
@@ -250,11 +269,16 @@ export interface SavedChoice {
   readonly model: string | null;
   readonly effort: string | null;
   readonly mode: string | null;
+  /** The facts of the seat. A file from before seats had facts holds none. */
+  readonly role?: string;
+  readonly family?: string | null;
+  readonly on_call?: boolean;
+  readonly coordinator?: boolean;
 }
 
 /** What new labs start with unless the person chooses otherwise. */
 export interface SetupDefaults {
-  /** `null` starts one agent of each harness that this computer has. */
+  /** The seats of a new lab. A harness can have several. `null` starts one agent of each harness that this computer has. */
   readonly agents: readonly SavedChoice[] | null;
   readonly auto_mode: boolean;
   /** `null` means no time limit. */
@@ -275,6 +299,29 @@ export interface AgentChoice {
   readonly effort?: string;
   /** One of the harness's own modes. Without it, the agents follow the lab's auto mode choice. */
   readonly mode?: string;
+  /** The role that the person gives the seat, as one line of at most 40 characters. */
+  readonly role?: string;
+  /** The model family of the seat's model. Without it, the seat has the family of its harness. */
+  readonly family?: string;
+  /** Whether the seat is on call: only a post for the agent itself wakes it. */
+  readonly on_call?: boolean;
+  /** Whether the seat's agent is the lab's coordinator. Such a seat has one agent. */
+  readonly coordinator?: boolean;
+}
+
+/** The person invites an agent that runs by itself, and can state the facts of its seat. */
+export interface InviteRequest {
+  readonly name?: string;
+  readonly role?: string;
+  readonly family?: string;
+  readonly on_call?: boolean;
+  readonly coordinator?: boolean;
+}
+
+/** The person changes an agent's seat. A part that is left out stays as it is. */
+export interface SeatChange {
+  readonly on_call?: boolean;
+  readonly coordinator?: boolean;
 }
 
 export interface StartRequest {
@@ -288,6 +335,8 @@ export interface Thread {
   readonly id: string;
   readonly title: string;
   readonly opened_by: string;
+  /** For the thread that Verifold opened for an agent's requests of one kind: that kind. */
+  readonly carries?: 'permission' | 'question' | null;
 }
 
 export interface FileEvidence {
@@ -326,13 +375,65 @@ export type Post =
         | 'call'
         | 'close';
     })
-  | (PostBase & { readonly kind: 'ask'; readonly choices: readonly string[] })
-  | (PostBase & { readonly kind: 'answer'; readonly accepts: boolean })
+  | (PostBase & {
+      readonly kind: 'ask';
+      readonly choices: readonly string[];
+      /** What the ask carries for the author's harness. Verifold sets it, and no agent can. */
+      readonly request?: 'permission' | 'question' | null;
+      /** What the harness's request holds. Verifold sets it, and the app shows it in place of the body. */
+      readonly shown?: PermissionShown | QuestionShown | null;
+    })
+  | (PostBase & {
+      readonly kind: 'answer';
+      readonly accepts: boolean;
+      /** Whether Verifold ended the harness's request that the ask carries, without the person's answer. */
+      readonly ends_request?: boolean;
+    })
   | (PostBase & {
       readonly kind: 'check';
       readonly outcome: 'holds' | 'fails';
       readonly method: 'rerun' | 'code_read' | 'ratings';
     });
+
+/** A fact about a request that Verifold states. The app writes the sentence. */
+export type RequestNote = 'refused' | 'unclear' | 'too_long' | 'no_decline';
+
+/** What a harness asks a permission for, as Verifold read it, with hidden characters written as code points. */
+export interface PermissionShown {
+  readonly type: 'permission';
+  readonly kind: string;
+  /** The harness's name for the request, when the request runs no command. */
+  readonly title: string;
+  readonly command: string | null;
+  /** What the request holds beside the command, or its whole input, as JSON. */
+  readonly given: string;
+  /** The whole names of the harness's answers, when the choices cannot hold them. */
+  readonly answers: readonly string[];
+  /** The choices that are the harness's own to remember. */
+  readonly remembered: readonly string[];
+  /** The start of the command that the grant choice names. With it, the ask's last choice is Verifold's grant. */
+  readonly grant: string | null;
+  /** The harness's ID of each of its answers among the ask's choices, in their order. */
+  readonly ids: readonly string[];
+  readonly notes: readonly RequestNote[];
+  /** With the note `too_long`: how many characters the request has. */
+  readonly size: number;
+}
+
+/** One field of a question that a harness asks its user, as Verifold read it. */
+export interface QuestionShown {
+  readonly type: 'question';
+  readonly message: string;
+  readonly field: string;
+  readonly description: string;
+  readonly kind: 'text' | 'number' | 'integer' | 'boolean' | 'choice' | 'choices';
+  readonly options: readonly string[];
+  readonly optional: boolean;
+  readonly part: number;
+  readonly parts: number;
+  /** Whether Verifold cut the harness's text, because it is too long to record. */
+  readonly cut: boolean;
+}
 
 export interface PostView {
   readonly seq: number;
@@ -432,6 +533,8 @@ export interface PostRequest {
   readonly new_thread?: string;
   readonly reply_to?: string;
   readonly mentions?: readonly string[];
+  /** On an answer: the choice of the ask that the person pressed. Words that they typed are in the text. */
+  readonly choice?: string;
 }
 
 /** The person's own author ID on the board. */

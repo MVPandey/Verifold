@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, AwareDatetime, Field, JsonValue, StringConstraints
 
-from verifold.protocol.agents import Agent, AgentChoices, Label, ValueId, one_line
+from verifold.protocol.agents import Agent, AgentChoices, Label, Name, SeatFacts, ValueId, one_line
 from verifold.protocol.events import AgentLeft, Note, Question
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, PostId, ThreadId
@@ -38,6 +38,10 @@ class AgentView(Record):
     agent: Agent
     role: str = ''
     """What the agent says that it is to the lab, in its own words."""
+    on_call: bool = False
+    """Whether the person put the agent's seat on call, so that only a post for the agent itself wakes it."""
+    coordinator: bool = False
+    """Whether the agent holds the lab's coordinator seat."""
     status: str = ''
     """What the agent says that it does now."""
     thread: ThreadId | None = None
@@ -59,6 +63,8 @@ class AgentView(Record):
     usage: Usage
     cost_usd: float | None = None
     """The cost that the harness reported. `None` when the harness reports tokens only."""
+    error: str | None = None
+    """Why the agent's latest turn, or the latest start of its harness, failed. `None` when it did not fail."""
 
 
 class LabView(Record):
@@ -66,6 +72,8 @@ class LabView(Record):
 
     question: str
     """The question that the lab works on now."""
+    coordinator_open: bool = True
+    """Whether an agent may take the coordinator seat by itself: nobody holds it, and the person did not close it."""
     versions: tuple[QuestionVersion, ...] = ()
     """Every version of the question, oldest first: the text that the lab opened with, and then each revision."""
     opened_at: AwareDatetime
@@ -90,18 +98,38 @@ class LabView(Record):
     """The settings that the lab follows, such as what happens to the agents' processes when the person stops it."""
 
 
-class InviteRequest(Record):
-    """The person invites an agent that runs by itself."""
+class InviteRequest(SeatFacts):
+    """
+    The person invites an agent that runs by itself, and can state the facts of its seat.
+
+    Verifold does not know the agent's model. With `family`, the person states its model family, so that a blind
+    rerun by another family can hold up its results.
+    """
 
     name: Annotated[str, AfterValidator(one_line), StringConstraints(min_length=1, max_length=40)] | None = None
     """The agent's display name, as one line. `None` gives it the next name, such as "Agent 3"."""
+
+
+class SeatChange(Record):
+    """The person changes an agent's seat in the lab that runs. `None` leaves a part as it is."""
+
+    on_call: bool | None = None
+    """Put the seat on call, or take it off."""
+    coordinator: bool | None = None
+    """Give the agent the lab's coordinator seat, or take the seat from the agent that holds it."""
+
+
+class CoordinatorSeat(Record):
+    """The person leaves the coordinator seat without a holder, and says whether an agent may take it by itself."""
+
+    open: bool
 
 
 class Invitation(Record):
     """An invited agent, and the text that lets it join. The app shows the text once, and Verifold doesn't keep it."""
 
     agent: AgentId
-    name: Label
+    name: Name
     text: str
     """What the agent needs to join: the board's address, its bearer token, its folder, and the lab's facts."""
 
@@ -217,7 +245,7 @@ class SettingsView(Record):
     """The settings that the folder's lab follows, or `None` before a lab starts."""
 
 
-type SettingKey = Literal['jobs.at_time_limit', 'jobs.at_exit', 'setup']
+type SettingKey = Literal['jobs.at_time_limit', 'jobs.at_exit', 'permissions.while_you_decide', 'setup']
 """The settings that the app changes. Harness commands are not among them, so the app can't change what a lab runs."""
 
 
@@ -235,7 +263,7 @@ class SettingsChange(Record):
     key: SettingKey
     value: str | SetupDefaults | None = None
     """
-    The new value: a job setting's answer, or the choices for new labs. `None` removes the setting, so the one for
+    The new value: the answer of a job or permission setting, or the choices for new labs. `None` removes the setting, so the one for
     all projects, or Verifold's default, applies.
     """
     revisions: SettingsRevisions

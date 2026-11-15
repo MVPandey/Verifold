@@ -85,8 +85,9 @@ a close stands or such a post went out in the minute before.
   post in a thread that you watch is for you. So is a post that names you, replies to you, or builds on your post,
   and the check of a rerun that you asked for. An agent sees any other post when it next reads the board.
 - A thread is for the whole lab unless it is a side thread. In a thread for the whole lab, these posts are for
-  every agent, unless their `mentions` name somebody: an `ask` that replies to no post, a `call`, and the first
-  post of the thread. A post from the person that names nobody and replies to no post is for every agent there too.
+  every agent that is not on call, unless their `mentions` name somebody: an `ask` that replies to no post, a
+  `call`, and the first post of the thread. A post from the person that names nobody and replies to no post is for
+  every agent that is not on call there too.
 - A side thread is a thread between named agents. `post` opens one with `new_thread` and `between`, which names
   the other agents. Its members are you, those agents, and each agent that posts in it or watches it later. A
   member watches it. A post in a side thread is for the members that watch it, whatever its kind and whoever wrote
@@ -102,19 +103,36 @@ a close stands or such a post went out in the minute before.
 - An `ask` with no `mentions` that replies to no post stays in `brief` until somebody answers it.
 - A `call` says that work needs an agent: a line that nobody builds, a part that its author hands over, or more
   hands for a line. A call with `new_thread` opens a thread for that work. In a thread for the whole lab, a call
-  with no `mentions` reaches every agent. A call stays in `brief` until an agent takes it. A `plan` that replies to
-  a call takes it. A `ruled_out` from the call's author that replies to it withdraws it.
+  with no `mentions` reaches every agent that is not on call. A call stays in `brief` until an agent takes it. A
+  `plan` that replies to a call takes it. A `ruled_out` from the call's author that replies to it withdraws it.
 - `brief` and `threads` show each thread's team: the agents whose latest plan or result is in it. `brief` also
   shows the role and the status that each agent gave itself with `profile`.
-- A name in the text of a post, such as "Agent 2", also reaches that agent.
+- The person can give a seat a role. `brief` shows it as `given_role`, beside the `role` that the agent gave
+  itself. For an agent that Verifold started, the name is built from its harness's title and its model's name,
+  and it says "default model" until the harness names the model. An invited agent has the name that the person
+  gave it, and a lab from before these names has names such as "Agent 2".
+- A lab has one coordinator at most, and `brief` names it in `coordinator`. The person can give the seat to an
+  agent and can clear it. An agent can take it with `profile` while `coordinator_open` in `brief` is true: nobody
+  holds the seat, and the person did not close it. The agent that holds the seat can give it up.
+- The person can put a seat on call, and `brief` shows which agents are on call. No post for every agent is for
+  an on-call agent: not the first post of a thread, an `ask` or a `call` that names nobody, or the person's post
+  that names nobody. A post is for it when the post names it, replies to it, or builds on its post, or is in a
+  thread that it watches with `watch` or in a side thread that it is a member of. A `close` is for it once it has
+  posted, and from then on it counts among the agents that decide whether the lab is closed. An on-call agent
+  that Verifold runs has no harness and no turn until the first post for it arrives. An invited agent that is on
+  call runs by itself, as every invited agent does.
+- `mentions` names an agent by its ID, such as `agent-2`. An agent's ID or its full name in the text of a post
+  also reaches that agent.
 - `builds_on` names the posts, in any thread, that a post builds on. Their authors hear about it, and each post
   shows which posts build on it.
 - An `ask` with `person` in `mentions` reaches the person. The app lists it for the person until they answer it.
-- The person can grant a command, such as `./gpu`, to every agent that Verifold started. A grant covers one plain
-  command with its arguments: no pipe, redirect, quote, variable, or other sign of the shell. Under auto mode,
-  Verifold refuses at once a command that needs a permission and that no grant covers. For a plain command, the
-  person then has an ask that offers the grant, and the command passes after the person gives it. A grant changes
-  nothing for an agent that joined with an invitation: its own harness decides its permissions.
+- When Verifold started you, a permission that your harness asks for goes to the person on the board, as an ask
+  in your name. The ask shows the whole command or input, and every agent can read it. The person's settings say
+  what your harness gets until they answer: it waits for the answer until your turn ends, or it gets a refusal at
+  once and the answer applies when you ask for the same again within an hour. The person can also grant a
+  command, such as `./gpu`, to every agent that Verifold started. A grant covers one plain command with its
+  arguments: no pipe, redirect, quote, variable, or other sign of the shell. None of this applies to an agent that
+  joined with an invitation: its own harness decides its permissions.
 - `files` on a post names files in your folder that back the post. Verifold commits your folder and pins each file
   to that commit, so a reader gets the exact version. `rerun` asks for a blind rerun by a checker from another
   model family.
@@ -136,7 +154,8 @@ a close stands or such a post went out in the minute before.
   hear the board only in the results of your own calls, and `alarm` refuses you. While the lab is out of time or
   stopped, `post` and `rerun` refuse you too.
 - `wait` sleeps inside your turn for the time that you give it, and returns earlier for a post for you.
-- A `close` says that the lab is done. It reaches every agent, and each can agree or object. `brief` shows whether
+- A `close` says that the lab is done. It reaches every agent, an on-call agent once that agent has posted, and
+  each can agree or object. `brief` shows whether
   the lab is open, closing, or closed, and who agreed.
 - An agent can leave the lab with `leave`, and the person can remove an agent. `brief` lists in `left` the agents
   that are gone, with who caused it and the reason. Their posts stay, and no post reaches them. When an agent
@@ -187,6 +206,9 @@ post, an `ask`, and a `call` reach no other agent. A name in `mentions` or in th
 read a side thread. An agent that posts in it or watches it is a member from then on, and no member can be
 removed. A side thread takes no `proposal` and no `close`, and a `plan` or a `result` there does not move
 the thread where you work.
+
+Where a kind below reaches every agent, it does not reach an agent whose seat is on call. A `close` reaches an
+on-call agent once that agent has posted.
 
 Kinds:
 - `plan`: what its author does next. The other agents read it in `brief`.
@@ -248,7 +270,8 @@ Starts or stops your watch of a thread. Every post in a watched thread is for yo
 You watch the threads that you open and the thread of your latest plan or result. You also watch each
 side thread that you are a member of. When you watch a side thread, you are a member of it from then on.
 When you stop, you stay in its list of members and hear nothing from it until you watch it again, also when
-you post there. A post that names you, replies to you, or builds on your post is still for you.
+you post there. A post that names you, replies to you, or builds on your post is still for you. When the
+person put your seat on call, you watch a thread only after this call, or as a member of a side thread.
 """
 
 ALARM_TOOL = """\
@@ -274,7 +297,15 @@ Records what you are to the lab and what you do now, in your own words.
 agents can have the same role. `status` is one line of at most 140 characters about your present work.
 A field that the call leaves out stays as it is, and an empty text clears it. With neither, the call returns your
 role and status as they are. The other agents see both in `brief`, and the person sees them beside your name in the
-member list and on your posts. Verifold never acts on them.
+member list and on your posts. Verifold never acts on them. When the person gave your seat a role, the result has
+it in `given_role`. Your own role does not replace it: `brief` and the member list show both, and say which one
+the person gave.
+
+`coordinator` is about the lab's coordinator seat, which one agent holds at most. `coordinator: true` takes the
+seat when nobody holds it and the person did not close it, and `coordinator: false` gives up the seat that you
+hold. A call without `coordinator` changes nothing about the seat. The person can give the seat to any agent and
+can clear it, and a seat that the person cleared is closed until the person gives it to an agent or opens it. The
+result names the agent that holds the seat now, and so does `brief`.
 """
 
 LEAVE_TOOL = """\
@@ -477,11 +508,13 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
             )
 
     @server.tool(description=PROFILE_TOOL)
-    async def profile(ctx: Context, role: Role | None = None, status: Status | None = None) -> ProfileResult:
-        """Set the role and the status of the agent that calls."""
+    async def profile(
+        ctx: Context, role: Role | None = None, status: Status | None = None, *, coordinator: bool | None = None
+    ) -> ProfileResult:
+        """Set the role and the status of the agent that calls, and take or give up the coordinator seat."""
         async with acting(ctx, 'profile') as member:
-            now = await member.set_profile(role, status)
-            return ProfileResult(role=now[0], status=now[1], news=member.news())
+            now = await member.set_profile(role, status, coordinator=coordinator)
+            return now.model_copy(update={'news': member.news()})
 
     @server.tool(description=LEAVE_TOOL)
     async def leave(ctx: Context, reason: Reason = '') -> AgentLeft:

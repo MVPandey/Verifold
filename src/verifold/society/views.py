@@ -8,7 +8,14 @@ the board is the agent's choice, and the person's norms are in the lab's `LAB.md
 from datetime import datetime, timedelta
 
 from verifold.protocol.agents import GUEST, Agent
-from verifold.protocol.events import Posted, ThreadOpened
+from verifold.protocol.events import (
+    ERROR_MODEL_REFUSED,
+    ERROR_OUT_OF_TIME,
+    ERROR_RAN_PAST,
+    Posted,
+    ThreadOpened,
+    TurnEnded,
+)
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.join import (
     MAX_LEADS,
@@ -43,7 +50,7 @@ from verifold.society.lifecycle import (
 )
 from verifold.society.lines import lines_of, question_thread
 from verifold.society.rules import blind_checks
-from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing
+from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing, waits_for_person
 from verifold.society.turns import before
 
 
@@ -331,6 +338,8 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         in_turn=sum(before(board, agent).cut_off for agent in run),
         alarms_waiting=sum(pending_alarm(board, joined.agent.id) is not None for joined in board.agents),
         agents=tuple(_agent_line(board, agent, working) for agent in others),
+        coordinator=board.coordinator,
+        coordinator_open=board.coordinator_open,
         left=tuple(left_line(board, entry) for entry in board.left),
         answer=PostLine.of(proposed) if proposed else None,
         answer_standing=standing(board, proposed.post.id) if proposed else None,
@@ -363,11 +372,30 @@ def _agent_line(board: Board, agent: Agent, working: dict[AgentId, ThreadId | No
         name=agent.name,
         harness=agent.harness,
         role=role,
+        given_role=agent.given_role,
+        on_call=board.on_call(agent.id),
+        coordinator=board.coordinator == agent.id,
         status=status,
         thread=working.get(agent.id),
         plan=PostLine.of(plan) if plan else None,
         latest=PostLine.of(posts[-1]) if posts and posts[-1] is not plan else None,
+        error=_reason(board.failure(agent.id)),
     )
+
+
+def _reason(failed: TurnEnded | None) -> str | None:
+    """
+    Return why an agent's harness failed last, for the other agents, as one of Verifold's own short sentences.
+
+    The harness's own error text stays with the person: it can hold paths, commands, and text that an agent wrote.
+    """
+    if failed is None or failed.error is None:
+        return None
+    if failed.error.startswith(ERROR_MODEL_REFUSED):
+        return 'Its harness refused the model.'
+    if failed.error.startswith((ERROR_OUT_OF_TIME, ERROR_RAN_PAST)):
+        return 'Verifold stopped its turn at the time limit.'
+    return 'Its harness failed to start.' if failed.no_turn else 'Its last turn ended with an error.'
 
 
 def needs_person(board: Board) -> tuple[PostView, ...]:
@@ -375,6 +403,7 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
     Return the asks that name the person and have no answer from the person yet, oldest first.
 
     Permission requests are asks too. An agent's answer leaves an ask open, because the asker waits for the person.
+    An ask that carried a harness's request is not among them after Verifold ended the request.
     The ask of an agent that left is not among them: nobody waits for its answer.
     """
     return tuple(
@@ -382,7 +411,7 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
         for entry in board.posts
         if isinstance(entry.post, Ask)
         and PERSON in entry.post.mentions
-        and not is_answered(board, entry.post.id, by=PERSON)
+        and waits_for_person(board, entry.post.id)
         and not board.gone(entry.post.author)
     )
 

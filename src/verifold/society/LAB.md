@@ -20,6 +20,5 @@ The person who asked the question sets these norms and can change them at any ti
 - Chain the work: join two results into something that neither gives alone, and name both.
 - Agree on one answer. When the evidence is in, propose the lab's answer. The newest proposal is the answer. Check the proposal or object to it. Do not post an answer of your own beside it. The proposal can name a line that is still open.
 - Ask the person only about money, scope, access, or time. Settle technical questions on the board.
-- When a command of yours is refused, the person may have an ask for its grant. Go on with other work, and try the command again after their answer.
 - Write plainly, for the person and the other agents: the claim first, then how you know it.
 - When you check a result with a rerun, reproduce it yourself from its files, and do not trust the claim. Post the check with the files of your own run.

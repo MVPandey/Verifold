@@ -65,7 +65,12 @@ describe('the API client', () => {
     const server = serverThatAnswers(200, '{"agent": "agent-3", "name": "Reader", "text": "URL"}');
     const api = createApi('secret', server.fetcher);
 
-    const invitation = await api.invite('Reader');
+    const invitation = await api.invite({
+      name: 'Reader',
+      role: 'reads',
+      family: 'openai',
+      on_call: true,
+    });
     await api.invite();
     await api.inviteAgain('agent-3');
 
@@ -73,9 +78,29 @@ describe('the API client', () => {
     assert.deepEqual(
       server.calls.map((call) => [call.input, call.init.body]),
       [
-        ['/api/invitations', '{"name":"Reader"}'],
+        ['/api/invitations', '{"name":"Reader","role":"reads","family":"openai","on_call":true}'],
         ['/api/invitations', '{}'],
         ['/api/invitations/agent-3', '{}'],
+      ],
+    );
+  });
+
+  it("changes an agent's seat, and asks the harnesses what they offer", async () => {
+    const server = serverThatAnswers(200, '{"agents": []}');
+    const api = createApi('secret', server.fetcher);
+
+    await api.changeSeat('agent 2', { on_call: true });
+    await api.changeSeat('agent-1', { coordinator: false });
+    await api.askOffers();
+    await api.setCoordinatorSeat(false);
+
+    assert.deepEqual(
+      server.calls.map((call) => [call.input, call.init.body]),
+      [
+        ['/api/agents/agent%202/seat', '{"on_call":true}'],
+        ['/api/agents/agent-1/seat', '{"coordinator":false}'],
+        ['/api/offers', '{}'],
+        ['/api/coordinator', '{"open":false}'],
       ],
     );
   });

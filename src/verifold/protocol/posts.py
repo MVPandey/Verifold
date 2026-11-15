@@ -63,6 +63,16 @@ type Outcome = Literal['holds', 'fails']
 type CheckMethod = Literal['rerun', 'code_read', 'ratings']
 type Helper = Annotated[str, StringConstraints(strip_whitespace=True, max_length=40)]
 """The name of a helper that an agent's harness started, such as a subagent."""
+type HarnessRequest = Literal['permission', 'question']
+"""What a harness wants from its user: a permission for an action, or the answer to a question."""
+type RequestNote = Literal['refused', 'unclear', 'too_long', 'no_decline']
+"""
+A fact about a request that Verifold states, as a code. The app writes the sentence, so no text from a harness can
+stand in its place. `refused`: Verifold refused the request at once, and the answer applies to the agent's next
+try. `unclear`: the person's last answer decided nothing. `too_long`: Verifold refused the request, because an
+ask cannot show all of it. `no_decline`: the harness offers no answer that declines the request without stopping
+the agent's turn.
+"""
 MAX_CHOICE = 100
 type Choice = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_CHOICE)]
 """An answer that an ask offers."""
@@ -125,11 +135,72 @@ class Result(PostBase):
     kind: Literal['result'] = 'result'
 
 
+class PermissionShown(Record):
+    """
+    What a harness asks a permission for, as the runner read it from the harness.
+
+    The app shows each part in a box of its own, apart from Verifold's sentences, so text in a command cannot pass
+    as Verifold's words. Every string has its characters that a reader cannot see written as code points.
+    """
+
+    type: Literal['permission'] = 'permission'
+    kind: str = ''
+    """The harness's kind of tool, such as `execute` or `edit`."""
+    title: str = ''
+    """The harness's name for the request, when the request runs no command."""
+    command: str | None = None
+    """The whole shell command. With the note `too_long`, only its start."""
+    given: str = ''
+    """What the request holds beside the command, or the whole input of a request without one, as JSON."""
+    answers: tuple[str, ...] = ()
+    """The whole names of the harness's answers, when the ask's choices cannot hold them."""
+    remembered: tuple[str, ...] = ()
+    """The choices that are the harness's own to remember, beyond this lab."""
+    grant: str | None = None
+    """The start of the command that the grant choice names, when the ask offers a grant. It is the last choice."""
+    ids: tuple[str, ...] = ()
+    """The harness's ID of each of its answers among the ask's choices, in their order."""
+    notes: tuple[RequestNote, ...] = ()
+    size: int = 0
+    """With the note `too_long`: how many characters the request has."""
+
+
+class QuestionShown(Record):
+    """One field of a question that a harness asks its user, as the runner read it, with the same care for text."""
+
+    type: Literal['question'] = 'question'
+    message: str = ''
+    field: str = ''
+    """The field's title."""
+    description: str = ''
+    kind: Literal['text', 'number', 'integer', 'boolean', 'choice', 'choices'] = 'text'
+    options: tuple[str, ...] = ()
+    """The names of the options, when the ask's choices do not offer them."""
+    optional: bool = False
+    part: int = 1
+    parts: int = 1
+    """Which field of the question this is, and how many it has."""
+    cut: bool = False
+    """Whether Verifold cut the message, the title, or the description, because it is too long to record."""
+
+
+type Shown = Annotated[PermissionShown | QuestionShown, Field(discriminator='type')]
+type Mark = Shown | Literal['ends_request']
+"""What Verifold marks on a post of its own: an ask that carries a harness's request, or the answer that ends one."""
+
+
 class Ask(PostBase):
     """A question. It stays open until an answer replies to it. `choices` offers answers to pick from."""
 
     kind: Literal['ask'] = 'ask'
     choices: tuple[Choice, ...] = Field(default=(), max_length=MAX_CHOICES)
+    request: HarnessRequest | None = None
+    """
+    What the ask carries for the author's harness: a permission request, or a question to its user. Verifold sets
+    it, and no agent can. `None` for an agent's own ask, and in a record from before Verifold kept it.
+    """
+    shown: Shown | None = None
+    """What the harness's request holds, which the app shows in place of the body. Verifold sets it with `request`."""
 
 
 class Answer(PostBase):
@@ -142,6 +213,16 @@ class Answer(PostBase):
     kind: Literal['answer'] = 'answer'
     reply_to: PostId
     accepts: bool = False
+    choice: Choice | None = None
+    """
+    The choice of the ask that the author picked, when the author picked one and did not only write words. The
+    person's app sends it for a press on a choice, so words that only start like a choice pick nothing.
+    """
+    ends_request: bool = False
+    """
+    Whether Verifold ended the harness's request that the ask carries, without the person's answer. Verifold sets
+    it, and no agent can. The ask then waits for nobody.
+    """
 
 
 class Objection(PostBase):

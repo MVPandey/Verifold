@@ -14,8 +14,8 @@ blind checker has no board and one job, so it starts its rerun again.
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
-from contextlib import suppress
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -25,7 +25,7 @@ from pydantic import Field, SecretStr
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent
 from verifold.protocol.app import AgentState
-from verifold.protocol.events import AlarmSet, TimeRanOut, TurnSummary
+from verifold.protocol.events import ERROR_OUT_OF_TIME, ERROR_RAN_PAST, AlarmSet, TimeRanOut, TurnSummary
 from verifold.protocol.ids import PERSON
 from verifold.protocol.record import Record
 from verifold.protocol.settings import AtExit, AtTimeLimit
@@ -47,12 +47,22 @@ from verifold.runner.messages import (
     more_time_message,
     time_facts,
 )
-from verifold.runner.permissions import GrantAsks, ask_the_person, refusal, settled
+from verifold.runner.permissions import (
+    Refusals,
+    ask_the_person,
+    ask_the_question,
+    declines,
+    named,
+    refusal,
+    settled,
+)
 from verifold.runner.session import (
     AgentSession,
+    Answers,
     BoardAccess,
     PermissionRequest,
     Place,
+    Question,
     SessionHooks,
     SessionOptions,
 )
@@ -61,6 +71,7 @@ from verifold.server.activity import Activity
 from verifold.server.member import Member
 from verifold.society.attention import update
 from verifold.society.board import Board
+from verifold.society.grants import agent_waits
 from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
 from verifold.society.turns import Before, before
 
@@ -109,8 +120,8 @@ class Shared:
 
     activity: Activity | None = None
     """Receives what each agent is doing now, for the person's view."""
-    grant_asks: GrantAsks | None = None
-    """With it, a lab in auto mode refuses a command that no grant covers and asks the person for the grant."""
+    refusals: Refusals | None = None
+    """Keeps the asks of the requests that Verifold refuses at once, when the person chose that no agent waits."""
     has_jobs: Callable[[str], Awaitable[bool]] | None = None
     """Says whether an agent has processes of its own that still run. Without it, no loop waits for them."""
 
@@ -144,7 +155,12 @@ class AgentLoop:
         share.
         """
         shared = shared or Shared()
-        self._grant_asks = shared.grant_asks
+        self._refusals = shared.refusals
+        self._turn_over = asyncio.Event()
+        """Set while the agent has no turn. A request of the harness that waits for the person ends with the turn."""
+        self._turn_over.set()
+        self._asking = 0
+        """How many requests of the harness wait for the person now."""
         self._has_jobs = shared.has_jobs
         self._done = done
         self._activity = shared.activity
@@ -187,7 +203,7 @@ class AgentLoop:
 
     async def _run(self) -> None:
         setup = self._setup
-        hooks = SessionHooks(permissions=self._permission, step=self._step)
+        hooks = SessionHooks(permissions=self._permission, step=self._step, questions=self._question)
         board = BoardAccess(url=self._settings.mcp_url, token=setup.token)
         was = self._before
         resume = was.session
@@ -308,15 +324,29 @@ class AgentLoop:
         self._seen_at_turn = self._member.seen
         # The mark comes before the message. A turn with a mark and no end did not end.
         rang, self._rang = self._rang, None
-        await self._lab.start_turn(self._setup.agent.id, session.id, self._seen_at_turn, rang)
+        model = session.model
+        if model:
+            # A name that says "default model" names the model that the harness reported, from the first turn on.
+            await self._lab.name_by_model(self._setup.agent.id, self._setup.harness.title, model.name)
+        await self._lab.start_turn(
+            self._setup.agent.id,
+            session.id,
+            self._seen_at_turn,
+            rang,
+            model=model.value if model else None,
+            model_name=model.name if model else None,
+        )
         self._in_turn = True
         try:
             async with asyncio.timeout(self._settings.turn_timeout) as limit:
                 stopper = asyncio.create_task(self._stop_when_out_of_time(limit))
+                self._turn_over.clear()
                 try:
                     result = await session.send(message)
                 finally:
                     stopper.cancel()
+                    # However the turn ends, a request that still waits for the person ends with it.
+                    self._turn_over.set()
         except TimeoutError:
             await session.cancel()
             if left := self._lab.board.gone(self._setup.agent.id):
@@ -332,9 +362,9 @@ class AgentLoop:
                 return False
             out_of_time = self._lab.board.out_of_time
             error = (
-                'The lab ran out of time, so Verifold cancelled the turn.'
+                f'{ERROR_OUT_OF_TIME}, so Verifold cancelled the turn.'
                 if out_of_time
-                else f'The turn ran past {self._settings.turn_timeout:g} seconds and was cancelled.'
+                else f'{ERROR_RAN_PAST} {self._settings.turn_timeout:g} seconds and was cancelled.'
             )
             await self._record(started, Usage(), None, error)
             self._cut_short = '' if out_of_time else error
@@ -518,13 +548,32 @@ class AgentLoop:
             return refusal(request)
         if allowed := settled(board, request):
             return allowed
-        if self._grant_asks and board.opened.auto_mode and request.command:
-            await self._grant_asks.offer(self._member, request)
-            return refusal(request)
-        await self._report('waiting', f'Asks you: {request.title}')
-        chosen = await ask_the_person(self._member, request)
-        await self._report('working')
-        return chosen
+        # The person's setting, or else their choice of auto mode, says whether the request waits for their answer.
+        # A refusal that would stop the agent's turn is no way to let the agent go on, so that request waits too.
+        if self._refusals and not agent_waits(board) and declines(request):
+            return await self._refusals.decide(self._member, request)
+        async with self._asks(named(request)):
+            return await ask_the_person(self._member, request, self._turn_over)
+
+    async def _question(self, question: Question) -> Answers | None:
+        # Nobody can answer an agent that left.
+        if self._left():
+            return None
+        async with self._asks('a question of its harness'):
+            return await ask_the_question(self._member, question, self._turn_over)
+
+    @asynccontextmanager
+    async def _asks(self, what: str) -> AsyncGenerator[None]:
+        """Show the agent as waiting for the person while the block runs, and while another request of it waits."""
+        self._asking += 1
+        await self._report('waiting', f'Asks you: {what}')
+        try:
+            yield
+        finally:
+            self._asking -= 1
+            # An agent whose turn ended is not at work, and the end of the turn reports what it does next.
+            if not self._asking and not self._turn_over.is_set():
+                await self._report('working')
 
     async def _step(self, title: str) -> None:
         await self._report('working', title)

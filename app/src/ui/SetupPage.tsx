@@ -1,25 +1,27 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
-import type { HarnessOption, Offer, SettingsLevel, SetupView } from '../api/types.ts';
+import type { HarnessOption, SettingsLevel, SetupView } from '../api/types.ts';
 import { duration } from '../model/format.ts';
 import {
   MAX_AGENTS,
+  addSeat,
   agentCount,
-  firstPicks,
-  effortsOf,
+  allOnCall,
+  firstSeats,
   initials,
-  menuEntries,
-  modeEntries,
   modelSummary,
+  needsModel,
+  removeSeat,
   setupChoices,
   startRequest,
   step,
-  withModel,
+  withSeat,
 } from '../model/setup.ts';
-import type { HarnessPick, MenuEntry } from '../model/setup.ts';
+import type { Seat } from '../model/setup.ts';
 import { messageOf } from '../api/client.ts';
+import { SeatFields } from './SeatForm.tsx';
 
 interface TimeChoice {
   readonly minutes: number | null;
@@ -37,7 +39,7 @@ const TIMES: readonly TimeChoice[] = [
 /** Milliseconds between reads of the setup while Verifold asks the harnesses what they offer. */
 const PROBE_POLL = 1000;
 
-/** The setup screen: the question, the agents of each harness, auto mode, and the time limit. */
+/** The setup screen: the question, the seats of each harness, auto mode, and the time limit. */
 export function SetupPage(props: {
   readonly api: Api;
   readonly setup: SetupView;
@@ -47,7 +49,7 @@ export function SetupPage(props: {
 }): ReactElement {
   const { defaults } = props.setup;
   const [question, setQuestion] = useState('');
-  const [picks, setPicks] = useState(() => firstPicks(props.setup.harnesses, defaults));
+  const [picks, setPicks] = useState(() => firstSeats(props.setup.harnesses, defaults));
   const [autoMode, setAutoMode] = useState(defaults.auto_mode);
   const [minutes, setMinutes] = useState<number | null>(defaults.minutes);
   const [starting, setStarting] = useState(false);
@@ -131,20 +133,23 @@ export function SetupPage(props: {
 
       <section className="section">
         <h2>Agents</h2>
-        <p className="sub">Each agent uses your own sign-in and settings for its harness.</p>
+        <p className="sub">
+          Each agent uses your own sign-in and settings for its harness. A seat is one model of a
+          harness, with a role if you give it one.
+        </p>
         <div className="rows harnesses">
           {props.setup.harnesses.map((option) => (
-            <HarnessRow
+            <HarnessSeats
               key={option.name}
               option={option}
-              pick={picks.find((pick) => pick.harness === option.name)}
+              seats={picks.flatMap((seat, index) =>
+                seat.harness === option.name ? [[seat, index] as const] : [],
+              )}
               full={total >= MAX_AGENTS}
-              onStep={(change) => setPicks((old) => step(old, option.name, change))}
-              onPick={(changed) =>
-                setPicks((old) =>
-                  old.map((pick) => (pick.harness === option.name ? changed : pick)),
-                )
-              }
+              onStep={(index, change) => setPicks((old) => step(old, index, change))}
+              onSeat={(index, changed) => setPicks((old) => withSeat(old, index, changed))}
+              onAdd={() => setPicks((old) => addSeat(old, option.name))}
+              onRemove={(index) => setPicks((old) => removeSeat(old, index))}
             />
           ))}
         </div>
@@ -152,7 +157,10 @@ export function SetupPage(props: {
 
       <section className="section">
         <h3>Can your agents run in auto mode?</h3>
-        <p className="sub">If not, their permission requests come to you.</p>
+        <p className="sub">
+          In auto mode each harness decides its own requests, with its own protections. If not, the
+          requests that a harness sends come to you.
+        </p>
         <div className="choice">
           <button type="button" aria-pressed={autoMode} onClick={() => setAutoMode(true)}>
             <b>Yes, use auto mode</b>
@@ -186,13 +194,22 @@ export function SetupPage(props: {
         <button
           className="btn primary"
           type="button"
-          disabled={starting || total === 0 || !question.trim()}
+          disabled={starting || total === 0 || !question.trim() || picks.some(needsModel)}
           onClick={start}
         >
           {starting ? 'Starting' : `Start lab with ${total} ${total === 1 ? 'agent' : 'agents'}`}
         </button>
         <span className="quiet">You can stop the lab at any time.</span>
       </div>
+      {picks.some(needsModel) ? (
+        <p className="quiet">A seat with “Other…” needs a model ID before the lab starts.</p>
+      ) : null}
+      {allOnCall(picks) ? (
+        <p className="quiet">
+          Every seat is on call, so no agent starts until a post names one. Your first post in the
+          lab can do that.
+        </p>
+      ) : null}
       <p className="savechoices">
         <span className="quiet">Save these choices for the next labs:</span>
         <button
@@ -226,165 +243,87 @@ export function SetupPage(props: {
   );
 }
 
-function HarnessRow(props: {
+/** One harness on the setup screen: its seats, and the way to add another seat with another model. */
+function HarnessSeats(props: {
   readonly option: HarnessOption;
-  readonly pick: HarnessPick | undefined;
+  /** The harness's seats, each with its place among all the seats. */
+  readonly seats: readonly (readonly [Seat, number])[];
   /** The lab has as many agents as it can start. */
   readonly full: boolean;
-  readonly onStep: (change: number) => void;
-  readonly onPick: (pick: HarnessPick) => void;
+  readonly onStep: (index: number, change: number) => void;
+  readonly onSeat: (index: number, seat: Seat) => void;
+  readonly onAdd: () => void;
+  readonly onRemove: (index: number) => void;
 }): ReactElement {
-  const { option, pick } = props;
-  const count = pick?.count ?? 0;
+  const { option } = props;
   return (
-    <div className="hrow">
-      <span className="f-face plain" aria-hidden="true">
-        {initials(option.title)}
-      </span>
-      <div>
-        <span className="hn">{option.title}</span>
-        {option.available ? null : <span className="missing">Not found on this computer</span>}
-      </div>
-      <div className="stepper">
-        <button
-          type="button"
-          aria-label={`One fewer ${option.title} agent`}
-          disabled={count === 0}
-          onClick={() => props.onStep(-1)}
-        >
-          −
-        </button>
-        <output aria-live="polite" aria-label={`${option.title} agents`}>
-          {count}
-        </output>
-        <button
-          type="button"
-          aria-label={`One more ${option.title} agent`}
-          disabled={!option.available || props.full}
-          onClick={() => props.onStep(1)}
-        >
-          +
-        </button>
-      </div>
-      {option.available && pick ? (
-        <details className="modelpick">
-          <summary>{modelSummary(pick, option.offer)}</summary>
-          <div className="menu">
-            {option.probing ? (
-              <p>Asking {option.title} what it offers.</p>
-            ) : option.offer ? (
-              <Offered
-                title={option.title}
-                offer={option.offer}
-                pick={pick}
-                onPick={props.onPick}
-              />
+    <>
+      {props.seats.map(([seat, index], place) => (
+        <div className={place === 0 ? 'hrow' : 'hrow more'} key={index}>
+          {place === 0 ? (
+            <span className="f-face plain" aria-hidden="true">
+              {initials(option.title)}
+            </span>
+          ) : (
+            <span />
+          )}
+          <div>
+            {place === 0 ? (
+              <span className="hn">{option.title}</span>
             ) : (
-              <Typed title={option.title} pick={pick} onPick={props.onPick} />
+              <span className="quiet">Seat {place + 1}</span>
             )}
+            {option.available ? null : <span className="missing">Not found on this computer</span>}
+            {props.seats.length > 1 ? (
+              <button
+                className="linkbtn missing"
+                type="button"
+                onClick={() => props.onRemove(index)}
+              >
+                Remove seat
+              </button>
+            ) : null}
           </div>
-        </details>
-      ) : null}
-    </div>
-  );
-}
-
-/** The menus for a harness that told Verifold what it offers. */
-function Offered(props: {
-  readonly title: string;
-  readonly offer: Offer;
-  readonly pick: HarnessPick;
-  readonly onPick: (pick: HarnessPick) => void;
-}): ReactElement {
-  const { offer, pick } = props;
-  const models = menuEntries(offer.models, offer.model, pick.model);
-  const levels = effortsOf(offer, pick.model);
-  const efforts = menuEntries(levels.values, levels.current, pick.effort);
-  const modes = modeEntries(offer, pick.mode);
-  if (models.length + efforts.length + modes.length === 0) {
-    return <p>{props.title} offers no model, effort, or mode choices.</p>;
-  }
-  return (
-    <>
-      <Menu
-        label="Model"
-        entries={models}
-        value={pick.model}
-        onChange={(model) => props.onPick(withModel(pick, offer, model))}
-      />
-      <Menu
-        label="Effort"
-        entries={efforts}
-        value={pick.effort}
-        onChange={(effort) => props.onPick({ ...pick, effort })}
-      />
-      <Menu
-        label="Mode"
-        entries={modes}
-        value={pick.mode}
-        onChange={(mode) => props.onPick({ ...pick, mode })}
-      />
-    </>
-  );
-}
-
-/** One menu of a harness's values, or nothing when the harness offers none. */
-function Menu(props: {
-  readonly label: string;
-  readonly entries: readonly MenuEntry[];
-  readonly value: string;
-  readonly onChange: (value: string) => void;
-}): ReactElement | null {
-  const id = useId();
-  if (props.entries.length === 0) return null;
-  return (
-    <>
-      <label htmlFor={id}>{props.label}</label>
-      <select id={id} value={props.value} onChange={(event) => props.onChange(event.target.value)}>
-        {props.entries.map((entry) => (
-          <option key={entry.value} value={entry.value}>
-            {entry.label}
-          </option>
-        ))}
-      </select>
-    </>
-  );
-}
-
-/** The fields for a harness that didn't tell Verifold what it offers: the person types the model, effort, and mode. */
-function Typed(props: {
-  readonly title: string;
-  readonly pick: HarnessPick;
-  readonly onPick: (pick: HarnessPick) => void;
-}): ReactElement {
-  const { pick } = props;
-  const modelId = useId();
-  const effortId = useId();
-  const modeId = useId();
-  return (
-    <>
-      <label htmlFor={modelId}>Model</label>
-      <input
-        id={modelId}
-        placeholder="Your default"
-        value={pick.model}
-        onChange={(event) => props.onPick({ ...pick, model: event.target.value })}
-      />
-      <label htmlFor={effortId}>Effort</label>
-      <input
-        id={effortId}
-        placeholder="Your default"
-        value={pick.effort}
-        onChange={(event) => props.onPick({ ...pick, effort: event.target.value })}
-      />
-      <label htmlFor={modeId}>Mode</label>
-      <input
-        id={modeId}
-        placeholder="Your auto mode answer"
-        value={pick.mode}
-        onChange={(event) => props.onPick({ ...pick, mode: event.target.value })}
-      />
-      <p>Leave a field blank to keep your own setting for {props.title}.</p>
+          <div className="stepper">
+            <button
+              type="button"
+              aria-label={`One fewer ${option.title} agent`}
+              disabled={seat.count === 0}
+              onClick={() => props.onStep(index, -1)}
+            >
+              −
+            </button>
+            <output aria-live="polite" aria-label={`${option.title} agents`}>
+              {seat.count}
+            </output>
+            <button
+              type="button"
+              aria-label={`One more ${option.title} agent`}
+              disabled={!option.available || props.full || (seat.coordinator && seat.count > 0)}
+              onClick={() => props.onStep(index, 1)}
+            >
+              +
+            </button>
+          </div>
+          {option.available ? (
+            <details className="modelpick">
+              <summary>{modelSummary(seat, option.offer, option.family)}</summary>
+              <div className="menu">
+                <SeatFields
+                  option={option}
+                  seat={seat}
+                  onSeat={(changed) => props.onSeat(index, changed)}
+                />
+              </div>
+            </details>
+          ) : null}
+          {option.available && place === props.seats.length - 1 ? (
+            <button className="linkbtn addseat" type="button" onClick={props.onAdd}>
+              Add a seat with another model
+            </button>
+          ) : null}
+        </div>
+      ))}
     </>
   );
 }

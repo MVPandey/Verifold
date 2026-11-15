@@ -11,7 +11,7 @@ import { sideReplyHint } from '../model/side.ts';
 import { act, isClaim, rows, standingIn } from '../model/turns.ts';
 import { messageOf } from '../api/client.ts';
 import { Detail } from './Markdown.tsx';
-import { ChipView, Composer, FaceView, Mark } from './parts.tsx';
+import { ChipView, Composer, FaceView, HarnessAsk, Mark } from './parts.tsx';
 
 /** What every turn of a thread needs from the lab. */
 interface Around {
@@ -116,7 +116,10 @@ export function Turn(
             {who.name}
           </b>
           {post.helper ? <span className="f-tag">helper {post.helper}</span> : null}
-          {member?.role ? <span className="f-role">{member.role}</span> : null}
+          {/* The agent's own word for what it is, or else the role that the person gave its seat. */}
+          {member?.role || member?.agent.given_role ? (
+            <span className="f-role">{member.role || member.agent.given_role}</span>
+          ) : null}
           {agent ? (
             <span className="f-tag">{harnessTitle(props.harnesses, agent.harness)}</span>
           ) : null}
@@ -151,7 +154,20 @@ export function Turn(
             for your answer there, not for a reply in the thread.
           </p>
         ) : null}
-        <Detail post={post.id} body={post.body} files={post.evidence} />
+        {post.kind === 'ask' && post.shown ? (
+          // A request of a harness shows from its recorded data. It never goes through Markdown.
+          <details className="f-detail">
+            <summary className="f-open">
+              <span className="closed">Read the detail</span>
+              <span className="opened">Hide the detail</span>
+            </summary>
+            <div className="f-words">
+              <HarnessAsk shown={post.shown} name={agent?.name ?? post.author} />
+            </div>
+          </details>
+        ) : (
+          <Detail post={post.id} body={post.body} files={post.evidence} />
+        )}
         {canRerun ? <RerunButton postId={post.id} onRerun={props.onRerun} /> : null}
       </div>
     </li>

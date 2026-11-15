@@ -3,7 +3,9 @@ import type {
   HarnessOption,
   LabView,
   Offer,
+  PermissionShown,
   Post,
+  QuestionShown,
   SetupDefaults,
   PostView,
   ThreadSummary,
@@ -75,11 +77,14 @@ export function agentView(id: string, changes: Partial<AgentView> = {}): AgentVi
       model: { family: 'anthropic', name: null, effort: null },
       role: '',
       brief: '',
+      given_role: '',
       mode: null,
       recruited_by: null,
       checks: null,
     },
     role: '',
+    on_call: false,
+    coordinator: false,
     status: '',
     thread: null,
     activity: { state: 'idle', detail: '', at: null },
@@ -91,6 +96,7 @@ export function agentView(id: string, changes: Partial<AgentView> = {}): AgentVi
     posts: 0,
     usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 },
     cost_usd: null,
+    error: null,
     ...changes,
   };
 }
@@ -112,7 +118,13 @@ export function result(id: string, changes: Partial<Post> = {}): Post {
   } as Post;
 }
 
-export function ask(id: string, author: string, choices: readonly string[] = []): Post {
+export function ask(
+  id: string,
+  author: string,
+  choices: readonly string[] = [],
+  request: 'permission' | 'question' | null = 'permission',
+  shown: PermissionShown | QuestionShown | null = null,
+): Post {
   return {
     id,
     thread: 't-2',
@@ -126,6 +138,8 @@ export function ask(id: string, author: string, choices: readonly string[] = [])
     evidence: [],
     kind: 'ask',
     choices,
+    request,
+    shown,
   };
 }
 
@@ -171,6 +185,7 @@ export function summary(changes: Partial<ThreadSummary> = {}): ThreadSummary {
 export function labView(changes: Partial<LabView> = {}): LabView {
   return {
     question: 'Is sorted() faster?',
+    coordinator_open: true,
     versions: [],
     opened_at: '2026-11-06T14:00:00Z',
     seq: 9,
@@ -184,7 +199,11 @@ export function labView(changes: Partial<LabView> = {}): LabView {
     close: null,
     close_agreed: 0,
     close_among: 0,
-    settings: { version: 1, jobs: { at_time_limit: 'pause', at_exit: 'stop' } },
+    settings: {
+      version: 1,
+      jobs: { at_time_limit: 'pause', at_exit: 'stop' },
+      permissions: { while_you_decide: 'auto' },
+    },
     ...changes,
   };
 }

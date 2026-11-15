@@ -13,9 +13,11 @@ from verifold.protocol.app import (
     FolderView,
     HarnessOption,
     Invitation,
+    InviteRequest,
     NormsChange,
     NormsFile,
     NormsView,
+    SeatChange,
     SettingsChange,
     SettingsFileView,
     SettingsView,
@@ -54,6 +56,9 @@ class Host:
         self.added: list[AgentChoice] = []
         self.invited: list[str | None] = []
         self.norms_text = '# Norms'
+        self.requests: list[InviteRequest] = []
+        self.seats: list[tuple[str, SeatChange]] = []
+        self.asked = 0
 
     def setup(self) -> SetupView:
         harnesses = (HarnessOption(name='fake', title='Fake', family='test', available=True),)
@@ -104,7 +109,19 @@ class Host:
             raise SetupRejected('Unknown harness nope.')
         self.added.append(choice)
 
-    async def invite(self, name: str | None = None) -> Invitation:
+    async def change_seat(self, agent_id: str, change: SeatChange) -> None:
+        if self.lab is None or self.lab.board.agent(agent_id) is None:
+            raise NotFound(f'The lab has no agent with the ID {agent_id}.')
+        self.seats.append((agent_id, change))
+
+    def ask_harnesses(self) -> SetupView:
+        self.asked += 1
+        return self.setup()
+
+    async def invite(self, request: InviteRequest | None = None) -> Invitation:
+        request = request or InviteRequest()
+        name = request.name
+        self.requests.append(request)
         if self.lab is None:
             raise NoLab('This folder has no lab yet. Start one from the setup screen.')
         if name == 'Ada':
@@ -201,7 +218,11 @@ async def test_settings_pass_through_and_refusals_say_why(client: httpx2.AsyncCl
     command = {'command': ['/bin/sh', '-c', 'true'], 'family': 'anthropic'}
     harness = await client.post('/settings', json={**change, 'key': 'harnesses.claude-code', 'value': command})
 
-    assert view['lab'] == {'version': 1, 'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'}}
+    assert view['lab'] == {
+        'version': 1,
+        'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'},
+        'permissions': {'while_you_decide': 'auto'},
+    }
     assert view['project']['path'] == '.verifold/settings.json'
     assert changed.status_code == 200
     assert (stale.status_code, invalid.status_code, harness.status_code) == (409, 400, 422)
@@ -485,6 +506,84 @@ async def test_the_person_adds_an_agent_to_the_lab_that_runs(lab: Lab, activity:
     assert added.status_code == 200
     assert [(choice.harness, choice.count) for choice in host.added] == [('fake', 2)]
     assert (refused.status_code, refused.json()['detail']) == (400, 'Unknown harness nope.')
+
+
+async def test_the_person_adds_a_seat_with_its_facts_changes_a_seat_and_asks_the_harnesses(
+    lab: Lab, activity: Activity
+) -> None:
+    host = Host(lab)
+    seat = {'harness': 'fake', 'model': 'opus', 'role': ' direction\ncreator ', 'on_call': True, 'family': 'other'}
+    async with client_of(host, activity) as client:
+        added = await client.post('/agents', json=seat)
+        two = await client.post('/agents', json={'harness': 'fake', 'count': 2, 'coordinator': True})
+        long = await client.post('/agents', json={'harness': 'fake', 'role': 'r' * 41})
+        changed = await client.post('/agents/ada/seat', json={'on_call': True})
+        missing = await client.post('/agents/nobody/seat', json={'coordinator': True})
+        offers = await client.post('/offers', json={})
+        invited = await client.post('/invitations', json={'role': 'reads', 'family': 'openai', 'coordinator': True})
+
+    assert (added.status_code, two.status_code, long.status_code) == (200, 422, 422)
+    assert 'the seat of the coordinator has one agent' in str(two.json())
+    # A role is one line, like the role that an agent gives itself.
+    assert host.added == [
+        AgentChoice(harness='fake', model='opus', role='direction creator', on_call=True, family='other')
+    ]
+    assert (changed.status_code, missing.status_code) == (200, 404)
+    assert host.seats == [('ada', SeatChange(on_call=True))]
+    assert (offers.status_code, offers.json()['question'], host.asked) == (200, 'Does it hold?', 1)
+    assert invited.status_code == 200
+    assert host.requests == [InviteRequest(role='reads', family='openai', coordinator=True)]
+
+
+async def test_the_person_closes_and_opens_a_coordinator_seat_that_nobody_holds(
+    client: httpx2.AsyncClient, lab: Lab, activity: Activity
+) -> None:
+    await lab.set_coordinator('ada', 'ada')
+    first = (await client.get('/lab')).json()
+    closed = await client.post('/coordinator', json={'open': False})
+    opened = await client.post('/coordinator', json={'open': True})
+    async with client_of(Host(None), activity) as nowhere:
+        no_lab = await nowhere.post('/coordinator', json={'open': True})
+
+    # A seat with a holder is not open, and the person's clear takes the holder and closes the seat.
+    assert (first['coordinator_open'], [view['coordinator'] for view in first['agents']]) == (False, [True, False])
+    assert (closed.json()['coordinator_open'], [view['coordinator'] for view in closed.json()['agents']]) == (
+        False,
+        [False, False],
+    )
+    assert opened.json()['coordinator_open'] is True
+    assert no_lab.status_code == 409
+    assert [(entry.agent, entry.by, entry.open) for entry in lab.board.coordinators[1:]] == [
+        (None, 'person', False),
+        (None, 'person', True),
+    ]
+
+
+async def test_the_lab_view_says_why_an_agents_harness_failed_last(client: httpx2.AsyncClient, lab: Lab) -> None:
+    refused = 'RequestError: The model fable-9 is not available.'
+    await lab.end_turn(TurnSummary(agent='bo', seconds=0, usage=Usage(), error=refused, no_turn=True))
+    await lab.end_turn(TurnSummary(agent='ada', seconds=1, usage=Usage(), error='It broke.'))
+    await lab.end_turn(TurnSummary(agent='ada', seconds=1, usage=Usage()))
+
+    ada, bo = (await client.get('/lab')).json()['agents']
+    await lab.start_turn('bo', 'session-1', 3)
+    again = (await client.get('/lab')).json()['agents'][1]
+
+    # The person reads the harness's own words. A turn that ended well after a failure clears it, and so does
+    # the start of a later turn.
+    assert (ada['error'], bo['error'], again['error']) == (None, refused, None)
+
+
+async def test_the_lab_view_says_who_is_on_call_who_coordinates_and_which_role_the_person_gave(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    await lab.join(agent('cy').model_copy(update={'given_role': 'driver'}), on_call=True, coordinator=True)
+    await lab.set_profile('cy', 'theory', None)
+
+    ada, _, cy = (await client.get('/lab')).json()['agents']
+
+    assert (ada['on_call'], ada['coordinator'], ada['agent']['given_role']) == (False, False, '')
+    assert (cy['on_call'], cy['coordinator'], cy['agent']['given_role'], cy['role']) == (True, True, 'driver', 'theory')
 
 
 async def test_the_person_invites_an_agent_and_gets_its_invitation(lab: Lab, activity: Activity) -> None:

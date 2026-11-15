@@ -19,7 +19,8 @@ def lab_state(board: Board) -> LabState:
 
     An invited agent counts among the lab's agents when it posted before the close. Until its first post nobody
     knows whether it came, so an invitation that nobody used does not keep the lab open. Its first post after the
-    close does not change the count either, so a closed lab stays closed.
+    close does not change the count either, so a closed lab stays closed. An on-call agent counts by the same
+    rule: from its first post, because until then no post for every agent reached it.
 
     An agent that left keeps the word that it gave. When it stood behind the close as it left, as the author or with
     its agreement, it still counts: among the lab's agents and behind the close. So agents that finish, agree, and
@@ -39,7 +40,7 @@ def close_count(board: Board, close: Posted) -> tuple[int, int]:
     behind = {close.post.author, *agreed(board, close)}
     among = sum(
         not joined.agent.checks
-        and board.came(joined, before=close.seq)
+        and board.counts(joined, before=close.seq)
         and (joined.agent.id in behind or not board.gone(joined.agent.id))
         for joined in board.agents
     )

@@ -1,12 +1,14 @@
 """One agent's ACP session: its harness process, the board attached as its MCP server, and the messages sent to it."""
 
 import asyncio
+import json
+import shlex
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
-from typing import NoReturn, Self, override
+from typing import Literal, NoReturn, Self, override
 
 import acp
 from acp import schema
@@ -20,7 +22,7 @@ from verifold.protocol.ids import AgentId
 from verifold.protocol.record import Record
 from verifold.protocol.usage import Usage
 from verifold.runner.environment import harness_environment
-from verifold.runner.errors import RunnerError
+from verifold.runner.errors import ModelRefused, RunnerError
 from verifold.runner.processes import STOP_GRACE, start, stop
 
 
@@ -43,6 +45,43 @@ class PermissionRequest(Record):
     """The shell command that the action runs, when the harness reports one."""
     board: bool = False
     """Whether the action is a call to the lab's board, which Verifold itself gave the harness."""
+    kind: str = ''
+    """The harness's kind of tool, such as `execute` or `edit`, when it reports one."""
+    given: str = ''
+    """The action's whole input as the harness reports it, as JSON. Empty when the harness reports none."""
+    rest: str = ''
+    """What the input holds beside the command, as JSON, such as the folder that the command runs in."""
+
+
+class FieldOption(Record):
+    """One value that a field of a question offers."""
+
+    value: str
+    name: str
+
+
+class QuestionField(Record):
+    """One field of a question from a harness to its user."""
+
+    name: str
+    title: str
+    description: str = ''
+    required: bool = True
+    """Whether the harness needs an answer for the field. The user can leave out any other field."""
+    kind: Literal['text', 'number', 'integer', 'boolean', 'choice', 'choices']
+    """`choice` takes one of `options`, and `choices` takes any number of them."""
+    options: tuple[FieldOption, ...] = ()
+
+
+class Question(Record):
+    """A harness asks its user a structured question, which ACP calls an elicitation."""
+
+    message: str
+    fields: tuple[QuestionField, ...]
+
+
+type FieldValue = str | int | float | bool | list[str]
+type Answers = dict[str, FieldValue]
 
 
 BOARD_SERVER = 'verifold'
@@ -57,8 +96,17 @@ type ConfigOption = schema.SessionConfigOptionSelect | schema.SessionConfigOptio
 type Permissions = Callable[[PermissionRequest], Awaitable[str | None]]
 """Decides a permission request: the ID of the chosen answer, or `None` to cancel the action."""
 
+type Questions = Callable[[Question], Awaitable[Answers | None]]
+"""Answers a harness's question: a value for each field, or `None` when the user gives no answer."""
+
+_SHELLS = frozenset({'bash', 'sh', 'zsh'})
+
 
 async def _ignore(_: str) -> None:
+    return None
+
+
+async def _no_answer(_: Question) -> Answers | None:
     return None
 
 
@@ -69,6 +117,7 @@ class SessionHooks:
     permissions: Permissions
     step: Callable[[str], Awaitable[None]] = _ignore
     """Gets the title of each tool call that the harness starts."""
+    questions: Questions = _no_answer
 
 
 class BoardAccess(Record):
@@ -109,10 +158,10 @@ class TurnResult(Record):
 
 class _Client(acp.Client):
     """
-    The client side of the ACP connection. It decides permission requests and tracks the running cost.
+    The client side of the ACP connection. It decides permission requests and questions, and tracks the cost.
 
-    Verifold offers no files, terminals, or forms. The agent learns that from the capabilities in `initialize`, and a
-    call to one of them gets a "method not found" error.
+    Verifold offers no files, no terminals, and no question that opens a link. The agent learns that from the
+    capabilities in `initialize`, and a call to one of them gets an error.
     """
 
     def __init__(self, hooks: SessionHooks, *, names_mcp_server: bool = False) -> None:
@@ -128,7 +177,7 @@ class _Client(acp.Client):
     ) -> schema.RequestPermissionResponse:
         call = self._calls.get(tool_call.tool_call_id, _Call()).updated(tool_call)
         # Only a call that runs a command has one. Another tool's `command` field is not a shell command.
-        command = _field(call.given, 'command') if call.kind == 'execute' else None
+        command, key = _command(call.given) if call.kind == 'execute' else (None, None)
         named = _field(call.given, 'server') == BOARD_SERVER and _field(call.given, 'tool') is not None
         request = PermissionRequest(
             title=command or call.title or 'an action',
@@ -138,6 +187,12 @@ class _Client(acp.Client):
             command=command,
             # A shell command is never a call to the board, whatever its text says.
             board=self._names_mcp_server and command is None and named,
+            kind=call.kind or '',
+            given=_json(call.given),
+            # The person reads the command, and what the input holds beside it.
+            rest=_json({name: value for name, value in call.given.items() if name != key} or None)
+            if key and isinstance(call.given, dict)
+            else '',
         )
         chosen = await self._hooks.permissions(request)
         outcome = (
@@ -206,7 +261,17 @@ class _Client(acp.Client):
     async def create_elicitation(
         self, message: str, mode: schema.ElicitationMode, **_: object
     ) -> schema.CreateElicitationResponse:
-        _unsupported('elicitation/create')
+        question = _question(message, mode)
+        if question is None:
+            raise acp.RequestError.invalid_params(
+                {
+                    'details': 'Verifold shows a form with text, number, yes-or-no, and choice fields. It cannot show this.'
+                }
+            )
+        answers = await self._hooks.questions(question)
+        if answers is None:
+            return schema.CancelElicitationResponse(action='cancel')
+        return schema.AcceptElicitationResponse(action='accept', content=dict(answers))
 
     @override
     async def complete_elicitation(self, elicitation_id: str, **_: object) -> None:
@@ -249,6 +314,65 @@ def _field(given: object, name: str) -> str | None:
     return value.strip() or None if isinstance(value, str) else None
 
 
+def _command(given: object) -> tuple[str, str] | tuple[None, None]:
+    """
+    Return the shell command in a tool call's input and the field that holds it, or `None` when Verifold finds none.
+
+    A harness reports it as text or as a list of arguments, under `command` or `cmd`. A list that starts a shell
+    with one script, such as `bash -lc 'make test'`, runs that script, so the script is the command.
+    """
+    key = next((key for key in ('command', 'cmd') if key in given), None) if isinstance(given, dict) else None
+    found = given[key] if key and isinstance(given, dict) else None
+    if isinstance(found, list) and found and all(isinstance(word, str) for word in found):
+        match [str(word) for word in found]:
+            case [shell, '-c' | '-lc', script] if Path(shell).name in _SHELLS:
+                found = script
+            case words:
+                found = shlex.join(words)
+    return (found.strip(), key) if key and isinstance(found, str) and found.strip() else (None, None)
+
+
+def _json(given: object) -> str:
+    return '' if given is None else json.dumps(given, indent=2, ensure_ascii=False, default=str, sort_keys=True)
+
+
+def _question(message: str, mode: schema.ElicitationMode) -> Question | None:
+    """Return the harness's question in Verifold's own shape, or `None` when it holds what the board cannot show."""
+    if not isinstance(mode, schema.ElicitationFormSessionMode | schema.ElicitationFormRequestMode):
+        return None
+    asked = mode.requested_schema
+    needed = set(asked.required or ())
+    fields = [_question_field(name, each, required=name in needed) for name, each in (asked.properties or {}).items()]
+    known = tuple(field for field in fields if field)
+    return Question(message=message, fields=known) if known and len(known) == len(fields) else None
+
+
+def _question_field(name: str, asked: object, *, required: bool) -> QuestionField | None:
+    title, description = getattr(asked, 'title', None) or name, getattr(asked, 'description', None) or ''
+    if isinstance(asked, schema.ElicitationStringPropertySchema):
+        titled = [FieldOption(value=option.const, name=option.title) for option in asked.one_of or []]
+        options = tuple(titled or [FieldOption(value=value, name=value) for value in asked.enum or []])
+        kind = 'choice' if options else 'text'
+    elif isinstance(asked, schema.ElicitationMultiSelectPropertySchema):
+        items = asked.items
+        if isinstance(items, schema.TitledMultiSelectItems):
+            options = tuple(FieldOption(value=option.const, name=option.title) for option in items.any_of)
+        elif isinstance(items, schema.StringMultiSelectItems):
+            options = tuple(FieldOption(value=value, name=value) for value in items.enum)
+        else:
+            return None
+        kind = 'choices'
+    elif isinstance(asked, schema.ElicitationBooleanPropertySchema):
+        options, kind = (), 'boolean'
+    elif isinstance(asked, schema.ElicitationIntegerPropertySchema):
+        options, kind = (), 'integer'
+    elif isinstance(asked, schema.ElicitationNumberPropertySchema):
+        options, kind = (), 'number'
+    else:
+        return None
+    return QuestionField(name=name, title=title, description=description, required=required, kind=kind, options=options)
+
+
 def _unsupported(method: str) -> NoReturn:
     raise acp.RequestError.method_not_found(method)
 
@@ -284,7 +408,8 @@ async def _connected(harness: HarnessEntry, place: Place, client: _Client) -> As
         if process.stdin is None or process.stdout is None:
             await stop(process)
             raise RunnerError(f'{harness.name} started without its protocol pipes.')
-        connection = acp.connect_to_agent(client, process.stdin, process.stdout)
+        # ACP marks a harness's question to its user as unstable. Verifold answers it, so the library must not warn.
+        connection = acp.connect_to_agent(client, process.stdin, process.stdout, use_unstable_protocol=True)
         try:
             yield connection
         finally:
@@ -299,7 +424,10 @@ async def _initialize(connection: ClientSideConnection) -> schema.InitializeResp
     return await connection.initialize(
         protocol_version=acp.PROTOCOL_VERSION,
         client_capabilities=schema.ClientCapabilities(
-            fs=schema.FileSystemCapabilities(read_text_file=False, write_text_file=False), terminal=False
+            fs=schema.FileSystemCapabilities(read_text_file=False, write_text_file=False),
+            terminal=False,
+            # A form reaches the person as asks on the board. A question that opens a link does not.
+            elicitation=schema.ElicitationCapabilities(form=schema.ElicitationFormCapabilities()),
         ),
         client_info=schema.Implementation(name='verifold', version=version(DISTRIBUTION)),
     )
@@ -395,12 +523,13 @@ def _option(value: str, name: str) -> OptionValue | None:
 
 async def _begin(
     connection: ClientSideConnection, harness: HarnessEntry, folder: Path, board: BoardAccess, options: SessionOptions
-) -> tuple[str, bool]:
+) -> tuple[str, bool, OptionValue | None]:
     """
     Initialize the connection, open or load the session, and set the options that the lab asks for.
 
-    Return the session's ID, and whether it is the session that `options.resume` names. It is a new one when the
-    harness says that it loads no sessions, and when it refuses to load this one.
+    Return the session's ID, whether it is the session that `options.resume` names, and the session's model as the
+    harness reports it. The session is a new one when the harness says that it loads no sessions, and when it
+    refuses to load this one.
     """
     abilities = (await _initialize(connection)).agent_capabilities
     servers: McpServers = [
@@ -421,17 +550,41 @@ async def _begin(
     else:
         opened = await connection.new_session(cwd=str(folder), mcp_servers=servers)
         session_id, offered = opened.session_id, opened.config_options
+    silent = False
     for category, value in (('model', options.model), ('thought_level', options.effort)):
         if value:
             option = _option_id(offered or [], category, harness)
-            changed = await connection.set_config_option(session_id=session_id, config_id=option, value=value)
+            try:
+                changed = await connection.set_config_option(session_id=session_id, config_id=option, value=value)
+            except acp.RequestError as error:
+                if category != 'model':
+                    raise
+                # The record keeps this cause apart, so that the lab can say that the model was refused.
+                raise ModelRefused(f'{harness.title} refused the model {value}: {error}') from error
             # A model can have its own effort levels. ACP answers a change with the full set of options, so a later
             # option comes from that answer. An empty answer says nothing, so the options from before stay.
+            silent = silent or (category == 'model' and not changed.config_options)
             offered = changed.config_options or offered
     # The mode comes last, so that a switch of model can't change it.
     if mode := options.mode or (harness.auto_mode if options.auto_mode else None):
         await connection.set_session_mode(session_id=session_id, mode_id=mode)
-    return session_id, loaded is not None
+    return session_id, loaded is not None, _model_now(offered, options.model if silent else None)
+
+
+def _model_now(offered: Sequence[ConfigOption] | None, chosen: str | None) -> OptionValue | None:
+    """
+    Return the session's model, with the name that the harness shows for it, or `None` when the harness names none.
+
+    The harness reports its models in the session option of the ACP category `model`, and the option's current
+    value is the session's model. `chosen` is the model that the lab set when the harness answered that change
+    with no options: the options are then from before the change, so the session's model is the chosen one. A
+    model that the harness does not list has its ID for a name.
+    """
+    option = _by_category(offered).get('model')
+    if option is None:
+        return None
+    value = chosen or option.current_value
+    return next((model for model in _values(option) if model.value == value), _option(value, value))
 
 
 def _option_id(offered: Sequence[ConfigOption], category: str, harness: HarnessEntry) -> str:
@@ -452,11 +605,24 @@ def _option_id(offered: Sequence[ConfigOption], category: str, harness: HarnessE
 class AgentSession:
     """A running ACP session. Open it with `AgentSession.open`, which stops the harness when the block ends."""
 
-    def __init__(self, connection: ClientSideConnection, session_id: str, client: _Client, *, loaded: bool) -> None:
-        """Wrap a session that is open on `connection`. `loaded` says that it holds an earlier conversation."""
+    def __init__(
+        self,
+        connection: ClientSideConnection,
+        session_id: str,
+        client: _Client,
+        *,
+        loaded: bool,
+        model: OptionValue | None = None,
+    ) -> None:
+        """
+        Wrap a session that is open on `connection`. `loaded` says that it holds an earlier conversation.
+
+        `model` is the session's model as the harness reported it when the session opened, or `None`.
+        """
         self._connection = connection
         self.id = session_id
         self.loaded = loaded
+        self.model = model
         self._client = client
 
     @classmethod
@@ -474,8 +640,8 @@ class AgentSession:
         """
         client = _Client(hooks, names_mcp_server=harness.names_mcp_server)
         async with _connected(harness, place, client) as connection:
-            session_id, loaded = await _begin(connection, harness, place.folder, board, options)
-            yield cls(connection, session_id, client, loaded=loaded)
+            session_id, loaded, model = await _begin(connection, harness, place.folder, board, options)
+            yield cls(connection, session_id, client, loaded=loaded, model=model)
 
     async def send(self, text: str) -> TurnResult:
         """Send one message, and return once the harness ends its turn."""

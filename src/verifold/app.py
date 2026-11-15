@@ -25,12 +25,14 @@ from verifold.protocol.app import (
     FolderView,
     HarnessOption,
     Invitation,
+    InviteRequest,
     NoPost,
     NormsChange,
     NormsFile,
     NormsName,
     NormsView,
     Offer,
+    SeatChange,
     SettingsChange,
     SettingsFileView,
     SettingsView,
@@ -49,7 +51,7 @@ from verifold.runner.folders import LAB_FOLDER, agent_folder, agents_folder, ope
 from verifold.runner.git import GitError, git
 from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, running_jobs, sweep
 from verifold.runner.messages import invitation, start_message
-from verifold.runner.permissions import GrantAsks
+from verifold.runner.permissions import Refusals
 from verifold.runner.reruns import Crew, Reruns
 from verifold.runner.session import Place, SessionOptions, offer_of
 from verifold.runner.snapshots import pin
@@ -61,8 +63,10 @@ from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.server.timekeeper import keep_time
 from verifold.server.web import WEB_FOLDER, web_app
+from verifold.society.attention import update
 from verifold.society.board import Board
 from verifold.society.errors import NotFound, SocietyError
+from verifold.society.labels import label
 from verifold.society.lines import question_thread
 from verifold.society.standing import closing
 from verifold.society.turns import before
@@ -189,8 +193,10 @@ class Host:
         self._settings: LoopSettings | None = None
         self._swept: Callable[[Sweep], None] = _ignore
         self._offers: dict[str, Offer] = {}
-        self._grant_asks: GrantAsks | None = None
+        self._refusals: Refusals | None = None
         self._probing: set[str] = set()
+        self._asked: set[str] = set()
+        """The harnesses that Verifold asked what they offer, whatever came of it. It asks each one once."""
         self._adding = asyncio.Lock()
         self._norms_saved: dict[NormsName, str] = {}
         """The revision of the last text of each norms file that the person saved from the app, in this process."""
@@ -229,8 +235,28 @@ class Host:
         A harness that fails or takes longer than `PROBE_TIMEOUT` seconds offers nothing, and the setup screen then
         takes free text for it.
         """
-        harnesses = [entry for entry in self._catalog.values() if available(entry)]
-        self._probing = {entry.name for entry in harnesses}
+        await self._probe_each(self._to_ask())
+
+    def ask_harnesses(self) -> SetupView:
+        """
+        Ask each harness that Verifold did not ask yet what it offers, in the background, and return the setup.
+
+        A lab that is served again asked none, so the form that adds an agent asks when the person opens it. The
+        setup shows which harnesses Verifold asks now.
+        """
+        asked = self._to_ask()
+        if asked and self._group:
+            self._group.create_task(self._probe_each(asked))
+        return self.setup()
+
+    def _to_ask(self) -> list[HarnessEntry]:
+        # Marks the harnesses as asked at once, so that the setup shows them as asked before the first answer.
+        harnesses = [entry for entry in self._catalog.values() if available(entry) and entry.name not in self._asked]
+        self._asked |= {entry.name for entry in harnesses}
+        self._probing |= {entry.name for entry in harnesses}
+        return harnesses
+
+    async def _probe_each(self, harnesses: list[HarnessEntry]) -> None:
         await asyncio.gather(*(self._probe(entry) for entry in harnesses))
 
     async def _probe(self, harness: HarnessEntry) -> None:
@@ -422,15 +448,15 @@ class Host:
         revisions = {SettingsLevel.PROJECT: change.revisions.project, SettingsLevel.ALL: change.revisions.all_projects}
         values = change_setting(paths, change.level, change.key, _written(change.value), revisions)
         decides = change.level is SettingsLevel.PROJECT or not _holds(values[SettingsLevel.PROJECT], change.key)
-        # The choices for new labs don't change a running lab. Only the job settings do.
-        if self._lab is not None and decides and change.key.startswith('jobs.'):
-            name = change.key.removeprefix('jobs.')
-            chosen = getattr(settings_of(values).jobs, name)
+        # The choices for new labs don't change a running lab. Only the settings that a lab follows do.
+        if self._lab is not None and decides and change.key != 'setup':
+            section, name = change.key.split('.')
+            chosen = getattr(getattr(settings_of(values), section), name)
             running = self._lab.board.settings
             # The lab follows the person's choice, also when the files held it already but the lab doesn't.
-            if getattr(running.jobs, name) != chosen:
-                jobs = running.jobs.model_copy(update={name: chosen})
-                await self._lab.set_settings(running.model_copy(update={'jobs': jobs}))
+            if getattr(getattr(running, section), name) != chosen:
+                changed = getattr(running, section).model_copy(update={name: chosen})
+                await self._lab.set_settings(running.model_copy(update={section: changed}))
         return self.settings()
 
     def setup(self) -> SetupView:
@@ -492,8 +518,15 @@ class Host:
         self._lab = lab
         chosen = [choice for choice in request.agents for _ in range(choice.count)]
         for number, choice in enumerate(chosen, start=1):
-            await lab.join(_agent(number, self._catalog[choice.harness], choice))
+            await self._join(lab, number, choice, auto_mode=request.auto_mode)
         await self._launch()
+
+    async def _join(self, lab: Lab, number: int, choice: AgentChoice, *, auto_mode: bool) -> Agent:
+        # Add one agent of a seat to the record, with its name and the facts that the person gave the seat.
+        harness = self._catalog[choice.harness]
+        agent = _agent(number, harness, choice, self._offers.get(harness.name), _names(lab.board), auto_mode=auto_mode)
+        await lab.join(agent, on_call=choice.on_call, coordinator=choice.coordinator)
+        return agent
 
     async def resume(self) -> None:
         """
@@ -516,8 +549,8 @@ class Host:
         write_missing_norms(self._project / LAB_FOLDER)
         group.create_task(keep_time(lab))
         group.create_task(keep_jobs(lab, self._project, self._swept))
-        self._grant_asks = GrantAsks(lab)
-        group.create_task(self._grant_asks.run())
+        self._refusals = Refusals(lab)
+        group.create_task(self._refusals.run())
         # A lab that is served again is under way for all of its agents. A new lab is so for none of them.
         under_way = bool(lab.board.turns or lab.board.starts)
         for agent in self._workers(lab):
@@ -563,18 +596,60 @@ class Host:
         )
 
     def _crew(self, lab: Lab) -> Crew:
-        return _crew(self._workers(lab), self._catalog, auto_mode=lab.board.opened.auto_mode)
+        # A checker takes the model of an on-call seat only when the lab has no other seat of that family.
+        workers = self._workers(lab)
+        on_call = frozenset(agent.id for agent in workers if lab.board.on_call(agent.id))
+        return _crew(workers, self._catalog, auto_mode=lab.board.opened.auto_mode, on_call=on_call)
 
     async def _run_agent(self, lab: Lab, agent: Agent, *, under_way: bool) -> None:
         group, settings = self._group, self._settings
         if group is None or settings is None:
             raise SetupRejected('Attach the host to the server before a lab starts.')
-        norms = self._project / LAB_FOLDER / 'LAB.md'
-        writing = self._project / LAB_FOLDER / 'WRITING.md'
-        start = start_message(lab.board, agent, norms, writing, under_way=under_way)
-        member, setup = await self._seat(lab, agent, start)
+        if lab.board.on_call(agent.id) and not before(lab.board, agent.id).worked:
+            # Verifold starts no turn for an on-call agent. The folder comes now, so that a failure shows here.
+            await agent_folder(self._project, agent.id)
+            await self._activity.set(agent.id, 'idle')
+            self._loops[agent.id] = group.create_task(self._run_when_called(lab, agent, settings))
+            return
+        member, setup = await self._seat(lab, agent, self._start_message(lab, agent, under_way=under_way))
         await self._activity.set(agent.id, 'starting')
         self._loops[agent.id] = group.create_task(AgentLoop(member, setup, settings, shared=self._shared()).run())
+
+    def _start_message(self, lab: Lab, agent: Agent, *, under_way: bool) -> str:
+        norms = self._project / LAB_FOLDER / 'LAB.md'
+        writing = self._project / LAB_FOLDER / 'WRITING.md'
+        return start_message(lab.board, agent, norms, writing, under_way=under_way)
+
+    async def _run_when_called(self, lab: Lab, agent: Agent, settings: LoopSettings) -> None:
+        # An on-call agent that never worked has no harness and no turn. It starts when the first post for it
+        # arrives, or when the person takes its seat off call. Its first message then holds the facts of that
+        # moment. After a restart the wait starts again from the agent's join, so a post from before still counts.
+        # No harness starts while the lab is out of time, because no turn can run then.
+        seen = before(lab.board, agent.id).seen
+        while True:
+            board = lab.board
+            if board.gone(agent.id):
+                return
+            called = not board.on_call(agent.id) or update(board, agent.id, seen).posts
+            if called and not board.out_of_time:
+                break
+            await lab.wait_for_change(board.seq)
+        # The agent can have a new name by now, so its seat and its first message take it from the board.
+        joined = lab.board.agent(agent.id)
+        agent = joined.agent if joined else agent
+        try:
+            member, setup = await self._seat(lab, agent, self._start_message(lab, agent, under_way=True))
+        except (GitError, OSError) as error:
+            # One agent that cannot start must not stop the lab. The record keeps why, the member list shows it,
+            # and the person can start the agent again.
+            failed = f"Verifold can't start {agent.name}: {error}"
+            await lab.end_turn(
+                TurnSummary(agent=agent.id, seconds=0, usage=Usage(), error=failed, stopped=True, no_turn=True)
+            )
+            await self._activity.set(agent.id, 'stopped')
+            return
+        await self._activity.set(agent.id, 'starting')
+        await AgentLoop(member, setup, settings, shared=self._shared()).run()
 
     async def start_again(self, agent_id: AgentId) -> None:
         """
@@ -626,16 +701,38 @@ class Host:
             if members + choice.count > MAX_AGENTS:
                 raise SetupRejected(f'A lab has at most {MAX_AGENTS} agents, and this one has {members}.')
             for _ in range(choice.count):
-                agent = _agent(_free_number(lab.board), entry, choice)
+                number = _free_number(lab.board)
                 # The folder comes first. An agent that the record holds and that has no folder could never start.
                 try:
-                    await agent_folder(self._project, agent.id)
+                    await agent_folder(self._project, f'agent-{number}')
                 except (GitError, OSError) as error:
-                    raise SetupRejected(f"Can't make the folder of {agent.name}: {error}") from error
-                await lab.join(agent)
+                    raise SetupRejected(f"Can't make the folder of agent-{number}: {error}") from error
+                agent = await self._join(lab, number, choice, auto_mode=lab.board.opened.auto_mode)
                 await self._run_agent(lab, agent, under_way=True)
 
-    async def invite(self, name: str | None = None) -> Invitation:
+    async def change_seat(self, agent_id: AgentId, change: SeatChange) -> None:
+        """
+        Change an agent's seat as the person says: put it on call or take it off, and give or take the coordinator seat.
+
+        An on-call agent that never worked starts when its seat comes off call.
+
+        Raises:
+            NoLab: The folder has no lab.
+            NotFound: The lab has no agent with that ID.
+            RejectedEvent: The agent left the lab or is a blind checker.
+
+        """
+        lab = self._running()
+        if lab.board.agent(agent_id) is None:
+            raise NotFound(f'The lab has no agent with the ID {agent_id}.')
+        if change.on_call is not None:
+            await lab.set_on_call(agent_id, on_call=change.on_call)
+        if change.coordinator:
+            await lab.set_coordinator(agent_id, PERSON)
+        elif change.coordinator is False and lab.board.coordinator == agent_id:
+            await lab.set_coordinator(None, PERSON)
+
+    async def invite(self, request: InviteRequest | None = None) -> Invitation:
         """
         Add an agent that runs by itself to the lab that runs, and return its invitation, which holds its token.
 
@@ -650,6 +747,8 @@ class Host:
 
         """
         lab = self._running()
+        request = request or InviteRequest()
+        name = request.name
         # One at a time, with the adds, so that two requests cannot pass the limit or take the same number.
         async with self._adding:
             members = _members(lab.board)
@@ -663,9 +762,13 @@ class Host:
                     'another name.'
                 )
             agent = Agent(
-                id=f'agent-{number}', name=name or default, harness=GUEST, model=ModelSpec(family=UNKNOWN_FAMILY)
+                id=f'agent-{number}',
+                name=name or default,
+                harness=GUEST,
+                model=ModelSpec(family=request.family or UNKNOWN_FAMILY),
+                given_role=request.role,
             )
-            return await self._invitation(lab, agent, joins=True)
+            return await self._invitation(lab, agent, joins=request)
 
     async def invite_again(self, agent_id: AgentId) -> Invitation:
         """
@@ -687,14 +790,15 @@ class Host:
         if lab.board.gone(agent_id):
             raise SetupRejected(f'{joined.agent.name} left the lab, and an agent that left does not come back.')
         async with self._adding:
-            return await self._invitation(lab, joined.agent, joins=False)
+            return await self._invitation(lab, joined.agent)
 
     def _running(self) -> Lab:
         if self._lab is None or self._settings is None:
             raise NoLab('This folder has no lab yet. Start one from the setup screen.')
         return self._lab
 
-    async def _invitation(self, lab: Lab, agent: Agent, *, joins: bool) -> Invitation:
+    async def _invitation(self, lab: Lab, agent: Agent, joins: InviteRequest | None = None) -> Invitation:
+        # With `joins`, the agent is new, and it joins the record with the facts that the person gave its seat.
         url = self._settings.mcp_url if self._settings else ''
         token = secrets.token_urlsafe(32)
         digest = token_digest(token)
@@ -706,11 +810,9 @@ class Host:
         except (GitError, OSError, GuestsInvalid) as error:
             raise SetupRejected(f"Can't invite {agent.name}: {error}") from error
         if joins:
-            await lab.join(agent)
+            await lab.join(agent, on_call=joins.on_call, coordinator=joins.coordinator)
         await self._seat_guest(lab, agent, digest)
-        norms = self._project / LAB_FOLDER / 'LAB.md'
-        writing = self._project / LAB_FOLDER / 'WRITING.md'
-        start = start_message(lab.board, agent, norms, writing, under_way=True)
+        start = self._start_message(lab, agent, under_way=True)
         return Invitation(agent=agent.id, name=agent.name, text=invitation(start, url, token, folder))
 
     @property
@@ -735,12 +837,13 @@ class Host:
                 any(watch.agent == agent.id for watch in board.watches),
                 any(rerun.by == agent.id for rerun in board.reruns),
                 any(profile.agent == agent.id for profile in board.profiles),
+                any(entry.by == agent.id for entry in board.coordinators),
             )
         )
         await self._activity.invite(agent.id, 'here' if called else 'invited')
 
     def _shared(self) -> Shared:
-        return Shared(activity=self._activity, grant_asks=self._grant_asks, has_jobs=self._has_jobs)
+        return Shared(activity=self._activity, refusals=self._refusals, has_jobs=self._has_jobs)
 
     async def _has_jobs(self, agent: str) -> bool:
         return bool(await asyncio.to_thread(running_jobs, self._project, agent))
@@ -757,7 +860,7 @@ class Host:
             folder=folder,
             log=self._project / LAB_FOLDER / 'logs' / f'{agent.id}.log',
             token=self._members.add(member),
-            options=_options(agent, auto_mode=lab.board.opened.auto_mode),
+            options=_options(agent, self._catalog[agent.harness], auto_mode=lab.board.opened.auto_mode),
             start=start,
         )
         return member, setup
@@ -933,7 +1036,7 @@ def _name_taken(board: Board, name: str) -> bool:
     # A name in the text of a post reaches its agent, so a name must not read as another agent's name or ID, as
     # one that Verifold gives later, or as the person.
     folded = name.casefold()
-    used = {text.casefold() for joined in board.agents for text in (joined.agent.id, joined.agent.name)}
+    used = {text.casefold() for text in (*_names(board), *(joined.agent.id for joined in board.agents))}
     return folded in used | RESERVED_NAMES or bool(NUMBERED_NAME.fullmatch(folded))
 
 
@@ -962,29 +1065,74 @@ def _is_free(port: int) -> bool:
     return True
 
 
-def _agent(number: int, harness: HarnessEntry, choice: AgentChoice) -> Agent:
+def _agent(  # noqa: PLR0913
+    number: int,
+    harness: HarnessEntry,
+    choice: AgentChoice,
+    offer: Offer | None,
+    taken: tuple[str, ...],
+    *,
+    auto_mode: bool,
+) -> Agent:
+    # The agent's record keeps the harness's auto mode of today, so a later change of the catalog leaves this lab
+    # as it is.
     return Agent(
+        auto_mode=harness.auto_mode if auto_mode else None,
         id=f'agent-{number}',
-        name=f'Agent {number}',
+        name=label(harness.title, _model_name(offer, choice.model), taken),
         harness=harness.name,
-        model=ModelSpec(family=harness.family, name=choice.model, effort=choice.effort),
+        model=ModelSpec(family=choice.family or harness.family, name=choice.model, effort=choice.effort),
         mode=choice.mode,
+        given_role=choice.role,
     )
 
 
-def _options(agent: Agent, *, auto_mode: bool) -> SessionOptions:
-    return SessionOptions(model=agent.model.name, effort=agent.model.effort, mode=agent.mode, auto_mode=auto_mode)
+def _model_name(offer: Offer | None, model: str | None) -> str | None:
+    # The name that the harness shows for a seat's model. A model that the harness did not list keeps its ID. The
+    # harness's default model has a name only when the harness said which model that is.
+    value = model or (offer.model if offer else None)
+    listed = next((entry.name for entry in offer.models if entry.value == value), None) if offer else None
+    return listed or model
 
 
-def _crew(agents: tuple[Agent, ...], catalog: Mapping[str, HarnessEntry], *, auto_mode: bool) -> Crew:
-    # One entry per harness, in the order that the agents joined, with the model and effort of the harness's first
-    # agent. Checkers come from this crew. A checker follows the auto mode answer, not a worker's mode, because it
-    # must be able to run the work again.
-    first = {agent.harness: agent for agent in reversed(agents)}
-    harnesses = dict.fromkeys(agent.harness for agent in agents)
+def _names(board: Board) -> tuple[str, ...]:
+    # Every name that an agent of the lab has or had, so that a new name matches none of them.
+    return (*(joined.agent.name for joined in board.agents), *(before for _, before in board.renames))
+
+
+def _options(agent: Agent, harness: HarnessEntry, *, auto_mode: bool) -> SessionOptions:
+    """
+    Return what Verifold sets in the agent's harness session.
+
+    The person's own mode for the agent wins. In a lab in auto mode, the agent runs in the auto mode that its
+    record holds. A record from before Verifold kept it goes on with the auto mode that Verifold set then.
+    """
+    kept = agent.auto_mode or harness.auto_mode_before
+    mode = agent.mode or (kept if auto_mode else None)
+    return SessionOptions(model=agent.model.name, effort=agent.model.effort, mode=mode, auto_mode=auto_mode)
+
+
+def _crew(
+    agents: tuple[Agent, ...],
+    catalog: Mapping[str, HarnessEntry],
+    *,
+    auto_mode: bool,
+    on_call: frozenset[AgentId] = frozenset(),
+) -> Crew:
+    # One entry for each harness and model family, with the model and effort of the first agent that has both. The
+    # agents of on-call seats come last, so a checker takes the model of an on-call seat only when no other seat has
+    # that family. The entry carries the agent's family, which the person can state for a seat. Checkers come from
+    # this crew. A checker follows the auto mode answer, not a worker's mode, because it must be able to run the
+    # work again.
+    first: dict[tuple[str, str], Agent] = {}
+    for agent in sorted(agents, key=lambda agent: agent.id in on_call):
+        first.setdefault((agent.harness, agent.model.family.strip().casefold()), agent)
     return tuple(
-        (catalog[name], _options(first[name].model_copy(update={'mode': None}), auto_mode=auto_mode))
-        for name in harnesses
+        (
+            catalog[harness].model_copy(update={'family': agent.model.family}),
+            _options(agent.model_copy(update={'mode': None}), catalog[harness], auto_mode=auto_mode),
+        )
+        for (harness, _), agent in first.items()
     )
 
 

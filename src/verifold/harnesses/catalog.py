@@ -30,12 +30,17 @@ class HarnessEntry(Record):
     """The model family of the harness's default models. Blind checks compare families."""
     auto_mode: str | None = None
     """The ID of the harness's own auto mode, set when the person allows auto mode for the lab's agents."""
+    auto_mode_before: str | None = None
+    """
+    The auto mode that Verifold set for this harness before each agent's record kept its own. An agent of a lab in
+    auto mode whose record holds none goes on with this one, so a lab that resumes runs as it ran.
+    """
     names_mcp_server: bool = False
     """
     Whether the harness itself writes the MCP server's name into a tool call's input, as `server`, beside `tool`.
 
     Verifold then knows a call to the lab's own board and allows it. Where the model writes the input, the name
-    proves nothing, so the default is off.
+    proves nothing, so the default is off. A harness in the person's settings sets it in the same way.
     """
 
 
@@ -69,9 +74,12 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
                 executable='codex',
                 command=_adapter('@agentclientprotocol/codex-acp@2.5.0'),
                 family='openai',
-                # Not the mode `agent`: there the harness's own reviewer decides, and a refusal never reaches the
-                # person. In this mode each request comes to Verifold, which follows the person's grants.
-                auto_mode='workspace-write',
+                # The adapter's own default mode: Codex works in its sandbox, and Codex's own reviewer decides each
+                # request to leave it, as when the person runs Codex with auto review. Not `workspace-write`: that
+                # mode sends each such request to Verifold, and the only "no" that the adapter offers for many of
+                # them stops the agent's turn. In both modes the adapter turns the sandbox's network off.
+                auto_mode='agent',
+                auto_mode_before='workspace-write',
                 names_mcp_server=True,
             ),
         )
@@ -92,6 +100,7 @@ def catalog_with(
             command=entry.command,
             family=entry.family,
             auto_mode=entry.auto_mode,
+            names_mcp_server=entry.names_mcp_server,
         )
         for name, entry in harnesses.items()
     }

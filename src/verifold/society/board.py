@@ -7,8 +7,11 @@ from verifold.protocol.agents import GUEST
 from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
+    AgentNamed,
     AlarmSet,
+    CoordinatorSet,
     LabOpened,
+    OnCallSet,
     Posted,
     ProfileSet,
     QuestionRevised,
@@ -20,7 +23,7 @@ from verifold.protocol.events import (
     TurnStarted,
     WatchSet,
 )
-from verifold.protocol.ids import AgentId, PostId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.settings import Settings
 
 
@@ -37,6 +40,13 @@ class Board:
     revisions: tuple[QuestionRevised, ...] = ()
     """The person's revisions of the question, oldest first."""
     agents: tuple[AgentJoined, ...] = ()
+    """Each agent's entry, with the name that the agent has now."""
+    renames: tuple[tuple[AgentNamed, str], ...] = ()
+    """Each new name that an agent got, with the name that it had before, oldest first."""
+    on_calls: tuple[OnCallSet, ...] = ()
+    """Each time that the person put a seat on call or took it off, oldest first."""
+    coordinators: tuple[CoordinatorSet, ...] = ()
+    """Each change of the lab's coordinator, oldest first."""
     left: tuple[AgentLeft, ...] = ()
     """The agents that left the lab or that the person removed, oldest first."""
     threads: tuple[ThreadOpened, ...] = ()
@@ -84,11 +94,63 @@ class Board:
         An agent that Verifold started is. An invited agent is from its first post, because until then nobody knows
         whether it used its invitation. With `before`, only its posts before that event count.
         """
-        if joined.agent.harness != GUEST:
-            return True
-        return any(
-            entry.post.author == joined.agent.id and (before is None or entry.seq < before) for entry in self.posts
+        return joined.agent.harness != GUEST or self._posted(joined.agent.id, before)
+
+    def counts(self, joined: AgentJoined, before: int | None = None) -> bool:
+        """
+        Return whether an agent counts among the lab's agents when they decide that the lab is done.
+
+        An agent does when it is known to be in the lab. An on-call agent does from its first post, by the rule
+        for an invited agent: until then no post for every agent reached it, so the lab does not wait for its word.
+        With `before`, the seat counts as it was at that event. So a switch of the seat after a close changes
+        neither who counted for the close nor whether the lab is closed. An agent that joined after that event
+        does not count, whatever its seat: a seat that the person adds to a closed lab leaves it closed.
+        """
+        if before is not None and joined.seq > before:
+            return False
+        if self.on_call(joined.agent.id, before):
+            return self._posted(joined.agent.id, before)
+        return self.came(joined, before)
+
+    def _posted(self, agent_id: AgentId, before: int | None) -> bool:
+        return any(entry.post.author == agent_id and (before is None or entry.seq < before) for entry in self.posts)
+
+    def on_call(self, agent_id: AgentId, before: int | None = None) -> bool:
+        """
+        Return whether the person put an agent's seat on call, and did not take it off since.
+
+        With `before`, return whether the seat was on call just before that event.
+        """
+        switches = (
+            entry
+            for entry in reversed(self.on_calls)
+            if entry.agent == agent_id and (before is None or entry.seq < before)
         )
+        latest = next(switches, None)
+        return bool(latest and latest.on_call)
+
+    @property
+    def coordinator(self) -> AgentId | None:
+        """The agent that holds the lab's coordinator seat, or `None`. An agent that left the lab holds it no longer."""
+        holder = self.coordinators[-1].agent if self.coordinators else None
+        return holder if holder and not self.gone(holder) else None
+
+    @property
+    def coordinator_open(self) -> bool:
+        """
+        Whether an agent may take the coordinator seat by itself now.
+
+        It may while nobody holds the seat and the person did not close it: nobody ever held it, its holder gave it
+        up or left the lab by itself, or the person said that agents may take it. The person closes the seat when
+        they clear it or remove its holder.
+        """
+        if not self.coordinators:
+            return True
+        last = self.coordinators[-1]
+        if last.agent is None:
+            return last.by != PERSON or last.open
+        left = self.gone(last.agent)
+        return left is not None and left.by == last.agent
 
     def gone(self, agent_id: AgentId) -> AgentLeft | None:
         """Return the entry that says that an agent left the lab, or `None` while it is in the lab."""
@@ -104,6 +166,18 @@ class Board:
         role = next((entry.role for entry in reversed(mine) if entry.role is not None), '')
         status = next((entry.status for entry in reversed(mine) if entry.status is not None), '')
         return role, status
+
+    def failure(self, agent_id: AgentId) -> TurnEnded | None:
+        """
+        Return the entry of an agent's latest turn, or of the latest start of its harness, when that failed.
+
+        A failure shows no longer once a turn of the agent started after it, or a later turn ended well.
+        """
+        latest = next((turn for turn in reversed(self.turns) if turn.agent == agent_id), None)
+        if latest is None or latest.error is None:
+            return None
+        again = any(start.agent == agent_id and start.seq > latest.seq for start in self.starts)
+        return None if again else latest
 
     def thread(self, thread_id: ThreadId) -> ThreadOpened | None:
         """Return the entry of a thread, or `None`."""

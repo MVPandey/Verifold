@@ -131,6 +131,7 @@ def messages() -> dict[str, str]:
     ada = board.agents[0].agent
     start = start_message(board, ada, NORMS, Path('/lab/.verifold/WRITING.md'), under_way=True)
     alarm = AlarmSet(seq=9, at=START, agent='ada', minutes=20, quiet=True, stays=True)
+    seats = RecordBuilder().join('ada').join('bo').on_call('ada').coordinator('ada')
     closing = RecordBuilder().join('ada').join('bo').thread('t-1', opened_by='ada')
     closing.post(Close(id='p-1', thread='t-1', author='ada', text='It holds.'))
     return {
@@ -143,6 +144,9 @@ def messages() -> dict[str, str]:
         'cut short': cut_short_message('The harness stopped: max_tokens.'),
         'start': start,
         'start alone': start_message(RecordBuilder().join('ada').board(), ada, NORMS),
+        'start with a seat': start_message(
+            seats.board(), ada.model_copy(update={'given_role': 'direction creator'}), NORMS
+        ).replace('direction creator', ''),
         **{
             f'back {why}': back_message(why, start, FOLDER, kept=kept, cut_off=True, jobs_stopped=True)
             for why, kept in ((RESTARTED, True), (STARTED_AGAIN, False), (HARNESS_FAILED, False))

@@ -24,9 +24,12 @@ import {
 } from '../model/agents.ts';
 import { href } from '../model/route.ts';
 import type { Route } from '../model/route.ts';
+import { modelSummary, needsModel, newSeat, seatChoice } from '../model/setup.ts';
 import { stopLine } from '../model/settings.ts';
 import { clockLine, endLine, moreTime } from '../model/time.ts';
 import { FaceView } from './parts.tsx';
+import { CoordinatorSeat, FactFields, SeatControls, SeatFields } from './SeatForm.tsx';
+import type { Facts } from './SeatForm.tsx';
 
 /** What the top bar shows for a started lab. */
 export interface TopLab {
@@ -124,8 +127,9 @@ export function Top(props: {
 }
 
 /**
- * The member list: who is in the lab, the role and the status that each gave itself, the thread where each works,
- * what each does now, and what each has cost.
+ * The member list: who is in the lab, the role that the person gave each and the role and the status that each gave
+ * itself, who is the coordinator, who is on call, the thread where each works, what each does now, and what each
+ * has cost.
  */
 function Members(props: {
   readonly api: Api;
@@ -149,15 +153,28 @@ function Members(props: {
       <>
         <p>
           <b>{view.agent.name}</b>
-          {view.role ? <span className="f-role">{view.role}</span> : null}
-          <span className="f-tag">{harnessTitle(props.harnesses, view.agent.harness)}</span>
+          {view.coordinator ? <span className="f-role">Coordinator</span> : null}
+          {view.agent.given_role ? (
+            <span className="f-role">{view.agent.given_role} (given by you)</span>
+          ) : null}
+          {view.role && view.role !== view.agent.given_role ? (
+            <span className="f-role">{view.role}</span>
+          ) : null}
+          {/* A name that Verifold built starts with the harness's title already. */}
+          {view.agent.name.startsWith(harnessTitle(props.harnesses, view.agent.harness)) ? null : (
+            <span className="f-tag">{harnessTitle(props.harnesses, view.agent.harness)}</span>
+          )}
         </p>
         {view.status ? <p className="f-own">{view.status}</p> : null}
         <p className="f-status">
           <span className={`dot ${state.dot}`} /> {state.text}
         </p>
         <Where view={view} threads={props.threads} />
+        {view.agent.checks === null && !view.left ? (
+          <SeatControls api={props.api} view={view} onChange={props.onChange} />
+        ) : null}
         <p className="f-where">{costLine(view)}</p>
+        {view.error && !view.left ? <Failure error={view.error} /> : null}
         {view.agent.harness === GUEST && !view.left ? (
           <InviteAgain
             api={props.api}
@@ -215,6 +232,9 @@ function Members(props: {
             </li>
           ) : null}
         </ul>
+        {lab.agents.some((view) => view.coordinator) ? null : (
+          <CoordinatorSeat api={props.api} open={lab.coordinator_open} onChange={props.onChange} />
+        )}
         <p className="f-total">
           <span>
             {lab.posts} {lab.posts === 1 ? 'post' : 'posts'} in {lab.threads}{' '}
@@ -243,9 +263,31 @@ function Members(props: {
   );
 }
 
+/** The most characters of a harness's error that a member's row shows before the person opens it. */
+const FAILURE_SHOWN = 160;
+
 /**
- * The way to add one agent to the lab that runs. The agent uses the harness's own defaults, reads the board, and
- * chooses its work as the others do.
+ * Why a member's harness failed last, in the harness's own words, as text. A long error shows its start, and the
+ * person opens it to read it whole.
+ */
+function Failure(props: { readonly error: string }): ReactElement {
+  const line = props.error.replace(/\s+/g, ' ').trim();
+  if (line.length <= FAILURE_SHOWN) return <p className="f-where">Last failure: {line}</p>;
+  return (
+    <details className="f-each">
+      <summary>Last failure: {line.slice(0, FAILURE_SHOWN)}…</summary>
+      <pre className="f-failure">{props.error}</pre>
+    </details>
+  );
+}
+
+/** Milliseconds between reads of the setup while Verifold asks the harnesses what they offer. */
+const OFFER_POLL = 1000;
+
+/**
+ * The way to add one agent to the lab that runs, with the same seat form as the setup screen: the model, the
+ * effort, and the mode that the harness offers, and the seat's facts. The agent reads the board and chooses its
+ * work as the others do.
  */
 function AddAgent(props: {
   readonly api: Api;
@@ -253,16 +295,34 @@ function AddAgent(props: {
   readonly onChange: () => void;
 }): ReactElement | null {
   const ready = props.harnesses.filter((harness) => harness.available);
-  const [harness, setHarness] = useState(ready[0]?.name ?? '');
+  const [seat, setSeat] = useState(() => newSeat(ready[0]?.name ?? ''));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  if (ready.length === 0) return null;
+  const option = ready.find((harness) => harness.name === seat.harness);
+  const probing = ready.some((harness) => harness.probing);
+  const { api, onChange } = props;
+
+  // While Verifold asks a harness what it offers, the list is read again until the answer is there.
+  useEffect(() => {
+    if (!probing) return undefined;
+    const timer = setTimeout(onChange, OFFER_POLL);
+    return () => clearTimeout(timer);
+  }, [probing, props.harnesses, onChange]);
+
+  if (!option) return null;
+  // A lab that Verifold serves again has not asked the harnesses yet. It asks when the person opens the form.
+  const ask = (open: boolean): void => {
+    if (open && ready.some((harness) => harness.offer === null && !harness.probing)) {
+      api.askOffers().then(onChange, () => undefined);
+    }
+  };
   const add = (): void => {
     setBusy(true);
     setError(null);
-    props.api.addAgents({ harness, count: 1 }).then(
+    api.addAgents(seatChoice(seat)).then(
       () => {
         setBusy(false);
+        setSeat(newSeat(seat.harness));
         props.onChange();
       },
       (failure: unknown) => {
@@ -276,21 +336,32 @@ function AddAgent(props: {
       <label>
         Add an agent
         <select
-          value={harness}
+          value={seat.harness}
           onChange={(event) => {
-            setHarness(event.target.value);
+            setSeat(newSeat(event.target.value));
           }}
         >
-          {ready.map((option) => (
-            <option key={option.name} value={option.name}>
-              {option.title}
+          {ready.map((harness) => (
+            <option key={harness.name} value={harness.name}>
+              {harness.title}
             </option>
           ))}
         </select>
       </label>
-      <button type="button" onClick={add} disabled={busy}>
+      <button type="button" onClick={add} disabled={busy || needsModel(seat)}>
         {busy ? 'Adding' : 'Add'}
       </button>
+      <details
+        className="modelpick inline"
+        onToggle={(event) => {
+          ask(event.currentTarget.open);
+        }}
+      >
+        <summary>{modelSummary(seat, option.offer, option.family)}</summary>
+        <div className="menu">
+          <SeatFields option={option} seat={seat} onSeat={setSeat} />
+        </div>
+      </details>
       {error ? (
         <span className="error" role="alert">
           {error}
@@ -299,6 +370,8 @@ function AddAgent(props: {
     </div>
   );
 }
+
+const NO_FACTS: Facts = { role: '', family: '', onCall: false, coordinator: false };
 
 /**
  * The way to invite an agent that the person runs themselves, in any harness that speaks MCP. Verifold starts
@@ -310,15 +383,24 @@ function InviteAgent(props: {
   readonly onChange: () => void;
 }): ReactElement {
   const [name, setName] = useState('');
+  const [facts, setFacts] = useState<Facts>(NO_FACTS);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const invite = (): void => {
     setBusy(true);
     setError(null);
-    props.api.invite(name.trim() || undefined).then(
+    const request = {
+      ...(name.trim() ? { name: name.trim() } : {}),
+      ...(facts.role.trim() ? { role: facts.role.trim() } : {}),
+      ...(facts.family.trim() ? { family: facts.family.trim() } : {}),
+      ...(facts.onCall ? { on_call: true } : {}),
+      ...(facts.coordinator ? { coordinator: true } : {}),
+    };
+    props.api.invite(request).then(
       (made) => {
         setBusy(false);
         setName('');
+        setFacts(NO_FACTS);
         props.onInvited(made);
         props.onChange();
       },
@@ -347,6 +429,16 @@ function InviteAgent(props: {
       <p className="f-where">
         For an agent that you run yourself. Verifold does not start it or stop it.
       </p>
+      <details className="modelpick inline">
+        <summary>Its seat</summary>
+        <div className="menu">
+          <FactFields value={facts} family="unknown" onChange={setFacts} />
+          <p>
+            Verifold does not know this agent’s model. With a model family, a blind rerun by another
+            family can hold up its results.
+          </p>
+        </div>
+      </details>
       {error ? (
         <span className="error" role="alert">
           {error}

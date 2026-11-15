@@ -10,6 +10,7 @@ from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.runner.messages import (
     DOORBELL,
+    ON_CALL,
     RESTARTED,
     back_message,
     invitation,
@@ -36,8 +37,44 @@ def test_the_start_message_gives_the_question_the_agent_its_peers_and_the_norms(
         '',
         f'You are Ada (ada) in a Verifold lab. {SAME_MOMENT}: Bo (bo, fake), Cy (cy, fake).',
         BOARD,
-        'Thread t-1 on the board holds this question, and every agent watches it.',
+        'Thread t-1 on the board holds this question.',
         "/lab/.verifold/LAB.md holds the lab's norms, which the person sets and can change while the lab runs.",
+    ]
+
+
+def test_the_start_message_states_the_role_that_the_person_gave_and_the_seat_as_facts() -> None:
+    record = RecordBuilder().join('ada').join('bo', name='Codex · gpt-6').on_call('ada').coordinator('ada')
+    board = record.board()
+    ada = board.agents[0].agent.model_copy(update={'given_role': 'direction creator'})
+
+    message = start_message(board, ada, Path('LAB.md'))
+    plain = start_message(board, board.agents[1].agent, Path('LAB.md'))
+
+    assert message.splitlines()[2:7] == [
+        f'You are Ada (ada) in a Verifold lab. {SAME_MOMENT}: Codex · gpt-6 (bo, fake).',
+        BOARD,
+        'The person gave your seat this role: direction creator',
+        "You hold the lab's coordinator seat.",
+        ON_CALL,
+    ]
+    # The sentence holds for an invited agent too, which Verifold never starts.
+    assert 'Verifold starts you' not in ON_CALL
+    assert all(
+        part in ON_CALL
+        for part in (
+            'names you',
+            'replies to you',
+            'builds on your post',
+            'a thread that you watch',
+            'side thread',
+            'close',
+        )
+    )
+    # An agent with no role from the person and a plain seat reads nothing about either.
+    assert plain.splitlines()[2:] == [
+        f'You are Codex · gpt-6 (bo) in a Verifold lab. {SAME_MOMENT}: Ada (ada, fake).',
+        BOARD,
+        "LAB.md holds the lab's norms, which the person sets and can change while the lab runs.",
     ]
 
 
@@ -73,8 +110,8 @@ def test_a_lab_with_a_time_limit_tells_each_agent_when_it_ends_in_utc() -> None:
 def test_the_lab_norms_and_the_doorbell_are_short_and_plain() -> None:
     assert NORMS_TEMPLATE.startswith("# The lab's norms")
     assert '`' not in NORMS_TEMPLATE
-    # The limit was 2,800. It grew by 500 for the three norms that came out of Python and the norm on blind reruns.
-    assert len(NORMS_TEMPLATE) < 3_300
+    # The limit was 2,800. It grew by 300 for the two norms that came out of Python and the norm on checks by rerun.
+    assert len(NORMS_TEMPLATE) < 3_100
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -115,7 +152,6 @@ def test_the_lab_norms_hold_what_came_out_of_python_and_the_norm_on_blind_reruns
     for norm in (
         "Post your results before the lab's time ends",
         "Have it give its own name in the post's helper field",
-        'Go on with other work, and try the command again after their answer',
         'When you check a result with a rerun, reproduce it yourself from its files, and do not trust the claim',
         'Post the check with the files of your own run',
     ):
@@ -256,7 +292,7 @@ def test_an_agent_that_starts_after_a_revision_gets_the_current_question_and_a_c
 
     assert lines[0] == 'Does it hold on ARM?'
     assert lines[4:6] == [
-        'Thread t-1 on the board holds this question, and every agent watches it.',
+        'Thread t-1 on the board holds this question.',
         (
             'The person revised the question, last at 2026-11-06 12:05 UTC. The text above is the current one, and '
             '`brief` lists the posts that hold the revisions.'

@@ -40,7 +40,7 @@ export function NormsPage(props: { readonly api: Api; readonly labOpen: boolean 
       <h1>Norms</h1>
       <p className="sub">
         {props.labOpen
-          ? 'These two files say how you want the agents to work. Each agent reads them when it starts. When you save a change here, a post from you in the thread of the question tells the agents that the file changed.'
+          ? 'These two files say how you want the agents to work. Each agent reads them when it starts. When you save a change here, a post from you in the thread of the question tells the agents that the file changed. An agent that is on call does not hear that post.'
           : 'These two files say how you want the agents to work. The lab that you start gets them as they are here.'}{' '}
         Verifold itself tells the agents only how the board works.
       </p>
@@ -230,7 +230,7 @@ export function savedLine(saved: Saved): string {
   switch (saved.noPost) {
     case null:
       return saved.told
-        ? 'Saved. A post from you in the thread of the question tells the agents.'
+        ? 'Saved. A post from you in the thread of the question tells the agents that are not on call.'
         : 'Saved.';
     case 'same':
       return 'The file has this text already, so nothing changed.';

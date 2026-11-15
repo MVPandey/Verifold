@@ -11,8 +11,11 @@ from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
+    AgentNamed,
+    CoordinatorSet,
     Event,
     LabOpened,
+    OnCallSet,
     Posted,
     QuestionRevised,
     RerunRequested,
@@ -52,17 +55,33 @@ class RecordBuilder:
         recruited_by: str | None = None,
         checks: str | None = None,
         harness: str = 'fake',
+        name: str | None = None,
     ) -> 'RecordBuilder':
         seq, at = self._stamp()
         agent = Agent(
             id=agent_id,
-            name=agent_id.title(),
+            name=name or agent_id.title(),
             harness=harness,
             model=ModelSpec(family=family),
             recruited_by=recruited_by,
             checks=checks,
         )
         self.events.append(AgentJoined(seq=seq, at=at, agent=agent))
+        return self
+
+    def named(self, agent_id: str, name: str) -> 'RecordBuilder':
+        seq, at = self._stamp()
+        self.events.append(AgentNamed(seq=seq, at=at, agent=agent_id, name=name))
+        return self
+
+    def on_call(self, agent_id: str, *, on_call: bool = True) -> 'RecordBuilder':
+        seq, at = self._stamp()
+        self.events.append(OnCallSet(seq=seq, at=at, agent=agent_id, on_call=on_call))
+        return self
+
+    def coordinator(self, agent_id: str | None, by: str = 'person', *, free: bool = False) -> 'RecordBuilder':
+        seq, at = self._stamp()
+        self.events.append(CoordinatorSet(seq=seq, at=at, agent=agent_id, by=by, open=free))
         return self
 
     def leave(self, agent_id: str, by: str | None = None, reason: str = '') -> 'RecordBuilder':

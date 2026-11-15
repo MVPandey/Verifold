@@ -88,7 +88,7 @@ def sweep(
     for number in range(SWEEP_PASSES):
         if number and not still():
             break
-        found, left = _lab_processes(lab, _harness_groups() if spare_harnesses else frozenset())
+        found, left = _lab_processes(lab, spare_harnesses=spare_harnesses)
         unmarked = [job for _, job in left]
         new = [(process, job) for process, job in found if job.pid not in survived]
         if not new:
@@ -104,7 +104,7 @@ def sweep(
 
 def pause_jobs(lab: Path) -> Sweep:
     """Pause the jobs that the lab's agents started, and return them. The harnesses keep running."""
-    found, _ = _lab_processes(lab, _harness_groups())
+    found, _ = _lab_processes(lab, spare_harnesses=True)
     paused: list[Job] = []
     for process, job in found:
         with suppress(psutil.Error):
@@ -115,7 +115,7 @@ def pause_jobs(lab: Path) -> Sweep:
 
 def resume_jobs(lab: Path) -> None:
     """Resume the jobs that the lab's agents started. A job that runs already doesn't notice."""
-    found, _ = _lab_processes(lab, _harness_groups())
+    found, _ = _lab_processes(lab, spare_harnesses=True)
     for process, _ in found:
         with suppress(psutil.Error):
             process.resume()
@@ -123,7 +123,7 @@ def resume_jobs(lab: Path) -> None:
 
 def running_jobs(lab: Path, agent: str) -> tuple[Job, ...]:
     """Return the jobs that `agent` started and that still run. The agent's harness is not one of them."""
-    found, _ = _lab_processes(lab, _harness_groups())
+    found, _ = _lab_processes(lab, spare_harnesses=True)
     return tuple(job for _, job in found if job.agent == agent)
 
 
@@ -183,26 +183,36 @@ def _stop(processes: list[psutil.Process], grace: float) -> set[psutil.Process]:
 
 
 def _lab_processes(
-    lab: Path, spared: frozenset[int] = frozenset()
+    lab: Path, *, spare_harnesses: bool = False
 ) -> tuple[list[tuple[psutil.Process, Job]], list[tuple[psutil.Process, Job]]]:
+    """
+    Return the lab's processes, and the processes in agents' folders that may not be the lab's.
+
+    With `spare_harnesses`, the harnesses and what runs in their process groups are not among them. The harnesses
+    are read after the look at the processes, which takes time. A harness that starts during the look is then
+    known as one, so that a pause or a stop of the agents' jobs never takes a harness that just started.
+    """
     # A process reports its working folder with symbolic links resolved.
     agents = agents_folder(lab).resolve()
-    found: list[tuple[psutil.Process, Job]] = []
-    unmarked: list[tuple[psutil.Process, Job]] = []
+    found: list[tuple[int, psutil.Process, Job]] = []
+    unmarked: list[tuple[int, psutil.Process, Job]] = []
     for process in psutil.process_iter():
         if process.pid == os.getpid():
             continue
         # Other people's processes refuse to show their environment, and a process can end while the sweep looks.
         with suppress(psutil.Error, OSError):
-            if os.getpgid(process.pid) in spared:
-                continue
+            group = os.getpgid(process.pid)
             environment = process.environ()
             if environment.get(LAB_VARIABLE) == str(lab):
-                found.append((process, _job(process, environment.get(AGENT_VARIABLE))))
+                found.append((group, process, _job(process, environment.get(AGENT_VARIABLE))))
             elif agent := _agent_of_folder(process, agents):
                 hidden = not environment and process.terminal() is None
-                (found if hidden else unmarked).append((process, _job(process, agent)))
-    return found, unmarked
+                (found if hidden else unmarked).append((group, process, _job(process, agent)))
+    spared = _harness_groups() if spare_harnesses else frozenset()
+    return (
+        [(process, job) for group, process, job in found if group not in spared],
+        [(process, job) for group, process, job in unmarked if group not in spared],
+    )
 
 
 def _harness_groups() -> frozenset[int]:
