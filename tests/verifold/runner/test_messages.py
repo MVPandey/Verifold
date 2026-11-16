@@ -112,7 +112,7 @@ def test_the_lab_norms_are_plain_text_for_one_read_and_the_doorbell_is_one_line(
     assert '`' not in NORMS_TEMPLATE
     # Each norm has its reason and what it looks like in practice, so the file is longer than a list of rules.
     # An agent still reads it whole at the start of its work.
-    assert len(NORMS_TEMPLATE) < 17_500
+    assert len(NORMS_TEMPLATE) < 18_500
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -125,6 +125,7 @@ def test_the_lab_norms_are_sections_that_each_say_what_the_person_wants_and_why(
         'Explore first',
         'What stands in the way becomes the way',
         'Chain ideas',
+        'Rounds',
         'Strategy and the seats',
         'Votes and badges',
         'Evidence',

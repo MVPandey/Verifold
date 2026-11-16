@@ -44,6 +44,7 @@ from verifold.protocol.app import (
     RequestAnswer,
     RerunRequest,
     ReviewerSeats,
+    RoundView,
     SeatChange,
     SettingsChange,
     SettingsView,
@@ -68,12 +69,13 @@ from verifold.server.status import agent_need, all_outcomes, in_turn, profile_ed
 from verifold.society.board import Board
 from verifold.society.deliverables import deliverable_lines, removed_lines, told_at
 from verifold.society.errors import NotFound, SocietyError
-from verifold.society.identity import post_line, seat_label
+from verifold.society.identity import post_line, post_view, seat_label
 from verifold.society.lifecycle import alarm_line, close_count, lab_state
 from verifold.society.lines import lines_of
 from verifold.society.obstacles import Obstacle, obstacles
 from verifold.society.reruns import reruns_wanted
 from verifold.society.reviewers import seats
+from verifold.society.rounds import close_of, closes_at, entries, is_open, waits_for
 from verifold.society.standing import agreed, closing, standing
 from verifold.society.turns import before
 from verifold.society.views import (
@@ -496,6 +498,7 @@ def _lab_view(board: Board, activity: Activity, now: datetime) -> LabView:
         proposals=proposals(board),
         breakthrough_threads=breakthrough_threads(board),
         obstacles=tuple(_obstacle_view(board, found) for found in reversed(obstacles(board))),
+        round=_round_view(board, now),
         reviewer_seats=seats(board),
         reviewer_seats_set=board.settings.reviewers.seats,
         ends_at=board.ends_at,
@@ -513,6 +516,23 @@ def _cards(lab: Lab) -> tuple[ThreadCard, ...]:
         ThreadCard(**dict(summary), last_result_at=result_at, last_plan_at=plan_at)
         for summary in thread_summaries(board, PERSON, lab.now())
         for result_at, plan_at in (line_times(board, summary.thread),)
+    )
+
+
+def _round_view(board: Board, now: datetime) -> RoundView | None:
+    # The newest round: the one that is open, or else the one that closed last. Its agents that did not enter are
+    # the ones that it waits for now, or the ones that it waited for at its close.
+    opened = board.rounds[-1] if board.rounds else None
+    if opened is None:
+        return None
+    closed = close_of(board, opened.post.id)
+    return RoundView(
+        round=post_view(board, opened, PERSON),
+        open=is_open(board, opened, now),
+        closes_at=closes_at(opened),
+        closed=closed,
+        entries=tuple(post_view(board, entry, PERSON) for entry in entries(board, opened.post.id)),
+        not_entered=waits_for(board, opened, closed.seq if closed else None),
     )
 
 

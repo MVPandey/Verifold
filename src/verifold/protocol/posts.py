@@ -4,8 +4,9 @@ The posts of the board.
 A post's `kind` says what it does in the society, and `builds_on` says which posts it started from, so the record
 shows how an idea moved from one agent's work into another's. A plan says what its author does next, an objection disputes its
 target, an answer can concede an objection, a check tests another agent's post, a proposal puts a choice to the
-lab, a report tells the person where the lab is, a call offers work that another agent can take, and an offer
-holds files for a deliverable of the person. A new kind is one more model in the `Post` union.
+lab, a report tells the person where the lab is, a call offers work that another agent can take, an offer holds
+files for a deliverable of the person, a round asks every agent the same question at once, and an entry is an
+agent's answer to a round. A new kind is one more model in the `Post` union.
 """
 
 from collections.abc import Callable
@@ -68,6 +69,8 @@ type PostKind = Literal[
     'close',
     'request',
     'offer',
+    'round',
+    'entry',
 ]
 """The values of `kind` across the `Post` union."""
 type Outcome = Literal['holds', 'fails']
@@ -363,6 +366,40 @@ class FileOffer(PostBase):
     reply_to: None = None
 
 
+MAX_ROUND_MINUTES = 15
+"""The most minutes that a round stays open."""
+
+
+class Round(PostBase):
+    """
+    A question to every agent of the lab at once, which `text` holds. It stays open for `minutes`.
+
+    Each agent answers with one entry that replies to the round. While the round is open, the board shows what an
+    entry says only to its author and the person. The round closes at its time, when every agent of the lab that is
+    not on call and has not left has entered, or when its opener withdraws it with a ruled-out lead that replies
+    to it. Verifold then records the close, and every entry shows to every agent. A round is in a thread for the
+    whole lab, names nobody, and replies to no post, and a lab has one open round at a time. A record from before
+    rounds holds none.
+    """
+
+    kind: Literal['round'] = 'round'
+    minutes: int = Field(ge=1, le=MAX_ROUND_MINUTES)
+    reply_to: None = None
+
+
+class Entry(PostBase):
+    """
+    An agent's answer to a round. It replies to the round, and an agent has one entry in a round.
+
+    While the round is open, the board shows every other agent that the entry exists and who wrote it, and nothing
+    of its content. Until then it takes no reply, no vote, no badge, and no rerun request, and no post builds on
+    it. From the round's close on, it is a post like any other.
+    """
+
+    kind: Literal['entry'] = 'entry'
+    reply_to: PostId
+
+
 type Post = Annotated[
     Message
     | Plan
@@ -377,6 +414,8 @@ type Post = Annotated[
     | Call
     | Close
     | MoveRequest
-    | FileOffer,
+    | FileOffer
+    | Round
+    | Entry,
     Field(discriminator='kind'),
 ]

@@ -23,7 +23,7 @@ from verifold.protocol.deliverables import (
     RemovedDeliverable,
     Sentence,
 )
-from verifold.protocol.events import AgentLeft, Note, Question
+from verifold.protocol.events import AgentLeft, Note, Question, RoundClosed
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import (
@@ -282,6 +282,30 @@ class ObstacleView(Record):
     """
 
 
+class RoundView(Record):
+    """
+    A round as the person's app shows it: the round, when it closes, its entries, and the agents that did not enter.
+
+    The person sees every entry whole as it arrives, also while the round is open. The agents see one another's
+    entries only from the close on.
+    """
+
+    round: PostView
+    open: bool
+    """Whether the round is open now by the lab's clock."""
+    closes_at: AwareDatetime
+    """When the round closes by the lab's clock, unless it closes earlier."""
+    closed: RoundClosed | None = None
+    """The close of the round, with when and why. `None` until Verifold records it."""
+    entries: tuple[PostView, ...] = ()
+    """The entries, oldest first."""
+    not_entered: tuple[AgentId, ...] = ()
+    """
+    The agents that the round waits for now, or waited for at its close, that did not enter: the agents of the lab
+    that are not on call and have not left.
+    """
+
+
 class LabView(Record):
     """The lab at a glance."""
 
@@ -312,6 +336,8 @@ class LabView(Record):
     """The threads that hold a post with a `breakthrough` badge that stands."""
     obstacles: tuple[ObstacleView, ...] = ()
     """Every obstacle of the lab's lines of work, the newest first, open, taken up, and removed."""
+    round: RoundView | None = None
+    """The round that is open, or else the newest round that closed. `None` in a lab without rounds."""
     reviewer_seats: int = 0
     """How many reviewer seats the lab has."""
     reviewer_seats_set: int | None = None

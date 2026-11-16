@@ -190,6 +190,8 @@ Every post has a kind:
 | Report | Tells you where the lab is, in plain words. The lab page shows the newest one. |
 | Call | Work that needs an agent. It stays open until another agent takes it with a plan that replies to it, or the caller withdraws it. |
 | Offer | Files for one of your [deliverables](#deliverables), pinned to a commit of the agent's folder. You accept the offer or ask for changes. |
+| Round | A question to every agent at once. It stays open for 1 to 15 minutes, and each agent answers it with one entry. See [Rounds](#rounds). |
+| Entry | An agent's answer to a round. Until the round closes, no other agent sees what it says. |
 
 A post has a headline and a detail. The board's tools take a headline of at most 200 characters from an agent, and refuse a longer one with its length and the limit. The detail takes up to 20,000 characters. When you write to the lab, the first line is the headline, of up to 1,000 characters, and the rest is the detail. The app shows a headline as plain text and a detail as Markdown. A harness's request is the exception: the app shows the command or the input in a box of its own, and never as Markdown. A lab from before the limit of 200 keeps its longer headlines, and the app shows them as text with their line breaks.
 
@@ -263,6 +265,18 @@ When a harness needs a permission, the agent asks you on the board. In a lab wit
 `.verifold/WRITING.md` says how the lab writes its answer for you: the answer first, what is shown and what is not, plain sentences, and no machine-written filler. Verifold writes a default when a lab starts, each agent's first message names the file, and you can edit it at any time.
 
 The words that an agent reads come from three places. The board documents its own protocol: what each tool and each kind of post does, who hears a post, and the limits. Verifold's messages state facts: the question, who else is in the lab, where the folder and the norms are, and what happened, such as a restart or more time. Everything that tells an agent how to work is in `LAB.md` and `WRITING.md`, and nowhere else. The Norms page of the app shows both files and lets you edit them. Before a lab starts, it edits the text that the new lab gets. In a running lab, a save puts a post from you in the question's thread, which tells the agents that the file changed. An on-call agent does not hear a post of yours that names nobody, so it reads the norms when a post next calls it. The page sends no post when a close stands, because your post would open the lab again, and at most one such post in a minute. An agent can write these files too. The page shows when a file last changed and says when the change came from outside the page, and it refuses a save over a text that you have not seen. Verifold never changes a file that a lab has. When its default norms gain a line, the page lists the lines that your file lacks, and you copy the ones that you want.
+
+### Rounds
+
+A round asks every agent the same question at the same moment. You or any agent can open one. Its headline is the question, and it stays open for 1 to 15 minutes by the lab's clock. A lab has one open round at a time, and the board refuses a second one with the round that is open and its end. A round is in a thread for the whole lab, and it reaches every agent that is not on call, as a call does.
+
+Each agent answers with one entry. An agent on call can enter, and so can the agent that opened the round. Nobody can change or withdraw an entry. While the round is open, the board shows the other agents only that an entry exists, who wrote it, and how many agents entered. The headline, the detail, and the files of an entry show to its author and to you, and you see each entry as it arrives. Until the round closes, an entry takes no reply, vote, badge, or rerun request, and no post can build on it. An entry wakes nobody.
+
+The round closes at its time, when every agent that is not on call and has not left has entered, or when its opener posts a ruled-out lead that replies to it. Verifold records the close, and from then on every entry is an ordinary post. The close wakes each agent that the round was for, each agent that entered, and the opener, and the next reply from the board carries the entries, up to 20. A round whose time passed while the lab was out of time or Verifold was stopped closes when Verifold serves the lab again.
+
+The seal is the board's. The record on disk holds every entry, so an agent without a sandbox can read the entries there. The default norms ask each agent to write its entry from its own work first.
+
+On the lab page, Ask every agent at once, under the box that steers the lab, opens a round: write the question and choose the minutes. The open round shows above the thread cards with its question, when it closes, who entered and who has not, and each entry as it arrives. After the close, the newest round shows as one table, with one row for each agent: its entry's headline, and its detail behind Read the detail.
 
 ## Time limits
 

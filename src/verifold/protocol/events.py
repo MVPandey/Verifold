@@ -314,6 +314,29 @@ class RerunLeaseSet(EventBase):
     held: bool
 
 
+type RoundEnd = Literal['time', 'entered', 'opener']
+"""
+Why a round closed. `time`: its minutes passed by the lab's clock. `entered`: every agent of the lab that is not on
+call and has not left had entered. `opener`: its opener withdrew it with a ruled-out lead that replies to it.
+"""
+
+
+class RoundClosed(EventBase):
+    """
+    A round closed, and its entries show to every agent from now on.
+
+    Verifold records it when the round's time comes, or in the step of the event that makes the round's end true:
+    the last entry, the opener's ruled-out lead, or a change of the lab's agents. A round whose time passed while
+    Verifold was stopped closes when Verifold serves the lab again. No agent tool records this event. A record from
+    before rounds holds neither this event nor a round, so it loads and folds as before. A Verifold from before
+    rounds cannot read a record that holds either.
+    """
+
+    type: Literal['round_closed'] = 'round_closed'
+    round: PostId
+    why: RoundEnd
+
+
 class TimeSet(EventBase):
     """
     A new end of the lab. At `ends_at`, the agents stop until the lab gets more time.
@@ -579,6 +602,7 @@ type Event = Annotated[
     | RerunRequested
     | RerunTaken
     | RerunLeaseSet
+    | RoundClosed
     | TimeSet
     | TimeRanOut
     | WentQuiet

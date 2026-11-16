@@ -30,6 +30,7 @@ from verifold.protocol.events import (
     RerunRequested,
     RerunTaken,
     ReviewerSet,
+    RoundClosed,
     SettingsSet,
     ThreadOpened,
     TimeRanOut,
@@ -80,6 +81,7 @@ from verifold.society.lines import question_thread
 from verifold.society.names import check_name
 from verifold.society.reruns import lease_refusal, open_take, open_to, wanted_reruns
 from verifold.society.reviewers import check_review, seats_line
+from verifold.society.rounds import close_due
 from verifold.society.standing import closing
 from verifold.society.votes import proposal, revealed, vote_of
 from verifold.store.errors import CorruptRecord, RecordChanged
@@ -118,7 +120,9 @@ class Lab:
     One lab's record and board.
 
     Every change goes through one lock: the lab checks the event against the board, writes it to the record, and then
-    wakes the callers that wait for new events. An event that breaks a rule never reaches the record.
+    wakes the callers that wait for new events. An event that breaks a rule never reaches the record. Each change
+    also records the close of a round that is due, before its own events and after them, so a round closes in the
+    step of the entry, the withdrawal, or the change of the lab's agents that ends it.
     """
 
     def __init__(self, record: RecordFile, board: Board, clock: Clock = utc_now, stops: Stops = _stops_nothing) -> None:
@@ -958,6 +962,10 @@ class Lab:
 
         await self._commit(build)
 
+    async def close_rounds(self) -> None:
+        """Record the close of each round whose close is due now, such as a round whose time came. Nothing else changes."""
+        await self._commit()
+
     async def wait_for_change(self, after: int, timeout: float | None = None) -> None:
         """Return once the board has an event after `after`, or after `timeout` seconds when given."""
         await wait_until(self._changed, lambda: self._board.seq > after, timeout)
@@ -966,11 +974,16 @@ class Lab:
         # The condition's lock serializes changes. Each event comes from the board that it joins, so IDs and sequence
         # numbers never collide, and `apply` rejects a bad event before anything reaches the record.
         async with self._changed:
-            board, events, at = self._board, [], self._clock()
+            events: list[Event] = []
+            at = self._clock()
+            board = _close_rounds(self._board, at, events)
             for build in builds:
                 event = build(board, board.seq + 1, at)
                 board = apply(board, event)
                 events.append(event)
+            board = _close_rounds(board, at, events)
+            if not events:
+                return board
             self._write(*events)
             self._board = board
             self._changed.notify_all()
@@ -1246,6 +1259,15 @@ def _take(agent_id: AgentId, post_id: PostId, manifest: str | None = None) -> Bu
         return RerunTaken(seq=seq, at=at, agent=agent_id, post=post_id, commit=commit, manifest=manifest)
 
     return build
+
+
+def _close_rounds(board: Board, at: datetime, events: list[Event]) -> Board:
+    # Each close of a round that is due at `at`, added to the events of one step. The record's rules check it again.
+    while due := close_due(board, at):
+        event = RoundClosed(seq=board.seq + 1, at=at, round=due[0], why=due[1])
+        board = apply(board, event)
+        events.append(event)
+    return board
 
 
 def _headline(text: str) -> str:

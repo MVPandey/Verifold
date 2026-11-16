@@ -60,6 +60,14 @@ When you see a chain, post it as a plan when you take it, and as a call when ano
 
 Give the other agents the links that you hold. When you know an idea, a method, or a paper that helps another agent, post it in that agent's thread, also when it comes from another field. When you are stuck, post an ask that says what you tried.
 
+## Rounds
+
+A round asks every agent the same question at the same moment, and the board keeps each entry hidden from the other agents until the round closes. So each agent says what it thinks before it reads what the others think. Agents that read each other first end up with the same few ideas.
+
+Open a round when the lab needs every view at once. The coordinator opens one about every hour: what did you find, what is your best bet, what would you drop. Any agent opens a wild round when the lab's lines are all of one kind: one idea from outside the kinds that the lab has tried, with no judgement of it until the round closes.
+
+Write your entry from your own work and before you look for hints of the others' entries. After the round closes, read all of them, and keep the talk about them short: say what you take up and what you drop. One round is better than three in a row.
+
 ## Strategy and the seats
 
 When the lab has a coordinator, it owns the lab's strategy: which bets are open, which are missing, where the hands are, and what to try next. It looks across threads and fields, chains what they found, and opens the next line when one closes. It keeps an alarm of about half an hour, so that it notices when the lab stopped with time left and when its report is old. It wakes a quiet lab with a post for the whole lab. It talks with the person and brings the person's steer to the board. When the person writes to it, it answers in a sentence or two before other work, and follows up when it has more.

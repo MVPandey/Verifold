@@ -48,21 +48,28 @@ it. So an agent learns of the rest when it reads the board, and not before.
 
 A vote and a badge are no posts, and they wake nobody. The author of a post reads the votes and the badges on it in
 its next news. Every other agent sees no vote on a young post until it votes on it, as `society.votes` says.
+
+A round is for every agent that is not on call, as a call that names nobody is. An entry of a round wakes nobody,
+whatever it names, replies to, or builds on, because no other agent may read it while the round is open. The close
+of a round is news for each agent that the round was for, for each agent that entered, and for its opener, with
+the lines of the entries. It wakes them as a post for them does. Every view for an agent reads the board without
+the content of the entries that are sealed for it, as `society.rounds` says.
 """
 
 import re
 from datetime import datetime
 from functools import lru_cache
 
-from verifold.protocol.events import AgentLeft, Posted
+from verifold.protocol.events import AgentLeft, Posted, RoundClosed
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
-from verifold.protocol.join import MAX_NEWS, LeftLine, News, ProfileNote, RenameLine, Update
-from verifold.protocol.posts import Ask, Call, Check, Close, Post
+from verifold.protocol.join import MAX_ENTRIES, MAX_NEWS, LeftLine, News, ProfileNote, RenameLine, RoundNote, Update
+from verifold.protocol.posts import Ask, Call, Check, Close, Entry, Post, Round
 from verifold.society.board import Board
 from verifold.society.identity import post_line, post_view
 from verifold.society.lifecycle import alarm_line, no_alarm_line
 from verifold.society.lines import lines_of
 from verifold.society.reruns import RerunKey, reruns_for
+from verifold.society.rounds import entries, for_reader
 from verifold.society.votes import badge_notes, vote_notes
 
 type Names = tuple[tuple[AgentId, str], ...]
@@ -104,10 +111,11 @@ def wakes(
     Return whether a post is for an agent, so that it wakes the agent.
 
     No post is for an agent that left the lab, and none is for a checker of a record from before agents took reruns.
+    An entry of a round is for nobody: the round's close tells of it.
     """
     post = entry.post
     reader = board.agent(agent_id)
-    if post.author == agent_id or (reader and reader.agent.checks) or board.gone(agent_id):
+    if post.author == agent_id or (reader and reader.agent.checks) or board.gone(agent_id) or isinstance(post, Entry):
         return False
     on_call = bool(reader) and board.on_call(agent_id)
     offers = board.holds_offers(post.thread)
@@ -145,8 +153,10 @@ def update(
     It holds at most `MAX_NEWS` posts for the agent, the oldest first. When more wait, it reaches only as far as the
     last one that it holds, so the next update brings the others. `now` dates the time that the lab has left, the
     votes that are sealed for the agent, and the leases on reruns. Without it, time counts from the newest post.
-    `told` holds the reruns that the agent was told of already, as `reruns_for` says.
+    `told` holds the reruns that the agent was told of already, as `reruns_for` says. An entry that is sealed for
+    the agent at `now` holds nothing of its content, and `rounds` holds the closes of rounds in the same reach.
     """
+    board = for_reader(board, agent_id, now)
     woken, rest = _unseen(board, agent_id, after)
     shown, others, reach = _page(woken, rest, board.seq)
     votes, more_votes = vote_notes(board, agent_id, after, reach)
@@ -169,6 +179,7 @@ def update(
         left=departures(board, agent_id, after, reach),
         profile=profile_notes(board, agent_id, after, reach),
         renamed=renames(board, agent_id, after, reach),
+        rounds=round_notes(board, agent_id, after, reach, now),
         reruns=reruns_for(board, agent_id, told, now),
         votes=votes,
         votes_left_out=more_votes,
@@ -191,9 +202,10 @@ def news(
     Return one line for each post after event `after` that an agent did not write.
 
     It holds at most `MAX_NEWS` posts for the agent, the oldest first, and reaches as far as `update` does. So a post
-    for the agent is never left out. Of the other posts it holds the newest. `now` decides which votes are sealed
-    and which leases on reruns stand, and `told` is as in `update`.
+    for the agent is never left out. Of the other posts it holds the newest. `now` decides which votes and which
+    entries are sealed and which leases on reruns stand, and `told` is as in `update`.
     """
+    board = for_reader(board, agent_id, now)
     woken, rest = _unseen(board, agent_id, after)
     shown, others, reach = _page(woken, rest, board.seq)
     votes, more_votes = vote_notes(board, agent_id, after, reach)
@@ -207,12 +219,53 @@ def news(
         left=departures(board, agent_id, after, reach),
         profile=profile_notes(board, agent_id, after, reach),
         renamed=renames(board, agent_id, after, reach),
+        rounds=round_notes(board, agent_id, after, reach, now),
         reruns=reruns_for(board, agent_id, told, now),
         votes=votes,
         votes_left_out=more_votes,
         badges=badges,
         badges_left_out=more_badges,
         alarm=alarm_line(board, agent_id),
+    )
+
+
+def round_notes(
+    board: Board, agent_id: AgentId, after: int, reach: int, now: datetime | None = None
+) -> tuple[RoundNote, ...]:
+    """
+    Return the rounds that closed after event `after`, up to event `reach`, that concern an agent, oldest first.
+
+    A close concerns the agents that the round was for at its close, the agents that entered, and the opener. Each
+    note has the lines of the round's entries, oldest first, at most `MAX_ENTRIES`, and counts the others.
+    """
+    return tuple(
+        _round_note(board, agent_id, opened, closed, now)
+        for closed in board.round_closes
+        if after < closed.seq <= reach
+        and (opened := board.post(closed.round))
+        and _hears_close(board, agent_id, opened, closed)
+    )
+
+
+def _hears_close(board: Board, agent_id: AgentId, opened: Posted, closed: RoundClosed) -> bool:
+    reader = board.agent(agent_id)
+    if reader is None or reader.agent.checks or board.gone(agent_id):
+        return False
+    took_part = agent_id == opened.post.author or any(
+        entry.post.author == agent_id for entry in entries(board, opened.post.id)
+    )
+    return took_part or not board.on_call(agent_id, before=closed.seq)
+
+
+def _round_note(
+    board: Board, agent_id: AgentId, opened: Posted, closed: RoundClosed, now: datetime | None
+) -> RoundNote:
+    answers = entries(board, opened.post.id)
+    return RoundNote(
+        round=post_line(board, opened, agent_id, now, news=True),
+        why=closed.why,
+        entries=tuple(post_line(board, entry, agent_id, now, news=True) for entry in answers[:MAX_ENTRIES]),
+        left_out=max(len(answers) - MAX_ENTRIES, 0),
     )
 
 
@@ -386,8 +439,8 @@ def _for_everyone(board: Board, entry: Posted) -> bool:
     # reader and takes none away. An ask that replies to a post is for that post's author. A call that replies to a
     # post, such as the caller's own result, still asks every agent for hands.
     post = entry.post
-    # Whether the lab is done concerns every agent, whatever the post names.
-    if isinstance(post, Close) or post.to_lab:
+    # Whether the lab is done concerns every agent, whatever the post names, and so does a round, which names nobody.
+    if isinstance(post, Close | Round) or post.to_lab:
         return True
     open_ask = isinstance(post, Call) or (isinstance(post, Ask) and not post.reply_to)
     return not post.mentions and (open_ask or _opens_thread(board, entry))
