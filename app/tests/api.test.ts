@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { ApiError, createApi } from '../src/api/client.ts';
+import { ApiError, NO_CANDIDATES, createApi } from '../src/api/client.ts';
 import { parseChange } from '../src/api/events.ts';
 import { takeToken } from '../src/api/token.ts';
 
@@ -174,12 +174,17 @@ describe('the API client', () => {
     );
   });
 
-  it('reads no answer as none, also from a server from before the answer route', async () => {
-    const none = createApi('secret', serverThatAnswers(200, 'null').fetcher);
+  it('reads the candidates, and none from a server from before the candidates route', async () => {
+    const none = createApi(
+      'secret',
+      serverThatAnswers(200, '{"standing": [], "closes_on": null}').fetcher,
+    );
     const before = createApi('secret', serverThatAnswers(404, '{"detail": "Not Found"}').fetcher);
+    const broken = createApi('secret', serverThatAnswers(500, 'Internal Server Error').fetcher);
 
-    assert.equal(await none.answer(), null);
-    assert.equal(await before.answer(), null);
+    assert.deepEqual(await none.candidates(), NO_CANDIDATES);
+    assert.deepEqual(await before.candidates(), NO_CANDIDATES);
+    await assert.rejects(broken.candidates(), ApiError);
   });
 
   it('turns a refusal into an error with the server reason', async () => {

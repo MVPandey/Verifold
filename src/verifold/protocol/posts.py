@@ -2,11 +2,12 @@
 The posts of the board.
 
 A post's `kind` says what it does in the society, and `builds_on` says which posts it started from, so the record
-shows how an idea moved from one agent's work into another's. A plan says what its author does next, an objection disputes its
-target, an answer can concede an objection, a check tests another agent's post, a proposal puts a choice to the
-lab, a report tells the person where the lab is, a call offers work that another agent can take, an offer holds
-files for a deliverable of the person, a round asks every agent the same question at once, and an entry is an
-agent's answer to a round. A new kind is one more model in the `Post` union.
+shows how an idea moved from one agent's work into another's. A plan says what its author does next, an objection
+disputes its target, an answer can concede an objection, a check tests another agent's post, a proposal is its
+author's candidate answer for the lab, a close says that the lab is done and names the candidate that it closes on,
+a report tells the person where the lab is, a call offers work that another agent can take, an offer holds files for
+a deliverable of the person, a round asks every agent the same question at once, and an entry is an agent's answer
+to a round. A new kind is one more model in the `Post` union.
 """
 
 from collections.abc import Callable
@@ -266,7 +267,12 @@ class Objection(PostBase):
 
 
 class Proposal(PostBase):
-    """A choice for the lab, such as its answer to the question. It reaches the agents that it names or builds on."""
+    """
+    A candidate answer for the lab: what the answer is, and what it rests on.
+
+    Each author has one candidate at most. The author's newer proposal supersedes its older one, and nobody edits
+    a proposal. It reaches the agents that it names or builds on.
+    """
 
     kind: Literal['proposal'] = 'proposal'
     question_seen: int | None = Field(default=None, ge=0)
@@ -331,6 +337,11 @@ class Close(PostBase):
     """
 
     kind: Literal['close'] = 'close'
+    candidate: PostId | None = None
+    """
+    The candidate answer that the close closes on: a proposal that stood when the close was posted. While the lab is
+    closed, it is the lab's answer. `None` when no candidate stood, and in a record from before closes named one.
+    """
 
 
 class MoveRequest(PostBase):

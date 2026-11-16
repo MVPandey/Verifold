@@ -145,6 +145,8 @@ class PostRequest(Record):
     """Whether the coordinator posts this for the person. With `new_thread`, the thread is one for the person too."""
     minutes: int | None = None
     """On a round: how many minutes it stays open, from 1 to `MAX_ROUND_MINUTES`. No other kind takes it."""
+    candidate: PostId | None = None
+    """On a close: the candidate answer that it closes on, a proposal that stands. No other kind takes it."""
 
     @model_validator(mode='after')
     def _one_thread(self) -> Self:
@@ -527,6 +529,28 @@ MAX_OBSTACLES = 5
 The most open obstacles that a brief lists. A brief is one tool result, and with ten lines of obstacles the largest
 brief was larger than a harness takes.
 """
+
+
+MAX_CANDIDATES = 3
+"""
+The most candidate answers that a brief lists, the newest ones. A brief is one tool result, and with five whole
+lines of candidates the largest brief was larger than a harness takes. `thread` shows every proposal.
+"""
+
+
+class CandidateLine(Sparse):
+    """
+    A candidate answer in a brief: its line, how many whole minutes ago it was posted, and where it stands.
+
+    The line has the candidate's author, its votes unless they are sealed for the reader, and its badges.
+    """
+
+    line: PostLine
+    minutes_ago: int = 0
+    standing: Standing = 'open'
+    """Where the candidate stands as a post, such as `checked` or `disputed`. Left out while it is `open`."""
+    to_earlier_question: bool = False
+    """Whether the person revised the question after the candidate, so that it answers an earlier version."""
 
 
 class ObstacleEntry(PostEntry):
@@ -1036,10 +1060,10 @@ class RevisionLine(Record):
     """The coordinator's request that the revision came from, when it came from one."""
 
 
-class AnswerView(Record):
-    """The lab's answer so far for the person: the newest proposal, and each post that it builds on with where it stands."""
+class CandidateView(Record):
+    """A candidate answer for the person: the proposal, and each post that it builds on with where it stands."""
 
-    answer: PostView
+    candidate: PostView
     to_earlier_question: bool = False
     """Whether the person revised the question after this proposal, so that it answers an earlier version."""
     builds_on: tuple[PostView, ...] = ()
@@ -1047,6 +1071,23 @@ class AnswerView(Record):
     """How many of `builds_on` are results with files, which an agent can rerun from a clean copy."""
     no_blind_rerun: tuple[PostId, ...] = ()
     """The results among them that have no check of an independent rerun. The name is from before agents took reruns."""
+    entry: PostView | None = None
+    """
+    The entry of a round that the proposal builds on and that its own author wrote, when it builds on one. The
+    proposal holds that entry's detail and files by reference.
+    """
+
+
+class CandidatesView(Record):
+    """The candidate answers for the person: each one that stands, and the one that the standing close closes on."""
+
+    standing: tuple[CandidateView, ...] = ()
+    """The candidates that stand, oldest first: the newest proposal of each author that its author did not concede."""
+    closes_on: CandidateView | None = None
+    """
+    The candidate that the close that stands closes on. While the lab is closed, it is the lab's answer. `None`
+    while no close stands, and for a close that closes on no candidate.
+    """
 
 
 class FileText(Record):
@@ -1182,12 +1223,18 @@ class Brief(Record):
     """
     left: tuple[LeftLine, ...] = ()
     """The agents that left the lab or that the person removed, oldest first."""
-    answer: PostLine | None = None
-    """The newest proposal, in whatever thread it is. The app shows it to the person as the answer so far."""
-    answer_standing: Standing | None = None
-    """Where the answer stands, such as `disputed` or `conceded`. `None` when the lab has no answer."""
-    answer_to_earlier_question: bool = False
-    """Whether the person revised the question after the answer, so that it answers an earlier version."""
+    candidates: tuple[CandidateLine, ...] = ()
+    """
+    The candidate answers that stand, newest last, at most `MAX_CANDIDATES`: the newest proposal of each author,
+    in whatever thread for the whole lab it is, unless its author conceded it. The app shows each one to the person.
+    """
+    more_candidates: int = 0
+    """How many candidates that stand `candidates` leaves out: the oldest ones."""
+    closes_on: PostId | None = None
+    """
+    The candidate that the close in `close` closes on. While the lab is closed, it is the lab's answer. `None` while
+    no close stands, and for a close that closes on no candidate.
+    """
     report: PostLine | None = None
     """The newest report of any agent, in whatever thread it is. The app shows it to the person. `None` when the lab has none."""
     report_minutes_ago: int | None = None

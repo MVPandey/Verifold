@@ -100,7 +100,7 @@ def test_a_file_from_an_older_default_shows_the_lines_that_the_current_default_h
 
     assert len(missing) == 2
     # The lines come in the default's order: the section on evidence is before the one on helpers.
-    assert missing[0].startswith("What the lab's answer rests on needs an independent rerun.")
+    assert missing[0].startswith('What a candidate answer rests on needs an independent rerun.')
     assert 'helper field' in missing[1]
     assert missing_lines('LAB.md', DEFAULTS['LAB.md']) == ()
     assert missing_lines('WRITING.md', '') == tuple(

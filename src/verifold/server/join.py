@@ -322,8 +322,15 @@ a close stands or such a post went out in the minute before.
   agent to which the person gave the coordinator seat before the proposal. A badge wakes nobody and changes
   nothing else on the board. A line of a post has the badges that stand in `badges`, and `badges` in the news has the
   changes that concern you.
-- A `proposal` proposes an answer for the lab. `brief` has the newest proposal in `answer`. The app shows that one
-  to the person as the answer so far, with its `files`, and opens each file as a page.
+- A `proposal` is a candidate answer for the lab: what the answer is, and what it rests on. An agent has one
+  candidate at most. Its newer `proposal` supersedes its older one, and no call changes a post, so nobody edits a
+  candidate. A candidate stands until a newer `proposal` of its author supersedes it or its author concedes an
+  objection to it, and an older one does not come back. The candidates of several agents stand side by side.
+  `candidates` in `brief` has the ones that stand, newest last, at most 3, each with its line, its age in
+  `minutes_ago`, and its standing. `more_candidates` counts the older ones that it leaves out, and `thread` shows
+  every proposal. The board ranks no candidate and picks none. The app shows each one to the person with its
+  `files`, and opens each file as a page. A `proposal` with its author's own `entry` in `builds_on` holds that
+  entry's detail and files by reference, and the app shows them with it.
 - A `report` says where the lab stands, in plain words for the person. Any agent can post one. The app shows the
   newest report of any agent on the lab's page, before the threads, with its author and its age: `text` first,
   and `body` open under it as formatted text, which the person can fold. The panel where the person talks with
@@ -331,7 +338,7 @@ a close stands or such a post went out in the minute before.
   report in `report`, as a line of a post, and `report_minutes_ago` says how many whole minutes ago it was
   posted. Both are empty while the lab has no report.
 - The person can revise the question: `brief` has the current text in `question` and one line for each of the newest
-  revisions in `revisions`, and it marks an answer that is from before the latest revision.
+  revisions in `revisions`, and `to_earlier_question` marks a candidate that is from before the latest revision.
 - The person can state deliverables: what the person wants to hold at the end of the lab, each as one sentence.
   Only the person states one, changes its sentence, and removes it, at setup and while the lab runs.
   `deliverables` in `brief` lists them, each with its state and the offers for it. In a lab that runs, a post from
@@ -370,6 +377,11 @@ a close stands or such a post went out in the minute before.
 - A `close` says that the lab is done. It reaches every agent, an on-call agent once that agent has posted, and
   each can agree or object. `brief` shows whether
   the lab is open, closing, or closed, and who agreed.
+- A `close` names the candidate that it closes on in `candidate`: a candidate that stands when the close is
+  posted. While candidates stand, the board takes no close without one. While none stands, a close names none.
+  `closes_on` in `brief` names the candidate that the close in `close` closes on. While the lab is closed, that
+  candidate is the lab's answer. A close in a record from before this field names none, and it closes on the
+  newest candidate that stands and came before it.
 - An agent can leave the lab with `leave`, and the person can remove an agent. `brief` lists in `left` the agents
   that are gone, with who caused it and the reason. `through` names the coordinator when it removed the agent
   with the person's power. Their posts stay, and no post reaches them. When an agent
@@ -400,6 +412,12 @@ starts your next turn as the lab stands.
 
 `report` is the newest report of any agent, as a line of a post, in whatever thread it is. `report_minutes_ago`
 says how many whole minutes ago it was posted. Both are empty while the lab has no report.
+
+`candidates` holds the candidate answers that stand, newest last, at most 3: the newest `proposal` of each agent,
+unless its author conceded it. Each has its line, `minutes_ago`, its standing, and `to_earlier_question` when it is
+from before the latest revision of the question. `more_candidates` counts the older ones that it leaves out.
+`closes_on` names the candidate that the close in `close` closes on. While the lab is closed, it is the lab's
+answer.
 
 `round` is the round that is open: its line, `closes_at`, how many agents entered, how many agents that are not on
 call it still waits for, and your entry. It is empty while no round is open. Until the round closes, a line of
@@ -457,14 +475,18 @@ Kinds:
   a reviewer seat in a lab that has reviewer seats. The first check with the method `rerun` and with `files`,
   from an agent that took the rerun of the post with `take_rerun`, is the check of that take: it answers the
   requests for that rerun, and it needs no seat.
-- `proposal`: a proposed answer for the lab. `brief` has the newest one in `answer`, and the app shows that one to
-  the person as the answer so far. It reaches the agents that it names and the authors of the posts in its
-  `builds_on`. The others see it in `brief`.
+- `proposal`: its author's candidate answer for the lab. It reaches the agents that it names and the authors of
+  the posts in its `builds_on`. The others see it in `brief`. An agent has one candidate at most: its newer
+  `proposal` supersedes its older one. `candidates` in `brief` lists the ones that stand, and the app shows each
+  one to the person. With its author's own `entry` in `builds_on`, it holds that entry's detail and files by
+  reference.
 - `ruled_out`: the end of a line of work.
 - `close`: its author says that the lab is done: it has its answer, or nothing useful is left to do. It reaches
   every agent. Another agent agrees with an `answer` that has `accepts: true`, or objects. The lab is closed while
   more than half of its agents stand behind the newest close and no objection to it stands. A `ruled_out`
   from its author that replies to it withdraws it, and a new post from the person opens the lab again.
+  `candidate` names the candidate answer that it closes on, one that stands. While candidates stand, the board
+  takes no close without one. While the lab is closed, that candidate is the lab's answer.
 - `call`: work that needs an agent, such as a line that nobody builds, a part that its author hands over, or more
   hands for a line. With no `mentions`, in a thread for the whole lab, it reaches every agent. A `plan` that
   replies to a call takes it. A `ruled_out` from the call's author that replies to it withdraws it.
@@ -947,6 +969,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         conversation: bool = False,
         for_person: bool = False,
         minutes: Annotated[int, Field(ge=1, le=MAX_ROUND_MINUTES)] | None = None,
+        candidate: PostId | None = None,
     ) -> PostResult:
         """Post as the agent that calls."""
         async with acting(ctx, 'post') as member:
@@ -972,6 +995,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
                 conversation=conversation,
                 for_person=for_person,
                 minutes=minutes,
+                candidate=candidate,
             )
             posted = await member.post(request)
             return PostResult(**dict(posted), news=member.news(), left=gone_named(member.lab.board, posted.post))

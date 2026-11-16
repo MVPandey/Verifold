@@ -33,6 +33,7 @@ from verifold.protocol.ids import PERSON, AgentId
 from verifold.protocol.posts import Answer, Check, Close, Objection, Post, Proposal
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
+from verifold.society.candidates import check_candidate
 from verifold.society.coordinator import check_marked_thread, check_marks, check_removal, check_reviser
 from verifold.society.errors import RejectedEvent
 from verifold.society.lifecycle import lab_state
@@ -538,6 +539,7 @@ def _check_between(board: Board, thread: Thread) -> None:
 def _check_close(board: Board, close: Close) -> None:
     if close.author == PERSON:
         raise RejectedEvent("A close is the agents' word that the lab is done. You can stop the lab at any time.")
+    check_candidate(board, close)
     standing_close = closing(board)
     if standing_close is None or standing_close.post.author == close.author:
         return

@@ -19,6 +19,7 @@ from verifold.protocol.events import (
 )
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.join import (
+    MAX_CANDIDATES,
     MAX_FORMER_NAMES,
     MAX_LEADS,
     MAX_LINKS,
@@ -26,8 +27,10 @@ from verifold.protocol.join import (
     MAX_OBSTACLES,
     QUIET_MINUTES,
     AgentLine,
-    AnswerView,
     Brief,
+    CandidateLine,
+    CandidatesView,
+    CandidateView,
     News,
     ObstacleEntry,
     Obstacles,
@@ -49,6 +52,7 @@ from verifold.protocol.threads import Thread
 from verifold.protocol.votes import BADGES, MAX_VOTE_LINES, NEWEST_VOTES
 from verifold.society.attention import left_line, watches_thread
 from verifold.society.board import Board
+from verifold.society.candidates import candidates, closes_on, own_entry
 from verifold.society.coordinator import request_waits
 from verifold.society.deliverables import deliverable_lines
 from verifold.society.errors import NotFound
@@ -300,16 +304,17 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
     Return the lab for one agent in one read.
 
     It holds the agent's own line, the lab's state and the time that it has left, how many agents are in a turn
-    and how many have an alarm that waits, the other agents with their latest plans, the newest proposal, and the
-    newest report with its age. Then come the threads: the
+    and how many have an alarm that waits, the other agents with their latest plans, the candidate answers that
+    stand with the one that a close closes on, and the newest report with its age. Then come the threads: the
     newest ones, one line for each side thread, the threads where one agent works alone, and the threads that got
     no post for a long while. Then come the posts by where they stand: the disputed posts, the results that nobody
     has built on, the results that nobody has checked, the open obstacles with the counts of the others, the asks
     that nobody has answered, and the calls that need an agent. The order ranks nothing. `how` says how the board
     works.
 
-    `now` dates the time that the lab has left, the report's age, the quiet threads, the votes that are sealed for
-    the agent, the open round and the entries that are sealed for the agent, and the leases on the wanted reruns.
+    `now` dates the time that the lab has left, the ages of the report and the candidates, the quiet threads, the
+    votes that are sealed for the agent, the open round and the entries that are sealed for the agent, and the
+    leases on the wanted reruns.
     Without it, time counts from the board's newest post. The agents in a turn come from the record, because this
     package does no I/O and so knows no live activity.
     """
@@ -392,12 +397,13 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
     )
     found = obstacles(board)
     blocking = tuple(item.entry for item in reversed(found) if item.state == 'open')
-    proposed = answer(board)
+    standing_candidates = candidates(board)
+    shown = standing_candidates[-MAX_CANDIDATES:]
     reported = newest_report(board)
     done = closing(board)
+    named = closes_on(board, done) if done else None
     you = board.agent(agent_id)
     close_line = post_line(board, done, agent_id, now) if done else None
-    answer_line = post_line(board, proposed, agent_id, now) if proposed else None
     report_line = post_line(board, reported, agent_id, now) if reported else None
     your_line = _agent_line(board, you.agent, working, agent_id, now) if you else None
     lines = tuple(_agent_line(board, agent, working, agent_id, now) for agent in others)
@@ -407,12 +413,12 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         *news.for_you,
         *news.others,
         close_line,
-        answer_line,
         report_line,
         *(line for agent in (your_line, *lines) if agent for line in (agent.plan, agent.latest)),
         *(summary.latest for summary in summaries[:MAX_NEWS]),
     )
-    told = {line.id for line in held if line}
+    # Each candidate has its whole line, so a later list of posts holds its ID alone.
+    told = {line.id for line in held if line} | {entry.post.id for entry in shown}
 
     # The brief's list of agents says who each agent is, so a line in the brief's own lists says who wrote the
     # post only for an author that the list does not hold, or whose seat had another label then.
@@ -472,9 +478,17 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         conversation=board.conversation,
         powers=tuple(power for power in POWERS if power in board.powers),
         left=tuple(left_line(board, entry) for entry in board.left),
-        answer=answer_line,
-        answer_standing=standing(board, proposed.post.id) if proposed else None,
-        answer_to_earlier_question=bool(proposed) and to_earlier_question(board, proposed),
+        candidates=tuple(
+            CandidateLine(
+                line=line(entry),
+                minutes_ago=minutes_since(entry.at, now) or 0,
+                standing=standing(board, entry.post.id),
+                to_earlier_question=to_earlier_question(board, entry),
+            )
+            for entry in shown
+        ),
+        more_candidates=len(standing_candidates) - len(shown),
+        closes_on=named.post.id if named else None,
         report=report_line,
         report_minutes_ago=minutes_since(reported.at, now) if reported else None,
         round=round_line(board, agent_id, now),
@@ -637,24 +651,6 @@ def _waits_for_person(board: Board, entry: Posted) -> bool:
     return to_person and waits_for_person(board, post.id) and not board.gone(post.author)
 
 
-def answer(board: Board) -> Posted | None:
-    """
-    Return the lab's answer so far: the newest proposal, in whatever thread for the whole lab it is.
-
-    The person steers the lab by opening threads, and an agent proposes where it was asked. A side thread takes no
-    proposal. Where the answer stands says whether an agent disputes it or its author conceded it. An older
-    proposal does not come back as the answer, because the lab moved on from it.
-    """
-    return next(
-        (
-            entry
-            for entry in reversed(board.posts)
-            if isinstance(entry.post, Proposal) and not board.is_side(entry.post.thread)
-        ),
-        None,
-    )
-
-
 def to_earlier_question(board: Board, proposed: Posted) -> bool:
     """
     Return whether a proposal answers an earlier version of the question.
@@ -689,19 +685,32 @@ def versions(board: Board) -> tuple[QuestionVersion, ...]:
     )
 
 
-def answer_view(board: Board) -> AnswerView | None:
-    """Return the lab's answer so far with the posts that it builds on, or `None` when no agent proposed one."""
-    entry = answer(board)
-    if entry is None:
-        return None
+def candidates_view(board: Board) -> CandidatesView:
+    """
+    Return the candidate answers for the person: each one that stands, and the one that the standing close closes on.
+
+    The person sees every post, so no view here is sealed.
+    """
+    done = closing(board)
+    named = closes_on(board, done) if done else None
+    return CandidatesView(
+        standing=tuple(candidate_view(board, entry) for entry in candidates(board)),
+        closes_on=candidate_view(board, named) if named else None,
+    )
+
+
+def candidate_view(board: Board, entry: Posted) -> CandidateView:
+    """Return a candidate answer for the person with the posts that it builds on and its author's own entry."""
     under = tuple(post for post_id in entry.post.builds_on if (post := board.post(post_id)))
     results = tuple(post for post in under if _can_rerun(post))
-    return AnswerView(
-        answer=post_view(board, entry, PERSON),
+    entered = own_entry(board, entry)
+    return CandidateView(
+        candidate=post_view(board, entry, PERSON),
         to_earlier_question=to_earlier_question(board, entry),
         builds_on=tuple(post_view(board, post, PERSON) for post in under),
         results=len(results),
         no_blind_rerun=tuple(post.post.id for post in _not_rerun(board, results)),
+        entry=post_view(board, entered, PERSON) if entered else None,
     )
 
 

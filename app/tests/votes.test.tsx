@@ -4,12 +4,12 @@ import { describe, it } from 'node:test';
 
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { createApi } from '../src/api/client.ts';
+import { NO_CANDIDATES, createApi } from '../src/api/client.ts';
 import type { Api } from '../src/api/client.ts';
 import type {
   AgentView,
-  AnswerView,
   BadgeLine,
+  CandidateView,
   Post,
   PostView,
   VoteLine,
@@ -462,7 +462,7 @@ describe('the lab page with votes and badges', () => {
     threads,
     needs: [],
     report: null,
-    answer: null as AnswerView | null,
+    candidates: NO_CANDIDATES,
     version: 1,
     error: null,
     reload: () => undefined,
@@ -513,23 +513,27 @@ describe('the lab page with votes and badges', () => {
     assert.equal(wall({ lab: { ...lab, proposals: [] } }).includes('o-waits'), false);
   });
 
-  it('says that the answer builds on a Breakthrough, and shows the badge only on an answer that has it', () => {
+  it('says that a candidate builds on a Breakthrough, and shows the badge only on a candidate that has it', () => {
     const answer = postView(
       { ...result('p-10', { thread: 't-1', author: 'agent-1' }), kind: 'proposal' },
       10,
     );
-    const view = (changes: Partial<AnswerView>): AnswerView => ({
-      answer,
+    const view = (changes: Partial<CandidateView>): CandidateView => ({
+      candidate: answer,
       to_earlier_question: false,
       builds_on: [voted],
       results: 1,
       no_blind_rerun: [],
+      entry: null,
       ...changes,
     });
     const block = (html: string): string =>
-      html.slice(html.indexOf('The answer so far'), html.indexOf('f-steer'));
+      html.slice(html.indexOf('Candidate answers'), html.indexOf('f-steer'));
+    const one = (item: CandidateView): Partial<typeof data> => ({
+      candidates: { standing: [item], closes_on: null },
+    });
 
-    const cites = block(wall({ answer: view({ builds_on: [broke] }) }));
+    const cites = block(wall(one(view({ builds_on: [broke] }))));
     assert.equal(cites.includes('v-badge'), false);
     assert.ok(
       cites.includes(
@@ -537,9 +541,9 @@ describe('the lab page with votes and badges', () => {
       ),
     );
     assert.equal(breakthroughUnder(view({ builds_on: [broke] }))?.post.id, 'p-6');
-    assert.equal(block(wall({ answer: view({}) })).includes('Breakthrough'), false);
-    const own = view({ answer: { ...answer, badges: [breakthrough] }, builds_on: [broke] });
-    const marked = block(wall({ answer: own }));
+    assert.equal(block(wall(one(view({})))).includes('Breakthrough'), false);
+    const own = view({ candidate: { ...answer, badges: [breakthrough] }, builds_on: [broke] });
+    const marked = block(wall(one(own)));
     assert.ok(marked.includes('<span class="v-badge rare">Breakthrough</span>'));
     assert.equal(marked.includes('Builds on a Breakthrough'), false);
     assert.equal(breakthroughUnder(own), null);

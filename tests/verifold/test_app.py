@@ -1259,7 +1259,7 @@ async def test_a_lab_keeps_the_norms_file_that_it_has_and_the_page_shows_what_th
     # Verifold adds nothing to the person's file. The page lists the line that the current default has.
     assert (lab_file['text'], lab_file['saved'], lab_file['changed_by']) == (older, True, None)
     assert len(lab_file['missing']) == 1
-    assert lab_file['missing'][0].startswith("What the lab's answer rests on needs an independent rerun.")
+    assert lab_file['missing'][0].startswith('What a candidate answer rests on needs an independent rerun.')
     assert (folder / 'LAB.md').read_text() == older + '- One more.\n'
     assert f"{folder / 'LAB.md'} holds the lab's norms" in prompts_of(log, 'agent-1')[0]
     # A file that Verifold can't read shows its own error, and the other file stays readable and editable.

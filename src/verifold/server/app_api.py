@@ -57,7 +57,7 @@ from verifold.protocol.app import (
 from verifold.protocol.deliverables import Decision, DeliverableLine, OfferLine
 from verifold.protocol.events import Reason, RerunRequested
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
-from verifold.protocol.join import AnswerView, FileText, PostRequest, PostView, ThreadView
+from verifold.protocol.join import CandidatesView, FileText, PostRequest, PostView, ThreadView
 from verifold.protocol.moves import AddSeat
 from verifold.protocol.usage import Usage
 from verifold.server.activity import Activity
@@ -79,7 +79,7 @@ from verifold.society.rounds import close_of, closes_at, entries, is_open, waits
 from verifold.society.standing import agreed, closing, standing
 from verifold.society.turns import before
 from verifold.society.views import (
-    answer_view,
+    candidates_view,
     latest_report,
     line_times,
     needs_person,
@@ -282,9 +282,9 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     async def report() -> PostView | None:
         return latest_report(current().board)
 
-    @api.get('/answer', dependencies=[authorized])
-    async def answer() -> AnswerView | None:
-        return answer_view(current().board)
+    @api.get('/candidates', dependencies=[authorized])
+    async def candidates() -> CandidatesView:
+        return candidates_view(current().board)
 
     @api.get('/posts/{post_id}/file', dependencies=[authorized])
     async def file(post_id: PostId, path: str) -> FileText:

@@ -58,6 +58,7 @@ from verifold.protocol.posts import (
     Answer,
     Ask,
     Check,
+    Close,
     FileEvidence,
     FileOffer,
     Mark,
@@ -71,6 +72,7 @@ from verifold.protocol.votes import Badge, BadgeAction, Direction
 from verifold.server.changes import wait_until
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.society.board import Board
+from verifold.society.candidates import check_names_candidate
 from verifold.society.coordinator import check_asks, permission_choice, power_covers, time_given
 from verifold.society.deliverables import accepted, check_decidable, live, offers_title, told_at
 from verifold.society.errors import RejectedEvent
@@ -1333,6 +1335,10 @@ def _add_post(  # noqa: PLR0913
         aside = board.is_side(thread_id) or thread_id == board.conversation
         if post.for_person and author == board.coordinator and not (post.mentions or post.reply_to or aside):
             post = post.model_copy(update={'to_lab': True})
+        # An older record holds closes that name no candidate, so this rule is here and not in the record's rules.
+        # The person posts no close, and the record's rules say so.
+        if isinstance(post, Close) and author != PERSON:
+            check_names_candidate(board, post)
         # An older record holds checks from before the reviewer seats, so this rule is here and not in the record's
         # rules.
         # The one check of a rerun that its author took needs no seat of its own: the take was open to the author.

@@ -1,7 +1,7 @@
 import type {
   AgentChoice,
-  AnswerView,
   BadgeRequest,
+  CandidatesView,
   ConversationView,
   Direction,
   DeliverableDecision,
@@ -25,6 +25,9 @@ import type {
   ThreadView,
 } from './types.ts';
 
+/** The candidates of a lab where no agent has proposed an answer. */
+export const NO_CANDIDATES: CandidatesView = { standing: [], closes_on: null };
+
 /** A request that the server refused, with the server's reason. */
 export class ApiError extends Error {
   /** The HTTP status, or 0 when the server never answered. */
@@ -47,8 +50,8 @@ export interface Api {
   needs(): Promise<readonly PostView[]>;
   /** The newest report that an agent wrote for the person, or `null` when the lab has none. */
   report(): Promise<PostView | null>;
-  /** The lab's answer so far with what it builds on, or `null` when no agent has proposed one. */
-  answer(): Promise<AnswerView | null>;
+  /** The candidate answers with what each builds on, and the one that a close closes on. */
+  candidates(): Promise<CandidatesView>;
   /** The text of a file that backs a post. */
   file(postId: string, path: string): Promise<FileText>;
   /**
@@ -221,9 +224,9 @@ export function createApi(
     needs: () => request('/needs'),
     report: () => request('/report'),
     // A server from before this route has none, and the page must still load.
-    answer: () =>
-      request<AnswerView | null>('/answer').catch((failure: unknown) => {
-        if (failure instanceof ApiError && failure.status === 404) return null;
+    candidates: () =>
+      request<CandidatesView>('/candidates').catch((failure: unknown) => {
+        if (failure instanceof ApiError && failure.status === 404) return NO_CANDIDATES;
         throw failure;
       }),
     file: (postId, path) =>

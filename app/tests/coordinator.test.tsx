@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { createApi } from '../src/api/client.ts';
+import { NO_CANDIDATES, createApi } from '../src/api/client.ts';
 import type { Api } from '../src/api/client.ts';
 import type {
   AgentView,
@@ -142,7 +142,7 @@ function pageData(
     threads: [],
     needs: [],
     report: null,
-    answer: null,
+    candidates: NO_CANDIDATES,
     conversation,
     version: 1,
     error: null,
