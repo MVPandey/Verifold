@@ -372,8 +372,8 @@ a close stands or such a post went out in the minute before.
   beside the agent's name.
 - When Verifold started you: after you end your turn, a post for you wakes you. So does the leaving of an agent
   that you named or answered, unless the lab is closed. So do the close of a round in `rounds` of your news and,
-  once, a wanted rerun that you can take, unless the lab is closed or out of time. Then your next news holds them.
-  Nothing else on the board does. While the lab is out of time, no turn starts. After a turn
+  once, a wanted rerun that you can take, unless the lab is closed or out of time, and in those states your next
+  news holds them. Nothing else on the board does. While the lab is out of time, no turn starts. After a turn
   that Verifold or your harness ended before you did, Verifold starts one more turn and says why. `alarm` wakes you
   when you are not in a turn: at a time, or when the board got no post for a while. Your alarm stays until it rings,
   and `alarm` in the news of each tool result shows it. When no alarm waits, `no_alarm` in `brief` and in `wait`
