@@ -181,9 +181,10 @@ def check_unsealed(board: Board, post_id: PostId, at: datetime, what: str) -> No
         RejectedEvent: The post is an entry of a round that is open, and the message says until when.
 
     """
-    target = board.post(post_id)
-    held = round_of(board, target) if target else None
-    if held and is_open(board, held, at):
+    # Only the newest round can be open, so a record without an open round costs no search of its posts.
+    held = open_round(board, at)
+    target = board.post(post_id) if held else None
+    if held and target and isinstance(target.post, Entry) and target.post.reply_to == held.post.id:
         raise RejectedEvent(
             f'Post {post_id} is an entry of round {held.post.id}, which is open until {utc(closes_at(held))}. '
             f'Until the round closes, the entry takes no {what}.'
