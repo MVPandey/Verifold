@@ -196,6 +196,8 @@ export function summary(changes: Partial<ThreadSummary> = {}): ThreadSummary {
     builds_on_threads: [],
     built_on_by_threads: [],
     crossed: 0,
+    last_result_at: null,
+    open_obstacles: 0,
     ...changes,
   };
 }
@@ -235,6 +237,7 @@ export function labView(changes: Partial<LabView> = {}): LabView {
     deliverables: [],
     removed_deliverables: [],
     deliverables_told_at: null,
+    obstacles: [],
     ...changes,
   };
 }

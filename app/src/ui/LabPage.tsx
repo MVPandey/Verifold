@@ -7,18 +7,20 @@ import type {
   AnswerView,
   LabView,
   Need,
+  Obstacle,
   PostView,
   QuestionVersion,
   ThreadLink,
   ThreadSummary,
 } from '../api/types.ts';
-import { authorName, members } from '../model/agents.ts';
+import { authorName, called, members } from '../model/agents.ts';
 import { coordinatorOf } from '../model/coordinator.ts';
 import type { Tab } from '../model/coordinator.ts';
 import { crossedLine, crossLines } from '../model/crossings.ts';
 import { deliverLine, isDocked } from '../model/deliverables.ts';
 import type { Docked } from '../model/deliverables.ts';
-import { clock, dayClock, duration, minutesBetween } from '../model/format.ts';
+import { ago, clock, dayClock, duration, minutesBetween } from '../model/format.ts';
+import { builderLine, lineFacts, obstacleGroups } from '../model/obstacles.ts';
 import { clip, isLong, personMessage, standingChip } from '../model/posts.ts';
 import { isRevision, noteLabel, revisedBy, revisedLine } from '../model/question.ts';
 import { href } from '../model/route.ts';
@@ -306,12 +308,19 @@ export function Wall(
                 fresh={hasNew(summary, seen)}
                 read={summary.thread.id === open ? cardRead : null}
                 turns={turns}
+                now={props.now}
               />
             ))}
           </div>
         ) : side.length === 0 ? (
           <p className="empty">No threads yet.</p>
         ) : null}
+        <Obstacles
+          obstacles={lab.obstacles}
+          threads={threads}
+          agents={lab.agents}
+          now={props.now}
+        />
         {side.length > 0 ? (
           // A link into the group opens it. The person folds and unfolds it as they like otherwise.
           <details
@@ -341,6 +350,7 @@ export function Wall(
                       fresh={false}
                       read={cardRead}
                       turns={turns}
+                      now={props.now}
                     />
                   </li>
                 ) : (
@@ -823,7 +833,7 @@ function QuietBand(props: { readonly lab: LabView; readonly now: Date }): ReactE
 }
 
 /**
- * One thread on the wall, or an opened side thread. Closed, it shows the title, a status, a mark for new posts, the pictures of its team, the time of the latest post, the one status of the thread, and the threads that it builds on and that build on it. Open, it takes
+ * One thread on the wall, or an opened side thread. Closed, it shows the title, a status, a mark for new posts, how long ago its line's newest result came and its open obstacles, the pictures of its team, the time of the latest post, the one status of the thread, and the threads that it builds on and that build on it. Open, it takes
  * the full width and shows who opened the thread, who a side thread is between, the
  * result that it stands on, and its turns.
  */
@@ -842,6 +852,7 @@ function Card(props: {
   /** The thread's posts when the card is open, or `null` for a closed card. */
   readonly read: ThreadRead | null;
   readonly turns: (read: ThreadRead) => ReactElement;
+  readonly now: Date;
 }): ReactElement {
   const { summary, read } = props;
   const { id, title, opened_by: opener } = summary.thread;
@@ -861,6 +872,9 @@ function Card(props: {
       : summary.latest
         ? [summary.latest.author]
         : [];
+  // The status says "No result yet" already when it shows. The facts do not say it twice.
+  const said = chip || summary.thread.deliverable ? null : status.label;
+  const facts = lineFacts(summary, props.now).filter((fact) => fact !== said);
   return (
     <section id={`card-${id}`} className={`f-card c-${status.edge}${open ? ' open' : ''}`}>
       <header>
@@ -889,6 +903,7 @@ function Card(props: {
           {status.openCalls ? <span className="f-st fs-ask">{status.openCalls}</span> : null}
           {props.breakthrough ? <BadgeChip badge="breakthrough" /> : null}
         </div>
+        {facts.length > 0 ? <p className="f-facts">{facts.join(' · ')}</p> : null}
         {head ? (
           <p className={isLong(head.post.text) ? 'f-head long' : 'f-head'}>{head.post.text}</p>
         ) : null}
@@ -915,5 +930,74 @@ function Card(props: {
       </header>
       {read ? props.turns(read) : null}
     </section>
+  );
+}
+
+/**
+ * The lab's obstacles after the cards: the ruled-out posts of its lines of work, in three groups. The open ones
+ * show, and the taken-up and removed ones are folded with their counts. Each row has the obstacle's headline,
+ * its thread, who posted it and how long ago, where it stands when that is not open, and for a taken-up or
+ * removed obstacle a link to the post that builds on it. Nothing shows while the lab has no obstacle.
+ */
+export function Obstacles(props: {
+  readonly obstacles: readonly Obstacle[];
+  readonly threads: readonly ThreadSummary[];
+  readonly agents: readonly AgentView[];
+  readonly now: Date;
+}): ReactElement | null {
+  const groups = obstacleGroups(props.obstacles);
+  if (groups.length === 0) return null;
+  return (
+    <section className="f-obstacles" aria-labelledby="obstacles-title">
+      <h2 id="obstacles-title">Obstacles</h2>
+      {groups.map((group) => (
+        <details key={group.state} open={group.state === 'open'}>
+          <summary>{group.label}</summary>
+          <ul>
+            {group.items.map((item) => (
+              <ObstacleRow
+                key={item.post.id}
+                item={item}
+                threads={props.threads}
+                agents={props.agents}
+                now={props.now}
+              />
+            ))}
+          </ul>
+        </details>
+      ))}
+    </section>
+  );
+}
+
+function ObstacleRow(props: {
+  readonly item: Obstacle;
+  readonly threads: readonly ThreadSummary[];
+  readonly agents: readonly AgentView[];
+  readonly now: Date;
+}): ReactElement {
+  const { post, at, standing } = props.item;
+  const title = props.threads.find((summary) => summary.thread.id === post.thread)?.thread.title;
+  const chip = standingChip(post, standing);
+  const builder = builderLine(props.item, (id) => called(props.agents, id));
+  return (
+    <li>
+      <a href={href({ page: 'thread', id: post.thread, post: post.id })}>{post.text}</a>
+      <span className="f-by">
+        <a href={href({ page: 'thread', id: post.thread, post: null })}>{title ?? post.thread}</a>
+        {' · '}
+        {authorName(props.agents, post.author)}
+        {' · '}
+        <time dateTime={at} title={clock(at)}>
+          {ago(at, props.now)}
+        </time>
+      </span>
+      {chip ? <ChipView chip={chip} /> : null}
+      {builder ? (
+        <a className="f-by" href={href({ page: 'thread', id: builder.thread, post: builder.id })}>
+          {builder.text}
+        </a>
+      ) : null}
+    </li>
   );
 }
