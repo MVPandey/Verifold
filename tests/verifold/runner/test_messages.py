@@ -182,7 +182,7 @@ def test_the_lab_norms_hold_the_goal_the_obstacle_the_seats_and_the_name() -> No
         'An agent in a reviewer seat can ask for one of any result.',
         "When the lab has a coordinator, it owns the lab's strategy",
         'The coordinator can ask one agent to take the strategy',
-        'it wakes the lab with a post for the whole lab',
+        'It wakes a quiet lab with a post for the whole lab.',
         'Each agent still chooses its own work, and says why when it chooses differently.',
         'When no agent holds the coordinator seat and it is open, an agent that wants this work can take it.',
         'An agent on call works only when it is asked.',
@@ -245,7 +245,9 @@ def test_the_lab_norms_hold_what_came_out_of_python_and_the_norm_on_reruns() -> 
 def test_the_lab_norms_say_how_the_person_follows_the_lab_how_a_post_reads_and_how_many_reruns_are_enough() -> None:
     for norm in (
         # A real lab's coordinator answered the person after 41 seconds at the median, and once after 12 minutes.
-        "brings the person's steer to the board. When the person writes to it, it answers in a line before other work, and follows up when it has more.",
+        "brings the person's steer to the board. When the person writes to it, it answers in a sentence or two before other work, and follows up when it has more.",
+        # An agent has one alarm, and in a busy lab an alarm for a quiet board never rings, so no report came of it.
+        'It keeps an alarm of about half an hour, so that it notices when the lab stopped with time left and when its report is old.',
         # The person asked five times where the lab stood, and no agent posted a report.
         'the work goes on from there.\n\nThe person follows the lab through its report.',
         'A report says in plain words where the lab stands: which lines are alive, which closed and why, what looks promising, and what the lab needs from the person.',
@@ -254,13 +256,18 @@ def test_the_lab_norms_say_how_the_person_follows_the_lab_how_a_post_reads_and_h
         'The person should not have to ask where the lab stands.',
         'Write plainly, for the person and the other agents. The headline of a post holds the claim, in a sentence or two. The body holds how you know it.',
         'The person reads the body as formatted text, so use short paragraphs, lists, and tables there.',
-        # Two to four agents took 8 of 37 wanted reruns at the same time.
-        'One independent rerun of a result is enough, when an agent of another model family than the author makes it. Before you take a wanted rerun, look at who took it already. When you check a result with a rerun',
+        # Two to four agents took 8 of 37 wanted reruns at the same time. A lab with one model family has no held up
+        # result, so it gets its own stopping point.
+        'A result that stands as held up needs no other rerun. In a lab with one model family, one independent rerun is enough. Before you take a wanted rerun, look at who took it already. When you check a result with a rerun',
     ):
         assert norm in NORMS_TEMPLATE
-    assert 'the claim first, then how you know it' not in NORMS_TEMPLATE
-    # A result stands as held up only after a rerun by another model family, so one rerun of any agent is not enough.
-    assert 'One independent rerun of a result is enough.' not in NORMS_TEMPLATE
+    for gone in (
+        'the claim first, then how you know it',
+        'One independent rerun of a result is enough.',
+        'It keeps an alarm for a quiet board',
+        'answers in a line',
+    ):
+        assert gone not in NORMS_TEMPLATE
 
 
 def test_the_message_after_more_time_says_what_happened_to_the_agents_processes() -> None:
