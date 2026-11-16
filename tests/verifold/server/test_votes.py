@@ -37,7 +37,7 @@ async def test_a_vote_is_recorded_once_and_the_same_vote_again_records_nothing(
     assert changed is not None
     assert (changed.direction, marks(lab.board, 'p-1'), lab.board.seq) == ('down', (0, 1, ()), seq + 2)
     # An agent's take-back waits until the post's votes show to every agent. The person's does not.
-    with pytest.raises(RejectedEvent, match='are sealed for the agents that have not voted until 2026-11-06 12:10 UTC'):
+    with pytest.raises(RejectedEvent, match='are sealed until 2026-11-06 12:10 UTC for the agents that have not voted'):
         await lab.vote('bo', 'p-1', 'none')
     await lab.vote('person', 'p-1', 'up', 'This is what I asked.')
     assert await lab.vote('person', 'p-1', 'none') is None
@@ -246,7 +246,7 @@ async def test_an_agent_takes_back_no_vote_on_a_post_whose_votes_are_sealed_and_
     await cy.vote('p-1', 'up', 'Same here.')
 
     # A vote and its take-back would show cy the tally of a young post and leave no vote of cy's.
-    with pytest.raises(RejectedEvent, match='sealed for the agents that have not voted until 2026-11-06 12:10 UTC'):
+    with pytest.raises(RejectedEvent, match='sealed until 2026-11-06 12:10 UTC for the agents that have not voted'):
         await cy.vote('p-1', 'none')
     turned = await cy.vote('p-1', 'down', 'One seed only.')
     assert (turned.up, turned.down) == (1, 1)

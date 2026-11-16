@@ -98,6 +98,36 @@ async def test_a_clean_copy_is_an_export_of_the_pinned_commit_in_verifolds_own_f
     assert await clean_copy(project, claim) == copy
 
 
+async def test_a_later_call_finds_the_copy_by_its_folder_and_its_manifest_file_and_reads_nothing_else(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / 'project'
+    claim = await a_claim(project, own=True)
+    copies = CleanCopies(project)
+    made = await copies(claim)
+
+    kept = await copies.kept(claim, made.digest)
+
+    assert kept is not None
+    assert (kept.folder, kept.listing, kept.digest, kept.files) == (made.folder, made.listing, made.digest, ())
+    # Another SHA-256, a changed manifest, a missing folder, and a link in the folder's place: no copy is there.
+    assert await copies.kept(claim, 'ab' * 32) is None
+    listing = made.listing.read_bytes()
+    made.listing.chmod(0o644)
+    made.listing.write_bytes(listing + b'x')
+    assert await copies.kept(claim, made.digest) is None
+    made.listing.write_bytes(listing)
+    assert await copies.kept(claim, made.digest) is not None
+    folder = made.folder
+    folder.rename(folder.with_name('moved'))
+    assert await copies.kept(claim, made.digest) is None
+    folder.symlink_to(folder.with_name('moved'))
+    assert await copies.kept(claim, made.digest) is None
+    # A post without files has no copy.
+    bare = claim.model_copy(update={'post': claim.post.model_copy(update={'evidence': ()})})
+    assert await copies.kept(bare, made.digest) is None
+
+
 @pytest.mark.parametrize('with_commits', [True, False])
 async def test_a_post_that_verifold_pinned_in_its_own_directory_exports_after_the_author_deleted_the_whole_folder(
     tmp_path: Path, *, with_commits: bool

@@ -647,7 +647,9 @@ class News(Record):
     The reruns that became wanted since and that the agent can take with `take_rerun`. A rerun is here once: a
     later request for it adds nothing. After the agent got a reviewer seat, every wanted rerun that it can take is
     here once. A rerun that another agent's lease keeps from the agent is not here, and it is here once when that
-    lease ends without a check. An agent whose seat is on call has none here, and `brief` lists every wanted rerun.
+    lease ends without a check, unless it was here before. An agent whose seat is on call has none here, and `brief`
+    lists every wanted rerun. The seat that serves the agent remembers what it told, so after a restart of Verifold,
+    or a new invitation, a rerun can be here once more.
     """
     votes: tuple[VoteNote, ...] = ()
     """
@@ -803,10 +805,10 @@ class RerunTake(Record):
     """
     Each file of the clean copy with its size and the SHA-256 of its bytes, as Verifold computed them from the
     pinned commit's objects at the take. Empty when the copy has more than `MAX_MANIFEST` files, and after a later
-    call, which checks no copy.
+    call that found the copy's folder and its manifest file as the take left them.
     """
     manifest_files: int = 0
-    """How many files the clean copy has. Zero after a later call, which checks no copy."""
+    """How many files the clean copy has. Zero after a later call that found the copy as the take left it."""
     manifest_file: str = ''
     """
     A file of Verifold's own, beside the copy, with one line for each file: the SHA-256, two spaces, and the path,

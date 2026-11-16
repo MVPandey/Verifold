@@ -20,6 +20,7 @@ from verifold.protocol.join import (
     PostRequest,
     PostView,
     ProfileResult,
+    RerunLine,
     RerunTake,
     ThreadList,
     ThreadView,
@@ -35,7 +36,7 @@ from verifold.society.attention import news, update, wakes
 from verifold.society.deliverables import live
 from verifold.society.errors import RejectedEvent
 from verifold.society.identity import post_view
-from verifold.society.reruns import kept_until, lease_of, open_take
+from verifold.society.reruns import RerunKey, kept_until, lease_of, open_take, told_of
 from verifold.society.views import brief, profile_result, side_lines, thread_summaries, thread_view, work_threads
 
 type Pin = Callable[[tuple[str, ...]], Awaitable[tuple[FileEvidence, ...]]]
@@ -67,8 +68,13 @@ class CleanCopy(Protocol):
         """
         ...
 
-    def place(self, claim: Posted) -> tuple[Path, Path]:
-        """Return where the clean copy of a post's files is, and where its manifest is. It checks nothing."""
+    async def kept(self, claim: Posted, digest: str) -> MadeCopy | None:
+        """
+        Return the clean copy of a post's files as a take left it, or `None` when it is not there as it was.
+
+        It is there when its folder is and its manifest file has the SHA-256 `digest`. The copy has no lines of the
+        manifest: this checks one file, and the manifest's SHA-256 checks the rest.
+        """
         ...
 
 
@@ -108,8 +114,11 @@ class Member:
         self._lab = lab
         self.agent_id = agent_id
         self._seen = lab.board.seq if seen is None else seen
-        self._seen_at: datetime | None = None
-        """When the agent read the board up to `seen`, or `None` when this seat does not know."""
+        self._told: tuple[tuple[RerunKey, int], ...] = ()
+        """
+        Each wanted rerun that a result of this seat told the agent of, with the event that the result reached. A
+        seat starts with none, so after a restart an agent can be told of a rerun a second time, and never not.
+        """
         before = self._heard_before()
         self._heard: tuple[Heard, ...] = (before,) if before else ()
         """Each fact of what the results carried, the newest last, so that a failed turn can go back to an earlier one."""
@@ -125,9 +134,14 @@ class Member:
         return self._seen
 
     @property
-    def seen_at(self) -> datetime | None:
-        """When the agent got the event in `seen`, or `None` for a seat that started there, as after a restart."""
-        return self._seen_at
+    def told(self) -> frozenset[RerunKey]:
+        """The wanted reruns that this seat told the agent of. The news tells each once."""
+        return frozenset(key for key, _ in self._told)
+
+    def _tell(self, lines: tuple[RerunLine, ...], seq: int) -> None:
+        # The reruns that a result carries to the agent now, so that no later result tells of them again.
+        fresh = told_of(self._lab.board, lines) - self.told
+        self._told = (*self._told, *((key, seq) for key in sorted(fresh)))
 
     @property
     def heard(self) -> Heard | None:
@@ -263,8 +277,9 @@ class Member:
 
     def _unseen(self) -> News:
         now = self._lab.now()
-        unseen = news(self._lab.board, self.agent_id, self._seen, now, since=self._seen_at)
-        self._seen, self._seen_at = unseen.seq, now
+        unseen = news(self._lab.board, self.agent_id, self._seen, now, told=self.told)
+        self._seen = unseen.seq
+        self._tell(unseen.reruns, unseen.seq)
         self._hear(now, (*unseen.for_you, *unseen.others))
         return unseen
 
@@ -313,10 +328,10 @@ class Member:
         A turn that fails can lose the tool results that carried them, so the agent gets them once more. What the
         results before it carried stays, with its time.
         """
-        if seq < self._seen:
-            # The read that reached `seq` came at a time that this seat does not know.
-            self._seen, self._seen_at = seq, None
+        self._seen = min(self._seen, seq)
         self._heard = tuple(heard for heard in self._heard if heard.seq <= self._seen)
+        # The reruns that the lost results told of are news again.
+        self._told = tuple((key, at) for key, at in self._told if at <= self._seen)
 
     def threads(self) -> ThreadList:
         """
@@ -351,9 +366,10 @@ class Member:
 
         The copy is in a folder of Verifold's own, and the take is recorded when the copy is there. So a copy that
         fails, and a take that the board refuses, record nothing. A take checks the copy and returns its manifest,
-        and it gives the agent a lease on the rerun. A later call of the agent renews the lease, makes no export,
-        and returns the folder of the take, its manifest file, and the manifest's SHA-256 that the record keeps.
-        When the board does not renew the lease, `not_renewed` says why. With `give_up`, the call ends the
+        and it gives the agent a lease on the rerun. A later call of the agent renews the lease, and it checks only
+        that the copy's folder is there and that its manifest file has the SHA-256 that the record keeps. Then it
+        returns them without the manifest's lines, and it makes the copy again when either check fails. When the
+        board does not renew the lease, `not_renewed` says why. With `give_up`, the call ends the
         agent's lease and makes no copy.
 
         Raises:
@@ -373,21 +389,20 @@ class Member:
         if self._copies is None:
             raise NoCleanCopy('This lab cannot make a clean copy for you.')
         if (taken := self._lab.board.take(self.agent_id, post_id)) is not None:
-            # The take checked the copy, and the manifest's SHA-256 checks it again. An export can take minutes.
+            # An export can take minutes, so a later call checks the folder and the manifest's file, and exports
+            # again only when one of them is gone or changed.
             why = await self._lab.renew_rerun(self.agent_id, post_id)
-            folder, listing = self._copies.place(claim)
-            return self._claim(claim, taken).model_copy(
-                update={
-                    'folder': str(folder),
-                    'manifest_file': str(listing),
-                    'manifest_sha256': taken.manifest or '',
-                    'not_renewed': why,
-                }
-            )
+            kept = await self._copies.kept(claim, taken.manifest) if taken.manifest else None
+            made = kept or await self._copies(claim)
+            return self._copy(self._claim(claim, taken), made).model_copy(update={'not_renewed': why})
         self._lab.check_take(self.agent_id, post_id)
         made = await self._copies(claim)
-        taken = await self._lab.take_rerun(self.agent_id, post_id, made.digest)
-        return self._claim(claim, taken).model_copy(
+        return self._copy(self._claim(claim, await self._lab.take_rerun(self.agent_id, post_id, made.digest)), made)
+
+    @staticmethod
+    def _copy(claim: RerunTake, made: MadeCopy) -> RerunTake:
+        # The claim with where its clean copy is, and the copy's manifest as far as this call checked it.
+        return claim.model_copy(
             update={
                 'folder': str(made.folder),
                 'manifest': made.files if len(made.files) <= MAX_MANIFEST else (),
@@ -563,13 +578,14 @@ class Member:
             if self.void:
                 raise UnknownAgent('This agent got a new invitation, so the token of this call is void.')
             now = self._lab.now()
-            news = update(self._lab.board, self.agent_id, self._seen, now, since=self._seen_at)
+            news = update(self._lab.board, self.agent_id, self._seen, now, told=self.told)
             remaining = deadline - loop.time()
             if news.posts or news.left or news.reruns or remaining <= 0:
-                self._seen, self._seen_at = news.seq, now
+                self._seen = news.seq
+                self._tell(news.reruns, news.seq)
                 self._hear(now, news.others, news.posts)
                 return news
             # A rerun that only a lease keeps from the agent comes free at the lease's end, which is no event.
-            free = kept_until(self._lab.board, self.agent_id, now)
+            free = kept_until(self._lab.board, self.agent_id, now, self.told)
             frees = remaining if free is None else min(remaining, (free - now).total_seconds())
             await self._lab.wait_for_change(news.seq, frees)

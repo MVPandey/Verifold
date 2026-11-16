@@ -16,6 +16,7 @@ from verifold.server.join import join_server
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.errors import RejectedEvent
+from verifold.society.reruns import kept_until
 from verifold.store.record_file import RecordFile
 
 EVIDENCE = (FileEvidence(path='bench.json', commit='c' * 40),)
@@ -292,3 +293,56 @@ async def test_a_renewal_and_a_call_after_the_check_make_no_export(wanted: Lab) 
     # The check settled the rerun, so bo holds no lease, and the result says why.
     assert (after.held_since, after.held_until) == (None, None)
     assert after.not_renewed == 'No rerun of post p-1 is wanted now, so no lease on it stands.'
+
+
+async def test_an_agent_told_of_a_rerun_is_told_nothing_more_when_later_leases_end(wanted: Lab, clock: Clock) -> None:
+    dee = Member(wanted, 'dee')
+    clock.pass_minutes(0.5)
+    assert [line.post for line in dee.news().reruns] == ['p-1']
+    # bo takes the rerun, dee reads while bo's lease keeps it out, and the lease ends at its time.
+    clock.pass_minutes(0.5)
+    await Member(wanted, 'bo', copies=FakeCopies()).take_rerun('p-1')
+    clock.pass_minutes(1)
+    dee.news()
+    clock.pass_minutes(10)
+    assert dee.news().reruns == ()
+    assert kept_until(wanted.board, 'dee', wanted.now(), dee.told) is None
+    # cy of another family takes it in its turn, and its lease ends too. dee was told, so it hears nothing.
+    clock.pass_minutes(1)
+    await Member(wanted, 'cy', copies=FakeCopies()).take_rerun('p-1')
+    clock.pass_minutes(1)
+    dee.news()
+    clock.pass_minutes(10)
+    assert dee.news().reruns == ()
+    assert (await dee.wait(0)).reruns == ()
+
+
+async def test_a_seat_that_starts_again_hears_once_more_of_a_rerun_that_a_lease_kept_out_and_never_misses_it(
+    wanted: Lab, clock: Clock
+) -> None:
+    await Member(wanted, 'bo', copies=FakeCopies()).take_rerun('p-1')
+    dee = Member(wanted, 'dee')
+    clock.pass_minutes(1)
+    assert dee.news().reruns == ()
+
+    # Verifold restarts: the seat starts again at dee's place, and it knows nothing of what it told.
+    again = Member(wanted, 'dee', seen=dee.seen)
+
+    assert kept_until(wanted.board, 'dee', wanted.now(), again.told) == START + timedelta(minutes=10)
+    clock.pass_minutes(14)
+    assert [line.post for line in again.news().reruns] == ['p-1']
+    assert again.news().reruns == ()
+
+
+async def test_a_later_call_makes_the_copy_again_when_it_is_gone_or_changed(wanted: Lab) -> None:
+    copies = FakeCopies()
+    bo = Member(wanted, 'bo', copies=copies)
+    await bo.take_rerun('p-1')
+
+    kept = await bo.take_rerun('p-1')
+    copies.lost = True
+    remade = await bo.take_rerun('p-1')
+
+    assert copies.made == [('p-1', 'ada'), ('p-1', 'ada')]
+    assert (kept.manifest, remade.manifest_files, remade.folder) == ((), 1, kept.folder)
+    assert [line.path for line in remade.manifest] == ['bench.json']

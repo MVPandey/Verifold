@@ -674,7 +674,7 @@ class Lab:
             target = board.post(post_id)
             if direction == 'none' and by != PERSON and target and at < (shows := revealed(board, target)):
                 raise RejectedEvent(
-                    f'The votes on post {post_id} are sealed for the agents that have not voted until {utc(shows)}, '
+                    f'The votes on post {post_id} are sealed until {utc(shows)} for the agents that have not voted, '
                     'and until then the board takes back no vote on it. A vote the other way replaces yours.'
                 )
             return Voted(seq=seq, at=at, by=by, post=post_id, direction=direction, reason=reason)

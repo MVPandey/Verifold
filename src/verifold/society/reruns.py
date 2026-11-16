@@ -16,18 +16,19 @@ because a record from before the leases can hold several takes of one rerun at o
 lease from its own time. A renewal is an event that no such record holds, so the record's rules refuse one that
 another agent's lease keeps out.
 
+A wanted rerun is news once for an agent, at the first moment when the agent can take it. The seat that serves
+the agent remembers which reruns it told the agent of, and these functions take that memory as `told`.
+
 A record from before agents took reruns holds checkers that Verifold started for each request. Such a checker read
 nothing but its claim and posted one check, and that check answers the requests before it in the same way.
 """
 
-from dataclasses import replace
 from datetime import datetime, timedelta
 
 from verifold.protocol.events import Posted, RerunRequested, RerunTaken
 from verifold.protocol.ids import AgentId, PostId
 from verifold.protocol.join import LeaseLine, RerunLine, RerunOpenTo
 from verifold.protocol.posts import Check
-from verifold.protocol.settings import ReviewerSettings
 from verifold.society.board import Board
 from verifold.society.lifecycle import latest_time, utc
 from verifold.society.reviewers import seats
@@ -38,6 +39,13 @@ MAX_RERUNS = 2
 """
 The most agents whose independent rerun of one post has a check. A post with that many takes no other request, so
 that the record of one post stays small.
+"""
+
+
+type RerunKey = tuple[PostId, int]
+"""
+A wanted rerun as a seat remembers it: the post, and the event of the first request for it that is still open. A
+rerun that a check settled and that somebody asks for again is another one.
 """
 
 
@@ -227,13 +235,15 @@ def renewal_refusal(board: Board, agent_id: AgentId, post_id: PostId, now: datet
     )
 
 
-def kept_until(board: Board, agent_id: AgentId, now: datetime) -> datetime | None:
+def kept_until(
+    board: Board, agent_id: AgentId, now: datetime, told: frozenset[RerunKey] = frozenset()
+) -> datetime | None:
     """
     Return when the first wanted rerun that only a lease keeps from an agent comes free by time, or `None`.
 
-    That is the latest end of the leases that keep the agent from it, the earliest such time of all the reruns.
-    The agent hears of such a rerun then, as `reruns_for` says. A renewal moves the time, so a caller asks again
-    when the board changes.
+    That is the latest end of the leases that keep the agent from it, the earliest such time of all the reruns. A
+    rerun in `told`, which the agent was told of already, does not count: its lease's end is no news for the agent.
+    A renewal moves the time, so a caller asks again when the board changes.
     """
     if board.on_call(agent_id):
         return None
@@ -241,32 +251,11 @@ def kept_until(board: Board, agent_id: AgentId, now: datetime) -> datetime | Non
         max(lease.until for lease in binding)
         for line in reruns_wanted(board, now)
         if agent_id not in line.asked_by[:1]
+        and rerun_key(board, line.post) not in told
         and _may_take(board, agent_id, line.post, now)
         and (binding := binding_leases(board, agent_id, line.post, now))
     )
     return min(ends, default=None)
-
-
-def _earlier(board: Board, seq: int) -> Board:
-    # The board as it was after event `seq`, as far as who can take a rerun goes: the agents, the seats, who left,
-    # who is on call, the requests, the takes and the leases, the turns, and the posts.
-    number = next((seats for at, seats in reversed(board.seat_numbers) if at <= seq), None)
-    settings = board.settings.model_copy(update={'reviewers': ReviewerSettings(seats=number)})
-    return replace(
-        board,
-        seq=seq,
-        agents=tuple(entry for entry in board.agents if entry.seq <= seq),
-        reviewers=tuple(entry for entry in board.reviewers if entry.seq <= seq),
-        on_calls=tuple(entry for entry in board.on_calls if entry.seq <= seq),
-        left=tuple(entry for entry in board.left if entry.seq <= seq),
-        posts=tuple(entry for entry in board.posts if entry.seq <= seq),
-        reruns=tuple(entry for entry in board.reruns if entry.seq <= seq),
-        takes=tuple(entry for entry in board.takes if entry.seq <= seq),
-        leases=tuple(entry for entry in board.leases if entry.seq <= seq),
-        starts=tuple(entry for entry in board.starts if entry.seq <= seq),
-        turns=tuple(entry for entry in board.turns if entry.seq <= seq),
-        settings=settings,
-    )
 
 
 def rerun_line(board: Board, post_id: PostId, now: datetime | None = None) -> RerunLine | None:
@@ -323,70 +312,42 @@ def can_take(board: Board, agent_id: AgentId, post_id: PostId, now: datetime | N
     return _may_take(board, agent_id, post_id, moment) and not binding_leases(board, agent_id, post_id, moment)
 
 
-def reruns_for(  # noqa: PLR0913
-    board: Board,
-    agent_id: AgentId,
-    after: int,
-    reach: int,
-    *,
-    now: datetime | None = None,
-    since: datetime | None = None,
+def rerun_key(board: Board, post_id: PostId) -> RerunKey | None:
+    """Return the key of the rerun of a post that is wanted now, or `None` when none is."""
+    wanted = wanted_reruns(board, post_id)
+    return (post_id, wanted[0].seq) if wanted else None
+
+
+def told_of(board: Board, lines: tuple[RerunLine, ...]) -> frozenset[RerunKey]:
+    """Return the keys of the wanted reruns that some lines of reruns hold."""
+    return frozenset(key for line in lines if (key := rerun_key(board, line.post)))
+
+
+def reruns_for(
+    board: Board, agent_id: AgentId, told: frozenset[RerunKey] = frozenset(), now: datetime | None = None
 ) -> tuple[RerunLine, ...]:
     """
-    Return the reruns that are news for an agent from event `after` to event `reach`, among those that it can take.
+    Return the wanted reruns that are news for an agent at `now`: each that it can take and that `told` does not hold.
 
-    A rerun is news once for an agent, when the agent can first take it:
-
-    - The post becomes wanted, with its first request. A later request for the same rerun joins it and reaches
-      nobody.
-    - The agent gets a reviewer seat while reruns are wanted.
-    - A rerun that was for the reviewer seats opens to any agent, as when its only holder took it or left.
-    - A lease of another agent that kept the agent from the rerun at `since` ends without a check: at its time,
-      at a give-up, or when its holder leaves.
+    A rerun is news once for an agent, at the first moment when the agent can take it: when it becomes wanted, when
+    the agent gets a reviewer seat, when it opens to every agent, as when its only holder of a seat took it or
+    left, or when a lease that kept the agent out ends. The caller keeps in `told` the reruns that the agent was
+    told of, so a later lease that ends tells it nothing. A later request for the same rerun joins it and reaches
+    nobody.
 
     A request reaches the agents that can take it, as a call that names nobody reaches every agent, so it does not
-    reach an agent whose seat is on call, not the agent that asked, and not an agent that a lease keeps out. An
-    agent reads every wanted rerun in its brief.
-
-    `now` is the time of this read, and `since` the time of the agent's read that reached event `after`. Without
-    `now`, time counts from the board's newest post, and without `since`, from the newest post up to `after`. A
-    rerun can then be news twice, which is better than never.
+    reach an agent whose seat is on call, not the agent that asked first, and not an agent that a lease keeps out.
+    An agent reads every wanted rerun in its brief. Without `now`, time counts from the board's newest post.
     """
     if board.on_call(agent_id):
         return ()
     moment = now or latest_time(board)
-    mine = tuple(
-        line
-        for line in reruns_wanted(board, moment)
-        if agent_id not in line.asked_by[:1] and can_take(board, agent_id, line.post, moment)
-    )
-    if not mine:
-        return ()
-    seated = any(after < entry.seq <= reach and entry.agent == agent_id and entry.reviewer for entry in board.reviewers)
-    was: Board | None = None
-
-    def earlier() -> tuple[Board, datetime]:
-        # The board at `after`, and the time of the agent's read then.
-        nonlocal was
-        was = was or _earlier(board, after)
-        return was, since or latest_time(was)
-
-    def opened(line: RerunLine) -> bool:
-        # Whether the rerun was for the reviewer seats at `after` and is open to any agent now.
-        if line.open_to != 'any':
-            return False
-        then, at = earlier()
-        return open_to(then, line.post, at) == 'reviewer'
-
-    def freed(line: RerunLine) -> bool:
-        # Whether a lease kept the agent from the rerun at `after`, and keeps it out no longer.
-        then, at = earlier()
-        return bool(binding_leases(then, agent_id, line.post, at))
-
     return tuple(
         line
-        for line in mine
-        if seated or after < wanted_reruns(board, line.post)[0].seq <= reach or opened(line) or freed(line)
+        for line in reruns_wanted(board, moment)
+        if agent_id not in line.asked_by[:1]
+        and rerun_key(board, line.post) not in told
+        and can_take(board, agent_id, line.post, moment)
     )
 
 
