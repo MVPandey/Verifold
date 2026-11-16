@@ -46,7 +46,7 @@ A post that is for an agent wakes it. The agent's news holds every post that it 
 it. So an agent learns of the rest when it reads the board, and not before.
 
 A vote and a badge are no posts, and they wake nobody. The author of a post reads the votes and the badges on it in
-its next news.
+its next news. Every other agent sees no vote on a young post until it votes on it, as `society.votes` says.
 """
 
 import re
@@ -136,7 +136,8 @@ def update(board: Board, agent_id: AgentId, after: int, now: datetime | None = N
     Return what happened after event `after`: the posts for an agent in full, and a summary of the rest.
 
     It holds at most `MAX_NEWS` posts for the agent, the oldest first. When more wait, it reaches only as far as the
-    last one that it holds, so the next update brings the others. `now` dates the time that the lab has left.
+    last one that it holds, so the next update brings the others. `now` dates the time that the lab has left, the
+    votes that are sealed for the agent, and the leases on reruns. Without it, time counts from the newest post.
     """
     woken, rest = _unseen(board, agent_id, after)
     shown, others, reach = _page(woken, rest, board.seq)
@@ -144,9 +145,9 @@ def update(board: Board, agent_id: AgentId, after: int, now: datetime | None = N
     badges, more_badges = badge_notes(board, agent_id, after, reach)
     return Update(
         seq=reach,
-        posts=tuple(post_view(board, entry) for entry in shown),
+        posts=tuple(post_view(board, entry, agent_id, now) for entry in shown),
         more=len(woken) - len(shown),
-        others=tuple(post_line(board, entry, news=True) for entry in others[-MAX_NEWS:]),
+        others=tuple(post_line(board, entry, agent_id, now, news=True) for entry in others[-MAX_NEWS:]),
         other_posts=len(others),
         threads=tuple(
             entry.thread for entry in board.threads if after < entry.seq <= reach and entry.thread.opened_by != agent_id
@@ -160,7 +161,7 @@ def update(board: Board, agent_id: AgentId, after: int, now: datetime | None = N
         left=departures(board, agent_id, after, reach),
         profile=profile_notes(board, agent_id, after, reach),
         renamed=renames(board, agent_id, after, reach),
-        reruns=reruns_for(board, agent_id, after, reach),
+        reruns=reruns_for(board, agent_id, after, reach, now),
         votes=votes,
         votes_left_out=more_votes,
         badges=badges,
@@ -171,12 +172,13 @@ def update(board: Board, agent_id: AgentId, after: int, now: datetime | None = N
     )
 
 
-def news(board: Board, agent_id: AgentId, after: int) -> News:
+def news(board: Board, agent_id: AgentId, after: int, now: datetime | None = None) -> News:
     """
     Return one line for each post after event `after` that an agent did not write.
 
     It holds at most `MAX_NEWS` posts for the agent, the oldest first, and reaches as far as `update` does. So a post
-    for the agent is never left out. Of the other posts it holds the newest.
+    for the agent is never left out. Of the other posts it holds the newest. `now` decides which votes are sealed
+    and which leases on reruns stand, as in `update`.
     """
     woken, rest = _unseen(board, agent_id, after)
     shown, others, reach = _page(woken, rest, board.seq)
@@ -184,14 +186,14 @@ def news(board: Board, agent_id: AgentId, after: int) -> News:
     badges, more_badges = badge_notes(board, agent_id, after, reach)
     return News(
         seq=reach,
-        for_you=tuple(post_line(board, entry, news=True) for entry in shown),
+        for_you=tuple(post_line(board, entry, agent_id, now, news=True) for entry in shown),
         more=len(woken) - len(shown),
-        others=tuple(post_line(board, entry, news=True) for entry in others[-MAX_NEWS:]),
+        others=tuple(post_line(board, entry, agent_id, now, news=True) for entry in others[-MAX_NEWS:]),
         left_out=max(len(others) - MAX_NEWS, 0),
         left=departures(board, agent_id, after, reach),
         profile=profile_notes(board, agent_id, after, reach),
         renamed=renames(board, agent_id, after, reach),
-        reruns=reruns_for(board, agent_id, after, reach),
+        reruns=reruns_for(board, agent_id, after, reach, now),
         votes=votes,
         votes_left_out=more_votes,
         badges=badges,

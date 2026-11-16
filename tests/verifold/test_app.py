@@ -1537,6 +1537,8 @@ async def test_the_persons_change_applies_to_the_running_lab_but_an_agents_edit_
             'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'},
             'permissions': {'while_you_decide': 'auto'},
             'reviewers': {'seats': None},
+            'votes': {'reveal_minutes': 10},
+            'reruns': {'lease_minutes': 10},
         },
         'defaults': {'agents': None, 'auto_mode': True, 'minutes': None},
     }
@@ -1571,6 +1573,27 @@ async def test_the_persons_choice_for_permission_requests_applies_to_the_running
     assert after['all_projects']['values'] == {'permissions': {'while_you_decide': 'refuse'}}
     assert after['lab']['permissions'] == {'while_you_decide': 'refuse'}
     assert after['lab']['jobs'] == before['lab']['jobs']
+
+
+async def test_the_persons_reveal_time_and_lease_apply_to_the_running_lab(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('HOME', str(project.parent))
+    async with serving(project, ONE_AGENT) as client:
+        await until(lambda: any(isinstance(event, SettingsSet) for event in record(project)))
+        before = (await client.get('/settings')).json()
+        reveal = {'level': 'project', 'key': 'votes.reveal_minutes', 'value': 0, 'revisions': revisions_of(before)}
+        revealed = (await client.post('/settings', json=reveal)).json()
+        lease = {'level': 'all', 'key': 'reruns.lease_minutes', 'value': 25, 'revisions': revisions_of(revealed)}
+        leased = (await client.post('/settings', json=lease)).json()
+        wrong = await client.post('/settings', json={**lease, 'value': -1, 'revisions': revisions_of(leased)})
+
+    assert (before['lab']['votes'], before['lab']['reruns']) == ({'reveal_minutes': 10}, {'lease_minutes': 10})
+    assert revealed['project']['values'] == {'votes': {'reveal_minutes': 0}}
+    assert (leased['lab']['votes'], leased['lab']['reruns']) == ({'reveal_minutes': 0}, {'lease_minutes': 25})
+    assert wrong.status_code == 400
+    kept = [event.settings for event in record(project) if isinstance(event, SettingsSet)]
+    assert [(one.votes.reveal_minutes, one.reruns.lease_minutes) for one in kept] == [(10, 10), (0, 10), (0, 25)]
 
 
 def revisions_of(view: dict[str, dict[str, str]]) -> dict[str, str]:

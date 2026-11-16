@@ -3,12 +3,17 @@ from datetime import timedelta
 import pytest
 from builders import START, RecordBuilder, lab
 
+from verifold.protocol.join import LeaseLine, News
 from verifold.protocol.posts import Check, FileEvidence, Message, Objection, Result
+from verifold.protocol.settings import RerunSettings, ReviewerSettings, Settings
 from verifold.society.attention import news, update
 from verifold.society.errors import RejectedEvent
 from verifold.society.reruns import (
     MAX_RERUNS,
     can_take,
+    lease_of,
+    lease_refusal,
+    leases,
     open_to,
     rerun_checks,
     rerun_line,
@@ -16,6 +21,7 @@ from verifold.society.reruns import (
     wanted_reruns,
 )
 from verifold.society.standing import standing
+from verifold.society.views import brief
 
 EVIDENCE = (FileEvidence(path='bench.json', commit='c' * 40),)
 RESULT = Result(id='p-1', thread='t-1', author='ada', text='sorted() is 11.8x faster.', evidence=EVIDENCE)
@@ -104,15 +110,142 @@ def test_a_take_needs_a_wanted_rerun_an_agent_of_the_lab_and_the_commit_that_the
         wanted().take('cy', 'p-1', commit='e' * 40).board()
 
 
-def test_several_agents_can_take_one_rerun_and_a_taker_that_left_shows_no_longer() -> None:
+def test_a_record_from_before_the_leases_with_two_takes_of_one_rerun_loads_and_each_take_holds_its_own_lease() -> None:
+    # The record's rules leave the lease to the server, so such a record folds as it was written.
     record = wanted().take('cy', 'p-1').take('bo', 'p-1')
-    line = rerun_line(record.board(), 'p-1')
+    board = record.board()
+    line = rerun_line(board, 'p-1', record.at(10))
     assert line is not None
     assert line.taken_by == ('cy', 'bo')
+    assert line.held_by == (
+        LeaseLine(agent='cy', since=record.at(9), until=record.at(19)),
+        LeaseLine(agent='bo', since=record.at(10), until=record.at(20)),
+    )
+    # Each lease ends ten minutes after its take, so a lab that resumes later has no holder.
+    assert [lease.agent for lease in leases(board, 'p-1', record.at(19))] == ['bo']
+    assert leases(board, 'p-1', record.at(20)) == ()
 
-    gone = rerun_line(record.leave('cy').board(), 'p-1')
+    gone = rerun_line(record.leave('cy').board(), 'p-1', record.at(10))
     assert gone is not None
-    assert gone.taken_by == ('bo',)
+    assert (gone.taken_by, [lease.agent for lease in gone.held_by]) == (('bo',), ['bo'])
+
+
+def minutes_pass(record: RecordBuilder, minutes: int) -> RecordBuilder:
+    # The builder dates one event a minute, so a watch of ada's moves the time and nothing else for a rerun.
+    for _ in range(minutes):
+        record.watch('ada', 't-1')
+    return record
+
+
+def test_a_take_holds_a_lease_that_a_renewal_moves_and_that_ends_at_its_time_its_give_up_its_check_and_a_leave() -> (
+    None
+):
+    record = wanted().take('bo', 'p-1')
+    taken = record.at(9)
+    board = record.board()
+
+    assert lease_of(board, 'bo', 'p-1', taken) == LeaseLine(
+        agent='bo', since=taken, until=taken + timedelta(minutes=10)
+    )
+    assert lease_of(board, 'bo', 'p-1', taken + timedelta(minutes=10)) is None
+    # A renewal while the lease stands keeps when it began and moves its end.
+    renewed = record.copy().lease('bo', 'p-1').board()
+    assert lease_of(renewed, 'bo', 'p-1', record.at(10)) == LeaseLine(
+        agent='bo', since=taken, until=record.at(10) + timedelta(minutes=10)
+    )
+    # A give-up ends it at once, whatever time a view counts from.
+    given = record.copy().lease('bo', 'p-1', held=False)
+    assert lease_of(given.board(), 'bo', 'p-1', taken) is None
+    # A renewal after a give-up, or after the lease ran out, starts a new lease.
+    again = given.copy().lease('bo', 'p-1')
+    assert lease_of(again.board(), 'bo', 'p-1', again.at(11)) == LeaseLine(
+        agent='bo', since=again.at(11), until=again.at(21)
+    )
+    late = minutes_pass(record.copy(), 10).lease('bo', 'p-1')
+    assert lease_of(late.board(), 'bo', 'p-1', late.at(20)) == LeaseLine(
+        agent='bo', since=late.at(20), until=late.at(30)
+    )
+    # The check of the take ends it, and so does a leave.
+    checked = record.copy().post(rerun_check('bo', take=9)).board()
+    assert lease_of(checked, 'bo', 'p-1', taken) is None
+    assert lease_of(record.copy().leave('bo').board(), 'bo', 'p-1', taken) is None
+    # A lab whose lease is zero minutes gives no lease.
+    none = wanted().settings(Settings(reviewers=ReviewerSettings(seats=0), reruns=RerunSettings(lease_minutes=0)))
+    assert lease_of(none.take('bo', 'p-1').board(), 'bo', 'p-1', none.at(10)) is None
+    # A record from before the setting has the default of ten minutes.
+    assert board.settings.reruns.lease_minutes == 10
+
+
+def test_the_record_takes_a_renewal_and_a_give_up_only_from_a_taker_whose_take_waits_for_its_check() -> None:
+    with pytest.raises(RejectedEvent, match='You did not take the rerun of post p-1, or you posted the check'):
+        wanted().lease('cy', 'p-1').board()
+    with pytest.raises(RejectedEvent, match='You did not take the rerun of post p-1, or you posted the check'):
+        wanted().take('bo', 'p-1').post(rerun_check('bo', take=9)).lease('bo', 'p-1').board()
+    with pytest.raises(RejectedEvent, match='bo left this lab'):
+        wanted().take('bo', 'p-1').leave('bo').lease('bo', 'p-1', held=False).board()
+    with pytest.raises(RejectedEvent, match='You hold no lease on the rerun of post p-1, so there is none to give up'):
+        wanted().take('bo', 'p-1').lease('bo', 'p-1', held=False).lease('bo', 'p-1', held=False).board()
+    with pytest.raises(RejectedEvent, match='You hold no lease on the rerun of post p-1'):
+        minutes_pass(wanted().take('bo', 'p-1'), 10).lease('bo', 'p-1', held=False).board()
+    with pytest.raises(RejectedEvent, match='dan is not an agent in this lab'):
+        wanted().lease('dan', 'p-1').board()
+
+
+def test_a_lease_keeps_every_other_agent_out_but_one_of_another_family_while_no_holder_is_of_another_family() -> None:
+    # ada, bo, and dee have one model family, and cy and eve have another. gus is invited, and nobody knows its family.
+    record = wanted().join('dee').join('eve', family='openai').join('gus', family='unknown', harness='guest')
+    bo_holds = record.copy().take('bo', 'p-1')
+    now = bo_holds.at(12)
+    board = bo_holds.board()
+
+    assert lease_refusal(board, 'dee', 'p-1', now) == (
+        'bo holds the rerun of post p-1 since 2026-11-06 12:11 UTC, until 2026-11-06 12:21 UTC. The board takes no '
+        'take of the rerun from you while that lease stands.'
+    )
+    assert lease_refusal(board, 'gus', 'p-1', now) is not None
+    # bo's check cannot make the post stand as held up, so an agent of another family can take the rerun too.
+    assert lease_refusal(board, 'cy', 'p-1', now) is None
+    assert lease_refusal(board, 'bo', 'p-1', now) is None
+    both = bo_holds.copy().take('cy', 'p-1')
+    board = both.board()
+    later = both.at(13)
+    assert [lease.agent for lease in leases(board, 'p-1', later)] == ['bo', 'cy']
+    # Then cy's lease keeps eve out, and both leases keep dee out.
+    eve = lease_refusal(board, 'eve', 'p-1', later)
+    assert eve is not None
+    assert eve.startswith('cy holds')
+    assert 'bo holds' not in eve
+    dee = lease_refusal(board, 'dee', 'p-1', later)
+    assert dee is not None
+    assert (dee.startswith('bo holds'), 'cy holds' in dee, dee.endswith('while one of those leases stands.')) == (
+        True,
+        True,
+        True,
+    )
+    # A holder of another family keeps out every other agent.
+    cy_holds = record.copy().take('cy', 'p-1').board()
+    assert all(lease_refusal(cy_holds, agent, 'p-1', now) for agent in ('bo', 'dee', 'eve', 'gus'))
+    # An invited holder whose family nobody knows keeps out every agent but one of a known other family.
+    gus_holds = record.copy().take('gus', 'p-1').board()
+    assert (lease_refusal(gus_holds, 'cy', 'p-1', now), bool(lease_refusal(gus_holds, 'bo', 'p-1', now))) == (
+        None,
+        True,
+    )
+    # Without a lease, nothing keeps an agent out.
+    assert lease_refusal(record.board(), 'dee', 'p-1', now) is None
+
+
+def test_the_brief_shows_who_holds_each_wanted_rerun_and_until_when() -> None:
+    record = wanted().take('bo', 'p-1')
+    board = record.board()
+
+    (line,) = brief(board, 'cy', News(seq=0), now=record.at(10)).reruns_wanted
+    assert (line.taken_by, line.held_by) == (('bo',), (LeaseLine(agent='bo', since=record.at(9), until=record.at(19)),))
+    # After the lease, the take still shows and no lease does.
+    (after,) = brief(board, 'cy', News(seq=0), now=record.at(19)).reruns_wanted
+    assert (after.taken_by, after.held_by) == (('bo',), ())
+    # The rerun leaves the list when the check that settles it replies to the post.
+    assert brief(record.post(rerun_check('bo', take=9)).board(), 'cy', News(seq=0)).reruns_wanted == ()
 
 
 def test_only_verifold_marks_a_check_as_the_one_check_of_a_take() -> None:

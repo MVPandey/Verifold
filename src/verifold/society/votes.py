@@ -17,12 +17,18 @@ only the person, or the coordinator that the person seated before the proposal, 
 is about an agent's work, so no post of the person takes one. A request of a harness, a request for a move, and
 the person's decision about an offer are no work to judge, so they take no vote and no badge.
 
-The board keeps the standing votes and the badge changes of each post, so a rule and a view read one post's and
-never scan the record.
+For an agent, the votes on a post are sealed while the post is younger than the lab's reveal time and the agent
+neither wrote it nor voted on it. A sealed post's views show no count, no voter, and no reason, as for a post that
+has no vote, so an agent's vote is its own and not the tally's. The post's author and the person see every vote at
+once. A badge is never sealed.
+
+The board keeps the latest vote of each voter and the badge changes of each post, so a rule and a view read one
+post's and never scan the record.
 """
 
 from bisect import bisect_right
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 
 from verifold.protocol.events import BadgeSet, Posted, Voted
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
@@ -43,6 +49,7 @@ from verifold.protocol.votes import (
 )
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
+from verifold.society.lifecycle import latest_time
 from verifold.society.standing import standing
 
 
@@ -60,12 +67,12 @@ class Held:
 
 
 def with_vote(board: Board, vote: Voted) -> Board:
-    """Return the board after a vote: the record has one more vote, and the post has the voter's standing vote."""
-    standing_votes = dict(board.votes_on.get(vote.post, {}))
-    standing_votes.pop(vote.by, None)
-    if vote.direction != 'none':
-        standing_votes[vote.by] = vote
-    votes_on = {**board.votes_on, vote.post: standing_votes}
+    """Return the board after a vote: the record has one more vote, and the post has the voter's latest vote."""
+    latest = dict(board.votes_on.get(vote.post, {}))
+    # The vote goes to the end, so the votes stay in the order that they were cast.
+    latest.pop(vote.by, None)
+    latest[vote.by] = vote
+    votes_on = {**board.votes_on, vote.post: latest}
     return replace(board, seq=vote.seq, votes=(*board.votes, vote), votes_on=votes_on)
 
 
@@ -91,12 +98,28 @@ def _held(changes: tuple[BadgeSet, ...]) -> dict[tuple[Badge, AgentId], Held]:
 
 def standing_votes(board: Board, post_id: PostId) -> tuple[Voted, ...]:
     """Return the votes on a post that stand: one for each voter, in the order that they were cast."""
-    return tuple(board.votes_on.get(post_id, {}).values())
+    return tuple(vote for vote in board.votes_on.get(post_id, {}).values() if vote.direction != 'none')
 
 
 def vote_of(board: Board, by: AgentId, post_id: PostId) -> Voted | None:
     """Return a voter's standing vote on a post, or `None`."""
-    return board.votes_on.get(post_id, {}).get(by)
+    vote = board.votes_on.get(post_id, {}).get(by)
+    return vote if vote and vote.direction != 'none' else None
+
+
+def sealed(board: Board, reader: AgentId, entry: Posted, now: datetime | None = None) -> bool:
+    """
+    Return whether the votes on a post are sealed for a reader at `now`, so that no view for it shows them.
+
+    They are for an agent that did not write the post and never voted on it, while the post is younger than the
+    reveal time of the lab's settings. A vote that the agent took back still counts as its vote. The person sees
+    every vote at once. Without `now`, time counts from the board's newest post, which is never later than the
+    lab's clock, so a view without a clock shows no vote that the lab's clock would seal.
+    """
+    if reader in (PERSON, entry.post.author) or reader in board.votes_on.get(entry.post.id, {}):
+        return False
+    reveal = timedelta(minutes=board.settings.votes.reveal_minutes)
+    return (now or latest_time(board)) < entry.at + reveal
 
 
 def held_badges(board: Board, post_id: PostId) -> tuple[Held, ...]:

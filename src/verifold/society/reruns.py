@@ -7,19 +7,29 @@ other agent when no agent in a reviewer seat can. Verifold gives the taker the c
 the pinned files in a folder of Verifold's own. The taker's first check with the method `rerun` and with files
 after that is the check of the take, and it answers every request that came before it.
 
+A take gives its agent a lease on the rerun for the minutes of the lab's settings, and the agent's next take of the
+same rerun renews it. The lease ends at its time, at the check of the take, when the agent gives it up, and when
+the agent leaves. While it stands, the server refuses the take of the rerun from every other agent, except from
+an agent of another model family than the post while no holder is of another family: only a check from another
+family can make the post stand as held up. The record's rules do not hold this limit, because a record from
+before it can hold several takes of one rerun at once. Each take there holds its lease from its own time.
+
 A record from before agents took reruns holds checkers that Verifold started for each request. Such a checker read
 nothing but its claim and posted one check, and that check answers the requests before it in the same way.
 """
 
 from dataclasses import replace
+from datetime import datetime, timedelta
 
 from verifold.protocol.events import Posted, RerunRequested, RerunTaken
 from verifold.protocol.ids import AgentId, PostId
-from verifold.protocol.join import RerunLine, RerunOpenTo
+from verifold.protocol.join import LeaseLine, RerunLine, RerunOpenTo
 from verifold.protocol.posts import Check
 from verifold.protocol.settings import ReviewerSettings
 from verifold.society.board import Board
+from verifold.society.lifecycle import latest_time, utc
 from verifold.society.reviewers import seats
+from verifold.society.standing import other_family
 from verifold.society.turns import before
 
 MAX_RERUNS = 2
@@ -108,6 +118,65 @@ def open_take(board: Board, agent_id: AgentId, post_id: PostId) -> RerunTaken | 
     return None if checked else taken
 
 
+def lease_of(board: Board, agent_id: AgentId, post_id: PostId, now: datetime) -> LeaseLine | None:
+    """
+    Return an agent's lease on the rerun of a post at `now`, or `None` when it holds none.
+
+    The agent's take starts the lease, and each renewal starts it again for the lab's minutes. A renewal after the
+    lease ended, by its time or because the agent gave it up, starts a new one, so `since` moves. The lease ends at
+    the check of the take, and when the agent leaves.
+    """
+    taken = open_take(board, agent_id, post_id)
+    if taken is None or board.gone(agent_id):
+        return None
+    span = timedelta(minutes=board.settings.reruns.lease_minutes)
+    marks = ((entry.at, entry.held) for entry in board.leases if entry.agent == agent_id and entry.post == post_id)
+    since: datetime | None = taken.at
+    until = taken.at + span
+    for at, held in marks:
+        if not held:
+            since = None
+        elif since is None or at >= until:
+            since, until = at, at + span
+        else:
+            until = at + span
+    return LeaseLine(agent=agent_id, since=since, until=until) if since and now < until else None
+
+
+def leases(board: Board, post_id: PostId, now: datetime) -> tuple[LeaseLine, ...]:
+    """Return the leases on the rerun of a post that stand at `now`, in the order of the takes."""
+    takers = dict.fromkeys(entry.agent for entry in board.takes if entry.post == post_id)
+    return tuple(lease for agent in takers if (lease := lease_of(board, agent, post_id, now)))
+
+
+def lease_refusal(board: Board, agent_id: AgentId, post_id: PostId, now: datetime) -> str | None:
+    """
+    Return why another agent's lease keeps an agent from taking the rerun of a post at `now`, or `None`.
+
+    Every lease of another agent does, except for an agent of another model family than the post while no holder
+    is of another family.
+    """
+    target = board.post(post_id)
+    author = board.agent(target.post.author) if target else None
+    others = tuple(lease for lease in leases(board, post_id, now) if lease.agent != agent_id)
+
+    def counts(agent: AgentId) -> bool:
+        # Whether a check of this agent can make the post stand as held up, by the model families of the seats.
+        joined = board.agent(agent)
+        return bool(author and joined and other_family(author.agent, joined.agent))
+
+    # For an agent whose check can count, only a lease whose check can count too keeps it out.
+    binding = tuple(lease for lease in others if counts(lease.agent)) if counts(agent_id) else others
+    if not binding:
+        return None
+    held = ' '.join(
+        f'{lease.agent} holds the rerun of post {post_id} since {utc(lease.since)}, until {utc(lease.until)}.'
+        for lease in binding
+    )
+    stands = 'that lease stands' if len(binding) == 1 else 'one of those leases stands'
+    return f'{held} The board takes no take of the rerun from you while {stands}.'
+
+
 def _earlier(board: Board, seq: int) -> Board:
     # The board as it was after event `seq`, as far as who can take a rerun goes: the agents, the seats, who left,
     # who is on call, the takes, the turns, and the posts.
@@ -128,8 +197,12 @@ def _earlier(board: Board, seq: int) -> Board:
     )
 
 
-def rerun_line(board: Board, post_id: PostId) -> RerunLine | None:
-    """Return the rerun that is wanted for a post as one line, or `None` when none is wanted."""
+def rerun_line(board: Board, post_id: PostId, now: datetime | None = None) -> RerunLine | None:
+    """
+    Return the rerun that is wanted for a post as one line, or `None` when none is wanted.
+
+    The line has the leases that stand at `now`. Without `now`, time counts from the board's newest post.
+    """
     wanted = wanted_reruns(board, post_id)
     target = board.post(post_id)
     if not wanted or target is None:
@@ -145,14 +218,16 @@ def rerun_line(board: Board, post_id: PostId) -> RerunLine | None:
             for entry in board.takes
             if entry.post == post_id and entry.agent not in checked and not board.gone(entry.agent)
         ),
+        held_by=leases(board, post_id, now or latest_time(board)),
         open_to=open_to(board, post_id),
     )
 
 
-def reruns_wanted(board: Board) -> tuple[RerunLine, ...]:
+def reruns_wanted(board: Board, now: datetime | None = None) -> tuple[RerunLine, ...]:
     """Return every rerun that is wanted, one line for each post, in the order of the first open request for it."""
     posts = dict.fromkeys(entry.post for entry in board.reruns)
-    return tuple(sorted(filter(None, (rerun_line(board, post) for post in posts)), key=lambda line: line.asked_at))
+    lines = filter(None, (rerun_line(board, post, now) for post in posts))
+    return tuple(sorted(lines, key=lambda line: line.asked_at))
 
 
 def can_take(board: Board, agent_id: AgentId, post_id: PostId) -> bool:
@@ -170,7 +245,9 @@ def can_take(board: Board, agent_id: AgentId, post_id: PostId) -> bool:
     )
 
 
-def reruns_for(board: Board, agent_id: AgentId, after: int, reach: int) -> tuple[RerunLine, ...]:
+def reruns_for(
+    board: Board, agent_id: AgentId, after: int, reach: int, now: datetime | None = None
+) -> tuple[RerunLine, ...]:
     """
     Return the reruns that are news for an agent from event `after` to event `reach`, among those that it can take.
 
@@ -183,13 +260,13 @@ def reruns_for(board: Board, agent_id: AgentId, after: int, reach: int) -> tuple
 
     A request reaches the agents that can take it, as a call that names nobody reaches every agent, so it does not
     reach an agent whose seat is on call, and not the agent that asked. An agent reads every wanted rerun in its
-    brief.
+    brief. A lease does not change who hears of a rerun: the first taker holds it, and the others read the refusal.
     """
     if board.on_call(agent_id):
         return ()
     mine = tuple(
         line
-        for line in reruns_wanted(board)
+        for line in reruns_wanted(board, now)
         if agent_id not in line.asked_by[:1] and can_take(board, agent_id, line.post)
     )
     if not mine:

@@ -75,6 +75,30 @@ class ReviewerSettings(Record):
     """
 
 
+MAX_BOARD_MINUTES = 24 * 60
+"""The longest reveal time of votes and the longest lease of a rerun that the person can set: one day."""
+
+
+class VoteSettings(Record):
+    """How long the votes on a new post stay sealed for an agent that has not voted on it."""
+
+    reveal_minutes: int = Field(default=10, ge=0, le=MAX_BOARD_MINUTES)
+    """
+    The minutes after a post was written in which an agent sees no votes on it until it votes on it itself. The
+    post's author and the person see them at once. Zero means that no vote is sealed.
+    """
+
+
+class RerunSettings(Record):
+    """How long one agent holds a wanted rerun that it took."""
+
+    lease_minutes: int = Field(default=10, ge=0, le=MAX_BOARD_MINUTES)
+    """
+    The minutes of the lease that a take of a rerun gives its agent, and that a second take renews. While the lease
+    stands, the board refuses the take of the same rerun from another agent. Zero means that a take gives no lease.
+    """
+
+
 class Settings(Record):
     """
     The person's settings, with Verifold's defaults for anything they leave out.
@@ -87,6 +111,8 @@ class Settings(Record):
     jobs: JobSettings = JobSettings()
     permissions: PermissionSettings = PermissionSettings()
     reviewers: ReviewerSettings = ReviewerSettings()
+    votes: VoteSettings = VoteSettings()
+    reruns: RerunSettings = RerunSettings()
 
 
 class HarnessSettings(Record):
@@ -140,6 +166,8 @@ class SettingsFile(Record):
     jobs: JobSettings = JobSettings()
     permissions: PermissionSettings = PermissionSettings()
     reviewers: ReviewerSettings = ReviewerSettings()
+    votes: VoteSettings = VoteSettings()
+    reruns: RerunSettings = RerunSettings()
     setup: SetupDefaults = SetupDefaults()
     harnesses: dict[Label, HarnessSettings] = Field(default_factory=dict)
 
@@ -155,4 +183,11 @@ class SettingsFile(Record):
 
     def lab_settings(self) -> Settings:
         """Return the settings that a new lab records and follows."""
-        return Settings(version=self.version, jobs=self.jobs, permissions=self.permissions, reviewers=self.reviewers)
+        return Settings(
+            version=self.version,
+            jobs=self.jobs,
+            permissions=self.permissions,
+            reviewers=self.reviewers,
+            votes=self.votes,
+            reruns=self.reruns,
+        )

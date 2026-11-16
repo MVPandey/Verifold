@@ -20,6 +20,7 @@ from verifold.protocol.events import (
     ProfileSet,
     QuestionRevised,
     RequestAnswered,
+    RerunLeaseSet,
     RerunRequested,
     RerunTaken,
     ReviewerSet,
@@ -73,6 +74,8 @@ class Board:
     reruns: tuple[RerunRequested, ...] = ()
     takes: tuple[RerunTaken, ...] = ()
     """Each time that an agent took the rerun of a post, oldest first."""
+    leases: tuple[RerunLeaseSet, ...] = ()
+    """Each time that an agent renewed or gave up its lease on a rerun that it took, oldest first."""
     times: tuple[TimeSet | TimeRanOut, ...] = ()
     settings: Settings = field(default_factory=Settings)
     """The person's settings for the lab: the latest that the record holds, or the defaults."""
@@ -89,7 +92,10 @@ class Board:
     badges: tuple[BadgeSet, ...] = ()
     """Each change to a badge on a post, oldest first."""
     votes_on: dict[PostId, dict[AgentId, Voted]] = field(default_factory=dict)
-    """The votes that stand on each post, by voter, in the order cast. No code changes a dictionary of a board."""
+    """
+    The latest vote of each voter on each post, by voter, in the order cast: one that stands, or the `none` with
+    which the voter took its vote back. No code changes a dictionary of a board.
+    """
     badges_on: dict[PostId, tuple[BadgeSet, ...]] = field(default_factory=dict)
     """The changes to the badges of each post, oldest first."""
     deliverables: tuple[DeliverableSet, ...] = ()

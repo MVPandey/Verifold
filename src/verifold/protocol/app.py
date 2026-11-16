@@ -499,7 +499,13 @@ class SettingsView(Record):
 
 
 type SettingKey = Literal[
-    'jobs.at_time_limit', 'jobs.at_exit', 'permissions.while_you_decide', 'reviewers.seats', 'setup'
+    'jobs.at_time_limit',
+    'jobs.at_exit',
+    'permissions.while_you_decide',
+    'reviewers.seats',
+    'votes.reveal_minutes',
+    'reruns.lease_minutes',
+    'setup',
 ]
 """The settings that the app changes. Harness commands are not among them, so the app can't change what a lab runs."""
 
@@ -518,8 +524,8 @@ class SettingsChange(Record):
     key: SettingKey
     value: int | str | SetupDefaults | None = None
     """
-    The new value: the answer of a job or permission setting, or the choices for new labs. `None` removes the setting, so the one for
-    all projects, or Verifold's default, applies.
+    The new value: the answer of a job or permission setting, a number of seats or minutes, or the choices for new
+    labs. `None` removes the setting, so the one for all projects, or Verifold's default, applies.
     """
     revisions: SettingsRevisions
     """

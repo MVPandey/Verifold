@@ -7,6 +7,7 @@ was written, so an older post keeps the model that wrote it.
 """
 
 import re
+from datetime import datetime
 
 from verifold.protocol.agents import GUEST, SeatMark
 from verifold.protocol.events import Posted
@@ -18,7 +19,7 @@ from verifold.society.board import Board
 from verifold.society.coordinator import request_end, request_waits
 from verifold.society.labels import is_numbered, plain
 from verifold.society.standing import standing
-from verifold.society.votes import badge_lines, marks, vote_lines
+from verifold.society.votes import badge_lines, marks, sealed, vote_lines
 
 GUEST_LABEL = 'Own harness · model not reported'
 """The label of an invited agent's seat. It runs in a harness that Verifold does not know, and reports no model."""
@@ -90,18 +91,30 @@ def byline(board: Board, entry: Posted, cut: int | None = None) -> Byline | None
     )
 
 
-def post_line(board: Board, entry: Posted, *, news: bool = False) -> PostLine:
+def post_line(
+    board: Board, entry: Posted, reader: AgentId, now: datetime | None = None, *, news: bool = False
+) -> PostLine:
     """
-    Return a post as one line, with who wrote it, its votes up and down, and its badges.
+    Return a post as one line for `reader` at `now`, with who wrote it, its votes up and down, and its badges.
 
-    With `news`, the line is one of the news, which carries a post of the person with its body.
+    While the votes on the post are sealed for the reader, the line has no counts, as a line of a post without
+    votes. With `news`, the line is one of the news, which carries a post of the person with its body.
     """
-    return PostLine.of(entry, byline(board, entry, MAX_SEAT), marks(board, entry.post.id), news=news)
+    up, down, badges = marks(board, entry.post.id)
+    counts = (0, 0) if sealed(board, reader, entry, now) else (up, down)
+    return PostLine.of(entry, byline(board, entry, MAX_SEAT), (*counts, badges), news=news)
 
 
-def post_view(board: Board, entry: Posted, votes: int = NEWEST_VOTES) -> PostView:
-    """Return a post with its time, who wrote it, where it stands, the posts that build on it, its votes, and its badges."""
-    up, down, _ = marks(board, entry.post.id)
+def post_view(
+    board: Board, entry: Posted, reader: AgentId, now: datetime | None = None, *, votes: int = NEWEST_VOTES
+) -> PostView:
+    """
+    Return a post with its time, who wrote it, where it stands, the posts that build on it, its votes, and its badges.
+
+    While the votes on the post are sealed for `reader` at `now`, it has no counts and no votes.
+    """
+    shown = not sealed(board, reader, entry, now)
+    up, down, _ = marks(board, entry.post.id) if shown else (0, 0, ())
     return PostView(
         seq=entry.seq,
         at=entry.at,
@@ -114,6 +127,6 @@ def post_view(board: Board, entry: Posted, votes: int = NEWEST_VOTES) -> PostVie
         ended=None if board.answer_to(entry.post.id) else request_end(board, entry),
         up=up,
         down=down,
-        votes=vote_lines(board, entry.post.id, votes),
+        votes=vote_lines(board, entry.post.id, votes) if shown else (),
         badges=badge_lines(board, entry.post.id),
     )

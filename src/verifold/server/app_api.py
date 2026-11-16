@@ -10,7 +10,7 @@ import asyncio
 import secrets
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Annotated, Protocol
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, params
@@ -219,17 +219,17 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
 
     @api.get('/lab', dependencies=[authorized])
     async def lab() -> LabView:
-        return _lab_view(current().board, activity)
+        return _view_of(current(), activity)
 
     @api.post('/agents', dependencies=[authorized])
     async def add_agents(choice: AgentChoice) -> LabView:
         await host.add_agents(choice)
-        return _lab_view(current().board, activity)
+        return _view_of(current(), activity)
 
     @api.post('/agents/{agent_id}/start', dependencies=[authorized])
     async def start_again(agent_id: AgentId) -> LabView:
         await host.start_again(agent_id)
-        return _lab_view(current().board, activity)
+        return _view_of(current(), activity)
 
     @api.delete('/agents/{agent_id}', dependencies=[authorized])
     async def remove_agent(agent_id: AgentId, reason: Reason = '') -> LabView:
@@ -241,7 +241,7 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
         if running.board.gone(agent_id):
             raise SetupRejected(f'{joined.agent.name} has left the lab already.')
         await running.leave(agent_id, PERSON, reason)
-        return _lab_view(running.board, activity)
+        return _view_of(running, activity)
 
     @api.post('/invitations', dependencies=[authorized])
     async def invite(request: InviteRequest) -> Invitation:
@@ -256,13 +256,13 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
         # A text that is the same as the question records nothing.
         running = current()
         await running.revise_question(request.question, request.note)
-        return _lab_view(running.board, activity)
+        return _view_of(running, activity)
 
     @api.post('/time', dependencies=[authorized])
     async def time(request: TimeRequest) -> LabView:
         running = current()
         await running.set_time_left(timedelta(minutes=request.minutes))
-        return _lab_view(running.board, activity)
+        return _view_of(running, activity)
 
     @api.get('/threads', dependencies=[authorized])
     async def threads() -> tuple[ThreadSummary, ...]:
@@ -347,7 +347,7 @@ def _seat_routes(api: FastAPI, host: Host, activity: Activity, authorized: param
     @api.post('/agents/{agent_id}/seat', dependencies=[authorized])
     async def change_seat(agent_id: AgentId, change: SeatChange) -> LabView:
         await host.change_seat(agent_id, change)
-        return _lab_view(_lab(host).board, activity)
+        return _view_of(_lab(host), activity)
 
     @api.post('/agents/{agent_id}/profile', dependencies=[authorized])
     async def change_profile(agent_id: AgentId, change: ProfileChange) -> LabView:
@@ -363,7 +363,7 @@ def _seat_routes(api: FastAPI, host: Host, activity: Activity, authorized: param
             reset_picture=change.reset_picture,
             given_role=change.role,
         )
-        return _lab_view(lab.board, activity)
+        return _view_of(lab, activity)
 
     @api.post('/reviewers', dependencies=[authorized])
     async def reviewer_seats(request: ReviewerSeats) -> LabView:
@@ -373,14 +373,14 @@ def _seat_routes(api: FastAPI, host: Host, activity: Activity, authorized: param
         if settings.reviewers.seats != request.seats:
             reviewers = settings.reviewers.model_copy(update={'seats': request.seats})
             await lab.set_settings(settings.model_copy(update={'reviewers': reviewers}))
-        return _lab_view(lab.board, activity)
+        return _view_of(lab, activity)
 
     @api.post('/coordinator', dependencies=[authorized])
     async def coordinator(seat: CoordinatorSeat) -> LabView:
         # The seat has no holder after this. A seat that the person closes stays free until the person gives it.
         lab = _lab(host)
         await lab.set_coordinator(None, PERSON, free=seat.open)
-        return _lab_view(lab.board, activity)
+        return _view_of(lab, activity)
 
     _coordinator_routes(api, host, authorized)
     _vote_routes(api, host, authorized)
@@ -412,27 +412,27 @@ def _deliverable_routes(api: FastAPI, host: Host, activity: Activity, authorized
     async def add_deliverable(request: DeliverableRequest) -> LabView:
         lab = _lab(host)
         await lab.add_deliverable(request.text)
-        return _lab_view(lab.board, activity)
+        return _view_of(lab, activity)
 
     @api.post('/deliverables/{deliverable_id}', dependencies=[authorized])
     async def change_deliverable(deliverable_id: DeliverableId, request: DeliverableRequest) -> LabView:
         # The same sentence again records nothing.
         lab = _lab(host)
         await lab.change_deliverable(deliverable_id, request.text)
-        return _lab_view(lab.board, activity)
+        return _view_of(lab, activity)
 
     @api.delete('/deliverables/{deliverable_id}', dependencies=[authorized])
     async def remove_deliverable(deliverable_id: DeliverableId) -> LabView:
         lab = _lab(host)
         await lab.remove_deliverable(deliverable_id)
-        return _lab_view(lab.board, activity)
+        return _view_of(lab, activity)
 
     @api.post('/deliverables/{deliverable_id}/decision', dependencies=[authorized])
     async def decide(deliverable_id: DeliverableId, request: DeliverableDecision) -> LabView:
         # The person's decision is also the person's reply to the offer, so the offer's author hears it.
         lab = _lab(host)
         await lab.decide(deliverable_id, DECISIONS[request.decision], request.offer, request.text)
-        return _lab_view(lab.board, activity)
+        return _view_of(lab, activity)
 
 
 def _lab(host: Host) -> Lab:
@@ -457,7 +457,12 @@ def _authorize(person_token: SecretStr) -> Callable[[Request, str | None], None]
     return check
 
 
-def _lab_view(board: Board, activity: Activity) -> LabView:
+def _view_of(lab: Lab, activity: Activity) -> LabView:
+    return _lab_view(lab.board, activity, lab.now())
+
+
+def _lab_view(board: Board, activity: Activity, now: datetime) -> LabView:
+    # `now` dates the leases on the wanted reruns.
     working = lines_of(board)
     done = closing(board)
     waiting = waits(board)
@@ -469,7 +474,7 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
     around = _Around(working=working, needs=needs, became=became)
     return LabView(
         state=lab_state(board),
-        close=post_line(board, done) if done else None,
+        close=post_line(board, done, PERSON) if done else None,
         close_agreed=len(agreed(board, done)) if done else 0,
         close_among=close_count(board, done)[1] if done else 0,
         question=board.question,
@@ -483,7 +488,7 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
         needs_you=len(waiting),
         waits=waiting,
         thread_needs=thread_needs(board, needs, waiting),
-        reruns_wanted=reruns_wanted(board),
+        reruns_wanted=reruns_wanted(board, now),
         proposals=proposals(board),
         breakthrough_threads=breakthrough_threads(board),
         reviewer_seats=seats(board),

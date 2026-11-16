@@ -26,6 +26,7 @@ from verifold.protocol.events import (
     ProfileSet,
     QuestionRevised,
     RequestAnswered,
+    RerunLeaseSet,
     RerunRequested,
     RerunTaken,
     ReviewerSet,
@@ -76,7 +77,7 @@ from verifold.society.fold import apply, fold
 from verifold.society.labels import awaits_model, is_numbered, label, plain
 from verifold.society.lines import question_thread
 from verifold.society.names import check_name
-from verifold.society.reruns import open_take, open_to, wanted_reruns
+from verifold.society.reruns import lease_refusal, open_take, open_to, wanted_reruns
 from verifold.society.reviewers import check_review, seats_line
 from verifold.society.standing import closing
 from verifold.society.votes import proposal, vote_of
@@ -630,14 +631,17 @@ class Lab:
         """
         Record that an agent takes the rerun of a post, and return the take.
 
-        `manifest` is the SHA-256 of the clean copy's manifest that the agent got. A second call returns the first
-        take, also when it comes while the first one is being recorded.
+        `manifest` is the SHA-256 of the clean copy's manifest that the agent got. The take gives the agent a lease
+        on the rerun. A second call returns the first take, also when it comes while the first one is being
+        recorded. While the take waits for its check and the rerun is wanted, the second call renews the lease.
 
         Raises:
             RejectedEvent: The agent cannot take the rerun, as `check_take` says.
 
         """
         if taken := self._board.take(agent_id, post_id):
+            if _renews(self._board, agent_id, post_id):
+                await self._commit(_lease(agent_id, post_id, held=True))
             return taken
         try:
             board = await self._commit(_take(agent_id, post_id, manifest))
@@ -708,17 +712,39 @@ class Lab:
 
     def check_take(self, agent_id: AgentId, post_id: PostId) -> None:
         """
-        Check that an agent can take the rerun of a post now, and record nothing.
+        Check that an agent can take the rerun of a post now, or renew its lease on it, and record nothing.
 
-        The clean copy is made between this check and the take, so a copy that fails leaves no take in the record.
+        The clean copy is made between this check and the take, so a copy that fails leaves no take in the record,
+        and a call that the board refuses makes no copy.
 
         Raises:
-            RejectedEvent: No rerun of the post is wanted, the post is the agent's own, or the rerun is for an
-                agent in a reviewer seat and the agent holds none.
+            RejectedEvent: No rerun of the post is wanted, the post is the agent's own, the rerun is for an agent
+                in a reviewer seat and the agent holds none, or another agent's lease on it stands.
 
         """
         board = self._board
-        apply(board, _take(agent_id, post_id)(board, board.seq + 1, self._clock()))
+        if board.take(agent_id, post_id) is None:
+            build = _take(agent_id, post_id)
+        elif _renews(board, agent_id, post_id):
+            build = _lease(agent_id, post_id, held=True)
+        else:
+            return
+        apply(board, build(board, board.seq + 1, self._clock()))
+
+    async def give_up_rerun(self, agent_id: AgentId, post_id: PostId) -> RerunTaken:
+        """
+        Record that an agent gives up its lease on the rerun of a post, and return its take.
+
+        The take stays, and the agent's next check of the post with the method `rerun` and with files is still its
+        check. Another agent can take the rerun from now on.
+
+        Raises:
+            RejectedEvent: The agent holds no lease on the rerun of the post.
+
+        """
+        board = await self._commit(_lease(agent_id, post_id, held=False))
+        # The record's rules take no lease without a take.
+        return next(entry for entry in board.takes if entry.agent == agent_id and entry.post == post_id)
 
     async def start_turn(  # noqa: PLR0913
         self,
@@ -1185,8 +1211,27 @@ def _take(agent_id: AgentId, post_id: PostId, manifest: str | None = None) -> Bu
                 f"The rerun of another agent's post takes a reviewer seat while an agent in such a seat can take "
                 f'it. {seats_line(board)}'
             )
+        if refusal := lease_refusal(board, agent_id, post_id, at):
+            raise RejectedEvent(refusal)
         commit = target.post.evidence[0].commit
         return RerunTaken(seq=seq, at=at, agent=agent_id, post=post_id, commit=commit, manifest=manifest)
+
+    return build
+
+
+def _renews(board: Board, agent_id: AgentId, post_id: PostId) -> bool:
+    # Whether an agent's take of a rerun that it took already renews its lease: its take waits for its check, and
+    # the rerun is wanted. Otherwise the call records nothing and returns the claim.
+    return open_take(board, agent_id, post_id) is not None and bool(wanted_reruns(board, post_id))
+
+
+def _lease(agent_id: AgentId, post_id: PostId, *, held: bool) -> Build:
+    def build(board: Board, seq: int, at: datetime) -> RerunLeaseSet:
+        # A lease binds the agents from the time that the limit came, so the rule is here and not in the record's
+        # rules, as for a take.
+        if held and (refusal := lease_refusal(board, agent_id, post_id, at)):
+            raise RejectedEvent(refusal)
+        return RerunLeaseSet(seq=seq, at=at, agent=agent_id, post=post_id, held=held)
 
     return build
 

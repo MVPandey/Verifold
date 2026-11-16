@@ -1,4 +1,5 @@
-from datetime import timedelta
+from dataclasses import replace
+from datetime import datetime, timedelta
 
 import pytest
 from builders import START, RecordBuilder, lab
@@ -8,6 +9,7 @@ from verifold.protocol.app import AgentView, LabView, Outcomes
 from verifold.protocol.join import AgentLine, Byline, LeftLine, News, ProfileResult
 from verifold.protocol.moves import TimeMove
 from verifold.protocol.posts import Answer, Ask, Check, Message, Objection, Result
+from verifold.protocol.settings import Settings, VoteSettings
 from verifold.protocol.votes import MAX_GIVES, MAX_NOTES, MAX_VOTE_LINES, MAX_WHY, NEWEST_VOTES, ProposalLine
 from verifold.society.attention import news, update, wakes
 from verifold.society.board import Board
@@ -150,8 +152,9 @@ def test_a_line_of_a_post_has_the_counts_and_the_badges_and_the_thread_has_the_r
         .badge('bo', 'p-1', 'promising')
         .board()
     )
-    line = post_line(board, board.posts[0])
-    view = post_view(board, board.posts[0])
+    # cy voted, so it sees every vote on the post.
+    line = post_line(board, board.posts[0], 'cy')
+    view = post_view(board, board.posts[0], 'cy')
 
     assert (line.up, line.down, line.badges) == (1, 1, ('promising',))
     assert 'reason' not in line.model_dump_json()
@@ -161,7 +164,7 @@ def test_a_line_of_a_post_has_the_counts_and_the_badges_and_the_thread_has_the_r
         ('promising', 'bo', 'Worth a second look.')
     ]
     # A post without votes and badges has a line without them.
-    bare = post_line(voted().board(), board.posts[0]).model_dump()
+    bare = post_line(voted().board(), board.posts[0], 'cy').model_dump()
     assert not {'up', 'down', 'badges'} & set(bare)
     # A brief holds the counts in its lines, and no reason.
     seen = brief(board, 'cy', news(board, 'cy', 0))
@@ -175,13 +178,15 @@ def test_a_thread_lists_the_newest_votes_of_a_post_and_counts_all_of_them() -> N
     for voter in voters:
         record.join(voter).vote(voter, 'p-1', 'up', f'Reason of {voter}.')
     board = record.post(Result(id='p-2', thread='t-1', author='bo', text='Fails.')).vote('ada', 'p-2').board()
+    # A day later no vote is sealed for cy.
+    later = START + timedelta(days=1)
 
     # An agent's thread has the three newest votes of each post, and the counts hold every vote.
-    first, second = thread_view(board, 'cy', 't-1').posts
+    first, second = thread_view(board, 'cy', 't-1', now=later).posts
     assert (first.up, first.down, [vote.by for vote in first.votes]) == (len(voters), 0, voters[-NEWEST_VOTES:])
     assert [vote.by for vote in second.votes] == ['ada']
     # The post that the call names has its newest twenty, and the other posts stay as they are.
-    first, second = thread_view(board, 'cy', 't-1', votes_of='p-1').posts
+    first, second = thread_view(board, 'cy', 't-1', votes_of='p-1', now=later).posts
     assert ([vote.by for vote in first.votes], len(second.votes)) == (voters[3:], 1)
     # The person's thread has the longer list for every post.
     assert len(thread_view(board, 'person', 't-1').posts[0].votes) == MAX_VOTE_LINES
@@ -210,6 +215,80 @@ def test_a_thread_of_three_hundred_posts_with_twenty_voters_each_stays_one_tool_
     assert voted_size - plain < 300 * 700
     assert all((post.up, len(post.votes)) == (20, NEWEST_VOTES) for post in thread_view(board, 'a1', 't-1').posts)
     assert len(thread_view(board, 'a1', 't-1', votes_of='p-7').posts[6].votes) == 20
+
+
+def sealed() -> RecordBuilder:
+    """A lab where ada posted result p-1 at minute 5, bo voted on it, and cy and dan have not."""
+    return voted().join('dan').vote('bo', 'p-1', 'up', 'It matches my run.')
+
+
+def everything(board: Board, reader: str, now: datetime) -> str:
+    """Return every result of the board's tools that can carry the post p-1, for a reader at `now`, as JSON."""
+    results = (
+        brief(board, reader, news(board, reader, 0, now), now=now),
+        thread_view(board, reader, 't-1', now=now),
+        thread_view(board, reader, 't-1', votes_of='p-1', now=now),
+        *thread_summaries(board, reader, now),
+        update(board, reader, 0, now),
+        post_view(board, board.posts[0], reader, now),
+        post_line(board, board.posts[0], reader, now),
+    )
+    return ''.join(result.model_dump_json() for result in results)
+
+
+def counts(board: Board, reader: str, now: datetime) -> tuple[int, int, tuple[str, ...]]:
+    """Return what a reader sees of the votes on p-1 at `now`: the line's votes up, the view's, and the voters."""
+    view = post_view(board, board.posts[0], reader, now)
+    return post_line(board, board.posts[0], reader, now).up, view.up, tuple(vote.by for vote in view.votes)
+
+
+def test_the_votes_on_a_young_post_are_sealed_for_an_agent_that_did_not_write_it_or_vote_on_it() -> None:
+    board = sealed().board()
+    written = board.posts[0].at
+    young, revealed = written + timedelta(minutes=9, seconds=59), written + timedelta(minutes=10)
+
+    # cy neither wrote the post nor voted on it: no result shows it a count, a voter, or a reason.
+    assert counts(board, 'cy', young) == (0, 0, ())
+    assert 'It matches my run.' not in everything(board, 'cy', young)
+    assert '"up":1' not in everything(board, 'cy', young)
+    # A line of a sealed post leaves the counts out, as for a post without votes.
+    assert not {'up', 'down'} & set(post_line(board, board.posts[0], 'cy', young).model_dump())
+    # At the reveal time every agent sees every vote.
+    assert counts(board, 'cy', revealed) == (1, 1, ('bo',))
+    assert 'It matches my run.' in everything(board, 'cy', revealed)
+    # The author, the voter, and the person see them at once.
+    for reader in ('ada', 'bo', 'person'):
+        assert counts(board, reader, written) == (1, 1, ('bo',)), reader
+    # An agent that votes sees every vote from then on, also after it takes its vote back.
+    voted_now = sealed().vote('cy', 'p-1', 'down', 'One seed only.')
+    assert counts(voted_now.board(), 'cy', young) == (1, 1, ('bo', 'cy'))
+    back = voted_now.vote('cy', 'p-1', 'none', '').board()
+    assert counts(back, 'cy', young) == (1, 1, ('bo',))
+    assert counts(back, 'dan', young) == (0, 0, ())
+    # A view without a clock counts from the board's newest post, which is never later than the lab's clock.
+    assert post_line(board, board.posts[0], 'cy').up == 0
+
+
+def test_a_sealed_vote_changes_nothing_else_in_any_result() -> None:
+    record = sealed().vote('dan', 'p-1', 'down', 'One seed only.').badge('bo', 'p-1', 'promising')
+    board = record.board()
+    young = board.posts[0].at + timedelta(minutes=5)
+    # The same board without its votes: a sealed vote leaves every result as if it were not there.
+    plain = replace(board, votes=(), votes_on={})
+
+    assert everything(board, 'cy', young) == everything(plain, 'cy', young)
+    # A badge is never sealed.
+    assert post_line(board, board.posts[0], 'cy', young).badges == ('promising',)
+
+
+def test_with_a_reveal_time_of_zero_no_vote_is_sealed_and_a_record_from_before_gets_ten_minutes() -> None:
+    record = sealed().settings(Settings(votes=VoteSettings(reveal_minutes=0)))
+    board = record.board()
+
+    assert counts(board, 'cy', board.posts[0].at) == (1, 1, ('bo',))
+    # A record from before the setting has the default reveal time.
+    assert sealed().board().settings.votes.reveal_minutes == 10
+    assert fold(sealed().events).settings == Settings()
 
 
 def test_the_author_reads_the_votes_on_its_posts_in_its_next_news_and_no_other_agent_does() -> None:
@@ -350,7 +429,7 @@ def test_a_confirmed_badge_shows_only_while_no_later_check_of_the_post_fails() -
 
     # The record keeps both givers' words. No view shows the badge, and the thread says why.
     assert marks(board, 'p-1')[2] == ()
-    assert post_line(board, board.posts[0]).badges == ()
+    assert post_line(board, board.posts[0], 'person').badges == ()
     (line,) = badge_lines(board, 'p-1')
     assert (line.lapsed, [(given.by, given.proof, given.lapsed) for given in line.given]) == (
         True,

@@ -235,6 +235,8 @@ async def test_settings_pass_through_and_refusals_say_why(client: httpx2.AsyncCl
         'jobs': {'at_time_limit': 'pause', 'at_exit': 'stop'},
         'permissions': {'while_you_decide': 'auto'},
         'reviewers': {'seats': None},
+        'votes': {'reveal_minutes': 10},
+        'reruns': {'lease_minutes': 10},
     }
     assert view['project']['path'] == '.verifold/settings.json'
     assert changed.status_code == 200
@@ -1130,7 +1132,7 @@ def test_the_lab_view_of_a_long_record_does_work_that_grows_with_the_record_and_
         built.clear()
         asked.clear()
         started = time.perf_counter()
-        view = _lab_view(board, activity)
+        view = _lab_view(board, activity, board.opened.at)
         taken = time.perf_counter() - started
         results = sum(isinstance(entry.post, Result) for entry in board.posts)
         assert sum(len(agent.outcomes.refuted) for agent in view.agents) > events // 40

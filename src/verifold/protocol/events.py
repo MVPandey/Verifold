@@ -296,6 +296,23 @@ class RerunTaken(EventBase):
     """
 
 
+class RerunLeaseSet(EventBase):
+    """
+    An agent that took the rerun of a post renewed its lease on it, or gave it up.
+
+    The take gives the agent a lease for the minutes of the lab's settings. With `held`, the lease starts again at
+    this event. Without it, the lease ends here. The lease also ends at its time, at the check of the take, and
+    when the agent leaves the lab. While it stands, Verifold refuses the take of the same rerun from every other
+    agent, with one exception: while no holder is of another model family than the post, an agent of another
+    family can take it.
+    """
+
+    type: Literal['rerun_lease_set'] = 'rerun_lease_set'
+    agent: AgentId
+    post: PostId
+    held: bool
+
+
 class TimeSet(EventBase):
     """
     A new end of the lab. At `ends_at`, the agents stop until the lab gets more time.
@@ -560,6 +577,7 @@ type Event = Annotated[
     | TurnEnded
     | RerunRequested
     | RerunTaken
+    | RerunLeaseSet
     | TimeSet
     | TimeRanOut
     | WentQuiet

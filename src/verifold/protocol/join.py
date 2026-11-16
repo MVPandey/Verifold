@@ -292,13 +292,18 @@ class PostView(Record):
     ended: RequestEnd | None = None
     """For a request for a move without an answer: why it waits for none. `None` while it waits."""
     up: int = 0
-    """How many votes up stand on the post. Every vote counts the same."""
+    """
+    How many votes up stand on the post. Every vote counts the same. For an agent, zero also while the votes on
+    the post are sealed: the post is younger than the lab's reveal time, and the agent neither wrote the post nor
+    voted on it.
+    """
     down: int = 0
-    """How many votes down stand on the post."""
+    """How many votes down stand on the post. Zero while the votes are sealed, as `up` says."""
     votes: tuple[VoteLine, ...] = ()
     """
     The newest standing votes with their reasons, oldest first. No order ranks them. An agent's `thread` holds
-    `NEWEST_VOTES` of each post, and `MAX_VOTE_LINES` of the post that the call names in `votes_of`.
+    `NEWEST_VOTES` of each post, and `MAX_VOTE_LINES` of the post that the call names in `votes_of`. Empty while
+    the votes are sealed, as `up` says.
     """
     badges: tuple[BadgeLine, ...] = ()
     """Each badge on the post once, with who gave it and why. A `breakthrough` that waits for its second says so."""
@@ -397,7 +402,10 @@ class PostLine(Sparse):
     coordinator: the mark is the coordinator's word, and a post by the person has `person` as its author.
     """
     up: int = 0
-    """How many votes up stand on the post. `thread` shows each vote with its reason."""
+    """
+    How many votes up stand on the post. `thread` shows each vote with its reason. For an agent, the line has no
+    count while the votes on the post are sealed, as `PostView.up` says.
+    """
     down: int = 0
     """How many votes down stand on the post."""
     badges: tuple[Badge, ...] = ()
@@ -573,6 +581,15 @@ of the lab, as when the post's author is the lab's only agent.
 """
 
 
+class LeaseLine(Record):
+    """An agent's lease on a wanted rerun: who holds it, since when, and when it ends unless the holder renews it."""
+
+    agent: AgentId
+    since: AwareDatetime
+    """When the agent took the rerun, or took it again after its lease had ended."""
+    until: AwareDatetime
+
+
 class RerunLine(Record):
     """
     A rerun that is wanted: somebody asked for an independent rerun of a post, and no check has answered it.
@@ -588,8 +605,14 @@ class RerunLine(Record):
     """When the first of them asked."""
     taken_by: tuple[AgentId, ...] = ()
     """The agents of the lab that took the rerun and have not posted its check yet. Empty when no agent took it."""
+    held_by: tuple[LeaseLine, ...] = ()
+    """
+    The leases that stand on the rerun, the oldest first. While one stands, the board refuses the take of this
+    rerun from every other agent, with one exception: while no holder is of another model family than the post,
+    an agent of another family can take it, and then both hold it. Empty when no lease stands.
+    """
     open_to: RerunOpenTo = 'reviewer'
-    """Who can take the rerun now."""
+    """Who can take the rerun now, by the reviewer seats. A lease in `held_by` limits it more."""
 
 
 class News(Record):
@@ -698,7 +721,11 @@ class WatchResult(Record):
 
 
 class VoteResult(Record):
-    """What the `vote` tool returns: the post's counts after the call, the caller's own vote, and the agent's news."""
+    """
+    What the `vote` tool returns: the post's counts after the call, the caller's own vote, and the agent's news.
+
+    The caller has voted on the post, so no vote on it is sealed for the caller from then on.
+    """
 
     post: PostId
     up: int = 0
@@ -754,10 +781,18 @@ class RerunTake(Record):
     """The files that back the claim, as paths in `folder`."""
     commit: str
     """The commit that the post pins those files to. `folder` holds the author's files at this commit."""
-    folder: str
+    held_since: AwareDatetime | None = None
+    held_until: AwareDatetime | None = None
+    """
+    Your lease on the rerun after the call: since when you hold it, and when it ends unless you take the rerun
+    again. Both are `None` when you hold no lease: you gave it up, you posted the check of your take, no rerun of
+    the post is wanted now, or the lab's lease is zero minutes.
+    """
+    folder: str = ''
     """
     The clean copy: a folder of Verifold's own, outside every agent's folder, with the author's files at `commit`
-    as plain files, and nothing else. Every agent that takes this rerun gets the same folder.
+    as plain files, and nothing else. Every agent that takes this rerun gets the same folder. Empty after a call
+    that gives the lease up, which makes no copy.
     """
     manifest: tuple[ManifestLine, ...] = ()
     """
@@ -1009,6 +1044,13 @@ class Brief(Record):
     """How many reviewer seats the lab has. With zero, a check and a rerun request take no seat."""
     reviewer_seats_free: int = 0
     """How many reviewer seats an agent can take with `profile`."""
+    vote_reveal_minutes: int = 0
+    """
+    For how many minutes after a post was written its votes are sealed for an agent that neither wrote it nor
+    voted on it. The person sets it. Zero seals no vote.
+    """
+    rerun_lease_minutes: int = 0
+    """How many minutes a take of a rerun, or its renewal, holds the lease on it. The person sets it."""
     conversation: ThreadId | None = None
     """The thread where the person and the coordinator talk, which every agent can read. `None` while the lab has none."""
     powers: tuple[Power, ...] = ()
@@ -1061,7 +1103,7 @@ class Brief(Record):
     reruns_wanted: tuple[RerunLine, ...] = ()
     """
     The reruns that are wanted, newest last, at most `MAX_NEWS`: who asked for each, when, which agents took it,
-    and in `open_to` who can take it now.
+    which of them hold a lease on it now and until when, and in `open_to` who can take it by the reviewer seats.
     """
     news: News
 
