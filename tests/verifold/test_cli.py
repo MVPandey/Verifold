@@ -377,6 +377,39 @@ def test_run_does_not_use_the_reviewer_seats_of_a_projects_file_and_says_so(
     assert said == (theirs is not None)
 
 
+@pytest.mark.parametrize(
+    ('mine', 'theirs', 'minutes'),
+    [
+        # Zero turns the seal or the lease off, and a day hides votes or holds a rerun for a day: no direction is
+        # the stricter one, so no number of a project counts.
+        ({'votes': {'reveal_minutes': 30}}, {'votes': {'reveal_minutes': 0}}, (30, None)),
+        ({}, {'reruns': {'lease_minutes': 1440}}, (None, 10)),
+        ({}, {'votes': {'reveal_minutes': 1440}, 'reruns': {'lease_minutes': 0}}, (10, 10)),
+        # Without a number in the project's file, the start gives none, and the lab follows the person's file.
+        ({'reruns': {'lease_minutes': 5}}, {}, (None, None)),
+    ],
+)
+def test_run_does_not_use_the_reveal_time_or_the_lease_of_a_projects_file_and_says_so(
+    serves: list[StartRequest | None],
+    project: Path,
+    capsys: pytest.CaptureFixture[str],
+    mine: dict[str, object],
+    theirs: dict[str, object],
+    minutes: tuple[int | None, int | None],
+) -> None:
+    global_settings(project, mine)
+    project_settings(project, theirs)
+
+    main(['run', 'Does it hold?', '--agent', 'codex:mini'])
+
+    (started,) = serves
+    assert started is not None
+    assert (started.reveal_minutes, started.lease_minutes) == minutes
+    printed = capsys.readouterr().out
+    assert ('the minutes that a new post hides its votes' in printed) == ('votes' in theirs)
+    assert ('the minutes that a take holds a rerun' in printed) == ('reruns' in theirs)
+
+
 def test_saved_modes_come_only_from_the_file_for_all_projects_and_not_under_ask_me(
     serves: list[StartRequest | None], project: Path
 ) -> None:

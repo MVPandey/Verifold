@@ -173,6 +173,11 @@ class CleanCopies:
             why = error.strerror if isinstance(error, OSError) and error.strerror else error
             raise NoCleanCopy(f'Verifold could not make the clean copy of post {post.id}: {why}') from error
 
+    def place(self, claim: Posted) -> tuple[Path, Path]:
+        """Return where the clean copy of a post's files is, and where its manifest is. It checks nothing."""
+        post = claim.post
+        return _place(self._project.resolve(), post.id, post.evidence[0].commit if post.evidence else '')
+
     async def _make(self, post_id: PostId, author: AgentId, commit: CommitId) -> MadeCopy:
         async with self._free:
             job = _Job(
@@ -199,12 +204,14 @@ def _export(job: _Job) -> MadeCopy:
         held, there = os.fstat(home), place.lstat()
         if not stat.S_ISDIR(there.st_mode) or (there.st_dev, there.st_ino) != (held.st_dev, held.st_ino):
             raise GitError(f'{place} was replaced while Verifold made the copy.')
-    return MadeCopy(
-        folder=place / name,
-        files=lines,
-        listing=place / f'{name}.manifest',
-        digest=hashlib.sha256(listed).hexdigest(),
-    )
+    folder, listing = _place(project, post_id, job.commit)
+    return MadeCopy(folder=folder, files=lines, listing=listing, digest=hashlib.sha256(listed).hexdigest())
+
+
+def _place(project: Path, post_id: PostId, commit: str) -> tuple[Path, Path]:
+    # The folder of a post's copy at a commit, and the file of its manifest beside it.
+    name = commit[:12]
+    return project / LAB_FOLDER / RERUNS / post_id / name, project / LAB_FOLDER / RERUNS / post_id / f'{name}.manifest'
 
 
 def _copied(home: int, name: str, objects: Objects, tree: str) -> list[ManifestLine]:

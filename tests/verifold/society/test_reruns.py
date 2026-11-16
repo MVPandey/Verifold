@@ -3,6 +3,7 @@ from datetime import timedelta
 import pytest
 from builders import START, RecordBuilder, lab
 
+from verifold.protocol.events import RerunTaken
 from verifold.protocol.join import LeaseLine, News
 from verifold.protocol.posts import Check, FileEvidence, Message, Objection, Result
 from verifold.protocol.settings import RerunSettings, ReviewerSettings, Settings
@@ -11,6 +12,7 @@ from verifold.society.errors import RejectedEvent
 from verifold.society.reruns import (
     MAX_RERUNS,
     can_take,
+    kept_until,
     lease_of,
     lease_refusal,
     leases,
@@ -153,9 +155,9 @@ def test_a_take_holds_a_lease_that_a_renewal_moves_and_that_ends_at_its_time_its
     assert lease_of(renewed, 'bo', 'p-1', record.at(10)) == LeaseLine(
         agent='bo', since=taken, until=record.at(10) + timedelta(minutes=10)
     )
-    # A give-up ends it at once, whatever time a view counts from.
+    # A give-up ends it at once.
     given = record.copy().lease('bo', 'p-1', held=False)
-    assert lease_of(given.board(), 'bo', 'p-1', taken) is None
+    assert lease_of(given.board(), 'bo', 'p-1', record.at(10)) is None
     # A renewal after a give-up, or after the lease ran out, starts a new lease.
     again = given.copy().lease('bo', 'p-1')
     assert lease_of(again.board(), 'bo', 'p-1', again.at(11)) == LeaseLine(
@@ -233,6 +235,112 @@ def test_a_lease_keeps_every_other_agent_out_but_one_of_another_family_while_no_
     )
     # Without a lease, nothing keeps an agent out.
     assert lease_refusal(record.board(), 'dee', 'p-1', now) is None
+
+
+def test_a_lease_keeps_the_minutes_of_its_moment_and_a_lease_that_ended_stays_ended() -> None:
+    record = wanted().take('bo', 'p-1')
+    taken = record.at(9)
+    # The person sets a lease of ten hours after bo's lease ended at its time.
+    later = minutes_pass(record.copy(), 15).settings(
+        Settings(reviewers=ReviewerSettings(seats=0), reruns=RerunSettings(lease_minutes=600))
+    )
+    board = later.board()
+
+    assert lease_of(board, 'bo', 'p-1', later.at(26)) is None
+    # A renewal after the change holds the new minutes. A lease from before keeps its own.
+    renewed = later.copy().lease('bo', 'p-1')
+    assert lease_of(renewed.board(), 'bo', 'p-1', renewed.at(26)) == LeaseLine(
+        agent='bo', since=renewed.at(26), until=renewed.at(26) + timedelta(minutes=600)
+    )
+    early = record.copy().settings(
+        Settings(reviewers=ReviewerSettings(seats=0), reruns=RerunSettings(lease_minutes=600))
+    )
+    assert lease_of(early.board(), 'bo', 'p-1', early.at(11)) == LeaseLine(
+        agent='bo', since=taken, until=taken + timedelta(minutes=10)
+    )
+
+
+def test_a_settled_rerun_has_no_lease_and_a_take_before_its_check_starts_none_after_it() -> None:
+    # cy's check settles the rerun while bo holds a lease on it too.
+    record = wanted().take('bo', 'p-1').take('cy', 'p-1')
+    record.post(rerun_check('cy', take=10))
+    board = record.board()
+
+    assert (lease_of(board, 'bo', 'p-1', record.at(11)), leases(board, 'p-1', record.at(11))) == (None, ())
+    # A new request makes the rerun wanted again. bo's take from before the check holds no lease, and its renewal
+    # starts one.
+    again = record.copy().rerun('person', 'p-1')
+    assert lease_of(again.board(), 'bo', 'p-1', again.at(12)) is None
+    renewed = again.copy().lease('bo', 'p-1')
+    assert lease_of(renewed.board(), 'bo', 'p-1', renewed.at(13)) == LeaseLine(
+        agent='bo', since=renewed.at(13), until=renewed.at(23)
+    )
+
+
+def test_an_event_dated_after_now_starts_no_lease() -> None:
+    record = wanted()
+    # A take that an edit dated an hour ahead, as from a clock that jumped.
+    record.events.append(
+        RerunTaken(seq=9, at=record.at(9) + timedelta(hours=1), agent='bo', post='p-1', commit='c' * 40)
+    )
+    board = record.board()
+
+    assert leases(board, 'p-1', record.at(10)) == ()
+    assert lease_refusal(board, 'dee', 'p-1', record.at(10)) is None
+    assert lease_of(board, 'bo', 'p-1', record.at(9) + timedelta(hours=1)) is not None
+
+
+def test_the_record_refuses_a_renewal_that_another_agents_lease_keeps_out() -> None:
+    # bo's lease ran out, and dee took the rerun. bo's take stands, and its renewal is refused while dee holds it.
+    record = minutes_pass(wanted().join('dee').take('bo', 'p-1'), 10).take('dee', 'p-1')
+
+    with pytest.raises(RejectedEvent, match=r'dee holds the rerun of post p-1 .* renews no lease of yours'):
+        record.copy().lease('bo', 'p-1').board()
+    # cy is of another family, so dee's lease does not keep cy out.
+    assert record.copy().take('cy', 'p-1').lease('cy', 'p-1').board().leases[-1].agent == 'cy'
+
+
+def test_a_rerun_that_a_lease_keeps_from_an_agent_is_no_news_for_it_until_the_lease_ends() -> None:
+    # One reviewer seat, held by bo. ada, bo, and dee have the post's family, and cy has another.
+    record = lab().join('dee').reviewer('bo').post(RESULT).rerun('ada', 'p-1')
+    asked = len(record.events)
+    record.take('bo', 'p-1')
+    board = record.board()
+    now = record.at(len(record.events))
+
+    # bo's take opens the rerun to every agent, and bo's lease keeps dee out. dee hears nothing, and cy hears it.
+    assert open_to(board, 'p-1', now) == 'any'
+    assert news(board, 'dee', asked, now).reruns == ()
+    assert [line.post for line in news(board, 'cy', asked, now).reruns] == ['p-1']
+    assert (can_take(board, 'dee', 'p-1', now), can_take(board, 'cy', 'p-1', now)) == (False, True)
+    assert kept_until(board, 'dee', now) == record.at(asked + 1) + timedelta(minutes=10)
+    assert kept_until(board, 'cy', now) is None
+    # The lease ends at its time without a check: then dee hears of the rerun, once.
+    ended = record.at(asked + 1) + timedelta(minutes=10)
+    freed = update(board, 'dee', board.seq, ended, since=now)
+    assert [line.post for line in freed.reruns] == ['p-1']
+    assert update(board, 'dee', board.seq, ended, since=ended).reruns == ()
+    # A give-up ends it at once, and so does bo's leave.
+    for gone in (record.copy().lease('bo', 'p-1', held=False), record.copy().leave('bo')):
+        after = gone.board()
+        assert [line.post for line in news(after, 'dee', board.seq, gone.at(len(gone.events)), since=now).reruns] == [
+            'p-1'
+        ]
+
+
+def test_a_reviewer_that_a_lease_keeps_out_leaves_the_rerun_open_to_another_family() -> None:
+    # Two reviewer seats, held by bo and dee, both of the post's family. cy has another family and no seat.
+    record = lab().reviewer_seats(2).join('dee').reviewer('bo').reviewer('dee').post(RESULT).rerun('ada', 'p-1')
+    before_take = record.board()
+    now = record.at(len(record.events))
+    assert open_to(before_take, 'p-1', now) == 'reviewer'
+    record.take('bo', 'p-1')
+    board = record.board()
+    now = record.at(len(record.events))
+
+    # bo's lease keeps dee out, so no agent in a reviewer seat can take the rerun, and cy can.
+    assert open_to(board, 'p-1', now) == 'any'
+    assert (can_take(board, 'dee', 'p-1', now), can_take(board, 'cy', 'p-1', now)) == (False, True)
 
 
 def test_the_brief_shows_who_holds_each_wanted_rerun_and_until_when() -> None:

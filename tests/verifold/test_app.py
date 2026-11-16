@@ -91,7 +91,8 @@ def posts(project: Path) -> list[Posted]:
 
 
 def calls(log: Path) -> list[dict[str, str]]:
-    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+    # The fake harness appends to the log, so a read can end inside a line. Only the lines that end are whole.
+    return [json.loads(line) for line in log.read_text().split('\n')[:-1]] if log.exists() else []
 
 
 @pytest.fixture
@@ -1573,6 +1574,14 @@ async def test_the_persons_choice_for_permission_requests_applies_to_the_running
     assert after['all_projects']['values'] == {'permissions': {'while_you_decide': 'refuse'}}
     assert after['lab']['permissions'] == {'while_you_decide': 'refuse'}
     assert after['lab']['jobs'] == before['lab']['jobs']
+
+
+async def test_a_start_can_name_the_reveal_time_and_the_lease_in_place_of_the_files(project: Path) -> None:
+    start = ONE_AGENT.model_copy(update={'reveal_minutes': 0, 'lease_minutes': 30})
+    async with serving(project, start) as client:
+        lab = (await client.get('/lab')).json()
+
+    assert (lab['settings']['votes'], lab['settings']['reruns']) == ({'reveal_minutes': 0}, {'lease_minutes': 30})
 
 
 async def test_the_persons_reveal_time_and_lease_apply_to_the_running_lab(

@@ -34,5 +34,9 @@ class FakeCopies:
         if self.fails:
             raise NoCleanCopy(f'Verifold could not make the clean copy of post {claim.post.id}: no space left.')
         self.made.append((claim.post.id, claim.post.author))
+        copy, listing = self.place(claim)
+        return MadeCopy(folder=copy, files=self.files, listing=listing, digest='cd' * 32)
+
+    def place(self, claim: Posted) -> tuple[Path, Path]:
         copy = self.folder / claim.post.id
-        return MadeCopy(folder=copy, files=self.files, listing=copy.with_suffix('.manifest'), digest='cd' * 32)
+        return copy, copy.with_suffix('.manifest')

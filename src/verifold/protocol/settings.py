@@ -84,8 +84,9 @@ class VoteSettings(Record):
 
     reveal_minutes: int = Field(default=10, ge=0, le=MAX_BOARD_MINUTES)
     """
-    The minutes after a post was written in which an agent sees no votes on it until it votes on it itself. The
-    post's author and the person see them at once. Zero means that no vote is sealed.
+    The minutes after a post was written in which the board shows an agent no votes on it until it votes on it
+    itself. The post's author and the person see them at once. Zero means that no vote is sealed. A post keeps the
+    minutes that the lab followed when it was written.
     """
 
 
@@ -94,8 +95,9 @@ class RerunSettings(Record):
 
     lease_minutes: int = Field(default=10, ge=0, le=MAX_BOARD_MINUTES)
     """
-    The minutes of the lease that a take of a rerun gives its agent, and that a second take renews. While the lease
-    stands, the board refuses the take of the same rerun from another agent. Zero means that a take gives no lease.
+    The minutes of the lease that a take of a rerun gives its agent, and that a renewal starts again. While the
+    lease stands, the board refuses the take of the same rerun from another agent. Zero means that a take gives no
+    lease. A lease keeps the minutes that the lab followed when it was taken or renewed.
     """
 
 

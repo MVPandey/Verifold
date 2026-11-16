@@ -75,12 +75,13 @@ from verifold.society.deliverables import accepted, check_decidable, live, offer
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
 from verifold.society.labels import awaits_model, is_numbered, label, plain
+from verifold.society.lifecycle import utc
 from verifold.society.lines import question_thread
 from verifold.society.names import check_name
 from verifold.society.reruns import lease_refusal, open_take, open_to, wanted_reruns
 from verifold.society.reviewers import check_review, seats_line
 from verifold.society.standing import closing
-from verifold.society.votes import proposal, vote_of
+from verifold.society.votes import proposal, revealed, vote_of
 from verifold.store.errors import CorruptRecord, RecordChanged
 from verifold.store.record_file import RecordFile
 
@@ -633,15 +634,13 @@ class Lab:
 
         `manifest` is the SHA-256 of the clean copy's manifest that the agent got. The take gives the agent a lease
         on the rerun. A second call returns the first take, also when it comes while the first one is being
-        recorded. While the take waits for its check and the rerun is wanted, the second call renews the lease.
+        recorded, and records nothing: `renew_rerun` renews the lease.
 
         Raises:
             RejectedEvent: The agent cannot take the rerun, as `check_take` says.
 
         """
         if taken := self._board.take(agent_id, post_id):
-            if _renews(self._board, agent_id, post_id):
-                await self._commit(_lease(agent_id, post_id, held=True))
             return taken
         try:
             board = await self._commit(_take(agent_id, post_id, manifest))
@@ -657,18 +656,30 @@ class Lab:
         Record a vote of an agent or the person on a post, and return the voter's vote as it stands, or `None`.
 
         A voter has one vote on a post: a new one replaces it, and `none` takes it back. The same vote again
-        records nothing. A vote wakes nobody and changes nothing else on the board.
+        records nothing. A vote wakes nobody and changes nothing else on the board. An agent takes back no vote on a
+        post whose votes are sealed for the other agents, because a vote and its take-back would show it the tally
+        and leave no vote. A vote the other way replaces its vote.
 
         Raises:
-            RejectedEvent: The vote breaks a rule of the record, as `check_vote` says.
+            RejectedEvent: The vote breaks a rule of the record, as `check_vote` says, or an agent takes back its
+                vote on a post whose votes are sealed.
 
         """
         now = vote_of(self._board, by, post_id)
         if now and (now.direction, now.reason) == (direction, one_line(reason)):
             return now
-        board = await self._commit(
-            lambda _, seq, at: Voted(seq=seq, at=at, by=by, post=post_id, direction=direction, reason=reason)
-        )
+
+        def build(board: Board, seq: int, at: datetime) -> Voted:
+            # A record from before this rule holds early take-backs, so the rule is here and not in the record's rules.
+            target = board.post(post_id)
+            if direction == 'none' and by != PERSON and target and at < (shows := revealed(board, target)):
+                raise RejectedEvent(
+                    f'The votes on post {post_id} are sealed for the agents that have not voted until {utc(shows)}, '
+                    'and until then the board takes back no vote on it. A vote the other way replaces yours.'
+                )
+            return Voted(seq=seq, at=at, by=by, post=post_id, direction=direction, reason=reason)
+
+        board = await self._commit(build)
         return vote_of(board, by, post_id)
 
     async def badge(  # noqa: PLR0913
@@ -712,24 +723,38 @@ class Lab:
 
     def check_take(self, agent_id: AgentId, post_id: PostId) -> None:
         """
-        Check that an agent can take the rerun of a post now, or renew its lease on it, and record nothing.
+        Check that an agent can take the rerun of a post now, and record nothing.
 
         The clean copy is made between this check and the take, so a copy that fails leaves no take in the record,
-        and a call that the board refuses makes no copy.
+        and a take that the board refuses makes no copy.
 
         Raises:
             RejectedEvent: No rerun of the post is wanted, the post is the agent's own, the rerun is for an agent
-                in a reviewer seat and the agent holds none, or another agent's lease on it stands.
+                in a reviewer seat and the agent holds none, or another agent's lease keeps the agent out.
 
         """
         board = self._board
-        if board.take(agent_id, post_id) is None:
-            build = _take(agent_id, post_id)
-        elif _renews(board, agent_id, post_id):
-            build = _lease(agent_id, post_id, held=True)
-        else:
-            return
-        apply(board, build(board, board.seq + 1, self._clock()))
+        apply(board, _take(agent_id, post_id)(board, board.seq + 1, self._clock()))
+
+    async def renew_rerun(self, agent_id: AgentId, post_id: PostId) -> str:
+        """
+        Renew an agent's lease on the rerun of a post that it took, and return why the board did not, or `''`.
+
+        The board renews the lease while the take waits for its check and the rerun is wanted, unless another
+        agent's lease keeps the agent out. Otherwise it records nothing, and the take stands as it was.
+        """
+        if not wanted_reruns(self._board, post_id):
+            return f'No rerun of post {post_id} is wanted now, so no lease on it stands.'
+        if open_take(self._board, agent_id, post_id) is None:
+            return f'You posted the check of your take of the rerun of post {post_id}, and it ended your lease.'
+        try:
+            await self._commit(
+                lambda _, seq, at: RerunLeaseSet(seq=seq, at=at, agent=agent_id, post=post_id, held=True)
+            )
+        except RejectedEvent as refused:
+            # Another agent's lease keeps the agent out, or its check came in meanwhile.
+            return str(refused)
+        return ''
 
     async def give_up_rerun(self, agent_id: AgentId, post_id: PostId) -> RerunTaken:
         """
@@ -742,7 +767,9 @@ class Lab:
             RejectedEvent: The agent holds no lease on the rerun of the post.
 
         """
-        board = await self._commit(_lease(agent_id, post_id, held=False))
+        board = await self._commit(
+            lambda _, seq, at: RerunLeaseSet(seq=seq, at=at, agent=agent_id, post=post_id, held=False)
+        )
         # The record's rules take no lease without a take.
         return next(entry for entry in board.takes if entry.agent == agent_id and entry.post == post_id)
 
@@ -1203,35 +1230,20 @@ def _take(agent_id: AgentId, post_id: PostId, manifest: str | None = None) -> Bu
         target = board.post(post_id)
         if target is None or not target.post.evidence:
             raise RejectedEvent(f'No rerun of post {post_id} is wanted now. `rerun` asks for one.')
-        # A rerun is for the holders of the reviewer seats, and for any agent when no holder can take it. An older
-        # record has no such rule, so it is here and not in the record's rules.
-        seated = board.reviewer(agent_id) or target.post.author == agent_id
-        if not seated and wanted_reruns(board, post_id) and open_to(board, post_id) == 'reviewer':
+        # A rerun is for the holders of the reviewer seats, and for any agent when no holder can take it. A lease
+        # keeps out one agent at a time. An older record has neither rule, so they are here and not in the
+        # record's rules. The author's own take gets the record's own reason.
+        own = target.post.author == agent_id
+        seated = board.reviewer(agent_id) or own
+        if not seated and wanted_reruns(board, post_id) and open_to(board, post_id, at) == 'reviewer':
             raise RejectedEvent(
                 f"The rerun of another agent's post takes a reviewer seat while an agent in such a seat can take "
                 f'it. {seats_line(board)}'
             )
-        if refusal := lease_refusal(board, agent_id, post_id, at):
+        if not own and (refusal := lease_refusal(board, agent_id, post_id, at)):
             raise RejectedEvent(refusal)
         commit = target.post.evidence[0].commit
         return RerunTaken(seq=seq, at=at, agent=agent_id, post=post_id, commit=commit, manifest=manifest)
-
-    return build
-
-
-def _renews(board: Board, agent_id: AgentId, post_id: PostId) -> bool:
-    # Whether an agent's take of a rerun that it took already renews its lease: its take waits for its check, and
-    # the rerun is wanted. Otherwise the call records nothing and returns the claim.
-    return open_take(board, agent_id, post_id) is not None and bool(wanted_reruns(board, post_id))
-
-
-def _lease(agent_id: AgentId, post_id: PostId, *, held: bool) -> Build:
-    def build(board: Board, seq: int, at: datetime) -> RerunLeaseSet:
-        # A lease binds the agents from the time that the limit came, so the rule is here and not in the record's
-        # rules, as for a take.
-        if held and (refusal := lease_refusal(board, agent_id, post_id, at)):
-            raise RejectedEvent(refusal)
-        return RerunLeaseSet(seq=seq, at=at, agent=agent_id, post=post_id, held=held)
 
     return build
 

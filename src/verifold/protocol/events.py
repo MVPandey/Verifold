@@ -300,11 +300,12 @@ class RerunLeaseSet(EventBase):
     """
     An agent that took the rerun of a post renewed its lease on it, or gave it up.
 
-    The take gives the agent a lease for the minutes of the lab's settings. With `held`, the lease starts again at
-    this event. Without it, the lease ends here. The lease also ends at its time, at the check of the take, and
-    when the agent leaves the lab. While it stands, Verifold refuses the take of the same rerun from every other
-    agent, with one exception: while no holder is of another model family than the post, an agent of another
-    family can take it.
+    The take gives the agent a lease for the minutes that the lab's settings held then. With `held`, the lease
+    starts again at this event, for the minutes that the settings hold then. Without it, the lease ends here. The
+    lease also ends at its time, at the check of the take, at the check that settles the rerun, and when the agent
+    leaves the lab. While it stands, it keeps every other agent from the rerun, with one exception: while no
+    holder is of another model family than the post, an agent of another family can take it. The record refuses a
+    renewal that another agent's lease keeps out.
     """
 
     type: Literal['rerun_lease_set'] = 'rerun_lease_set'

@@ -29,6 +29,7 @@ from verifold.society.votes import (
     vote_lines,
     vote_of,
 )
+from verifold.society.votes import sealed as sealed_for
 
 RESULT = Result(id='p-1', thread='t-1', author='ada', text='Holds.')
 
@@ -281,11 +282,22 @@ def test_a_sealed_vote_changes_nothing_else_in_any_result() -> None:
     assert post_line(board, board.posts[0], 'cy', young).badges == ('promising',)
 
 
-def test_with_a_reveal_time_of_zero_no_vote_is_sealed_and_a_record_from_before_gets_ten_minutes() -> None:
-    record = sealed().settings(Settings(votes=VoteSettings(reveal_minutes=0)))
-    board = record.board()
+def test_a_post_keeps_the_reveal_time_of_its_moment_and_zero_seals_no_vote() -> None:
+    zero = Settings(votes=VoteSettings(reveal_minutes=0))
+    record = lab().settings(zero).post(RESULT).join('dan').vote('bo', 'p-1', 'up', 'It matches my run.')
+    written = record.board().posts[0].at
 
-    assert counts(board, 'cy', board.posts[0].at) == (1, 1, ('bo',))
+    assert counts(record.board(), 'cy', written) == (1, 1, ('bo',))
+    # A later change holds for the posts after it: p-1 stays open, and p-2 is sealed for its first hour.
+    hour = record.settings(Settings(votes=VoteSettings(reveal_minutes=60)))
+    later = hour.post(Result(id='p-2', thread='t-1', author='ada', text='Again.')).vote('bo', 'p-2').board()
+    assert counts(later, 'cy', written + timedelta(minutes=30)) == (1, 1, ('bo',))
+    second = later.posts[1]
+    assert sealed_for(later, 'cy', second, second.at + timedelta(minutes=59))
+    assert not sealed_for(later, 'cy', second, second.at + timedelta(minutes=60))
+    # Raising the reveal time seals no vote again that an agent saw: p-1 of a lab of ten minutes stays revealed.
+    raised = sealed().settings(Settings(votes=VoteSettings(reveal_minutes=600))).board()
+    assert counts(raised, 'cy', raised.posts[0].at + timedelta(minutes=10)) == (1, 1, ('bo',))
     # A record from before the setting has the default reveal time.
     assert sealed().board().settings.votes.reveal_minutes == 10
     assert fold(sealed().events).settings == Settings()

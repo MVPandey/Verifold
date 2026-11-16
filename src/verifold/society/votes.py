@@ -111,15 +111,24 @@ def sealed(board: Board, reader: AgentId, entry: Posted, now: datetime | None = 
     """
     Return whether the votes on a post are sealed for a reader at `now`, so that no view for it shows them.
 
-    They are for an agent that did not write the post and never voted on it, while the post is younger than the
-    reveal time of the lab's settings. A vote that the agent took back still counts as its vote. The person sees
-    every vote at once. Without `now`, time counts from the board's newest post, which is never later than the
-    lab's clock, so a view without a clock shows no vote that the lab's clock would seal.
+    They are for an agent that did not write the post and never voted on it, until the post is `revealed`. A vote
+    that the agent took back, in a record from before the board refused that, still counts as its vote. The person
+    sees every vote at once. Without `now`, time counts from the board's newest post, which is never later than
+    the lab's clock, so a view without a clock shows no vote that the lab's clock would seal.
     """
     if reader in (PERSON, entry.post.author) or reader in board.votes_on.get(entry.post.id, {}):
         return False
-    reveal = timedelta(minutes=board.settings.votes.reveal_minutes)
-    return (now or latest_time(board)) < entry.at + reveal
+    return (now or latest_time(board)) < revealed(board, entry)
+
+
+def revealed(board: Board, entry: Posted) -> datetime:
+    """
+    Return when the votes on a post show to every agent.
+
+    That is the reveal time of the settings that the lab followed when the post was written, after the post's time.
+    A later change of the setting leaves the post as it was.
+    """
+    return entry.at + timedelta(minutes=board.settings_at(entry.seq).votes.reveal_minutes)
 
 
 def held_badges(board: Board, post_id: PostId) -> tuple[Held, ...]:

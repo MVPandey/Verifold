@@ -73,6 +73,7 @@ from verifold.society.attention import update, wakes
 from verifold.society.board import Board
 from verifold.society.grants import agent_waits
 from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
+from verifold.society.reruns import kept_until
 from verifold.society.turns import before
 
 
@@ -174,6 +175,8 @@ class AgentLoop:
         # An agent that waits again gets a doorbell for every post for it that it has not read. One of them can
         # have rung before Verifold stopped: a doorbell that rings twice is better than one that never rings.
         self._notified = member.seen if self._rests else board.seq
+        self._notified_at: datetime | None = None
+        """When the doorbell rang for the posts up to `_notified`, or `None` when this loop did not ring it."""
         self._seen_at_turn = member.seen
         """What the agent had seen when its turn started. A failed turn takes the agent back to it."""
         self._in_turn = False
@@ -443,7 +446,10 @@ class AgentLoop:
             if board.gone(agent_id):
                 return ''
             stopped = self._jobs_stopped(board)
-            news = update(board, agent_id, max(self._notified, self._member.seen))
+            now = self._lab.now()
+            # The time of the read or the doorbell that reached this far, for a rerun that a lease kept out then.
+            since = self._member.seen_at if self._member.seen >= self._notified else self._notified_at
+            news = update(board, agent_id, max(self._notified, self._member.seen), now, since=since)
             # An agent that this agent wrote to and that left wakes it as a post does: no answer comes from it.
             # Like the alarm, that does not wake an agent in a closed lab, where agents leave because it is done.
             # A rerun that somebody asked for, and that this agent can take, wakes it as a call does.
@@ -453,7 +459,7 @@ class AgentLoop:
             left = None
             if alarm:
                 rings, closed = rings_at(board, alarm), lab_state(board) == 'closed'
-                ahead = (rings - self._lab.now()).total_seconds()
+                ahead = (rings - now).total_seconds()
                 if board.out_of_time or closed:
                     held = CLOSED if closed else OUT_OF_TIME
                 else:
@@ -466,7 +472,7 @@ class AgentLoop:
             # A post during a stop waits for the wake after more time, so the doorbell rings then.
             if stopped and not board.out_of_time:
                 if posts:
-                    self._notified = board.seq
+                    self._notified, self._notified_at = board.seq, now
                 message = more_time_message(board.ends_at, AtTimeLimit.STOP)
                 return self._ring(f'{message} {DOORBELL}' if posts else message, due, late)
             if posts and not stopped:
@@ -475,11 +481,16 @@ class AgentLoop:
                     await self._settle()
                     settled = True
                     continue
-                self._notified = board.seq
+                self._notified, self._notified_at = board.seq, now
                 return self._ring(DOORBELL if news.posts else RERUN_WANTED if news.reruns else DEPARTURE, due, late)
             if due:
                 return self._ring('', due, late)
-            await self._lab.wait_for_change(board.seq, left)
+            # A rerun that only a lease keeps from the agent comes free at the lease's end, which is no event.
+            free = kept_until(board, agent_id, now)
+            frees = None if free is None else (free - now).total_seconds()
+            await self._lab.wait_for_change(
+                board.seq, min((wait for wait in (left, frees) if wait is not None), default=None)
+            )
 
     def _rings_in_turn(self, board: Board, rings: datetime) -> bool:
         # Whether the time of the agent's alarm came while the agent's last turn ran.

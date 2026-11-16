@@ -11,7 +11,7 @@ from verifold.protocol.events import RerunLeaseSet, RerunTaken
 from verifold.protocol.ids import PERSON
 from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import FileEvidence
-from verifold.protocol.settings import ReviewerSettings, Settings
+from verifold.protocol.settings import RerunSettings, ReviewerSettings, Settings
 from verifold.server.join import join_server
 from verifold.server.lab import Lab
 from verifold.server.member import Member
@@ -94,9 +94,12 @@ async def test_a_take_is_refused_to_another_agent_while_the_lease_stands_and_the
     assert dee.brief('').reruns_wanted[0].held_by == ()
     assert (await dee.take_rerun('p-1')).held_until == START + timedelta(minutes=20)
     assert [entry.agent for entry in wanted.board.takes] == ['bo', 'dee']
-    # bo's take stays, and the board refuses bo's renewal while dee holds the rerun.
-    with pytest.raises(RejectedEvent, match='dee holds the rerun of post p-1 since 2026-11-06 12:10 UTC'):
-        await bo.take_rerun('p-1')
+    # bo's take stays. bo's call gets the folder of its take, and no renewal while dee holds the rerun.
+    seq = wanted.board.seq
+    again = await bo.take_rerun('p-1')
+    assert (again.folder, again.held_until, wanted.board.seq) == ('/lab/.verifold/reruns/p-1', None, seq)
+    assert again.not_renewed.startswith('dee holds the rerun of post p-1 since 2026-11-06 12:10 UTC')
+    assert 'The board renews no lease of yours on the rerun while that lease stands.' in again.not_renewed
     assert bo_copies.made == [('p-1', 'ada')]
 
 
@@ -169,7 +172,9 @@ async def test_agents_take_renew_and_give_up_a_rerun_through_the_mcp_tool(wanted
     async with Client(join_server(lambda _: dee)) as client:
         refused = await client.call_tool('take_rerun', {'post': 'p-1'})
         brief = await client.call_tool('brief', {})
+    clock.pass_minutes(5)
     async with Client(join_server(lambda _: bo)) as client:
+        renewed = await client.call_tool('take_rerun', {'post': 'p-1'})
         given = await client.call_tool('take_rerun', {'post': 'p-1', 'give_up': True})
 
     assert 'give_up' in tools['take_rerun'].input_schema['properties']
@@ -186,5 +191,104 @@ async def test_agents_take_renew_and_give_up_a_rerun_through_the_mcp_tool(wanted
         10,
         10,
     )
+    # The renewal moves the end of the lease and returns the folder of the take without a new copy.
+    assert renewed.structured_content is not None
+    assert [renewed.structured_content[key] for key in ('held_since', 'held_until', 'not_renewed', 'manifest')] == [
+        '2026-11-06T12:00:00Z',
+        '2026-11-06T12:16:00Z',
+        '',
+        [],
+    ]
+    assert renewed.structured_content['folder'] == taken.structured_content['folder']
     assert given.structured_content is not None
     assert (given.structured_content['held_until'], given.structured_content['folder']) == (None, '')
+
+
+async def test_two_reviewers_of_the_posts_family_leave_the_rerun_to_another_family_while_one_holds_it(
+    record_file: RecordFile, clock: Clock
+) -> None:
+    lab = Lab.create(record_file, 'Does it hold?', clock=lambda: clock.now)
+    for name in ('ada', 'bo', 'dee'):
+        await lab.join(agent(name))
+    await lab.join(agent('cy').model_copy(update={'model': ModelSpec(family='openai')}))
+    await lab.set_settings(Settings(reviewers=ReviewerSettings(seats=2)))
+    await lab.set_reviewer('bo', PERSON, reviewer=True)
+    await lab.set_reviewer('dee', PERSON, reviewer=True)
+    await lab.post(PostRequest(kind='result', text='11.8x.', new_thread='Speed'), 'ada', EVIDENCE)
+    await lab.request_rerun('ada', 'p-1')
+    bo, dee, cy = (Member(lab, name, copies=FakeCopies()) for name in ('bo', 'dee', 'cy'))
+    # Before any take, the rerun is for the reviewer seats, and cy has none.
+    with pytest.raises(RejectedEvent, match='takes a reviewer seat while an agent in such a seat can take it'):
+        await cy.take_rerun('p-1')
+
+    await bo.take_rerun('p-1')
+
+    # bo's lease keeps dee out, so no agent in a reviewer seat can take the rerun, and cy of another family can.
+    assert [line.open_to for line in cy.brief('').reruns_wanted] == ['any']
+    with pytest.raises(RejectedEvent, match='bo holds the rerun of post p-1'):
+        await dee.take_rerun('p-1')
+    assert (await cy.take_rerun('p-1')).held_until == START + timedelta(minutes=10)
+
+
+async def test_a_takers_own_call_while_another_agent_holds_the_rerun_returns_its_folder_and_renews_nothing(
+    wanted: Lab, clock: Clock
+) -> None:
+    bo, cy = Member(wanted, 'bo', copies=FakeCopies()), Member(wanted, 'cy', copies=FakeCopies())
+    await bo.take_rerun('p-1')
+    clock.pass_minutes(1)
+    await cy.take_rerun('p-1')
+    clock.pass_minutes(1)
+    seq = wanted.board.seq
+
+    # cy's check can make the post stand as held up, so its lease keeps bo from renewing. bo's lease stands.
+    again = await bo.take_rerun('p-1')
+
+    assert (again.folder, again.held_since, again.held_until, wanted.board.seq) == (
+        '/lab/.verifold/reruns/p-1',
+        START,
+        START + timedelta(minutes=10),
+        seq,
+    )
+    assert again.not_renewed.startswith('cy holds the rerun of post p-1 since 2026-11-06 12:01 UTC')
+    # After cy's lease and bo's both end, bo renews and holds the rerun again.
+    clock.pass_minutes(10)
+    renewed = await bo.take_rerun('p-1')
+    assert (renewed.not_renewed, renewed.held_since) == ('', START + timedelta(minutes=12))
+
+
+async def test_a_change_of_the_lease_after_a_lease_ended_brings_no_lease_back(wanted: Lab, clock: Clock) -> None:
+    bo, dee = Member(wanted, 'bo', copies=FakeCopies()), Member(wanted, 'dee', copies=FakeCopies())
+    await bo.take_rerun('p-1')
+    clock.pass_minutes(30)
+    await dee.take_rerun('p-1')
+    clock.pass_minutes(15)
+
+    await wanted.set_settings(Settings(reviewers=ReviewerSettings(seats=0), reruns=RerunSettings(lease_minutes=600)))
+
+    assert bo.brief('').reruns_wanted[0].held_by == ()
+    # A renewal after the change holds the new minutes, and it keeps dee from renewing.
+    renewed = await bo.take_rerun('p-1')
+    assert renewed.held_until == START + timedelta(minutes=45, hours=10)
+    assert (await dee.take_rerun('p-1')).not_renewed.startswith('bo holds the rerun of post p-1')
+
+
+async def test_the_author_of_a_post_gets_the_reason_of_its_own_post_also_while_a_lease_stands(wanted: Lab) -> None:
+    await Member(wanted, 'bo', copies=FakeCopies()).take_rerun('p-1')
+
+    with pytest.raises(RejectedEvent, match=r'Post p-1 is your own\. Another agent takes its rerun\.'):
+        await Member(wanted, 'ada', copies=FakeCopies()).take_rerun('p-1')
+
+
+async def test_a_renewal_and_a_call_after_the_check_make_no_export(wanted: Lab) -> None:
+    copies = FakeCopies()
+    bo = Member(wanted, 'bo', pin=pin, copies=copies)
+    await bo.take_rerun('p-1')
+    renewed = await bo.take_rerun('p-1')
+    await bo.post(check())
+    after = await bo.take_rerun('p-1')
+
+    assert copies.made == [('p-1', 'ada')]
+    assert renewed.manifest_sha256 == 'cd' * 32
+    # The check settled the rerun, so bo holds no lease, and the result says why.
+    assert (after.held_since, after.held_until) == (None, None)
+    assert after.not_renewed == 'No rerun of post p-1 is wanted now, so no lease on it stands.'

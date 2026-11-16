@@ -150,7 +150,8 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
         case SettingsSet(settings=settings):
             check_made(board, event)
             numbers = (*board.seat_numbers, (event.seq, settings.reviewers.seats))
-            return replace(board, seq=event.seq, settings=settings, seat_numbers=numbers)
+            history = (*board.settings_history, (event.seq, settings))
+            return replace(board, seq=event.seq, settings=settings, seat_numbers=numbers, settings_history=history)
         case PermissionGranted(prefix=prefix):
             grants = board.grants if prefix in board.grants else (*board.grants, prefix)
             return replace(board, seq=event.seq, grants=grants)

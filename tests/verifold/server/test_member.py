@@ -435,8 +435,18 @@ async def test_a_take_returns_the_manifest_of_the_copy_and_the_record_keeps_its_
     assert lab.board.takes[0].manifest == 'cd' * 32
     # A manifest of very many files is in its file only, and the result says how many it has.
     copies.files = tuple(ManifestLine(path=f'f{number}', size=1, sha256='ab' * 32) for number in range(201))
-    many = await bo.take_rerun('p-2')
+    await bo.take_rerun('p-2', give_up=True)
+    await lab.join(agent('cy'))
+    many = await Member(lab, 'cy', copies=copies).take_rerun('p-2')
     assert (many.manifest, many.manifest_files) == ((), 201)
+    # bo's renewal makes no export: it gives the folder of its take, the manifest's file, and the record's SHA-256.
+    again = await bo.take_rerun('p-2')
+    assert (again.folder, again.manifest_file, again.manifest_sha256) == (
+        str(copies.folder / 'p-2'),
+        str(copies.folder / 'p-2.manifest'),
+        'cd' * 32,
+    )
+    assert (again.manifest, again.manifest_files, copies.made) == ((), 0, [('p-2', 'ada'), ('p-2', 'ada')])
 
 
 async def test_two_calls_of_one_agent_at_the_same_time_are_one_take_and_one_check_of_it(lab: Lab) -> None:

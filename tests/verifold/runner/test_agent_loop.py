@@ -38,6 +38,7 @@ from verifold.runner.messages import (
 from verifold.runner.permissions import Refusals
 from verifold.runner.session import AgentSession, PermissionChoice, PermissionRequest, TurnResult
 from verifold.server.activity import Activity
+from verifold.server.member import Member
 from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
 from verifold.society.turns import before
 from verifold.society.views import needs_person
@@ -51,7 +52,8 @@ def log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def calls(log: Path, event: str) -> list[dict[str, object]]:
-    lines = log.read_text().splitlines() if log.exists() else []
+    # The fake harness appends to the log, so a read can end inside a line. Only the lines that end are whole.
+    lines = log.read_text().split('\n')[:-1] if log.exists() else []
     return [call for call in map(json.loads, lines) if call['event'] == event]
 
 
@@ -1352,6 +1354,44 @@ async def test_an_agent_that_ended_its_turn_wakes_when_an_agent_that_it_wrote_to
         running.cancel()
 
     assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DEPARTURE]
+
+
+async def test_a_rerun_that_a_lease_keeps_from_the_agent_wakes_it_only_when_the_lease_ends(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
+    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
+    # A lab of three agents has one reviewer seat. cy holds it, and cy has the post's model family, as bo has.
+    await lab.join(agent('cy'))
+    await lab.set_reviewer('cy', 'cy', reviewer=True)
+    waits: list[float | None] = []
+    wait = lab.wait_for_change
+
+    async def waited(after: int, timeout: float | None = None) -> None:
+        waits.append(timeout)
+        await wait(after, timeout)
+
+    monkeypatch.setattr(lab, 'wait_for_change', waited)
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        # The rerun is for cy's seat. cy's take opens it to every agent, and cy's lease keeps bo out.
+        await lab.request_rerun('ada', 'p-2')
+        await Member(lab, 'cy', copies=FakeCopies()).take_rerun('p-2')
+        await lab.post(SIDE_NOTE, 'ada')
+        await until(lambda: bool(waits) and waits[-1] is not None)
+        assert len(calls(log, 'prompt')) == 1
+        # The loop wakes by itself when the lease ends: its wait lasts until then at most.
+        assert 0 < (waits[-1] or 0) <= 600
+        # At the end of the lease the rerun is news for bo, and the doorbell rings for it.
+        pass_time(served, 600)
+        await lab.post(SIDE_NOTE, 'ada')
+        await until(lambda: len(lab.board.turns) == 2)
+    finally:
+        running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', RERUN_WANTED]
 
 
 async def test_a_rerun_that_the_agent_can_take_wakes_it_and_it_takes_the_rerun_in_its_own_turn(

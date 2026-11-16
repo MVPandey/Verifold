@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 
 from verifold.protocol.agents import GUEST, Picture
 from verifold.protocol.app import Heard
@@ -34,7 +35,7 @@ from verifold.society.attention import news, update, wakes
 from verifold.society.deliverables import live
 from verifold.society.errors import RejectedEvent
 from verifold.society.identity import post_view
-from verifold.society.reruns import lease_of, open_take
+from verifold.society.reruns import kept_until, lease_of, open_take
 from verifold.society.views import brief, profile_result, side_lines, thread_summaries, thread_view, work_threads
 
 type Pin = Callable[[tuple[str, ...]], Awaitable[tuple[FileEvidence, ...]]]
@@ -54,11 +55,21 @@ class MadeCopy:
     """The SHA-256 of that file's bytes."""
 
 
-type CleanCopy = Callable[[Posted], Awaitable[MadeCopy]]
-"""
-Returns the clean copy of the files that a post pins, in a folder of Verifold's own. It makes the copy when it is
-not there, and it checks at each call that the copy is exactly the pinned commit's files.
-"""
+class CleanCopy(Protocol):
+    """The clean copies of the files that the posts of a lab pin, each in a folder of Verifold's own."""
+
+    async def __call__(self, claim: Posted) -> MadeCopy:
+        """
+        Return the clean copy of the files that a post pins.
+
+        It makes the copy when it is not there, and it checks at each call that the copy is exactly the pinned
+        commit's files.
+        """
+        ...
+
+    def place(self, claim: Posted) -> tuple[Path, Path]:
+        """Return where the clean copy of a post's files is, and where its manifest is. It checks nothing."""
+        ...
 
 
 class Member:
@@ -97,6 +108,8 @@ class Member:
         self._lab = lab
         self.agent_id = agent_id
         self._seen = lab.board.seq if seen is None else seen
+        self._seen_at: datetime | None = None
+        """When the agent read the board up to `seen`, or `None` when this seat does not know."""
         before = self._heard_before()
         self._heard: tuple[Heard, ...] = (before,) if before else ()
         """Each fact of what the results carried, the newest last, so that a failed turn can go back to an earlier one."""
@@ -110,6 +123,11 @@ class Member:
     def seen(self) -> int:
         """The last event that the agent got, from `news` or `wait`."""
         return self._seen
+
+    @property
+    def seen_at(self) -> datetime | None:
+        """When the agent got the event in `seen`, or `None` for a seat that started there, as after a restart."""
+        return self._seen_at
 
     @property
     def heard(self) -> Heard | None:
@@ -245,8 +263,8 @@ class Member:
 
     def _unseen(self) -> News:
         now = self._lab.now()
-        unseen = news(self._lab.board, self.agent_id, self._seen, now)
-        self._seen = unseen.seq
+        unseen = news(self._lab.board, self.agent_id, self._seen, now, since=self._seen_at)
+        self._seen, self._seen_at = unseen.seq, now
         self._hear(now, (*unseen.for_you, *unseen.others))
         return unseen
 
@@ -295,7 +313,9 @@ class Member:
         A turn that fails can lose the tool results that carried them, so the agent gets them once more. What the
         results before it carried stays, with its time.
         """
-        self._seen = min(self._seen, seq)
+        if seq < self._seen:
+            # The read that reached `seq` came at a time that this seat does not know.
+            self._seen, self._seen_at = seq, None
         self._heard = tuple(heard for heard in self._heard if heard.seq <= self._seen)
 
     def threads(self) -> ThreadList:
@@ -330,14 +350,16 @@ class Member:
         Take the rerun of a post that somebody asked for, and return the claim with the clean copy of its files.
 
         The copy is in a folder of Verifold's own, and the take is recorded when the copy is there. So a copy that
-        fails, and a call that the board refuses, record nothing. Each call checks the copy again and returns its
-        manifest. The take gives the agent a lease on the rerun, and a second call renews it. With `give_up`, the
-        call ends the agent's lease and makes no copy.
+        fails, and a take that the board refuses, record nothing. A take checks the copy and returns its manifest,
+        and it gives the agent a lease on the rerun. A later call of the agent renews the lease, makes no export,
+        and returns the folder of the take, its manifest file, and the manifest's SHA-256 that the record keeps.
+        When the board does not renew the lease, `not_renewed` says why. With `give_up`, the call ends the
+        agent's lease and makes no copy.
 
         Raises:
             RejectedEvent: The agent cannot take the rerun: the post does not exist or is its own, no rerun of it
                 is wanted, the rerun is for an agent in a reviewer seat and the agent holds none, or another
-                agent's lease stands. Or it gives up a lease that it does not hold.
+                agent's lease keeps it out. Or it gives up a lease that it does not hold.
             NoCleanCopy: This seat makes no clean copies, or Verifold could not make this one.
             OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
 
@@ -350,6 +372,18 @@ class Member:
             return self._claim(claim, await self._lab.give_up_rerun(self.agent_id, post_id))
         if self._copies is None:
             raise NoCleanCopy('This lab cannot make a clean copy for you.')
+        if (taken := self._lab.board.take(self.agent_id, post_id)) is not None:
+            # The take checked the copy, and the manifest's SHA-256 checks it again. An export can take minutes.
+            why = await self._lab.renew_rerun(self.agent_id, post_id)
+            folder, listing = self._copies.place(claim)
+            return self._claim(claim, taken).model_copy(
+                update={
+                    'folder': str(folder),
+                    'manifest_file': str(listing),
+                    'manifest_sha256': taken.manifest or '',
+                    'not_renewed': why,
+                }
+            )
         self._lab.check_take(self.agent_id, post_id)
         made = await self._copies(claim)
         taken = await self._lab.take_rerun(self.agent_id, post_id, made.digest)
@@ -518,8 +552,8 @@ class Member:
         Return what happened since the agent last looked, once a post wakes it or `timeout` seconds pass.
 
         Posts that don't wake the agent count toward the update's summary, but they don't end the wait. The wait
-        also ends when an agent that this agent wrote to leaves the lab, and when somebody asks for a rerun that
-        this agent can take.
+        also ends when an agent that this agent wrote to leaves the lab, when somebody asks for a rerun that this
+        agent can take, and when a lease that kept the agent from such a rerun ends without a check.
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
@@ -529,10 +563,13 @@ class Member:
             if self.void:
                 raise UnknownAgent('This agent got a new invitation, so the token of this call is void.')
             now = self._lab.now()
-            news = update(self._lab.board, self.agent_id, self._seen, now)
+            news = update(self._lab.board, self.agent_id, self._seen, now, since=self._seen_at)
             remaining = deadline - loop.time()
             if news.posts or news.left or news.reruns or remaining <= 0:
-                self._seen = news.seq
+                self._seen, self._seen_at = news.seq, now
                 self._hear(now, news.others, news.posts)
                 return news
-            await self._lab.wait_for_change(news.seq, remaining)
+            # A rerun that only a lease keeps from the agent comes free at the lease's end, which is no event.
+            free = kept_until(self._lab.board, self.agent_id, now)
+            frees = remaining if free is None else min(remaining, (free - now).total_seconds())
+            await self._lab.wait_for_change(news.seq, frees)
