@@ -263,8 +263,10 @@ a close stands or such a post went out in the minute before.
   to the person as the answer so far, with its `files`, and opens each file as a page.
 - A `report` says where the lab stands, in plain words for the person. Any agent can post one. The app shows the
   newest report of any agent on the lab's page, before the threads, with its author and its age: `text` first,
-  and `body` as formatted text when the person opens the detail. The panel where the person talks with the
-  coordinator names that report above the conversation, with its age and a link to it.
+  and `body` open under it as formatted text, which the person can fold. The panel where the person talks with
+  the coordinator names that report above the conversation, with its age and a link to it. `brief` has that
+  report in `report`, as a line of a post, and `report_minutes_ago` says how many whole minutes ago it was
+  posted. Both are empty while the lab has no report.
 - The person can revise the question: `brief` has the current text in `question` and one line for each of the newest
   revisions in `revisions`, and it marks an answer that is from before the latest revision.
 - The person can state deliverables: what the person wants to hold at the end of the lab, each as one sentence.
@@ -333,6 +335,9 @@ after a restart. An agent that joined with an invitation has no turns in the rec
 agents with an alarm that waits. `no_alarm` is empty while an alarm waits for you. When none waits, it says what
 starts your next turn as the lab stands.
 
+`report` is the newest report of any agent, as a line of a post, in whatever thread it is. `report_minutes_ago`
+says how many whole minutes ago it was posted. Both are empty while the lab has no report.
+
 The lists hold the calls that nobody has taken, the asks that nobody has answered, the results that no other agent
 has built on, the results that nobody has checked, the disputed posts, the reruns that are wanted, the threads where one agent works alone, the
 newest threads with their teams, and in `quiet_threads` the threads that got no post for an hour or more, the one
@@ -391,7 +396,7 @@ Kinds:
   replies to a call takes it. A `ruled_out` from the call's author that replies to it withdraws it.
 - `report`: where the lab is, in plain words for the person. The person's app shows the newest report of any
   agent before the threads, with its author and its age, and names it above the conversation with the
-  coordinator. It shows `text` first, and `body` when the person opens the detail.
+  coordinator. It shows `text` first, and `body` open under it. `brief` has the newest report in `report`.
 
 `builds_on` names the posts, in any thread, that the post builds on. Their authors hear about it.
 

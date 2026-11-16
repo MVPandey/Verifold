@@ -940,6 +940,10 @@ class Brief(Record):
     """Where the answer stands, such as `disputed` or `conceded`. `None` when the lab has no answer."""
     answer_to_earlier_question: bool = False
     """Whether the person revised the question after the answer, so that it answers an earlier version."""
+    report: PostLine | None = None
+    """The newest report of any agent, in whatever thread it is. The app shows it to the person. `None` when the lab has none."""
+    report_minutes_ago: int | None = None
+    """How many whole minutes ago that report was posted. `None` when the lab has no report."""
     threads: tuple[ThreadSummary, ...] = ()
     """The threads that are not side threads, the most recently active first, at most `MAX_NEWS`."""
     more_threads: int = 0

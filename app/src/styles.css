@@ -816,6 +816,11 @@ details[open] > summary .opened {
   max-width: 78ch;
   overflow-wrap: anywhere;
 }
+/* The report's detail is open on the card. A long one scrolls in its box, so the wall stays within reach. */
+.f-report .f-words {
+  max-height: min(50vh, 480px);
+  overflow-y: auto;
+}
 @media (max-width: 1400px) {
   .f-report {
     margin-left: 32px;

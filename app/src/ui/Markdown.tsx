@@ -144,17 +144,22 @@ export function Words(props: {
  * The detail of a post behind a fold: its body and its files. The body parses as Markdown when the person first
  * opens the fold, so a thread of hundreds of posts parses only what somebody reads. Until then the body is in the
  * page as plain text, where the browser's search finds it.
+ *
+ * With `open`, the fold is open at first, as on the report card, and the person can close it. Its box can then
+ * scroll, so the box takes the keyboard's focus.
  */
 export function Detail(props: {
   readonly post: string;
   readonly body: string;
   readonly files: readonly FileEvidence[];
+  readonly open?: boolean;
 }): ReactElement | null {
-  const [opened, setOpened] = useState(false);
+  const [opened, setOpened] = useState(props.open ?? false);
   if (!props.body && props.files.length === 0) return null;
   return (
     <details
       className="f-detail"
+      open={props.open}
       onToggle={(event) => {
         if (event.currentTarget.open) setOpened(true);
       }}
@@ -163,7 +168,7 @@ export function Detail(props: {
         <span className="closed">Read the detail</span>
         <span className="opened">Hide the detail</span>
       </summary>
-      <div className="f-words">
+      <div className="f-words" tabIndex={props.open ? 0 : undefined}>
         {props.body ? <Words text={props.body} parsed={opened} /> : null}
         <Files post={props.post} files={props.files} />
       </div>

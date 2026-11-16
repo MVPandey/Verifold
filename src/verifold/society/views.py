@@ -243,13 +243,14 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
     Return the lab for one agent in one read.
 
     It holds the agent's own line, the lab's state and the time that it has left, how many agents are in a turn
-    and how many have an alarm that waits, and the other agents with their latest plans. Then come the threads: the
+    and how many have an alarm that waits, the other agents with their latest plans, the newest proposal, and the
+    newest report with its age. Then come the threads: the
     newest ones, one line for each side thread, the threads where one agent works alone, and the threads that got
     no post for a long while. Then come the posts by where they stand: the disputed posts, the results that nobody
     has built on, the results that nobody has checked, the asks that nobody has answered, and the calls that need an
     agent. The order ranks nothing. `how` says how the board works.
 
-    `now` dates the time that the lab has left and the quiet threads. Without it, time counts from the board's
+    `now` dates the time that the lab has left, the report's age, and the quiet threads. Without it, time counts from the board's
     newest post. The agents in a turn come from the record, because this package does no I/O and so knows no live
     activity.
     """
@@ -330,10 +331,12 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         and not _built_on(board, entry)
     )
     proposed = answer(board)
+    reported = newest_report(board)
     done = closing(board)
     you = board.agent(agent_id)
     close_line = post_line(board, done) if done else None
     answer_line = post_line(board, proposed) if proposed else None
+    report_line = post_line(board, reported) if reported else None
     your_line = _agent_line(board, you.agent, working) if you else None
     lines = tuple(_agent_line(board, agent, working) for agent in others)
     # A post whose line the brief holds already is its ID alone in the lists of posts, so the brief holds each
@@ -343,6 +346,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         *news.others,
         close_line,
         answer_line,
+        report_line,
         *(line for agent in (your_line, *lines) if agent for line in (agent.plan, agent.latest)),
         *(summary.latest for summary in summaries[:MAX_NEWS]),
     )
@@ -399,6 +403,8 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         answer=answer_line,
         answer_standing=standing(board, proposed.post.id) if proposed else None,
         answer_to_earlier_question=bool(proposed) and to_earlier_question(board, proposed),
+        report=report_line,
+        report_minutes_ago=max(int((now - reported.at).total_seconds() // 60), 0) if reported else None,
         threads=summaries[:MAX_NEWS],
         more_threads=max(len(summaries) - MAX_NEWS, 0),
         side_threads=side[:MAX_NEWS],
@@ -614,8 +620,13 @@ def _not_rerun(board: Board, results: tuple[Posted, ...]) -> tuple[Posted, ...]:
     )
 
 
-def latest_report(board: Board) -> PostView | None:
-    """Return the newest report that an agent posted, or `None` when no agent has posted one."""
+def newest_report(board: Board) -> Posted | None:
+    """Return the newest report that an agent posted, in whatever thread it is, or `None` when no agent has posted one."""
     reports = (entry for entry in reversed(board.posts) if isinstance(entry.post, Report))
-    entry = next((entry for entry in reports if entry.post.author != PERSON), None)
+    return next((entry for entry in reports if entry.post.author != PERSON), None)
+
+
+def latest_report(board: Board) -> PostView | None:
+    """Return the newest report that an agent posted, as the person's app shows it, or `None`."""
+    entry = newest_report(board)
     return post_view(board, entry) if entry else None

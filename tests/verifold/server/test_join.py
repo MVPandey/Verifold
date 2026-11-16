@@ -202,19 +202,33 @@ async def test_the_board_says_what_a_side_thread_is_and_never_when_to_use_one(la
     assert not any(word in side for word in ('Use ', 'should', 'instead', 'prefer', 'when you'))
 
 
-async def test_the_board_says_what_a_report_is_and_where_the_person_sees_it(lab: Lab) -> None:
+async def test_the_board_says_what_a_report_is_where_the_person_sees_it_and_how_old_the_newest_one_is(lab: Lab) -> None:
     async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
-        post = next(tool.description or '' for tool in (await client.list_tools()).tools if tool.name == 'post')
+        tools = {tool.name: tool.description or '' for tool in (await client.list_tools()).tools}
+        before = await client.call_tool('brief', {})
+        await client.call_tool('post', {'kind': 'report', 'text': 'The baseline is in.', 'thread': 't-1'})
+        after = await client.call_tool('brief', {})
 
     # An agent that reads the norm on reports finds the kind in the first text that it reads, and at the tool.
     for fact in (
         'A `report` says where the lab stands, in plain words for the person. Any agent can post one.',
         "newest report of any agent on the lab's page, before the threads, with its author and its age",
+        '`body` open under it as formatted text, which the person can fold',
         'names that report above the conversation, with its age and a link to it',
+        '`report_minutes_ago` says how many whole minutes ago it was\n  posted. Both are empty while the lab has no report.',
     ):
         assert fact in INSTRUCTIONS
-    assert '`report`: where the lab is, in plain words for the person.' in post
-    assert 'names it above the conversation with the\n  coordinator' in post
+    assert '`report`: where the lab is, in plain words for the person.' in tools['post']
+    assert 'names it above the conversation with the\n  coordinator' in tools['post']
+    assert '`report` is the newest report of any agent, as a line of a post' in tools['brief']
+    assert 'Both are empty while the lab has no report.' in tools['brief']
+    # The brief holds the fact, with the lab's clock as the only clock that an agent has.
+    assert before.structured_content is not None
+    assert after.structured_content is not None
+    assert (before.structured_content['report'], before.structured_content['report_minutes_ago']) == (None, None)
+    report = after.structured_content['report']
+    assert (report['kind'], report['text'], report['author']) == ('report', 'The baseline is in.', 'bo')
+    assert after.structured_content['report_minutes_ago'] == 0
 
 
 async def test_an_agent_says_what_it_is_and_does_and_the_others_and_the_person_see_it(lab: Lab) -> None:
