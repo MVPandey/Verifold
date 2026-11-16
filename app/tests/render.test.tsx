@@ -612,6 +612,7 @@ describe('an opened thread', () => {
     readonly id?: string;
     readonly conversation?: boolean;
     readonly members?: readonly string[];
+    readonly seen?: number;
   }
   const propsOf = (posts: readonly PostView[], given: Given = {}): Parameters<typeof Turns>[0] => ({
     view: {
@@ -635,6 +636,7 @@ describe('an opened thread', () => {
     onSend: () => Promise.resolve(),
     target: given.target ?? null,
     ...(given.lab === undefined ? {} : { lab: given.lab }),
+    ...(given.seen === undefined ? {} : { seen: given.seen }),
   });
   const thread = (posts: readonly PostView[], given: Given = {}): string =>
     renderToStaticMarkup(<Turns {...propsOf(posts, given)} />);
@@ -858,6 +860,29 @@ describe('an opened thread', () => {
     // A row that the person did not open stays shut through the same changes.
     const untouched = live([moment(run), moment([...run, note('p-6', { reply_to: 'p-2' })])]);
     assert.ok(untouched.includes('<details><summary>3 messages from Agent 1</summary>'));
+  });
+
+  it('marks a closed row of replies that holds a post that is new to the person', () => {
+    const tree = [
+      postView(result('p-1'), 1),
+      postView(result('p-2', { reply_to: 'p-1', author: 'agent-2' }), 2),
+      postView(result('p-3', { kind: 'message', reply_to: 'p-1', author: 'agent-2' }), 5),
+    ];
+    const row =
+      '<button type="button" aria-expanded="false">2 replies: 1 result, 1 message</button>';
+    const mark = '<span class="f-new">New</span>';
+    // The person saw the thread up to p-2, so the reply p-3 is new.
+    assert.ok(thread(tree, { seen: 2 }).includes(`${row}${mark}</li>`));
+    assert.equal(thread(tree, { seen: 5 }).includes(mark), false);
+    assert.equal(thread(tree).includes(mark), false);
+    // An open row shows its replies, which need no mark.
+    const label = '2 replies: 1 result, 1 message';
+    const opened = live([
+      moment(tree, (page) => press(page, label), { seen: 2 }),
+      moment(tree, undefined, { seen: 2 }),
+    ]);
+    assert.ok(opened.includes(`aria-expanded="true">${label}</button></li>`));
+    assert.equal(opened.includes(mark), false);
   });
 
   it('folds the replies under each top-level post into one row that says what they hold, and opens it in place', () => {
@@ -1561,7 +1586,7 @@ describe('the lab page', () => {
         ? NO_CANDIDATES
         : 'standing' in answer
           ? answer
-          : { standing: [answer], closes_on: null };
+          : { standing: [answer], gone: [], closes_on: null };
     return renderToStaticMarkup(
       <Wall
         api={{} as Api}
@@ -2122,7 +2147,7 @@ describe('the lab page', () => {
   });
 
   it('shows several candidates side by side, each with its author, age, and standing', () => {
-    const html = wall('t-2', none, none, { standing: three, closes_on: null });
+    const html = wall('t-2', none, none, { standing: three, gone: [], closes_on: null });
     const block = html.slice(html.indexOf('class="f-candidates"'), html.indexOf('f-steer'));
 
     assert.equal(block.split('<div class="f-candidate">').length - 1, 3);
@@ -2145,7 +2170,7 @@ describe('the lab page', () => {
       't-2',
       none,
       none,
-      { standing: three, closes_on: three[1] ?? null },
+      { standing: three, gone: [], closes_on: three[1] ?? null },
       {},
       'closing',
     );
@@ -2155,7 +2180,14 @@ describe('the lab page', () => {
 
   it('shows a closed lab’s answer, the candidate that its close names, with the others folded under it', () => {
     const named = three[1] ?? null;
-    const html = wall('t-2', none, none, { standing: three, closes_on: named }, {}, 'closed');
+    const html = wall(
+      't-2',
+      none,
+      none,
+      { standing: three, gone: [], closes_on: named },
+      {},
+      'closed',
+    );
     const block = html.slice(html.indexOf('class="f-answer'), html.indexOf('f-steer'));
 
     assert.ok(block.includes('aria-expanded="false">The lab’s answer</a>'));
@@ -2174,11 +2206,81 @@ describe('the lab page', () => {
     );
     assert.equal(folded.includes('No: 3x at most.'), false);
     // A lab whose close names no candidate shows the candidates that stand.
-    const nothing = wall('t-2', none, none, { standing: three, closes_on: null }, {}, 'closed');
+    const nothing = wall(
+      't-2',
+      none,
+      none,
+      { standing: three, gone: [], closes_on: null },
+      {},
+      'closed',
+    );
     assert.ok(nothing.includes('Candidate answers</a>'));
     // With no other candidate, nothing is folded.
-    const alone = wall('t-2', none, none, { standing: [], closes_on: named }, {}, 'closed');
+    const alone = wall(
+      't-2',
+      none,
+      none,
+      { standing: [], gone: [], closes_on: named },
+      {},
+      'closed',
+    );
     assert.ok(alone.includes('The lab’s answer</a>') && !alone.includes('f-others'));
+  });
+
+  it('says that no candidate stands when every proposal was conceded or replaced, and folds them', () => {
+    const replaced = postView(
+      result('p-2', { kind: 'proposal', text: 'Yes, 12x.', thread: 't-1' }),
+      2,
+    );
+    const conceded = postView(
+      result('p-5', {
+        kind: 'proposal',
+        text: 'No: 3x at most.',
+        author: 'agent-2',
+        thread: 't-1',
+      }),
+      5,
+      'conceded',
+    );
+    const html = wall('t-2', none, none, {
+      standing: [],
+      gone: [replaced, conceded],
+      closes_on: null,
+    });
+    const block = html.slice(html.indexOf('class="f-answer'), html.indexOf('f-steer'));
+
+    assert.equal(block.includes('No agent has proposed an answer yet.'), false);
+    assert.ok(
+      block.includes(
+        '<summary class="f-open">No candidate stands. 2 proposals were conceded or replaced. <span class="closed">Show</span>',
+      ),
+    );
+    assert.ok(
+      block.includes(
+        '<a href="#/thread/t-1/p-2">Yes, 12x.</a> <span class="dim">Agent 1 · replaced</span>',
+      ),
+    );
+    assert.ok(
+      block.includes(
+        '<a href="#/thread/t-1/p-5">No: 3x at most.</a> <span class="dim">Agent 2 · conceded</span>',
+      ),
+    );
+  });
+
+  it('puts what waits for the person and the steer box before the candidates on a narrow page', () => {
+    const css = readFileSync(new URL('../../src/styles.css', import.meta.url), 'utf8');
+    const narrow = css.slice(css.indexOf('@media (max-width: 1000px)'));
+    assert.ok(narrow.includes('.f-seat-main {\n    display: contents;\n  }'));
+    assert.ok(narrow.includes('.f-seat > .f-steer {\n    order: 1;'));
+    assert.ok(
+      narrow.includes('.f-seat-main > .f-answer,\n  .f-seat-main > .f-answer ~ * {\n    order: 2;'),
+    );
+    // The question comes first, and the waits and the steer box are in the box beside the seat's first part.
+    const html = wall('t-2', none, none);
+    const seat = html.slice(html.indexOf('<section class="f-seat">'));
+    assert.ok(
+      seat.startsWith('<section class="f-seat"><div class="f-seat-main"><div class="f-question">'),
+    );
   });
 
   it('stacks the candidates on a narrow page and keeps each card within it', () => {
@@ -4011,8 +4113,9 @@ describe('a round', () => {
     };
     const html = renderToStaticMarkup(<RoundPanel round={closed} agents={agents} now={now} />);
     assert.ok(html.includes('<h2 id="round-title">Last round</h2>'));
+    // A round that closed because its time came shows that time, also when Verifold recorded the close later.
     assert.ok(
-      html.includes(`Closed at ${clock('2026-11-06T14:12:00Z')}: its time came · 1 of 2 entered`),
+      html.includes(`Closed at ${clock(closed.closes_at)}: its time came · 1 of 2 entered`),
     );
     assert.ok(
       html.includes(

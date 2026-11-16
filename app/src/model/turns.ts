@@ -256,6 +256,15 @@ export function objectionStands(item: PostView, posts: readonly PostView[]): boo
 }
 
 /**
+ * Return whether a check fails and disputes the post that it checks: its author did not concede it, as `disputes`
+ * in the server's `society/standing.py` says.
+ */
+export function checkFails(item: PostView): boolean {
+  const { post } = item;
+  return post.kind === 'check' && post.outcome === 'fails' && item.standing !== 'conceded';
+}
+
+/**
  * Return the top-level post whose replies hold a post, or `null` when the post is a top-level post itself or the
  * thread does not hold it.
  */
@@ -279,7 +288,7 @@ export function replyRoot(posts: readonly PostView[], id: string | null): string
  * show theirs. An open row shows every reply in its place, with the runs of messages folded as above. These
  * replies stay in sight outside the row: a post of the person, a reply to a post of the person, a post for the
  * person (an ask that names the person, or a post that the coordinator marked for the person), an objection that
- * stands, and `target`.
+ * stands, a check that fails, and `target`.
  *
  * These never fold: the first post of the thread, a reply to a post of the person, and `target`, the post that
  * the page opened on. A message that has replies is a turn, with its replies under it. Without `folding`, every
@@ -323,7 +332,8 @@ export function rows(
       answered?.post.author === PERSON ||
       post.for_person ||
       (post.kind === 'ask' && post.mentions.includes(PERSON)) ||
-      objectionStands(item, posts)
+      objectionStands(item, posts) ||
+      checkFails(item)
     );
   };
   const below = (item: PostView, depth: Depth): (readonly [PostView, Depth])[] =>
@@ -391,30 +401,37 @@ export function replyFolds(list: readonly Row[]): number {
   return list.filter((row) => row.kind === 'replies').length;
 }
 
-/** The nouns of the kinds of post in the row that folds replies, in the order that the row names them. */
-const PLURALS: readonly (readonly [Post['kind'], string, string])[] = [
-  ['result', 'result', 'results'],
-  ['proposal', 'proposal', 'proposals'],
-  ['ruled_out', 'ruled-out lead', 'ruled-out leads'],
-  ['check', 'check', 'checks'],
-  ['objection', 'objection', 'objections'],
-  ['answer', 'answer', 'answers'],
-  ['plan', 'plan', 'plans'],
-  ['call', 'call', 'calls'],
-  ['ask', 'question', 'questions'],
-  ['report', 'report', 'reports'],
-  ['close', 'close', 'closes'],
-  ['request', 'request', 'requests'],
-  ['offer', 'offer', 'offers'],
-  ['message', 'message', 'messages'],
-];
+/**
+ * The nouns of the kinds of post in the row that folds replies, in the order that the row names them. Every kind
+ * has its nouns, so the type checker fails when a kind of post has none.
+ */
+const PLURALS = {
+  result: ['result', 'results'],
+  proposal: ['proposal', 'proposals'],
+  ruled_out: ['ruled-out lead', 'ruled-out leads'],
+  check: ['check', 'checks'],
+  objection: ['objection', 'objections'],
+  answer: ['answer', 'answers'],
+  plan: ['plan', 'plans'],
+  call: ['call', 'calls'],
+  ask: ['question', 'questions'],
+  report: ['report', 'reports'],
+  close: ['close', 'closes'],
+  request: ['request', 'requests'],
+  offer: ['offer', 'offers'],
+  round: ['round', 'rounds'],
+  entry: ['entry', 'entries'],
+  message: ['message', 'messages'],
+} as const satisfies Record<Post['kind'], readonly [string, string]>;
 
 /** Return what the row that folds replies says: how many and of what kinds, such as "5 replies: 2 results, 1 check, 2 messages". */
 export function repliesLabel(items: readonly PostView[]): string {
-  const kinds = PLURALS.map(([kind, one, many]) => {
-    const count = items.filter((item) => item.post.kind === kind).length;
-    return count === 0 ? '' : `${count} ${count === 1 ? one : many}`;
-  }).filter(Boolean);
+  const kinds = Object.entries(PLURALS)
+    .map(([kind, [one, many]]) => {
+      const count = items.filter((item) => item.post.kind === kind).length;
+      return count === 0 ? '' : `${count} ${count === 1 ? one : many}`;
+    })
+    .filter(Boolean);
   return `${items.length} ${items.length === 1 ? 'reply' : 'replies'}: ${kinds.join(', ')}`;
 }
 
@@ -471,6 +488,14 @@ export function cardStatus(summary: ThreadSummary): CardStatus {
     return { label, edge: 'good', ...rest };
   }
   return { label: open > 0 ? 'Not checked' : 'No result yet', edge: 'none', ...rest };
+}
+
+/**
+ * Return the line of a lab where no candidate stands and `gone` proposals stand no more, such as "No candidate
+ * stands. 2 proposals were conceded or replaced."
+ */
+export function goneLine(gone: number): string {
+  return `No candidate stands. ${gone === 1 ? '1 proposal was' : `${gone} proposals were`} conceded or replaced.`;
 }
 
 /**

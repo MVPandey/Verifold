@@ -10,7 +10,7 @@ import { href } from '../model/route.ts';
 import { offersReplyHint } from '../model/deliverables.ts';
 import { sideReplyHint } from '../model/side.ts';
 import { MAX_RERUNS, wantedLine } from '../model/status.ts';
-import { markUnfolded, readUnfolded } from '../model/seen.ts';
+import { holdsNew, markUnfolded, readUnfolded } from '../model/seen.ts';
 import {
   act,
   foldLabel,
@@ -30,7 +30,7 @@ import { messageOf } from '../api/client.ts';
 import { ForYou } from './Coordinator.tsx';
 import { browserStore } from './hooks.ts';
 import { Detail } from './Markdown.tsx';
-import { ChipView, Composer, HarnessAsk, Mark } from './parts.tsx';
+import { ChipView, Composer, HarnessAsk, Mark, New } from './parts.tsx';
 import { Name, Who } from './Picture.tsx';
 import { Badges, Votes, useRing } from './Votes.tsx';
 import type { MarkActions } from './Votes.tsx';
@@ -71,13 +71,20 @@ export function Turns(
     readonly target?: string | null;
     /** When the lab opened. With it, the browser keeps for each thread whether the person shows every message. */
     readonly lab?: string;
+    /**
+     * The last post of the thread that the person had seen when the thread opened. A closed fold of replies that
+     * holds a later post has the mark of a new post. Without it, no fold has the mark.
+     */
+    readonly seen?: number;
   },
 ): ReactElement {
-  const { onSend, target, lab, ...around } = props;
+  const { onSend, target, lab, seen, ...around } = props;
   const { thread } = props.view;
   const [shown, setShown] = useState(
     () => lab !== undefined && readUnfolded(browserStore, lab, thread.id),
   );
+  // The page records the thread as seen when it opens, so the turns keep what the person had seen before.
+  const [since] = useState(seen ?? Number.POSITIVE_INFINITY);
   // The messages of the folds that the person opened. A run changes when one of its messages gets a reply or a
   // badge, or when a message joins it. The row of any run that holds one of these stays open then.
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
@@ -149,6 +156,7 @@ export function Turns(
                       >
                         {repliesLabel(row.items)}
                       </button>
+                      {!row.open && holdsNew(row.items, since) ? <New /> : null}
                     </li>,
                   ]
               : shown

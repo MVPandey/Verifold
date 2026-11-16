@@ -14,6 +14,11 @@ export function Mark(props: { readonly post: Post }): ReactElement {
   return <span className={`f-mark fm-${tone(props.post)}${cross}`} aria-hidden="true" />;
 }
 
+/** The mark of something that holds a post that the person has not seen. */
+export function New(): ReactElement {
+  return <span className="f-new">New</span>;
+}
+
 /** A status, such as "Disputed". */
 export function ChipView(props: { readonly chip: Chip }): ReactElement {
   return <span className={`f-st fs-${props.chip.tone}`}>{props.chip.label}</span>;

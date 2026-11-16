@@ -1011,6 +1011,8 @@ export interface CandidateView {
 /** The candidate answers that stand, oldest first, and the one that the close that stands closes on. */
 export interface CandidatesView {
   readonly standing: readonly CandidateView[];
+  /** The proposals that stand no more, oldest first: conceded, with the standing `conceded`, or replaced. */
+  readonly gone: readonly PostView[];
   /** While the lab is closed, this candidate is the lab's answer. `null` while no close names one. */
   readonly closes_on: CandidateView | null;
 }

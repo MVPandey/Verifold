@@ -26,7 +26,7 @@ import type {
 } from './types.ts';
 
 /** The candidates of a lab where no agent has proposed an answer. */
-export const NO_CANDIDATES: CandidatesView = { standing: [], closes_on: null };
+export const NO_CANDIDATES: CandidatesView = { standing: [], gone: [], closes_on: null };
 
 /** A request that the server refused, with the server's reason. */
 export class ApiError extends Error {

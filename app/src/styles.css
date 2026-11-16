@@ -742,6 +742,20 @@ details[open] > summary .opened {
 .f-others > .f-candidates {
   margin-top: 10px;
 }
+/* The proposals that stand no more, when no candidate stands: one line each, with its author. */
+.f-gone {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+}
+.f-gone a {
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 /* The link covers its whole block, so the block opens the thread as one target. */
 .f-answer .f-label::after,
 .f-card h2 a::after {
@@ -1634,9 +1648,24 @@ span.error {
   }
   .f-seat {
     grid-template-columns: minmax(0, 1fr);
-    gap: 22px;
+    gap: 0;
     padding-left: 18px;
     padding-right: 18px;
+  }
+  /*
+   * On a narrow page, what waits for the person and the box that steers the lab come after the question and
+   * before the candidate answers.
+   */
+  .f-seat-main {
+    display: contents;
+  }
+  .f-seat > .f-steer {
+    order: 1;
+    margin-bottom: 22px;
+  }
+  .f-seat-main > .f-answer,
+  .f-seat-main > .f-answer ~ * {
+    order: 2;
   }
   .f-seat h1 {
     font-size: 26px;

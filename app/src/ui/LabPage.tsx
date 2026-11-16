@@ -29,7 +29,7 @@ import { hasNew, markSeen, readSeen } from '../model/seen.ts';
 import { NEED_WORDS, WAITS_ID, quietBand, waitGroups, wantedLine } from '../model/status.ts';
 import { betweenLine, isSide, sideHeading, sideLines } from '../model/side.ts';
 import { messageOf } from '../api/client.ts';
-import { cardStatus, doneLine, headClaim, questionThread } from '../model/turns.ts';
+import { cardStatus, doneLine, goneLine, headClaim, questionThread } from '../model/turns.ts';
 import {
   breakthroughUnder,
   hasBreakthrough,
@@ -41,7 +41,7 @@ import type { PageProps, ThreadRead } from './hooks.ts';
 import { Detail, Words } from './Markdown.tsx';
 import { CoordinatorSeat, OpenedForYou } from './Coordinator.tsx';
 import { DeliverDoor, Deliverables } from './Deliverables.tsx';
-import { ChipView, Composer, Exact, Files } from './parts.tsx';
+import { ChipView, Composer, Exact, Files, New } from './parts.tsx';
 import { Who } from './Picture.tsx';
 import { RoundOpener, RoundPanel } from './Rounds.tsx';
 import { Turns } from './Thread.tsx';
@@ -139,6 +139,7 @@ export function Wall(
         view={read.view}
         target={read.view.thread.id === open ? props.post : null}
         lab={lab.opened_at}
+        seen={seen[read.view.thread.id] ?? 0}
         agents={lab.agents}
         needs={needs}
         question={questionId}
@@ -186,7 +187,7 @@ export function Wall(
   return (
     <>
       <section className="f-seat">
-        <div>
+        <div className="f-seat-main">
           <Question
             lab={lab}
             now={props.now}
@@ -607,10 +608,6 @@ function Cross(props: {
   );
 }
 
-function New(): ReactElement {
-  return <span className="f-new">New</span>;
-}
-
 /**
  * The newest report that an agent wrote for the person: who wrote it and how long ago, where it stands when an
  * agent disputes it, what it says, and its detail. The detail is open, because a report's substance is in its
@@ -700,8 +697,41 @@ function Candidates(
     );
   }
   const [only] = rest;
-  if (only === undefined) return <p className="dim">No agent has proposed an answer yet.</p>;
+  if (only === undefined) return <NoCandidate gone={view.gone} agents={place.agents} />;
   return rest.length === 1 ? <Candidate view={only} {...place} /> : cards(rest);
+}
+
+/**
+ * The line of a lab where no candidate stands: no agent has proposed an answer yet, or every proposal was conceded
+ * or replaced. Those proposals are folded under the line, each with its author and a link to it.
+ */
+function NoCandidate(props: {
+  readonly gone: readonly PostView[];
+  readonly agents: readonly AgentView[];
+}): ReactElement {
+  const { gone } = props;
+  if (gone.length === 0) return <p className="dim">No agent has proposed an answer yet.</p>;
+  return (
+    <details className="f-others">
+      <summary className="f-open">
+        {goneLine(gone.length)} <span className="closed">Show</span>
+        <span className="opened">Hide</span>
+      </summary>
+      <ul className="f-gone">
+        {gone.map((item) => (
+          <li key={item.post.id}>
+            <a href={href({ page: 'thread', id: item.post.thread, post: item.post.id })}>
+              {item.post.text}
+            </a>{' '}
+            <span className="dim">
+              {authorName(props.agents, item.post.author)} ·{' '}
+              {item.standing === 'conceded' ? 'conceded' : 'replaced'}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
 }
 
 /**

@@ -179,6 +179,7 @@ describe('the loader', () => {
           entry: null,
         },
       ],
+      gone: [],
       closes_on: null,
     }));
     const api = {
