@@ -29,10 +29,13 @@ from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import (
     AlarmLine,
     LabState,
+    ObstacleState,
     PostLine,
     PostView,
     QuestionVersion,
     RerunLine,
+    Standing,
+    ThreadSummary,
     ThreadView,
 )
 from verifold.protocol.posts import MAX_HEADLINE, Body
@@ -252,6 +255,33 @@ class DeliverableView(DeliverableLine):
     offers: tuple[OfferView, ...] = ()
 
 
+class ThreadCard(ThreadSummary):
+    """A thread's summary as the person's app shows it on its card, with the times of the line's newest result and plan."""
+
+    last_result_at: AwareDatetime | None = None
+    """When the newest result of the line of work was posted. `None` without one, and for any other thread."""
+    last_plan_at: AwareDatetime | None = None
+    """When the newest plan of the line of work was posted. `None` without one, and for any other thread."""
+
+
+class ObstacleView(Record):
+    """
+    An obstacle as the person's app shows it: its post, its time, its standing, and its state as an obstacle.
+
+    `state` is as `ObstacleState` says, and `standing` is where the `ruled_out` post itself stands, as any post does.
+    """
+
+    post: PostLine
+    at: AwareDatetime
+    standing: Standing
+    state: ObstacleState
+    builders: tuple[PostLine, ...] = ()
+    """
+    The posts that give the obstacle its state, oldest first: for `removed`, the results that build on it and stand,
+    and for `taken_up`, the plans and results that build on it. Empty for `open`.
+    """
+
+
 class LabView(Record):
     """The lab at a glance."""
 
@@ -280,6 +310,8 @@ class LabView(Record):
     """
     breakthrough_threads: tuple[ThreadId, ...] = ()
     """The threads that hold a post with a `breakthrough` badge that stands."""
+    obstacles: tuple[ObstacleView, ...] = ()
+    """Every obstacle of the lab's lines of work, the newest first, open, taken up, and removed."""
     reviewer_seats: int = 0
     """How many reviewer seats the lab has."""
     reviewer_seats_set: int | None = None

@@ -112,7 +112,7 @@ def test_the_lab_norms_are_plain_text_for_one_read_and_the_doorbell_is_one_line(
     assert '`' not in NORMS_TEMPLATE
     # Each norm has its reason and what it looks like in practice, so the file is longer than a list of rules.
     # An agent still reads it whole at the start of its work.
-    assert len(NORMS_TEMPLATE) < 17_200
+    assert len(NORMS_TEMPLATE) < 17_500
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -169,6 +169,18 @@ def test_the_lab_norms_hold_the_goal_the_obstacle_the_seats_and_the_name() -> No
         'An agent that the board cannot wake has no alarm, and it waits inside its turn.',
         'name the obstacle exactly and ask what would remove it',
         'Remove the defender, and the capture works.',
+        # Two threads of a real lab grew to 266 and 153 posts, and the person could not tell which lines were alive.
+        # The board lists each obstacle that no plan or result builds on, and the norm says when to use the list.
+        (
+            'An idea that fails for one clear reason is one step from working, and that step is to remove the reason.'
+            '\n\nThe board keeps the obstacles.'
+        ),
+        'When a line closes, post what blocked it as ruled out, with the reason in a sentence.',
+        'The board lists the obstacles that nobody has taken up.',
+        (
+            'Read that list before you choose work, and build on an obstacle when you have a way to remove it: a plan '
+            'that builds on it takes it up, and a result that builds on it removes it.'
+        ),
         'Two things that fail alone can work together.',
         "Do not assume a human's limits.",
         'Revisit what you ruled out as too slow or too much work',

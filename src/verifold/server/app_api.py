@@ -35,6 +35,7 @@ from verifold.protocol.app import (
     Need,
     NormsChange,
     NormsView,
+    ObstacleView,
     OfferView,
     Outcomes,
     PowerChange,
@@ -48,13 +49,14 @@ from verifold.protocol.app import (
     SettingsView,
     SetupView,
     StartRequest,
+    ThreadCard,
     TimeRequest,
     VoteRequest,
 )
 from verifold.protocol.deliverables import Decision, DeliverableLine, OfferLine
 from verifold.protocol.events import Reason, RerunRequested
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
-from verifold.protocol.join import AnswerView, FileText, PostRequest, PostView, ThreadSummary, ThreadView
+from verifold.protocol.join import AnswerView, FileText, PostRequest, PostView, ThreadView
 from verifold.protocol.moves import AddSeat
 from verifold.protocol.usage import Usage
 from verifold.server.activity import Activity
@@ -69,13 +71,15 @@ from verifold.society.errors import NotFound, SocietyError
 from verifold.society.identity import post_line, seat_label
 from verifold.society.lifecycle import alarm_line, close_count, lab_state
 from verifold.society.lines import lines_of
+from verifold.society.obstacles import Obstacle, obstacles
 from verifold.society.reruns import reruns_wanted
 from verifold.society.reviewers import seats
-from verifold.society.standing import agreed, closing
+from verifold.society.standing import agreed, closing, standing
 from verifold.society.turns import before
 from verifold.society.views import (
     answer_view,
     latest_report,
+    line_times,
     needs_person,
     thread_summaries,
     thread_view,
@@ -265,8 +269,8 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
         return _view_of(running, activity)
 
     @api.get('/threads', dependencies=[authorized])
-    async def threads() -> tuple[ThreadSummary, ...]:
-        return thread_summaries(current().board, PERSON)
+    async def threads() -> tuple[ThreadCard, ...]:
+        return _cards(current())
 
     @api.get('/threads/{thread_id}', dependencies=[authorized])
     async def thread(thread_id: ThreadId) -> ThreadView:
@@ -491,6 +495,7 @@ def _lab_view(board: Board, activity: Activity, now: datetime) -> LabView:
         reruns_wanted=reruns_wanted(board, now),
         proposals=proposals(board),
         breakthrough_threads=breakthrough_threads(board),
+        obstacles=tuple(_obstacle_view(board, found) for found in reversed(obstacles(board))),
         reviewer_seats=seats(board),
         reviewer_seats_set=board.settings.reviewers.seats,
         ends_at=board.ends_at,
@@ -499,6 +504,26 @@ def _lab_view(board: Board, activity: Activity, now: datetime) -> LabView:
         deliverables=tuple(_deliverable_view(board, line) for line in deliverable_lines(board)),
         removed_deliverables=removed_lines(board),
         deliverables_told_at=told_at(board),
+    )
+
+
+def _cards(lab: Lab) -> tuple[ThreadCard, ...]:
+    board = lab.board
+    return tuple(
+        ThreadCard(**dict(summary), last_result_at=result_at, last_plan_at=plan_at)
+        for summary in thread_summaries(board, PERSON, lab.now())
+        for result_at, plan_at in (line_times(board, summary.thread),)
+    )
+
+
+def _obstacle_view(board: Board, found: Obstacle) -> ObstacleView:
+    entry = found.entry
+    return ObstacleView(
+        post=post_line(board, entry, PERSON),
+        at=entry.at,
+        standing=standing(board, entry.post.id),
+        state=found.state,
+        builders=tuple(post_line(board, builder, PERSON) for builder in found.builders),
     )
 
 

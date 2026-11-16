@@ -55,6 +55,17 @@ type LabState = Literal['open', 'closing', 'closed']
 type Standing = Literal['open', 'checked', 'held_up', 'disputed', 'conceded']
 """Where a post stands after the objections, checks, and answers to it."""
 
+type ObstacleState = Literal['open', 'taken_up', 'removed']
+"""
+Where an obstacle stands, by the posts that build on it. An obstacle is a `ruled_out` post in a line of work, other
+than one that withdraws its author's own call or close. A plan or a result whose author accepted an objection to it
+counts for none of these states.
+
+- `open`: no plan and no result builds on it.
+- `taken_up`: a plan or a result builds on it, and no result that builds on it stands.
+- `removed`: a result that builds on it stands: no failed check and no objection disputes it.
+"""
+
 MAX_NEWS = 20
 """The most posts in each list of an agent's news or update, and the most threads in a brief."""
 
@@ -380,10 +391,10 @@ class PostLine(Sparse):
     by: Byline | None = None
     """
     Who the author is, with its seat's label cut to `MAX_SEAT` characters. `None` for a post of the person. In
-    `brief`, the list of agents says who each agent is. So in the brief's lists of posts and in an agent's `plan`
-    and `latest`, `by` is `None` for an author that the list of agents holds, unless the label of its seat was
-    another when the post was written. The same holds for the lines of the news that a brief carries. The lines of
-    `news` in any other result, and of a thread's `latest`, always have it.
+    `brief`, the list of agents says who each agent is. So in the brief's lists of posts, in an agent's `plan` and
+    `latest`, and in each thread's `latest`, `by` is `None` for an author that the list of agents holds, unless the
+    label of its seat was another when the post was written. The same holds for the lines of the news that a brief
+    carries. The lines of `news` in any other result, and of a thread's `latest` in `threads`, always have it.
     """
     helper: Helper = ''
     kind: PostKind
@@ -460,6 +471,37 @@ class PostEntry(Sparse):
     """The post's line. `None` when `news` or an earlier field of the same brief holds it."""
 
 
+MAX_OBSTACLES = 5
+"""
+The most open obstacles that a brief lists. A brief is one tool result, and with ten lines of obstacles the largest
+brief was larger than a harness takes.
+"""
+
+
+class ObstacleEntry(PostEntry):
+    """An open obstacle in a brief: its line, or its ID alone as in every list of a brief, and where it stands as a post."""
+
+    standing: Standing = 'open'
+    """Where the `ruled_out` post itself stands, as any post does, such as `disputed`. Left out while it is `open`."""
+
+
+class Obstacles(Sparse):
+    """
+    The obstacles of the lab, as `ObstacleState` says what an obstacle is and how it stands.
+
+    The board computes each state from the posts that build on the obstacle. No agent sets it.
+    """
+
+    open: tuple[ObstacleEntry, ...] = ()
+    """The open obstacles, the newest first, at most `MAX_OBSTACLES`."""
+    more_open: int = 0
+    """How many open obstacles `open` leaves out."""
+    taken_up: int = 0
+    """How many obstacles are `taken_up`."""
+    removed: int = 0
+    """How many obstacles are `removed`."""
+
+
 MAX_LINKS = 3
 """The most links to other threads that a thread's summary names on each side."""
 
@@ -480,6 +522,10 @@ class ThreadSummary(Record):
     A thread at a glance: its latest post, how its results and asks stand, and where its ideas come from and where they go.
 
     `checked` counts results that a check holds up, and `not_checked` counts results that nobody has checked yet.
+
+    A line of work is a thread for the whole lab, other than the conversation with the coordinator and a thread of
+    offers. Only a line of work has the facts from `result_minutes_ago` to `badges`, and every other thread has
+    them empty.
     """
 
     thread: Thread
@@ -507,6 +553,14 @@ class ThreadSummary(Record):
     """The other threads where other agents build most on the posts of this thread, at most `MAX_LINKS`."""
     crossed: int = 0
     """How many times a post of this thread builds on another agent's post in another thread."""
+    result_minutes_ago: int | None = None
+    """How many whole minutes ago the newest result of the line was posted, by the lab's clock. `None` without one."""
+    plan_minutes_ago: int | None = None
+    """How many whole minutes ago the newest plan of the line was posted, by the lab's clock. `None` without one."""
+    open_obstacles: int = 0
+    """How many obstacles in the line are `open`: `ruled_out` posts that no plan and no result builds on."""
+    badges: dict[Badge, int] = Field(default_factory=dict)
+    """For each badge, how many posts of the line it stands on. A badge that stands on no post of the line is not here."""
 
 
 class LeftLine(Record):
@@ -1105,6 +1159,11 @@ class Brief(Record):
     """Other agents' results that no other agent has built on yet, newest last, at most `MAX_LEADS`."""
     not_checked: tuple[PostEntry, ...] = ()
     """Other agents' results that nobody has checked yet, newest last."""
+    obstacles: Obstacles = Obstacles()
+    """
+    The lab's open obstacles, the reader's own among them, the newest first, and how many obstacles are taken up
+    and removed.
+    """
     open_asks: tuple[PostEntry, ...] = ()
     """Asks from others that nobody has answered yet, newest last. Asks for the person alone are not among them."""
     open_calls: tuple[PostEntry, ...] = ()
