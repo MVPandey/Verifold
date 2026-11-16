@@ -8,8 +8,10 @@ export interface Chip {
   readonly tone: ChipTone;
 }
 
-/** The most characters in a headline, as the server takes it. */
+/** The most characters in a headline of the person, as the server takes it. */
 const HEADLINE_LIMIT = 1000;
+/** The most characters in a headline that a tool of the board takes from an agent. */
+const AGENT_HEADLINE_LIMIT = 200;
 const TITLE_LIMIT = 80;
 const LIST_LIMIT = 200;
 
@@ -42,6 +44,17 @@ export function split(text: string): { readonly headline: string; readonly body:
   const headline = first.trim();
   if (headline.length <= HEADLINE_LIMIT) return { headline, body: rest.join('\n').trim() };
   return { headline: `${headline.slice(0, HEADLINE_LIMIT - 1)}…`, body: trimmed };
+}
+
+/**
+ * Return whether a headline is longer than a tool takes from an agent: it is the person's, or an agent's from
+ * before that limit. The page shows such a headline as text, and not in the type of a heading.
+ *
+ * The server counts characters as code points, so this does too. A letter outside the basic plane, such as a
+ * math italic one, is two units of a JavaScript string and one character.
+ */
+export function isLong(headline: string): boolean {
+  return [...headline].length > AGENT_HEADLINE_LIMIT;
 }
 
 /** Return a headline as a list shows it: whole, or its first 200 characters. The post's thread shows all of it. */

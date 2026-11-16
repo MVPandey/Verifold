@@ -1,8 +1,18 @@
 """The messages of the join protocol: what an agent sends to its lab and what it gets back."""
 
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
-from pydantic import AwareDatetime, Field, SerializerFunctionWrapHandler, TypeAdapter, model_serializer, model_validator
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    Field,
+    SerializerFunctionWrapHandler,
+    StringConstraints,
+    TypeAdapter,
+    WithJsonSchema,
+    model_serializer,
+    model_validator,
+)
 
 from verifold.protocol.agents import (
     About,
@@ -33,6 +43,7 @@ from verifold.protocol.posts import (
     Post,
     PostKind,
     RelativePath,
+    fits_a_headline,
 )
 from verifold.protocol.record import Record
 from verifold.protocol.threads import Thread, Title
@@ -52,6 +63,31 @@ _moves: TypeAdapter[Move] = TypeAdapter(Move)
 
 type MoveKind = Literal['time', 'permission', 'add_agent', 'remove_agent', 'setting', 'question']
 """The kinds of move that the coordinator can ask the person for."""
+
+MAX_AGENT_HEADLINE = 200
+"""
+The most characters in a headline that an agent sends with a tool of the board: `post`, `offer`, or `request`.
+
+The person's app shows a headline as plain text and a body as Markdown. With the record's limit of 1,000 characters
+alone, half of the posts of one lab of 13 agents had a headline of more than 500 characters, fewer than half had a
+body, and one harness ran words together to fit. So a tool takes a headline with room for a sentence or two. The
+record's limit was 300 once, and agents ran words together to fit a full sentence then too, so the error for a
+longer headline names `body` as the place of the detail.
+"""
+type AgentHeadline = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1),
+    AfterValidator(fits_a_headline(MAX_AGENT_HEADLINE)),
+    WithJsonSchema({'type': 'string', 'minLength': 1, 'maxLength': MAX_AGENT_HEADLINE}),
+]
+"""
+A headline as a tool of the board takes it from an agent.
+
+The limit is the tools' and not the record's. `Headline` keeps the record's limit, so a record from before this
+limit loads, the person's post keeps its own limit, and so does a post that Verifold writes, such as the post of a
+revised question. A tool's parameter has this type, so the tool's schema states the limit, and the board refuses a
+longer headline before it pins a file or writes an event.
+"""
 
 
 class PostRequest(Record):

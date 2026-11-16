@@ -26,6 +26,7 @@ from verifold.protocol.app import (
     CoordinatorSeat,
     DeliverableDecision,
     DeliverableRequest,
+    DeliverableView,
     FolderRequest,
     FolderView,
     Invitation,
@@ -34,6 +35,7 @@ from verifold.protocol.app import (
     Need,
     NormsChange,
     NormsView,
+    OfferView,
     Outcomes,
     PowerChange,
     ProfileChange,
@@ -49,7 +51,7 @@ from verifold.protocol.app import (
     TimeRequest,
     VoteRequest,
 )
-from verifold.protocol.deliverables import Decision
+from verifold.protocol.deliverables import Decision, DeliverableLine, OfferLine
 from verifold.protocol.events import Reason, RerunRequested
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import AnswerView, FileText, PostRequest, PostView, ThreadSummary, ThreadView
@@ -489,10 +491,21 @@ def _lab_view(board: Board, activity: Activity) -> LabView:
         ends_at=board.ends_at,
         out_of_time=board.out_of_time,
         settings=board.settings,
-        deliverables=deliverable_lines(board),
+        deliverables=tuple(_deliverable_view(board, line) for line in deliverable_lines(board)),
         removed_deliverables=removed_lines(board),
         deliverables_told_at=told_at(board),
     )
+
+
+def _deliverable_view(board: Board, line: DeliverableLine) -> DeliverableView:
+    # The person decides about an offer in the panel that lists it, so each offer comes with its detail.
+    offers = tuple(_offer_view(board, offer) for offer in line.offers)
+    return DeliverableView(**dict(line.model_copy(update={'offers': offers})))
+
+
+def _offer_view(board: Board, offer: OfferLine) -> OfferView:
+    entry = board.post(offer.post)
+    return OfferView(**dict(offer), body=entry.post.body if entry else '')
 
 
 @dataclass(frozen=True, slots=True)

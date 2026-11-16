@@ -256,6 +256,34 @@ describe('the deliverables panel', () => {
     assert.ok(html.includes('<button type="button" class="d-add">Add a deliverable</button>'));
   });
 
+  it('shows the detail of an offer under its note, where the person decides about it', () => {
+    const body = 'It has **no** numbers yet.\n\n- one table\n- one chart';
+    const html = panel([{ ...OFFERED, offers: [offer('p-5', 'agent-1', { body })] }]);
+    // The detail is behind the fold that a post in a thread has, between the note and what the person decided.
+    // The fold parses it as Markdown when the person opens it, and it has the switch to the exact text.
+    assert.ok(
+      html.includes(
+        '<p class="d-note">The answer, without the numbers.</p><details class="f-detail"><summary class="f-open"><span class="closed">Read the detail</span>',
+      ),
+    );
+    assert.ok(
+      html.includes(
+        '<div class="f-words"><div class="words"><div class="body"><p>It has **no** numbers yet.</p><p>- one table\n- one chart</p></div><button type="button" class="linkbtn as-toggle">Show as written</button></div></div></details><p class="d-facts">',
+      ),
+    );
+    // The files stay in their rows above the note. The fold lists none again.
+    assert.equal(
+      html.split('answer.md').length - 1,
+      panel([OFFERED]).split('answer.md').length - 1,
+    );
+    // An offer without a detail has no fold.
+    assert.equal(panel([OFFERED]).includes('f-detail'), false);
+    assert.equal(
+      panel([{ ...OFFERED, offers: [offer('p-5', 'agent-1', { body: '' })] }]).includes('f-detail'),
+      false,
+    );
+  });
+
   it('opens a file as a page at the offered version, and names the link by the element that shows the path', () => {
     const html = panel([OFFERED]);
     const [, path, read, labelled] =

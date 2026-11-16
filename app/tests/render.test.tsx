@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { isValidElement, useState } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { Api } from '../src/api/client.ts';
@@ -21,6 +23,8 @@ import type {
   ThreadView,
 } from '../src/api/types.ts';
 import { clock, dayClock } from '../src/model/format.ts';
+import { markSeen, readSeen } from '../src/model/seen.ts';
+import { browserStore } from '../src/ui/hooks.ts';
 import type { ThreadRead } from '../src/ui/hooks.ts';
 import { LabPage, QuestionForm, Wall } from '../src/ui/LabPage.tsx';
 import { Failed } from '../src/ui/App.tsx';
@@ -48,6 +52,97 @@ import {
 
 const HOSTILE =
   '<img src="https://evil.example/x.png" onerror="alert(1)"> ![x](https://evil.example/y.png)';
+
+/** An element that a component rendered, before React renders the components inside it. */
+type Rendered = ReactElement<Record<string, unknown>>;
+
+/** Return every element in what a component rendered, in the order of the page. */
+function elementsOf(node: ReactNode): readonly Rendered[] {
+  if (Array.isArray(node)) return (node as readonly ReactNode[]).flatMap(elementsOf);
+  if (!isValidElement(node)) return [];
+  const element = node as Rendered;
+  return [element, ...elementsOf(element.props['children'] as ReactNode)];
+}
+
+/** Return the text that an element holds directly, such as a button's label. */
+function labelOf(element: Rendered): string {
+  const children = element.props['children'];
+  return typeof children === 'string' ? children : '';
+}
+
+/** Press the button with this label, as the person does: run what the button does on a press. */
+function press(tree: readonly Rendered[], label: string): void {
+  const button = tree.find((element) => element.type === 'button' && labelOf(element) === label);
+  assert.ok(button, `The page has no button "${label}".`);
+  (button.props['onClick'] as () => void)();
+}
+
+/** Open or shut the fold with this row, as the browser reports it after the person's press on the row. */
+function toggle(tree: readonly Rendered[], row: string, open: boolean): void {
+  const fold = tree.find(
+    (element) =>
+      element.type === 'details' && elementsOf(element).some((part) => labelOf(part) === row),
+  );
+  assert.ok(fold, `The page has no fold "${row}".`);
+  (fold.props['onToggle'] as (event: { currentTarget: { open: boolean } }) => void)({
+    currentTarget: { open },
+  });
+}
+
+/** One moment of a page: what a component renders then, and what the person does with it. */
+interface Moment {
+  readonly render: () => ReactElement;
+  readonly then?: (tree: readonly Rendered[]) => void;
+}
+
+/**
+ * Return the page after the last of some moments, with the state that the component kept through them.
+ *
+ * These tests have no browser, and the server render gives a component no second render after an event. So the
+ * probe calls the component as a function, which makes the component's state the probe's own, and does what the
+ * person does while it renders. React renders a component again at once when its state changes during its
+ * render, so each moment renders with the state that the moment before left. `render` calls the component with
+ * that moment's props: `() => Turns(props)`.
+ */
+function live(moments: readonly Moment[]): string {
+  function Probe(): ReactElement | null {
+    const [at, next] = useState(0);
+    const moment = moments[at];
+    if (!moment) return null;
+    const page = moment.render();
+    if (at < moments.length - 1) {
+      moment.then?.(elementsOf(page));
+      next(at + 1);
+    }
+    return page;
+  }
+  return renderToStaticMarkup(<Probe />);
+}
+
+/** Give the page a browser storage that keeps what the page writes, and return what it holds. */
+function storage(held: Record<string, string> = {}): Map<string, string> {
+  const items = new Map(Object.entries(held));
+  Object.assign(globalThis, {
+    window: {
+      localStorage: {
+        getItem: (key: string) => items.get(key) ?? null,
+        setItem: (key: string, value: string) => void items.set(key, value),
+      },
+    },
+  });
+  return items;
+}
+
+/** Give the page a browser that refuses storage: the access to it throws, as with blocked site data. */
+function noStorage(): void {
+  const refusing = {};
+  Object.defineProperty(refusing, 'localStorage', {
+    get: () => {
+      throw new Error('The operation is insecure.');
+    },
+  });
+  Object.assign(globalThis, { window: refusing });
+}
 
 describe('agent text', () => {
   it('reaches the page as text, so it cannot load an image or run a script', () => {
@@ -144,9 +239,25 @@ describe('agent text', () => {
     );
     assert.ok(turn.includes('<p class="f-say-text">A `headline` with **marks**</p>'));
     assert.ok(
+      turn.includes(
+        '<details class="f-detail"><summary class="f-open"><span class="closed">Read the detail</span>',
+      ),
+    );
+    assert.ok(
       turn.includes('<div class="body"><p>Method: replay of **450** combos.\nResult: no edge.</p>'),
     );
     assert.equal(turn.includes('<div class="md">'), false);
+    // The fold shows the body through the same component, with its switch. Once the person opens the fold, the
+    // component parses the body, and until then it does not.
+    assert.ok(
+      turn.includes('<button type="button" class="linkbtn as-toggle">Show as written</button>'),
+    );
+    const opened = renderToStaticMarkup(<Words text={body} parsed />);
+    assert.ok(opened.includes('<div class="md"><p>Method: replay of <strong>450</strong> combos.'));
+    assert.equal(
+      renderToStaticMarkup(<Words text={body} parsed={false} />).includes('<strong>'),
+      false,
+    );
   });
 
   it('shows code of every kind as its author wrote it', () => {
@@ -472,28 +583,303 @@ describe('an opened thread', () => {
     assert.ok(html.includes('<span class="f-port">Built on by 1 post</span>'));
   });
 
-  it('folds a run of status notes in the question’s thread into one row', () => {
-    const note = (id: string): Post => result(id, { kind: 'message', author: 'agent-1' });
-    const folded = renderToStaticMarkup(
-      <Turns
-        view={{
-          thread: { id: 't-1', title: 'The question', opened_by: 'person' },
-          watching: false,
-          members: [],
-          posts: [postView(note('p-1')), postView(note('p-2'))],
-        }}
-        agents={agents}
-        needs={[]}
-        question="t-1"
-        reruns={[]}
-        seats={0}
-        now={new Date('2026-11-06T14:26:00Z')}
-        onRerun={() => Promise.resolve()}
-        onSend={() => Promise.resolve()}
-      />,
+  const LAB = '2026-11-06T14:00:00Z';
+  const note = (id: string, changes: Partial<Post> = {}): PostView =>
+    postView(result(id, { kind: 'message', text: `Note ${id}.`, ...changes }));
+  const talk = [
+    postView(result('p-1')),
+    note('p-2'),
+    note('p-3', { author: 'agent-2' }),
+    note('p-4', { author: 'person', text: 'Go on.' }),
+    note('p-5', { reply_to: 'p-1', author: 'agent-2' }),
+    note('p-6', { reply_to: 'p-1' }),
+  ];
+  interface Given {
+    readonly target?: string;
+    readonly lab?: string;
+    readonly id?: string;
+    readonly conversation?: boolean;
+    readonly members?: readonly string[];
+  }
+  const propsOf = (posts: readonly PostView[], given: Given = {}): Parameters<typeof Turns>[0] => ({
+    view: {
+      thread: {
+        id: given.id ?? 't-4',
+        title: 'Maker side',
+        opened_by: 'agent-1',
+        conversation: given.conversation ?? false,
+      },
+      watching: false,
+      members: given.members ?? [],
+      posts,
+    },
+    agents,
+    needs: [],
+    question: 't-1',
+    reruns: [],
+    seats: 0,
+    now: new Date('2026-11-06T14:26:00Z'),
+    onRerun: () => Promise.resolve(),
+    onSend: () => Promise.resolve(),
+    target: given.target ?? null,
+    ...(given.lab === undefined ? {} : { lab: given.lab }),
+  });
+  const thread = (posts: readonly PostView[], given: Given = {}): string =>
+    renderToStaticMarkup(<Turns {...propsOf(posts, given)} />);
+  /** A moment of the thread in the browser: the posts that it has then, and what the person does. */
+  const moment = (
+    posts: readonly PostView[],
+    then?: Moment['then'],
+    given: Given = {},
+  ): Moment => ({ render: () => Turns(propsOf(posts, given)), ...(then ? { then } : {}) });
+
+  it('folds each run of agents’ messages that nobody replied to into one row, in every thread', () => {
+    const folded = thread(talk);
+    // The row says how many messages it holds and who wrote them, and it opens in place. A fold of replies
+    // sits where the replies sit, and its turns have no indent of their own.
+    assert.ok(
+      folded.includes(
+        '<li class="f-fold d1"><details><summary>2 messages from Agent 2 and Agent 1</summary><ol class="f-turns"><li id="p-5" class="f-turn d0">',
+      ),
     );
-    assert.ok(folded.includes('<summary>2 short notes</summary>'));
-    assert.equal(folded.includes('leads this thread'), false);
+    assert.ok(
+      folded.includes(
+        '<li class="f-fold d0"><details><summary>2 messages from Agent 1 and Agent 2</summary><ol class="f-turns"><li id="p-2" class="f-turn d0">',
+      ),
+    );
+    // The person's post is a turn of its own after the fold.
+    assert.ok(folded.includes('</li><li id="p-4" class="f-turn d0">'));
+    assert.equal(folded.split('<details><summary>').length - 1, 2);
+    // The question's thread folds by the same rule.
+    assert.ok(thread(talk, { id: 't-1' }).includes('<summary>2 messages from Agent 1 and Agent 2'));
+  });
+
+  it('folds nothing in a side thread and in the conversation with the coordinator', () => {
+    // A side thread is a conversation between named agents, and in the conversation with the coordinator an
+    // agent's message is its word to the person.
+    for (const given of [{ members: ['agent-1', 'agent-2'] }, { conversation: true }]) {
+      const html = thread(talk, given);
+      assert.equal(html.includes('f-fold') || html.includes('f-unfold'), false);
+      assert.ok(html.includes('<li id="p-2" class="f-turn d0">'));
+      assert.ok(html.includes('<li id="p-5" class="f-turn d1">'));
+    }
+  });
+
+  it('shows one message alone as a turn, and an agent’s reply to the person’s post too', () => {
+    // The last message of a chain of replies has no reply yet. It is the newest word, so it is in sight.
+    const chain = thread([
+      postView(result('p-1')),
+      note('p-2', { reply_to: 'p-1' }),
+      note('p-3', { reply_to: 'p-2', author: 'agent-2' }),
+    ]);
+    assert.equal(chain.includes('f-fold') || chain.includes('f-unfold'), false);
+    assert.ok(chain.includes('<li id="p-3" class="f-turn d2">'));
+    // Two agents answered the person's post. Their answers are turns under it, and no fold.
+    const answered = thread([
+      postView(result('p-1')),
+      note('p-2', { author: 'person', text: 'Which seed?' }),
+      note('p-3', { reply_to: 'p-2' }),
+      note('p-4', { reply_to: 'p-2', author: 'agent-2' }),
+    ]);
+    assert.equal(answered.includes('f-fold') || answered.includes('f-unfold'), false);
+    assert.ok(answered.includes('<li id="p-3" class="f-turn d1">'));
+    assert.ok(answered.includes('<li id="p-4" class="f-turn d1">'));
+  });
+
+  it('keeps the post that the page opened on out of a fold', () => {
+    const more = [...talk, note('p-7'), note('p-8'), note('p-9')];
+    assert.ok(thread(more).includes('<summary>3 messages from Agent 1</summary>'));
+    // The page opened on the first message of the run, so the two after it are the fold.
+    const first = thread(more, { target: 'p-7' });
+    assert.ok(first.includes('<li id="p-7" class="f-turn d0">'));
+    assert.ok(first.includes('<summary>2 messages from Agent 1</summary>'));
+    // The page opened on the middle one. A message alone on each side is a turn, so the run has no fold.
+    const middle = thread(more, { target: 'p-8' });
+    assert.ok(middle.includes('</li><li id="p-8" class="f-turn d0">'));
+    assert.equal(middle.includes('messages from Agent 1</summary>'), false);
+  });
+
+  it('has one control above the posts that shows every folded message, and none without a fold', () => {
+    const folded = thread(talk);
+    assert.ok(
+      folded.includes(
+        '<p class="f-unfold"><button type="button" class="linkbtn" aria-expanded="false">Show the 4 folded messages</button></p><ol class="f-turns">',
+      ),
+    );
+    assert.equal(
+      thread([postView(result('p-1')), note('p-4', { author: 'person' })]).includes('f-unfold'),
+      false,
+    );
+  });
+
+  it('shows every message as a turn in a thread where the person chose that, and keeps the choice per thread', () => {
+    storage({ [`verifold-unfolded:${LAB}`]: '["t-4"]' });
+    const shown = thread(talk, { lab: LAB });
+    assert.ok(
+      shown.includes(
+        '<button type="button" class="linkbtn" aria-expanded="true">Fold 4 messages again</button>',
+      ),
+    );
+    assert.equal(shown.includes('<summary>'), false);
+    // Each message is a turn at the depth of its fold, in the thread's order.
+    assert.ok(shown.includes('<li id="p-2" class="f-turn d0">'));
+    assert.ok(shown.includes('<li id="p-5" class="f-turn d1">'));
+    assert.ok(shown.indexOf('id="p-5"') < shown.indexOf('id="p-2"'));
+    // Another thread of the lab has its own choice, and so has a thread whose page names no lab.
+    assert.ok(thread(talk, { lab: LAB, id: 't-5' }).includes('aria-expanded="false"'));
+    assert.ok(thread(talk).includes('aria-expanded="false"'));
+  });
+
+  it('shows every message on a press of the control, keeps that choice in the browser, and folds on the next press', () => {
+    const items = storage();
+    const show = 'Show the 4 folded messages';
+    const pressed = live([
+      moment(talk, (tree) => press(tree, show), { lab: LAB }),
+      moment(talk, undefined, { lab: LAB }),
+    ]);
+    assert.ok(pressed.includes('aria-expanded="true">Fold 4 messages again</button>'));
+    assert.equal(pressed.includes('<summary>'), false);
+    assert.ok(pressed.includes('<li id="p-5" class="f-turn d1">'));
+    assert.equal(items.get(`verifold-unfolded:${LAB}`), '["t-4"]');
+    // A thread that the page opens later reads the choice, and the next press folds the messages again.
+    const again = live([
+      moment(talk, (tree) => press(tree, 'Fold 4 messages again'), { lab: LAB }),
+      moment(talk, undefined, { lab: LAB }),
+    ]);
+    assert.ok(again.includes(`aria-expanded="false">${show}</button>`));
+    assert.equal(again.split('<details><summary>').length - 1, 2);
+    assert.equal(items.get(`verifold-unfolded:${LAB}`), '[]');
+    // A browser that refuses storage keeps nothing, and the press still shows every message.
+    noStorage();
+    const refused = live([
+      moment(talk, (tree) => press(tree, show), { lab: LAB }),
+      moment(talk, undefined, { lab: LAB }),
+    ]);
+    assert.ok(refused.includes('aria-expanded="true">Fold 4 messages again</button>'));
+    assert.ok(thread(talk, { lab: LAB }).includes(`aria-expanded="false">${show}</button>`));
+    storage();
+  });
+
+  it('keeps every turn a direct child of the list under its post’s ID, so a new post remounts no turn', () => {
+    // React matches a direct child by its key and a child inside a nested list by the list's place. A turn in
+    // a nested list would mount again, and lose its opened detail, when a post before it changes the rows.
+    const keys = (tree: readonly Rendered[]): readonly (string | null)[] => {
+      const list = tree.find((element) => element.props['className'] === 'f-turns');
+      assert.ok(list);
+      const children = list.props['children'] as readonly unknown[];
+      assert.ok(children.every((child) => isValidElement(child)));
+      return (children as readonly Rendered[]).map((child) => child.key);
+    };
+    storage({ [`verifold-unfolded:${LAB}`]: '["t-4"]' });
+    const order = ['p-1', 'p-5', 'p-6', 'p-2', 'p-3', 'p-4'];
+    live([
+      moment(talk, (tree) => assert.deepEqual(keys(tree), order), { lab: LAB }),
+      // A reply under the first post comes in. Every turn that was there keeps its key and its place in one list.
+      moment(
+        [...talk, note('p-7', { reply_to: 'p-1', author: 'agent-2' })],
+        (tree) => assert.deepEqual(keys(tree), ['p-1', 'p-5', 'p-6', 'p-7', 'p-2', 'p-3', 'p-4']),
+        { lab: LAB },
+      ),
+      moment(talk),
+    ]);
+    // Folded, each row is a direct child too: a turn under its post's ID, and a fold under its first message's.
+    storage();
+    live([
+      moment(talk, (tree) => assert.deepEqual(keys(tree), ['p-1', 'p-5', 'p-2', 'p-4'])),
+      moment(talk),
+    ]);
+  });
+
+  it('keeps a fold open that the person opened when its run changes', () => {
+    storage();
+    const run = [postView(result('p-1')), note('p-2'), note('p-3'), note('p-4'), note('p-5')];
+    const row = '4 messages from Agent 1';
+    const open = (tree: readonly Rendered[]): void => toggle(tree, row, true);
+    const opened = '<details open=""><summary>';
+    // The person opens the row, and then a message joins the run.
+    const joined = live([moment(run, open), moment([...run, note('p-6', { author: 'agent-2' })])]);
+    assert.ok(joined.includes(`${opened}5 messages from Agent 1 and Agent 2</summary>`));
+    // The first message gets a reply, so it leaves the run. The rest is a new row, and it is open.
+    const first = live([moment(run, open), moment([...run, note('p-6', { reply_to: 'p-2' })])]);
+    assert.ok(first.includes('<li id="p-2" class="f-turn d0">'));
+    assert.ok(first.includes(`${opened}3 messages from Agent 1</summary>`));
+    // A message in the middle gets a badge. The messages after it are a new row, and it is open.
+    const badged = { ...note('p-3'), badges: [{ badge: 'promising' as const, given: [] }] };
+    const middle = live([
+      moment(run, open),
+      moment([postView(result('p-1')), note('p-2'), badged, note('p-4'), note('p-5')]),
+    ]);
+    assert.ok(middle.includes('<li id="p-2" class="f-turn d0">'));
+    assert.ok(middle.includes(`${opened}2 messages from Agent 1</summary>`));
+    // A link opens the page on a message of the run. The rows on both sides of it stay open.
+    const longer = [...run, note('p-6'), note('p-7')];
+    const linked = live([
+      moment(longer, (tree) => toggle(tree, '6 messages from Agent 1', true)),
+      moment(longer, undefined, { target: 'p-4' }),
+    ]);
+    assert.equal(linked.split(`${opened}`).length - 1, 2);
+    assert.ok(linked.includes('<li id="p-4" class="f-turn d0">'));
+    // The browser reports the new row as opened. That changes nothing, and the person can still shut the row.
+    const shut = live([
+      moment(run, open),
+      moment([...run, note('p-6', { reply_to: 'p-2' })], (tree) =>
+        toggle(tree, '3 messages from Agent 1', true),
+      ),
+      moment([...run, note('p-6', { reply_to: 'p-2' })], (tree) =>
+        toggle(tree, '3 messages from Agent 1', false),
+      ),
+      moment([...run, note('p-6', { reply_to: 'p-2' })]),
+    ]);
+    assert.ok(shut.includes('<details><summary>3 messages from Agent 1</summary>'));
+    // A row that the person did not open stays shut through the same changes.
+    const untouched = live([moment(run), moment([...run, note('p-6', { reply_to: 'p-2' })])]);
+    assert.ok(untouched.includes('<details><summary>3 messages from Agent 1</summary>'));
+  });
+
+  it('shows a long headline from before the agents’ limit as text that keeps its lines, and never as Markdown', () => {
+    const long = `**Scan** of 143 markets:\n${'no edge after fees in any bucket; '.repeat(12)}`;
+    const old = thread([
+      postView(result('p-1', { text: long })),
+      postView(result('p-2', { text: 'x'.repeat(200) })),
+      // The server counts characters as code points. 164 of them are short, also when 60 are math italic.
+      postView(result('p-3', { text: `${'𝑥'.repeat(60)}${'x'.repeat(104)}` })),
+    ]);
+    // The text is in the page as its author wrote it. The stylesheet keeps its line breaks and wraps it.
+    assert.ok(
+      old.includes(`<p class="f-say-text long">**Scan** of 143 markets:\nno edge after fees`),
+    );
+    assert.equal(old.includes('<strong>'), false);
+    assert.ok(old.includes(`<p class="f-say-text">${'x'.repeat(200)}</p>`));
+    assert.ok(old.includes(`<p class="f-say-text">${'𝑥'.repeat(60)}`));
+    // A post without a body and without files has no fold for a detail.
+    assert.equal(old.includes('f-detail'), false);
+  });
+});
+
+describe('the browser’s storage', () => {
+  it('gives nothing and keeps nothing when the browser refuses it, and no read or write fails', () => {
+    noStorage();
+    assert.equal(browserStore.getItem('verifold-seen:lab'), null);
+    browserStore.setItem('verifold-seen:lab', '{}');
+    assert.deepEqual(readSeen(browserStore, 'lab'), {});
+    markSeen(browserStore, 'lab', 't-1', 7);
+    // A store that is full refuses a write and still reads.
+    Object.assign(globalThis, {
+      window: {
+        localStorage: {
+          getItem: () => '{"t-1":3}',
+          setItem: () => {
+            throw new Error('The quota has been exceeded.');
+          },
+        },
+      },
+    });
+    markSeen(browserStore, 'lab', 't-1', 7);
+    assert.deepEqual(readSeen(browserStore, 'lab'), { 't-1': 3 });
+    // A browser with storage keeps what the page writes.
+    const items = storage();
+    markSeen(browserStore, 'lab', 't-1', 7);
+    assert.equal(items.get('verifold-seen:lab'), '{"t-1":7}');
   });
 });
 
@@ -975,15 +1361,17 @@ describe('the lab page', () => {
     questionRead: ThreadRead,
     cardRead: ThreadRead,
     answer: AnswerView | null = null,
+    /** The post that the link names, and what the browser's storage holds. */
+    link: { readonly post?: string; readonly held?: Record<string, string> } = {},
   ): string => {
-    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    storage(link.held);
     return renderToStaticMarkup(
       <Wall
         api={{} as Api}
         data={{ ...data, answer }}
         now={now}
         open={open}
-        post={null}
+        post={link.post ?? null}
         questionRead={questionRead}
         cardRead={cardRead}
       />,
@@ -1212,7 +1600,7 @@ describe('the lab page', () => {
     const proposal = result('p-2', {
       kind: 'proposal',
       text: 'Yes, 12x.',
-      body: 'Three runs agree.\nThe seed is 7.',
+      body: 'Three runs **agree**.\nThe seed is 7.',
     });
     const posts = [
       result('p-1', { kind: 'message', author: 'person', text: 'Is sorted() faster?' }),
@@ -1227,10 +1615,11 @@ describe('the lab page', () => {
     // The fixture's posts are from 14:04, and the page's clock says 14:26.
     assert.ok(html.includes('<span class="f-by">Agent 1 proposed it <time'));
     assert.ok(html.includes('>22 min ago</time>'));
-    // Open, the answer shows its detail, and each line of it stays a line.
+    // Open, the answer shows its detail as Markdown with the switch to the exact text, and each line of it
+    // stays a line.
     assert.ok(
       html.includes(
-        '<div class="f-words"><div class="words"><div class="md"><p>Three runs agree.<br/>\nThe seed is 7.</p></div><button',
+        '<div class="f-words"><div class="words"><div class="md"><p>Three runs <strong>agree</strong>.<br/>\nThe seed is 7.</p></div><button type="button" class="linkbtn as-toggle">Show as written</button>',
       ),
     );
     assert.ok(
@@ -1240,10 +1629,95 @@ describe('the lab page', () => {
     );
     assert.ok(html.includes('proposed an answer'));
     assert.ok(html.includes('aria-label="Message to everyone in this thread"'));
-    // Closed, the seat clamps the answer.
+    // Closed, the answer's detail is one press away in place, behind a fold. As in a thread, the fold parses
+    // the detail as Markdown when the person opens it.
     const closed = wall('t-2', thread('t-1', 'person', posts), none, answer);
-    assert.ok(closed.includes('<p class="clamp">Yes, 12x.</p>'));
-    assert.equal(closed.includes('Three runs agree.'), false);
+    assert.ok(closed.includes('<p>Yes, 12x.</p>'));
+    assert.ok(
+      closed.includes(
+        '</div><details class="f-detail"><summary class="f-open"><span class="closed">Read the detail</span>',
+      ),
+    );
+    assert.ok(
+      closed.includes(
+        '<div class="f-words"><div class="words"><div class="body"><p>Three runs **agree**.\nThe seed is 7.</p></div><button type="button" class="linkbtn as-toggle">Show as written</button>',
+      ),
+    );
+    // An answer without a detail has no fold, closed or open.
+    const bare = answerOf({ ...proposal, body: '' });
+    assert.equal(wall('t-2', none, none, bare).includes('f-detail'), false);
+    assert.equal(wall('t-1', none, none, bare).includes('f-words'), false);
+    // A headline that a tool takes from an agent shows whole in the closed seat, so "Read the detail" never
+    // sits under a cut sentence.
+    const most = answerOf({ ...proposal, text: 'z'.repeat(200) });
+    assert.ok(wall('t-2', none, none, most).includes(`<p>${'z'.repeat(200)}</p>`));
+    // A longer one is the person's or from before that limit. The closed seat stops it after four lines, and
+    // it reads as text in both states.
+    const long = answerOf({ ...proposal, text: 'y'.repeat(201) });
+    assert.ok(
+      wall('t-2', none, none, long).includes(`<p class="clamp long">${'y'.repeat(201)}</p>`),
+    );
+    assert.ok(wall('t-1', none, none, long).includes(`<p class="long">${'y'.repeat(201)}</p>`));
+  });
+
+  it('gives an open thread the post that the link names and the choice that the browser keeps for it', () => {
+    const talk = [
+      result('p-1'),
+      result('p-2', { kind: 'message' }),
+      result('p-3', { kind: 'message' }),
+      result('p-4', { kind: 'message' }),
+    ];
+    const card = thread('t-2', 'agent-1', talk);
+    const row = '<summary>3 messages from Agent 1</summary>';
+    assert.ok(wall('t-2', none, card).includes(row));
+    // The link names the middle message. That message is a turn, and so is the one message on each side.
+    const linked = wall('t-2', none, card, null, { post: 'p-3' });
+    assert.ok(linked.includes('<li id="p-3" class="f-turn d0">'));
+    assert.equal(linked.includes('messages from Agent 1</summary>'), false);
+    // A link to another post of the thread leaves the run whole.
+    assert.ok(wall('t-2', none, card, null, { post: 'p-1' }).includes(row));
+    // The question's thread gets the link's post in the same way.
+    const question = thread('t-1', 'person', talk);
+    assert.ok(wall('t-1', question, none).includes(row));
+    assert.equal(
+      wall('t-1', question, none, null, { post: 'p-3' }).includes(
+        'messages from Agent 1</summary>',
+      ),
+      false,
+    );
+    // The browser keeps for this lab that the person shows every message of t-2. The page reads that choice
+    // for the thread that it opens, and another thread of the lab folds.
+    const held = { [`verifold-unfolded:${lab.opened_at}`]: '["t-2"]' };
+    const shown = wall('t-2', none, card, null, { held });
+    assert.ok(shown.includes('aria-expanded="true">Fold 3 messages again</button>'));
+    assert.equal(shown.includes(row), false);
+    const other = wall('t-3', none, thread('t-3', 'agent-2', talk), null, { held });
+    assert.ok(other.includes('aria-expanded="false">Show the 3 folded messages</button>'));
+    assert.ok(other.includes(row));
+  });
+
+  it('shows the lab in a browser that refuses storage', () => {
+    const talk = [
+      result('p-1'),
+      result('p-2', { kind: 'message' }),
+      result('p-3', { kind: 'message' }),
+    ];
+    noStorage();
+    const html = renderToStaticMarkup(
+      <Wall
+        api={{} as Api}
+        data={data}
+        now={now}
+        open="t-2"
+        post={null}
+        questionRead={none}
+        cardRead={thread('t-2', 'agent-1', talk)}
+      />,
+    );
+    storage();
+    // Nothing is seen and nothing is chosen: the other cards have their mark for new posts, and the thread folds.
+    assert.ok(html.includes('<span class="f-new">New</span>'));
+    assert.ok(html.includes('aria-expanded="false">Show the 2 folded messages</button>'));
   });
 
   it('takes the answer so far from the lab’s own answer, not from its read of the question’s thread', () => {
@@ -1253,7 +1727,7 @@ describe('the lab page', () => {
     const behind = thread('t-1', 'person', [old]);
     for (const read of [behind, none, { view: null, error: 'No connection.' }]) {
       const html = wall('t-2', read, none, answerOf(newest));
-      assert.ok(html.includes('<p class="clamp">No: 3x at most.</p>'));
+      assert.ok(html.includes('<p>No: 3x at most.</p>'));
       assert.ok(html.includes('Agent 2 proposed it'));
       assert.equal(html.includes('Yes, 12x.'), false);
       assert.equal(html.includes('Loading the answer.'), false);
@@ -1270,7 +1744,7 @@ describe('the lab page', () => {
     });
     const elsewhere = answerOf(proposal, { answer: postView({ ...proposal, thread: 't-3' }, 12) });
     const html = wall('t-2', none, none, elsewhere);
-    assert.ok(html.includes('<p class="clamp">No: 3x at most.</p>'));
+    assert.ok(html.includes('<p>No: 3x at most.</p>'));
     assert.ok(
       html.includes(
         '<p class="f-earlier">Proposed in the thread <a href="#/thread/t-3/p-12">Merge sort</a>.</p>',
