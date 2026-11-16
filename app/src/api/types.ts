@@ -994,16 +994,25 @@ export interface ConversationView {
   readonly deeds: readonly Deed[];
 }
 
-/** The lab's answer so far, which is the newest proposal in any thread, and each post that it builds on with where it stands. */
-export interface AnswerView {
-  readonly answer: PostView;
-  /** Whether the person revised the question after this answer. */
+/** A candidate answer: an agent's newest proposal, and each post that it builds on with where it stands. */
+export interface CandidateView {
+  readonly candidate: PostView;
+  /** Whether the person revised the question after this candidate. */
   readonly to_earlier_question: boolean;
   readonly builds_on: readonly PostView[];
   /** How many of `builds_on` are results with files, which an agent can rerun from a clean copy. */
   readonly results: number;
   /** The results among them that have no check of an independent rerun. The name is from before agents took reruns. */
   readonly no_blind_rerun: readonly string[];
+  /** The author's own entry of a round that the candidate builds on. Its detail and files are the candidate's too. */
+  readonly entry: PostView | null;
+}
+
+/** The candidate answers that stand, oldest first, and the one that the close that stands closes on. */
+export interface CandidatesView {
+  readonly standing: readonly CandidateView[];
+  /** While the lab is closed, this candidate is the lab's answer. `null` while no close names one. */
+  readonly closes_on: CandidateView | null;
 }
 
 /** A folder of the lab on the server's computer, and whether the server opened it in the file manager. */

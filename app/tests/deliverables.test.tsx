@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { createApi } from '../src/api/client.ts';
+import { NO_CANDIDATES, createApi } from '../src/api/client.ts';
 import type { Api } from '../src/api/client.ts';
 import type {
   Deliverable,
@@ -695,7 +695,7 @@ describe('the deliverables on the lab page', () => {
       threads,
       needs: [],
       report: null,
-      answer: null,
+      candidates: NO_CANDIDATES,
       conversation: null,
       version: 1,
       error: null,
@@ -758,7 +758,7 @@ describe('the deliverables on the lab page', () => {
             threads: [...threads, work, offers],
             needs: [],
             report: null,
-            answer: null,
+            candidates: NO_CANDIDATES,
             conversation: null,
             version: 1,
             error: null,
@@ -789,7 +789,7 @@ describe('the deliverables on the lab page', () => {
           threads: [...threads, work, offers],
           needs: [],
           report: null,
-          answer: null,
+          candidates: NO_CANDIDATES,
           conversation: null,
           version: 1,
           error: null,

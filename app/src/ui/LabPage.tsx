@@ -4,7 +4,8 @@ import type { FormEvent, ReactElement } from 'react';
 import { PERSON } from '../api/types.ts';
 import type {
   AgentView,
-  AnswerView,
+  CandidatesView,
+  CandidateView,
   LabView,
   Need,
   Obstacle,
@@ -68,7 +69,7 @@ export function LabPage(props: PageProps & Place): ReactElement {
   // A link can name a thread that the lab does not have. Reading it would fail again at every load.
   const known = threads.some((summary) => summary.thread.id === open);
   // The seat shows who posted in the question's thread, so it reads the thread at every load. An open card needs
-  // its own. The answer so far does not come from this read: it comes with the lab, in `data.answer`.
+  // its own. The candidate answers do not come from this read: they come with the lab, in `data.candidates`.
   const questionRead = useThread(api, questionId, version);
   const cardRead = useThread(api, known && open !== questionId ? open : null, version);
   const loaded = (open === questionId ? questionRead : cardRead).view;
@@ -100,7 +101,7 @@ export function LabPage(props: PageProps & Place): ReactElement {
 }
 
 /**
- * The lab as a wall: the question and the answer so far, what waits for the person, the box that steers the lab
+ * The lab as a wall: the question and the candidate answers, what waits for the person, the box that steers the lab
  * with the control that opens a round, the newest report, the band of a quiet lab, the newest round, and one card
  * for each thread. The cards stay in the order of their
  * threads' numbers, so a status that changes moves no card. The side threads come after the cards as one folded group, one line each. `questionRead` is the question's thread, and `cardRead` is the thread of the open card.
@@ -176,6 +177,8 @@ export function Wall(
     .sort((first, second) => number(first) - number(second));
   const side = threads.filter(isSide);
   const answerOpen = question !== null && open === questionId;
+  // A closed lab has the answer that its close names. Until then, the candidates stand side by side.
+  const answered = lab.state === 'closed' && data.candidates.closes_on !== null;
   const crossing = crossedLine(threads);
   const done = doneLine(lab);
   const missing = open !== null && !threads.some((summary) => summary.thread.id === open);
@@ -205,22 +208,19 @@ export function Wall(
                   )}
                   aria-expanded={answerOpen}
                 >
-                  The answer so far
+                  {answered ? 'The lab’s answer' : 'Candidate answers'}
                 </a>
                 {hasNew(question, seen) && !answerOpen ? <New /> : null}
               </div>
-              {data.answer ? (
-                <Answer
-                  view={data.answer}
-                  question={question.thread.id}
-                  open={answerOpen}
-                  threads={threads}
-                  agents={lab.agents}
-                  now={props.now}
-                />
-              ) : (
-                <p className="dim">No answer proposed yet.</p>
-              )}
+              <Candidates
+                view={data.candidates}
+                answered={answered}
+                question={question.thread.id}
+                open={answerOpen}
+                threads={threads}
+                agents={lab.agents}
+                now={props.now}
+              />
               <Faces
                 ids={authors(questionRead.view?.posts ?? [], lab.agents)}
                 agents={lab.agents}
@@ -652,25 +652,70 @@ export function ReportCard(props: {
   );
 }
 
-/**
- * The lab's answer so far, as the server has it now: its headline, where it stands, who proposed it and how long
- * ago, its detail, its files, and what it builds on. With `open`, the detail follows the headline. Closed, the
- * detail is behind "Read the detail", as on a post in a thread, and a headline of more than 200 characters
- * stops after four lines.
- */
-function Answer(props: {
-  readonly view: AnswerView;
+/** What a candidate needs from the page beside the candidate itself. */
+interface CandidatePlace {
   /** The ID of the question's thread. */
   readonly question: string;
   readonly open: boolean;
   readonly threads: readonly ThreadSummary[];
   readonly agents: readonly AgentView[];
   readonly now: Date;
-}): ReactElement {
-  const { post, at, standing } = props.view.answer;
+}
+
+/**
+ * The candidate answers, as the server has them now. With none, a line says so. One candidate shows alone, and
+ * several stand side by side, as many as the width holds, in the order that they came. With `answered`, the lab
+ * is closed: the candidate that its close names shows alone, and the others are folded under it.
+ */
+function Candidates(
+  props: CandidatePlace & { readonly view: CandidatesView; readonly answered: boolean },
+): ReactElement {
+  const { view, answered, ...place } = props;
+  const named = answered ? view.closes_on : null;
+  const rest = view.standing.filter((item) => item.candidate.post.id !== named?.candidate.post.id);
+  const cards = (items: readonly CandidateView[]): ReactElement => (
+    <div className="f-candidates">
+      {items.map((item) => (
+        <div key={item.candidate.post.id} className="f-candidate">
+          <Candidate view={item} {...place} />
+        </div>
+      ))}
+    </div>
+  );
+  if (named) {
+    return (
+      <>
+        <Candidate view={named} {...place} />
+        {rest.length > 0 ? (
+          <details className="f-others">
+            <summary className="f-open">
+              {rest.length === 1 ? '1 other candidate' : `${rest.length} other candidates`}{' '}
+              <span className="closed">Show</span>
+              <span className="opened">Hide</span>
+            </summary>
+            {cards(rest)}
+          </details>
+        ) : null}
+      </>
+    );
+  }
+  const [only] = rest;
+  if (only === undefined) return <p className="dim">No agent has proposed an answer yet.</p>;
+  return rest.length === 1 ? <Candidate view={only} {...place} /> : cards(rest);
+}
+
+/**
+ * One candidate answer: its headline, where it stands, who proposed it and how long ago, its detail, its files,
+ * and what it builds on. A candidate that builds on its author's own entry of a round has that entry's detail
+ * and files too. With `open`, the detail follows the headline. Closed, the detail is behind "Read the detail", as
+ * on a post in a thread, and a headline of more than 200 characters stops after four lines.
+ */
+function Candidate(props: CandidatePlace & { readonly view: CandidateView }): ReactElement {
+  const { post, at, standing } = props.view.candidate;
+  const entry = props.view.entry?.post ?? null;
   const minutes = minutesBetween(at, props.now);
   const under = breakthroughUnder(props.view);
-  // The answer is the newest proposal in any thread. Outside the question's thread, the block names its thread.
+  // An agent proposes in any thread for the whole lab. Outside the question's thread, the candidate names its thread.
   const elsewhere =
     post.thread === props.question
       ? null
@@ -682,8 +727,8 @@ function Answer(props: {
       <p className={look}>{post.text}</p>
       <div className="f-card-st">
         <ChipView chip={standingChip(post, standing) ?? { label: 'Not checked', tone: 'none' }} />
-        {/* The answer has the badge only when the proposal itself got it. */}
-        {hasBreakthrough(props.view.answer) ? <BadgeChip badge="breakthrough" /> : null}
+        {/* The candidate has the badge only when the proposal itself got it. */}
+        {hasBreakthrough(props.view.candidate) ? <BadgeChip badge="breakthrough" /> : null}
         <span className="f-by">
           {authorName(props.agents, post.author)} proposed it{' '}
           <time dateTime={at} title={clock(at)}>
@@ -692,7 +737,7 @@ function Answer(props: {
         </span>
       </div>
       {under ? (
-        // An answer that cites a post with the badge has no badge of its own: the line names what it builds on.
+        // A candidate that cites a post with the badge has no badge of its own: the line names what it builds on.
         <p className="f-earlier">
           <a href={href({ page: 'thread', id: under.post.thread, post: under.post.id })}>
             Builds on a Breakthrough
@@ -700,7 +745,7 @@ function Answer(props: {
         </p>
       ) : null}
       {props.view.to_earlier_question ? (
-        <p className="f-earlier">This answer is to an earlier version of the question.</p>
+        <p className="f-earlier">This candidate is to an earlier version of the question.</p>
       ) : null}
       {elsewhere ? (
         <p className="f-earlier">
@@ -711,25 +756,49 @@ function Answer(props: {
           .
         </p>
       ) : null}
-      {props.open && post.body ? (
-        <div className="f-words">
-          <Words text={post.body} />
-        </div>
-      ) : (
-        // Closed, the detail is one press away, in place. The files follow it in both states.
-        <Detail post={post.id} body={post.body} files={[]} />
-      )}
+      <Body id={post.id} body={post.body} open={props.open} />
       <Files post={post.id} files={post.evidence} />
+      {entry ? (
+        <>
+          <p className="f-earlier">
+            Proposed from{' '}
+            <a href={href({ page: 'thread', id: entry.thread, post: entry.id })}>
+              an entry to a round
+            </a>
+            .
+          </p>
+          <Body id={entry.id} body={entry.body} open={props.open} />
+          <Files post={entry.id} files={entry.evidence} />
+        </>
+      ) : null}
       <Under view={props.view} open={props.open} />
     </>
   );
 }
 
+/** A post's detail: in full with `open`, and else one press away in place, as on a post in a thread. */
+function Body(props: {
+  readonly id: string;
+  readonly body: string;
+  readonly open: boolean;
+}): ReactElement | null {
+  return props.open && props.body ? (
+    <div className="f-words">
+      <Words text={props.body} />
+    </div>
+  ) : (
+    <Detail post={props.id} body={props.body} files={[]} />
+  );
+}
+
 /**
- * What the lab's answer builds on: how many posts, and how many of the results with files among them have no
+ * What a candidate answer builds on: how many posts, and how many of the results with files among them have no
  * check of an independent rerun. With `open`, each post follows with where it stands.
  */
-function Under(props: { readonly view: AnswerView; readonly open: boolean }): ReactElement | null {
+function Under(props: {
+  readonly view: CandidateView;
+  readonly open: boolean;
+}): ReactElement | null {
   const { builds_on: posts, results, no_blind_rerun: waits } = props.view;
   if (posts.length === 0) return null;
   return (

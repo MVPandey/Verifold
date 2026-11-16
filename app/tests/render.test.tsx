@@ -1,15 +1,18 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 import { isValidElement, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
+import { NO_CANDIDATES } from '../src/api/client.ts';
 import type { Api } from '../src/api/client.ts';
 import { PERSON } from '../src/api/types.ts';
 import type {
   AgentView,
-  AnswerView,
+  CandidatesView,
+  CandidateView,
   HarnessOption,
   LabView,
   NoPost,
@@ -392,7 +395,7 @@ describe('agent text', () => {
           threads: [],
           needs: [asked],
           report: null,
-          answer: null,
+          candidates: NO_CANDIDATES,
           version: 1,
           error: null,
           reload: () => undefined,
@@ -1149,7 +1152,7 @@ describe('a rerun that is wanted', () => {
       ],
       needs: [],
       report: null,
-      answer: null,
+      candidates: NO_CANDIDATES,
       version: 1,
       error: null,
       reload: () => undefined,
@@ -1214,7 +1217,7 @@ describe('the lab page', () => {
     threads,
     needs,
     report: null,
-    answer: null,
+    candidates: NO_CANDIDATES,
     version: 1,
     error: null,
     reload: () => undefined,
@@ -1546,15 +1549,23 @@ describe('the lab page', () => {
     open: string,
     questionRead: ThreadRead,
     cardRead: ThreadRead,
-    answer: AnswerView | null = null,
+    /** One candidate, or every candidate of the lab. */
+    answer: CandidateView | CandidatesView | null = null,
     /** The post that the link names, and what the browser's storage holds. */
     link: { readonly post?: string; readonly held?: Record<string, string> } = {},
+    state: LabView['state'] = 'open',
   ): string => {
     storage(link.held);
+    const candidates =
+      answer === null
+        ? NO_CANDIDATES
+        : 'standing' in answer
+          ? answer
+          : { standing: [answer], closes_on: null };
     return renderToStaticMarkup(
       <Wall
         api={{} as Api}
-        data={{ ...data, answer }}
+        data={{ ...data, lab: { ...data.lab, state }, candidates }}
         now={now}
         open={open}
         post={link.post ?? null}
@@ -1563,13 +1574,14 @@ describe('the lab page', () => {
       />,
     );
   };
-  /** The server's answer view for a proposal in the question's thread. */
-  const answerOf = (proposal: Post, changes: Partial<AnswerView> = {}): AnswerView => ({
-    answer: postView({ ...proposal, thread: 't-1' }, 2),
+  /** The server's view of a candidate answer in the question's thread. */
+  const answerOf = (proposal: Post, changes: Partial<CandidateView> = {}): CandidateView => ({
+    candidate: postView({ ...proposal, thread: 't-1' }, 2),
     to_earlier_question: false,
     builds_on: [],
     results: 0,
     no_blind_rerun: [],
+    entry: null,
     ...changes,
   });
   const thread = (id: string, opener: string, posts: readonly Post[]): ThreadRead => ({
@@ -1922,7 +1934,7 @@ describe('the lab page', () => {
     assert.equal(html.includes('Loading the thread.'), false);
   });
 
-  it('opens the question’s thread under the seat, with the answer so far in full', () => {
+  it('opens the question’s thread under the seat, with the candidate in full', () => {
     const proposal = result('p-2', {
       kind: 'proposal',
       text: 'Yes, 12x.',
@@ -2046,7 +2058,7 @@ describe('the lab page', () => {
     assert.ok(html.includes('aria-expanded="false">Show the 2 folded messages</button>'));
   });
 
-  it('takes the answer so far from the lab’s own answer, not from its read of the question’s thread', () => {
+  it('takes the candidates from the lab’s own view, not from its read of the question’s thread', () => {
     const old = result('p-2', { kind: 'proposal', text: 'Yes, 12x.' });
     const newest = result('p-9', { kind: 'proposal', text: 'No: 3x at most.', author: 'agent-2' });
     // The thread's read is behind, as while a long thread loads, or has not come at all.
@@ -2059,16 +2071,20 @@ describe('the lab page', () => {
       assert.equal(html.includes('Loading the answer.'), false);
     }
     // No agent has proposed an answer, whatever the thread's read holds.
-    assert.ok(wall('t-2', behind, none).includes('<p class="dim">No answer proposed yet.</p>'));
+    assert.ok(
+      wall('t-2', behind, none).includes('<p class="dim">No agent has proposed an answer yet.</p>'),
+    );
   });
 
-  it('names the thread of an answer that an agent proposed outside the question’s thread', () => {
+  it('names the thread of a candidate that an agent proposed outside the question’s thread', () => {
     const proposal = result('p-12', {
       kind: 'proposal',
       text: 'No: 3x at most.',
       author: 'agent-2',
     });
-    const elsewhere = answerOf(proposal, { answer: postView({ ...proposal, thread: 't-3' }, 12) });
+    const elsewhere = answerOf(proposal, {
+      candidate: postView({ ...proposal, thread: 't-3' }, 12),
+    });
     const html = wall('t-2', none, none, elsewhere);
     assert.ok(html.includes('<p>No: 3x at most.</p>'));
     assert.ok(
@@ -2078,6 +2094,127 @@ describe('the lab page', () => {
     );
     assert.equal(
       wall('t-2', none, none, answerOf(proposal)).includes('Proposed in the thread'),
+      false,
+    );
+  });
+
+  /** A candidate of another agent, in the question's thread. */
+  const candidateOf = (id: string, author: string, text: string, seq: number): CandidateView =>
+    answerOf(result(id, { kind: 'proposal', text, author }), {
+      candidate: postView(result(id, { kind: 'proposal', text, author, thread: 't-1' }), seq),
+    });
+  const three = [
+    candidateOf('p-2', 'agent-1', 'Yes, 12x.', 2),
+    candidateOf('p-5', 'agent-2', 'No: 3x at most.', 5),
+    candidateOf('p-9', 'agent-3', 'Only on sorted input.', 9),
+  ];
+
+  it('says that no agent has proposed an answer, and shows one candidate alone', () => {
+    const empty = wall('t-2', none, none);
+    assert.ok(empty.includes('aria-expanded="false">Candidate answers</a>'));
+    assert.ok(empty.includes('<p class="dim">No agent has proposed an answer yet.</p>'));
+    const [first] = three;
+    assert.ok(first);
+    const one = wall('t-2', none, none, first);
+    assert.ok(one.includes('aria-expanded="false">Candidate answers</a>'));
+    assert.ok(one.includes('<p>Yes, 12x.</p>'));
+    assert.equal(one.includes('f-candidates'), false);
+  });
+
+  it('shows several candidates side by side, each with its author, age, and standing', () => {
+    const html = wall('t-2', none, none, { standing: three, closes_on: null });
+    const block = html.slice(html.indexOf('class="f-candidates"'), html.indexOf('f-steer'));
+
+    assert.equal(block.split('<div class="f-candidate">').length - 1, 3);
+    // They come in the order that they were proposed, and the page ranks none.
+    const order = ['Yes, 12x.', 'No: 3x at most.', 'Only on sorted input.'].map((text) =>
+      block.indexOf(`<p>${text}</p>`),
+    );
+    assert.deepEqual(
+      order,
+      [...order].sort((a, b) => a - b),
+    );
+    assert.ok(order.every((at) => at > 0));
+    // The third author is no agent of this lab, so the page names it by its ID.
+    for (const name of ['Agent 1', 'Agent 2', 'agent-3']) {
+      assert.ok(block.includes(`<span class="f-by">${name} proposed it <time`), name);
+    }
+    assert.equal(block.split('<span class="f-st fs-none">Not checked</span>').length - 1, 3);
+    // A closing lab still shows every candidate side by side.
+    const closing = wall(
+      't-2',
+      none,
+      none,
+      { standing: three, closes_on: three[1] ?? null },
+      {},
+      'closing',
+    );
+    assert.ok(closing.includes('Candidate answers</a>'));
+    assert.equal(closing.split('<div class="f-candidate">').length - 1, 3);
+  });
+
+  it('shows a closed lab’s answer, the candidate that its close names, with the others folded under it', () => {
+    const named = three[1] ?? null;
+    const html = wall('t-2', none, none, { standing: three, closes_on: named }, {}, 'closed');
+    const block = html.slice(html.indexOf('class="f-answer'), html.indexOf('f-steer'));
+
+    assert.ok(block.includes('aria-expanded="false">The lab’s answer</a>'));
+    assert.equal(block.includes('Candidate answers'), false);
+    // The answer shows alone, before the fold, and the fold holds the two others.
+    const fold = block.indexOf('<details class="f-others">');
+    assert.ok(block.indexOf('<p>No: 3x at most.</p>') < fold);
+    assert.ok(
+      block.includes(
+        '<summary class="f-open">2 other candidates <span class="closed">Show</span><span class="opened">Hide</span></summary>',
+      ),
+    );
+    const folded = block.slice(fold);
+    assert.ok(
+      folded.includes('<p>Yes, 12x.</p>') && folded.includes('<p>Only on sorted input.</p>'),
+    );
+    assert.equal(folded.includes('No: 3x at most.'), false);
+    // A lab whose close names no candidate shows the candidates that stand.
+    const nothing = wall('t-2', none, none, { standing: three, closes_on: null }, {}, 'closed');
+    assert.ok(nothing.includes('Candidate answers</a>'));
+    // With no other candidate, nothing is folded.
+    const alone = wall('t-2', none, none, { standing: [], closes_on: named }, {}, 'closed');
+    assert.ok(alone.includes('The lab’s answer</a>') && !alone.includes('f-others'));
+  });
+
+  it('stacks the candidates on a narrow page and keeps each card within it', () => {
+    const css = readFileSync(new URL('../../src/styles.css', import.meta.url), 'utf8');
+    // At 390 px, one card of at least 260 px fits a row, and a card is never wider than its row.
+    assert.ok(
+      css.includes(
+        '.f-candidates {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));',
+      ),
+    );
+    assert.ok(
+      css.includes('.f-candidate {\n  position: relative;\n  z-index: 1;\n  min-width: 0;'),
+    );
+  });
+
+  it('gives a candidate that builds on its author’s own entry that entry’s detail and files', () => {
+    const file = { type: 'file' as const, path: 'bench.py', commit: 'c'.repeat(40) };
+    const entry = postView(
+      {
+        ...result('p-4', { thread: 't-1', text: '12x.', body: 'The table.', evidence: [file] }),
+        kind: 'entry',
+      },
+      4,
+    );
+    const proposal = result('p-6', { kind: 'proposal', text: 'My entry is my answer.', body: '' });
+    const html = wall('t-2', none, none, answerOf(proposal, { entry }));
+
+    assert.ok(
+      html.includes(
+        '<p class="f-earlier">Proposed from <a href="#/thread/t-1/p-4">an entry to a round</a>.</p>',
+      ),
+    );
+    assert.ok(html.includes('href="#/file/p-4/bench.py"'));
+    assert.ok(html.includes('<span class="closed">Read the detail</span>'));
+    assert.equal(
+      wall('t-2', none, none, answerOf(proposal)).includes('an entry to a round'),
       false,
     );
   });
@@ -2192,17 +2329,18 @@ describe('the lab page', () => {
     assert.ok(html.includes('Every agent gets the new question. The earlier versions stay.'));
   });
 
-  it('says that the answer is to an earlier version of the question after a revision', () => {
+  it('says that a candidate is to an earlier version of the question after a revision', () => {
     const proposal = result('p-2', { kind: 'proposal', text: 'Yes, 12x.' });
     const posts = [result('p-1', { kind: 'message', author: 'person', text: 'Faster?' }), proposal];
     const answer = answerOf(proposal, { to_earlier_question: true });
-    const line = '<p class="f-earlier">This answer is to an earlier version of the question.</p>';
+    const line =
+      '<p class="f-earlier">This candidate is to an earlier version of the question.</p>';
     assert.ok(wall('t-2', thread('t-1', 'person', posts), none, answer).includes(line));
     const current = { ...answer, to_earlier_question: false };
     assert.ok(!wall('t-2', thread('t-1', 'person', posts), none, current).includes(line));
   });
 
-  it('links the answer’s files, and says which results under it have no blind rerun', () => {
+  it('links a candidate’s files, and says which results under it have no blind rerun', () => {
     const file = { type: 'file' as const, path: 'answer.md', commit: 'c'.repeat(40) };
     const proposal = result('p-2', { kind: 'proposal', text: 'Yes, 12x.', evidence: [file] });
     const posts = [result('p-1', { kind: 'message', author: 'person', text: 'Faster?' }), proposal];
@@ -3471,7 +3609,7 @@ describe('a request of a harness', () => {
           threads: [],
           needs: [postView(post)],
           report: null,
-          answer: null,
+          candidates: NO_CANDIDATES,
           version: 1,
           error: null,
           reload: () => undefined,
@@ -3908,7 +4046,7 @@ describe('a round', () => {
       threads: [summary({ thread: { id: 't-2', title: 'Cache', opened_by: 'agent-1' } })],
       needs: [],
       report: null,
-      answer: null,
+      candidates: NO_CANDIDATES,
       version: 1,
       error: null,
       reload: () => undefined,

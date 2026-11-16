@@ -555,7 +555,7 @@ details[open] > summary .opened {
   z-index: 1;
 }
 
-/* The seat: the question, the answer so far, and the box that steers the lab */
+/* The seat: the question, the candidate answers, and the box that steers the lab */
 .f-seat {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 380px;
@@ -706,6 +706,41 @@ details[open] > summary .opened {
   -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+/* The files and the posts under an answer sit above the link that covers the block, so a press opens them. */
+.f-answer .files,
+.f-answer .f-under,
+.f-answer .f-others {
+  position: relative;
+  z-index: 1;
+}
+/*
+ * The candidates side by side, as many as the width holds at 260 px or more each. A narrow page stacks them. A
+ * card sits above the link that covers the block, so a press inside it reaches its own links and folds.
+ */
+.f-candidates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 12px;
+  margin-top: 4px;
+}
+.f-candidate {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+}
+/* A card's headline is its first line. Its other lines keep their own sizes. */
+.f-answer .f-candidate > p:first-child {
+  font-size: 17px;
+}
+.f-others {
+  margin-top: 12px;
+}
+.f-others > .f-candidates {
+  margin-top: 10px;
 }
 /* The link covers its whole block, so the block opens the thread as one target. */
 .f-answer .f-label::after,
@@ -1347,7 +1382,8 @@ details[open] > summary .opened {
 .k-text,
 .nq,
 .d-note,
-.f-answer > p {
+.f-answer > p,
+.f-candidate > p {
   white-space: pre-wrap;
 }
 /*
@@ -1356,7 +1392,8 @@ details[open] > summary .opened {
  */
 .f-turn.claim .f-say-text.long,
 .f-head.long,
-.f-answer > p.long {
+.f-answer > p.long,
+.f-answer .f-candidate > p.long {
   font: 400 16.5px/1.6 var(--body);
   letter-spacing: 0;
   max-width: 64ch;

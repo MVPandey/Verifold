@@ -1,8 +1,8 @@
 import type {
   AgentView,
-  AnswerView,
   Badge,
   BadgeLine,
+  CandidateView,
   Given,
   LabView,
   Post,
@@ -162,9 +162,9 @@ export function proposedLine(line: BadgeLine, agents: readonly AgentView[]): str
   return `Proposed as a breakthrough by ${names}. Waits for ${who}.`;
 }
 
-/** Return the post with a Breakthrough badge that the lab's answer builds on, when the answer itself has none. */
-export function breakthroughUnder(view: AnswerView): PostView | null {
-  if (hasBreakthrough(view.answer)) return null;
+/** Return the post with a Breakthrough badge that a candidate answer builds on, when the candidate itself has none. */
+export function breakthroughUnder(view: CandidateView): PostView | null {
+  if (hasBreakthrough(view.candidate)) return null;
   return view.builds_on.find(hasBreakthrough) ?? null;
 }
 

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { ApiError } from '../src/api/client.ts';
+import { ApiError, NO_CANDIDATES } from '../src/api/client.ts';
 import type { Api } from '../src/api/client.ts';
-import type { AnswerView, LabView } from '../src/api/types.ts';
+import type { CandidatesView, LabView } from '../src/api/types.ts';
 import { EMPTY, LOST, createLoader, inOrder, settled } from '../src/ui/loader.ts';
 import type { LabData } from '../src/ui/loader.ts';
 import { DEFAULTS, labView, postView, result } from './fixtures.ts';
@@ -42,7 +42,7 @@ function slowServer(): {
     threads: () => answer('threads', []),
     needs: () => answer('needs', []),
     report: () => answer('report', null),
-    answer: () => answer('answer', null),
+    candidates: () => answer('candidates', NO_CANDIDATES),
     conversation: () =>
       answer('conversation', {
         coordinator: null,
@@ -128,7 +128,7 @@ describe('the loader', () => {
       'threads',
       'needs',
       'report',
-      'answer',
+      'candidates',
       'conversation',
       'lab',
     ]);
@@ -158,38 +158,47 @@ describe('the loader', () => {
       'threads',
       'needs',
       'report',
-      'answer',
+      'candidates',
       'conversation',
     ]);
     assert.equal(loader.stale(), false);
     assert.equal(state.data().error, null);
   });
 
-  it('reads the answer so far again at every full read', async () => {
+  it('reads the candidate answers again at every full read', async () => {
     const server = slowServer();
     const state = store();
-    const answers = ['Yes, 12x.', 'No: 3x at most.'].map((text, index): AnswerView => ({
-      answer: postView(result(`p-${index + 2}`, { kind: 'proposal', text }), index + 2),
-      to_earlier_question: false,
-      builds_on: [],
-      results: 0,
-      no_blind_rerun: [],
+    const answers = ['Yes, 12x.', 'No: 3x at most.'].map((text, index): CandidatesView => ({
+      standing: [
+        {
+          candidate: postView(result(`p-${index + 2}`, { kind: 'proposal', text }), index + 2),
+          to_earlier_question: false,
+          builds_on: [],
+          results: 0,
+          no_blind_rerun: [],
+          entry: null,
+        },
+      ],
+      closes_on: null,
     }));
-    const api = { ...server.api, answer: () => Promise.resolve(answers.shift() ?? null) };
+    const api = {
+      ...server.api,
+      candidates: () => Promise.resolve(answers.shift() ?? NO_CANDIDATES),
+    };
     const loader = createLoader(api, state.apply);
 
     loader.full();
     await settle();
     server.answerLab(working);
     await settle();
-    assert.equal(state.data().answer?.answer.post.text, 'Yes, 12x.');
+    assert.equal(state.data().candidates.standing[0]?.candidate.post.text, 'Yes, 12x.');
 
-    // A new event on the board causes a full read, and the answer comes with it.
+    // A new event on the board causes a full read, and the candidates come with it.
     loader.full();
     await settle();
     server.answerLab(working);
     await settle();
-    assert.equal(state.data().answer?.answer.post.text, 'No: 3x at most.');
+    assert.equal(state.data().candidates.standing[0]?.candidate.post.text, 'No: 3x at most.');
     assert.equal(state.data().version, 2);
   });
 
