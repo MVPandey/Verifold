@@ -1,18 +1,23 @@
 import asyncio
+import json
 from datetime import timedelta
 
 import pytest
+from builders import START
 from conftest import agent
 from mcp import Client
 
 from verifold.app import NORMS_TEMPLATE
 from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.events import BadgeSet, Voted
+from verifold.protocol.ids import PERSON
+from verifold.protocol.join import PostRequest
 from verifold.server.errors import OutOfTime
 from verifold.server.join import join_server
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.errors import RejectedEvent
+from verifold.society.views import thread_view
 from verifold.society.votes import marks, vote_of
 from verifold.store.record_file import RecordFile
 
@@ -31,15 +36,24 @@ async def test_a_vote_is_recorded_once_and_the_same_vote_again_records_nothing(
     changed = await lab.vote('bo', 'p-1', 'down', 'The second seed fails.')
     assert changed is not None
     assert (changed.direction, marks(lab.board, 'p-1'), lab.board.seq) == ('down', (0, 1, ()), seq + 2)
-    assert await lab.vote('bo', 'p-1', 'none') is None
-    assert (marks(lab.board, 'p-1'), lab.board.seq) == ((0, 0, ()), seq + 3)
-    with pytest.raises(RejectedEvent, match='You have no vote on post p-1'):
+    # An agent's take-back waits until the post's votes show to every agent. The person's does not.
+    with pytest.raises(RejectedEvent, match='are sealed until 2026-11-06 12:10 UTC for the agents that have not voted'):
         await lab.vote('bo', 'p-1', 'none')
+    await lab.vote('person', 'p-1', 'up', 'This is what I asked.')
+    assert await lab.vote('person', 'p-1', 'none') is None
+    assert (marks(lab.board, 'p-1'), lab.board.seq) == ((0, 1, ()), seq + 4)
+    with pytest.raises(RejectedEvent, match='You have no vote on post p-1'):
+        await lab.vote('person', 'p-1', 'none')
     with pytest.raises(RejectedEvent, match='Post p-1 is your own'):
         await lab.vote('ada', 'p-1', 'up', 'Mine.')
     # A refused vote is not in the record, and the record keeps the history of the others.
     stored = [event for event in record_file.read() if isinstance(event, Voted)]
-    assert [(event.by, event.direction) for event in stored] == [('bo', 'up'), ('bo', 'down'), ('bo', 'none')]
+    assert [(event.by, event.direction) for event in stored] == [
+        ('bo', 'up'),
+        ('bo', 'down'),
+        ('person', 'up'),
+        ('person', 'none'),
+    ]
     assert Lab.load(record_file).board.votes == lab.board.votes
 
 
@@ -174,6 +188,74 @@ async def test_agents_vote_and_give_badges_through_the_mcp_tools(lab: Lab) -> No
     assert vote_of(lab.board, 'bo', 'p-1') is not None
 
 
+async def test_an_agent_reads_no_vote_on_a_young_post_until_it_votes_or_the_reveal_time_passes(
+    record_file: RecordFile,
+) -> None:
+    now = [START]
+    lab = Lab.create(record_file, 'Does it hold?', clock=lambda: now[0])
+    for name in ('ada', 'bo', 'cy', 'dan'):
+        await lab.join(agent(name))
+    await lab.post(PostRequest(kind='result', text='Beats random.', new_thread='Does it beat random?'), 'ada')
+    await lab.vote('bo', 'p-1', 'up', 'It matches my run.')
+    cy, dan = Member(lab, 'cy'), Member(lab, 'dan')
+
+    async def results(member: Member) -> str:
+        # Every tool result that can carry the post p-1, its line, or its votes, as the agent gets it.
+        async with Client(join_server(lambda _: member)) as client:
+            calls = (
+                ('brief', {}),
+                ('threads', {}),
+                ('thread', {'thread': 't-1'}),
+                ('thread', {'thread': 't-1', 'votes_of': 'p-1'}),
+                ('wait', {'timeout_seconds': 0}),
+                ('post', {'kind': 'message', 'text': 'Reading.', 'thread': 't-1'}),
+            )
+            called = [await client.call_tool(name, arguments) for name, arguments in calls]
+        return json.dumps([result.structured_content for result in called])
+
+    # cy neither wrote p-1 nor voted on it, and p-1 is young: no result shows a count, a voter, or a reason.
+    member_view = await results(cy)
+    assert 'It matches my run.' not in member_view
+    assert '"up": 1' not in member_view
+    # Its own vote shows it every vote, in the result of the call and from then on.
+    async with Client(join_server(lambda _: cy)) as client:
+        voted = await client.call_tool('vote', {'post': 'p-1', 'direction': 'down', 'reason': 'One seed only.'})
+    assert voted.structured_content is not None
+    assert [voted.structured_content[key] for key in ('up', 'down', 'yours')] == [1, 1, 'down']
+    assert 'It matches my run.' in await results(cy)
+    # dan did not vote. After the reveal time it sees every vote.
+    assert 'It matches my run.' not in await results(dan)
+    now[0] = START + timedelta(minutes=10)
+    revealed = await results(dan)
+    assert ('It matches my run.' in revealed, '"up": 1' in revealed) == (True, True)
+    # The author and the person see the votes at once.
+    assert [vote.by for vote in Member(lab, 'ada').thread('t-1').posts[0].votes] == ['bo', 'cy']
+    assert [vote.by for vote in thread_view(lab.board, PERSON, 't-1').posts[0].votes] == ['bo', 'cy']
+
+
+async def test_an_agent_takes_back_no_vote_on_a_post_whose_votes_are_sealed_and_turns_it_the_other_way(
+    record_file: RecordFile,
+) -> None:
+    now = [START]
+    lab = Lab.create(record_file, 'Does it hold?', clock=lambda: now[0])
+    for name in ('ada', 'bo', 'cy'):
+        await lab.join(agent(name))
+    await lab.post(PostRequest(kind='result', text='Beats random.', new_thread='Does it beat random?'), 'ada')
+    await lab.vote('bo', 'p-1', 'up', 'It matches my run.')
+    cy = Member(lab, 'cy')
+    await cy.vote('p-1', 'up', 'Same here.')
+
+    # A vote and its take-back would show cy the tally of a young post and leave no vote of cy's.
+    with pytest.raises(RejectedEvent, match='sealed until 2026-11-06 12:10 UTC for the agents that have not voted'):
+        await cy.vote('p-1', 'none')
+    turned = await cy.vote('p-1', 'down', 'One seed only.')
+    assert (turned.up, turned.down) == (1, 1)
+    # Once the votes show to every agent, the take-back is a vote's ordinary end.
+    now[0] = START + timedelta(minutes=10)
+    back = await cy.vote('p-1', 'none')
+    assert (back.up, back.down, vote_of(lab.board, 'cy', 'p-1')) == (1, 0, None)
+
+
 def test_the_norms_say_what_a_vote_is_for_and_when_to_vote_and_ask_no_agent_to_earn_votes() -> None:
     start = NORMS_TEMPLATE.index('## Votes and badges')
     section = NORMS_TEMPLATE[start : NORMS_TEMPLATE.index('\n## ', start + 1)]
@@ -183,6 +265,8 @@ def test_the_norms_say_what_a_vote_is_for_and_when_to_vote_and_ask_no_agent_to_e
         'The board ranks nothing by votes and keeps no score for an agent.',
         'Vote to inform the others, and do not write to collect votes.',
         'Vote at the two moments when you read the board: before new work, and before you end your turn.',
+        # The board seals a young post's votes, and the norm says why.
+        'A young post shows you no votes until you vote on it yourself, so that your vote is your own judgement.',
         'For a line of work, put it on the plan or on the newest result of the line.',
         'It does not say that the post is right, and it is no evidence for a result or for a proposal.',
         'Vote up when a post changed what you do, or when it ought to change what the lab does.',

@@ -161,7 +161,7 @@ def test_a_post_for_the_person_does_not_open_a_closed_lab_again() -> None:
 def test_only_the_coordinator_asks_for_a_move_and_only_in_the_conversation() -> None:
     board = talk().request('p-1', 'ada', MORE).board()
 
-    view = post_view(board, board.posts[-1])
+    view = post_view(board, board.posts[-1], 'person')
     assert (view.waits, view.decision) == (True, None)
     assert [item.post.id for item in needs_person(board)] == ['p-1']
     refused(talk().request('p-1', 'bo', MORE), 'Only the agent that holds the coordinator seat asks')
@@ -207,7 +207,7 @@ def test_the_person_answers_a_request_once_and_nobody_else_does_without_a_power(
     no = RecordBuilder(events=list(asked.events)).answered('p-1', yes=False).board()
 
     assert (yes.answer_to('p-1'), no.answer_to('p-1')) == (yes.answers[-1], no.answers[-1])
-    assert not post_view(no, no.posts[-1]).waits
+    assert not post_view(no, no.posts[-1], 'person').waits
     assert needs_person(no) == ()
     refused(RecordBuilder(events=list(asked.events)).answered('p-1').answered('p-1'), 'has its answer already')
     refused(RecordBuilder(events=list(asked.events)).answered('p-9'), 'p-9 is no request for a move')
@@ -223,7 +223,10 @@ def test_a_request_ends_for_good_when_the_seat_changes_also_when_its_author_gets
 
     board = asked.board()
 
-    assert (post_view(board, board.posts[-1]).waits, post_view(board, board.posts[-1]).ended) == (False, 'seat')
+    assert (post_view(board, board.posts[-1], 'person').waits, post_view(board, board.posts[-1], 'person').ended) == (
+        False,
+        'seat',
+    )
     assert needs_person(board) == ()
     ended = 'The coordinator seat changed after ada asked, so its request p-1 ended'
     refused(RecordBuilder(events=list(asked.events)).answered('p-1'), ended)
@@ -232,7 +235,10 @@ def test_a_request_ends_for_good_when_the_seat_changes_also_when_its_author_gets
     # The seat comes back to ada. Her request from before stays ended, also for her power.
     back = RecordBuilder(events=list(asked.events)).coordinator('ada').power('time', 'ada')
     again = back.board()
-    assert (post_view(again, again.posts[-1]).waits, post_view(again, again.posts[-1]).ended) == (False, 'seat')
+    assert (post_view(again, again.posts[-1], 'person').waits, post_view(again, again.posts[-1], 'person').ended) == (
+        False,
+        'seat',
+    )
     assert needs_person(again) == ()
     refused(RecordBuilder(events=list(back.events)).answered('p-1'), ended)
     refused(RecordBuilder(events=list(back.events)).answered('p-1', by='ada'), ended)
@@ -521,7 +527,7 @@ def test_a_request_to_answer_a_permission_request_ends_when_that_request_got_its
     assert needs_person(board) == ()
     asked = board.post('p-2')
     assert asked is not None
-    view = post_view(board, asked)
+    view = post_view(board, asked, 'person')
     assert (view.waits, view.ended) == (False, 'ask')
     refused(RecordBuilder(events=list(record.events)).answered('p-2'), 'p-1 waits for no answer now')
     refused(record.answered('p-2', yes=False), 'p-1 waits for no answer now, so the request p-2 ended')

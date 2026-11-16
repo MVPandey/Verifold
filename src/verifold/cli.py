@@ -123,6 +123,10 @@ def _start(args: argparse.Namespace) -> StartRequest:
         minutes=shorter if args.minutes is None else args.minutes,
         allow=tuple(args.allow or ()),
         reviewer_seats=_reviewer_seats(values, own=own),
+        reveal_minutes=_own_minutes(
+            values, 'votes', 'reveal_minutes', 'the minutes that a new post hides its votes', own=own
+        ),
+        lease_minutes=_own_minutes(values, 'reruns', 'lease_minutes', 'the minutes that a take holds a rerun', own=own),
         # A deliverable is the person's own sentence for this lab, as the question is. No settings file holds one.
         deliverables=tuple(args.deliverable or ()),
     )
@@ -145,6 +149,27 @@ def _reviewer_seats(values: Mapping[SettingsLevel, SettingsValues], *, own: bool
     )
     mine = settings_of({SettingsLevel.ALL: values[SettingsLevel.ALL]}).reviewers.seats
     return 'size' if mine is None else mine
+
+
+def _own_minutes(
+    values: Mapping[SettingsLevel, SettingsValues], section: str, name: str, what: str, *, own: bool
+) -> int | None:
+    """
+    Return the minutes of `section.name` that `verifold run` starts with, or `None` for what the files add up to.
+
+    `verifold run` does not use the number in a project's file, and says so, as for the reviewer seats. Zero turns
+    the sealed votes or the leases off, and a day lets a vote stay hidden or a first taker hold a rerun for a day,
+    so no number from somebody else's file is the stricter one. The lab then has the person's own number, or the
+    default.
+    """
+    project = values[SettingsLevel.PROJECT].get(section)
+    if own or not (isinstance(project, dict) and name in project):
+        return None
+    _say(
+        f"Did not use {what} from this project's settings file: `verifold run` takes it only from your settings for all projects."
+    )
+    mine = settings_of({SettingsLevel.ALL: values[SettingsLevel.ALL]})
+    return mine.votes.reveal_minutes if section == 'votes' else mine.reruns.lease_minutes
 
 
 def _saved_agents(

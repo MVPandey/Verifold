@@ -23,6 +23,7 @@ from verifold.protocol.events import (
     ProfileSet,
     QuestionRevised,
     RequestAnswered,
+    RerunLeaseSet,
     RerunRequested,
     RerunTaken,
     ReviewerSet,
@@ -50,6 +51,7 @@ from verifold.society.rules import (
     check_agent,
     check_alarm,
     check_coordinator,
+    check_lease,
     check_left,
     check_named,
     check_on_call,
@@ -132,6 +134,9 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
         case RerunTaken():
             check_take(board, event)
             return replace(board, seq=event.seq, takes=(*board.takes, event))
+        case RerunLeaseSet():
+            check_lease(board, event)
+            return replace(board, seq=event.seq, leases=(*board.leases, event))
         case TimeSet():
             check_time(event)
             check_made(board, event)
@@ -145,7 +150,8 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
         case SettingsSet(settings=settings):
             check_made(board, event)
             numbers = (*board.seat_numbers, (event.seq, settings.reviewers.seats))
-            return replace(board, seq=event.seq, settings=settings, seat_numbers=numbers)
+            history = (*board.settings_history, (event.seq, settings))
+            return replace(board, seq=event.seq, settings=settings, seat_numbers=numbers, settings_history=history)
         case PermissionGranted(prefix=prefix):
             grants = board.grants if prefix in board.grants else (*board.grants, prefix)
             return replace(board, seq=event.seq, grants=grants)

@@ -1,5 +1,6 @@
 """The board: the state that a lab's events add up to."""
 
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from datetime import datetime
 from heapq import merge
@@ -20,6 +21,7 @@ from verifold.protocol.events import (
     ProfileSet,
     QuestionRevised,
     RequestAnswered,
+    RerunLeaseSet,
     RerunRequested,
     RerunTaken,
     ReviewerSet,
@@ -73,11 +75,15 @@ class Board:
     reruns: tuple[RerunRequested, ...] = ()
     takes: tuple[RerunTaken, ...] = ()
     """Each time that an agent took the rerun of a post, oldest first."""
+    leases: tuple[RerunLeaseSet, ...] = ()
+    """Each time that an agent renewed or gave up its lease on a rerun that it took, oldest first."""
     times: tuple[TimeSet | TimeRanOut, ...] = ()
     settings: Settings = field(default_factory=Settings)
     """The person's settings for the lab: the latest that the record holds, or the defaults."""
     seat_numbers: tuple[tuple[int, int | None], ...] = ()
     """Each number of reviewer seats that the person's settings held, with the event that set it, oldest first."""
+    settings_history: tuple[tuple[int, Settings], ...] = ()
+    """Each of the person's settings for the lab, with the event that set it, oldest first."""
     grants: tuple[str, ...] = ()
     """The starts of the commands that the person lets every agent run."""
     power_sets: tuple[PowerSet, ...] = ()
@@ -89,7 +95,10 @@ class Board:
     badges: tuple[BadgeSet, ...] = ()
     """Each change to a badge on a post, oldest first."""
     votes_on: dict[PostId, dict[AgentId, Voted]] = field(default_factory=dict)
-    """The votes that stand on each post, by voter, in the order cast. No code changes a dictionary of a board."""
+    """
+    The latest vote of each voter on each post, by voter, in the order cast: one that stands, or the `none` with
+    which the voter took its vote back. No code changes a dictionary of a board.
+    """
     badges_on: dict[PostId, tuple[BadgeSet, ...]] = field(default_factory=dict)
     """The changes to the badges of each post, oldest first."""
     deliverables: tuple[DeliverableSet, ...] = ()
@@ -407,6 +416,11 @@ class Board:
         """Return whether a thread is the thread of the offers for a deliverable. No post there is for every agent."""
         opened = self.thread(thread_id)
         return bool(opened and opened.thread.deliverable)
+
+    def settings_at(self, seq: int) -> Settings:
+        """Return the settings that the lab followed at event `seq`: the latest ones by then, or the defaults."""
+        index = bisect_right(self.settings_history, seq, key=lambda pair: pair[0])
+        return self.settings_history[index - 1][1] if index else Settings()
 
     def take(self, agent_id: AgentId, post_id: PostId) -> RerunTaken | None:
         """Return the entry with which an agent took the rerun of a post, or `None`. An agent takes a post once."""

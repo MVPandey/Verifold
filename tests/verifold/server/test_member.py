@@ -387,9 +387,13 @@ async def test_who_can_take_a_rerun(lab: Lab) -> None:
     with pytest.raises(RejectedEvent, match='takes a reviewer seat while an agent in such a seat can take it'):
         await bo.take_rerun('p-2')
     assert lab.board.takes == ()
-    # The holder took it, so no agent in a reviewer seat can take it any more, and any other agent can.
+    # The holder took it, so no agent in a reviewer seat can take it any more, and any other agent can once the
+    # holder's lease ends.
     await cy.take_rerun('p-2')
     assert [(line.open_to, line.taken_by) for line in bo.brief('').reruns_wanted] == [('any', ('cy',))]
+    with pytest.raises(RejectedEvent, match='cy holds the rerun of post p-2 since'):
+        await bo.take_rerun('p-2')
+    await cy.take_rerun('p-2', give_up=True)
     assert (await bo.take_rerun('p-2')).post == 'p-2'
     # The one check of that rerun needs no seat of its own. Any other check of bo's does, also a later rerun.
     with pytest.raises(RejectedEvent, match=r'A check on another agent.s post takes a reviewer seat'):
@@ -431,8 +435,18 @@ async def test_a_take_returns_the_manifest_of_the_copy_and_the_record_keeps_its_
     assert lab.board.takes[0].manifest == 'cd' * 32
     # A manifest of very many files is in its file only, and the result says how many it has.
     copies.files = tuple(ManifestLine(path=f'f{number}', size=1, sha256='ab' * 32) for number in range(201))
-    many = await bo.take_rerun('p-2')
+    await bo.take_rerun('p-2', give_up=True)
+    await lab.join(agent('cy'))
+    many = await Member(lab, 'cy', copies=copies).take_rerun('p-2')
     assert (many.manifest, many.manifest_files) == ((), 201)
+    # bo's renewal makes no export: it gives the folder of its take, the manifest's file, and the record's SHA-256.
+    again = await bo.take_rerun('p-2')
+    assert (again.folder, again.manifest_file, again.manifest_sha256) == (
+        str(copies.folder / 'p-2'),
+        str(copies.folder / 'p-2.manifest'),
+        'cd' * 32,
+    )
+    assert (again.manifest, again.manifest_files, copies.made) == ((), 0, [('p-2', 'ada'), ('p-2', 'ada')])
 
 
 async def test_two_calls_of_one_agent_at_the_same_time_are_one_take_and_one_check_of_it(lab: Lab) -> None:
@@ -447,7 +461,13 @@ async def test_two_calls_of_one_agent_at_the_same_time_are_one_take_and_one_chec
 
     first, second = await asyncio.gather(bo.take_rerun('p-2'), bo.take_rerun('p-2'))
 
-    assert (first, len(lab.board.takes)) == (second, 1)
+    # The later call renews the lease of the first, so only the end of the lease can differ.
+    assert (first.folder, first.commit, first.held_since, len(lab.board.takes)) == (
+        second.folder,
+        second.commit,
+        second.held_since,
+        1,
+    )
     # The first check is the check of the take. The second posts as a check like any other, and is not refused.
     checks = await asyncio.gather(bo.post(rerun_check()), bo.post(rerun_check()))
     assert [check.post.model_dump()['take'] for check in checks] == [lab.board.takes[0].seq, None]
@@ -462,17 +482,19 @@ async def test_two_calls_of_one_agent_at_the_same_time_are_one_take_and_one_chec
     assert 'takes a reviewer seat' in str(both[1])
 
 
-async def test_a_second_take_of_the_same_post_gives_the_same_copy_and_records_nothing(lab: Lab) -> None:
+async def test_a_second_take_of_the_same_post_gives_the_same_copy_and_renews_the_lease(lab: Lab) -> None:
     await a_claim(lab)
     await Member(lab, 'ada').rerun('p-2')
     copies = FakeCopies()
     bo = Member(lab, 'bo', copies=copies)
     first = await bo.take_rerun('p-2')
-    seq = lab.board.seq
 
     again = await bo.take_rerun('p-2')
 
-    assert (again.folder, lab.board.seq) == (first.folder, seq)
+    assert (again.folder, len(lab.board.takes)) == (first.folder, 1)
+    (renewed,) = lab.board.leases
+    assert (renewed.agent, renewed.post, renewed.held) == ('bo', 'p-2', True)
+    assert (again.held_since, again.held_until) == (first.held_since, renewed.at + timedelta(minutes=10))
 
 
 async def test_a_request_ends_the_wait_of_an_agent_that_can_take_it(lab: Lab) -> None:

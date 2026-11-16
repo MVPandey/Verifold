@@ -3,11 +3,13 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 
 from verifold.protocol.agents import GUEST, Picture
 from verifold.protocol.app import Heard
-from verifold.protocol.events import AgentLeft, AlarmSet, Posted, RerunRequested, WatchSet
+from verifold.protocol.events import AgentLeft, AlarmSet, Posted, RerunRequested, RerunTaken, WatchSet
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
     MAX_MANIFEST,
@@ -18,6 +20,7 @@ from verifold.protocol.join import (
     PostRequest,
     PostView,
     ProfileResult,
+    RerunLine,
     RerunTake,
     ThreadList,
     ThreadView,
@@ -33,7 +36,7 @@ from verifold.society.attention import news, update, wakes
 from verifold.society.deliverables import live
 from verifold.society.errors import RejectedEvent
 from verifold.society.identity import post_view
-from verifold.society.reruns import open_take
+from verifold.society.reruns import RerunKey, kept_until, lease_of, open_take, told_of
 from verifold.society.views import brief, profile_result, side_lines, thread_summaries, thread_view, work_threads
 
 type Pin = Callable[[tuple[str, ...]], Awaitable[tuple[FileEvidence, ...]]]
@@ -53,11 +56,26 @@ class MadeCopy:
     """The SHA-256 of that file's bytes."""
 
 
-type CleanCopy = Callable[[Posted], Awaitable[MadeCopy]]
-"""
-Returns the clean copy of the files that a post pins, in a folder of Verifold's own. It makes the copy when it is
-not there, and it checks at each call that the copy is exactly the pinned commit's files.
-"""
+class CleanCopy(Protocol):
+    """The clean copies of the files that the posts of a lab pin, each in a folder of Verifold's own."""
+
+    async def __call__(self, claim: Posted) -> MadeCopy:
+        """
+        Return the clean copy of the files that a post pins.
+
+        It makes the copy when it is not there, and it checks at each call that the copy is exactly the pinned
+        commit's files.
+        """
+        ...
+
+    async def kept(self, claim: Posted, digest: str) -> MadeCopy | None:
+        """
+        Return the clean copy of a post's files as a take left it, or `None` when it is not there as it was.
+
+        It is there when its folder is and its manifest file has the SHA-256 `digest`. The copy has no lines of the
+        manifest: this checks one file, and the manifest's SHA-256 checks the rest.
+        """
+        ...
 
 
 class Member:
@@ -96,6 +114,11 @@ class Member:
         self._lab = lab
         self.agent_id = agent_id
         self._seen = lab.board.seq if seen is None else seen
+        self._told: tuple[tuple[RerunKey, int], ...] = ()
+        """
+        Each wanted rerun that a result of this seat told the agent of, with the event that the result reached. A
+        seat starts with none, so after a restart an agent can be told of a rerun a second time, and never not.
+        """
         before = self._heard_before()
         self._heard: tuple[Heard, ...] = (before,) if before else ()
         """Each fact of what the results carried, the newest last, so that a failed turn can go back to an earlier one."""
@@ -109,6 +132,16 @@ class Member:
     def seen(self) -> int:
         """The last event that the agent got, from `news` or `wait`."""
         return self._seen
+
+    @property
+    def told(self) -> frozenset[RerunKey]:
+        """The wanted reruns that this seat told the agent of. The news tells each once."""
+        return frozenset(key for key, _ in self._told)
+
+    def _tell(self, lines: tuple[RerunLine, ...], seq: int) -> None:
+        # The reruns that a result carries to the agent now, so that no later result tells of them again.
+        fresh = told_of(self._lab.board, lines) - self.told
+        self._told = (*self._told, *((key, seq) for key in sorted(fresh)))
 
     @property
     def heard(self) -> Heard | None:
@@ -181,7 +214,7 @@ class Member:
         # earlier version can post just after a revision, and its answer is then to that earlier version.
         seen = sum(self._seen >= told.seq for revision in board.revisions if (told := board.post(revision.post)))
         posted = await self._lab.post(request, self.agent_id, evidence, seen, take=taken.seq if taken else None)
-        return post_view(self._lab.board, posted)
+        return post_view(self._lab.board, posted, self.agent_id, self._lab.now())
 
     async def offer(
         self, deliverable_id: DeliverableId, files: tuple[str, ...], note: str, body: str = '', helper: str = ''
@@ -205,7 +238,7 @@ class Member:
         # A path that the call names twice is one file of the offer.
         evidence = await self._pin(tuple(dict.fromkeys(files)))
         posted = await self._lab.offer(self.agent_id, deliverable_id, evidence, note, body, helper=helper)
-        return post_view(self._lab.board, posted)
+        return post_view(self._lab.board, posted, self.agent_id, self._lab.now())
 
     async def request(self, move: Move, text: str, body: str = '') -> PostView:
         """
@@ -223,7 +256,7 @@ class Member:
             # A seat whose harness this computer lacks is refused now, so it never waits for the person.
             self._seat_ok(move.seat)
         posted = await self._lab.request(move, text, body, self.agent_id, self._adds)
-        return post_view(self._lab.board, posted)
+        return post_view(self._lab.board, posted, self.agent_id, self._lab.now())
 
     def news(self) -> News:
         """
@@ -243,12 +276,14 @@ class Member:
         return brief(self._lab.board, self.agent_id, self._unseen(), how if first else '', now=self._lab.now())
 
     def _unseen(self) -> News:
-        unseen = news(self._lab.board, self.agent_id, self._seen)
+        now = self._lab.now()
+        unseen = news(self._lab.board, self.agent_id, self._seen, now, told=self.told)
         self._seen = unseen.seq
-        self._hear((*unseen.for_you, *unseen.others))
+        self._tell(unseen.reruns, unseen.seq)
+        self._hear(now, (*unseen.for_you, *unseen.others))
         return unseen
 
-    def _hear(self, lines: Iterable[PostLine], full: Iterable[PostView] = ()) -> None:
+    def _hear(self, now: datetime, lines: Iterable[PostLine], full: Iterable[PostView] = ()) -> None:
         # The person's posts in the conversation that a result carries to the agent now, each by its place and
         # whether the result holds it whole.
         talk = self._lab.board.conversation
@@ -265,7 +300,7 @@ class Member:
         # A place and its whole flag compare as a pair: a newer post, or the same post whole after its cut line.
         if newest and (heard is None or newest > (heard.seq, heard.whole)):
             seq, whole = newest
-            self._heard = (*self._heard, Heard(seq=seq, at=self._lab.now(), whole=whole))
+            self._heard = (*self._heard, Heard(seq=seq, at=now, whole=whole))
 
     def _heard_before(self) -> Heard | None:
         # The person's newest post in the conversation for the agent, between its join and the place where it is.
@@ -295,6 +330,8 @@ class Member:
         """
         self._seen = min(self._seen, seq)
         self._heard = tuple(heard for heard in self._heard if heard.seq <= self._seen)
+        # The reruns that the lost results told of are news again.
+        self._told = tuple((key, at) for key, at in self._told if at <= self._seen)
 
     def threads(self) -> ThreadList:
         """
@@ -302,13 +339,14 @@ class Member:
 
         Both have the most recently active first, and the agent's own side threads come before the others.
         """
-        every = thread_summaries(self._lab.board, self.agent_id)
+        every = thread_summaries(self._lab.board, self.agent_id, self._lab.now())
         return ThreadList(threads=work_threads(every), side_threads=side_lines(every, self.agent_id))
 
     def thread(self, thread_id: ThreadId, votes_of: PostId | None = None) -> ThreadView:
         """Return a thread and its posts. The post that `votes_of` names has the longer list of its votes."""
-        view = thread_view(self._lab.board, self.agent_id, thread_id, votes_of)
-        self._hear((), view.posts)
+        now = self._lab.now()
+        view = thread_view(self._lab.board, self.agent_id, thread_id, votes_of, now)
+        self._hear(now, (), view.posts)
         return view
 
     async def rerun(self, post_id: PostId) -> RerunRequested:
@@ -322,17 +360,22 @@ class Member:
         self._check_in_time()
         return await self._lab.request_rerun(self.agent_id, post_id)
 
-    async def take_rerun(self, post_id: PostId) -> RerunTake:
+    async def take_rerun(self, post_id: PostId, *, give_up: bool = False) -> RerunTake:
         """
         Take the rerun of a post that somebody asked for, and return the claim with the clean copy of its files.
 
         The copy is in a folder of Verifold's own, and the take is recorded when the copy is there. So a copy that
-        fails records nothing. Each call checks the copy again and returns its manifest. A second call records
-        nothing more.
+        fails, and a take that the board refuses, record nothing. A take checks the copy and returns its manifest,
+        and it gives the agent a lease on the rerun. A later call of the agent renews the lease, and it checks only
+        that the copy's folder is there and that its manifest file has the SHA-256 that the record keeps. Then it
+        returns them without the manifest's lines, and it makes the copy again when either check fails. When the
+        board does not renew the lease, `not_renewed` says why. With `give_up`, the call ends the
+        agent's lease and makes no copy.
 
         Raises:
             RejectedEvent: The agent cannot take the rerun: the post does not exist or is its own, no rerun of it
-                is wanted, or the rerun is for an agent in a reviewer seat and the agent holds none.
+                is wanted, the rerun is for an agent in a reviewer seat and the agent holds none, or another
+                agent's lease keeps it out. Or it gives up a lease that it does not hold.
             NoCleanCopy: This seat makes no clean copies, or Verifold could not make this one.
             OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
 
@@ -341,25 +384,47 @@ class Member:
         claim = self._lab.board.post(post_id)
         if claim is None:
             raise RejectedEvent(f'Post {post_id} does not exist.')
+        if give_up:
+            return self._claim(claim, await self._lab.give_up_rerun(self.agent_id, post_id))
         if self._copies is None:
             raise NoCleanCopy('This lab cannot make a clean copy for you.')
-        if self._lab.board.take(self.agent_id, post_id) is None:
-            self._lab.check_take(self.agent_id, post_id)
+        if (taken := self._lab.board.take(self.agent_id, post_id)) is not None:
+            # An export can take minutes, so a later call checks the folder and the manifest's file, and exports
+            # again only when one of them is gone or changed.
+            why = await self._lab.renew_rerun(self.agent_id, post_id)
+            kept = await self._copies.kept(claim, taken.manifest) if taken.manifest else None
+            made = kept or await self._copies(claim)
+            return self._copy(self._claim(claim, taken), made).model_copy(update={'not_renewed': why})
+        self._lab.check_take(self.agent_id, post_id)
         made = await self._copies(claim)
-        taken = await self._lab.take_rerun(self.agent_id, post_id, made.digest)
+        return self._copy(self._claim(claim, await self._lab.take_rerun(self.agent_id, post_id, made.digest)), made)
+
+    @staticmethod
+    def _copy(claim: RerunTake, made: MadeCopy) -> RerunTake:
+        # The claim with where its clean copy is, and the copy's manifest as far as this call checked it.
+        return claim.model_copy(
+            update={
+                'folder': str(made.folder),
+                'manifest': made.files if len(made.files) <= MAX_MANIFEST else (),
+                'manifest_files': len(made.files),
+                'manifest_file': str(made.listing),
+                'manifest_sha256': made.digest,
+            }
+        )
+
+    def _claim(self, claim: Posted, taken: RerunTaken) -> RerunTake:
+        # The claim with the agent's lease on its rerun as it stands now, and no clean copy.
+        lease = lease_of(self._lab.board, self.agent_id, claim.post.id, self._lab.now())
         return RerunTake(
-            post=post_id,
+            post=claim.post.id,
             thread=claim.post.thread,
             author=claim.post.author,
             text=claim.post.text,
             body=claim.post.body,
             files=tuple(file.path for file in claim.post.evidence),
             commit=taken.commit,
-            folder=str(made.folder),
-            manifest=made.files if len(made.files) <= MAX_MANIFEST else (),
-            manifest_files=len(made.files),
-            manifest_file=str(made.listing),
-            manifest_sha256=made.digest,
+            held_since=lease.since if lease else None,
+            held_until=lease.until if lease else None,
         )
 
     async def vote(self, post_id: PostId, direction: Direction, reason: str = '') -> PostView:
@@ -402,7 +467,7 @@ class Member:
         entry = self._lab.board.post(post_id)
         if entry is None:
             raise RejectedEvent(f'Post {post_id} does not exist.')
-        return post_view(self._lab.board, entry)
+        return post_view(self._lab.board, entry, self.agent_id, self._lab.now())
 
     def _is_guest(self) -> bool:
         joined = self._lab.board.agent(self.agent_id)
@@ -502,8 +567,8 @@ class Member:
         Return what happened since the agent last looked, once a post wakes it or `timeout` seconds pass.
 
         Posts that don't wake the agent count toward the update's summary, but they don't end the wait. The wait
-        also ends when an agent that this agent wrote to leaves the lab, and when somebody asks for a rerun that
-        this agent can take.
+        also ends when an agent that this agent wrote to leaves the lab, when somebody asks for a rerun that this
+        agent can take, and when a lease that kept the agent from such a rerun ends without a check.
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
@@ -512,10 +577,15 @@ class Member:
             self.check_here()
             if self.void:
                 raise UnknownAgent('This agent got a new invitation, so the token of this call is void.')
-            news = update(self._lab.board, self.agent_id, self._seen, self._lab.now())
+            now = self._lab.now()
+            news = update(self._lab.board, self.agent_id, self._seen, now, told=self.told)
             remaining = deadline - loop.time()
             if news.posts or news.left or news.reruns or remaining <= 0:
                 self._seen = news.seq
-                self._hear(news.others, news.posts)
+                self._tell(news.reruns, news.seq)
+                self._hear(now, news.others, news.posts)
                 return news
-            await self._lab.wait_for_change(news.seq, remaining)
+            # A rerun that only a lease keeps from the agent comes free at the lease's end, which is no event.
+            free = kept_until(self._lab.board, self.agent_id, now, self.told)
+            frees = remaining if free is None else min(remaining, (free - now).total_seconds())
+            await self._lab.wait_for_change(news.seq, frees)

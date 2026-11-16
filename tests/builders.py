@@ -25,6 +25,7 @@ from verifold.protocol.events import (
     ProfileSet,
     QuestionRevised,
     RequestAnswered,
+    RerunLeaseSet,
     RerunRequested,
     RerunTaken,
     ReviewerSet,
@@ -114,8 +115,12 @@ class RecordBuilder:
 
     def reviewer_seats(self, seats: int | None) -> 'RecordBuilder':
         """Add the person's settings with a number of reviewer seats."""
+        return self.settings(Settings(reviewers=ReviewerSettings(seats=seats)))
+
+    def settings(self, settings: Settings) -> 'RecordBuilder':
+        """Add the person's settings for the lab."""
         seq, at = self._stamp()
-        self.events.append(SettingsSet(seq=seq, at=at, settings=Settings(reviewers=ReviewerSettings(seats=seats))))
+        self.events.append(SettingsSet(seq=seq, at=at, settings=settings))
         return self
 
     def leave(self, agent_id: str, by: str | None = None, reason: str = '') -> 'RecordBuilder':
@@ -208,6 +213,12 @@ class RecordBuilder:
         """Add an agent's take of the rerun of a post, whose files are pinned to `commit`."""
         seq, at = self._stamp()
         self.events.append(RerunTaken(seq=seq, at=at, agent=agent_id, post=post_id, commit=commit))
+        return self
+
+    def lease(self, agent_id: str, post_id: str, *, held: bool = True) -> 'RecordBuilder':
+        """Add an agent's renewal of its lease on the rerun of a post, or with `held` false, its give-up."""
+        seq, at = self._stamp()
+        self.events.append(RerunLeaseSet(seq=seq, at=at, agent=agent_id, post=post_id, held=held))
         return self
 
     def turn(

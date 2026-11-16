@@ -371,7 +371,9 @@ def test_the_answer_is_the_newest_proposal_in_any_thread_with_what_it_builds_on(
     asked = answer_view(record.board())
     assert asked is not None
     assert (asked.answer.post.id, asked.answer.post.thread) == ('p-6', 't-2')
-    assert brief(record.board(), 'ada', News(seq=0)).answer == post_line(record.board(), record.board().posts[-1])
+    assert brief(record.board(), 'ada', News(seq=0)).answer == post_line(
+        record.board(), record.board().posts[-1], 'ada'
+    )
     record.post(Proposal(id='p-7', thread='t-1', author='bo', text='Yes.', builds_on=('p-1', 'p-2', 'p-3')))
 
     view = answer_view(record.board())
@@ -480,7 +482,7 @@ def test_a_brief_has_the_newest_report_of_any_agent_with_its_age_in_minutes_and_
 
     assert (none.report, none.report_minutes_ago) == (None, None)
     # The line has the form of every line of a post: the headline, who wrote it, and no body.
-    assert view.report == post_line(board, board.posts[2])
+    assert view.report == post_line(board, board.posts[2], 'ada')
     assert (view.report.id, view.report.kind, view.report.text) == ('p-3', 'report', 'The baseline is in.')
     assert view.report_minutes_ago == 31
     # The reader's own report is the lab's newest too, and under a minute is zero.

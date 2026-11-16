@@ -44,7 +44,7 @@ from verifold.protocol.ids import PERSON, AgentId, PostId
 from verifold.protocol.join import FileText, PostRequest
 from verifold.protocol.moves import AddSeat
 from verifold.protocol.record import Record
-from verifold.protocol.settings import AtExit, SettingsLevel, SetupDefaults
+from verifold.protocol.settings import AtExit, RerunSettings, SettingsLevel, SetupDefaults, VoteSettings
 from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
 from verifold.runner.errors import NoAgentFolder, NoFileManager
@@ -557,6 +557,10 @@ class Host:
         if request.reviewer_seats is not None:
             seats = None if request.reviewer_seats == 'size' else request.reviewer_seats
             settings = settings.model_copy(update={'reviewers': settings.reviewers.model_copy(update={'seats': seats})})
+        if request.reveal_minutes is not None:
+            settings = settings.model_copy(update={'votes': VoteSettings(reveal_minutes=request.reveal_minutes)})
+        if request.lease_minutes is not None:
+            settings = settings.model_copy(update={'reruns': RerunSettings(lease_minutes=request.lease_minutes)})
         lab = Lab.create(
             self._record, request.question, auto_mode=request.auto_mode, time_left=time_left, stops=self._stops
         )

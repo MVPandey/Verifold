@@ -230,7 +230,7 @@ function Item(props: Shared & { readonly item: Deliverable }): ReactElement {
       ))}
       {item.thread ? (
         <ul className="d-work">
-          {threadFacts(item, props.lab.reruns_wanted ?? []).map((fact) => (
+          {threadFacts(item, props.lab.reruns_wanted ?? [], props.agents, props.now).map((fact) => (
             <li key={`${fact.post} ${fact.text}`}>
               {fact.text}{' '}
               <a href={href({ page: 'thread', id: item.thread ?? '', post: fact.post })}>Read it</a>
@@ -273,7 +273,7 @@ function OfferBlock(
   const line = offerLine(offer, props.agents, props.now);
   const by = `the offer by ${authorName(props.agents, offer.by)}`;
   const left = authorLeft(offer, props.agents);
-  const rerun = rerunFact(offer, props.lab.reruns_wanted ?? []);
+  const rerun = rerunFact(offer, props.lab.reruns_wanted ?? [], props.agents, props.now);
   const doubted = offer.standing === 'disputed' || offer.standing === 'conceded';
   const decide = (decision: DeliverableDecision): void => {
     setBusy(true);

@@ -37,7 +37,14 @@ from verifold.protocol.join import (
 )
 from verifold.protocol.posts import MAX_HEADLINE, Body
 from verifold.protocol.record import Record
-from verifold.protocol.settings import MAX_MINUTES, MAX_REVIEWER_SEATS, Settings, SettingsLevel, SetupDefaults
+from verifold.protocol.settings import (
+    MAX_BOARD_MINUTES,
+    MAX_MINUTES,
+    MAX_REVIEWER_SEATS,
+    Settings,
+    SettingsLevel,
+    SetupDefaults,
+)
 from verifold.protocol.usage import Usage
 from verifold.protocol.votes import Badge, BadgeAction, Direction, ProposalLine, Why
 
@@ -472,6 +479,10 @@ class StartRequest(Record):
     How many reviewer seats the lab has. `size` follows the size of the lab, whatever the settings files say, and
     `None` takes the number from the person's settings files.
     """
+    reveal_minutes: int | None = Field(default=None, ge=0, le=MAX_BOARD_MINUTES)
+    """How long a new post hides its votes, in place of `votes.reveal_minutes` of the files. `None` takes the files'."""
+    lease_minutes: int | None = Field(default=None, ge=0, le=MAX_BOARD_MINUTES)
+    """How long a take holds a rerun, in place of `reruns.lease_minutes` of the files. `None` takes the files'."""
     deliverables: tuple[Sentence, ...] = Field(default=(), max_length=MAX_DELIVERABLES)
     """What the person wants to hold at the end of the lab, each as one sentence. They can add more while it runs."""
 
@@ -499,7 +510,13 @@ class SettingsView(Record):
 
 
 type SettingKey = Literal[
-    'jobs.at_time_limit', 'jobs.at_exit', 'permissions.while_you_decide', 'reviewers.seats', 'setup'
+    'jobs.at_time_limit',
+    'jobs.at_exit',
+    'permissions.while_you_decide',
+    'reviewers.seats',
+    'votes.reveal_minutes',
+    'reruns.lease_minutes',
+    'setup',
 ]
 """The settings that the app changes. Harness commands are not among them, so the app can't change what a lab runs."""
 
@@ -518,8 +535,8 @@ class SettingsChange(Record):
     key: SettingKey
     value: int | str | SetupDefaults | None = None
     """
-    The new value: the answer of a job or permission setting, or the choices for new labs. `None` removes the setting, so the one for
-    all projects, or Verifold's default, applies.
+    The new value: the answer of a job or permission setting, a number of seats or minutes, or the choices for new
+    labs. `None` removes the setting, so the one for all projects, or Verifold's default, applies.
     """
     revisions: SettingsRevisions
     """

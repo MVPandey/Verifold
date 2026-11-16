@@ -31,7 +31,8 @@ from verifold.runner.session import (
 
 
 def calls(log: Path) -> list[dict[str, object]]:
-    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+    # The fake harness appends to the log, so a read can end inside a line. Only the lines that end are whole.
+    return [json.loads(line) for line in log.read_text().split('\n')[:-1]] if log.exists() else []
 
 
 @pytest.fixture

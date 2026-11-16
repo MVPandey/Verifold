@@ -15,7 +15,8 @@ names nobody and replies to no post is for every agent. No post is for an agent 
 
 A request for an independent rerun is no post. It reaches the agents that can take it, as a call that names nobody
 reaches every agent: the holders of the reviewer seats, or every agent in a lab without such seats, but not the
-post's author, not the agent that asked, and not an agent on call.
+post's author, not the agent that asked, not an agent on call, and not an agent that another agent's lease keeps
+out. That agent hears of it when the lease ends without a check.
 
 An on-call agent hears less. No post for every agent is for it, and neither are the person's words that name nobody.
 A plain mention is not for it either: a plan, a message, a result, or another post that addresses nobody can name
@@ -46,7 +47,7 @@ A post that is for an agent wakes it. The agent's news holds every post that it 
 it. So an agent learns of the rest when it reads the board, and not before.
 
 A vote and a badge are no posts, and they wake nobody. The author of a post reads the votes and the badges on it in
-its next news.
+its next news. Every other agent sees no vote on a young post until it votes on it, as `society.votes` says.
 """
 
 import re
@@ -61,7 +62,7 @@ from verifold.society.board import Board
 from verifold.society.identity import post_line, post_view
 from verifold.society.lifecycle import alarm_line, no_alarm_line
 from verifold.society.lines import lines_of
-from verifold.society.reruns import reruns_for
+from verifold.society.reruns import RerunKey, reruns_for
 from verifold.society.votes import badge_notes, vote_notes
 
 type Names = tuple[tuple[AgentId, str], ...]
@@ -131,12 +132,20 @@ def wakes(
     return watches_thread(board, agent_id, post.thread, working)
 
 
-def update(board: Board, agent_id: AgentId, after: int, now: datetime | None = None) -> Update:
+def update(
+    board: Board,
+    agent_id: AgentId,
+    after: int,
+    now: datetime | None = None,
+    told: frozenset[RerunKey] = frozenset(),
+) -> Update:
     """
     Return what happened after event `after`: the posts for an agent in full, and a summary of the rest.
 
     It holds at most `MAX_NEWS` posts for the agent, the oldest first. When more wait, it reaches only as far as the
-    last one that it holds, so the next update brings the others. `now` dates the time that the lab has left.
+    last one that it holds, so the next update brings the others. `now` dates the time that the lab has left, the
+    votes that are sealed for the agent, and the leases on reruns. Without it, time counts from the newest post.
+    `told` holds the reruns that the agent was told of already, as `reruns_for` says.
     """
     woken, rest = _unseen(board, agent_id, after)
     shown, others, reach = _page(woken, rest, board.seq)
@@ -144,9 +153,9 @@ def update(board: Board, agent_id: AgentId, after: int, now: datetime | None = N
     badges, more_badges = badge_notes(board, agent_id, after, reach)
     return Update(
         seq=reach,
-        posts=tuple(post_view(board, entry) for entry in shown),
+        posts=tuple(post_view(board, entry, agent_id, now) for entry in shown),
         more=len(woken) - len(shown),
-        others=tuple(post_line(board, entry, news=True) for entry in others[-MAX_NEWS:]),
+        others=tuple(post_line(board, entry, agent_id, now, news=True) for entry in others[-MAX_NEWS:]),
         other_posts=len(others),
         threads=tuple(
             entry.thread for entry in board.threads if after < entry.seq <= reach and entry.thread.opened_by != agent_id
@@ -160,7 +169,7 @@ def update(board: Board, agent_id: AgentId, after: int, now: datetime | None = N
         left=departures(board, agent_id, after, reach),
         profile=profile_notes(board, agent_id, after, reach),
         renamed=renames(board, agent_id, after, reach),
-        reruns=reruns_for(board, agent_id, after, reach),
+        reruns=reruns_for(board, agent_id, told, now),
         votes=votes,
         votes_left_out=more_votes,
         badges=badges,
@@ -171,12 +180,19 @@ def update(board: Board, agent_id: AgentId, after: int, now: datetime | None = N
     )
 
 
-def news(board: Board, agent_id: AgentId, after: int) -> News:
+def news(
+    board: Board,
+    agent_id: AgentId,
+    after: int,
+    now: datetime | None = None,
+    told: frozenset[RerunKey] = frozenset(),
+) -> News:
     """
     Return one line for each post after event `after` that an agent did not write.
 
     It holds at most `MAX_NEWS` posts for the agent, the oldest first, and reaches as far as `update` does. So a post
-    for the agent is never left out. Of the other posts it holds the newest.
+    for the agent is never left out. Of the other posts it holds the newest. `now` decides which votes are sealed
+    and which leases on reruns stand, and `told` is as in `update`.
     """
     woken, rest = _unseen(board, agent_id, after)
     shown, others, reach = _page(woken, rest, board.seq)
@@ -184,14 +200,14 @@ def news(board: Board, agent_id: AgentId, after: int) -> News:
     badges, more_badges = badge_notes(board, agent_id, after, reach)
     return News(
         seq=reach,
-        for_you=tuple(post_line(board, entry, news=True) for entry in shown),
+        for_you=tuple(post_line(board, entry, agent_id, now, news=True) for entry in shown),
         more=len(woken) - len(shown),
-        others=tuple(post_line(board, entry, news=True) for entry in others[-MAX_NEWS:]),
+        others=tuple(post_line(board, entry, agent_id, now, news=True) for entry in others[-MAX_NEWS:]),
         left_out=max(len(others) - MAX_NEWS, 0),
         left=departures(board, agent_id, after, reach),
         profile=profile_notes(board, agent_id, after, reach),
         renamed=renames(board, agent_id, after, reach),
-        reruns=reruns_for(board, agent_id, after, reach),
+        reruns=reruns_for(board, agent_id, told, now),
         votes=votes,
         votes_left_out=more_votes,
         badges=badges,

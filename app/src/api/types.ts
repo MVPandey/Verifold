@@ -281,10 +281,22 @@ export interface RerunLine {
   /** The agents that took the rerun and have not posted its check yet. */
   readonly taken_by: readonly string[];
   /**
+   * The leases that stand on the rerun, the oldest first. While one stands, the board refuses the rerun to every
+   * other agent, except to an agent of another model family than the post while no holder is of another family.
+   */
+  readonly held_by: readonly LeaseLine[];
+  /**
    * Who can take the rerun now: an agent in a reviewer seat, any agent that did not write the post, because no
    * agent in a reviewer seat can take it, or no agent of the lab.
    */
   readonly open_to: 'reviewer' | 'any' | 'none';
+}
+
+/** An agent's lease on a wanted rerun: who holds it, since when, and when it ends unless the holder renews it. */
+export interface LeaseLine {
+  readonly agent: string;
+  readonly since: string;
+  readonly until: string;
 }
 
 /** What a vote says about a post. `none` takes the voter's vote back. */
@@ -484,11 +496,26 @@ export interface ReviewerSettings {
   readonly seats: number | null;
 }
 
+export interface VoteSettings {
+  /**
+   * For how many minutes after a post was written an agent sees no votes on it until it votes itself. The author
+   * and the person see them at once. Zero seals no vote.
+   */
+  readonly reveal_minutes: number;
+}
+
+export interface RerunSettings {
+  /** How many minutes a take of a rerun, or its renewal, holds the lease on it. */
+  readonly lease_minutes: number;
+}
+
 export interface Settings {
   readonly version: number;
   readonly jobs: JobSettings;
   readonly permissions: PermissionSettings;
   readonly reviewers: ReviewerSettings;
+  readonly votes: VoteSettings;
+  readonly reruns: RerunSettings;
 }
 
 /** Where a setting lives: in one project's file, which wins, or in the file for all projects. */
@@ -519,6 +546,8 @@ export type SettingKey =
   | 'jobs.at_exit'
   | 'permissions.while_you_decide'
   | 'reviewers.seats'
+  | 'votes.reveal_minutes'
+  | 'reruns.lease_minutes'
   | 'setup';
 
 /**

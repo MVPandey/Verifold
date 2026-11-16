@@ -14,11 +14,14 @@ import { defaultsLine } from '../model/setup.ts';
 import {
   AT_EXIT,
   AT_TIME_LIMIT,
+  DEFAULT_MINUTES,
+  MAX_BOARD_MINUTES,
   MAX_REVIEWER_SEATS,
   SEATS_FOLLOW,
   WHILE_YOU_DECIDE,
   labelOf,
-  seatsValue,
+  minutesWords,
+  numberValue,
   valueAt,
 } from '../model/settings.ts';
 import type { Choice } from '../model/settings.ts';
@@ -187,15 +190,23 @@ export function SettingsForm(props: {
         disabled={props.disabled}
         onChange={(value) => props.onChange('permissions.while_you_decide', value)}
       />
-      <ReviewerSetting
-        // The field starts again from the file after each save.
-        key={`${props.level}:${file.revision}`}
-        file={file}
-        project={project}
-        projectOwn={own('reviewers.seats')}
-        disabled={props.disabled}
-        onChange={(value) => props.onChange('reviewers.seats', value)}
-      />
+      {[
+        { field: SEATS, current: file.settings.reviewers.seats },
+        { field: REVEAL, current: file.settings.votes.reveal_minutes },
+        { field: LEASE, current: file.settings.reruns.lease_minutes },
+      ].map(({ field, current }) => (
+        <NumberSetting
+          // The field starts again from the file after each save.
+          key={`${props.level}:${file.revision}:${field.key}`}
+          field={field}
+          file={file}
+          current={current}
+          project={project}
+          projectOwn={own(field.key)}
+          disabled={props.disabled}
+          onChange={(value) => props.onChange(field.key, value)}
+        />
+      ))}
       <NewLabs
         file={file}
         project={project}
@@ -208,45 +219,91 @@ export function SettingsForm(props: {
   );
 }
 
-/** Return a number of reviewer seats in words, or that the number follows the lab's size. */
-function seatsWords(seats: number | null): string {
-  if (seats === null) return 'the number follows the lab’s size';
-  return seats === 1 ? '1 seat' : `${seats} seats`;
+/** What the page says about one setting that takes a whole number, and the number's limits. */
+interface NumberField {
+  readonly key: 'reviewers.seats' | 'votes.reveal_minutes' | 'reruns.lease_minutes';
+  readonly title: string;
+  readonly detail: string;
+  readonly label: string;
+  readonly max: number;
+  /** The empty field's placeholder on the page for all projects. */
+  readonly empty: string;
+  /** The number that a level adds up to, in words. */
+  readonly words: (value: number | null) => string;
+  /** What `verifold run` does with a project's number, after its name, or `null` when it takes it. */
+  readonly run: string | null;
 }
 
+const SEATS: NumberField = {
+  key: 'reviewers.seats',
+  title: 'Reviewer seats',
+  detail: `How many agents can hold a reviewer seat. Leave the field empty, and the number follows the lab’s size: ${SEATS_FOLLOW}.`,
+  label: 'Seats',
+  max: MAX_REVIEWER_SEATS,
+  empty: 'Follows the lab’s size',
+  words: (seats) => {
+    if (seats === null) return 'the number follows the lab’s size';
+    return seats === 1 ? '1 seat' : `${seats} seats`;
+  },
+  run: 'does not take a higher number from this project’s file.',
+};
+
+const REVEAL: NumberField = {
+  key: 'votes.reveal_minutes',
+  title: 'Votes on a new post',
+  detail: `For these minutes after a post was written, the board shows an agent no votes on it until it votes on it itself, so that its vote is its own judgement. Until then an agent cannot take its vote back. The author of the post and you see every vote at once. A change holds for the posts after it. Leave the field empty, and the time is ${DEFAULT_MINUTES} minutes. With 0, every agent sees every vote at once.`,
+  label: 'Minutes',
+  max: MAX_BOARD_MINUTES,
+  empty: `${DEFAULT_MINUTES} minutes`,
+  words: (minutes) => minutesWords(minutes ?? DEFAULT_MINUTES),
+  run: 'does not take this number from this project’s file.',
+};
+
+const LEASE: NumberField = {
+  key: 'reruns.lease_minutes',
+  title: 'A rerun that an agent takes',
+  detail: `For these minutes, the agent that takes a wanted rerun holds it, and no other agent can take it. An agent of another model family than the post can, while no holder is of another family. The holder’s next take starts the time again. The time ends early when the holder posts its check, gives the rerun up, or leaves the lab, and when another check settles the rerun. A change holds for the takes after it. Leave the field empty, and the time is ${DEFAULT_MINUTES} minutes. With 0, several agents can take one rerun at once.`,
+  label: 'Minutes',
+  max: MAX_BOARD_MINUTES,
+  empty: `${DEFAULT_MINUTES} minutes`,
+  words: (minutes) => minutesWords(minutes ?? DEFAULT_MINUTES),
+  run: 'does not take this number from this project’s file.',
+};
+
 /**
- * How many reviewer seats a lab has: a number, or an empty field. An empty field removes the number from this
- * level's file, so the level above applies, and without any number the seats follow the lab's size.
+ * A setting that takes a whole number, or an empty field. An empty field removes the number from this level's
+ * file, so the level above applies, and without any number Verifold's default applies.
  */
-function ReviewerSetting(props: {
+function NumberSetting(props: {
+  readonly field: NumberField;
   readonly file: SettingsFileView;
+  /** The number that this level adds up to. */
+  readonly current: number | null;
   readonly project: boolean;
   /** On the page for all projects: this project's file has a number of its own, which wins. */
   readonly projectOwn: boolean;
   readonly disabled: boolean;
   readonly onChange: (value: number | null) => void;
 }): ReactElement {
-  const written = valueAt(props.file.values, 'reviewers.seats');
+  const { field } = props;
+  const written = valueAt(props.file.values, field.key);
   const [text, setText] = useState(typeof written === 'number' ? String(written) : '');
   const id = useId();
-  const seats = seatsValue(text);
-  const same = seats === (typeof written === 'number' ? written : null);
+  const value = numberValue(text, field.max);
+  const same = value === (typeof written === 'number' ? written : null);
   return (
     <section className="section">
-      <h3>Reviewer seats</h3>
-      <p className="sub">
-        How many agents can hold a reviewer seat. Leave the field empty, and the number follows the
-        lab’s size: {SEATS_FOLLOW}.
-      </p>
+      <h3>{field.title}</h3>
+      <p className="sub">{field.detail}</p>
       <div className="seats">
-        <label htmlFor={id}>Seats</label>
+        <label htmlFor={id}>{field.label}</label>
         <input
           id={id}
           type="number"
           min={0}
-          max={MAX_REVIEWER_SEATS}
+          max={field.max}
           value={text}
-          placeholder={props.project ? 'Same as all projects' : 'Follows the lab’s size'}
+          placeholder={props.project ? 'Same as all projects' : field.empty}
           disabled={props.disabled}
           onChange={(event) => {
             setText(event.target.value);
@@ -255,24 +312,24 @@ function ReviewerSetting(props: {
         <button
           className="btn small"
           type="button"
-          disabled={props.disabled || seats === undefined || same}
+          disabled={props.disabled || value === undefined || same}
           onClick={() => {
-            if (seats !== undefined) props.onChange(seats);
+            if (value !== undefined) props.onChange(value);
           }}
         >
           Save
         </button>
       </div>
-      {seats === undefined ? (
-        <p className="note">Type a whole number from 0 to {MAX_REVIEWER_SEATS}.</p>
+      {value === undefined ? (
+        <p className="note">Type a whole number from 0 to {field.max}.</p>
       ) : null}
       <p className="note">
         {props.project && written === undefined ? 'Same as all projects. ' : ''}Now:{' '}
-        {seatsWords(props.file.settings.reviewers.seats)}.
+        {field.words(props.current)}.
       </p>
-      {props.project ? (
+      {props.project && field.run ? (
         <p className="note">
-          <code>verifold run</code> does not take a higher number from this project’s file.
+          <code>verifold run</code> {field.run}
         </p>
       ) : null}
       {props.projectOwn ? (

@@ -19,6 +19,7 @@ from verifold.protocol.events import (
     OnCallSet,
     ProfileSet,
     QuestionRevised,
+    RerunLeaseSet,
     RerunRequested,
     RerunTaken,
     ReviewerSet,
@@ -35,7 +36,14 @@ from verifold.society.board import Board
 from verifold.society.coordinator import check_marked_thread, check_marks, check_removal, check_reviser
 from verifold.society.errors import RejectedEvent
 from verifold.society.lifecycle import lab_state
-from verifold.society.reruns import MAX_RERUNS, open_take, rerun_checks, wanted_reruns
+from verifold.society.reruns import (
+    MAX_RERUNS,
+    lease_of,
+    open_take,
+    renewal_refusal,
+    rerun_checks,
+    wanted_reruns,
+)
 from verifold.society.reviewers import free_seats, seats, seats_line
 from verifold.society.standing import closing
 
@@ -407,6 +415,29 @@ def check_take(board: Board, take: RerunTaken) -> None:
         raise RejectedEvent(f'No rerun of post {take.post} is wanted now. `rerun` asks for one.')
     if all(file.commit != take.commit for file in target.post.evidence):
         raise RejectedEvent(f'Post {take.post} pins no file to the commit {take.commit}.')
+
+
+def check_lease(board: Board, lease: RerunLeaseSet) -> None:
+    """
+    Check that an agent can renew its lease on the rerun of a post, or give it up.
+
+    No record from before the leases holds this event, so a renewal follows the limit of a lease here: another
+    agent's lease that keeps the agent out refuses it.
+
+    Raises:
+        RejectedEvent: The agent is not in the lab or left it, it has no take of the rerun without its check, it
+            renews a lease that another agent's lease keeps out, or it gives up a lease that it does not hold.
+
+    """
+    if not board.agent(lease.agent):
+        raise RejectedEvent(f'{lease.agent} is not an agent in this lab.')
+    _check_here(board, lease.agent)
+    if open_take(board, lease.agent, lease.post) is None:
+        raise RejectedEvent(f'You did not take the rerun of post {lease.post}, or you posted the check of your take.')
+    if lease.held and (refusal := renewal_refusal(board, lease.agent, lease.post, lease.at)):
+        raise RejectedEvent(refusal)
+    if not lease.held and lease_of(board, lease.agent, lease.post, lease.at) is None:
+        raise RejectedEvent(f'You hold no lease on the rerun of post {lease.post}, so there is none to give up.')
 
 
 def check_time(time: TimeSet) -> None:

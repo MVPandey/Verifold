@@ -62,13 +62,20 @@ from verifold.society.standing import agreed, closing, is_answered, is_open_call
 from verifold.society.turns import before
 
 
-def thread_view(board: Board, agent_id: AgentId, thread_id: ThreadId, votes_of: PostId | None = None) -> ThreadView:
+def thread_view(
+    board: Board,
+    agent_id: AgentId,
+    thread_id: ThreadId,
+    votes_of: PostId | None = None,
+    now: datetime | None = None,
+) -> ThreadView:
     """
     Return a thread and its posts.
 
     Each post has its counts, its badges, and its newest votes with their reasons: `NEWEST_VOTES` for an agent,
     so that a long thread with many voters stays one tool result. The post that `votes_of` names has
-    `MAX_VOTE_LINES`, and so has every post for the person.
+    `MAX_VOTE_LINES`, and so has every post for the person. A post whose votes are sealed for the agent at `now`
+    has no counts and no votes.
 
     Raises:
         NotFound: No thread has this ID, or the thread has no post with the ID in `votes_of`.
@@ -89,15 +96,23 @@ def thread_view(board: Board, agent_id: AgentId, thread_id: ThreadId, votes_of: 
         watching=watches_thread(board, agent_id, thread_id),
         members=board.members(thread_id),
         person_reaches=board.offer_listeners(thread_id) if board.holds_offers(thread_id) else None,
-        posts=tuple(post_view(board, entry, votes(entry)) for entry in board.posts if entry.post.thread == thread_id),
+        posts=tuple(
+            post_view(board, entry, agent_id, now, votes=votes(entry))
+            for entry in board.posts
+            if entry.post.thread == thread_id
+        ),
     )
 
 
-def thread_summaries(board: Board, agent_id: AgentId) -> tuple[ThreadSummary, ...]:
-    """Return one summary for each thread, side threads among them, the most recently active first."""
+def thread_summaries(board: Board, agent_id: AgentId, now: datetime | None = None) -> tuple[ThreadSummary, ...]:
+    """
+    Return one summary for each thread, side threads among them, the most recently active first.
+
+    The latest post of each thread shows its votes as `post_line` does for the agent at `now`.
+    """
     crossed = crossings(board)
     lines = lines_of(board)
-    summaries = (_summary(board, agent_id, opened, crossed, lines) for opened in board.threads)
+    summaries = (_summary(board, agent_id, opened, crossed, lines, now=now) for opened in board.threads)
     return tuple(sorted(summaries, key=lambda summary: summary.last_at, reverse=True))
 
 
@@ -185,12 +200,14 @@ def team(board: Board, opened: ThreadOpened, lines: dict[AgentId, ThreadId | Non
     return tuple(agent for agent in workers if agent in opener or lines.get(agent) == thread.id)
 
 
-def _summary(
+def _summary(  # noqa: PLR0913
     board: Board,
     agent_id: AgentId,
     opened: ThreadOpened,
     crossed: tuple[Crossing, ...],
     lines: dict[AgentId, ThreadId | None],
+    *,
+    now: datetime | None,
 ) -> ThreadSummary:
     entries = tuple(entry for entry in board.posts if entry.post.thread == opened.thread.id)
     results = tuple(standing(board, entry.post.id) for entry in entries if isinstance(entry.post, Result))
@@ -202,7 +219,7 @@ def _summary(
         members=board.members(opened.thread.id),
         posts=len(entries),
         last_at=latest.at if latest else opened.at,
-        latest=post_line(board, latest) if latest else None,
+        latest=post_line(board, latest, agent_id, now) if latest else None,
         disputed=results.count('disputed'),
         checked=sum(state in {'checked', 'held_up'} for state in results),
         not_checked=results.count('open'),
@@ -250,9 +267,9 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
     has built on, the results that nobody has checked, the asks that nobody has answered, and the calls that need an
     agent. The order ranks nothing. `how` says how the board works.
 
-    `now` dates the time that the lab has left, the report's age, and the quiet threads. Without it, time counts from the board's
-    newest post. The agents in a turn come from the record, because this package does no I/O and so knows no live
-    activity.
+    `now` dates the time that the lab has left, the report's age, the quiet threads, the votes that are sealed for
+    the agent, and the leases on the wanted reruns. Without it, time counts from the board's newest post. The
+    agents in a turn come from the record, because this package does no I/O and so knows no live activity.
     """
     now = now or latest_time(board)
     # An invited agent that has not posted may never come, so no agent reads it as a peer to ask or wait for. An
@@ -295,7 +312,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         and entry.post.thread not in not_mine
         and is_open_call(board, entry.post.id)
     )
-    every = thread_summaries(board, agent_id)
+    every = thread_summaries(board, agent_id, now)
     summaries, side = work_threads(every), side_lines(every, agent_id)
     # A thread counts when an agent's latest plan or result is in it, so a thread that holds only notes is no line.
     working = lines_of(board)
@@ -334,11 +351,11 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
     reported = newest_report(board)
     done = closing(board)
     you = board.agent(agent_id)
-    close_line = post_line(board, done) if done else None
-    answer_line = post_line(board, proposed) if proposed else None
-    report_line = post_line(board, reported) if reported else None
-    your_line = _agent_line(board, you.agent, working) if you else None
-    lines = tuple(_agent_line(board, agent, working) for agent in others)
+    close_line = post_line(board, done, agent_id, now) if done else None
+    answer_line = post_line(board, proposed, agent_id, now) if proposed else None
+    report_line = post_line(board, reported, agent_id, now) if reported else None
+    your_line = _agent_line(board, you.agent, working, agent_id, now) if you else None
+    lines = tuple(_agent_line(board, agent, working, agent_id, now) for agent in others)
     # A post whose line the brief holds already is its ID alone in the lists of posts, so the brief holds each
     # headline once.
     held = (
@@ -359,7 +376,9 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
     def line(entry: Posted, *, news: bool = False) -> PostLine:
         # The person is in no list of agents, so a line of the news keeps the person's body.
         seat = labels.get(entry.post.author)
-        return post_line(board, entry, news=news) if seat is None else _own_line(board, entry, seat)
+        if seat is None:
+            return post_line(board, entry, agent_id, now, news=news)
+        return _own_line(board, entry, seat, agent_id, now)
 
     def known(lines: tuple[PostLine, ...]) -> tuple[PostLine, ...]:
         # The lines of the news that this brief carries follow the same rule, so no author's name, seat, and
@@ -398,6 +417,8 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         reviewers=holders(board),
         reviewer_seats=seats(board),
         reviewer_seats_free=free_seats(board),
+        vote_reveal_minutes=board.settings.votes.reveal_minutes,
+        rerun_lease_minutes=board.settings.reruns.lease_minutes,
         conversation=board.conversation,
         powers=tuple(power for power in POWERS if power in board.powers),
         left=tuple(left_line(board, entry) for entry in board.left),
@@ -421,12 +442,14 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         not_checked=listed(not_checked[-MAX_NEWS:]),
         open_asks=listed(open_asks[-MAX_NEWS:]),
         open_calls=listed(open_calls[-MAX_NEWS:]),
-        reruns_wanted=reruns_wanted(board)[-MAX_NEWS:],
+        reruns_wanted=reruns_wanted(board, now)[-MAX_NEWS:],
         news=news.model_copy(update={'for_you': known(news.for_you), 'others': known(news.others)}),
     )
 
 
-def _agent_line(board: Board, agent: Agent, working: dict[AgentId, ThreadId | None]) -> AgentLine:
+def _agent_line(
+    board: Board, agent: Agent, working: dict[AgentId, ThreadId | None], reader: AgentId, now: datetime
+) -> AgentLine:
     posts = tuple(entry for entry in board.posts if entry.post.author == agent.id)
     plan = next((entry for entry in reversed(posts) if isinstance(entry.post, Plan)), None)
     role, status = board.profile(agent.id)
@@ -450,8 +473,8 @@ def _agent_line(board: Board, agent: Agent, working: dict[AgentId, ThreadId | No
         flag=flag.flag or '' if flag else '',
         status=status,
         thread=working.get(agent.id),
-        plan=_own_line(board, plan, seat) if plan else None,
-        latest=_own_line(board, posts[-1], seat) if posts and posts[-1] is not plan else None,
+        plan=_own_line(board, plan, seat, reader, now) if plan else None,
+        latest=_own_line(board, posts[-1], seat, reader, now) if posts and posts[-1] is not plan else None,
         error=_reason(board.failure(agent.id)),
     )
 
@@ -464,10 +487,10 @@ def _former_names(board: Board, agent: Agent) -> tuple[str, ...]:
     return tuple(reversed(tuple(last)))[-MAX_FORMER_NAMES:]
 
 
-def _own_line(board: Board, entry: Posted, seat: str) -> PostLine:
+def _own_line(board: Board, entry: Posted, seat: str, reader: AgentId, now: datetime) -> PostLine:
     # A post's line in a list that holds its author already. It says who wrote the post only when the seat's
     # label was another when the post was written.
-    line = post_line(board, entry)
+    line = post_line(board, entry, reader, now)
     same = line.by is not None and seat_label(board, entry.post.author, entry.seq) == seat
     return line.model_copy(update={'by': None}) if same else line
 
@@ -523,7 +546,7 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
     An ask that carried a harness's request is not among them after Verifold ended the request.
     The ask of an agent that left is not among them: nobody waits for its answer.
     """
-    return tuple(post_view(board, entry) for entry in board.posts if _waits_for_person(board, entry))
+    return tuple(post_view(board, entry, PERSON) for entry in board.posts if _waits_for_person(board, entry))
 
 
 def _waits_for_person(board: Board, entry: Posted) -> bool:
@@ -598,9 +621,9 @@ def answer_view(board: Board) -> AnswerView | None:
     under = tuple(post for post_id in entry.post.builds_on if (post := board.post(post_id)))
     results = tuple(post for post in under if _can_rerun(post))
     return AnswerView(
-        answer=post_view(board, entry),
+        answer=post_view(board, entry, PERSON),
         to_earlier_question=to_earlier_question(board, entry),
-        builds_on=tuple(post_view(board, post) for post in under),
+        builds_on=tuple(post_view(board, post, PERSON) for post in under),
         results=len(results),
         no_blind_rerun=tuple(post.post.id for post in _not_rerun(board, results)),
     )
@@ -630,4 +653,4 @@ def newest_report(board: Board) -> Posted | None:
 def latest_report(board: Board) -> PostView | None:
     """Return the newest report that an agent posted, as the person's app shows it, or `None`."""
     entry = newest_report(board)
-    return post_view(board, entry) if entry else None
+    return post_view(board, entry, PERSON) if entry else None

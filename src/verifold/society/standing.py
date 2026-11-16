@@ -101,7 +101,7 @@ def _independent_rerun(board: Board, post_id: PostId, seq: int, check: Check) ->
     if checker.agent.checks == post_id:
         # A checker that Verifold started, in a record from before agents took reruns. It read nothing but its
         # claim, and the families of the two seats decide, as they did then.
-        return _other_family(author.agent, checker.agent)
+        return other_family(author.agent, checker.agent)
     # Any other check counts when it is the check of its author's take.
     return check.take is not None and another_model(board, target, seq, check.author)
 
@@ -121,14 +121,15 @@ def another_model(board: Board, post: Posted, seq: int, checker_id: AgentId) -> 
     turn has none, so there the families decide.
     """
     author, checker = board.agent(post.post.author), board.agent(checker_id)
-    if author is None or checker is None or author is checker or not _other_family(author.agent, checker.agent):
+    if author is None or checker is None or author is checker or not other_family(author.agent, checker.agent):
         return False
     wrote, checked = _model_at(board, author.agent.id, post.seq), _model_at(board, checker_id, seq)
     one_harness = author.agent.harness == checker.agent.harness
     return not (one_harness and wrote and checked and wrote.casefold() == checked.casefold())
 
 
-def _other_family(author: Agent, checker: Agent) -> bool:
+def other_family(author: Agent, checker: Agent) -> bool:
+    """Return whether two seats have different model families. A family that nobody knows differs from none."""
     unknown = (GUEST, UNKNOWN_FAMILY)
     if unknown in ((author.harness, author.model.family), (checker.harness, checker.model.family)):
         return False

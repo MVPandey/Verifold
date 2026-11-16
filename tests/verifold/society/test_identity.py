@@ -38,7 +38,7 @@ def test_a_record_from_before_profiles_has_the_seats_label_as_each_name_and_no_p
     assert (board.about('ada'), board.picture('ada'), board.flag('ada')) == ('', None, None)
     assert board.profile('ada') == ('theory', 'Reads.')
     assert board.given_role('ada') == ('', 'person')
-    line = post_line(board, board.posts[0])
+    line = post_line(board, board.posts[0], 'person')
     assert line.by is not None
     assert (line.by.name, line.by.seat, line.by.marks, line.by.role) == ('Ada', '', (), 'theory')
 

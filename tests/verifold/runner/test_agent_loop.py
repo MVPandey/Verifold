@@ -1,20 +1,28 @@
 import asyncio
 import json
+import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from builders import until
-from conftest import ServedBoard, agent
+from builders import START, until
+from conftest import ServedBoard, agent, serve_board
 from fakes import FAKE_HARNESS, FakeCopies
 
 from verifold.protocol.app import AgentState, WaitsFor
-from verifold.protocol.events import AlarmSet, TurnSummary
+from verifold.protocol.events import AlarmSet, TurnStarted, TurnSummary
 from verifold.protocol.join import MAX_NEWS, PostRequest
 from verifold.protocol.posts import Ask, FileEvidence, PermissionShown, QuestionShown
-from verifold.protocol.settings import AtTimeLimit, JobSettings, PermissionSettings, Settings, WhileYouDecide
+from verifold.protocol.settings import (
+    AtTimeLimit,
+    JobSettings,
+    PermissionSettings,
+    ReviewerSettings,
+    Settings,
+    WhileYouDecide,
+)
 from verifold.protocol.usage import Usage
 from verifold.runner import agent_loop
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
@@ -38,9 +46,12 @@ from verifold.runner.messages import (
 from verifold.runner.permissions import Refusals
 from verifold.runner.session import AgentSession, PermissionChoice, PermissionRequest, TurnResult
 from verifold.server.activity import Activity
+from verifold.server.lab import Lab
+from verifold.server.member import Member
 from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
 from verifold.society.turns import before
 from verifold.society.views import needs_person
+from verifold.store.record_file import RecordFile
 
 
 @pytest.fixture
@@ -51,7 +62,8 @@ def log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def calls(log: Path, event: str) -> list[dict[str, object]]:
-    lines = log.read_text().splitlines() if log.exists() else []
+    # The fake harness appends to the log, so a read can end inside a line. Only the lines that end are whole.
+    lines = log.read_text().split('\n')[:-1] if log.exists() else []
     return [call for call in map(json.loads, lines) if call['event'] == event]
 
 
@@ -1352,6 +1364,183 @@ async def test_an_agent_that_ended_its_turn_wakes_when_an_agent_that_it_wrote_to
         running.cancel()
 
     assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DEPARTURE]
+
+
+async def test_a_rerun_that_a_lease_keeps_from_the_agent_wakes_it_only_when_the_lease_ends(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
+    await lab.post(PostRequest(kind='result', text='11.8x.', thread='t-1'), 'ada', evidence)
+    # A lab of three agents has one reviewer seat. cy holds it, and cy has the post's model family, as bo has.
+    await lab.join(agent('cy'))
+    await lab.set_reviewer('cy', 'cy', reviewer=True)
+    waits: list[float | None] = []
+    wait = lab.wait_for_change
+
+    async def waited(after: int, timeout: float | None = None) -> None:
+        waits.append(timeout)
+        await wait(after, timeout)
+
+    monkeypatch.setattr(lab, 'wait_for_change', waited)
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        # The rerun is for cy's seat. cy's take opens it to every agent, and cy's lease keeps bo out.
+        await lab.request_rerun('ada', 'p-2')
+        await Member(lab, 'cy', copies=FakeCopies()).take_rerun('p-2')
+        await lab.post(SIDE_NOTE, 'ada')
+        await until(lambda: bool(waits) and waits[-1] is not None)
+        assert len(calls(log, 'prompt')) == 1
+        # The loop wakes by itself when the lease ends: its wait lasts until then at most.
+        assert 0 < (waits[-1] or 0) <= 600
+        # At the end of the lease the rerun is news for bo, and the doorbell rings for it.
+        pass_time(served, 600)
+        await lab.post(SIDE_NOTE, 'ada')
+        await until(lambda: len(lab.board.turns) == 2)
+    finally:
+        running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', RERUN_WANTED]
+
+
+class RealClock:
+    """The lab's clock, which goes with the real one, and which a test can move on at once."""
+
+    def __init__(self) -> None:
+        self.began, self.jump = time.monotonic(), timedelta(0)
+
+    def __call__(self) -> datetime:
+        return START + self.jump + timedelta(seconds=time.monotonic() - self.began)
+
+
+async def a_wanted_rerun(record_file: RecordFile, clock: RealClock, *, ask_first: bool) -> Lab:
+    """A lab with ada's result p-1, which has a file, and the agents bo and cy of its model family."""
+    lab = Lab.create(record_file, 'Does it hold?', clock=clock)
+    for name in ('ada', 'bo', 'cy'):
+        await lab.join(agent(name))
+    await lab.set_settings(Settings(reviewers=ReviewerSettings(seats=0)))
+    evidence = (FileEvidence(path='bench.json', commit='c' * 40),)
+    await lab.post(PostRequest(kind='result', text='11.8x.', new_thread='Speed'), 'ada', evidence)
+    if ask_first:
+        await lab.request_rerun('ada', 'p-1')
+    return lab
+
+
+async def test_the_end_of_a_lease_alone_wakes_an_agent_that_it_kept_from_a_rerun(
+    record_file: RecordFile, tmp_path: Path, log: Path
+) -> None:
+    clock = RealClock()
+    lab = await a_wanted_rerun(record_file, clock, ask_first=False)
+    async with serve_board(lab) as served:
+        # The clean copy that the fake agent reads, and the pin of the files that it posts from its own folder.
+        served.copies = FakeCopies(folder=tmp_path / 'copies')
+        (tmp_path / 'copies' / 'p-1').mkdir(parents=True)
+        (tmp_path / 'copies' / 'p-1' / 'bench.json').write_text('11.8')
+
+        async def pin(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+            return tuple(FileEvidence(path=path, commit='d' * 40) for path in paths)
+
+        served.pin = pin
+        running = asyncio.create_task(loop_for(served, tmp_path).run())
+        try:
+            await until(lambda: len(lab.board.turns) == 1)
+            # cy takes the rerun at once, so its lease keeps bo out from the request on.
+            await lab.request_rerun('ada', 'p-1')
+            await Member(lab, 'cy', copies=FakeCopies()).take_rerun('p-1')
+            taken = lab.board.seq
+            # Nothing happens on the board from here on. The lease ends in a moment, and that alone wakes bo.
+            clock.jump = timedelta(minutes=10) - timedelta(seconds=0.3)
+            await until(lambda: len(lab.board.turns) == 2)
+        finally:
+            running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', RERUN_WANTED]
+    assert isinstance(next(event for event in record_file.read() if event.seq > taken), TurnStarted)
+
+
+async def test_a_rerun_that_a_lease_kept_out_rings_no_doorbell_in_a_closed_lab_and_rings_when_it_opens(
+    record_file: RecordFile, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = RealClock()
+    lab = await a_wanted_rerun(record_file, clock, ask_first=False)
+    waits: list[float | None] = []
+    wait = lab.wait_for_change
+
+    async def waited(after: int, timeout: float | None = None) -> None:
+        waits.append(timeout)
+        await wait(after, timeout)
+
+    monkeypatch.setattr(lab, 'wait_for_change', waited)
+    async with serve_board(lab) as served:
+        served.copies = FakeCopies(folder=tmp_path / 'copies')
+        (tmp_path / 'copies' / 'p-1').mkdir(parents=True)
+        (tmp_path / 'copies' / 'p-1' / 'bench.json').write_text('11.8')
+
+        async def pin(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+            return tuple(FileEvidence(path=path, commit='d' * 40) for path in paths)
+
+        served.pin = pin
+        running = asyncio.create_task(loop_for(served, tmp_path).run())
+        try:
+            await until(lambda: len(lab.board.turns) == 1)
+            await lab.request_rerun('ada', 'p-1')
+            await Member(lab, 'cy', copies=FakeCopies()).take_rerun('p-1')
+            # The close reaches every agent, bo too. With cy's word the lab is closed.
+            close = await lab.post(PostRequest(kind='close', text='Done.', thread='t-1'), 'ada')
+            agreed = {'kind': 'answer', 'text': 'Agreed.', 'thread': 't-1', 'reply_to': close.post.id, 'accepts': True}
+            await lab.post(PostRequest.model_validate(agreed), 'cy')
+            await until(lambda: len(lab.board.turns) == 2)
+            assert lab_state(lab.board) == 'closed'
+            # The lease ends in the closed lab. It sets bo no time to wake, and it rings nothing.
+            clock.jump = timedelta(minutes=10)
+            await asyncio.sleep(0.3)
+            assert len(calls(log, 'prompt')) == 2
+            assert waits[-1] is None
+            # ada withdraws the close, so the lab is open again, and the rerun rings for bo now.
+            withdrawn = {'kind': 'ruled_out', 'text': 'Not done.', 'thread': 't-1', 'reply_to': close.post.id}
+            await lab.post(PostRequest.model_validate(withdrawn), 'ada')
+            await until(lambda: len(lab.board.turns) == 3)
+        finally:
+            running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL, RERUN_WANTED]
+
+
+async def test_an_agent_that_was_told_of_a_rerun_wakes_for_no_lease_that_ends(
+    record_file: RecordFile, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = RealClock()
+    # The rerun is wanted before bo's first turn, so the news of that turn tells bo of it.
+    lab = await a_wanted_rerun(record_file, clock, ask_first=True)
+    waits: list[float | None] = []
+    wait = lab.wait_for_change
+
+    async def waited(after: int, timeout: float | None = None) -> None:
+        waits.append(timeout)
+        await wait(after, timeout)
+
+    monkeypatch.setattr(lab, 'wait_for_change', waited)
+    async with serve_board(lab) as served:
+        running = asyncio.create_task(loop_for(served, tmp_path).run())
+        try:
+            await until(lambda: len(lab.board.turns) == 1)
+            cy = Member(lab, 'cy', copies=FakeCopies())
+            # Two leases of cy end, one after the other. Neither wakes bo, and the loop sets no time for them.
+            for _ in range(2):
+                looked = len(waits)
+                await cy.take_rerun('p-1')
+                # The loop looks at the take, and waits again.
+                await until(lambda: len(waits) > looked)  # noqa: B023
+                clock.jump += timedelta(minutes=10)
+                await asyncio.sleep(0.3)
+            await lab.post(SIDE_NOTE, 'ada')
+            await asyncio.sleep(0.3)
+        finally:
+            running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.']
+    assert set(waits) == {None}
 
 
 async def test_a_rerun_that_the_agent_can_take_wakes_it_and_it_takes_the_rerun_in_its_own_turn(

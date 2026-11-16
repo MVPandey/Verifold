@@ -25,7 +25,7 @@ def conversation_view(board: Board) -> ConversationView:
             for item in needs_person(board)
             if item.post.thread == talk and item.post.author == board.coordinator
         ),
-        asks=tuple(post_view(board, entry) for entry in board.posts if entry.post.id in asked),
+        asks=tuple(post_view(board, entry, PERSON) for entry in board.posts if entry.post.id in asked),
         powers=_powers(board),
         deeds=_deeds(board),
     )
@@ -61,7 +61,7 @@ def _powers(board: Board) -> tuple[PowerView, ...]:
 
 def _deeds(board: Board) -> tuple[Deed, ...]:
     return tuple(
-        Deed(request=post_view(board, entry), agent=joined_by(board, answered), undo=undo_of(board, answered))
+        Deed(request=post_view(board, entry, PERSON), agent=joined_by(board, answered), undo=undo_of(board, answered))
         for answered in reversed(board.answers)
         if answered.yes and (entry := board.post(answered.request))
     )

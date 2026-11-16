@@ -5,7 +5,9 @@ from pathlib import Path
 
 import psutil
 import pytest
+from pydantic import ValidationError
 
+from verifold.protocol.moves import SettingMove
 from verifold.protocol.settings import (
     AtExit,
     AtTimeLimit,
@@ -58,6 +60,34 @@ def test_a_projects_settings_win_over_the_global_ones_setting_by_setting(tmp_pat
     assert settings.jobs.at_exit is AtExit.KEEP
     assert settings.lab_settings().permissions.while_you_decide is WhileYouDecide.WAIT
     assert everywhere.lab_settings().permissions.while_you_decide is WhileYouDecide.REFUSE
+
+
+def test_the_reveal_time_of_votes_and_the_lease_of_a_rerun_are_settings_of_ten_minutes_by_default(
+    tmp_path: Path,
+) -> None:
+    home, project = tmp_path / 'home', tmp_path / 'project'
+    write(home / '.verifold', {'votes': {'reveal_minutes': 0}, 'reruns': {'lease_minutes': 30}})
+    write(project / '.verifold', {'reruns': {'lease_minutes': 5}})
+
+    settings = load_settings(project, home=home).lab_settings()
+
+    assert (Settings().votes.reveal_minutes, Settings().reruns.lease_minutes) == (10, 10)
+    assert (settings.votes.reveal_minutes, settings.reruns.lease_minutes) == (0, 5)
+    # Each is a whole number of minutes from zero to one day.
+    for wrong in ({'votes': {'reveal_minutes': -1}}, {'reruns': {'lease_minutes': 24 * 60 + 1}}):
+        write(project / '.verifold', wrong)
+        with pytest.raises(SettingsInvalid, match=r'settings\.json'):
+            load_settings(project, home=home)
+    write(project / '.verifold', {'votes': {'reveal_minutes': 1.5}})
+    with pytest.raises(SettingsInvalid):
+        load_settings(project, home=home)
+    # The settings that a lab recorded before these two existed get the defaults.
+    older = Settings.model_validate({'version': 1, 'jobs': {'at_exit': 'keep'}, 'reviewers': {'seats': 2}})
+    assert (older.votes.reveal_minutes, older.reruns.lease_minutes) == (10, 10)
+    # The coordinator's power for settings covers the job settings only, so no move of it changes either one.
+    for key in ('votes.reveal_minutes', 'reruns.lease_minutes'):
+        with pytest.raises(ValidationError):
+            SettingMove.model_validate({'key': key, 'value': '0'})
 
 
 @pytest.mark.parametrize('content', ['{not json', '[]', '{"jobs": {"at_exit": "later"}}', '{"colour": "blue"}'])

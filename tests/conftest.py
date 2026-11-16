@@ -1,5 +1,6 @@
 import asyncio
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -91,9 +92,9 @@ class ServedBoard:
         return member, SecretStr(self.members.add(member))
 
 
-@pytest.fixture
-async def served(lab: Lab) -> AsyncIterator[ServedBoard]:
-    """The `lab` fixture with its board served over MCP on a free port."""
+@asynccontextmanager
+async def serve_board(lab: Lab) -> AsyncGenerator[ServedBoard]:
+    """Serve a lab's board over MCP on a free port."""
     members = Members()
     app = join_server(members.resolve).streamable_http_app(host='127.0.0.1')
     server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=0, log_level='warning'))
@@ -101,6 +102,15 @@ async def served(lab: Lab) -> AsyncIterator[ServedBoard]:
     while not server.started:
         await asyncio.sleep(0.01)
     port = server.servers[0].sockets[0].getsockname()[1]
-    yield ServedBoard(lab=lab, url=f'http://127.0.0.1:{port}/mcp', members=members)
-    server.should_exit = True
-    await serving
+    try:
+        yield ServedBoard(lab=lab, url=f'http://127.0.0.1:{port}/mcp', members=members)
+    finally:
+        server.should_exit = True
+        await serving
+
+
+@pytest.fixture
+async def served(lab: Lab) -> AsyncIterator[ServedBoard]:
+    """The `lab` fixture with its board served over MCP on a free port."""
+    async with serve_board(lab) as board:
+        yield board

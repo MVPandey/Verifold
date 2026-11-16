@@ -4,6 +4,7 @@ import type { AgentView, Deliverable, DeliverableOffer, LabView, RerunLine } fro
 import { authorName } from './agents.ts';
 import type { Tab } from './coordinator.ts';
 import { dayClock } from './format.ts';
+import { heldUntil } from './status.ts';
 
 /** The most characters in a deliverable's sentence, as `MAX_SENTENCE` in the server's `protocol/deliverables.py`. */
 export const MAX_SENTENCE = 300;
@@ -208,19 +209,22 @@ export interface ThreadFact {
 export function threadFacts(
   item: Deliverable,
   wanted: readonly RerunLine[],
+  agents: readonly AgentView[],
+  now: Date,
 ): readonly ThreadFact[] {
   const shown = new Set(item.offers.map((offer) => offer.post));
   const reruns = wanted.filter((line) => line.thread === item.thread && !shown.has(line.post));
+  const taken = (line: RerunLine): string => {
+    const held = heldUntil(line, agents, now);
+    if (held) return `The rerun of a post in the thread is held by ${held}`;
+    return line.taken_by.length > 0
+      ? 'An agent took the rerun of a post in the thread'
+      : 'A rerun of a post in the thread is wanted';
+  };
   return [
     ...item.disputed.map((post) => ({ text: 'An agent disputes a post in the thread', post })),
     ...item.open_asks.map((post) => ({ text: 'A question in the thread has no answer', post })),
-    ...reruns.map((line) => ({
-      text:
-        line.taken_by.length > 0
-          ? 'An agent took the rerun of a post in the thread'
-          : 'A rerun of a post in the thread is wanted',
-      post: line.post,
-    })),
+    ...reruns.map((line) => ({ text: taken(line), post: line.post })),
   ];
 }
 
@@ -242,11 +246,18 @@ export function isDocked(panel: Docked, hasCoordinator: boolean): boolean {
 
 /**
  * Return what the reruns and checks of an offer say, in a few words, or `null` when there is nothing to say: a
- * rerun is wanted, an agent took it, an independent rerun held the offer up, or an agent's check holds. A check
- * that failed shows as a dispute, with its link.
+ * rerun is wanted, an agent took it, who holds it and until when, an independent rerun held the offer up, or an
+ * agent's check holds. A check that failed shows as a dispute, with its link.
  */
-export function rerunFact(offer: DeliverableOffer, wanted: readonly RerunLine[]): string | null {
+export function rerunFact(
+  offer: DeliverableOffer,
+  wanted: readonly RerunLine[],
+  agents: readonly AgentView[],
+  now: Date,
+): string | null {
   const line = wanted.find((item) => item.post === offer.post);
+  const held = line ? heldUntil(line, agents, now) : null;
+  if (held) return `Its rerun is held by ${held}`;
   if (line) return line.taken_by.length > 0 ? 'An agent took its rerun' : 'A rerun is wanted';
   if (offer.standing === 'held_up') return 'Held up by an independent rerun';
   return offer.standing === 'checked' ? 'Checked by an agent' : null;

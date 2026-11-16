@@ -173,6 +173,18 @@ class CleanCopies:
             why = error.strerror if isinstance(error, OSError) and error.strerror else error
             raise NoCleanCopy(f'Verifold could not make the clean copy of post {post.id}: {why}') from error
 
+    async def kept(self, claim: Posted, digest: str) -> MadeCopy | None:
+        """
+        Return the clean copy of a post's files as a take left it, or `None` when it is not there as it was.
+
+        It is there when its folder is and its manifest file has the SHA-256 `digest`. The check reads that one
+        file through Verifold's own folder, and the copy that it returns has no lines of the manifest.
+        """
+        post = claim.post
+        if not post.evidence:
+            return None
+        return await asyncio.to_thread(_kept, self._project.resolve(), post.id, post.evidence[0].commit, digest)
+
     async def _make(self, post_id: PostId, author: AgentId, commit: CommitId) -> MadeCopy:
         async with self._free:
             job = _Job(
@@ -199,12 +211,31 @@ def _export(job: _Job) -> MadeCopy:
         held, there = os.fstat(home), place.lstat()
         if not stat.S_ISDIR(there.st_mode) or (there.st_dev, there.st_ino) != (held.st_dev, held.st_ino):
             raise GitError(f'{place} was replaced while Verifold made the copy.')
-    return MadeCopy(
-        folder=place / name,
-        files=lines,
-        listing=place / f'{name}.manifest',
-        digest=hashlib.sha256(listed).hexdigest(),
-    )
+    folder, listing = _place(project, post_id, job.commit)
+    return MadeCopy(folder=folder, files=lines, listing=listing, digest=hashlib.sha256(listed).hexdigest())
+
+
+def _kept(project: Path, post_id: PostId, commit: str, digest: str) -> MadeCopy | None:
+    # The copy and its manifest's file, read through the folders that Verifold holds, and never through a link.
+    name = commit[:12]
+    try:
+        with _own(project, post_id) as home:
+            if not stat.S_ISDIR(os.stat(name, dir_fd=home, follow_symlinks=False).st_mode):
+                return None
+            with os.fdopen(os.open(f'{name}.manifest', os.O_RDONLY | os.O_NOFOLLOW, dir_fd=home), 'rb') as file:
+                listed = file.read()
+    except OSError:
+        return None
+    if hashlib.sha256(listed).hexdigest() != digest:
+        return None
+    folder, listing = _place(project, post_id, commit)
+    return MadeCopy(folder=folder, files=(), listing=listing, digest=digest)
+
+
+def _place(project: Path, post_id: PostId, commit: str) -> tuple[Path, Path]:
+    # The folder of a post's copy at a commit, and the file of its manifest beside it.
+    name = commit[:12]
+    return project / LAB_FOLDER / RERUNS / post_id / name, project / LAB_FOLDER / RERUNS / post_id / f'{name}.manifest'
 
 
 def _copied(home: int, name: str, objects: Objects, tree: str) -> list[ManifestLine]:
