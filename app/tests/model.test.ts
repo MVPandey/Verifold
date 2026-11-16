@@ -203,6 +203,10 @@ describe('posts', () => {
     assert.equal(clip('Short.'), 'Short.');
     // A tool of the board takes 200 characters from an agent. A longer headline shows as text.
     assert.deepEqual([isLong('x'.repeat(200)), isLong('x'.repeat(201))], [false, true]);
+    // The server counts code points. A math italic letter is one character and two units of a string.
+    const math = `${'𝑥'.repeat(60)}${'x'.repeat(104)}`;
+    assert.deepEqual([math.length, [...math].length, isLong(math)], [224, 164, false]);
+    assert.equal(isLong('𝑥'.repeat(201)), true);
     assert.equal(clip('x'.repeat(300)), `${'x'.repeat(199)}…`);
   });
 
@@ -808,7 +812,7 @@ describe('turns', () => {
         : `[${row.items.map((item) => item.post.id).join('+')}]:${row.depth}`,
     );
 
-  it('nests replies to two levels and folds each run of agents’ messages that nobody replied to', () => {
+  it('nests replies to two levels and folds each run of two or more agents’ messages that nobody replied to', () => {
     const posts = [
       note('p-1', { author: 'person' }),
       note('p-2'),
@@ -834,20 +838,66 @@ describe('turns', () => {
       '[p-7+p-13]:2',
       // Two replies to the result that nobody answered are one row under it.
       '[p-11+p-12]:1',
-      // A message that has a reply is a turn, with its reply under it. The reply is a fold of one.
+      // A message that has a reply is a turn, with its reply under it. That reply is the last word of its
+      // chain: one message alone is a turn and no fold.
       'p-8:0',
-      '[p-9]:1',
-      // A reply to a post that the thread does not hold sits with the first posts.
-      '[p-10]:0',
+      'p-9:1',
+      // A reply to a post that the thread does not hold sits with the first posts. It is alone there too.
+      'p-10:0',
     ]);
     // The same rule holds in every thread: the fold does not ask which thread it is.
     const elsewhere = posts.map((item) => ({ ...item, post: { ...item.post, thread: 't-7' } }));
     assert.deepEqual(shape(elsewhere), shape(posts));
-    assert.equal(foldedCount(rows(posts)), 8);
-    // In the conversation with the coordinator, no post folds.
+    assert.equal(foldedCount(rows(posts)), 6);
+    // A side thread and the conversation with the coordinator fold nothing: every post is a turn.
     assert.equal(foldedCount(rows(posts, null, false)), 0);
     assert.equal(rows(posts, null, false).length, posts.length);
     assert.equal(foldedCount(rows([postView(result('p-1'))])), 0);
+  });
+
+  it('folds no single message: the newest message of a chain of replies stays in sight', () => {
+    const chain = [
+      postView(result('p-1')),
+      note('p-2', { reply_to: 'p-1' }),
+      note('p-3', { reply_to: 'p-2', author: 'agent-2' }),
+      note('p-4', { reply_to: 'p-3' }),
+    ];
+    assert.deepEqual(shape(chain), ['p-1:0', 'p-2:1', 'p-3:2', 'p-4:2']);
+    assert.equal(foldedCount(rows(chain)), 0);
+    // Two messages that nobody replied to are a fold, and a third one joins it.
+    const more = [...chain, note('p-5', { reply_to: 'p-3', author: 'agent-2' })];
+    assert.deepEqual(shape(more), ['p-1:0', 'p-2:1', 'p-3:2', '[p-4+p-5]:2']);
+    assert.deepEqual(shape([...more, note('p-6', { reply_to: 'p-3' })]).at(-1), '[p-4+p-5+p-6]:2');
+  });
+
+  it('never folds an agent’s reply to a post of the person', () => {
+    const offer = postView({
+      ...result('p-2', { author: 'agent-2' }),
+      kind: 'offer',
+      deliverable: 'd-1',
+    });
+    const posts = [
+      postView(result('p-1')),
+      offer,
+      // The person asked for changes to the offer, and two agents replied to that.
+      note('p-3', { author: 'person', reply_to: 'p-2', text: 'Add the numbers.' }),
+      note('p-4', { author: 'agent-2', reply_to: 'p-3' }),
+      note('p-5', { reply_to: 'p-3' }),
+      // Two messages to nobody still fold, and so do two replies to an agent's post.
+      note('p-6'),
+      note('p-7'),
+      note('p-8', { reply_to: 'p-1' }),
+      note('p-9', { reply_to: 'p-1' }),
+    ];
+    assert.deepEqual(shape(posts), [
+      'p-1:0',
+      '[p-8+p-9]:1',
+      'p-2:0',
+      'p-3:1',
+      'p-4:2',
+      'p-5:2',
+      '[p-6+p-7]:0',
+    ]);
   });
 
   it('never folds the first post, a post of the person, a marked post, or the post that the page opened on', () => {
@@ -869,7 +919,7 @@ describe('turns', () => {
     ];
     assert.deepEqual(shape(posts), [
       'p-1:0',
-      '[p-2]:0',
+      'p-2:0',
       'p-3:0',
       'p-4:0',
       'p-5:0',
@@ -879,8 +929,16 @@ describe('turns', () => {
       '[p-9+p-10+p-11]:0',
       'p-12:0',
     ]);
-    // The page opened on p-10, so it is a turn of its own between the messages around it.
-    assert.deepEqual(shape(posts, 'p-10').slice(8), ['[p-9]:0', 'p-10:0', '[p-11]:0', 'p-12:0']);
+    // Without those marks, the same posts are one run after the first post and the person's post.
+    const plain = posts.map((item) => note(item.post.id, { author: item.post.author }));
+    assert.deepEqual(shape(plain).slice(0, 4), [
+      'p-1:0',
+      'p-2:0',
+      'p-3:0',
+      '[p-4+p-5+p-6+p-7+p-8+p-9+p-10+p-11+p-12]:0',
+    ]);
+    // The page opened on p-10, so it is a turn of its own, and so is each single message beside it.
+    assert.deepEqual(shape(posts, 'p-10').slice(8), ['p-9:0', 'p-10:0', 'p-11:0', 'p-12:0']);
     assert.deepEqual(shape(posts, 'p-9').slice(8), ['p-9:0', '[p-10+p-11]:0', 'p-12:0']);
     // Only an agent's message folds: no other kind does, and a vote changes nothing.
     assert.equal(isPlainMessage(note('p-2')), true);
@@ -896,7 +954,6 @@ describe('turns', () => {
       id;
     const from = (...authors: string[]): readonly PostView[] =>
       authors.map((author, index) => note(`p-${index + 2}`, { author: `agent-${author}` }));
-    assert.equal(foldLabel(from('1'), called), '1 message from Keel');
     assert.equal(foldLabel(from('1', '1', '1'), called), '3 messages from Keel');
     assert.equal(foldLabel(from('2', '1', '2'), called), '3 messages from Basis and Keel');
     assert.equal(
@@ -917,8 +974,7 @@ describe('turns', () => {
   it('names the control that shows every folded message of a thread and folds them again', () => {
     assert.equal(unfoldLabel(12, false), 'Show the 12 folded messages');
     assert.equal(unfoldLabel(12, true), 'Fold 12 messages again');
-    assert.equal(unfoldLabel(1, false), 'Show the folded message');
-    assert.equal(unfoldLabel(1, true), 'Fold 1 message again');
+    assert.equal(unfoldLabel(2, false), 'Show the 2 folded messages');
   });
 
   it('finds what a thread stands on', () => {
@@ -1032,49 +1088,29 @@ describe('seen', () => {
 
   it('remembers for each thread of a lab whether the person shows every message', () => {
     const store = memoryStore();
-    const browser = (): typeof store => store;
-    assert.equal(readUnfolded(browser, 'lab', 't-1'), false);
-    markUnfolded(browser, 'lab', 't-1', true);
-    markUnfolded(browser, 'lab', 't-4', true);
-    markUnfolded(browser, 'lab', 't-1', true);
+    assert.equal(readUnfolded(store, 'lab', 't-1'), false);
+    markUnfolded(store, 'lab', 't-1', true);
+    markUnfolded(store, 'lab', 't-4', true);
+    markUnfolded(store, 'lab', 't-1', true);
     assert.equal(store.getItem('verifold-unfolded:lab'), '["t-4","t-1"]');
-    assert.equal(readUnfolded(browser, 'lab', 't-1'), true);
+    assert.equal(readUnfolded(store, 'lab', 't-1'), true);
     // The choice is for one thread of one lab, and what the person saw is in another place.
-    assert.equal(readUnfolded(browser, 'lab', 't-2'), false);
-    assert.equal(readUnfolded(browser, 'other lab', 't-1'), false);
+    assert.equal(readUnfolded(store, 'lab', 't-2'), false);
+    assert.equal(readUnfolded(store, 'other lab', 't-1'), false);
     assert.deepEqual(readSeen(store, 'lab'), {});
-    markUnfolded(browser, 'lab', 't-1', false);
-    assert.equal(readUnfolded(browser, 'lab', 't-1'), false);
-    assert.equal(readUnfolded(browser, 'lab', 't-4'), true);
+    markUnfolded(store, 'lab', 't-1', false);
+    assert.equal(readUnfolded(store, 'lab', 't-1'), false);
+    assert.equal(readUnfolded(store, 'lab', 't-4'), true);
   });
 
-  it('works without the browser’s storage: nothing is remembered, and nothing fails', () => {
-    const refused = (): never => {
-      throw new Error('The browser refuses storage.');
-    };
-    assert.equal(readUnfolded(refused, 'lab', 't-1'), false);
-    markUnfolded(refused, 'lab', 't-1', true);
-    const full = {
-      getItem: (): string | null => null,
-      setItem: (): void => {
-        throw new Error('The storage is full.');
-      },
-    };
-    markUnfolded(() => full, 'lab', 't-1', true);
-    // Damaged storage counts as no choice, and the next choice replaces it.
+  it('treats a damaged choice as none, and the next choice replaces it', () => {
     const store = memoryStore();
     for (const damaged of ['{not json', '{"t-1": true}', '"t-1"']) {
       store.setItem('verifold-unfolded:lab', damaged);
-      assert.equal(
-        readUnfolded(() => store, 'lab', 't-1'),
-        false,
-      );
+      assert.equal(readUnfolded(store, 'lab', 't-1'), false);
     }
-    markUnfolded(() => store, 'lab', 't-1', true);
-    assert.equal(
-      readUnfolded(() => store, 'lab', 't-1'),
-      true,
-    );
+    markUnfolded(store, 'lab', 't-1', true);
+    assert.equal(readUnfolded(store, 'lab', 't-1'), true);
   });
 });
 

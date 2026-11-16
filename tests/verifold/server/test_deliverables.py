@@ -384,6 +384,8 @@ async def test_an_agent_reads_the_deliverables_in_its_brief_and_offers_files_wit
     assert [(offer['post'], offer['by'], offer['files'], offer['revised']) for offer in line['offers']] == [
         (post['id'], 'ada', ['answer.md'], 0)
     ]
+    # The offer has a detail, and a brief holds the offer's line alone: `thread` shows the detail to an agent.
+    assert (post['body'], 'body' in line['offers'][0]) == ('No numbers yet.', False)
     assert [result.is_error for result in (no_file, too_many, outside, unknown, as_post)] == [True] * 5
     assert 'goes through the `offer` tool' in str(as_post.content)
     assert 'no deliverable d-5' in str(unknown.content)

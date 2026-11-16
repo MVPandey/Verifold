@@ -49,9 +49,12 @@ export function split(text: string): { readonly headline: string; readonly body:
 /**
  * Return whether a headline is longer than a tool takes from an agent: it is the person's, or an agent's from
  * before that limit. The page shows such a headline as text, and not in the type of a heading.
+ *
+ * The server counts characters as code points, so this does too. A letter outside the basic plane, such as a
+ * math italic one, is two units of a JavaScript string and one character.
  */
 export function isLong(headline: string): boolean {
-  return headline.length > AGENT_HEADLINE_LIMIT;
+  return [...headline].length > AGENT_HEADLINE_LIMIT;
 }
 
 /** Return a headline as a list shows it: whole, or its first 200 characters. The post's thread shows all of it. */

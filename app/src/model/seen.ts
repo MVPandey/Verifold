@@ -1,7 +1,10 @@
 import { PERSON } from '../api/types.ts';
 import type { ThreadSummary } from '../api/types.ts';
 
-/** Where the app keeps what the person has seen. `localStorage` in the browser. */
+/**
+ * Where the app keeps what the person has seen and chosen. In the browser it is `browserStore`, which reads and
+ * writes `localStorage` and fails at neither.
+ */
 export interface SeenStore {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
@@ -39,35 +42,26 @@ export function hasNew(summary: ThreadSummary, seen: Seen): boolean {
 }
 
 /**
- * Return whether the person chose to see every message of a thread, in the lab that opened at `lab`. `store`
- * gives the storage, and a browser can refuse it: storage that fails or is damaged counts as no choice.
+ * Return whether the person chose to see every message of a thread, in the lab that opened at `lab`. Damaged
+ * storage counts as no choice.
  */
-export function readUnfolded(store: () => SeenStore, lab: string, thread: string): boolean {
-  try {
-    return unfolded(store(), lab).includes(thread);
-  } catch {
-    return false;
-  }
+export function readUnfolded(store: SeenStore, lab: string, thread: string): boolean {
+  return unfolded(store, lab).includes(thread);
 }
 
-/** Record whether the person sees every message of a thread. When the storage fails, nothing is kept. */
-export function markUnfolded(
-  store: () => SeenStore,
-  lab: string,
-  thread: string,
-  shown: boolean,
-): void {
-  try {
-    const others = unfolded(store(), lab).filter((id) => id !== thread);
-    store().setItem(unfoldedKey(lab), JSON.stringify(shown ? [...others, thread] : others));
-  } catch {
-    // The page still has the choice until it loads again.
-  }
+/** Record whether the person sees every message of a thread. */
+export function markUnfolded(store: SeenStore, lab: string, thread: string, shown: boolean): void {
+  const others = unfolded(store, lab).filter((id) => id !== thread);
+  store.setItem(unfoldedKey(lab), JSON.stringify(shown ? [...others, thread] : others));
 }
 
 function unfolded(store: SeenStore, lab: string): readonly unknown[] {
-  const stored: unknown = JSON.parse(store.getItem(unfoldedKey(lab)) ?? '[]');
-  return Array.isArray(stored) ? (stored as readonly unknown[]) : [];
+  try {
+    const stored: unknown = JSON.parse(store.getItem(unfoldedKey(lab)) ?? '[]');
+    return Array.isArray(stored) ? (stored as readonly unknown[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 function key(lab: string): string {

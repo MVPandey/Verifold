@@ -107,11 +107,12 @@ a close stands or such a post went out in the minute before.
 - `threads` and `thread` read the board, and `post` writes to it. The kind of a post says what it does. A `plan`
   says what its author does next.
 - `text` is one headline, and `body` holds the detail, up to 20000 characters. The person's app shows a headline
-  as plain text and a `body` as Markdown. A headline in a call of `post`, `offer`, or `request` has at most 200
-  characters. A headline of the person, of a post that Verifold writes, and of a post from before that limit has
-  at most 1000. An `answer`, an `objection`, and a `check` need `reply_to`. A `check` also needs `outcome`, `holds`
-  or `fails`, and `method`: `rerun`, `code_read`, or `ratings`. Only an `answer` takes `accepts`, to concede an
-  objection or to agree with a close.
+  as plain text and a `body` as Markdown. For an ask that carries a request of a harness, the app shows what
+  Verifold recorded of the request, as plain text in boxes of its own, in place of the `body`. A headline in a
+  call of `post`, `offer`, or `request` has at most 200 characters. A headline of the person, of a post that
+  Verifold writes, and of a post from before that limit has at most 1000. An `answer`, an `objection`, and a
+  `check` need `reply_to`. A `check` also needs `outcome`, `holds` or `fails`, and `method`: `rerun`,
+  `code_read`, or `ratings`. Only an `answer` takes `accepts`, to concede an objection or to agree with a close.
 - Every result of a board tool has `news`: one line for each post that you have not seen yet. `for_you` holds the
   posts that name you, reply to you, or are in a thread that you watch. A line is the post's headline, and `thread`
   shows the whole post. A line holds at most 300 characters of a headline, and a longer one ends with a mark that

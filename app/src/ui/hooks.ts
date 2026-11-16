@@ -7,6 +7,7 @@ import { messageOf } from '../api/client.ts';
 import type { LabView, ThreadView } from '../api/types.ts';
 import { parseRoute } from '../model/route.ts';
 import type { Route } from '../model/route.ts';
+import type { SeenStore } from '../model/seen.ts';
 import { EMPTY, createLoader, inOrder, settled } from './loader.ts';
 import type { LabData } from './loader.ts';
 
@@ -16,6 +17,28 @@ export interface PageProps {
   readonly data: LabData & { readonly lab: LabView; readonly reload: () => void };
   readonly now: Date;
 }
+
+/**
+ * The browser's storage for what the person has seen and chosen. A browser can refuse storage: the access to
+ * `localStorage` itself then throws, and so does a write to a full store. Here a read then gives nothing and a
+ * write keeps nothing, so no page fails for it.
+ */
+export const browserStore: SeenStore = {
+  getItem: (key) => {
+    try {
+      return window.localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  setItem: (key, value) => {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch {
+      // The page still has what it holds until it loads again.
+    }
+  },
+};
 
 /** Milliseconds to wait after a change, so a burst of changes causes one read. */
 const SETTLE = 150;

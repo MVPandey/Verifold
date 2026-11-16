@@ -220,39 +220,56 @@ export type Row =
 
 /**
  * Return a thread's posts as rows. A reply sits under the post that it answers, and the indent stops at two
- * levels. A run of agents' plain messages that nobody replied to folds into one row at its depth, in every
- * thread. The first post of the thread never folds, and neither does `target`, the post that the page opened on.
- * A message that has replies is a turn, with its replies under it. Without `folding`, every post is a turn: that
- * is the conversation with the coordinator, where the agent's messages are its words to the person.
+ * levels. A run of two or more agents' plain messages that nobody replied to folds into one row at its depth.
+ * One such message alone is a turn: the last message of a chain of replies has no reply yet, and it is the
+ * newest word in the thread.
+ *
+ * These never fold: the first post of the thread, a reply to a post of the person, and `target`, the post that
+ * the page opened on. A message that has replies is a turn, with its replies under it. Without `folding`, every
+ * post is a turn: that is a side thread, which is a conversation between named agents, and the conversation
+ * with the coordinator, where the agent's messages are its words to the person.
  */
 export function rows(
   posts: readonly PostView[],
   target: string | null = null,
   folding = true,
 ): readonly Row[] {
-  const ids = new Set(posts.map((item) => item.post.id));
+  const byId = new Map(posts.map((item) => [item.post.id, item]));
   const replies = new Map<string, PostView[]>();
   const roots: PostView[] = [];
   for (const item of posts) {
     const parent = item.post.reply_to;
-    if (parent !== null && ids.has(parent))
+    if (parent !== null && byId.has(parent))
       replies.set(parent, [...(replies.get(parent) ?? []), item]);
     else roots.push(item);
   }
   const first = posts[0]?.post.id;
+  const folds = (item: PostView): boolean => {
+    const { id, reply_to: parent } = item.post;
+    const answered = parent === null ? undefined : byId.get(parent);
+    return (
+      folding &&
+      id !== first &&
+      id !== target &&
+      !replies.has(id) &&
+      answered?.post.author !== PERSON &&
+      isPlainMessage(item)
+    );
+  };
   const out: Row[] = [];
   const walk = (item: PostView, depth: Depth): void => {
-    const { id } = item.post;
     const last = out.at(-1);
-    if (!folding || replies.has(id) || id === first || id === target || !isPlainMessage(item))
-      out.push({ kind: 'turn', item, depth });
+    if (!folds(item)) out.push({ kind: 'turn', item, depth });
     else if (last?.kind === 'fold' && last.depth === depth)
       out[out.length - 1] = { ...last, items: [...last.items, item] };
     else out.push({ kind: 'fold', items: [item], depth });
-    for (const reply of replies.get(id) ?? []) walk(reply, depth === 0 ? 1 : 2);
+    for (const reply of replies.get(item.post.id) ?? []) walk(reply, depth === 0 ? 1 : 2);
   };
   for (const root of roots) walk(root, 0);
-  return out;
+  return out.map((row) => {
+    const [only, more] = row.kind === 'fold' ? row.items : [];
+    return only && !more ? { kind: 'turn', item: only, depth: row.depth } : row;
+  });
 }
 
 /** Return how many messages the folds of a thread hold. */
@@ -278,13 +295,15 @@ export function foldLabel(
       : names.length === 2
         ? `${first} and ${second}`
         : first;
-  return `${items.length === 1 ? '1 message' : `${items.length} messages`} from ${who}`;
+  return `${items.length} messages from ${who}`;
 }
 
-/** Return the words of the control above a thread's posts, which shows every folded message or folds them again. */
+/**
+ * Return the words of the control above a thread's posts, which shows every folded message or folds them again.
+ * A thread with a fold has two folded messages or more.
+ */
 export function unfoldLabel(count: number, shown: boolean): string {
-  if (shown) return count === 1 ? 'Fold 1 message again' : `Fold ${count} messages again`;
-  return count === 1 ? 'Show the folded message' : `Show the ${count} folded messages`;
+  return shown ? `Fold ${count} messages again` : `Show the ${count} folded messages`;
 }
 
 /**

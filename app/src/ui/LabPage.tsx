@@ -33,7 +33,7 @@ import {
   proposalRows,
   proposalsHeading,
 } from '../model/votes.ts';
-import { useThread } from './hooks.ts';
+import { browserStore, useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
 import { Detail, Words } from './Markdown.tsx';
 import { CoordinatorSeat, OpenedForYou } from './Coordinator.tsx';
@@ -73,7 +73,7 @@ export function LabPage(props: PageProps & Place): ReactElement {
 
   useEffect(() => {
     if (open !== null && last !== undefined) {
-      markSeen(window.localStorage, lab.opened_at, open, last);
+      markSeen(browserStore, lab.opened_at, open, last);
     }
   }, [open, last, lab.opened_at]);
 
@@ -106,7 +106,7 @@ export function Wall(
 ): ReactElement {
   const { api, data, open, questionRead, cardRead } = props;
   const { lab, threads, needs } = data;
-  const seen = readSeen(window.localStorage, lab.opened_at);
+  const seen = readSeen(browserStore, lab.opened_at);
   const question = questionThread(threads);
   const questionId = question?.thread.id ?? null;
   // The panel that is docked beside the wall: a tab of the panel for the coordinator, or the deliverables.
@@ -624,8 +624,9 @@ function ReportCard(props: {
 
 /**
  * The lab's answer so far, as the server has it now: its headline, where it stands, who proposed it and how long
- * ago, its detail, its files, and what it builds on. With `open`, the headline is whole and the detail follows
- * it. Closed, the detail is behind "Read the detail", as on a post in a thread.
+ * ago, its detail, its files, and what it builds on. With `open`, the detail follows the headline. Closed, the
+ * detail is behind "Read the detail", as on a post in a thread, and a headline of more than 200 characters
+ * stops after four lines.
  */
 function Answer(props: {
   readonly view: AnswerView;
@@ -644,10 +645,11 @@ function Answer(props: {
     post.thread === props.question
       ? null
       : props.threads.find((summary) => summary.thread.id === post.thread);
-  const look = `${props.open ? '' : 'clamp'}${isLong(post.text) ? ' long' : ''}`.trim();
+  // A headline that a tool takes from an agent shows whole. Only a longer one stops after four lines, closed.
+  const look = isLong(post.text) ? (props.open ? 'long' : 'clamp long') : undefined;
   return (
     <>
-      <p className={look || undefined}>{post.text}</p>
+      <p className={look}>{post.text}</p>
       <div className="f-card-st">
         <ChipView chip={standingChip(post, standing) ?? { label: 'Not checked', tone: 'none' }} />
         {/* The answer has the badge only when the proposal itself got it. */}

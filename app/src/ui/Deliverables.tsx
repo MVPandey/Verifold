@@ -31,6 +31,7 @@ import {
 import type { LabNow } from '../model/deliverables.ts';
 import { dayClock } from '../model/format.ts';
 import { href } from '../model/route.ts';
+import { Detail } from './Markdown.tsx';
 import { Who } from './Picture.tsx';
 
 /**
@@ -255,7 +256,7 @@ function Item(props: Shared & { readonly item: Deliverable }): ReactElement {
 
 /**
  * One agent's offer: its files, each of which opens as a page at the version that the agent offered, the agent's
- * note, what the person decided about it, and the person's buttons. A button names the offer by its author. No
+ * note, the detail behind "Read the detail", what the person decided about it, and the person's buttons. A button names the offer by its author. No
  * text of an agent stands inside a sentence of the app or inside a control's name.
  */
 function OfferBlock(
@@ -307,6 +308,8 @@ function OfferBlock(
         </div>
       ))}
       <p className="d-note">{offer.note}</p>
+      {/* The detail of the offer, where the person decides about it. The files are in the rows above. */}
+      <Detail post={offer.post} body={offer.body ?? ''} files={[]} />
       <p className="d-facts">
         <span className="d-ostate">{offerState(offer, props.now)}</span>
         {left ? <span>Its author left the lab</span> : null}

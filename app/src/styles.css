@@ -697,7 +697,10 @@ details[open] > summary .opened {
   max-width: 48ch;
   overflow-wrap: anywhere;
 }
-/* The seat is a closed surface, so a long answer stops after four lines. The opened thread has all of it. */
+/*
+ * The seat is a closed surface, so an answer of more than 200 characters stops after four lines. The opened
+ * thread has all of it. A shorter answer shows whole, so the fold of its detail never sits under a cut sentence.
+ */
 .f-answer p.clamp {
   display: -webkit-box;
   -webkit-line-clamp: 4;
@@ -1168,6 +1171,8 @@ details[open] > summary .opened {
 .f-head,
 .f-report-text,
 .k-text,
+.nq,
+.d-note,
 .f-answer > p {
   white-space: pre-wrap;
 }

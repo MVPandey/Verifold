@@ -387,6 +387,7 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         'A `plan` says what',
         'A headline in a call of `post`, `offer`, or `request` has at most 200 characters',
         "The person's app shows a headline as plain text and a `body` as Markdown",
+        'For an ask that carries a request of a harness, the app shows what Verifold recorded of the request',
         'of a post from before that limit has at most 1000',
         '`holds` or `fails`',
         'has `news`',

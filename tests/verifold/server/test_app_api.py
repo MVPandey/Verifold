@@ -802,7 +802,7 @@ async def test_the_person_accepts_an_offer_asks_for_changes_and_takes_an_accepta
 ) -> None:
     await client.post('/deliverables', json={'text': 'A one-page answer.'})
     evidence = (FileEvidence(path='answer.md', commit='c' * 40),)
-    offer = (await lab.offer('ada', 'd-1', evidence, 'The answer.')).post.id
+    offer = (await lab.offer('ada', 'd-1', evidence, 'The answer.', 'It has **no** numbers yet.')).post.id
     offered = (await client.get('/lab')).json()['deliverables'][0]
 
     wordless = await client.post('/deliverables/d-1/decision', json={'decision': 'ask_changes', 'offer': offer})
@@ -830,6 +830,8 @@ async def test_the_person_accepts_an_offer_asks_for_changes_and_takes_an_accepta
             'standing': 'open',
             'disputed_by': None,
             'conceded_to': None,
+            # The person decides about the offer where the app lists it, so the app's view has its detail.
+            'body': 'It has **no** numbers yet.',
         }
     ]
     assert [reply.status_code for reply in (wordless, early, twice, other, word)] == [400, 400, 400, 400, 422]
