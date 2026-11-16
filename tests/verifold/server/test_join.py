@@ -7,11 +7,12 @@ from mcp import Client
 from mcp.types import TextContent
 
 from verifold.protocol.agents import Agent, ModelSpec
-from verifold.protocol.join import AlarmLine, AlarmResult, Brief, News, PostRequest, ThreadList, Update
+from verifold.protocol.ids import PERSON
+from verifold.protocol.join import MAX_PERSON_LINE, AlarmLine, AlarmResult, Brief, News, PostRequest, ThreadList, Update
 from verifold.protocol.posts import FileEvidence
 from verifold.server.activity import Activity
 from verifold.server.errors import HasLeft, UnknownAgent
-from verifold.server.join import INSTRUCTIONS, Members, join_server, token_digest
+from verifold.server.join import BRIEF_TOOL, INSTRUCTIONS, Members, join_server, token_digest
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.store.record_file import RecordFile
@@ -229,6 +230,33 @@ async def test_the_board_says_what_a_report_is_where_the_person_sees_it_and_how_
     report = after.structured_content['report']
     assert (report['kind'], report['text'], report['author']) == ('report', 'The baseline is in.', 'bo')
     assert after.structured_content['report_minutes_ago'] == 0
+
+
+async def test_a_post_of_the_person_reaches_an_agent_whole_in_brief_and_in_the_news_of_any_tool(lab: Lab) -> None:
+    bo = Member(lab, 'bo')
+    # The person's app makes the first line of a message the headline and the rest the body.
+    await lab.post(
+        PostRequest(kind='message', text='Hi Bo,', body='Stop the tail line and rerun p-9.', thread='t-1'), PERSON
+    )
+    async with Client(join_server(lambda _: bo)) as client:
+        briefed = await client.call_tool('brief', {})
+        await lab.post(PostRequest(kind='message', text='Also,', body='post a report.', thread='t-1'), PERSON)
+        await lab.post(PostRequest(kind='message', text='Side note.', body='The seed is 7.', thread='t-1'), 'ada')
+        listed = await client.call_tool('threads', {})
+
+    assert briefed.structured_content is not None
+    assert listed.structured_content is not None
+    first = briefed.structured_content['news']['for_you'][0]
+    news = listed.structured_content['news']
+    assert (first['text'], first['body']) == ('Hi Bo,', 'Stop the tail line and rerun p-9.')
+    assert [(line['text'], line['body']) for line in news['for_you']] == [('Also,', 'post a report.')]
+    # A line of an agent's post holds its headline alone, and `thread` shows the body.
+    assert [line['text'] for line in news['others']] == ['Side note.']
+    assert 'body' not in news['others'][0]
+    assert f'its `body` whole, up to {MAX_PERSON_LINE} characters\n  together. A longer `body` is cut' in INSTRUCTIONS
+    assert f'of the person holds its headline and its `body` whole, up to {MAX_PERSON_LINE} characters' in (
+        BRIEF_TOOL.replace('\n', ' ')
+    )
 
 
 async def test_an_agent_says_what_it_is_and_does_and_the_others_and_the_person_see_it(lab: Lab) -> None:

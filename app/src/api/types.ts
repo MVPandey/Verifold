@@ -150,15 +150,17 @@ export interface AgentActivity {
 }
 
 /**
- * The person's newest post that a result of an agent's board tools carried to the agent, as a line or in full.
- * The server that runs knows it, and the record does not hold it. It says nothing about what the agent made of
- * the post.
+ * The person's newest post in the conversation that a result of an agent's board tools carried to the agent. The
+ * server that runs knows it, and the record does not hold it. It says nothing about what the agent made of the
+ * post.
  */
 export interface Heard {
   /** The post's place in the record. */
   readonly seq: number;
   /** When the result carried the post, or `null` when that was before this server started. */
   readonly at: string | null;
+  /** Whether a result carried the whole post. `false` when the results carried only a line with a cut body. */
+  readonly whole: boolean;
 }
 
 export interface Usage {
@@ -230,7 +232,7 @@ export interface AgentView {
   /** The thread where the agent works now, or `null` when it works in none. */
   readonly thread: string | null;
   readonly activity: AgentActivity;
-  /** The person's newest post that the agent's board tools carried to it, or `null` when they carried none. */
+  /** The person's newest post in the conversation that the agent's board tools carried to it, or `null`. */
   readonly heard: Heard | null;
   /** `null` while the agent is in the lab. */
   readonly left: AgentLeft | null;

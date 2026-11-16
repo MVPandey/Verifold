@@ -196,8 +196,8 @@ const COVERS = '(max-width: 1000px)';
 
 /**
  * The conversation: a line that names the newest report, one row for each post, and the box where the person
- * writes to the coordinator. Under the person's newest message, a line says where that message is until the
- * coordinator replies.
+ * writes to the coordinator. Under the person's newest message, a line says where that message is until an agent
+ * replies.
  */
 function Talk(
   props: Shared & {
@@ -233,7 +233,12 @@ function Talk(
         {posts.map((item) => (
           <Fragment key={item.post.id}>
             <Say item={item} {...props} />
-            {heard?.post === item.post.id ? <li className="k-heard">{heard.text}</li> : null}
+            {heard?.post === item.post.id ? (
+              <li className="k-heard">
+                {/* A status is a polite live region, so a screen reader says the line when it changes. */}
+                <span role="status">{heard.text}</span>
+              </li>
+            ) : null}
           </Fragment>
         ))}
       </ol>

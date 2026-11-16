@@ -68,7 +68,9 @@ async def test_a_call_that_carried_a_post_of_the_person_to_its_agent_is_a_change
     activity.seat(ada)
     activity.seat(bo)
     await activity.invite('bo', 'here')
-    steer = await lab.post(PostRequest(kind='message', text='Try the small models.', thread='t-1'), PERSON)
+    # Every agent can read the conversation, so a line of the person's post there reaches ada as well.
+    await lab.set_coordinator('bo', PERSON)
+    steer = await lab.post(PostRequest(kind='message', text='Try the small models.', conversation=True), PERSON)
 
     # A call that brought no news changes nothing for an agent that Verifold started.
     async with activity.call('ada', 'threads'):

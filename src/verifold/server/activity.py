@@ -1,5 +1,5 @@
 """
-What each agent is doing now, and which post of the person reached it last.
+What each agent is doing now, and which post of the person in the conversation reached it last.
 
 The runner writes what an agent does from its harness's live updates. The seat that serves an agent's board tools
 knows what they carried to the agent. The app reads both.
@@ -48,7 +48,7 @@ class Activity:
         self._seats[member.agent_id] = member
 
     def heard(self, agent_id: AgentId) -> Heard | None:
-        """Return the person's newest post that an agent's board tools carried to it, or `None` when they carried none."""
+        """Return the person's newest post in the conversation that an agent's board tools carried to it, or `None`."""
         seat = self._seats.get(agent_id)
         return seat.heard if seat else None
 

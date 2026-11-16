@@ -72,7 +72,7 @@ class AgentActivity(Record):
 
 class Heard(Record):
     """
-    The person's newest post that a result of an agent's board tools carried to the agent, as a line or in full.
+    The person's newest post in the conversation that a result of an agent's board tools carried to the agent.
 
     It is a live fact of the server that runs, and no event in the record holds it. It says that a tool result
     held the post. It says nothing about what the agent made of the post.
@@ -82,6 +82,11 @@ class Heard(Record):
     """The post's place in the record."""
     at: AwareDatetime | None = None
     """When the result carried the post. `None` when that was before this server started."""
+    whole: bool
+    """
+    Whether a result carried the whole post: a line that held all of its body, the post in full in `wait`, or the
+    conversation in `thread`. `False` when the results carried only a line with a cut body.
+    """
 
 
 type Need = Literal['approval', 'answer', 'working', 'waiting', 'idle', 'stopped', 'left']
@@ -199,7 +204,10 @@ class AgentView(Record):
     """The thread where the agent works now, or `None` when it works in none."""
     activity: AgentActivity
     heard: Heard | None = None
-    """The person's newest post that the agent's board tools carried to it, or `None` when they carried none."""
+    """
+    The person's newest post in the conversation that the agent's board tools carried to it, or `None` when they
+    carried none.
+    """
     left: AgentLeft | None = None
     """When the agent left the lab, who caused it, and why. `None` while the agent is in the lab."""
     stopped: bool = False

@@ -3,7 +3,8 @@ from builders import START
 from pydantic import ValidationError
 
 from verifold.protocol.events import Posted
-from verifold.protocol.join import PostLine, PostRequest
+from verifold.protocol.ids import PERSON
+from verifold.protocol.join import MAX_PERSON_LINE, PostLine, PostRequest, holds_whole
 from verifold.protocol.posts import Answer, Ask, Check, Message, Plan
 
 
@@ -43,6 +44,25 @@ def test_a_plan_is_a_post_of_its_own_kind_and_becomes_one_line() -> None:
         0,
         0,
         (),
+    )
+
+
+def test_a_line_of_a_post_of_the_person_holds_its_headline_and_its_body_whole_up_to_a_bound() -> None:
+    head = 'h' * 1000
+    request = PostRequest(kind='message', text=head, body='b' * (MAX_PERSON_LINE - 1000), thread='t-1')
+    post = request.to_post('p-1', 't-1', PERSON)
+
+    line = PostLine.of(Posted(seq=3, at=START, post=post))
+    longer = PostLine.of(Posted(seq=4, at=START, post=post.model_copy(update={'body': f'{post.body}b'})))
+    of_an_agent = PostLine.of(Posted(seq=5, at=START, post=post.model_copy(update={'author': 'ada'})))
+
+    assert (line.text, line.body, holds_whole(line.text, line.body)) == (head, post.body, True)
+    # A longer body is cut at the bound, and the mark says so. With the mark, the line is longer than the bound.
+    assert longer.body == f'{"b" * 3000}… [cut: 3001 characters, `thread` shows all of it]'
+    assert holds_whole(longer.text, longer.body) is False
+    assert (of_an_agent.text, of_an_agent.body) == (
+        f'{"h" * 300}… [cut: 1000 characters, `thread` shows all of it]',
+        '',
     )
 
 
