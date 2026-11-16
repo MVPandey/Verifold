@@ -385,7 +385,10 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
     flat = ' '.join(instructions.split())
     for rule in (
         'A `plan` says what',
-        'at most 1000 characters',
+        'A headline in a call of `post`, `offer`, or `request` has at most 200 characters',
+        "The person's app shows a headline as plain text and a `body` as Markdown",
+        'For an ask that carries a request of a harness, the app shows what Verifold recorded of the request',
+        'of a post from before that limit has at most 1000',
         '`holds` or `fails`',
         'has `news`',
         "A line is the post's headline",
@@ -590,16 +593,63 @@ async def test_the_wait_tool_states_what_starts_the_next_turn_and_gives_no_advic
     assert Update.model_validate(with_alarm.structured_content).no_alarm == ''
 
 
-async def test_a_headline_takes_a_full_sentence_and_a_longer_one_is_refused_with_its_length_and_the_limit(
+async def test_a_tool_takes_a_headline_of_200_characters_and_refuses_a_longer_one_with_its_length_and_the_limit(
     lab: Lab,
 ) -> None:
-    async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
-        long = await client.call_tool('post', {'kind': 'message', 'text': 'x' * 1000, 'thread': 't-1'})
-        too_long = await client.call_tool('post', {'kind': 'message', 'text': 'x' * 1001, 'thread': 't-1'})
-        schema = next(tool for tool in (await client.list_tools()).tools if tool.name == 'post').input_schema
+    pinned: list[tuple[str, ...]] = []
 
-    assert not long.is_error
-    assert too_long.is_error
-    assert '`text` has 1001 characters, and the limit of a headline is 1000.' in str(too_long.content)
-    assert '`body` takes up to 20000 characters.' in str(too_long.content)
-    assert schema['$defs']['Headline']['maxLength'] == 1000
+    async def pin(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+        pinned.append(paths)
+        return tuple(FileEvidence(path=path, commit='b' * 40) for path in paths)
+
+    await lab.add_deliverable('The answer as one page.')
+    await lab.set_coordinator('ada', 'person')
+    calls: dict[str, tuple[str, dict[str, object]]] = {
+        'post': ('text', {'kind': 'result', 'thread': 't-1', 'files': ['a.json']}),
+        'offer': ('note', {'deliverable': 'd-1', 'files': ['answer.md']}),
+        'request': ('text', {'move': 'question', 'question': 'Does it hold on ARM?'}),
+    }
+    async with Client(join_server(lambda _: Member(lab, 'ada', pin=pin))) as client:
+        fits = {
+            name: await client.call_tool(name, {**given, field: 'x' * 200}) for name, (field, given) in calls.items()
+        }
+        posts, pins = len(lab.board.posts), len(pinned)
+        too_long = {
+            name: await client.call_tool(name, {**given, field: f' {"x" * 201} ', 'body': 'The detail.'})
+            for name, (field, given) in calls.items()
+        }
+        schemas = {tool.name: tool.input_schema for tool in (await client.list_tools()).tools}
+
+    assert [call.is_error for call in fits.values()] == [False, False, False]
+    assert [len(entry.post.text) for entry in lab.board.posts[-3:]] == [200, 200, 200]
+    for name, (field, _) in calls.items():
+        refusal = str(too_long[name].content)
+        assert too_long[name].is_error, name
+        assert f'{name}Arguments\\n{field}\\n' in refusal, name
+        assert (
+            'The headline has 201 characters, and the limit is 200. `body` takes the detail, up to 20000 characters.'
+            in refusal
+        ), name
+        assert schemas[name]['$defs']['AgentHeadline'] == {'type': 'string', 'minLength': 1, 'maxLength': 200}
+    # The board refuses the headline before it pins a file or writes a post.
+    assert (len(lab.board.posts), len(pinned)) == (posts, pins)
+
+
+async def test_a_record_from_before_the_limit_of_200_loads_and_agents_read_its_long_headline(
+    lab: Lab, record_file: RecordFile
+) -> None:
+    # The record's own limit is 1,000 characters, so this is a post as an agent's tool took it before.
+    long = ' '.join(['word'] * 180)
+    await lab.post(PostRequest(kind='result', text=long, thread='t-1'), 'ada')
+    again = Lab.load(record_file)
+
+    async with Client(join_server(lambda _: Member(again, 'bo'))) as client:
+        brief = await client.call_tool('brief', {})
+        thread = await client.call_tool('thread', {'thread': 't-1'})
+
+    assert (len(long), again.board.posts[-1].post.text) == (899, long)
+    assert thread.structured_content is not None
+    assert thread.structured_content['posts'][-1]['post']['text'] == long
+    latest = Brief.model_validate(brief.structured_content).agents[0].latest
+    assert latest is not None
+    assert (latest.id, latest.text) == ('p-2', f'{long[:300]}… [cut: 899 characters, `thread` shows all of it]')

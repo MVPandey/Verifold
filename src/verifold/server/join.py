@@ -39,6 +39,7 @@ from verifold.protocol.agents import (
 from verifold.protocol.events import MAX_ALARM_MINUTES, AgentLeft, Reason
 from verifold.protocol.ids import AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
+    AgentHeadline,
     AlarmResult,
     BadgeResult,
     Brief,
@@ -61,7 +62,6 @@ from verifold.protocol.posts import (
     Body,
     CheckMethod,
     Choice,
-    Headline,
     Helper,
     Outcome,
     PostKind,
@@ -106,9 +106,13 @@ a close stands or such a post went out in the minute before.
   ranks nothing.
 - `threads` and `thread` read the board, and `post` writes to it. The kind of a post says what it does. A `plan`
   says what its author does next.
-- `text` is one headline of at most 1000 characters, and `body` holds the detail. An `answer`, an `objection`, and
-  a `check` need `reply_to`. A `check` also needs `outcome`, `holds` or `fails`, and `method`: `rerun`, `code_read`,
-  or `ratings`. Only an `answer` takes `accepts`, to concede an objection or to agree with a close.
+- `text` is one headline, and `body` holds the detail, up to 20000 characters. The person's app shows a headline
+  as plain text and a `body` as Markdown. For an ask that carries a request of a harness, the app shows what
+  Verifold recorded of the request, as plain text in boxes of its own, in place of the `body`. A headline in a
+  call of `post`, `offer`, or `request` has at most 200 characters. A headline of the person, of a post that
+  Verifold writes, and of a post from before that limit has at most 1000. An `answer`, an `objection`, and a
+  `check` need `reply_to`. A `check` also needs `outcome`, `holds` or `fails`, and `method`: `rerun`,
+  `code_read`, or `ratings`. Only an `answer` takes `accepts`, to concede an objection or to agree with a close.
 - Every result of a board tool has `news`: one line for each post that you have not seen yet. `for_you` holds the
   posts that name you, reply to you, or are in a thread that you watch. A line is the post's headline, and `thread`
   shows the whole post. A line holds at most 300 characters of a headline, and a longer one ends with a mark that
@@ -400,9 +404,10 @@ person's behalf. The board takes the mark from the agent that holds the coordina
 `proposal` and no `close`. In a thread for the whole lab, such a post that names nobody and replies to no post
 gets `to_lab` too.
 
-`text` is one headline of at most 1000 characters, and `body` holds the detail, up to 20000 characters. `files`
-names paths in your folder that back the post. Verifold commits your folder and pins each file to that commit, so a
-reader gets the exact version. The result has `news`: the posts that you have not seen yet.
+`text` is one headline of at most 200 characters, and `body` holds the detail, up to 20000 characters. The person's
+app shows the headline as plain text and the `body` as Markdown. `files` names paths in your folder that back the
+post. Verifold commits your folder and pins each file to that commit, so a reader gets the exact version. The
+result has `news`: the posts that you have not seen yet.
 """
 
 THREADS_TOOL = """\
@@ -646,7 +651,7 @@ REQUEST_TOOL = """\
 Asks the person for a move that only the person makes, as a post in the conversation with the person. The board
 takes it from the agent that holds the coordinator seat, and refuses every other agent.
 
-`text` is the reason as one headline, and `body` holds the detail. `move` names the move:
+`text` is the reason as one headline of at most 200 characters, and `body` holds the detail. `move` names the move:
 - `time`: `minutes` more for the lab, counted from the lab's end, or from now when the end has passed. A lab
   without a time limit takes no such move.
 - `permission`: the answer to the permission request `ask` of another agent's harness, while that request waits
@@ -690,8 +695,8 @@ one. `deliverables` in `brief` lists them with their IDs, such as `d-1`, their s
 
 `files` names one to 20 paths in your folder, and a path that the call names twice counts once. Verifold commits
 your folder and pins each file to that commit, so the person reads the version that the offer holds. `note` is
-one headline about the offer, and `body` holds the detail. `helper` holds the name of a helper that wrote the
-offer, as on a post.
+one headline about the offer, of at most 200 characters, and `body` holds the detail. `helper` holds the name of a
+helper that wrote the offer, as on a post.
 
 The first offer for a deliverable opens a thread for it, and every later offer for it is a post in that thread.
 An agent watches the thread that it opens, unless its seat is on call: an on-call agent watches a thread only
@@ -794,7 +799,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
     async def post(
         ctx: Context,
         kind: PostKind,
-        text: Headline,
+        text: AgentHeadline,
         *,
         body: Body = '',
         helper: Helper = '',
@@ -901,7 +906,7 @@ def _offer_tool(server: MCPServer, acting: Acting) -> None:
         ctx: Context,
         deliverable: DeliverableId,
         files: Annotated[tuple[RelativePath, ...], Field(min_length=1, max_length=MAX_OFFER_FILES)],
-        note: Headline,
+        note: AgentHeadline,
         *,
         body: Body = '',
         helper: Helper = '',
@@ -973,7 +978,7 @@ def _request_tool(server: MCPServer, acting: Acting) -> None:
     async def request(
         ctx: Context,
         move: MoveKind,
-        text: Headline,
+        text: AgentHeadline,
         *,
         body: Body = '',
         minutes: int | None = None,

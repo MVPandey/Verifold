@@ -16,7 +16,13 @@ from verifold.protocol.agents import (
     ValueId,
     one_line,
 )
-from verifold.protocol.deliverables import MAX_DELIVERABLES, DeliverableLine, RemovedDeliverable, Sentence
+from verifold.protocol.deliverables import (
+    MAX_DELIVERABLES,
+    DeliverableLine,
+    OfferLine,
+    RemovedDeliverable,
+    Sentence,
+)
 from verifold.protocol.events import AgentLeft, Note, Question
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, PostId, ThreadId
@@ -29,7 +35,7 @@ from verifold.protocol.join import (
     RerunLine,
     ThreadView,
 )
-from verifold.protocol.posts import MAX_HEADLINE
+from verifold.protocol.posts import MAX_HEADLINE, Body
 from verifold.protocol.record import Record
 from verifold.protocol.settings import MAX_MINUTES, MAX_REVIEWER_SEATS, Settings, SettingsLevel, SetupDefaults
 from verifold.protocol.usage import Usage
@@ -198,6 +204,23 @@ class AgentView(Record):
     """Why the agent's latest turn, or the latest start of its harness, failed. `None` when it did not fail."""
 
 
+class OfferView(OfferLine):
+    """
+    An offer as the person's app shows it: the line that agents read in `brief`, and the detail of the offer's post.
+
+    The person accepts an offer or asks for changes in the panel for the deliverables, so the app shows the
+    detail there. `brief` holds the line alone, and `thread` shows the detail to an agent.
+    """
+
+    body: Body = ''
+
+
+class DeliverableView(DeliverableLine):
+    """A deliverable as the person's app shows it: each of its offers comes with its detail."""
+
+    offers: tuple[OfferView, ...] = ()
+
+
 class LabView(Record):
     """The lab at a glance."""
 
@@ -244,7 +267,7 @@ class LabView(Record):
     """Among how many agents its author and the agents that agreed count. Zero while no close stands."""
     settings: Settings = Settings()
     """The settings that the lab follows, such as what happens to the agents' processes when the person stops it."""
-    deliverables: tuple[DeliverableLine, ...] = ()
+    deliverables: tuple[DeliverableView, ...] = ()
     """What the person wants to hold at the end of the lab, each with its state and the files that agents offered."""
     removed_deliverables: tuple[RemovedDeliverable, ...] = ()
     """The deliverables that the person removed after agents offered files for them, with the thread of the offers."""

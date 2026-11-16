@@ -398,6 +398,8 @@ export interface DeliverableOffer {
   readonly at: string;
   /** The agent's note on the offer. */
   readonly note: string;
+  /** The detail of the offer's post. */
+  readonly body?: string;
   readonly files: readonly string[];
   /** How many earlier offers of the same agent for this deliverable this one replaced. */
   readonly revised: number;

@@ -412,6 +412,17 @@ async def test_the_person_posts_and_gets_a_readable_refusal(client: httpx2.Async
     assert (refused.status_code, refused.json()['detail']) == (400, 'Post p-9 does not exist.')
 
 
+async def test_the_person_posts_a_headline_of_1000_characters_which_is_more_than_a_tool_takes_from_an_agent(
+    client: httpx2.AsyncClient,
+) -> None:
+    posted = await client.post('/posts', json={'kind': 'message', 'text': 'x' * 1000, 'thread': 't-1'})
+    refused = await client.post('/posts', json={'kind': 'message', 'text': 'x' * 1001, 'thread': 't-1'})
+
+    assert (posted.status_code, len(posted.json()['post']['text'])) == (200, 1000)
+    assert refused.status_code == 422
+    assert 'The headline has 1001 characters, and the limit is 1000. `body` takes the detail' in refused.text
+
+
 async def test_the_person_reads_why_a_post_failed_when_another_program_changed_the_record(
     client: httpx2.AsyncClient, record_file: RecordFile
 ) -> None:
@@ -791,7 +802,7 @@ async def test_the_person_accepts_an_offer_asks_for_changes_and_takes_an_accepta
 ) -> None:
     await client.post('/deliverables', json={'text': 'A one-page answer.'})
     evidence = (FileEvidence(path='answer.md', commit='c' * 40),)
-    offer = (await lab.offer('ada', 'd-1', evidence, 'The answer.')).post.id
+    offer = (await lab.offer('ada', 'd-1', evidence, 'The answer.', 'It has **no** numbers yet.')).post.id
     offered = (await client.get('/lab')).json()['deliverables'][0]
 
     wordless = await client.post('/deliverables/d-1/decision', json={'decision': 'ask_changes', 'offer': offer})
@@ -819,6 +830,8 @@ async def test_the_person_accepts_an_offer_asks_for_changes_and_takes_an_accepta
             'standing': 'open',
             'disputed_by': None,
             'conceded_to': None,
+            # The person decides about the offer where the app lists it, so the app's view has its detail.
+            'body': 'It has **no** numbers yet.',
         }
     ]
     assert [reply.status_code for reply in (wordless, early, twice, other, word)] == [400, 400, 400, 400, 422]

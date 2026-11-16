@@ -5,15 +5,27 @@ import type { AgentView, PostView, RerunLine, ThreadView } from '../api/types.ts
 import { PERSON } from '../api/types.ts';
 import { author, authorName, called } from '../model/agents.ts';
 import { clock } from '../model/format.ts';
-import { builtOnLabel, standingChip } from '../model/posts.ts';
+import { builtOnLabel, isLong, standingChip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { offersReplyHint } from '../model/deliverables.ts';
 import { sideReplyHint } from '../model/side.ts';
 import { MAX_RERUNS, wantedLine } from '../model/status.ts';
-import { act, isClaim, rerunChecks, rows, standingIn } from '../model/turns.ts';
+import { markUnfolded, readUnfolded } from '../model/seen.ts';
+import {
+  act,
+  foldLabel,
+  foldedCount,
+  isClaim,
+  rerunChecks,
+  rows,
+  standingIn,
+  unfoldLabel,
+} from '../model/turns.ts';
+import type { Depth } from '../model/turns.ts';
 import { hasBreakthrough } from '../model/votes.ts';
 import { messageOf } from '../api/client.ts';
 import { ForYou } from './Coordinator.tsx';
+import { browserStore } from './hooks.ts';
 import { Detail } from './Markdown.tsx';
 import { ChipView, Composer, HarnessAsk, Mark } from './parts.tsx';
 import { Name, Who } from './Picture.tsx';
@@ -42,31 +54,88 @@ interface Around {
   readonly marks?: MarkActions | undefined;
 }
 
-/** An opened thread: its turns, each reply under the post that it answers, and a box to reply in it. */
+/**
+ * An opened thread: its turns, each reply under the post that it answers, and a box to reply in it. A run of two
+ * or more agents' plain messages that nobody replied to is one row, which opens in place. One control above the
+ * posts shows every such message and folds them again. A side thread and the conversation with the coordinator
+ * fold nothing.
+ */
 export function Turns(
-  props: Around & { readonly onSend: (text: string) => Promise<void> },
+  props: Around & {
+    readonly onSend: (text: string) => Promise<void>;
+    /** The post that the page opened on. It is never inside a fold. */
+    readonly target?: string | null;
+    /** When the lab opened. With it, the browser keeps for each thread whether the person shows every message. */
+    readonly lab?: string;
+  },
 ): ReactElement {
-  const { onSend, ...around } = props;
+  const { onSend, target, lab, ...around } = props;
+  const { thread } = props.view;
+  const [shown, setShown] = useState(
+    () => lab !== undefined && readUnfolded(browserStore, lab, thread.id),
+  );
+  // The messages of the folds that the person opened. A run changes when one of its messages gets a reply or a
+  // badge, or when a message joins it. The row of any run that holds one of these stays open then.
+  const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
+  const folding = !thread.conversation && props.view.members.length === 0;
+  const list = rows(props.view.posts, target ?? null, folding);
+  const folded = foldedCount(list);
+  const turn = (item: PostView, depth: Depth): ReactElement => (
+    <Turn key={item.post.id} item={item} depth={depth} {...around} />
+  );
+  const toggle = (items: readonly PostView[], open: boolean): void => {
+    setOpened((before) => {
+      const after = new Set(before);
+      for (const item of items) {
+        if (open) after.add(item.post.id);
+        else after.delete(item.post.id);
+      }
+      // The browser also reports a row that the page opened itself. Then nothing changes.
+      return after.size === before.size ? before : after;
+    });
+  };
   return (
     <>
+      {folded > 0 ? (
+        <p className="f-unfold">
+          <button
+            type="button"
+            className="linkbtn"
+            aria-expanded={shown}
+            onClick={() => {
+              setShown(!shown);
+              if (lab !== undefined) markUnfolded(browserStore, lab, thread.id, !shown);
+            }}
+          >
+            {unfoldLabel(folded, shown)}
+          </button>
+        </p>
+      ) : null}
       <ol className="f-turns">
-        {rows(props.view.posts, props.question).map((row) =>
-          row.kind === 'turn' ? (
-            <Turn key={row.item.post.id} item={row.item} depth={row.depth} {...around} />
-          ) : (
-            <li key={row.items[0]?.post.id} className="f-fold">
-              <details>
-                <summary>
-                  {row.items.length === 1 ? '1 short note' : `${row.items.length} short notes`}
-                </summary>
-                <ol className="f-turns">
-                  {row.items.map((item) => (
-                    <Turn key={item.post.id} item={item} depth={0} {...around} />
-                  ))}
-                </ol>
-              </details>
-            </li>
-          ),
+        {/*
+          Each row is a direct child of the list under a key: a turn under its post's ID, and a fold under the
+          ID of its first message. So a post that comes in remounts no turn of the list, also while every
+          message shows. A turn inside a fold is a child of that fold: when its run splits, the turns that go
+          to the new row mount again there, and the new row is open when the person had opened the old one.
+        */}
+        {list.flatMap((row) =>
+          row.kind === 'turn'
+            ? [turn(row.item, row.depth)]
+            : shown
+              ? row.items.map((item) => turn(item, row.depth))
+              : [
+                  <li key={row.items[0]?.post.id} className={`f-fold d${row.depth}`}>
+                    <details
+                      open={row.items.some((item) => opened.has(item.post.id))}
+                      onToggle={(event) => {
+                        toggle(row.items, event.currentTarget.open);
+                      }}
+                    >
+                      <summary>{foldLabel(row.items, (id) => called(props.agents, id))}</summary>
+                      <ol className="f-turns">{row.items.map((item) => turn(item, 0))}</ol>
+                    </details>
+                  </li>,
+                ],
         )}
       </ol>
       <Composer
@@ -93,7 +162,7 @@ export function Turns(
  * list and the profile.
  */
 export function Turn(
-  props: Around & { readonly item: PostView; readonly depth: 0 | 1 | 2 },
+  props: Around & { readonly item: PostView; readonly depth: Depth },
 ): ReactElement {
   const { agents, view } = props;
   const { post, standing, at } = props.item;
@@ -178,7 +247,7 @@ export function Turn(
           .map((id) => near(id))
           .map((other) => other && port('Built on by', other))}
         {onward ? <span className="f-port">{onward}</span> : null}
-        <p className="f-say-text">{post.text}</p>
+        <p className={isLong(post.text) ? 'f-say-text long' : 'f-say-text'}>{post.text}</p>
         {post.kind === 'ask' && post.choices.length > 0 ? (
           <p className="choices">Choices: {post.choices.join(' · ')}</p>
         ) : null}
