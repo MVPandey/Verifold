@@ -230,8 +230,8 @@ interface NumberField {
   readonly empty: string;
   /** The number that a level adds up to, in words. */
   readonly words: (value: number | null) => string;
-  /** Whether `verifold run` takes no higher number from a project's file. */
-  readonly runStricter: boolean;
+  /** What `verifold run` does with a project's number, after its name, or `null` when it takes it. */
+  readonly run: string | null;
 }
 
 const SEATS: NumberField = {
@@ -245,29 +245,29 @@ const SEATS: NumberField = {
     if (seats === null) return 'the number follows the lab’s size';
     return seats === 1 ? '1 seat' : `${seats} seats`;
   },
-  runStricter: true,
+  run: 'does not take a higher number from this project’s file.',
 };
 
 const REVEAL: NumberField = {
   key: 'votes.reveal_minutes',
   title: 'Votes on a new post',
-  detail: `For these minutes after a post was written, an agent sees no votes on it until it votes on it itself, so that its vote is its own judgement. The author of the post and you see every vote at once. Leave the field empty, and the time is ${DEFAULT_MINUTES} minutes. With 0, every agent sees every vote at once.`,
+  detail: `For these minutes after a post was written, the board shows an agent no votes on it until it votes on it itself, so that its vote is its own judgement. Until then an agent cannot take its vote back. The author of the post and you see every vote at once. A change holds for the posts after it. Leave the field empty, and the time is ${DEFAULT_MINUTES} minutes. With 0, every agent sees every vote at once.`,
   label: 'Minutes',
   max: MAX_BOARD_MINUTES,
   empty: `${DEFAULT_MINUTES} minutes`,
   words: (minutes) => minutesWords(minutes ?? DEFAULT_MINUTES),
-  runStricter: false,
+  run: 'does not take this number from this project’s file.',
 };
 
 const LEASE: NumberField = {
   key: 'reruns.lease_minutes',
   title: 'A rerun that an agent takes',
-  detail: `For these minutes, the agent that takes a wanted rerun holds it, and no other agent can take it. An agent of another model family than the post can, while no holder is of another family. The holder’s next take starts the time again. The time ends early when the holder posts its check, gives the rerun up, or leaves the lab. Leave the field empty, and the time is ${DEFAULT_MINUTES} minutes. With 0, several agents can take one rerun at once.`,
+  detail: `For these minutes, the agent that takes a wanted rerun holds it, and no other agent can take it. An agent of another model family than the post can, while no holder is of another family. The holder’s next take starts the time again. The time ends early when the holder posts its check, gives the rerun up, or leaves the lab, and when another check settles the rerun. A change holds for the takes after it. Leave the field empty, and the time is ${DEFAULT_MINUTES} minutes. With 0, several agents can take one rerun at once.`,
   label: 'Minutes',
   max: MAX_BOARD_MINUTES,
   empty: `${DEFAULT_MINUTES} minutes`,
   words: (minutes) => minutesWords(minutes ?? DEFAULT_MINUTES),
-  runStricter: false,
+  run: 'does not take this number from this project’s file.',
 };
 
 /**
@@ -327,9 +327,9 @@ function NumberSetting(props: {
         {props.project && written === undefined ? 'Same as all projects. ' : ''}Now:{' '}
         {field.words(props.current)}.
       </p>
-      {props.project && field.runStricter ? (
+      {props.project && field.run ? (
         <p className="note">
-          <code>verifold run</code> does not take a higher number from this project’s file.
+          <code>verifold run</code> {field.run}
         </p>
       ) : null}
       {props.projectOwn ? (

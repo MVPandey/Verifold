@@ -3097,7 +3097,7 @@ describe('the settings page', () => {
     assert.ok(project.includes('<h3>Votes on a new post</h3>'));
     assert.ok(
       project.includes(
-        'an agent sees no votes on it until it votes on it itself, so that its vote is its own judgement.',
+        'the board shows an agent no votes on it until it votes on it itself, so that its vote is its own judgement.',
       ),
     );
     assert.ok(project.includes('<h3>A rerun that an agent takes</h3>'));
@@ -3111,8 +3111,12 @@ describe('the settings page', () => {
       project.split('<p class="note">Same as all projects. Now: 10 minutes.</p>').length - 1,
       2,
     );
-    // A project's file can hold both numbers for `verifold run`: neither gives an agent a permission.
-    assert.equal(project.split('verifold run').length - 1, 1);
+    // `verifold run` takes neither number from a project's file, as it takes no number of reviewer seats.
+    assert.equal(
+      project.split('<code>verifold run</code> does not take this number from this project’s file.')
+        .length - 1,
+      2,
+    );
 
     const set = {
       ...view.all_projects,
