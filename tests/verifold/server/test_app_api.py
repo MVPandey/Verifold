@@ -383,6 +383,29 @@ async def test_threads_and_a_thread_read_as_the_person(client: httpx2.AsyncClien
     assert (missing.status_code, missing.json()['detail']) == (404, 'No thread has the ID t-9.')
 
 
+async def test_a_card_says_when_its_line_had_its_newest_result_and_the_lab_view_lists_every_obstacle(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    for text in ('No edge after fees.', 'No edge at night.', 'No edge on weekends.'):
+        await lab.post(PostRequest(kind='ruled_out', text=text, thread='t-1'), 'bo')
+    await lab.post(PostRequest(kind='plan', text='Maker side.', thread='t-1', builds_on=('p-3',)), 'ada')
+    await lab.post(PostRequest(kind='result', text='Maker side pays.', thread='t-1', builds_on=('p-4',)), 'ada')
+
+    (card,) = (await client.get('/threads')).json()
+    obstacles = (await client.get('/lab')).json()['obstacles']
+    at = {entry.post.id: entry.at.isoformat().replace('+00:00', 'Z') for entry in lab.board.posts}
+
+    # The card has the times of the line's newest result and plan, and the minutes since them by the lab's clock.
+    assert (card['last_result_at'], card['last_plan_at']) == (at['p-6'], at['p-5'])
+    assert (card['result_minutes_ago'], card['plan_minutes_ago'], card['open_obstacles']) == (0, 0, 1)
+    # The newest first, each with who posted it, when, where it stands as a post, and the posts that build on it.
+    assert [
+        (item['post']['id'], item['state'], item['standing'], [one['id'] for one in item['builders']])
+        for item in obstacles
+    ] == [('p-4', 'removed', 'open', ['p-6']), ('p-3', 'taken_up', 'open', ['p-5']), ('p-2', 'open', 'open', [])]
+    assert (obstacles[2]['post']['author'], obstacles[2]['at']) == ('bo', at['p-2'])
+
+
 async def test_the_person_reads_a_side_thread_and_posts_in_it(client: httpx2.AsyncClient, lab: Lab) -> None:
     await lab.post(
         PostRequest(kind='message', text='Can you fetch it?', new_thread='Scoreboard', between=('bo',)), 'ada'

@@ -168,6 +168,7 @@ export function createApi(
         deliverables: lab.deliverables ?? [],
         removed_deliverables: lab.removed_deliverables ?? [],
         deliverables_told_at: lab.deliverables_told_at ?? null,
+        obstacles: lab.obstacles ?? [],
         agents: lab.agents.map((view) => ({
           ...view,
           agent: { ...view.agent, given_role: view.agent.given_role ?? '' },
@@ -207,6 +208,8 @@ export function createApi(
           open_calls: summary.open_calls ?? 0,
           team: summary.team ?? [],
           members: summary.members ?? [],
+          last_result_at: summary.last_result_at ?? null,
+          open_obstacles: summary.open_obstacles ?? 0,
         })),
       ),
     thread: (id) =>

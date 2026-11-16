@@ -2,8 +2,13 @@
 
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.posts import Call, Close, Plan, Result, RuledOut
-from verifold.protocol.threads import QUESTION_TITLE
+from verifold.protocol.threads import QUESTION_TITLE, Thread
 from verifold.society.board import Board
+
+
+def is_line_of_work(thread: Thread) -> bool:
+    """Return whether a thread is a line of work: one for the whole lab, and not the conversation or a thread of offers."""
+    return not (thread.between or thread.conversation or thread.deliverable)
 
 
 def question_thread(board: Board) -> ThreadId | None:

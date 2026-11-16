@@ -413,6 +413,28 @@ export interface LabView {
   readonly removed_deliverables: readonly RemovedDeliverable[];
   /** When a post of the person last told the lab of a new sentence or a removal, or `null`. */
   readonly deliverables_told_at: string | null;
+  /** Every obstacle of the lab's lines of work, the newest first. */
+  readonly obstacles: readonly Obstacle[];
+}
+
+/**
+ * Where an obstacle stands, by the posts that build on it, as `ObstacleState` in the server's `protocol/join.py`.
+ * `open`: no plan and no result builds on it. `taken_up`: one does, and no result that builds on it stands.
+ * `removed`: a result that builds on it stands.
+ */
+export type ObstacleState = 'open' | 'taken_up' | 'removed';
+
+/** A post as an obstacle's line shows it: where it is, who wrote it, its kind, and its headline. */
+export type ObstacleLine = Pick<PostLine, 'id' | 'thread' | 'author' | 'kind' | 'text'>;
+
+/** An obstacle: a ruled-out post of a line of work, when it came, where it stands as a post, and its state. */
+export interface Obstacle {
+  readonly post: ObstacleLine;
+  readonly at: string;
+  readonly standing: Standing;
+  readonly state: ObstacleState;
+  /** For `removed`, the results that build on it and stand. For `taken_up`, the plans and results that build on it. */
+  readonly builders: readonly ObstacleLine[];
 }
 
 /** Where a deliverable stands, by the lab's record. Only the person's acceptance makes it `accepted`. */
@@ -1017,6 +1039,10 @@ export interface ThreadSummary {
   readonly built_on_by_threads: readonly ThreadLink[];
   /** How many times a post of this thread builds on another agent's post in another thread. */
   readonly crossed: number;
+  /** When the newest result of a line of work came. `null` without one, and for any other thread. */
+  readonly last_result_at: string | null;
+  /** How many obstacles of a line of work are open: ruled-out posts that no plan and no result builds on. */
+  readonly open_obstacles: number;
 }
 
 export interface PostRequest {

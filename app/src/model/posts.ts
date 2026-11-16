@@ -16,7 +16,7 @@ const TITLE_LIMIT = 80;
 const LIST_LIMIT = 200;
 
 /** Return the chip that says where a post stands, or `null` when there is nothing to say. Results always get one. */
-export function standingChip(post: Post, standing: Standing): Chip | null {
+export function standingChip(post: Pick<Post, 'kind'>, standing: Standing): Chip | null {
   switch (standing) {
     case 'disputed':
       return { label: 'Disputed', tone: 'dis' };

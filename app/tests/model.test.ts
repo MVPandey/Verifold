@@ -116,7 +116,9 @@ import {
   foldedCount,
   headClaim,
   isPlainMessage,
+  objectionStands,
   questionThread,
+  replyRoot,
   rows,
   standingIn,
   tone,
@@ -849,11 +851,14 @@ describe('turns', () => {
 
   const note = (id: string, changes: Partial<Post> = {}): PostView =>
     postView(result(id, { kind: 'message', ...changes }));
+  // The rows with every reply in sight, without the rows that fold the replies of a top-level post.
   const shape = (posts: readonly PostView[], target: string | null = null): readonly string[] =>
-    rows(posts, target).map((row) =>
+    rows(posts, target, true, () => true).flatMap((row) =>
       row.kind === 'turn'
-        ? `${row.item.post.id}:${row.depth}`
-        : `[${row.items.map((item) => item.post.id).join('+')}]:${row.depth}`,
+        ? [`${row.item.post.id}:${row.depth}`]
+        : row.kind === 'fold'
+          ? [`[${row.items.map((item) => item.post.id).join('+')}]:${row.depth}`]
+          : [],
     );
 
   it('nests replies to two levels and folds each run of two or more agents’ messages that nobody replied to', () => {
@@ -892,11 +897,54 @@ describe('turns', () => {
     // The same rule holds in every thread: the fold does not ask which thread it is.
     const elsewhere = posts.map((item) => ({ ...item, post: { ...item.post, thread: 't-7' } }));
     assert.deepEqual(shape(elsewhere), shape(posts));
-    assert.equal(foldedCount(rows(posts)), 6);
+    assert.equal(foldedCount(rows(posts, null, true, () => true)), 6);
     // A side thread and the conversation with the coordinator fold nothing: every post is a turn.
     assert.equal(foldedCount(rows(posts, null, false)), 0);
     assert.equal(rows(posts, null, false).length, posts.length);
     assert.equal(foldedCount(rows([postView(result('p-1'))])), 0);
+  });
+
+  it('folds the replies of a top-level post behind one row, and keeps an objection that stands in sight', () => {
+    const check = { kind: 'check', method: 'rerun', outcome: 'holds' } as const;
+    const posts = [
+      postView(result('p-1')),
+      postView(result('p-2', { kind: 'objection', reply_to: 'p-1', author: 'agent-2' }), 2),
+      postView({ ...result('p-3', { reply_to: 'p-1', author: 'agent-3' }), ...check }, 3),
+      note('p-4', { reply_to: 'p-3' }),
+      postView(result('p-5')),
+    ];
+    const list = (items: readonly PostView[], opened: (root: string) => boolean = () => false) =>
+      rows(items, null, true, opened).map((row) =>
+        row.kind === 'replies'
+          ? `${row.root} ${row.open ? 'shows' : 'folds'} ${row.items.map((item) => item.post.id).join('+')}`
+          : row.kind === 'turn'
+            ? `${row.item.post.id}:${row.depth}`
+            : `[${row.items.map((item) => item.post.id).join('+')}]:${row.depth}`,
+      );
+    // A later check that holds, from another agent, overrules the objection, so it folds with the rest.
+    assert.deepEqual(list(posts), ['p-1:0', 'p-1 folds p-2+p-3+p-4', 'p-5:0']);
+    assert.deepEqual(
+      list(posts, (root) => root === 'p-1'),
+      ['p-1:0', 'p-1 shows p-2+p-3+p-4', 'p-2:1', 'p-3:1', 'p-4:2', 'p-5:0'],
+    );
+    // A check from the objector overrules nothing, and neither does a check from before the objection.
+    const own = posts.map((item) =>
+      item.post.id === 'p-3' ? { ...item, post: { ...item.post, author: 'agent-2' } } : item,
+    );
+    const earlier = posts.map((item) => (item.post.id === 'p-3' ? { ...item, seq: 1 } : item));
+    for (const items of [own, earlier]) {
+      assert.deepEqual(list(items), ['p-1:0', 'p-1 folds p-3+p-4', 'p-2:1', 'p-5:0']);
+    }
+    const [, objection, conceded] = posts;
+    assert.ok(objection && conceded);
+    assert.equal(objectionStands({ ...objection, standing: 'conceded' }, own), false);
+    assert.equal(objectionStands(conceded, posts), false);
+    // The row of a reply is the one of its top-level post.
+    assert.equal(replyRoot(posts, 'p-4'), 'p-1');
+    assert.equal(replyRoot(posts, 'p-2'), 'p-1');
+    assert.equal(replyRoot(posts, 'p-1'), null);
+    assert.equal(replyRoot(posts, 'p-99'), null);
+    assert.equal(replyRoot(posts, null), null);
   });
 
   it('folds no single message: the newest message of a chain of replies stays in sight', () => {
@@ -907,7 +955,7 @@ describe('turns', () => {
       note('p-4', { reply_to: 'p-3' }),
     ];
     assert.deepEqual(shape(chain), ['p-1:0', 'p-2:1', 'p-3:2', 'p-4:2']);
-    assert.equal(foldedCount(rows(chain)), 0);
+    assert.equal(foldedCount(rows(chain, null, true, () => true)), 0);
     // Two messages that nobody replied to are a fold, and a third one joins it.
     const more = [...chain, note('p-5', { reply_to: 'p-3', author: 'agent-2' })];
     assert.deepEqual(shape(more), ['p-1:0', 'p-2:1', 'p-3:2', '[p-4+p-5]:2']);
@@ -1016,9 +1064,14 @@ describe('turns', () => {
   });
 
   it('names the control that shows every folded message of a thread and folds them again', () => {
-    assert.equal(unfoldLabel(12, false), 'Show the 12 folded messages');
-    assert.equal(unfoldLabel(12, true), 'Fold 12 messages again');
-    assert.equal(unfoldLabel(2, false), 'Show the 2 folded messages');
+    assert.equal(unfoldLabel(12, 0, false), 'Show the 12 folded messages');
+    assert.equal(unfoldLabel(12, 0, true), 'Fold 12 messages again');
+    assert.equal(unfoldLabel(2, 0, false), 'Show the 2 folded messages');
+    // The same control opens every reply that a row folds, and its words say so.
+    assert.equal(unfoldLabel(2, 3, false), 'Show the 2 folded messages and every reply');
+    assert.equal(unfoldLabel(2, 3, true), 'Fold 2 messages and the replies again');
+    assert.equal(unfoldLabel(0, 1, false), 'Show every reply');
+    assert.equal(unfoldLabel(0, 1, true), 'Fold the replies again');
   });
 
   it('finds what a thread stands on', () => {

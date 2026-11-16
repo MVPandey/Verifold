@@ -938,6 +938,63 @@ details[open] > summary .opened {
   order: 3;
   margin-top: 12px;
 }
+/* The facts of a card's line of work: how long ago its newest result came, and its open obstacles. */
+.f-facts {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.f-card.open .f-facts {
+  order: 3;
+}
+/* The obstacles after the cards: open ones in sight, the others folded with their counts. */
+.f-obstacles {
+  margin-top: 18px;
+}
+.f-obstacles h2 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-ink);
+}
+.f-obstacles details {
+  margin-top: 8px;
+  border: 1px dashed var(--line2);
+  font-size: 13px;
+}
+.f-obstacles summary {
+  padding: 7px 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.f-obstacles ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px dashed var(--line2);
+}
+.f-obstacles li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  padding: 8px 12px;
+  overflow-wrap: anywhere;
+}
+.f-obstacles li + li {
+  border-top: 1px solid var(--line);
+}
+.f-obstacles li > a:first-child {
+  flex: 1 1 320px;
+  min-width: 0;
+  color: var(--ink);
+}
+.f-obstacles .f-by {
+  margin: 0;
+}
+.f-obstacles .f-st {
+  margin: 0;
+}
 /* A card's links to other threads sit above the link that covers the card, so each one opens its own thread. */
 .f-cross {
   display: flex;
@@ -1335,6 +1392,25 @@ details[open] > summary .opened {
 }
 .f-fold.d2 {
   margin-left: 120px;
+}
+/* The row under a top-level post that folds its replies, or folds them again. */
+.f-tree > button {
+  display: block;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.f-tree > button::before {
+  content: '▸ ';
+}
+.f-tree > button[aria-expanded='true']::before {
+  content: '▾ ';
 }
 /* The control above a thread's posts that shows every folded message, or folds them again. */
 .f-unfold {

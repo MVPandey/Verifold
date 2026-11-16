@@ -1,11 +1,22 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from builders import RecordBuilder, lab
 from pydantic import TypeAdapter
 
 from verifold.protocol.events import AlarmSet, Posted
-from verifold.protocol.join import MAX_LINE, MAX_NEWS, QUIET_MINUTES, Brief, News, PostLine, ThreadLine, ThreadLink
+from verifold.protocol.join import (
+    MAX_LINE,
+    MAX_NEWS,
+    MAX_OBSTACLES,
+    QUIET_MINUTES,
+    Brief,
+    News,
+    PostLine,
+    ThreadLine,
+    ThreadLink,
+    ThreadSummary,
+)
 from verifold.protocol.posts import (
     Answer,
     Ask,
@@ -495,9 +506,92 @@ def test_a_brief_has_the_newest_report_of_any_agent_with_its_age_in_minutes_and_
     assert [(entry.id, entry.line) for entry in disputed] == [('p-3', None)]
 
 
+def test_a_line_of_work_says_how_long_ago_its_newest_result_and_plan_came_its_open_obstacles_and_its_badges() -> None:
+    record = lab().thread('t-2', opened_by='ada', between=('ada', 'bo'))
+    record.post(Plan(id='p-1', thread='t-1', author='ada', text='I fit the curve.'))
+    record.post(Result(id='p-2', thread='t-1', author='ada', text='It fits.'))
+    record.post(RuledOut(id='p-3', thread='t-1', author='bo', text='No fit past 40 points.'))
+    record.post(RuledOut(id='p-4', thread='t-1', author='cy', text='No fit on the log scale.'))
+    record.post(Plan(id='p-5', thread='t-1', author='cy', text='I rescale it.', builds_on=('p-4',)))
+    record.post(Result(id='p-6', thread='t-2', author='bo', text='A side result.'))
+    record.post(RuledOut(id='p-7', thread='t-2', author='bo', text='Not between us.'))
+    record.badge('bo', 'p-2', 'promising').badge('cy', 'p-2', 'promising').badge('cy', 'p-1', 'promising')
+    record.badge('cy', 'p-6', 'promising')
+    board = record.board()
+    result_at = board.posts[1].at
+
+    def facts(summary: ThreadSummary) -> tuple[int | None, int | None, int, dict[str, int]]:
+        return summary.result_minutes_ago, summary.plan_minutes_ago, summary.open_obstacles, dict(summary.badges)
+
+    def summaries(now: datetime | None = None) -> dict[str, ThreadSummary]:
+        return {summary.thread.id: summary for summary in thread_summaries(board, 'bo', now)}
+
+    # The clock is twelve and a half minutes past the result, and Cy's plan came three minutes after the result. That
+    # plan takes Cy's obstacle up, and two posts have a badge that stands. A side thread is no line of work.
+    now = result_at + timedelta(minutes=12, seconds=30)
+    assert facts(summaries(now)['t-1']) == (12, 9, 1, {'promising': 2})
+    assert facts(summaries(now)['t-2']) == (None, None, 0, {})
+    # The clock moves, and so do the minutes. Without a clock, time counts from the board's newest post.
+    assert facts(summaries(now + timedelta(hours=1))['t-1'])[:2] == (72, 69)
+    assert facts(summaries()['t-1'])[:2] == (5, 2)
+    # The brief has the same facts in its threads.
+    (line,) = brief(board, 'bo', News(seq=0), now=now).threads
+    assert facts(line) == (12, 9, 1, {'promising': 2})
+    # A line of work without a result or a plan has none of them.
+    empty = lab().board()
+    assert facts(thread_summaries(empty, 'bo')[0]) == (None, None, 0, {})
+
+
+def test_a_brief_lists_the_newest_open_obstacles_with_their_standing_and_counts_the_others() -> None:
+    record = lab()
+    for number in range(1, 9):
+        record.post(RuledOut(id=f'p-{number}', thread='t-1', author='bo', text=f'Dead end {number}.'))
+    record.post(Plan(id='p-9', thread='t-1', author='cy', text='I take dead end 1.', builds_on=('p-1',)))
+    record.post(Result(id='p-10', thread='t-1', author='cy', text='Dead end 2 is gone.', builds_on=('p-2',)))
+    record.post(Objection(id='p-11', thread='t-1', author='ada', text='Dead end 7 is open.', reply_to='p-7'))
+    board = record.board()
+
+    obstacles = brief(board, 'cy', News(seq=board.seq)).obstacles
+
+    # The newest open ones come first, at most five, with the counts of the others.
+    assert [entry.id for entry in obstacles.open] == ['p-8', 'p-7', 'p-6', 'p-5', 'p-4']
+    assert (obstacles.more_open, obstacles.taken_up, obstacles.removed) == (1, 1, 1)
+    # An obstacle is a post, so one that an objection disputes says so. Bo's latest post is in the list of agents
+    # and the disputed post is in `disputed`, so each is its ID alone. The others have their lines.
+    assert [(entry.id, entry.standing, entry.line.text if entry.line else None) for entry in obstacles.open] == [
+        ('p-8', 'open', None),
+        ('p-7', 'disputed', None),
+        ('p-6', 'open', 'Dead end 6.'),
+        ('p-5', 'open', 'Dead end 5.'),
+        ('p-4', 'open', 'Dead end 4.'),
+    ]
+    # An entry leaves its standing out while it is open, and a lab without obstacles leaves out every part.
+    assert ('standing' in obstacles.open[1].model_dump(), 'standing' in obstacles.open[2].model_dump()) == (True, False)
+    assert brief(lab().board(), 'ada', News(seq=0)).obstacles.model_dump() == {}
+    # The news holds every post, so every obstacle is its ID alone.
+    assert all(entry.line is None for entry in brief(board, 'cy', news(board, 'cy', 0)).obstacles.open)
+
+
+def test_a_brief_names_the_author_of_a_threads_latest_post_only_when_its_list_of_agents_does_not(
+    record: RecordBuilder,
+) -> None:
+    record.post(Result(id='p-1', thread='t-1', author='bo', text='Beats random.'))
+    board = record.board()
+
+    (line,) = brief(board, 'ada', News(seq=0)).threads
+    (summary,) = thread_summaries(board, 'ada')
+
+    # The brief's list of agents says who Bo is. `threads` has no such list, so its line says it.
+    assert (line.latest and line.latest.by, summary.latest and summary.latest.by and summary.latest.by.name) == (
+        None,
+        'Bo',
+    )
+
+
 def test_a_brief_orders_its_lists_by_what_they_are_and_not_by_what_to_do_first() -> None:
     fields = list(Brief.model_fields)
-    lists = [name for name in fields if name in {'open_calls', 'open_asks', 'not_built_on', 'not_checked', 'disputed'}]
+    names = {'open_calls', 'open_asks', 'not_built_on', 'not_checked', 'disputed', 'obstacles'}
+    lists = [name for name in fields if name in names]
 
     # The lists of posts come in the order of the alphabet, after the threads, so the order ranks nothing.
     assert lists == sorted(lists)
@@ -576,17 +670,21 @@ before votes, the largest brief that the board gave had 126,005 characters. No b
 def _largest(*, full: bool = False) -> RecordBuilder:
     # Twenty agents with the longest name, about line, role, and status, a long label, and every seat mark, in
     # twenty threads with every list full and headlines of 1,000 characters. With `full`, every post also has
-    # the longest helper name and builds on ten posts, so that no line has an empty field to leave out.
+    # the longest helper name and builds on ten posts, so that no line has an empty field to leave out. No post
+    # builds on an obstacle, so that every obstacle stays open.
     record = RecordBuilder()
     for number in range(20):
         record.join(f'a{number}', name=f'Claude Code · {"m" * 40} {number + 2}')
     record.reviewer_seats(20).thread('t-1', opened_by='a0')
     ids: list[str] = []
+    built: list[str] = []
     long = 'x' * 1000
 
     def post(kind: str, thread: str, author: str, reply_to: str | None = None) -> str:
-        more = {'helper': 'h' * 40, 'builds_on': tuple(ids[-10:])} if full else {}
+        more = {'helper': 'h' * 40, 'builds_on': tuple(built[-10:])} if full else {}
         ids.append(f'p-{len(ids) + 1}')
+        if kind != 'ruled_out':
+            built.append(ids[-1])
         fields = {'kind': kind, 'id': ids[-1], 'thread': thread, 'author': author, 'text': long, 'reply_to': reply_to}
         record.post(TypeAdapter(Post).validate_python(fields | more))
         return ids[-1]
@@ -598,6 +696,8 @@ def _largest(*, full: bool = False) -> RecordBuilder:
         post('result', thread, author)
         disputed = post('result', thread, author)
         post('objection', thread, other, disputed)
+        # The obstacle's author posts later in its own thread, so the brief has the obstacle's line.
+        post('ruled_out', thread, other)
         post('ask', thread, author)
         post('call', thread, author)
     post('proposal', 't-1', 'a1')
@@ -619,6 +719,8 @@ def test_the_largest_brief_without_votes_is_one_tool_result() -> None:
     assert (len(unseen.for_you), len(unseen.others), len(view.agents), len(view.threads)) == (20, 20, 19, 20)
     assert [len(entries) for entries in (view.disputed, view.not_built_on, view.not_checked)] == [19, 10, 19]
     assert [len(entries) for entries in (view.open_asks, view.open_calls)] == [19, 19]
+    assert (len(view.obstacles.open), view.obstacles.more_open) == (MAX_OBSTACLES, 19 - MAX_OBSTACLES)
+    assert sum(entry.line is not None for entry in view.obstacles.open) >= MAX_OBSTACLES - 1
     assert len(view.model_dump_json()) < ONE_TOOL_RESULT
     assert len(unseen.model_dump_json()) < 28_000
     # Each author's name, seat, seat marks, and role stand once in the brief: in its list of agents. A line of

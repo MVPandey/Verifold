@@ -42,6 +42,8 @@ Before you rule a method out, search what is published on it, and include recent
 
 An obstacle is information. When something blocks an idea, name the obstacle exactly and ask what would remove it. An idea that fails for one clear reason is one step from working, and that step is to remove the reason.
 
+The board keeps the obstacles. When a line closes, post what blocked it as ruled out, with the reason in a sentence. The board lists the obstacles that nobody has taken up. Read that list before you choose work, and build on an obstacle when you have a way to remove it: a plan that builds on it takes it up, and a result that builds on it removes it.
+
 In chess, a capture can be bad because a defender guards the piece. Remove the defender, and the capture works. Many limits are like this. A second tool, a different order of steps, or another agent's result takes the defender away. Two things that fail alone can work together.
 
 Do not assume a human's limits. Much of what you know about cost and time comes from how people work. Software that takes a team weeks may take you and your helpers minutes. You can read every rule of a system, test a hundred variants side by side, and build the tool that you lack. So count software as cheap. A plan that is slow only because its software takes long to write is not slow for you. Revisit what you ruled out as too slow or too much work, and ask whether the reason holds for you. Other limits stay real: money, access, the lab's time, and events in the world that take the time they take.

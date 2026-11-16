@@ -16,6 +16,9 @@ import {
   foldLabel,
   foldedCount,
   isClaim,
+  repliesLabel,
+  replyFolds,
+  replyRoot,
   rerunChecks,
   rows,
   standingIn,
@@ -55,10 +58,11 @@ interface Around {
 }
 
 /**
- * An opened thread: its turns, each reply under the post that it answers, and a box to reply in it. A run of two
- * or more agents' plain messages that nobody replied to is one row, which opens in place. One control above the
- * posts shows every such message and folds them again. A side thread and the conversation with the coordinator
- * fold nothing.
+ * An opened thread: its turns, each reply under the post that it answers, and a box to reply in it. The replies
+ * under a top-level post fold behind one row, which opens them in place, and the replies that `rows` keeps in
+ * sight stay outside it. A run of two or more agents' plain messages that nobody replied to is one row too, which
+ * opens in place. One control above the posts shows every such message and every reply, and folds them again. A
+ * side thread and the conversation with the coordinator fold nothing.
  */
 export function Turns(
   props: Around & {
@@ -77,9 +81,19 @@ export function Turns(
   // The messages of the folds that the person opened. A run changes when one of its messages gets a reply or a
   // badge, or when a message joins it. The row of any run that holds one of these stays open then.
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
+  // The person's choice for the replies of each top-level post, by its ID, so it holds when replies come in.
+  // Without a choice, only the replies around the post that the page opened on show.
+  const [chosen, setChosen] = useState<ReadonlyMap<string, boolean>>(() => new Map());
+  const home = replyRoot(props.view.posts, target ?? null);
   const folding = !thread.conversation && props.view.members.length === 0;
-  const list = rows(props.view.posts, target ?? null, folding);
-  const folded = foldedCount(list);
+  const list = rows(
+    props.view.posts,
+    target ?? null,
+    folding,
+    (root) => shown || (chosen.get(root) ?? root === home),
+  );
+  const every = rows(props.view.posts, target ?? null, folding, () => true);
+  const [folded, trees] = [foldedCount(every), replyFolds(every)];
   const turn = (item: PostView, depth: Depth): ReactElement => (
     <Turn key={item.post.id} item={item} depth={depth} {...around} />
   );
@@ -96,7 +110,7 @@ export function Turns(
   };
   return (
     <>
-      {folded > 0 ? (
+      {folded > 0 || trees > 0 ? (
         <p className="f-unfold">
           <button
             type="button"
@@ -107,7 +121,7 @@ export function Turns(
               if (lab !== undefined) markUnfolded(browserStore, lab, thread.id, !shown);
             }}
           >
-            {unfoldLabel(folded, shown)}
+            {unfoldLabel(folded, trees, shown)}
           </button>
         </p>
       ) : null}
@@ -121,21 +135,37 @@ export function Turns(
         {list.flatMap((row) =>
           row.kind === 'turn'
             ? [turn(row.item, row.depth)]
-            : shown
-              ? row.items.map((item) => turn(item, row.depth))
-              : [
-                  <li key={row.items[0]?.post.id} className={`f-fold d${row.depth}`}>
-                    <details
-                      open={row.items.some((item) => opened.has(item.post.id))}
-                      onToggle={(event) => {
-                        toggle(row.items, event.currentTarget.open);
-                      }}
-                    >
-                      <summary>{foldLabel(row.items, (id) => called(props.agents, id))}</summary>
-                      <ol className="f-turns">{row.items.map((item) => turn(item, 0))}</ol>
-                    </details>
-                  </li>,
-                ],
+            : row.kind === 'replies'
+              ? shown
+                ? []
+                : [
+                    <li key={`replies-${row.root}`} className="f-fold f-tree d1">
+                      <button
+                        type="button"
+                        aria-expanded={row.open}
+                        onClick={() => {
+                          setChosen((before) => new Map(before).set(row.root, !row.open));
+                        }}
+                      >
+                        {repliesLabel(row.items)}
+                      </button>
+                    </li>,
+                  ]
+              : shown
+                ? row.items.map((item) => turn(item, row.depth))
+                : [
+                    <li key={row.items[0]?.post.id} className={`f-fold d${row.depth}`}>
+                      <details
+                        open={row.items.some((item) => opened.has(item.post.id))}
+                        onToggle={(event) => {
+                          toggle(row.items, event.currentTarget.open);
+                        }}
+                      >
+                        <summary>{foldLabel(row.items, (id) => called(props.agents, id))}</summary>
+                        <ol className="f-turns">{row.items.map((item) => turn(item, 0))}</ol>
+                      </details>
+                    </li>,
+                  ],
         )}
       </ol>
       <Composer

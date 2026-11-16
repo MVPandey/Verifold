@@ -5,6 +5,7 @@ A view holds what is on the board, as facts. `brief` ranks nothing and gives no 
 the board is the agent's choice, and the person's norms are in the lab's `LAB.md`.
 """
 
+from collections import Counter
 from datetime import datetime, timedelta
 
 from verifold.protocol.agents import GUEST, POWERS, Agent
@@ -22,11 +23,14 @@ from verifold.protocol.join import (
     MAX_LEADS,
     MAX_LINKS,
     MAX_NEWS,
+    MAX_OBSTACLES,
     QUIET_MINUTES,
     AgentLine,
     AnswerView,
     Brief,
     News,
+    ObstacleEntry,
+    Obstacles,
     PostEntry,
     PostLine,
     PostView,
@@ -40,7 +44,8 @@ from verifold.protocol.join import (
     ThreadView,
 )
 from verifold.protocol.posts import Ask, Call, Check, Close, Objection, Plan, Proposal, Report, Result
-from verifold.protocol.votes import MAX_VOTE_LINES, NEWEST_VOTES
+from verifold.protocol.threads import Thread
+from verifold.protocol.votes import BADGES, MAX_VOTE_LINES, NEWEST_VOTES
 from verifold.society.attention import left_line, watches_thread
 from verifold.society.board import Board
 from verifold.society.coordinator import request_waits
@@ -55,11 +60,13 @@ from verifold.society.lifecycle import (
     no_alarm_line,
     pending_alarm,
 )
-from verifold.society.lines import lines_of, question_thread
+from verifold.society.lines import is_line_of_work, lines_of, question_thread
+from verifold.society.obstacles import obstacles
 from verifold.society.reruns import rerun_checks, reruns_wanted
 from verifold.society.reviewers import free_seats, holders, seats
 from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing, waits_for_person
 from verifold.society.turns import before
+from verifold.society.votes import marks
 
 
 def thread_view(
@@ -108,11 +115,17 @@ def thread_summaries(board: Board, agent_id: AgentId, now: datetime | None = Non
     """
     Return one summary for each thread, side threads among them, the most recently active first.
 
-    The latest post of each thread shows its votes as `post_line` does for the agent at `now`.
+    The latest post of each thread shows its votes as `post_line` does for the agent at `now`, and the minutes since
+    the newest result and plan of a line of work count to `now`. Without it, time counts from the board's newest post.
     """
+    now = now or latest_time(board)
     crossed = crossings(board)
     lines = lines_of(board)
-    summaries = (_summary(board, agent_id, opened, crossed, lines, now=now) for opened in board.threads)
+    blocked = Counter(found.entry.post.thread for found in obstacles(board) if found.state == 'open')
+    summaries = (
+        _summary(board, agent_id, opened, crossed, lines, now=now, blocked=blocked[opened.thread.id])
+        for opened in board.threads
+    )
     return tuple(sorted(summaries, key=lambda summary: summary.last_at, reverse=True))
 
 
@@ -207,12 +220,17 @@ def _summary(  # noqa: PLR0913
     crossed: tuple[Crossing, ...],
     lines: dict[AgentId, ThreadId | None],
     *,
-    now: datetime | None,
+    now: datetime,
+    blocked: int,
 ) -> ThreadSummary:
     entries = tuple(entry for entry in board.posts if entry.post.thread == opened.thread.id)
     results = tuple(standing(board, entry.post.id) for entry in entries if isinstance(entry.post, Result))
     latest = entries[-1] if entries else None
     incoming = tuple((source, built) for source, built in crossed if built.post.thread == opened.thread.id)
+    # The facts of a line of work. Every other thread has them empty.
+    line = entries if is_line_of_work(opened.thread) else ()
+    result_at, plan_at = line_times(board, opened.thread)
+    badges = Counter(badge for entry in line for badge in marks(board, entry.post.id)[2])
     return ThreadSummary(
         thread=opened.thread,
         watching=watches_thread(board, agent_id, opened.thread.id, lines),
@@ -235,7 +253,24 @@ def _summary(  # noqa: PLR0913
             tuple((built, source) for source, built in crossed if source.post.thread == opened.thread.id)
         ),
         crossed=len(incoming),
+        result_minutes_ago=minutes_since(result_at, now),
+        plan_minutes_ago=minutes_since(plan_at, now),
+        open_obstacles=blocked,
+        badges={badge: badges[badge] for badge in BADGES if badges[badge]},
     )
+
+
+def line_times(board: Board, thread: Thread) -> tuple[datetime | None, datetime | None]:
+    """Return when the newest result and the newest plan of a line of work were posted, with `None` for each that it lacks."""
+    posts = board.thread_posts(thread.id) if is_line_of_work(thread) else ()
+    result = next((entry.at for entry in reversed(posts) if isinstance(entry.post, Result)), None)
+    plan = next((entry.at for entry in reversed(posts) if isinstance(entry.post, Plan)), None)
+    return result, plan
+
+
+def minutes_since(at: datetime | None, now: datetime) -> int | None:
+    """Return how many whole minutes lie between `at` and `now`, zero for a time after `now`, or `None` without `at`."""
+    return max(int((now - at).total_seconds() // 60), 0) if at else None
 
 
 def _built_on(board: Board, entry: Posted) -> bool:
@@ -264,8 +299,9 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
     newest report with its age. Then come the threads: the
     newest ones, one line for each side thread, the threads where one agent works alone, and the threads that got
     no post for a long while. Then come the posts by where they stand: the disputed posts, the results that nobody
-    has built on, the results that nobody has checked, the asks that nobody has answered, and the calls that need an
-    agent. The order ranks nothing. `how` says how the board works.
+    has built on, the results that nobody has checked, the open obstacles with the counts of the others, the asks
+    that nobody has answered, and the calls that need an agent. The order ranks nothing. `how` says how the board
+    works.
 
     `now` dates the time that the lab has left, the report's age, the quiet threads, the votes that are sealed for
     the agent, and the leases on the wanted reruns. Without it, time counts from the board's newest post. The
@@ -347,6 +383,8 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         and state not in {'conceded', 'disputed'}
         and not _built_on(board, entry)
     )
+    found = obstacles(board)
+    blocking = tuple(item.entry for item in reversed(found) if item.state == 'open')
     proposed = answer(board)
     reported = newest_report(board)
     done = closing(board)
@@ -384,6 +422,11 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         # The lines of the news that this brief carries follow the same rule, so no author's name, seat, and
         # role stand in the brief twice.
         return tuple(line(entry, news=True) if (entry := board.post(one.id)) else one for one in lines)
+
+    def latest(summary: ThreadSummary) -> ThreadSummary:
+        # The latest line of each thread follows the same rule.
+        entry = board.post(summary.latest.id) if summary.latest else None
+        return summary.model_copy(update={'latest': line(entry)}) if entry else summary
 
     def listed(entries: tuple[Posted, ...]) -> tuple[PostEntry, ...]:
         shown = tuple(
@@ -426,8 +469,8 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         answer_standing=standing(board, proposed.post.id) if proposed else None,
         answer_to_earlier_question=bool(proposed) and to_earlier_question(board, proposed),
         report=report_line,
-        report_minutes_ago=max(int((now - reported.at).total_seconds() // 60), 0) if reported else None,
-        threads=summaries[:MAX_NEWS],
+        report_minutes_ago=minutes_since(reported.at, now) if reported else None,
+        threads=tuple(latest(summary) for summary in summaries[:MAX_NEWS]),
         more_threads=max(len(summaries) - MAX_NEWS, 0),
         side_threads=side[:MAX_NEWS],
         more_side_threads=max(len(side) - MAX_NEWS, 0),
@@ -440,6 +483,15 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         disputed=listed(disputed[-MAX_NEWS:]),
         not_built_on=listed(not_built_on[-MAX_LEADS:]),
         not_checked=listed(not_checked[-MAX_NEWS:]),
+        obstacles=Obstacles(
+            open=tuple(
+                ObstacleEntry(id=entry.id, line=entry.line, standing=standing(board, entry.id))
+                for entry in listed(blocking[:MAX_OBSTACLES])
+            ),
+            more_open=max(len(blocking) - MAX_OBSTACLES, 0),
+            taken_up=sum(item.state == 'taken_up' for item in found),
+            removed=sum(item.state == 'removed' for item in found),
+        ),
         open_asks=listed(open_asks[-MAX_NEWS:]),
         open_calls=listed(open_calls[-MAX_NEWS:]),
         reruns_wanted=reruns_wanted(board, now)[-MAX_NEWS:],
