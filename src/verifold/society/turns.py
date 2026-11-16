@@ -58,5 +58,18 @@ def before(board: Board, agent_id: AgentId) -> Before:
         cut_off=cut_off,
         rested=started if chose else None,
         ended=ended.seq if ended else 0,
-        stopped=bool(entries) and entries[-1].stopped and (started is None or started.seq < entries[-1].seq),
+        stopped=stopped(board, agent_id),
     )
+
+
+def stopped(board: Board, agent_id: AgentId, before: int | None = None) -> bool:
+    """
+    Return whether Verifold stopped an agent after its harness failed too often, and no turn of it started since.
+
+    A harness that is not on the computer fails at every start, so Verifold stops its seat in the same way. With
+    `before`, the answer is as it was just before that event.
+    """
+    ahead = lambda seq: before is None or seq < before
+    ended = next((turn for turn in reversed(board.turns) if turn.agent == agent_id and ahead(turn.seq)), None)
+    started = next((turn for turn in reversed(board.starts) if turn.agent == agent_id and ahead(turn.seq)), None)
+    return bool(ended and ended.stopped and (started is None or started.seq < ended.seq))

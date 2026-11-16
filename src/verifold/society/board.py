@@ -69,6 +69,11 @@ class Board:
     """The posts that opened a round, oldest first. `society.rounds` says which one is open."""
     round_closes: tuple[RoundClosed, ...] = ()
     """Each close of a round that Verifold recorded, oldest first."""
+    unnamed_closes: tuple[tuple[PostId, PostId | None], ...] = ()
+    """
+    Each close that names no candidate, oldest first, with the candidate that it closes on: the newest candidate
+    that stood when the close was posted, or `None`. `society.candidates` says why.
+    """
     watches: tuple[WatchSet, ...] = ()
     alarms: tuple[AlarmSet, ...] = ()
     """The alarms that agents set, oldest first."""
@@ -433,7 +438,11 @@ class Board:
 
     def post(self, post_id: PostId) -> Posted | None:
         """Return the entry of a post, or `None`."""
-        # The fold asks this for every new post, and each of its boards has other posts, so no index pays here.
+        # The fold asks this for every new post, and each of its boards has other posts, so building an index for
+        # this alone does not pay. A view reads the replies first, so its board has an index, and the lookup uses it.
+        index = _built(self.posts)
+        if index is not None:
+            return index.ids.get(post_id)
         return next((entry for entry in self.posts if entry.post.id == post_id), None)
 
     def replies(self, post_id: PostId) -> tuple[Posted, ...]:
@@ -447,9 +456,10 @@ class Board:
 
 @dataclass(frozen=True, slots=True)
 class _Index:
-    """The posts of one board by the post that they reply to, by the posts that they build on, by thread, and the offers by deliverable."""
+    """The posts of one board by ID, by the post that they reply to, by the posts that they build on, by thread, and the offers by deliverable."""
 
     posts: tuple[Posted, ...]
+    ids: dict[PostId, Posted]
     replies: dict[PostId, tuple[Posted, ...]]
     builds: dict[PostId, tuple[Posted, ...]]
     offers: dict[DeliverableId, tuple[Posted, ...]]
@@ -462,12 +472,17 @@ _indexes: list[_Index] = []
 _KEPT_INDEXES = 4
 
 
+def _built(posts: tuple[Posted, ...]) -> _Index | None:
+    # The index of a board's posts when one was built already, or `None`.
+    return next((index for index in _indexes if index.posts is posts), None)
+
+
 def _index(posts: tuple[Posted, ...]) -> _Index:
     # A view asks for the replies to every post, and a scan of all posts for each one costs time that grows with
     # the square of the record. The index is built once for a board's posts, which are one tuple that no code changes.
-    for index in _indexes:
-        if index.posts is posts:
-            return index
+    built = _built(posts)
+    if built is not None:
+        return built
     replies: dict[PostId, list[Posted]] = {}
     builds: dict[PostId, list[Posted]] = {}
     offers: dict[DeliverableId, list[Posted]] = {}
@@ -482,6 +497,7 @@ def _index(posts: tuple[Posted, ...]) -> _Index:
             builds.setdefault(source, []).append(entry)
     index = _Index(
         posts=posts,
+        ids={entry.post.id: entry for entry in posts},
         replies={post: tuple(entries) for post, entries in replies.items()},
         builds={post: tuple(entries) for post, entries in builds.items()},
         offers={deliverable: tuple(entries) for deliverable, entries in offers.items()},

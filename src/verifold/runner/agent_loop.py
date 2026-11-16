@@ -455,12 +455,13 @@ class AgentLoop:
             news = update(board, agent_id, max(self._notified, self._member.seen), now, told)
             # An agent that this agent wrote to and that left wakes it as a post does: no answer comes from it.
             # Like the alarm, that does not wake an agent in a closed lab, where agents leave because it is done.
-            # A rerun that this agent can take wakes it once, as a call does. Like the alarm, it does not in a lab
-            # that is out of time or closed, and it rings when the lab has time or is open again. The close of a
-            # round that concerns the agent wakes it as a post for it does.
+            # A rerun that this agent can take wakes it once, as a call does. The close of a round that concerns the
+            # agent wakes it as a post for it does. Like the alarm, neither does in a lab that is out of time or
+            # closed: the next news carries them, and a rerun rings when the lab has time or is open again.
             resting = board.out_of_time or lab_state(board) == 'closed'
             reruns = () if resting else news.reruns
-            posts = bool(news.posts or news.rounds or reruns or (news.left and lab_state(board) != 'closed'))
+            rounds = () if resting else news.rounds
+            posts = bool(news.posts or rounds or reruns or (news.left and lab_state(board) != 'closed'))
             # The agent's own alarm. It does not ring in a lab that is out of time or closed.
             alarm = pending_alarm(board, agent_id)
             left = None
@@ -489,9 +490,7 @@ class AgentLoop:
                     settled = True
                     continue
                 self._notified, self._rung = board.seq, self._rung | told_of(board, reruns)
-                bell = (
-                    DOORBELL if news.posts else ROUND_CLOSED if news.rounds else RERUN_WANTED if reruns else DEPARTURE
-                )
+                bell = DOORBELL if news.posts else ROUND_CLOSED if rounds else RERUN_WANTED if reruns else DEPARTURE
                 return self._ring(bell, due, late)
             if due:
                 return self._ring('', due, late)

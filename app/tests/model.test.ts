@@ -6,10 +6,12 @@ import type {
   Post,
   PostView,
   RerunLine,
+  RoundEnd,
   RoundView,
   ThreadSummary,
   Wait,
 } from '../src/api/types.ts';
+import { PERSON } from '../src/api/types.ts';
 
 import {
   authorName,
@@ -45,7 +47,14 @@ import {
 } from '../src/model/posts.ts';
 import { crossedLine, crossLines } from '../src/model/crossings.ts';
 import { href, parseRoute } from '../src/model/route.ts';
-import { hasNew, markSeen, markUnfolded, readSeen, readUnfolded } from '../src/model/seen.ts';
+import {
+  hasNew,
+  holdsNew,
+  markSeen,
+  markUnfolded,
+  readSeen,
+  readUnfolded,
+} from '../src/model/seen.ts';
 import {
   editLine,
   giveRole,
@@ -116,10 +125,12 @@ import {
   cardStatus,
   foldLabel,
   foldedCount,
+  goneLine,
   headClaim,
   isPlainMessage,
   objectionStands,
   questionThread,
+  repliesLabel,
   replyRoot,
   rows,
   standingIn,
@@ -947,6 +958,54 @@ describe('turns', () => {
     assert.equal(replyRoot(posts, 'p-1'), null);
     assert.equal(replyRoot(posts, 'p-99'), null);
     assert.equal(replyRoot(posts, null), null);
+  });
+
+  it('keeps a check that fails in sight, as an objection that stands', () => {
+    const fails = { kind: 'check', method: 'rerun', outcome: 'fails' } as const;
+    const posts = [
+      postView(result('p-1')),
+      postView({ ...result('p-2', { reply_to: 'p-1', author: 'agent-2' }), ...fails }, 2),
+      note('p-3', { reply_to: 'p-1', author: 'agent-3' }),
+      note('p-4', { reply_to: 'p-1', author: 'agent-2' }),
+    ];
+    const list = (items: readonly PostView[]): readonly string[] =>
+      rows(items, null, true).map((row) =>
+        row.kind === 'replies'
+          ? `folds ${row.items.map((item) => item.post.id).join('+')}`
+          : row.kind === 'turn'
+            ? `${row.item.post.id}:${row.depth}`
+            : `[${row.items.map((item) => item.post.id).join('+')}]`,
+      );
+    assert.deepEqual(list(posts), ['p-1:0', 'folds p-3+p-4', 'p-2:1']);
+    // A check that its author conceded disputes nothing, so it folds with the rest.
+    const conceded = posts.map((item) =>
+      item.post.id === 'p-2' ? { ...item, standing: 'conceded' as const } : item,
+    );
+    assert.deepEqual(list(conceded), ['p-1:0', 'folds p-2+p-3+p-4']);
+  });
+
+  it('names every kind of post in the row that folds replies, a round’s entries among them', () => {
+    const entries = Array.from({ length: 13 }, (_, index) =>
+      postView(result(`p-${index + 3}`, { kind: 'entry', reply_to: 'p-2' }), index + 3),
+    );
+    assert.equal(repliesLabel(entries), '13 replies: 13 entries');
+    assert.equal(
+      repliesLabel([postView(result('p-2', { kind: 'round' })), ...entries.slice(0, 1)]),
+      '2 replies: 1 round, 1 entry',
+    );
+  });
+
+  it('says how many proposals stand no more when no candidate stands', () => {
+    assert.equal(goneLine(1), 'No candidate stands. 1 proposal was conceded or replaced.');
+    assert.equal(goneLine(2), 'No candidate stands. 2 proposals were conceded or replaced.');
+  });
+
+  it('tells whether some posts of a thread hold one that the person has not seen', () => {
+    const posts = [postView(result('p-2'), 2), postView(result('p-5'), 5)];
+    assert.equal(holdsNew(posts, 4), true);
+    assert.equal(holdsNew(posts, 5), false);
+    // The person's own post is never new to the person.
+    assert.equal(holdsNew([postView(result('p-6', { author: PERSON }), 6)], 5), false);
   });
 
   it('folds no single message: the newest message of a chain of replies stays in sight', () => {
@@ -2338,6 +2397,19 @@ describe('a round', () => {
     assert.equal(
       roundTime({ ...open, open: false }, now),
       `Closed at ${clock(open.closes_at)}: its time came`,
+    );
+    // After a restart, Verifold records the close of a round whose time came later. It closed at its time.
+    const close = (at: string, why: RoundEnd): RoundView => ({
+      ...closed,
+      closed: { type: 'round_closed', seq: 9, at, round: 'p-2', why },
+    });
+    assert.equal(
+      roundTime(close('2026-11-06T18:02:00Z', 'time'), now),
+      `Closed at ${clock(open.closes_at)}: its time came`,
+    );
+    assert.equal(
+      roundTime(close('2026-11-06T14:12:00Z', 'entered'), now),
+      `Closed at ${clock('2026-11-06T14:12:00Z')}: every agent that was asked entered`,
     );
   });
 

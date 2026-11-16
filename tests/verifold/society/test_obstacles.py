@@ -59,6 +59,27 @@ def test_a_disputed_result_takes_an_obstacle_up_and_a_conceded_one_builds_on_not
     assert _states(record) == [('p-1', 'taken_up', ['p-5'])]
 
 
+def test_work_that_its_author_ruled_out_or_whose_author_left_counts_for_nothing(record: RecordBuilder) -> None:
+    record.post(RuledOut(id='p-1', thread='t-1', author='ada', text='The solver times out past 40 nodes.'))
+    record.post(Plan(id='p-2', thread='t-1', author='bo', text='I split the graph first.', builds_on=('p-1',)))
+    planned = record.copy()
+    # bo rules its own plan out, with a ruled-out post that replies to it or that builds on it.
+    record.post(RuledOut(id='p-3', thread='t-1', author='bo', text='Splitting loses edges.', reply_to='p-2'))
+    assert ('p-1', 'open', []) in _states(record)
+    built = planned.copy().post(RuledOut(id='p-3', thread='t-1', author='bo', text='No.', builds_on=('p-2',)))
+    assert ('p-1', 'open', []) in _states(built)
+    # Another agent's ruled-out post does not rule bo's plan out.
+    other = planned.copy().post(RuledOut(id='p-3', thread='t-1', author='cy', text='No.', reply_to='p-2'))
+    assert ('p-1', 'taken_up', ['p-2']) in _states(other)
+    # A plan whose author left the lab takes nothing up.
+    assert _states(planned.copy().leave('bo')) == [('p-1', 'open', [])]
+    # A result that its author ruled out removes nothing.
+    result = planned.copy().post(Result(id='p-3', thread='t-1', author='cy', text='200 nodes.', builds_on=('p-1',)))
+    assert _states(result) == [('p-1', 'removed', ['p-3'])]
+    result.post(RuledOut(id='p-4', thread='t-1', author='cy', text='It was one graph.', reply_to='p-3'))
+    assert ('p-1', 'taken_up', ['p-2']) in _states(result)
+
+
 def test_only_a_ruled_out_post_of_a_line_of_work_is_an_obstacle(record: RecordBuilder) -> None:
     record.post(Call(id='p-1', thread='t-1', author='ada', text='Somebody to fit the curve.'))
     # The caller withdraws its own call. That closes no lead.

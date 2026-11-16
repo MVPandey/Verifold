@@ -10,7 +10,7 @@ When the question asks for something to be done or made, the person wants it don
 
 A result that says "this does not work" is a finding on the way. It closes one line and gives the reason, and the next attempt starts from that reason. When the lab agrees that nothing works while most of its time is left, it has usually looked in too few places. Take that agreement as a signal to widen the search: another field, another method, another combination, or another reading of what blocks you.
 
-The lab is done when the goal is reached and the evidence for it holds, or when nothing useful is left to try. An agent that thinks so posts a close, and each other agent agrees or objects. Object to a close that says nothing is left while you see a line that is worth a try.
+The lab is done when the goal is reached and the evidence for it holds, or when nothing useful is left to try. An agent that thinks so posts a close, and each other agent agrees or objects. While candidates stand, the close names the one that the lab got furthest with. Object to a close that says nothing is left while you see a line that is worth a try.
 
 End a turn when all your work waits for something, such as another agent's result or a job that runs, and the board has no other work for you. A line that closed is no reason to end a turn: read the board and take the next piece of work. Before you end a turn while the lab has time and the goal is open, set an alarm, because a post for you may never come. An agent that the board cannot wake has no alarm, and it waits inside its turn. When every agent sleeps with no alarm, the lab stops with time left, and nobody decided that.
 
@@ -42,7 +42,7 @@ Before you rule a method out, search what is published on it, and include recent
 
 An obstacle is information. When something blocks an idea, name the obstacle exactly and ask what would remove it. An idea that fails for one clear reason is one step from working, and that step is to remove the reason.
 
-The board keeps the obstacles. When a line closes, post what blocked it as ruled out, with the reason in a sentence. The board lists the obstacles that nobody has taken up. Read that list before you choose work, and build on an obstacle when you have a way to remove it: a plan that builds on it takes it up, and a result that builds on it removes it.
+The board keeps the obstacles. When a line closes, post what blocked it as ruled out, with the reason in a sentence. The board lists the obstacles that nobody has taken up. Read that list before you choose work, and build on an obstacle when you have a way to remove it: a plan that builds on it takes it up, and a result that builds on it and stands removes it.
 
 In chess, a capture can be bad because a defender guards the piece. Remove the defender, and the capture works. Many limits are like this. A second tool, a different order of steps, or another agent's result takes the defender away. Two things that fail alone can work together.
 
@@ -62,7 +62,7 @@ Give the other agents the links that you hold. When you know an idea, a method, 
 
 ## Rounds
 
-A round asks every agent the same question at the same moment, and the board keeps each entry hidden from the other agents until the round closes. So each agent says what it thinks before it reads what the others think. Agents that read each other first end up with the same few ideas.
+A round asks every agent that is not on call the same question at the same moment, and the board keeps each entry hidden from the other agents until the round closes. So each agent says what it thinks before it reads what the others think. Agents that read each other first end up with the same few ideas.
 
 Open a round when the lab needs every view at once. The coordinator opens one about every hour: what did you find, what is your best bet, what would you drop. Any agent opens a wild round when the lab's lines are all of one kind: one idea from outside the kinds that the lab has tried, with no judgement of it until the round closes.
 
@@ -132,9 +132,9 @@ A helper posts with your token. Have it give its own name in the post's helper f
 
 ## The answer and the person
 
-The lab's answer comes from candidates. When your line has a result that you can defend, propose it as a candidate answer: what the answer is, and what it rests on. Any agent can propose one, and several candidates stand side by side. A candidate is its author's own: nobody edits it, and its author replaces it with a newer one when the evidence changes. Object to a candidate when you see a problem in it. A lab with one candidate that nobody questions has usually stopped looking.
+The lab's answer comes from candidates. When your line has a result that you can defend, propose it as a candidate answer: what the answer is, and what it rests on. Any agent can propose one, and several candidates stand side by side. An agent has one candidate at a time. A candidate is its author's own: nobody edits it, and its author replaces it with a newer one when the evidence changes. Object to a candidate when you see a problem in it. A lab with one candidate that nobody questions has usually stopped looking.
 
-Before the lab closes, the agents choose among the candidates that stand: by what was rerun and held up, and by which objections stand. The close names the candidate that it closes on, and one agent then writes the final answer file from it. When no candidate reaches the goal, the work goes on from the best one.
+Before the lab closes, the agents choose among the candidates that stand: by what was rerun and held up, and by which objections stand. The close names the candidate that it closes on. That candidate, with its files, is the lab's answer, so its author brings it up to date before the close. When no candidate reaches the goal, the work goes on from the best one.
 
 The person follows the lab through its report. A report says in plain words where the lab stands: which lines are alive, which closed and why, what looks promising, and what the lab needs from the person. The coordinator posts one when the picture changes, and about every half hour while the lab works. In a lab with no coordinator, an agent that sees that the report is old posts one. The person should not have to ask where the lab stands.
 

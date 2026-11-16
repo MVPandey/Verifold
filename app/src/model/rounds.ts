@@ -25,13 +25,14 @@ export function roundRequest(text: string, minutes: number): PostRequest | null 
 
 const ENDS = {
   time: 'its time came',
-  entered: 'every agent entered',
+  entered: 'every agent that was asked entered',
   opener: 'its opener closed it',
 } as const satisfies Record<RoundEnd, string>;
 
 /**
  * Return when a round closes, or when and why it closed, such as "Closes at 14:10, in 7 min" or "Closed at 14:10:
- * every agent entered". A round whose time came before Verifold recorded its close closed at its time.
+ * every agent that was asked entered". A round that closed because its time came closed at that time, also when
+ * Verifold recorded the close later, as after a restart.
  */
 export function roundTime(view: RoundView, now: Date): string {
   if (view.open) {
@@ -41,8 +42,9 @@ export function roundTime(view: RoundView, now: Date): string {
     );
     return `Closes at ${clock(view.closes_at)}, in ${duration(left)}`;
   }
-  const at = view.closed?.at ?? view.closes_at;
-  return `Closed at ${clock(at)}: ${ENDS[view.closed?.why ?? 'time']}`;
+  const why = view.closed?.why ?? 'time';
+  const at = why === 'time' ? view.closes_at : (view.closed?.at ?? view.closes_at);
+  return `Closed at ${clock(at)}: ${ENDS[why]}`;
 }
 
 /** Return how many agents entered among the ones that entered and the ones that the round waits for, as "2 of 5 entered". */

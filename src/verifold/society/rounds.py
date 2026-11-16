@@ -12,8 +12,8 @@ entry at once. An entry wakes nobody: the round's close tells of it.
 The seal is the board's. The record on disk holds every entry whole, and an agent that can read files outside its
 folder can read them there. The norms ask agents not to.
 
-A round closes at its time by the lab's clock, when every agent of the lab that is not on call and has not left
-has entered, or when its opener withdraws it with a ruled-out lead that replies to it. Verifold records the close
+A round closes at its time by the lab's clock, when every agent that it waits for has entered, as `waits_for` says,
+or when its opener withdraws it with a ruled-out lead that replies to it. Verifold records the close
 as an event, and the news of the agents carries it. A round whose time passed is closed for every view at once,
 also before Verifold records the event, as after a stop of Verifold.
 
@@ -32,6 +32,7 @@ from verifold.protocol.posts import Entry, Round, RuledOut
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 from verifold.society.lifecycle import latest_time, utc
+from verifold.society.turns import stopped
 
 
 def closes_at(opened: Posted) -> datetime:
@@ -76,10 +77,12 @@ def entries(board: Board, round_id: PostId) -> tuple[Posted, ...]:
 
 def waits_for(board: Board, opened: Posted, before: int | None = None) -> tuple[AgentId, ...]:
     """
-    Return the agents that a round waits for, in the order that they joined: the agents that have not entered.
+    Return the agents that a round waits for, in the order that they joined: the ones that were asked and have not entered.
 
-    They are the agents of the lab that are known to be in it, are not on call, and have not left. With `before`,
-    the list is as it was just before that event, as at a round's close.
+    A round waits for every agent that it was for and that can still enter: an agent of the lab that is known to
+    be in it, so not an invited agent that has not posted yet, and that is not on call, has not left, and is not a
+    seat that Verifold stopped. It does not wait for its opener, which asked the question. The opener and an agent
+    on call can still enter. With `before`, the list is as it was just before that event, as at a round's close.
     """
     ahead = lambda seq: before is None or seq < before
     entered = {entry.post.author for entry in entries(board, opened.post.id) if ahead(entry.seq)}
@@ -89,9 +92,11 @@ def waits_for(board: Board, opened: Posted, before: int | None = None) -> tuple[
         for joined in board.agents
         if ahead(joined.seq)
         and not joined.agent.checks
+        and joined.agent.id != opened.post.author
         and board.came(joined, before)
         and joined.agent.id not in gone
         and not board.on_call(joined.agent.id, before)
+        and not stopped(board, joined.agent.id, before)
         and joined.agent.id not in entered
     )
 

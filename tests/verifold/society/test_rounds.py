@@ -4,6 +4,7 @@ import pytest
 from builders import START, RecordBuilder, lab
 from pydantic import ValidationError
 
+from verifold.protocol.agents import GUEST
 from verifold.protocol.events import Posted, RoundEnd
 from verifold.protocol.ids import PERSON
 from verifold.protocol.join import MAX_ENTRIES, SEALED_TEXT
@@ -227,8 +228,9 @@ def test_a_round_closes_at_its_time_when_every_agent_entered_or_when_its_opener_
 
     assert close_due(board, DURING) is None
     assert close_due(board, CLOSES) == ('p-2', 'time')
-    # The round waits for the agents that are not on call and have not left: ada and cy, not dan.
-    assert waits_for(board, board.posts[1]) == ('ada', 'cy')
+    # The round waits for the agents that it asked and that can still enter: cy. Not its opener ada, which asked,
+    # not dan, which is on call, and not bo, which entered. The opener and an agent on call can still enter.
+    assert waits_for(board, board.posts[1]) == ('cy',)
     almost = record.copy().post(entry('p-4', 'ada')).post(entry('p-5', 'dan'))
     assert close_due(almost.board(), DURING) is None
     assert close_due(almost.copy().post(entry('p-6', 'cy')).board(), DURING) == ('p-2', 'entered')
@@ -251,6 +253,13 @@ def test_a_round_closes_at_its_time_when_every_agent_entered_or_when_its_opener_
     assert close_due(twice.board(), CLOSES) is None
     assert refusal(twice.closed('p-2', 'opener')) == 'Round p-2 closed already.'
     assert refusal(record.copy().closed('p-1', 'time')) == 'Post p-1 is no round.'
+    # A seat that Verifold stopped is waited for no longer, until a turn of it starts again. Nor is an invited
+    # agent that has not posted yet.
+    assert waits_for(record.copy().turn('cy', 'It failed.', stopped=True).board(), board.posts[1]) == ()
+    restarted = record.copy().turn('cy', 'It failed.', stopped=True).start('cy', seen=1)
+    assert waits_for(restarted.board(), board.posts[1]) == ('cy',)
+    invited = record.copy().join('eve', harness=GUEST)
+    assert waits_for(invited.board(), board.posts[1]) == ('cy',)
     # A round with no entry runs to its time, also in a lab whose agents are all on call.
     quiet = RecordBuilder().join('ada').on_call('ada').thread('t-1', opened_by='person')
     question = quiet.post(ROUND.model_copy(update={'author': PERSON})).board()
@@ -294,9 +303,30 @@ def test_the_news_of_a_close_holds_the_lines_of_twenty_entries_and_counts_the_ot
         at(record.post(entry(f'p-{number + 3}', name)), soon)
     board = at(record.closed('p-2', 'time'), START + timedelta(hours=2)).board()
 
-    (note,) = news(board, 'bo', 0).rounds
+    unseen = news(board, 'bo', 0)
+    (note,) = unseen.rounds
     assert (len(note.entries), note.left_out) == (MAX_ENTRIES, 5)
     assert note.entries[0].author == 'agent-0'
+    # The round and its entries are in the note, or counted there, and the other posts of the news hold none of them.
+    assert (unseen.others, unseen.left_out) == ((), 0)
+    assert update(board, 'bo', 0).others == ()
+
+
+def test_the_notes_of_two_rounds_share_the_lines_of_entries_of_one_news() -> None:
+    names = [f'agent-{number}' for number in range(12)]
+    record = lab()
+    for name in names:
+        record.join(name)
+    for first, round_id in ((3, 'p-2'), (16, 'p-15')):
+        record.post(ROUND.model_copy(update={'id': round_id}))
+        soon = record.events[-1].at + timedelta(minutes=1)
+        for number, name in enumerate(names):
+            post = Entry(id=f'p-{first + number}', thread='t-1', author=name, text='My bet.', reply_to=round_id)
+            at(record.post(post), soon)
+        at(record.closed(round_id, 'time'), soon + timedelta(minutes=10))
+
+    first, second = news(record.board(), 'bo', 0).rounds
+    assert (len(first.entries), first.left_out, len(second.entries), second.left_out) == (12, 0, 8, 4)
 
 
 def test_brief_has_the_open_round_with_its_end_its_count_and_the_readers_entry() -> None:
@@ -310,7 +340,8 @@ def test_brief_has_the_open_round_with_its_end_its_count_and_the_readers_entry()
             QUESTION,
             CLOSES,
             1,
-            2,
+            # cy, and not the opener ada.
+            1,
             yours,
         )
     # A line leaves out what holds nothing.

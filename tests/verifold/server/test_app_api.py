@@ -622,7 +622,7 @@ async def test_the_candidates_route_gives_the_candidate_answers_and_a_file_route
         file = await client.get('/posts/p-1/file', params={'path': 'answer.md'})
         missing = await client.get('/posts/p-1/file', params={'path': 'other.md'})
 
-    assert before == {'standing': [], 'closes_on': None}
+    assert before == {'standing': [], 'gone': [], 'closes_on': None}
     (candidate,) = after['standing']
     assert (candidate['candidate']['post']['text'], candidate['builds_on'], after['closes_on']) == (
         'Yes, it holds.',

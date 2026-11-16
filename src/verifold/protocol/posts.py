@@ -333,7 +333,8 @@ class Close(PostBase):
 
     Another agent agrees with an answer that accepts it, or objects to it. The lab is closed while more than half of
     its agents stand behind the newest such post and no objection to it stands. The author withdraws it with a
-    ruled-out lead that replies to it. The person can always go on: a lab that is closed is not stopped.
+    ruled-out lead that replies to it. A close that names a candidate stands only while that candidate stands. The
+    person can always go on: a lab that is closed is not stopped.
     """
 
     kind: Literal['close'] = 'close'
@@ -386,9 +387,9 @@ class Round(PostBase):
     A question to every agent of the lab at once, which `text` holds. It stays open for `minutes`.
 
     Each agent answers with one entry that replies to the round. While the round is open, the board shows what an
-    entry says only to its author and the person. The round closes at its time, when every agent of the lab that is
-    not on call and has not left has entered, or when its opener withdraws it with a ruled-out lead that replies
-    to it. Verifold then records the close, and every entry shows to every agent. A round is in a thread for the
+    entry says only to its author and the person. The round closes at its time, when every agent that it asked and
+    that can still enter has entered, or when its opener withdraws it with a ruled-out lead that replies to it.
+    Verifold then records the close, and every entry shows to every agent. A round is in a thread for the
     whole lab, names nobody, and replies to no post, and a lab has one open round at a time. A record from before
     rounds holds none.
     """

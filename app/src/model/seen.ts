@@ -1,5 +1,5 @@
 import { PERSON } from '../api/types.ts';
-import type { ThreadSummary } from '../api/types.ts';
+import type { PostView, ThreadSummary } from '../api/types.ts';
 
 /**
  * Where the app keeps what the person has seen and chosen. In the browser it is `browserStore`, which reads and
@@ -39,6 +39,14 @@ export function markSeen(store: SeenStore, lab: string, thread: string, seq: num
 export function hasNew(summary: ThreadSummary, seen: Seen): boolean {
   const latest = summary.latest;
   return latest !== null && latest.author !== PERSON && latest.seq > (seen[summary.thread.id] ?? 0);
+}
+
+/**
+ * Return whether some posts of a thread hold one that the person has not seen: one after `seen`, the last post of
+ * the thread that the person saw. The person's own posts don't count.
+ */
+export function holdsNew(items: readonly PostView[], seen: number): boolean {
+  return items.some((item) => item.post.author !== PERSON && item.seq > seen);
 }
 
 /**

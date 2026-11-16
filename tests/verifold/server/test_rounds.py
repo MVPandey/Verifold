@@ -72,7 +72,8 @@ async def test_an_agent_opens_a_round_with_the_post_tool_and_the_board_refuses_a
     )
     assert brief.structured_content is not None
     line = brief.structured_content['round']
-    assert (line['round']['id'], line['round']['text'], line['not_entered']) == ('p-2', 'What would you drop?', 2)
+    # The round waits for bo, and not for ada, which asked.
+    assert (line['round']['id'], line['round']['text'], line['not_entered']) == ('p-2', 'What would you drop?', 1)
     assert message.is_error
 
 
@@ -108,12 +109,13 @@ async def test_the_lab_closes_a_round_in_the_step_of_the_last_entry_and_every_ag
     bo, cy, dan = Member(lab, 'bo'), Member(lab, 'cy'), Member(lab, 'dan')
     await lab.post(enter(SECRET, body=DETAIL), 'bo')
     await lab.post(enter('From the side line.'), 'dan')
-    await lab.post(enter('Drop the night runs.'), 'cy')
+    # The opener can enter, and the round does not wait for it.
+    await lab.post(enter('Keep the cache.'), 'ada')
     assert not lab.board.round_closes
     waiting = asyncio.create_task(bo.wait(5))
     await asyncio.sleep(0)
 
-    await lab.post(enter('Keep the cache.'), 'ada')
+    await lab.post(enter('Drop the night runs.'), 'cy')
 
     # The last entry and the close are one step of the record.
     assert [type(event).__name__ for event in record_file.read()[-2:]] == ['Posted', 'RoundClosed']
@@ -123,10 +125,10 @@ async def test_the_lab_closes_a_round_in_the_step_of_the_last_entry_and_every_ag
     assert [(line.author, line.text) for line in note.entries] == [
         ('bo', SECRET),
         ('dan', 'From the side line.'),
-        ('cy', 'Drop the night runs.'),
         ('ada', 'Keep the cache.'),
+        ('cy', 'Drop the night runs.'),
     ]
-    assert [line.author for line in cy.news().rounds[0].entries] == ['bo', 'dan', 'cy', 'ada']
+    assert [line.author for line in cy.news().rounds[0].entries] == ['bo', 'dan', 'ada', 'cy']
     # dan is on call, and it entered, so it hears the close too.
     assert len(dan.news().rounds) == 1
     # From the close on, an entry is a post like any other.
@@ -264,8 +266,9 @@ def test_the_norms_say_when_to_open_a_round_and_how_to_enter_it() -> None:
 
     assert section.strip().split('\n\n')[1:] == [
         (
-            'A round asks every agent the same question at the same moment, and the board keeps each entry hidden '
-            'from the other agents until the round closes. So each agent says what it thinks before it reads what '
+            'A round asks every agent that is not on call the same question at the same moment, and the board keeps '
+            'each entry hidden from the other agents until the round closes. So each agent says what it thinks '
+            'before it reads what '
             'the others think. Agents that read each other first end up with the same few ideas.'
         ),
         (

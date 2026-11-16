@@ -29,6 +29,7 @@ from verifold.protocol.join import (
     AgentLine,
     Brief,
     CandidateLine,
+    CandidateRef,
     CandidatesView,
     CandidateView,
     News,
@@ -52,7 +53,7 @@ from verifold.protocol.threads import Thread
 from verifold.protocol.votes import BADGES, MAX_VOTE_LINES, NEWEST_VOTES
 from verifold.society.attention import left_line, watches_thread
 from verifold.society.board import Board
-from verifold.society.candidates import candidates, closes_on, own_entry
+from verifold.society.candidates import candidates, closes_on, gone, own_entry
 from verifold.society.coordinator import request_waits
 from verifold.society.deliverables import deliverable_lines
 from verifold.society.errors import NotFound
@@ -398,7 +399,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
     found = obstacles(board)
     blocking = tuple(item.entry for item in reversed(found) if item.state == 'open')
     standing_candidates = candidates(board)
-    shown = standing_candidates[-MAX_CANDIDATES:]
+    older, shown = standing_candidates[:-MAX_CANDIDATES], standing_candidates[-MAX_CANDIDATES:]
     reported = newest_report(board)
     done = closing(board)
     named = closes_on(board, done) if done else None
@@ -487,7 +488,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
             )
             for entry in shown
         ),
-        more_candidates=len(standing_candidates) - len(shown),
+        older_candidates=tuple(CandidateRef(id=entry.post.id, author=entry.post.author) for entry in older),
         closes_on=named.post.id if named else None,
         report=report_line,
         report_minutes_ago=minutes_since(reported.at, now) if reported else None,
@@ -517,7 +518,16 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         open_asks=listed(open_asks[-MAX_NEWS:]),
         open_calls=listed(open_calls[-MAX_NEWS:]),
         reruns_wanted=reruns_wanted(board, now)[-MAX_NEWS:],
-        news=news.model_copy(update={'for_you': known(news.for_you), 'others': known(news.others)}),
+        news=news.model_copy(
+            update={
+                'for_you': known(news.for_you),
+                'others': known(news.others),
+                'rounds': tuple(
+                    note.model_copy(update={'round': known((note.round,))[0], 'entries': known(note.entries)})
+                    for note in news.rounds
+                ),
+            }
+        ),
     )
 
 
@@ -687,14 +697,15 @@ def versions(board: Board) -> tuple[QuestionVersion, ...]:
 
 def candidates_view(board: Board) -> CandidatesView:
     """
-    Return the candidate answers for the person: each one that stands, and the one that the standing close closes on.
+    Return the candidate answers for the person: the ones that stand, the ones gone, and the one that a close names.
 
-    The person sees every post, so no view here is sealed.
+    The proposals that stand no more are the ones gone. The person sees every post, so no view here is sealed.
     """
     done = closing(board)
     named = closes_on(board, done) if done else None
     return CandidatesView(
         standing=tuple(candidate_view(board, entry) for entry in candidates(board)),
+        gone=tuple(post_view(board, entry, PERSON) for entry in gone(board)),
         closes_on=candidate_view(board, named) if named else None,
     )
 

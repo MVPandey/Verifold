@@ -177,7 +177,7 @@ describe('the API client', () => {
   it('reads the candidates, and none from a server from before the candidates route', async () => {
     const none = createApi(
       'secret',
-      serverThatAnswers(200, '{"standing": [], "closes_on": null}').fetcher,
+      serverThatAnswers(200, '{"standing": [], "gone": [], "closes_on": null}').fetcher,
     );
     const before = createApi('secret', serverThatAnswers(404, '{"detail": "Not Found"}').fetcher);
     const broken = createApi('secret', serverThatAnswers(500, 'Internal Server Error').fetcher);

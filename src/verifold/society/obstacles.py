@@ -17,7 +17,10 @@ class Obstacle:
     entry: Posted
     state: ObstacleState
     builders: tuple[Posted, ...]
-    """For `removed`, the results that stand and build on it. For `taken_up`, the plans and results that build on it."""
+    """
+    For `removed`, the results that stand and build on it. For `taken_up`, the plans and results that build on it.
+    Neither holds a post whose author conceded it, ruled it out, or left the lab.
+    """
 
 
 def obstacles(board: Board) -> tuple[Obstacle, ...]:
@@ -38,7 +41,7 @@ def _obstacle(board: Board, entry: Posted) -> Obstacle:
     work = tuple(
         other
         for other in board.built_on(entry.post.id)
-        if isinstance(other.post, Plan | Result) and standing(board, other.post.id) != 'conceded'
+        if isinstance(other.post, Plan | Result) and _holds(board, other)
     )
     removing = tuple(
         other for other in work if isinstance(other.post, Result) and standing(board, other.post.id) != 'disputed'
@@ -46,3 +49,12 @@ def _obstacle(board: Board, entry: Posted) -> Obstacle:
     if removing:
         return Obstacle(entry=entry, state='removed', builders=removing)
     return Obstacle(entry=entry, state='taken_up' if work else 'open', builders=work)
+
+
+def _holds(board: Board, work: Posted) -> bool:
+    # Whether a plan or a result still counts for an obstacle: its author is in the lab, did not concede it, and did
+    # not rule it out with a `ruled_out` that replies to it or builds on it.
+    author = work.post.author
+    around = (*board.replies(work.post.id), *board.built_on(work.post.id))
+    ruled = any(isinstance(other.post, RuledOut) and other.post.author == author for other in around)
+    return not ruled and not board.gone(author) and standing(board, work.post.id) != 'conceded'

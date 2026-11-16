@@ -38,8 +38,9 @@ from verifold.protocol.events import (
     WatchSet,
     WentQuiet,
 )
-from verifold.protocol.posts import Round
+from verifold.protocol.posts import Close, Round
 from verifold.society.board import Board
+from verifold.society.candidates import settled
 from verifold.society.coordinator import check_answered, check_made, check_power
 from verifold.society.deliverables import (
     check_decision,
@@ -114,7 +115,14 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
             check_offer(board, post)
             check_rounds(board, event)
             rounds = (*board.rounds, event) if isinstance(post, Round) else board.rounds
-            return replace(board, seq=event.seq, posts=(*board.posts, event), rounds=rounds)
+            # A close that names no candidate closes on what stood just before it, also after a later concession.
+            unnamed = (
+                (*board.unnamed_closes, (post.id, settled(board)))
+                if isinstance(post, Close) and post.candidate is None
+                else board.unnamed_closes
+            )
+            posts = (*board.posts, event)
+            return replace(board, seq=event.seq, posts=posts, rounds=rounds, unnamed_closes=unnamed)
         case RoundClosed():
             check_close(board, event)
             return replace(board, seq=event.seq, round_closes=(*board.round_closes, event))
