@@ -13,12 +13,13 @@ from verifold.protocol.settings import Settings, VoteSettings
 from verifold.protocol.votes import MAX_GIVES, MAX_NOTES, MAX_VOTE_LINES, MAX_WHY, NEWEST_VOTES, ProposalLine
 from verifold.society.attention import news, update, wakes
 from verifold.society.board import Board
+from verifold.society.candidates import candidates
 from verifold.society.errors import NotFound, RejectedEvent
 from verifold.society.fold import fold
 from verifold.society.identity import post_line, post_view
 from verifold.society.lines import lines_of
 from verifold.society.standing import standing
-from verifold.society.views import answer, brief, thread_summaries, thread_view
+from verifold.society.views import brief, thread_summaries, thread_view
 from verifold.society.votes import (
     badge_lines,
     breakthrough_threads,
@@ -130,7 +131,7 @@ def test_a_vote_and_a_badge_wake_nobody_and_change_no_standing_no_list_and_no_an
     ]
     assert not update(marked, 'ada', plain.seq).posts
     assert [standing(marked, post) for post in ('p-1', 'p-2')] == [standing(plain, post) for post in ('p-1', 'p-2')]
-    assert answer(marked) == answer(plain)
+    assert candidates(marked) == candidates(plain)
 
     # The lists of a brief hold the same posts in the same order, whatever the votes and the badges say.
     def lists(board: Board) -> list[list[str]]:

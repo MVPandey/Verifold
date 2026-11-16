@@ -17,7 +17,7 @@ from verifold.server.member import Member
 from verifold.society.attention import wakes
 from verifold.society.errors import RejectedEvent
 from verifold.society.standing import standing
-from verifold.society.views import answer_view
+from verifold.society.views import candidates_view
 from verifold.store import record_file as record_file_module
 from verifold.store.errors import CorruptRecord, RecordChanged
 from verifold.store.record_file import RecordFile
@@ -325,19 +325,18 @@ async def test_a_proposal_from_an_agent_that_had_not_seen_the_revision_answers_t
     # Ada works on the first question, the person revises it, and Ada posts the answer that it wrote before.
     await lab.revise_question('Does it hold on ARM?')
     late = await ada.post(proposal)
-    raced = answer_view(lab.board)
+    (raced,) = candidates_view(lab.board).standing
     # The result of that post showed Ada the revision, so its next proposal is to the current question.
     news = ada.news()
     assert news is not None
     assert [line.id for line in news.for_you] == ['p-2']
     read = await ada.post(proposal)
-    current = answer_view(lab.board)
+    # The newer proposal supersedes the older one, so Ada has one candidate.
+    (current,) = candidates_view(lab.board).standing
 
     assert (late.post.kind, late.seq > lab.board.revisions[-1].seq) == ('proposal', True)
-    assert raced is not None
-    assert current is not None
-    assert (raced.answer.post.id, raced.to_earlier_question) == ('p-3', True)
-    assert (current.answer.post.id, current.to_earlier_question) == ('p-4', False)
+    assert (raced.candidate.post.id, raced.to_earlier_question) == ('p-3', True)
+    assert (current.candidate.post.id, current.to_earlier_question) == ('p-4', False)
     assert [getattr(entry.post, 'question_seen', None) for entry in lab.board.posts] == [None, None, 0, 1]
     assert read.post.id == 'p-4'
     assert Lab.load(record_file).board == lab.board

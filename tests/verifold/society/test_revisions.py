@@ -10,7 +10,7 @@ from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply
 from verifold.society.lifecycle import lab_state
-from verifold.society.views import answer_view, brief, thread_view, versions
+from verifold.society.views import brief, candidates_view, thread_view, versions
 
 
 def asked() -> RecordBuilder:
@@ -28,7 +28,7 @@ def test_a_record_with_no_revision_keeps_the_question_that_the_lab_opened_with()
         ('Does it hold?', START, None)
     ]
     view = brief(board, 'ada', News(seq=0))
-    assert (view.question, view.revisions, view.answer_to_earlier_question) == ('Does it hold?', (), False)
+    assert (view.question, view.revisions, view.candidates) == ('Does it hold?', (), ())
 
 
 def test_the_board_has_the_newest_question_and_keeps_every_version_with_its_time_and_note() -> None:
@@ -68,23 +68,28 @@ def test_a_revision_opens_a_closed_lab_again() -> None:
     assert lab_state(record.revise('Does it hold on ARM?', 'p-4').board()) == 'open'
 
 
-def test_an_answer_from_before_a_revision_is_marked_until_a_newer_proposal_comes() -> None:
+def test_a_candidate_from_before_a_revision_is_marked_until_its_author_proposes_again() -> None:
     record = asked().post(Proposal(id='p-2', thread='t-1', author='ada', text='It holds.'))
     before = record.board()
     record.revise('Does it hold on ARM?', 'p-3')
     marked = record.board()
-    after = record.post(Proposal(id='p-4', thread='t-1', author='bo', text='It holds on ARM too.')).board()
+    beside = record.post(Proposal(id='p-4', thread='t-1', author='bo', text='It holds on ARM too.')).board()
+    again = record.post(Proposal(id='p-5', thread='t-1', author='ada', text='It holds on ARM.')).board()
 
-    def marks(board: Board) -> tuple[bool, bool]:
-        view, lab_answer = brief(board, 'cy', News(seq=0)), answer_view(board)
-        assert lab_answer is not None
-        return view.answer_to_earlier_question, lab_answer.to_earlier_question
+    def marks(board: Board) -> list[tuple[str, bool, bool]]:
+        lines, views = brief(board, 'cy', News(seq=0)).candidates, candidates_view(board).standing
+        return [
+            (line.line.id, line.to_earlier_question, view.to_earlier_question)
+            for line, view in zip(lines, views, strict=True)
+        ]
 
-    assert [marks(board) for board in (before, marked, after)] == [(False, False), (True, True), (False, False)]
-    # The earlier answer stays as it was: nothing withdrew or conceded it.
-    kept = answer_view(marked)
-    assert kept is not None
-    assert (kept.answer.post.id, kept.answer.standing) == ('p-2', 'open')
+    assert marks(before) == [('p-2', False, False)]
+    assert marks(marked) == [('p-2', True, True)]
+    # Another agent's newer candidate stands beside it and changes nothing about it.
+    assert marks(beside) == [('p-2', True, True), ('p-4', False, False)]
+    assert marks(again) == [('p-4', False, False), ('p-5', False, False)]
+    # The earlier candidate stays as it was: nothing withdrew or conceded it.
+    assert candidates_view(beside).standing[0].candidate.standing == 'open'
 
 
 def test_the_brief_gives_the_current_question_and_one_line_for_each_revision() -> None:
@@ -118,7 +123,7 @@ def test_a_proposal_that_says_what_its_author_had_seen_goes_by_that_and_an_older
     unseen = record.post(Proposal(id='p-4', thread='t-1', author='bo', text='It holds.', question_seen=0)).board()
     seen = record.post(Proposal(id='p-5', thread='t-1', author='bo', text='It holds.', question_seen=1)).board()
 
-    assert [brief(board, 'cy', News(seq=0)).answer_to_earlier_question for board in (old, unseen, seen)] == [
+    assert [brief(board, 'cy', News(seq=0)).candidates[-1].to_earlier_question for board in (old, unseen, seen)] == [
         False,
         True,
         False,
@@ -129,9 +134,8 @@ def test_an_answer_to_a_text_that_the_question_has_again_is_still_to_an_earlier_
     record = asked().post(Proposal(id='p-2', thread='t-1', author='ada', text='It holds.', question_seen=0))
     board = record.revise('Does it hold on ARM?', 'p-3').revise('Does it hold?', 'p-4').board()
 
-    view = answer_view(board)
+    (view,) = candidates_view(board).standing
 
-    assert view is not None
     assert (board.question, view.to_earlier_question) == (board.opened.question, True)
 
 

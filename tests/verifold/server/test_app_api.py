@@ -608,22 +608,27 @@ async def test_the_person_sets_how_long_the_agents_may_still_work(client: httpx2
     assert refused.status_code == 422
 
 
-async def test_the_answer_route_gives_the_labs_answer_and_a_file_route_gives_a_files_text(
+async def test_the_candidates_route_gives_the_candidate_answers_and_a_file_route_gives_a_files_text(
     record_file: RecordFile, activity: Activity
 ) -> None:
     lab = Lab.create(record_file, 'Does it hold?')
     await lab.open_question_thread()
     await lab.join(agent('bo'))
     async with client_of(Host(lab), activity) as client:
-        before = (await client.get('/answer')).json()
+        before = (await client.get('/candidates')).json()
         await lab.post(PostRequest(kind='proposal', text='Yes, it holds.', thread='t-1'), 'bo')
 
-        after = (await client.get('/answer')).json()
+        after = (await client.get('/candidates')).json()
         file = await client.get('/posts/p-1/file', params={'path': 'answer.md'})
         missing = await client.get('/posts/p-1/file', params={'path': 'other.md'})
 
-    assert before is None
-    assert (after['answer']['post']['text'], after['builds_on']) == ('Yes, it holds.', [])
+    assert before == {'standing': [], 'closes_on': None}
+    (candidate,) = after['standing']
+    assert (candidate['candidate']['post']['text'], candidate['builds_on'], after['closes_on']) == (
+        'Yes, it holds.',
+        [],
+        None,
+    )
     assert file.json()['text'] == '# The answer'
     assert (missing.status_code, missing.json()['detail']) == (404, 'Post p-1 names no file other.md.')
 

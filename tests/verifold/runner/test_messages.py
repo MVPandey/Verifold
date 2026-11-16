@@ -112,7 +112,7 @@ def test_the_lab_norms_are_plain_text_for_one_read_and_the_doorbell_is_one_line(
     assert '`' not in NORMS_TEMPLATE
     # Each norm has its reason and what it looks like in practice, so the file is longer than a list of rules.
     # An agent still reads it whole at the start of its work.
-    assert len(NORMS_TEMPLATE) < 18_500
+    assert len(NORMS_TEMPLATE) < 19_000
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -141,19 +141,36 @@ def test_the_lab_norms_are_sections_that_each_say_what_the_person_wants_and_why(
         assert how_to_read in NORMS_TEMPLATE
 
 
-def test_the_lab_norms_ask_agents_to_plan_together_keep_threads_apart_and_propose_an_answer() -> None:
+def test_the_lab_norms_ask_agents_to_plan_together_keep_threads_apart_and_propose_candidates() -> None:
     for norm in (
         "post your plan in the question's thread and read the other agents' plans",
         'Wait a moment for the plans that are not there yet',
         'The direct path to the goal needs an owner too',
         'Give each line of work its own thread',
         'Post each result when you have it',
-        "Propose the lab's answer as soon as the lab has one that it can defend",
-        'The newest proposal is the answer that the person sees',
-        'A proposal is a draft. It does not end the work',
-        'Another agent can propose a different answer, and any agent can object to a proposal',
+        # A visible shared draft locks a group of agents in, and selection among candidates beat one draft.
+        (
+            "The lab's answer comes from candidates. When your line has a result that you can defend, propose it as a "
+            'candidate answer: what the answer is, and what it rests on. Any agent can propose one, and several '
+            "candidates stand side by side. A candidate is its author's own: nobody edits it, and its author replaces "
+            'it with a newer one when the evidence changes. Object to a candidate when you see a problem in it. A lab '
+            'with one candidate that nobody questions has usually stopped looking.'
+        ),
+        (
+            'Before the lab closes, the agents choose among the candidates that stand: by what was rerun and held up, '
+            'and by which objections stand. The close names the candidate that it closes on, and one agent then '
+            'writes the final answer file from it. When no candidate reaches the goal, the work goes on from the best '
+            'one.'
+        ),
+        "Keep the question's thread for the first plans and the candidate answers",
     ):
         assert norm in NORMS_TEMPLATE
+    for gone in (
+        'The newest proposal is the answer that the person sees',
+        'A proposal is a draft',
+        'so it holds the whole answer and not only your part',
+    ):
+        assert gone not in NORMS_TEMPLATE
 
 
 def test_the_lab_norms_hold_the_goal_the_obstacle_the_seats_and_the_name() -> None:
@@ -191,7 +208,7 @@ def test_the_lab_norms_hold_the_goal_the_obstacle_the_seats_and_the_name() -> No
         'A lead gets a champion and a forward test before it gets an audit.',
         'When the lab has reviewer seats, a check that the lab relies on comes from an agent in one.',
         'Take a seat only when checking is the work you want, and give it back when you would rather build.',
-        "Ask for one of your own result when the lab's answer rests on it.",
+        'Ask for one of your own result when a candidate rests on it.',
         'An agent in a reviewer seat can ask for one of any result.',
         "When the lab has a coordinator, it owns the lab's strategy",
         'The coordinator can ask one agent to take the strategy',
@@ -262,7 +279,7 @@ def test_the_lab_norms_say_how_the_person_follows_the_lab_how_a_post_reads_and_h
         # An agent has one alarm, and in a busy lab an alarm for a quiet board never rings, so no report came of it.
         'It keeps an alarm of about half an hour, so that it notices when the lab stopped with time left and when its report is old.',
         # The person asked five times where the lab stood, and no agent posted a report.
-        'the work goes on from there.\n\nThe person follows the lab through its report.',
+        'the work goes on from the best one.\n\nThe person follows the lab through its report.',
         'A report says in plain words where the lab stands: which lines are alive, which closed and why, what looks promising, and what the lab needs from the person.',
         'The coordinator posts one when the picture changes, and about every half hour while the lab works.',
         'In a lab with no coordinator, an agent that sees that the report is old posts one.',

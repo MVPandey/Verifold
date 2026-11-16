@@ -6,11 +6,13 @@ from pydantic import TypeAdapter
 
 from verifold.protocol.events import AlarmSet, Posted
 from verifold.protocol.join import (
+    MAX_CANDIDATES,
     MAX_LINE,
     MAX_NEWS,
     MAX_OBSTACLES,
     QUIET_MINUTES,
     Brief,
+    CandidatesView,
     News,
     PostLine,
     ThreadLine,
@@ -39,8 +41,8 @@ from verifold.society.errors import NotFound
 from verifold.society.identity import post_line
 from verifold.society.standing import is_open_call, takers
 from verifold.society.views import (
-    answer_view,
     brief,
+    candidates_view,
     crossings,
     latest_report,
     needs_person,
@@ -362,7 +364,7 @@ def test_a_ruled_out_lead_ends_an_agents_work_in_a_thread_but_a_withdrawn_call_e
     assert {summary.thread.id: summary.team for summary in ended.threads} == {'t-1': (), 't-2': (), 't-3': ()}
 
 
-def test_the_answer_is_the_newest_proposal_in_any_thread_with_what_it_builds_on() -> None:
+def test_each_candidate_shows_the_person_what_it_builds_on_and_the_brief_lists_it() -> None:
     record = RecordBuilder().join('ada').join('bo').join('cy', family='openai')
     record.thread('t-1', opened_by='person', title=QUESTION_TITLE).thread('t-2', opened_by='ada')
     file = (FileEvidence(path='run.json', commit='c' * 40),)
@@ -373,51 +375,45 @@ def test_the_answer_is_the_newest_proposal_in_any_thread_with_what_it_builds_on(
     record.post(
         Check(id='p-4', thread='t-2', author='dee', text='So.', reply_to='p-1', outcome='holds', method='rerun')
     )
-    assert answer_view(record.board()) is None
-    assert brief(record.board(), 'bo', News(seq=0)).answer is None
+    assert candidates_view(record.board()) == CandidatesView()
+    assert brief(record.board(), 'bo', News(seq=0)).candidates == ()
 
     record.post(Proposal(id='p-5', thread='t-1', author='cy', text='No.'))
+    # An agent proposes where it was asked, so a proposal in any thread for the whole lab is a candidate.
     record.post(Proposal(id='p-6', thread='t-2', author='bo', text='Not yet: the tail is open.'))
-    # An agent proposes where it was asked, so the newest proposal is the answer in any thread.
-    asked = answer_view(record.board())
-    assert asked is not None
-    assert (asked.answer.post.id, asked.answer.post.thread) == ('p-6', 't-2')
-    assert brief(record.board(), 'ada', News(seq=0)).answer == post_line(
-        record.board(), record.board().posts[-1], 'ada'
-    )
+    assert [view.candidate.post.id for view in candidates_view(record.board()).standing] == ['p-5', 'p-6']
     record.post(Proposal(id='p-7', thread='t-1', author='bo', text='Yes.', builds_on=('p-1', 'p-2', 'p-3')))
 
-    view = answer_view(record.board())
-    line = brief(record.board(), 'ada', News(seq=0)).answer
+    cy, bo = candidates_view(record.board()).standing
+    lines = brief(record.board(), 'ada', News(seq=0)).candidates
 
-    assert view is not None
-    assert view.answer.post.id == 'p-7'
-    assert [(under.post.id, under.standing) for under in view.builds_on] == [
+    assert (cy.candidate.post.id, bo.candidate.post.id) == ('p-5', 'p-7')
+    assert [(under.post.id, under.standing) for under in bo.builds_on] == [
         ('p-1', 'held_up'),
         ('p-2', 'open'),
         ('p-3', 'open'),
     ]
-    assert (view.results, view.no_blind_rerun) == (2, ('p-2',))
-    assert line is not None
-    assert line.id == 'p-7'
+    assert (bo.results, bo.no_blind_rerun, bo.entry) == (2, ('p-2',), None)
+    # The brief's list of agents says who wrote each one, so a line has no byline of its own.
+    assert [(line.line.id, line.line.by, line.standing) for line in lines] == [
+        ('p-5', None, 'open'),
+        ('p-7', None, 'open'),
+    ]
 
     # A blind rerun that fails, or one from the author's own family, is still a blind rerun.
     record.join('eve', family='anthropic', checks='p-2')
     record.post(
         Check(id='p-8', thread='t-2', author='eve', text='No.', reply_to='p-2', outcome='fails', method='rerun')
     )
-    after = answer_view(record.board())
-    assert after is not None
-    assert after.no_blind_rerun == ()
+    assert candidates_view(record.board()).standing[-1].no_blind_rerun == ()
 
-    # The newest proposal stays the answer when its author concedes it. Where it stands says so.
+    # A candidate that its author conceded does not stand, and the author's older one does not come back.
     record.post(Objection(id='p-9', thread='t-1', author='ada', text='p-2 failed.', reply_to='p-7'))
+    disputed = brief(record.board(), 'cy', News(seq=0)).candidates
+    assert [(line.line.id, line.standing) for line in disputed] == [('p-5', 'open'), ('p-7', 'disputed')]
     record.post(Answer(id='p-10', thread='t-1', author='bo', text='Right.', reply_to='p-9', accepts=True))
-    conceded = answer_view(record.board())
-    assert conceded is not None
-    assert (conceded.answer.post.id, conceded.answer.standing) == ('p-7', 'conceded')
-    told = brief(record.board(), 'cy', News(seq=0))
-    assert (told.answer and told.answer.id, told.answer_standing) == ('p-7', 'conceded')
+    assert [view.candidate.post.id for view in candidates_view(record.board()).standing] == ['p-5']
+    assert [line.line.id for line in brief(record.board(), 'cy', News(seq=0)).candidates] == ['p-5']
 
 
 def test_the_brief_gives_an_agent_its_own_line(record: RecordBuilder) -> None:
@@ -700,7 +696,9 @@ def _largest(*, full: bool = False) -> RecordBuilder:
         post('ruled_out', thread, other)
         post('ask', thread, author)
         post('call', thread, author)
-    post('proposal', 't-1', 'a1')
+    # More agents propose than the brief lists, so the brief has every candidate line that it can hold.
+    for number in range(1, MAX_CANDIDATES + 2):
+        post('proposal', 't-1', f'a{number}')
     for number in range(20):
         agent = f'a{number}'
         record.profile(agent, name=f'{"N" * 21}{number:03d}', about='a' * 240, role='r' * 40, status='s' * 140)
@@ -721,6 +719,7 @@ def test_the_largest_brief_without_votes_is_one_tool_result() -> None:
     assert [len(entries) for entries in (view.open_asks, view.open_calls)] == [19, 19]
     assert (len(view.obstacles.open), view.obstacles.more_open) == (MAX_OBSTACLES, 19 - MAX_OBSTACLES)
     assert sum(entry.line is not None for entry in view.obstacles.open) >= MAX_OBSTACLES - 1
+    assert (len(view.candidates), view.more_candidates) == (MAX_CANDIDATES, 1)
     assert len(view.model_dump_json()) < ONE_TOOL_RESULT
     assert len(unseen.model_dump_json()) < 28_000
     # Each author's name, seat, seat marks, and role stand once in the brief: in its list of agents. A line of
