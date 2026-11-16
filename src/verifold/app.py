@@ -140,7 +140,7 @@ class ServeOptions(Record):
     """0 picks a free port."""
     turn_timeout: float = Field(default=2 * 3_600, gt=0)
     quiet: float = Field(default=10, ge=0)
-    """Seconds without a new event on the board before an agent's doorbell rings."""
+    """Seconds without a new event on the board before an agent's doorbell rings. A post of the person rings at once."""
     max_quiet: float = Field(default=45, ge=0)
     """The most seconds that a doorbell waits for the board to go quiet."""
     web: Path = WEB_FOLDER
@@ -965,6 +965,7 @@ class Host:
             seat_ok=self.check_seat,
         )
         self._members.add_guest(member, digest)
+        self._activity.seat(member)
         # A `brief` leaves no mark on the record, so an agent that only read the board shows as invited again.
         called = own or any(
             (
@@ -993,6 +994,7 @@ class Host:
             adds=self.add_seat,
             seat_ok=self.check_seat,
         )
+        self._activity.seat(member)
         setup = AgentSetup(
             agent=agent,
             harness=self._catalog[agent.harness],

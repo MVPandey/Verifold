@@ -1,7 +1,11 @@
 import asyncio
 from datetime import UTC, datetime
 
+from verifold.protocol.ids import PERSON
+from verifold.protocol.join import PostRequest
 from verifold.server.activity import Activity
+from verifold.server.lab import Lab
+from verifold.server.member import Member
 
 
 async def test_activity_starts_unknown_and_records_each_change() -> None:
@@ -56,3 +60,30 @@ async def test_a_call_of_an_agent_that_verifold_started_changes_nothing() -> Non
         during = activity.of('ada')
 
     assert (during.state, during.detail, activity.version) == ('working', 'Runs the benchmark', 1)
+
+
+async def test_a_call_that_carried_a_post_of_the_person_to_its_agent_is_a_change(lab: Lab) -> None:
+    activity = Activity()
+    ada, bo = Member(lab, 'ada'), Member(lab, 'bo')
+    activity.seat(ada)
+    activity.seat(bo)
+    await activity.invite('bo', 'here')
+    # Every agent can read the conversation, so a line of the person's post there reaches ada as well.
+    await lab.set_coordinator('bo', PERSON)
+    steer = await lab.post(PostRequest(kind='message', text='Try the small models.', conversation=True), PERSON)
+
+    # A call that brought no news changes nothing for an agent that Verifold started.
+    async with activity.call('ada', 'threads'):
+        pass
+    quiet = activity.version
+    async with activity.call('ada', 'brief'):
+        ada.news()
+    read = activity.version
+    # A guest's call shows when it starts, and what it carried shows when it ends.
+    async with activity.call('bo', 'brief'):
+        bo.news()
+
+    assert (quiet, read, activity.version) == (1, 2, 4)
+    assert [heard.seq for heard in (activity.heard('ada'), activity.heard('bo')) if heard] == [steer.seq, steer.seq]
+    # No seat serves an agent that never started, such as one on call that no post reached.
+    assert activity.heard('cy') is None

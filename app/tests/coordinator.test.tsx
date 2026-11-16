@@ -6,7 +6,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { createApi } from '../src/api/client.ts';
 import type { Api } from '../src/api/client.ts';
 import type {
+  AgentView,
   ConversationView,
+  LabView,
   Move,
   Post,
   PostView,
@@ -23,18 +25,22 @@ import {
   details,
   doneLine,
   endedLine,
+  heardLine,
   minutesOf,
   newEnd,
   pickedChoice,
   powerLine,
   powerOf,
+  reportLine,
   requestState,
   tabs,
   talkLabel,
   undoLabel,
+  wakes,
   yesLabel,
 } from '../src/model/coordinator.ts';
 import { leftLine } from '../src/model/agents.ts';
+import { ago } from '../src/model/format.ts';
 import { noteLabel, revisedBy } from '../src/model/question.ts';
 import { newSeat, seatChoice, setupChoices, startRequest } from '../src/model/setup.ts';
 import { act } from '../src/model/turns.ts';
@@ -680,6 +686,270 @@ describe('the panel for the coordinator', () => {
     assert.ok(html.includes('<button type="button">Remove it</button>'));
     assert.ok(html.includes('<button type="button">Take the minutes back</button>'));
     assert.ok(panel(view([]), 'log').includes('Nothing was done for you yet.'));
+  });
+});
+
+describe('where the person’s message to the coordinator is', () => {
+  const KEEL = agentView('agent-1', {
+    coordinator: true,
+    agent: { ...MAREN.agent, name: 'Keel' },
+    chosen_name: 'Keel',
+  });
+  // The person wrote at 14:20, and the page's clock says 14:30.
+  const asked = { ...said('p-2', 'person', 'Status update?'), seq: 20, at: '2026-11-06T14:20:00Z' };
+  const talk = view([said('p-1', 'agent-1', 'I hold the seat.'), asked]);
+  const working = { state: 'working', detail: 'Run pytest', at: null } as const;
+  const read = { seq: 20, at: '2026-11-06T14:28:10Z', whole: true };
+  const line = (
+    holder: Partial<AgentView> = {},
+    lab: Partial<LabView> = {},
+    conversation: ConversationView = talk,
+  ): string | null =>
+    heardLine(conversation, labView({ agents: [{ ...KEEL, ...holder }, TESSEL], ...lab }), NOW)
+      ?.text ?? null;
+  const guest = { agent: { ...KEEL.agent, harness: 'guest' } };
+
+  it('says whether a turn of the coordinator runs and whether its board tools carried the message', () => {
+    const turn = { in_turn: true, activity: working };
+    assert.equal(line(turn), 'Keel is in a turn and has not read this yet.');
+    assert.equal(line({ ...turn, heard: read }), 'Keel is in a turn and read this 1 min ago.');
+    // An earlier post of the person reached the coordinator, and this one did not.
+    assert.equal(
+      line({ ...turn, heard: { ...read, seq: 12 } }),
+      'Keel is in a turn and has not read this yet.',
+    );
+    // A turn in which the harness waits for the person's answer runs.
+    const waits = { state: 'waiting', detail: 'Asks you', at: null, waits_for: 'person' } as const;
+    assert.equal(
+      line({ in_turn: true, activity: waits }),
+      'Keel is in a turn and has not read this yet.',
+    );
+    assert.equal(line(), 'Keel is not in a turn. This message wakes it.');
+    assert.equal(line({ heard: read }), 'Keel is not in a turn. It read this 1 min ago.');
+    // The message's post is the line's place, and a seat's label stands where an agent chose no name.
+    const plain = heardLine(talk, LAB, NOW);
+    assert.deepEqual(plain, {
+      post: 'p-2',
+      text: 'Agent 1 is not in a turn. This message wakes it.',
+    });
+  });
+
+  it('gives the time of the read in plain words, and none when it is not this message’s own', () => {
+    const turn = { in_turn: true, activity: working };
+    const at = (time: string): string | null => line({ ...turn, heard: { ...read, at: time } });
+    assert.equal(at('2026-11-06T14:29:30Z'), 'Keel is in a turn and read this just now.');
+    assert.equal(at('2026-11-06T14:04:00Z'), 'Keel is in a turn and read this 26 min ago.');
+    assert.equal(at('2026-11-06T13:25:00Z'), 'Keel is in a turn and read this 1 h 5 min ago.');
+    assert.deepEqual(
+      ['2026-11-06T14:29:30Z', '2026-11-06T14:04:00Z', '2026-11-06T12:30:00Z'].map((time) =>
+        ago(time, NOW),
+      ),
+      ['just now', '26 min ago', '2 h ago'],
+    );
+    // A later message of the person reached the coordinator, so this view of the conversation is behind, and
+    // the line knows neither the time nor whether a result held this message whole. A restart keeps no time.
+    assert.equal(
+      line({ ...turn, heard: { ...read, seq: 31 } }),
+      'Keel is in a turn and has seen this.',
+    );
+    assert.equal(
+      line({ ...turn, heard: { ...read, at: null } }),
+      'Keel is in a turn and has read this.',
+    );
+    assert.equal(
+      line({ heard: { ...read, at: null } }),
+      'Keel is not in a turn. It has read this.',
+    );
+  });
+
+  it('says that the coordinator saw the start of a message when its results carried only a cut line', () => {
+    const cut = { ...read, whole: false };
+    assert.equal(
+      line({ in_turn: true, activity: working, heard: cut }),
+      'Keel is in a turn and saw the start of this 1 min ago.',
+    );
+    assert.equal(
+      line({ heard: cut }),
+      'Keel is not in a turn. It saw the start of this 1 min ago.',
+    );
+    assert.equal(
+      line({ heard: { ...cut, at: null } }),
+      'Keel is not in a turn. It has seen the start of this.',
+    );
+    assert.equal(
+      line({ ...guest, activity: { state: 'here', detail: '', at: null }, heard: cut }),
+      'Keel runs by itself and saw the start of this 1 min ago.',
+    );
+  });
+
+  it('says that the message wakes the coordinator only where Verifold starts a turn for it', () => {
+    const wakesIt = 'Keel is not in a turn. This message wakes it.';
+    // An on-call coordinator wakes for the person's message, and so does one in a lab that its agents call done.
+    assert.equal(line({ on_call: true }), wakesIt);
+    assert.equal(line({}, { state: 'closed' }), wakesIt);
+    assert.equal(line({ turn_ended_at: '2026-11-06T14:10:00Z' }), wakesIt);
+    // A turn that ended after the message used the doorbell that the message rang, and no result of it carried
+    // the message. Only a new message rings again.
+    assert.equal(
+      line({ turn_ended_at: '2026-11-06T14:25:00Z' }),
+      'Keel is not in a turn. Its last turn ended without reading this. Your next message wakes it.',
+    );
+    // A turn that was cut short left an error. Verifold starts one more turn at once, so a coordinator that is in
+    // no turn with that error had a second cut in a row, and it waits for a post as after any turn.
+    assert.equal(line({ error: 'The harness stopped: max_tokens.' }), wakesIt);
+    const process = { state: 'waiting', detail: '', at: null, waits_for: 'process' } as const;
+    assert.equal(line({ activity: process }), 'Keel is not in a turn. It has not read this.');
+    assert.equal(
+      line({}, { out_of_time: true }),
+      'The lab is out of time, so no turn of Keel starts. Keel has not read this.',
+    );
+    assert.equal(
+      line({ heard: read, in_turn: true, activity: working }, { out_of_time: true }),
+      'The lab is out of time, so no turn of Keel starts. Keel read this 1 min ago.',
+    );
+    assert.equal(
+      line({ stopped: true, activity: { state: 'stopped', detail: '', at: null } }),
+      'Verifold stopped Keel, because its harness failed too often. You can start it again in the member list.',
+    );
+    const lacks = { state: 'stopped', detail: 'Its harness is not on this computer.', at: null };
+    assert.equal(
+      line({ activity: lacks } as Partial<AgentView>),
+      'Keel is stopped, so no message wakes it. Its harness is not on this computer.',
+    );
+    assert.equal(
+      line({ activity: { state: 'stopped', detail: '', at: null } }),
+      'Keel is stopped, so no message wakes it.',
+    );
+    // The record holds a failure only until the next turn starts, so the harness is on its way back.
+    assert.equal(
+      line({ in_turn: true, activity: working, error: 'ConnectionError: closed' }),
+      'The harness of Keel failed, and Verifold starts it again.',
+    );
+    const lab = labView();
+    assert.deepEqual(
+      [
+        wakes(KEEL, lab),
+        wakes({ ...KEEL, ...guest }, lab),
+        wakes({ ...KEEL, stopped: true }, lab),
+        wakes({ ...KEEL, activity: lacks } as AgentView, lab),
+        wakes(KEEL, labView({ out_of_time: true })),
+      ],
+      [true, false, false, false, false],
+    );
+  });
+
+  it('says of an invited coordinator that it runs by itself, and never that the message wakes it', () => {
+    const here = { state: 'here', detail: '', at: '2026-11-06T14:19:00Z' } as const;
+    assert.equal(
+      line({ ...guest, activity: here }),
+      'Keel runs by itself and has not read this. Verifold cannot wake it.',
+    );
+    assert.equal(
+      line({ ...guest, activity: { state: 'listening', detail: '', at: null }, heard: read }),
+      'Keel runs by itself and read this 1 min ago.',
+    );
+    assert.equal(
+      line({ ...guest, activity: { state: 'invited', detail: '', at: null } }),
+      'Keel has not joined the lab yet.',
+    );
+    assert.equal(
+      line({ ...guest, activity: { state: 'void', detail: '', at: null }, heard: read }),
+      'The invitation of Keel is void, so Keel cannot use the board. Invite it again from its profile.',
+    );
+    assert.equal(
+      line({ ...guest, activity: here }, { out_of_time: true }),
+      'The lab is out of time, so the board takes no post from Keel. Keel has not read this.',
+    );
+  });
+
+  it('has no line once an agent posted after the message, and none without a message or a holder', () => {
+    const later = (author: string): PostView => ({ ...said('p-3', author, 'Two lines.'), seq: 24 });
+    assert.equal(line({}, {}, view([asked, later('agent-1')])), null);
+    // The agent that held the seat before answered the message, so the message needs no line.
+    assert.equal(line({}, {}, view([asked, later('agent-2')])), null);
+    // The line stands under the person's newest message.
+    const again = { ...said('p-4', 'person', 'Updates?'), seq: 30 };
+    assert.equal(heardLine(view([asked, later('agent-1'), again]), LAB, NOW)?.post, 'p-4');
+    assert.equal(line({}, {}, view([said('p-1', 'agent-1', 'I hold the seat.')])), null);
+    assert.equal(line({}, {}, view([], { thread: null })), null);
+    assert.equal(heardLine(talk, labView({ agents: [TESSEL] }), NOW), null);
+  });
+
+  it('shows the line under the person’s newest message, and the hint only where the message wakes', () => {
+    const first = { ...said('p-1', 'person', 'Where are we?'), seq: 12 };
+    const other = { ...said('p-3', 'agent-2', 'I can take that.'), seq: 16 };
+    const shown = (conversation: ConversationView, holder: AgentView = MAREN): string =>
+      renderToStaticMarkup(
+        <Panel
+          api={{} as Api}
+          view={conversation}
+          holder={holder}
+          lab={labView({ agents: [holder, TESSEL] })}
+          harnesses={HARNESSES}
+          now={NOW}
+          tab="talk"
+          onTab={() => undefined}
+          reload={() => undefined}
+        />,
+      );
+    const html = shown(view([first, other, asked]));
+    // The line is a polite live region, so a screen reader says it when it changes.
+    const under =
+      '<li class="k-heard"><span role="status">Agent 1 is not in a turn. This message wakes it.</span></li>';
+    assert.equal(html.split('k-heard').length - 1, 1);
+    assert.ok(html.indexOf('id="k-p-3"') < html.indexOf('id="k-p-2"'));
+    assert.ok(html.indexOf('id="k-p-2"') < html.indexOf(under));
+    assert.ok(html.indexOf(under) < html.indexOf('</ol>'));
+    assert.ok(html.includes('Your message wakes Agent 1.'));
+
+    const replied = shown(view([asked, { ...said('p-3', 'agent-1', 'Two lines.'), seq: 24 }]));
+    assert.equal(replied.includes('k-heard'), false);
+
+    const invited = shown(view([asked]), {
+      ...MAREN,
+      ...guest,
+      agent: { ...MAREN.agent, harness: 'guest' },
+    });
+    assert.ok(
+      invited.includes(
+        '<li class="k-heard"><span role="status">Agent 1 runs by itself and has not read this. Verifold cannot wake it.</span></li>',
+      ),
+    );
+    assert.equal(invited.includes('Your message wakes'), false);
+  });
+
+  it('names the newest report above the conversation, with its age and a link to it', () => {
+    const report = postView(
+      {
+        ...result('p-30', { author: 'agent-2', thread: 't-3' }),
+        kind: 'report',
+        text: 'Two lines.',
+      },
+      30,
+    );
+    assert.equal(reportLine(report, AGENTS, NOW), 'Where the lab is: Agent 2 reported 26 min ago.');
+    assert.equal(
+      reportLine({ ...report, at: '2026-11-06T14:29:40Z' }, AGENTS, NOW),
+      'Where the lab is: Agent 2 reported just now.',
+    );
+    const seat = (data: PageProps['data']): string =>
+      renderToStaticMarkup(
+        <CoordinatorSeat
+          api={{} as Api}
+          data={data}
+          now={NOW}
+          tab="talk"
+          onTab={() => undefined}
+        />,
+      );
+    const html = seat(pageData(view([asked]), { report }));
+    const named =
+      '<p class="k-report">Where the lab is: Agent 2 reported 26 min ago. <a href="#/thread/t-3/p-30">Read the report</a></p>';
+    assert.ok(html.includes(named));
+    assert.ok(html.indexOf(named) < html.indexOf('<ol class="k-talk">'));
+    // The other tabs and a lab without a report have no such line.
+    assert.equal(seat(pageData(view([asked]))).includes('k-report'), false);
+    assert.equal(panel(view([asked]), 'powers').includes('k-report'), false);
   });
 });
 

@@ -1,4 +1,9 @@
-"""What each agent is doing now. The runner writes it from the harnesses' live updates, and the app reads it."""
+"""
+What each agent is doing now, and which post of the person in the conversation reached it last.
+
+The runner writes what an agent does from its harness's live updates. The seat that serves an agent's board tools
+knows what they carried to the agent. The app reads both.
+"""
 
 import asyncio
 from collections.abc import AsyncGenerator, Callable
@@ -6,10 +11,11 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Literal
 
-from verifold.protocol.app import AgentActivity, AgentState, WaitsFor
+from verifold.protocol.app import AgentActivity, AgentState, Heard, WaitsFor
 from verifold.protocol.ids import AgentId
 from verifold.server.changes import wait_until
 from verifold.server.lab import utc_now
+from verifold.server.member import Member
 
 
 class Activity:
@@ -20,6 +26,7 @@ class Activity:
         self._clock = clock
         self._by_agent: dict[AgentId, AgentActivity] = {}
         self._guests: set[AgentId] = set()
+        self._seats: dict[AgentId, Member] = {}
         self._changed = asyncio.Condition()
         self.version = 0
 
@@ -35,6 +42,15 @@ class Activity:
         harness Verifold starts now, and every part of the app reads the same state.
         """
         return self._by_agent.get(agent_id, AgentActivity(state='idle'))
+
+    def seat(self, member: Member) -> None:
+        """Take the seat that serves an agent's board tools from now on. It replaces an earlier seat of the agent."""
+        self._seats[member.agent_id] = member
+
+    def heard(self, agent_id: AgentId) -> Heard | None:
+        """Return the person's newest post in the conversation that an agent's board tools carried to it, or `None`."""
+        seat = self._seats.get(agent_id)
+        return seat.heard if seat else None
 
     async def set(
         self, agent_id: AgentId, state: AgentState, detail: str = '', waits_for: WaitsFor | None = None
@@ -65,17 +81,21 @@ class Activity:
         """
         Show a guest's board call while the block runs: `listening` during a `wait`, and `here` for any other call.
 
-        A call of an agent that Verifold started changes nothing, because its harness reports what it does.
+        A call of an agent that Verifold started changes no state, because its harness reports what it does. A
+        call that carried a post of the person to its agent is a change, whoever started the agent.
         """
-        if agent_id not in self._guests:
-            yield
-            return
-        await self.set(agent_id, 'listening' if tool == 'wait' else 'here')
+        guest, heard = agent_id in self._guests, self.heard(agent_id)
+        if guest:
+            await self.set(agent_id, 'listening' if tool == 'wait' else 'here')
         try:
             yield
         finally:
-            if tool == 'wait':
+            if guest and tool == 'wait':
                 await self.set(agent_id, 'here')
+            elif self.heard(agent_id) != heard:
+                async with self._changed:
+                    self.version += 1
+                    self._changed.notify_all()
 
     async def wait_for_change(self, after: int, timeout: float | None) -> None:
         """Return once `version` passes `after`, or after `timeout` seconds when given."""

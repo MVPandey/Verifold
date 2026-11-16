@@ -559,6 +559,8 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
         before = await state_of(client, 'agent-2')
         async with board_of(url, token) as board:
             brief = await board.call_tool('brief', {})
+            # The invited agent takes the coordinator seat, so the person can write to it in the conversation.
+            await board.call_tool('profile', {'coordinator': True})
             waiting = asyncio.create_task(board.call_tool('wait', {'timeout_seconds': 1}))
             listening = False
             while not waiting.done():
@@ -571,8 +573,8 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
             alarm = await board.call_tool('alarm', {'minutes': 5})
         after = await state_of(client, 'agent-2')
         view = next(view for view in (await client.get('/lab')).json()['agents'] if view['agent']['id'] == 'agent-2')
-        # The person writes to the lab while the invited agent is not connected.
-        await client.post('/posts', json={'kind': 'message', 'text': 'Go on with the tail.', 'thread': 't-1'})
+        # The person writes to the invited coordinator while it is not connected.
+        await client.post('/posts', json={'kind': 'message', 'text': 'Go on with the tail.', 'conversation': True})
 
     assert (invited['agent'], invited['name']) == ('agent-2', 'Reader')
     assert 'The lab is under way, and these agents work in it: Fake · default (agent-1, fake).' in invited['text']
@@ -598,8 +600,10 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
     async with serving(project, catalog={'fake': FAKE_HARNESS}) as client:
         resumed = await state_of(client, 'agent-2')
         async with board_of(url, token) as board:
+            unread = (await client.get('/lab')).json()['agents'][1]['heard']
             since = await board.call_tool('wait', {'timeout_seconds': 0})
             again = await board.call_tool('brief', {})
+            heard = (await client.get('/lab')).json()['agents'][1]['heard']
         async with board_of(url, f'{token}x') as board:
             wrong = await board.call_tool('brief', {})
         # A new invitation gives the agent a new token, and the old one opens nothing.
@@ -617,6 +621,12 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
     # The agent gets what the board got after its own last post, also across the restart.
     assert since.structured_content is not None
     assert 'Go on with the tail.' in [entry['post']['text'] for entry in since.structured_content['posts']]
+    # The app's view says that the result of that call carried the person's post whole, and when. Before it, the
+    # seat knows only that the agent read up to its own last post.
+    steer = next(
+        event for event in record(project) if isinstance(event, Posted) and event.post.text.startswith('Go on')
+    )
+    assert (unread, heard['seq'], heard['whole'], heard['at'] is not None) == (None, steer.seq, True, True)
     assert wrong.is_error
     assert (renewed['agent'], renewed['name'], new_token != token) == ('agent-2', 'Reader', True)
     assert (launched.status_code, old.is_error, new.is_error) == (404, True, False)

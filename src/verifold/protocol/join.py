@@ -324,11 +324,36 @@ MAX_LINE = 300
 """The most characters of a headline that a post's line shows. A longer headline is cut, and `thread` shows all of it."""
 
 
+MAX_PERSON_LINE = 4_000
+"""
+The most characters of a post of the person, its headline and its body together, that a line of the news holds.
+
+The person's app makes the first line of a message the headline and the rest the body. A line with the headline
+alone gave an agent "Hi Keel," of "Hi Keel, stop the tail line and rerun p-9". So a line of the news, which
+carries each new post once, holds the person's words whole up to this bound. A longer body is cut, and `thread`
+shows all of it. Every other line, such as a thread's `latest` in each brief, holds the headline alone, so a brief
+does not carry the person's long posts again and again.
+"""
+
+
+def _cut(text: str, keep: int) -> str:
+    # The mark says that the text was cut, how long it is, and where all of it is.
+    return f'{text[:keep]}… [cut: {len(text)} characters, `thread` shows all of it]'
+
+
 def line_text(text: str) -> str:
     """Return a headline as a post's line shows it: whole, or cut to `MAX_LINE` characters with a mark that says so."""
-    if len(text) <= MAX_LINE:
-        return text
-    return f'{text[:MAX_LINE]}… [cut: {len(text)} characters, `thread` shows all of it]'
+    return text if len(text) <= MAX_LINE else _cut(text, MAX_LINE)
+
+
+def holds_whole(text: str, body: str) -> bool:
+    """
+    Return whether a line of the news holds a post of the person whole.
+
+    It does when the headline and the body have `MAX_PERSON_LINE` characters at most together. A cut body with its
+    mark is always longer, so the check also holds for the headline and the body of such a line.
+    """
+    return len(text) + len(body) <= MAX_PERSON_LINE
 
 
 class PostLine(Sparse):
@@ -336,10 +361,12 @@ class PostLine(Sparse):
     One post as a single line: where it is, who wrote it, what kind it is, and its headline.
 
     A headline of more than `MAX_LINE` characters is cut and ends with a mark that says so. So the lists of a brief
-    and of the news stay within what a harness takes as one tool result. `thread` shows the whole headline.
+    and of the news stay within what a harness takes as one tool result. `thread` shows the whole headline. A line
+    of the news of a post of the person holds its whole headline and its body, up to `MAX_PERSON_LINE` characters
+    together.
 
-    A line leaves out each field that holds nothing, as `Sparse` says: `by`, `helper`, `reply_to`, `builds_on`,
-    `for_person`, `up`, `down`, and `badges`. It has `seq` and no time.
+    A line leaves out each field that holds nothing, as `Sparse` says: `by`, `helper`, `body`, `reply_to`,
+    `builds_on`, `for_person`, `up`, `down`, and `badges`. It has `seq` and no time.
     """
 
     id: PostId
@@ -356,6 +383,12 @@ class PostLine(Sparse):
     helper: Helper = ''
     kind: PostKind
     text: Headline
+    body: Body = ''
+    """
+    For a post of the person in a line of the news: its body, whole when the headline and the body have
+    `MAX_PERSON_LINE` characters at most together. A longer body is cut to that bound and ends with a mark that says
+    so. Empty in every other line and for a post of an agent: `thread` shows the body.
+    """
     reply_to: PostId | None = None
     builds_on: tuple[PostId, ...] = ()
     for_person: bool = False
@@ -374,10 +407,24 @@ class PostLine(Sparse):
 
     @classmethod
     def of(
-        cls, entry: Posted, by: Byline | None = None, marks: tuple[int, int, tuple[Badge, ...]] = (0, 0, ())
+        cls,
+        entry: Posted,
+        by: Byline | None = None,
+        marks: tuple[int, int, tuple[Badge, ...]] = (0, 0, ()),
+        *,
+        news: bool = False,
     ) -> Self:
-        """Return the line of a post on the board, with who wrote it. `marks` are its votes up and down and its badges."""
+        """
+        Return the line of a post on the board, with who wrote it. `marks` are its votes up and down and its badges.
+
+        With `news`, the line is one of the news, and a line of a post of the person holds its body too.
+        """
         post = entry.post
+        text, body = line_text(post.text), ''
+        if news and post.author == PERSON:
+            # The person's headline has the record's limit of 1,000, so the line has room for it and the body's start.
+            whole = holds_whole(post.text, post.body)
+            text, body = post.text, post.body if whole else _cut(post.body, MAX_PERSON_LINE - len(post.text))
         return cls(
             id=post.id,
             thread=post.thread,
@@ -385,7 +432,8 @@ class PostLine(Sparse):
             by=by,
             helper=post.helper,
             kind=post.kind,
-            text=line_text(post.text),
+            text=text,
+            body=body,
             reply_to=post.reply_to,
             builds_on=post.builds_on,
             for_person=post.for_person,
@@ -552,8 +600,8 @@ class News(Record):
 
     `for_you` holds the posts that name the agent, reply to one of its posts, or are in a thread that it watches,
     at most `MAX_NEWS` of them. When more wait, the news stops at the last one that it holds, and the next result
-    brings the others. `others` holds the newest of the remaining posts. A line is a post's headline, and `thread`
-    shows the whole post.
+    brings the others. `others` holds the newest of the remaining posts. A line is a post's headline, and a line of
+    a post of the person has its body too. `thread` shows the whole post.
     """
 
     seq: int
@@ -976,6 +1024,10 @@ class Brief(Record):
     """Where the answer stands, such as `disputed` or `conceded`. `None` when the lab has no answer."""
     answer_to_earlier_question: bool = False
     """Whether the person revised the question after the answer, so that it answers an earlier version."""
+    report: PostLine | None = None
+    """The newest report of any agent, in whatever thread it is. The app shows it to the person. `None` when the lab has none."""
+    report_minutes_ago: int | None = None
+    """How many whole minutes ago that report was posted. `None` when the lab has no report."""
     threads: tuple[ThreadSummary, ...] = ()
     """The threads that are not side threads, the most recently active first, at most `MAX_NEWS`."""
     more_threads: int = 0

@@ -1,11 +1,12 @@
 """One agent's seat in its lab."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 from verifold.protocol.agents import GUEST, Picture
+from verifold.protocol.app import Heard
 from verifold.protocol.events import AgentLeft, AlarmSet, Posted, RerunRequested, WatchSet
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
@@ -13,6 +14,7 @@ from verifold.protocol.join import (
     Brief,
     ManifestLine,
     News,
+    PostLine,
     PostRequest,
     PostView,
     ProfileResult,
@@ -20,13 +22,14 @@ from verifold.protocol.join import (
     ThreadList,
     ThreadView,
     Update,
+    holds_whole,
 )
 from verifold.protocol.moves import AddMove, AddSeat, Move
 from verifold.protocol.posts import FileEvidence
 from verifold.protocol.votes import Badge, BadgeAction, Direction
 from verifold.server.errors import CannotWake, EvidenceRejected, HasLeft, NoCleanCopy, OutOfTime, UnknownAgent
 from verifold.server.lab import Adds, Lab
-from verifold.society.attention import news, update
+from verifold.society.attention import news, update, wakes
 from verifold.society.deliverables import live
 from verifold.society.errors import RejectedEvent
 from verifold.society.identity import post_view
@@ -62,7 +65,9 @@ class Member:
     What one agent does in its lab: post, read, watch, and wait.
 
     The member remembers how far its agent has read. `news` and `wait` return only what came after, so the agent
-    gets each post once, and a post that it got during a turn does not wake it later.
+    gets each post once, and a post that it got during a turn does not wake it later. It also remembers the
+    person's newest post in the conversation that a result carried to the agent, when, and whether whole, which
+    the person's app shows.
     """
 
     def __init__(  # noqa: PLR0913
@@ -91,6 +96,9 @@ class Member:
         self._lab = lab
         self.agent_id = agent_id
         self._seen = lab.board.seq if seen is None else seen
+        before = self._heard_before()
+        self._heard: tuple[Heard, ...] = (before,) if before else ()
+        """Each fact of what the results carried, the newest last, so that a failed turn can go back to an earlier one."""
         self.void = False
         """Whether the agent got a new token, so that this seat's open `wait` must return nothing more."""
         self._pin = pin
@@ -101,6 +109,16 @@ class Member:
     def seen(self) -> int:
         """The last event that the agent got, from `news` or `wait`."""
         return self._seen
+
+    @property
+    def heard(self) -> Heard | None:
+        """
+        The person's newest post in the conversation that a result of the agent's board tools carried to it.
+
+        A seat that starts at a place in the record, as after a restart of Verifold, has no time for the posts
+        before that place.
+        """
+        return self._heard[-1] if self._heard else None
 
     @property
     def lab(self) -> Lab:
@@ -227,15 +245,56 @@ class Member:
     def _unseen(self) -> News:
         unseen = news(self._lab.board, self.agent_id, self._seen)
         self._seen = unseen.seq
+        self._hear((*unseen.for_you, *unseen.others))
         return unseen
+
+    def _hear(self, lines: Iterable[PostLine], full: Iterable[PostView] = ()) -> None:
+        # The person's posts in the conversation that a result carries to the agent now, each by its place and
+        # whether the result holds it whole.
+        talk = self._lab.board.conversation
+        carried = (
+            *(
+                (line.seq, holds_whole(line.text, line.body))
+                for line in lines
+                if line.author == PERSON and line.thread == talk
+            ),
+            *((view.seq, True) for view in full if view.post.author == PERSON and view.post.thread == talk),
+        )
+        newest = max(carried, default=None)
+        heard = self.heard
+        # A place and its whole flag compare as a pair: a newer post, or the same post whole after its cut line.
+        if newest and (heard is None or newest > (heard.seq, heard.whole)):
+            seq, whole = newest
+            self._heard = (*self._heard, Heard(seq=seq, at=self._lab.now(), whole=whole))
+
+    def _heard_before(self) -> Heard | None:
+        # The person's newest post in the conversation for the agent, between its join and the place where it is.
+        # The agent's news brought it every post for it up to that place, at a time that this seat does not know.
+        # A line holds a short post whole, and of a longer one this seat knows only that its line was cut.
+        board = self._lab.board
+        joined = board.agent(self.agent_id)
+        if joined is None:
+            return None
+        mine = (
+            entry
+            for entry in reversed(board.posts)
+            if joined.seq < entry.seq <= self._seen
+            and entry.post.author == PERSON
+            and entry.post.thread == board.conversation
+            and wakes(board, self.agent_id, entry)
+        )
+        newest = next(mine, None)
+        return Heard(seq=newest.seq, whole=holds_whole(newest.post.text, newest.post.body)) if newest else None
 
     def rewind(self, seq: int) -> None:
         """
         Count the posts after event `seq` as not seen again.
 
-        A turn that fails can lose the tool results that carried them, so the agent gets them once more.
+        A turn that fails can lose the tool results that carried them, so the agent gets them once more. What the
+        results before it carried stays, with its time.
         """
         self._seen = min(self._seen, seq)
+        self._heard = tuple(heard for heard in self._heard if heard.seq <= self._seen)
 
     def threads(self) -> ThreadList:
         """
@@ -248,7 +307,9 @@ class Member:
 
     def thread(self, thread_id: ThreadId, votes_of: PostId | None = None) -> ThreadView:
         """Return a thread and its posts. The post that `votes_of` names has the longer list of its votes."""
-        return thread_view(self._lab.board, self.agent_id, thread_id, votes_of)
+        view = thread_view(self._lab.board, self.agent_id, thread_id, votes_of)
+        self._hear((), view.posts)
+        return view
 
     async def rerun(self, post_id: PostId) -> RerunRequested:
         """
@@ -455,5 +516,6 @@ class Member:
             remaining = deadline - loop.time()
             if news.posts or news.left or news.reruns or remaining <= 0:
                 self._seen = news.seq
+                self._hear(news.others, news.posts)
                 return news
             await self._lab.wait_for_change(news.seq, remaining)

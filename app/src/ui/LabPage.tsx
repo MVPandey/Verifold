@@ -592,10 +592,11 @@ function New(): ReactElement {
 
 /**
  * The newest report that an agent wrote for the person: who wrote it and how long ago, where it stands when an
- * agent disputes it, what it says, and its detail, folded. The link goes to the report in its thread, where the
- * earlier reports are.
+ * agent disputes it, what it says, and its detail. The detail is open, because a report's substance is in its
+ * body, and the person can fold it. A long detail scrolls in its box. The link goes to the report in its thread,
+ * where the earlier reports are.
  */
-function ReportCard(props: {
+export function ReportCard(props: {
   readonly report: PostView;
   readonly agents: readonly AgentView[];
   readonly now: Date;
@@ -617,7 +618,15 @@ function ReportCard(props: {
         <a href={href({ page: 'thread', id: post.thread, post: post.id })}>See it in its thread</a>
       </div>
       <p className="f-report-text">{post.text}</p>
-      <Detail post={post.id} body={post.body} files={post.evidence} />
+      {/* The key opens the detail of a new report, also after the person folded an earlier one. */}
+      <Detail
+        key={post.id}
+        post={post.id}
+        body={post.body}
+        files={post.evidence}
+        open
+        label="Detail of the report"
+      />
     </section>
   );
 }

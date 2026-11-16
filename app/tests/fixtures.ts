@@ -104,6 +104,7 @@ export function agentView(id: string, changes: Partial<AgentView> = {}): AgentVi
     status: '',
     thread: null,
     activity: { state: 'idle', detail: '', at: null },
+    heard: null,
     left: null,
     stopped: false,
     turns: 0,

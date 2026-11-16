@@ -463,6 +463,36 @@ def test_a_brief_shows_the_labs_time_its_turns_its_alarms_and_its_quiet_threads(
     assert brief(out, 'ada', News(seq=0)).minutes_left == 0
 
 
+def test_a_brief_has_the_newest_report_of_any_agent_with_its_age_in_minutes_and_none_in_a_lab_without_one(
+    record: RecordBuilder,
+) -> None:
+    record.post(Result(id='p-1', thread='t-1', author='ada', text='Beats random.'))
+    none = brief(record.board(), 'bo', News(seq=0))
+    record.post(Report(id='p-2', thread='t-1', author='bo', text='Nothing trained yet.'))
+    record.post(Report(id='p-3', thread='t-1', author='ada', text='The baseline is in.', body='Loss 0.39.'))
+    # A report of the person is no report of the lab.
+    record.post(Report(id='p-4', thread='t-1', author='person', text='I think it holds.'))
+    board = record.board()
+    posted = board.posts[2].at
+
+    view = brief(board, 'bo', News(seq=0), now=posted + timedelta(minutes=31, seconds=50))
+    own = brief(board, 'ada', News(seq=0), now=posted + timedelta(seconds=59))
+
+    assert (none.report, none.report_minutes_ago) == (None, None)
+    # The line has the form of every line of a post: the headline, who wrote it, and no body.
+    assert view.report == post_line(board, board.posts[2])
+    assert (view.report.id, view.report.kind, view.report.text) == ('p-3', 'report', 'The baseline is in.')
+    assert view.report_minutes_ago == 31
+    # The reader's own report is the lab's newest too, and under a minute is zero.
+    assert (own.report.id if own.report else None, own.report_minutes_ago) == ('p-3', 0)
+    # Without a clock, time counts from the board's newest post, which came a minute after the report.
+    assert brief(board, 'bo', News(seq=0)).report_minutes_ago == 1
+    # A report that somebody disputes is in the list of disputed posts by its ID alone, because the brief holds its line.
+    record.post(Objection(id='p-5', thread='t-1', author='bo', text='The loss is 0.41.', reply_to='p-3'))
+    disputed = brief(record.board(), 'cy', News(seq=0)).disputed
+    assert [(entry.id, entry.line) for entry in disputed] == [('p-3', None)]
+
+
 def test_a_brief_orders_its_lists_by_what_they_are_and_not_by_what_to_do_first() -> None:
     fields = list(Brief.model_fields)
     lists = [name for name in fields if name in {'open_calls', 'open_asks', 'not_built_on', 'not_checked', 'disputed'}]

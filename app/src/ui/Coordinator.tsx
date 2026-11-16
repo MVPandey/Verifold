@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { Fragment, useId, useState } from 'react';
 import type { FormEvent, ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
@@ -24,12 +24,15 @@ import {
   details,
   doneLine,
   endedLine,
+  heardLine,
   minutesOf,
   powerLine,
+  reportLine,
   requestState,
   tabs,
   talkLabel,
   undoLabel,
+  wakes,
   yesLabel,
 } from '../model/coordinator.ts';
 import type { Around, Detail, Tab } from '../model/coordinator.ts';
@@ -106,6 +109,7 @@ export function CoordinatorSeat(
           holder={holder}
           lab={data.lab}
           harnesses={data.setup?.harnesses ?? []}
+          report={data.report}
           now={props.now}
           tab={tab}
           onTab={setTab}
@@ -123,6 +127,8 @@ export function Panel(props: {
   readonly holder: AgentView;
   readonly lab: LabView;
   readonly harnesses: readonly HarnessOption[];
+  /** The newest report of any agent, which the conversation names above its posts. */
+  readonly report?: PostView | null;
   readonly now: Date;
   readonly tab: Tab;
   readonly onTab: (tab: Tab | null) => void;
@@ -176,29 +182,69 @@ export function Panel(props: {
           </button>
         ))}
       </nav>
-      {tab === 'talk' ? <Talk {...shared} name={name} /> : null}
+      {tab === 'talk' ? (
+        <Talk {...shared} holder={holder} report={props.report ?? null} onTab={props.onTab} />
+      ) : null}
       {tab === 'powers' ? <Powers {...shared} name={name} /> : null}
       {tab === 'log' ? <Log {...shared} /> : null}
     </aside>
   );
 }
 
-/** The conversation: one row for each post, and the box where the person writes to the coordinator. */
-function Talk(props: Shared & { readonly name: string }): ReactElement {
+/** The width at which the panel covers the wall, as the panel's styles have it. */
+const COVERS = '(max-width: 1000px)';
+
+/**
+ * The conversation: a line that names the newest report, one row for each post, and the box where the person
+ * writes to the coordinator. Under the person's newest message, a line says where that message is until an agent
+ * replies.
+ */
+function Talk(
+  props: Shared & {
+    readonly holder: AgentView;
+    readonly report: PostView | null;
+    readonly onTab: (tab: Tab | null) => void;
+  },
+): ReactElement {
+  const { holder, report } = props;
+  const name = holder.agent.name;
   const posts = props.view.thread?.posts ?? [];
+  const heard = heardLine(props.view, props.lab, props.now);
   return (
     <>
+      {report ? (
+        <p className="k-report">
+          {reportLine(report, props.lab.agents, props.now)}{' '}
+          <a
+            href={href({ page: 'thread', id: report.post.thread, post: report.post.id })}
+            onClick={() => {
+              // The report is on the wall. Where the panel covers the wall, the panel closes to show it.
+              if (window.matchMedia(COVERS).matches) props.onTab(null);
+            }}
+          >
+            Read the report
+          </a>
+        </p>
+      ) : null}
       <ol className="k-talk">
         <li className="k-public">
           Every agent can read this conversation. It is a thread of the lab.
         </li>
         {posts.map((item) => (
-          <Say key={item.post.id} item={item} {...props} />
+          <Fragment key={item.post.id}>
+            <Say item={item} {...props} />
+            {heard?.post === item.post.id ? (
+              <li className="k-heard">
+                {/* A status is a polite live region, so a screen reader says the line when it changes. */}
+                <span role="status">{heard.text}</span>
+              </li>
+            ) : null}
+          </Fragment>
         ))}
       </ol>
       <Write
-        placeholder={`Tell ${props.name} what you want`}
-        hint={`Your message wakes ${props.name}.`}
+        placeholder={`Tell ${name} what you want`}
+        hint={wakes(holder, props.lab) ? `Your message wakes ${name}.` : ''}
         onSend={async (text) => {
           const { headline, body } = split(text);
           await props.api.post({

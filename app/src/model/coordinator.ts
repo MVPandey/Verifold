@@ -1,9 +1,10 @@
-import { PERSON } from '../api/types.ts';
+import { GUEST, PERSON } from '../api/types.ts';
 import type {
   AgentView,
   ConversationView,
   Deed,
   HarnessOption,
+  Heard,
   LabView,
   Move,
   PostView,
@@ -11,7 +12,7 @@ import type {
   PowerView,
 } from '../api/types.ts';
 import { authorName, labTotal } from './agents.ts';
-import { clock, dayClock } from './format.ts';
+import { ago, clock, dayClock } from './format.ts';
 import { AT_EXIT, AT_TIME_LIMIT } from './settings.ts';
 
 /** A tab of the panel for the coordinator. */
@@ -47,6 +48,94 @@ export function tabs(name: string, waits: number): readonly (readonly [Tab, stri
 /** Return the words on the button that opens the conversation. */
 export function talkLabel(name: string, waits: number): string {
   return waits > 0 ? `Talk to ${name} (${waitWords(waits)})` : `Talk to ${name}`;
+}
+
+/**
+ * Return whether Verifold starts a turn of the coordinator for a message of the person: it runs the coordinator,
+ * the coordinator is not stopped, and the lab has time. An invited agent runs by itself.
+ */
+export function wakes(holder: AgentView, lab: LabView): boolean {
+  const stopped = holder.stopped || holder.activity.state === 'stopped';
+  return holder.agent.harness !== GUEST && !stopped && !lab.out_of_time;
+}
+
+/** The line under a message of the person in the conversation: the message's post, and where the message is. */
+export interface HeardLine {
+  readonly post: string;
+  readonly text: string;
+}
+
+/**
+ * Return the line under the person's newest message in the conversation: whether a turn of the coordinator runs,
+ * and whether the coordinator has read the message. It is `null` once an agent posted in the conversation after
+ * the message, and while nobody holds the seat.
+ *
+ * "Read" means that a result of the coordinator's board tools carried the whole message to it. When the results
+ * carried only a line with a cut body, the line says that the coordinator saw the start of the message. The line
+ * says nothing about what the coordinator made of the message.
+ */
+export function heardLine(view: ConversationView, lab: LabView, now: Date): HeardLine | null {
+  const holder = coordinatorOf(lab.agents);
+  const posts = view.thread?.posts ?? [];
+  const said = posts.filter((item) => item.post.author === PERSON).at(-1);
+  if (!holder || !said) return null;
+  // A reply of the holder before a change of the seat answers the message too.
+  const replied = posts.some((item) => item.seq > said.seq && item.post.author !== PERSON);
+  return replied ? null : { post: said.post.id, text: heardWords(holder, lab, said, now) };
+}
+
+function heardWords(holder: AgentView, lab: LabView, said: PostView, now: Date): string {
+  const { heard, activity } = holder;
+  const name = holder.agent.name;
+  const when = heard !== null && heard.seq >= said.seq ? readWords(heard, said, now) : null;
+  const fact = (who: string): string => `${who} ${when ?? 'has not read this'}.`;
+  if (holder.agent.harness === GUEST) {
+    if (activity.state === 'void') {
+      return `The invitation of ${name} is void, so ${name} cannot use the board. Invite it again from its profile.`;
+    }
+    if (lab.out_of_time) {
+      return `The lab is out of time, so the board takes no post from ${name}. ${fact(name)}`;
+    }
+    if (when) return `${name} runs by itself and ${when}.`;
+    return activity.state === 'invited'
+      ? `${name} has not joined the lab yet.`
+      : `${name} runs by itself and has not read this. Verifold cannot wake it.`;
+  }
+  if (holder.stopped) {
+    return `Verifold stopped ${name}, because its harness failed too often. You can start it again in the member list.`;
+  }
+  if (activity.state === 'stopped') {
+    return `${name} is stopped, so no message wakes it.${activity.detail ? ` ${activity.detail}` : ''}`;
+  }
+  if (lab.out_of_time) return `The lab is out of time, so no turn of ${name} starts. ${fact(name)}`;
+  if (holder.in_turn) {
+    // The record holds a failure only while no turn started after it, so the harness is on its way back.
+    if (holder.error !== null) {
+      return `The harness of ${name} failed, and Verifold starts it again.`;
+    }
+    return `${name} is in a turn and ${when ?? 'has not read this yet'}.`;
+  }
+  if (when || activity.state !== 'idle') return `${name} is not in a turn. ${fact('It')}`;
+  // A turn that ended after the message used the one doorbell that the message rings, and it read nothing. A new
+  // message of the person rings again.
+  const rang = holder.turn_ended_at !== null && new Date(holder.turn_ended_at) >= new Date(said.at);
+  return rang
+    ? `${name} is not in a turn. Its last turn ended without reading this. Your next message wakes it.`
+    : `${name} is not in a turn. This message wakes it.`;
+}
+
+/** Return what a result carried of a message: all of it or its start, with how long ago when the server knows. */
+function readWords(heard: Heard, said: PostView, now: Date): string {
+  // A later message of the person reached the coordinator, so this view of the conversation is behind. This
+  // message reached it before that one, in a form that the line does not know.
+  if (heard.seq > said.seq) return 'has seen this';
+  if (heard.at === null) return heard.whole ? 'has read this' : 'has seen the start of this';
+  return `${heard.whole ? 'read this' : 'saw the start of this'} ${ago(heard.at, now)}`;
+}
+
+/** Return the line above the conversation that names the newest report: who wrote it, and how long ago. */
+export function reportLine(report: PostView, agents: readonly AgentView[], now: Date): string {
+  return `Where the lab is: ${authorName(agents, report.post.author)} reported ${ago(report.at, now)}.`;
 }
 
 /** The name of each power, and what the coordinator does with it. `what` takes the coordinator's name. */

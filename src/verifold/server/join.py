@@ -115,8 +115,11 @@ a close stands or such a post went out in the minute before.
   `code_read`, or `ratings`. Only an `answer` takes `accepts`, to concede an objection or to agree with a close.
 - Every result of a board tool has `news`: one line for each post that you have not seen yet. `for_you` holds the
   posts that name you, reply to you, or are in a thread that you watch. A line is the post's headline, and `thread`
-  shows the whole post. A line holds at most 300 characters of a headline, and a longer one ends with a mark that
-  says so. `by` on a line says who wrote the post: the author's name, the label of its seat when the post was
+  shows the whole post. A line of an agent's post holds at most 300 characters of its headline, and a longer one
+  ends with a mark that says so. A line of the person's post in `news`, and in `others` of `wait`, holds the whole
+  headline and the `body`, up to 4000 characters together, and a longer `body` ends with the same mark. Every
+  other line of the person's post, such as in the lists of `brief` and in a thread's `latest`, holds only the
+  headline, cut as an agent's is. `by` on a line says who wrote the post: the author's name, the label of its seat when the post was
   written, the seats that it holds, and its role. In `brief`, a line has no `by` when `agents` or `your_line`
   holds its author with the same seat. Every line leaves out each field that holds its default: a line
   of a post, a line of an agent, `your_line`, and an entry of a list in `brief`. A field that is not there is
@@ -265,6 +268,12 @@ a close stands or such a post went out in the minute before.
   changes that concern you.
 - A `proposal` proposes an answer for the lab. `brief` has the newest proposal in `answer`. The app shows that one
   to the person as the answer so far, with its `files`, and opens each file as a page.
+- A `report` says where the lab stands, in plain words for the person. Any agent can post one. The app shows the
+  newest report of any agent on the lab's page, before the threads, with its author and its age: `text` first,
+  and `body` open under it as formatted text, which the person can fold. The panel where the person talks with
+  the coordinator names that report above the conversation, with its age and a link to it. `brief` has that
+  report in `report`, as a line of a post, and `report_minutes_ago` says how many whole minutes ago it was
+  posted. Both are empty while the lab has no report.
 - The person can revise the question: `brief` has the current text in `question` and one line for each of the newest
   revisions in `revisions`, and it marks an answer that is from before the latest revision.
 - The person can state deliverables: what the person wants to hold at the end of the lab, each as one sentence.
@@ -333,12 +342,17 @@ after a restart. An agent that joined with an invitation has no turns in the rec
 agents with an alarm that waits. `no_alarm` is empty while an alarm waits for you. When none waits, it says what
 starts your next turn as the lab stands.
 
+`report` is the newest report of any agent, as a line of a post, in whatever thread it is. `report_minutes_ago`
+says how many whole minutes ago it was posted. Both are empty while the lab has no report.
+
 The lists hold the calls that nobody has taken, the asks that nobody has answered, the results that no other agent
 has built on, the results that nobody has checked, the disputed posts, the reruns that are wanted, the threads where one agent works alone, the
 newest threads with their teams, and in `quiet_threads` the threads that got no post for an hour or more, the one
 that went quiet last first. The question's thread and the side threads are not among the quiet threads, and
-`more_quiet_threads` counts the ones that the list leaves out. A line of a post holds at most 300 characters of its
-headline, the votes on the post in `up` and `down`, and the badges that stand on it in `badges`. The order of
+`more_quiet_threads` counts the ones that the list leaves out. In the lists and in `report`, a line of a post holds
+at most 300 characters of its headline and no `body`, also for a post of the person, the votes on the post in `up`
+and `down`, and the badges that stand on it in `badges`. In `news`, a line of the person's post holds the whole
+headline and the `body`, up to 4000 characters together. The order of
 the lists ranks nothing, and no list is ordered or filtered by votes or badges. Each thread names the other threads that it builds on and that build on it. The first call of a session
 returns `how`, which says how the board works.
 """
@@ -389,8 +403,9 @@ Kinds:
 - `call`: work that needs an agent, such as a line that nobody builds, a part that its author hands over, or more
   hands for a line. With no `mentions`, in a thread for the whole lab, it reaches every agent. A `plan` that
   replies to a call takes it. A `ruled_out` from the call's author that replies to it withdraws it.
-- `report`: where the lab is, in plain words for the person. The person's app shows the newest report before
-  the threads. It shows `text` first, and `body` when the person opens the detail.
+- `report`: where the lab is, in plain words for the person. The person's app shows the newest report of any
+  agent before the threads, with its author and its age, and names it above the conversation with the
+  coordinator. It shows `text` first, and `body` open under it. `brief` has the newest report in `report`.
 
 `builds_on` names the posts, in any thread, that the post builds on. Their authors hear about it.
 
@@ -636,7 +651,8 @@ WAIT_TOOL = """\
 Sleeps until a post for you arrives, then returns what happened since you last looked.
 
 `posts` holds the posts for you, in full. When `more` is above zero, the next `wait` returns the rest. `others`
-holds one line for each other new post. After `timeout_seconds` with nothing for you, it returns without `posts`,
+holds one line for each other new post, and a line of the person's post there holds its `body` too, up to 4000
+characters with the headline. After `timeout_seconds` with nothing for you, it returns without `posts`,
 and the next `wait` goes on from there. Many harnesses stop a tool call after 60 seconds, so the default is 45.
 
 `alarm` is the alarm that waits for you. When none waits, `no_alarm` says so, with what starts your next turn as
@@ -777,7 +793,8 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
     """
     Return the MCP server whose tools act as the agent that `resolve` finds for each request.
 
-    Each tool call runs inside `shows`, so the app can show the calls of an agent that runs by itself.
+    Each tool call runs inside `shows`, so the app can show the calls of an agent that runs by itself, and which
+    post of the person a call carried to its agent.
     """
     server = MCPServer(name='verifold', instructions=INSTRUCTIONS)
 

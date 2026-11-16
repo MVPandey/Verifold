@@ -6,13 +6,16 @@ from conftest import agent
 from fakes import FakeCopies
 
 from verifold.protocol.agents import Agent, ModelSpec
-from verifold.protocol.join import ManifestLine, PostRequest
+from verifold.protocol.app import Heard
+from verifold.protocol.ids import PERSON
+from verifold.protocol.join import MAX_LINE, MAX_NEWS, MAX_PERSON_LINE, ManifestLine, PostRequest
 from verifold.protocol.posts import FileEvidence
 from verifold.server.errors import EvidenceRejected, NoCleanCopy, OutOfTime
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.errors import RejectedEvent
 from verifold.society.standing import standing
+from verifold.store.record_file import RecordFile
 
 EVIDENCE = (FileEvidence(path='bench.json', commit='c' * 40),)
 
@@ -94,6 +97,138 @@ async def test_a_rewind_brings_back_the_posts_that_a_failed_turn_lost(lab: Lab) 
 
     assert [entry.post.text for entry in again.posts] == ['Which layer?']
     assert bo.seen == lab.board.seq
+
+
+def to_coordinator(text: str, body: str = '') -> PostRequest:
+    return PostRequest(kind='message', text=text, body=body, conversation=True)
+
+
+async def test_a_member_keeps_the_persons_newest_post_in_the_conversation_that_a_result_carried_and_records_nothing(
+    lab: Lab, record_file: RecordFile
+) -> None:
+    await lab.set_coordinator('bo', PERSON)
+    bo = Member(lab, 'bo')
+    # A post of the person in another thread is not the one that the person's app asks about.
+    await lab.post(PostRequest(kind='message', text='Try the small models.', thread='t-1'), PERSON)
+    bo.news()
+    elsewhere = bo.heard
+    # The app makes the first line of the person's message the headline and the rest the body.
+    steer = await lab.post(to_coordinator('Hi Bo,', 'Stop the tail line and rerun p-9.'), PERSON)
+    recorded = len(record_file.read())
+    not_read = bo.heard
+
+    # The line of the news holds the whole post, and the time is the lab's clock at that result.
+    carried = bo.news().for_you
+    by_news = bo.heard
+    # A later post of the person reaches bo in full in `wait`.
+    again = await lab.post(to_coordinator('And post a report.'), PERSON)
+    await bo.wait(timeout=0)
+    by_wait = bo.heard
+    # A `thread` that holds a post that bo read already changes nothing, so the time stays the time of the read.
+    bo.thread(lab.board.conversation or '')
+
+    assert (elsewhere, not_read) == (None, None)
+    assert [(line.text, line.body) for line in carried] == [('Hi Bo,', 'Stop the tail line and rerun p-9.')]
+    assert by_news == Heard(seq=steer.seq, at=steer.at + timedelta(seconds=1), whole=True)
+    assert by_wait is not None
+    assert (by_wait.seq, by_wait.whole, by_wait.at is not None and by_wait.at > again.at) == (again.seq, True, True)
+    assert bo.heard == by_wait
+    # The place and its time are facts of this server, and no event holds them.
+    assert len(record_file.read()) == recorded + 1
+
+
+async def test_a_member_says_when_a_result_carried_only_the_start_of_the_persons_post(lab: Lab) -> None:
+    await lab.set_coordinator('bo', PERSON)
+    bo = Member(lab, 'bo')
+    long = await lab.post(to_coordinator('Here is the log.', 'x' * (MAX_PERSON_LINE + 1)), PERSON)
+
+    # The line holds the headline whole and the body up to the bound, and the mark says that it was cut.
+    line = bo.brief('').news.for_you[0]
+    cut = bo.heard
+    # The conversation in `thread` holds the post whole, so the agent got all of it then.
+    bo.thread(lab.board.conversation or '')
+
+    assert line.text == 'Here is the log.'
+    assert (
+        line.body
+        == f'{"x" * (MAX_PERSON_LINE - 16)}… [cut: {MAX_PERSON_LINE + 1} characters, `thread` shows all of it]'
+    )
+    assert cut is not None
+    assert (cut.seq, cut.whole) == (long.seq, False)
+    assert bo.heard is not None
+    assert (bo.heard.seq, bo.heard.whole, bo.heard.at is not None and cut.at is not None and bo.heard.at > cut.at) == (
+        long.seq,
+        True,
+        True,
+    )
+
+
+async def test_the_persons_long_posts_last_in_twenty_threads_keep_the_news_under_twenty_lines_and_the_brief_small(
+    lab: Lab,
+) -> None:
+    bo = Member(lab, 'bo')
+    # The person opens MAX_NEWS threads, each with a message of MAX_PERSON_LINE characters, which is the last post.
+    head, body = 'h' * 1000, 'b' * (MAX_PERSON_LINE - 1000)
+    for number in range(MAX_NEWS):
+        await lab.post(PostRequest(kind='message', text=head, body=body, new_thread=f'Line {number}'), PERSON)
+
+    first = bo.brief('')
+    after = bo.brief('')
+    news_size, after_size = len(first.news.model_dump_json()), len(after.model_dump_json())
+
+    # The news is the one place that carries the person's words whole: MAX_NEWS lines for bo, each with at most
+    # MAX_PERSON_LINE characters of them and less than 300 of its other fields.
+    news_bound = MAX_NEWS * (MAX_PERSON_LINE + 300)
+    # Every other line holds at most MAX_LINE characters of a headline and no body. Each of the at most MAX_NEWS
+    # summaries takes less than 1,000 more for its cut mark and its other fields, and the rest of this brief less
+    # than 5,000. Without that rule, each summary of a thread would hold the person's message.
+    brief_bound = MAX_NEWS * (MAX_LINE + 1_000) + 5_000
+    assert [len(line.text) + len(line.body) for line in first.news.for_you] == [MAX_PERSON_LINE] * MAX_NEWS
+    assert news_size < news_bound
+    assert after_size < brief_bound < MAX_NEWS * MAX_PERSON_LINE
+    assert 'b' * 100 not in after.model_dump_json()
+    assert len(first.model_dump_json()) < news_bound + brief_bound
+
+
+async def test_a_failed_turn_keeps_what_the_turns_before_it_carried_with_its_time(lab: Lab) -> None:
+    await lab.set_coordinator('bo', PERSON)
+    bo = Member(lab, 'bo')
+    start = bo.seen
+    await lab.post(to_coordinator('Where are we?'), PERSON)
+    bo.news()
+    read = bo.heard
+    turn = bo.seen
+    await lab.post(to_coordinator('And the tail line?'), PERSON)
+    bo.news()
+
+    # The turn that carried the second post failed, so that post counts as not carried. The first one still does.
+    bo.rewind(turn)
+    kept = bo.heard
+    bo.rewind(start)
+
+    assert read is not None
+    assert read.at is not None
+    assert kept == read
+    assert bo.heard is None
+
+
+async def test_a_seat_that_starts_at_a_place_in_the_record_knows_what_reached_its_agent_and_not_when(lab: Lab) -> None:
+    await lab.set_coordinator('bo', PERSON)
+    steer = await lab.post(to_coordinator('Try the small models.'), PERSON)
+    long = await lab.post(to_coordinator('Here is the log.', 'x' * MAX_PERSON_LINE), PERSON)
+    # The person's posts in other threads are not the ones that the app asks about.
+    await lab.post(PostRequest(kind='message', text='Keep that one.', thread='t-1'), PERSON)
+    await lab.join(agent('cy'))
+
+    # The agent's news brought it every post for it up to its place. A line held the short post whole, and of the
+    # long one the seat knows only that its line was cut.
+    assert Member(lab, 'bo', seen=steer.seq).heard == Heard(seq=steer.seq, whole=True)
+    assert Member(lab, 'bo', seen=lab.board.seq).heard == Heard(seq=long.seq, whole=False)
+    assert Member(lab, 'bo', seen=steer.seq - 1).heard is None
+    # The conversation is not for ada, and no result carried a post from before the agent joined.
+    assert Member(lab, 'ada', seen=lab.board.seq).heard is None
+    assert Member(lab, 'cy').heard is None
+    assert Member(lab, PERSON).heard is None
 
 
 async def test_the_first_brief_says_how_the_board_works_and_every_brief_carries_the_news(lab: Lab) -> None:
