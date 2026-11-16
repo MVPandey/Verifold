@@ -84,8 +84,8 @@ class Heard(Record):
     """When the result carried the post. `None` when that was before this server started."""
     whole: bool
     """
-    Whether a result carried the whole post: a line that held all of its body, the post in full in `wait`, or the
-    conversation in `thread`. `False` when the results carried only a line with a cut body.
+    Whether a result carried the whole post: a line of the news that held all of its body, the post in full in
+    `wait`, or the conversation in `thread`. `False` when the results carried only a line with a cut body.
     """
 
 

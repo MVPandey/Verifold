@@ -90,9 +90,13 @@ def byline(board: Board, entry: Posted, cut: int | None = None) -> Byline | None
     )
 
 
-def post_line(board: Board, entry: Posted) -> PostLine:
-    """Return a post as one line, with who wrote it, its votes up and down, and its badges."""
-    return PostLine.of(entry, byline(board, entry, MAX_SEAT), marks(board, entry.post.id))
+def post_line(board: Board, entry: Posted, *, news: bool = False) -> PostLine:
+    """
+    Return a post as one line, with who wrote it, its votes up and down, and its badges.
+
+    With `news`, the line is one of the news, which carries a post of the person with its body.
+    """
+    return PostLine.of(entry, byline(board, entry, MAX_SEAT), marks(board, entry.post.id), news=news)
 
 
 def post_view(board: Board, entry: Posted, votes: int = NEWEST_VOTES) -> PostView:

@@ -356,14 +356,15 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
     # post only for an author that the list does not hold, or whose seat had another label then.
     labels = {agent.id: seat_label(board, agent.id) for agent in (*others, *((you.agent,) if you else ()))}
 
-    def line(entry: Posted) -> PostLine:
+    def line(entry: Posted, *, news: bool = False) -> PostLine:
+        # The person is in no list of agents, so a line of the news keeps the person's body.
         seat = labels.get(entry.post.author)
-        return post_line(board, entry) if seat is None else _own_line(board, entry, seat)
+        return post_line(board, entry, news=news) if seat is None else _own_line(board, entry, seat)
 
     def known(lines: tuple[PostLine, ...]) -> tuple[PostLine, ...]:
         # The lines of the news that this brief carries follow the same rule, so no author's name, seat, and
         # role stand in the brief twice.
-        return tuple(line(entry) if (entry := board.post(one.id)) else one for one in lines)
+        return tuple(line(entry, news=True) if (entry := board.post(one.id)) else one for one in lines)
 
     def listed(entries: tuple[Posted, ...]) -> tuple[PostEntry, ...]:
         shown = tuple(

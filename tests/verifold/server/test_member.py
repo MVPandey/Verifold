@@ -8,7 +8,7 @@ from fakes import FakeCopies
 from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.app import Heard
 from verifold.protocol.ids import PERSON
-from verifold.protocol.join import MAX_PERSON_LINE, ManifestLine, PostRequest
+from verifold.protocol.join import MAX_LINE, MAX_NEWS, MAX_PERSON_LINE, ManifestLine, PostRequest
 from verifold.protocol.posts import FileEvidence
 from verifold.server.errors import EvidenceRejected, NoCleanCopy, OutOfTime
 from verifold.server.lab import Lab
@@ -161,6 +161,33 @@ async def test_a_member_says_when_a_result_carried_only_the_start_of_the_persons
         True,
         True,
     )
+
+
+async def test_the_persons_long_posts_last_in_twenty_threads_keep_the_news_under_twenty_lines_and_the_brief_small(
+    lab: Lab,
+) -> None:
+    bo = Member(lab, 'bo')
+    # The person opens MAX_NEWS threads, each with a message of MAX_PERSON_LINE characters, which is the last post.
+    head, body = 'h' * 1000, 'b' * (MAX_PERSON_LINE - 1000)
+    for number in range(MAX_NEWS):
+        await lab.post(PostRequest(kind='message', text=head, body=body, new_thread=f'Line {number}'), PERSON)
+
+    first = bo.brief('')
+    after = bo.brief('')
+    news_size, after_size = len(first.news.model_dump_json()), len(after.model_dump_json())
+
+    # The news is the one place that carries the person's words whole: MAX_NEWS lines for bo, each with at most
+    # MAX_PERSON_LINE characters of them and less than 300 of its other fields.
+    news_bound = MAX_NEWS * (MAX_PERSON_LINE + 300)
+    # Every other line holds at most MAX_LINE characters of a headline and no body. Each of the at most MAX_NEWS
+    # summaries takes less than 1,000 more for its cut mark and its other fields, and the rest of this brief less
+    # than 5,000. Without that rule, each summary of a thread would hold the person's message.
+    brief_bound = MAX_NEWS * (MAX_LINE + 1_000) + 5_000
+    assert [len(line.text) + len(line.body) for line in first.news.for_you] == [MAX_PERSON_LINE] * MAX_NEWS
+    assert news_size < news_bound
+    assert after_size < brief_bound < MAX_NEWS * MAX_PERSON_LINE
+    assert 'b' * 100 not in after.model_dump_json()
+    assert len(first.model_dump_json()) < news_bound + brief_bound
 
 
 async def test_a_failed_turn_keeps_what_the_turns_before_it_carried_with_its_time(lab: Lab) -> None:

@@ -253,9 +253,23 @@ async def test_a_post_of_the_person_reaches_an_agent_whole_in_brief_and_in_the_n
     # A line of an agent's post holds its headline alone, and `thread` shows the body.
     assert [line['text'] for line in news['others']] == ['Side note.']
     assert 'body' not in news['others'][0]
-    assert f'its `body` whole, up to {MAX_PERSON_LINE} characters\n  together. A longer `body` is cut' in INSTRUCTIONS
-    assert f'of the person holds its headline and its `body` whole, up to {MAX_PERSON_LINE} characters' in (
-        BRIEF_TOOL.replace('\n', ' ')
+    # The thread's summary in a brief holds the person's headline alone, so the brief does not carry it twice.
+    latest = briefed.structured_content['threads'][0]['latest']
+    assert (latest['id'], latest['text'], 'body' in latest) == (first['id'], 'Hi Bo,', False)
+    for fact in (
+        "A line of an agent's post holds at most 300 characters of its headline",
+        (
+            f"A line of the person's post in `news`, and in `others` of `wait`, holds the whole headline and the "
+            f'`body`, up to {MAX_PERSON_LINE} characters together'
+        ),
+        (
+            "Every other line of the person's post, such as in the lists of `brief` and in a thread's `latest`, "
+            "holds only the headline, cut as an agent's is."
+        ),
+    ):
+        assert fact in ' '.join(INSTRUCTIONS.split())
+    assert 'at most 300 characters of its headline and no `body`, also for a post of the person' in ' '.join(
+        BRIEF_TOOL.split()
     )
 
 

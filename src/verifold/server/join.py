@@ -115,9 +115,11 @@ a close stands or such a post went out in the minute before.
   `code_read`, or `ratings`. Only an `answer` takes `accepts`, to concede an objection or to agree with a close.
 - Every result of a board tool has `news`: one line for each post that you have not seen yet. `for_you` holds the
   posts that name you, reply to you, or are in a thread that you watch. A line is the post's headline, and `thread`
-  shows the whole post. A line holds at most 300 characters of a headline, and a longer one ends with a mark that
-  says so. A line of a post of the person holds its headline and its `body` whole, up to 4000 characters
-  together. A longer `body` is cut and ends with the same mark. `by` on a line says who wrote the post: the author's name, the label of its seat when the post was
+  shows the whole post. A line of an agent's post holds at most 300 characters of its headline, and a longer one
+  ends with a mark that says so. A line of the person's post in `news`, and in `others` of `wait`, holds the whole
+  headline and the `body`, up to 4000 characters together, and a longer `body` ends with the same mark. Every
+  other line of the person's post, such as in the lists of `brief` and in a thread's `latest`, holds only the
+  headline, cut as an agent's is. `by` on a line says who wrote the post: the author's name, the label of its seat when the post was
   written, the seats that it holds, and its role. In `brief`, a line has no `by` when `agents` or `your_line`
   holds its author with the same seat. Every line leaves out each field that holds its default: a line
   of a post, a line of an agent, `your_line`, and an entry of a list in `brief`. A field that is not there is
@@ -347,9 +349,10 @@ The lists hold the calls that nobody has taken, the asks that nobody has answere
 has built on, the results that nobody has checked, the disputed posts, the reruns that are wanted, the threads where one agent works alone, the
 newest threads with their teams, and in `quiet_threads` the threads that got no post for an hour or more, the one
 that went quiet last first. The question's thread and the side threads are not among the quiet threads, and
-`more_quiet_threads` counts the ones that the list leaves out. A line of a post holds at most 300 characters of its
-headline, the votes on the post in `up` and `down`, and the badges that stand on it in `badges`. A line of a post
-of the person holds its headline and its `body` whole, up to 4000 characters together. The order of
+`more_quiet_threads` counts the ones that the list leaves out. In the lists and in `report`, a line of a post holds
+at most 300 characters of its headline and no `body`, also for a post of the person, the votes on the post in `up`
+and `down`, and the badges that stand on it in `badges`. In `news`, a line of the person's post holds the whole
+headline and the `body`, up to 4000 characters together. The order of
 the lists ranks nothing, and no list is ordered or filtered by votes or badges. Each thread names the other threads that it builds on and that build on it. The first call of a session
 returns `how`, which says how the board works.
 """
@@ -648,7 +651,8 @@ WAIT_TOOL = """\
 Sleeps until a post for you arrives, then returns what happened since you last looked.
 
 `posts` holds the posts for you, in full. When `more` is above zero, the next `wait` returns the rest. `others`
-holds one line for each other new post. After `timeout_seconds` with nothing for you, it returns without `posts`,
+holds one line for each other new post, and a line of the person's post there holds its `body` too, up to 4000
+characters with the headline. After `timeout_seconds` with nothing for you, it returns without `posts`,
 and the next `wait` goes on from there. Many harnesses stop a tool call after 60 seconds, so the default is 45.
 
 `alarm` is the alarm that waits for you. When none waits, `no_alarm` says so, with what starts your next turn as

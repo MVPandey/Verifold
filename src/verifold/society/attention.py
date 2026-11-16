@@ -146,7 +146,7 @@ def update(board: Board, agent_id: AgentId, after: int, now: datetime | None = N
         seq=reach,
         posts=tuple(post_view(board, entry) for entry in shown),
         more=len(woken) - len(shown),
-        others=tuple(post_line(board, entry) for entry in others[-MAX_NEWS:]),
+        others=tuple(post_line(board, entry, news=True) for entry in others[-MAX_NEWS:]),
         other_posts=len(others),
         threads=tuple(
             entry.thread for entry in board.threads if after < entry.seq <= reach and entry.thread.opened_by != agent_id
@@ -184,9 +184,9 @@ def news(board: Board, agent_id: AgentId, after: int) -> News:
     badges, more_badges = badge_notes(board, agent_id, after, reach)
     return News(
         seq=reach,
-        for_you=tuple(post_line(board, entry) for entry in shown),
+        for_you=tuple(post_line(board, entry, news=True) for entry in shown),
         more=len(woken) - len(shown),
-        others=tuple(post_line(board, entry) for entry in others[-MAX_NEWS:]),
+        others=tuple(post_line(board, entry, news=True) for entry in others[-MAX_NEWS:]),
         left_out=max(len(others) - MAX_NEWS, 0),
         left=departures(board, agent_id, after, reach),
         profile=profile_notes(board, agent_id, after, reach),
