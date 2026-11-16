@@ -596,7 +596,7 @@ function New(): ReactElement {
  * body, and the person can fold it. A long detail scrolls in its box. The link goes to the report in its thread,
  * where the earlier reports are.
  */
-function ReportCard(props: {
+export function ReportCard(props: {
   readonly report: PostView;
   readonly agents: readonly AgentView[];
   readonly now: Date;
@@ -619,7 +619,14 @@ function ReportCard(props: {
       </div>
       <p className="f-report-text">{post.text}</p>
       {/* The key opens the detail of a new report, also after the person folded an earlier one. */}
-      <Detail key={post.id} post={post.id} body={post.body} files={post.evidence} open />
+      <Detail
+        key={post.id}
+        post={post.id}
+        body={post.body}
+        files={post.evidence}
+        open
+        label="Detail of the report"
+      />
     </section>
   );
 }

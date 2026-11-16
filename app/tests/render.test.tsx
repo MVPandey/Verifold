@@ -26,7 +26,7 @@ import { clock, dayClock } from '../src/model/format.ts';
 import { markSeen, readSeen } from '../src/model/seen.ts';
 import { browserStore } from '../src/ui/hooks.ts';
 import type { ThreadRead } from '../src/ui/hooks.ts';
-import { LabPage, QuestionForm, Wall } from '../src/ui/LabPage.tsx';
+import { LabPage, QuestionForm, ReportCard, Wall } from '../src/ui/LabPage.tsx';
 import { Failed } from '../src/ui/App.tsx';
 import { Boundary, Detail, Markdown, Words } from '../src/ui/Markdown.tsx';
 import { NeedsPage } from '../src/ui/NeedsPage.tsx';
@@ -1154,11 +1154,14 @@ describe('the lab page', () => {
     assert.ok(html.includes('<p class="f-report-text">Merge sort is ahead on random input.</p>'));
     assert.ok(html.includes('<a href="#/thread/t-3/p-30">See it in its thread</a>'));
     // A report's substance is in its body, so the detail is open: formatted text in a box that can scroll and
-    // that the person can fold, with the way to the text as its author wrote it.
+    // that the person can fold, with the way to the text as its author wrote it. The box is a named region, and it
+    // is a tab stop only once the browser shows that its detail is taller than the box.
     assert.ok(html.includes('<details class="f-detail" open="">'));
     assert.ok(html.includes('<span class="opened">Hide the detail</span>'));
     assert.ok(
-      html.includes('<div class="f-words" tabindex="0"><div class="words"><div class="md">'),
+      html.includes(
+        '<div class="f-words" role="region" aria-label="Detail of the report"><div class="words"><div class="md">',
+      ),
     );
     assert.ok(html.includes('<p>Three runs <strong>agree</strong>.</p>'));
     assert.ok(html.includes('<div class="md-table"><table>'));
@@ -1169,6 +1172,36 @@ describe('the lab page', () => {
     assert.ok(folded.includes('<details class="f-detail"><summary'));
     assert.ok(folded.includes('<div class="f-words"><div class="words">'));
     assert.equal(folded.includes('class="md"'), false);
+  });
+
+  it('opens the detail of a new report, also after the person folded the detail of an older one', () => {
+    const report = (id: string): PostView =>
+      postView(
+        { ...result(id, { author: 'agent-2' }), kind: 'report', body: 'Three runs agree.' },
+        30,
+      );
+    const detail = (card: ReactElement): Rendered => {
+      const found = elementsOf(card).find((element) => element.type === Detail);
+      assert.ok(found);
+      return found;
+    };
+    const card = (id: string): Rendered =>
+      detail(ReportCard({ report: report(id), agents: [], now: new Date('2026-11-06T14:26:00Z') }));
+    // React mounts a new detail for a new key, and a new detail starts open.
+    assert.deepEqual(
+      [card('p-30'), card('p-31')].map((element) => [element.key, element.props['open']]),
+      [
+        ['p-30', true],
+        ['p-31', true],
+      ],
+    );
+    // The person folds a detail, and it stays folded while the same report shows.
+    const open = { post: 'p-30', body: 'Three runs agree.', files: [], open: true };
+    const folded = live([
+      { render: () => <>{Detail(open)}</>, then: (tree) => toggle(tree, 'Read the detail', false) },
+      { render: () => <>{Detail(open)}</> },
+    ]);
+    assert.ok(folded.includes('<details class="f-detail"><summary'));
   });
 
   it('names on each card the threads that it builds on and that build on it', () => {

@@ -1,4 +1,4 @@
-import { Component, memo, useState } from 'react';
+import { Component, memo, useEffect, useRef, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
@@ -145,30 +145,55 @@ export function Words(props: {
  * opens the fold, so a thread of hundreds of posts parses only what somebody reads. Until then the body is in the
  * page as plain text, where the browser's search finds it.
  *
- * With `open`, the fold is open at first, as on the report card, and the person can close it. Its box can then
- * scroll, so the box takes the keyboard's focus.
+ * With `open`, the fold is open at first, as on the report card, and the person can close it. With `label`, the box
+ * is a region of the page with that name, for a box that scrolls, as on the report card. While its content is taller
+ * than the box, the box takes the keyboard's focus, so that the keys scroll it.
  */
 export function Detail(props: {
   readonly post: string;
   readonly body: string;
   readonly files: readonly FileEvidence[];
   readonly open?: boolean;
+  readonly label?: string;
 }): ReactElement | null {
-  const [opened, setOpened] = useState(props.open ?? false);
+  const [open, setOpen] = useState(props.open ?? false);
+  const [opened, setOpened] = useState(open);
+  const [scrolls, setScrolls] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = box.current;
+    if (props.label === undefined || !element) return;
+    // The observer reports the box's size when it starts and at each change, such as in a narrower window.
+    const watch = new ResizeObserver(() => {
+      setScrolls(element.scrollHeight > element.clientHeight);
+    });
+    watch.observe(element);
+    return () => {
+      watch.disconnect();
+    };
+  }, [props.label]);
   if (!props.body && props.files.length === 0) return null;
   return (
     <details
       className="f-detail"
-      open={props.open}
+      open={open}
       onToggle={(event) => {
-        if (event.currentTarget.open) setOpened(true);
+        const now = event.currentTarget.open;
+        setOpen(now);
+        if (now) setOpened(true);
       }}
     >
       <summary className="f-open">
         <span className="closed">Read the detail</span>
         <span className="opened">Hide the detail</span>
       </summary>
-      <div className="f-words" tabIndex={props.open ? 0 : undefined}>
+      <div
+        ref={box}
+        className="f-words"
+        role={props.label ? 'region' : undefined}
+        aria-label={props.label}
+        tabIndex={scrolls ? 0 : undefined}
+      >
         {props.body ? <Words text={props.body} parsed={opened} /> : null}
         <Files post={props.post} files={props.files} />
       </div>

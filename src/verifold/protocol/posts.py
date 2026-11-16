@@ -300,7 +300,8 @@ class Report(PostBase):
     """
     Where the lab is, in plain words for the person. The person's app shows the newest report before the threads.
 
-    `text` is what the person reads first, and `body` holds the detail that they can open.
+    `text` is what the person reads first. `body` holds the detail, which the app shows open under it, and which
+    the person can fold.
     """
 
     kind: Literal['report'] = 'report'
