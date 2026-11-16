@@ -947,6 +947,118 @@ details[open] > summary .opened {
 .f-card.open .f-facts {
   order: 3;
 }
+/* The control beside the steer box that opens a round, and the newest round above the cards. */
+.f-steer button.f-round-toggle,
+.f-steer .f-round-form button.linkbtn {
+  background: none;
+  padding: 0;
+  color: var(--accent-ink);
+}
+.f-steer .f-round-toggle {
+  align-self: flex-start;
+  margin-top: 10px;
+}
+.f-round-note,
+.f-round-hint {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.f-round-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+}
+.f-steer .f-round-form label {
+  margin: 0;
+  font-size: 13.5px;
+}
+.f-round-form input,
+.f-round-form select {
+  background: var(--card);
+  border: 1px solid var(--line2);
+  color: var(--ink);
+  padding: 8px 10px;
+  font-size: 15px;
+}
+.f-round-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.f-round-row button[type='submit'] {
+  margin-left: auto;
+}
+.f-round {
+  margin-bottom: 18px;
+  padding: 14px 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+.f-round-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  font-size: 12.5px;
+}
+.f-round-head h2,
+.f-round-head .f-by {
+  margin: 0;
+}
+.f-round-head h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-ink);
+}
+.f-round-head a {
+  margin-left: auto;
+  color: var(--muted);
+}
+.f-round-text {
+  margin: 8px 0 10px;
+  font-size: 16px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.f-round-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  table-layout: fixed;
+}
+.f-round-table thead th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 4px 8px 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+.f-round-table thead th:first-child {
+  width: 24%;
+}
+.f-round-table tbody th,
+.f-round-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 8px 8px 8px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.f-round-table tbody th {
+  font-weight: 600;
+}
+.f-round-table td p {
+  margin: 0;
+}
+@media (max-width: 600px) {
+  .f-round-table thead th:first-child {
+    width: 34%;
+  }
+}
 /* The obstacles after the cards: open ones in sight, the others folded with their counts. */
 .f-obstacles {
   margin-top: 18px;

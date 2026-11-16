@@ -32,7 +32,9 @@ export type PostKind =
   | 'call'
   | 'close'
   | 'request'
-  | 'offer';
+  | 'offer'
+  | 'round'
+  | 'entry';
 export type Standing = 'open' | 'checked' | 'held_up' | 'disputed' | 'conceded';
 
 export interface ModelSpec {
@@ -415,6 +417,37 @@ export interface LabView {
   readonly deliverables_told_at: string | null;
   /** Every obstacle of the lab's lines of work, the newest first. */
   readonly obstacles: readonly Obstacle[];
+  /** The round that is open, or else the newest round that closed. `null` in a lab without rounds. */
+  readonly round: RoundView | null;
+}
+
+/** Why a round closed: its time came, every agent that it waited for entered, or its opener withdrew it. */
+export type RoundEnd = 'time' | 'entered' | 'opener';
+
+/** Verifold's record that a round closed. */
+export interface RoundClosed {
+  readonly type: 'round_closed';
+  readonly seq: number;
+  readonly at: string;
+  readonly round: string;
+  readonly why: RoundEnd;
+}
+
+/**
+ * A round as the lab page shows it: the round, when it closes, its entries, and the agents that did not enter. The
+ * person sees every entry whole as it arrives. The agents see one another's entries only from the close on.
+ */
+export interface RoundView {
+  readonly round: PostView;
+  /** Whether the round is open now by the lab's clock. */
+  readonly open: boolean;
+  readonly closes_at: string;
+  /** The close, with when and why. `null` until Verifold records it. */
+  readonly closed: RoundClosed | null;
+  /** The entries, oldest first. */
+  readonly entries: readonly PostView[];
+  /** The agents that the round waits for now, or waited for at its close, that did not enter. */
+  readonly not_entered: readonly string[];
 }
 
 /**
@@ -838,6 +871,15 @@ export type Post =
       readonly deliverable: string;
     })
   | (PostBase & {
+      /** A question to every agent at once, which `text` holds. It stays open for `minutes`. */
+      readonly kind: 'round';
+      readonly minutes: number;
+    })
+  | (PostBase & {
+      /** An agent's answer to a round, which `reply_to` names. */
+      readonly kind: 'entry';
+    })
+  | (PostBase & {
       readonly kind: 'check';
       readonly outcome: 'holds' | 'fails';
       readonly method: 'rerun' | 'code_read' | 'ratings';
@@ -1057,6 +1099,8 @@ export interface PostRequest {
   readonly choice?: string;
   /** Whether the post goes in the conversation with the coordinator, in place of `thread` and `new_thread`. */
   readonly conversation?: boolean;
+  /** On a round: how many minutes it stays open, from 1 to 15. */
+  readonly minutes?: number;
 }
 
 /** The person's own author ID on the board. */

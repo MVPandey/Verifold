@@ -17,9 +17,11 @@ import type {
   Obstacle,
   PermissionShown,
   Post,
+  PostRequest,
   PostView,
   QuestionShown,
   RerunLine,
+  RoundView,
   SettingsView,
   ThreadSummary,
   ThreadView,
@@ -39,6 +41,7 @@ import { HarnessAsk } from '../src/ui/parts.tsx';
 import { Mark } from '../src/ui/Picture.tsx';
 import { SettingsForm } from '../src/ui/SettingsPage.tsx';
 import { SetupPage } from '../src/ui/SetupPage.tsx';
+import { RoundOpener, RoundPanel } from '../src/ui/Rounds.tsx';
 import { Turns } from '../src/ui/Thread.tsx';
 import { FolderLine, InvitationText, ProfileSheet } from '../src/ui/Profile.tsx';
 import { Top } from '../src/ui/Top.tsx';
@@ -3738,5 +3741,182 @@ describe('the norms page', () => {
     assert.match(line('close'), /a close stands/);
     assert.match(line('told_already', 'p-9'), /less than a minute ago/);
     assert.match(line('refused'), /did not take the post/);
+  });
+});
+
+describe('a round', () => {
+  const now = new Date('2026-11-06T14:10:00Z');
+  const agents = [agentView('agent-1'), agentView('agent-2'), agentView('agent-3')];
+  const question = postView(
+    result('p-2', {
+      kind: 'round',
+      minutes: 10,
+      author: 'person',
+      text: 'Best bet?',
+    }),
+  );
+  const entry = postView(
+    result('p-3', {
+      kind: 'entry',
+      author: 'agent-2',
+      reply_to: 'p-2',
+      text: 'Keep the cache.',
+      body: 'The second seed fails without it.',
+    }),
+    3,
+  );
+  const open: RoundView = {
+    round: question,
+    open: true,
+    closes_at: '2026-11-06T14:14:00Z',
+    closed: null,
+    entries: [entry],
+    not_entered: ['agent-1', 'agent-3'],
+  };
+
+  /** Return the element of a type, such as `form`, in what a component rendered. */
+  const find = (tree: readonly Rendered[], type: string): Rendered => {
+    const found = tree.find((element) => element.type === type);
+    assert.ok(found, `The page has no ${type}.`);
+    return found;
+  };
+
+  it('opens a round with the question and the minutes from the control beside the steer box', () => {
+    const sent: PostRequest[] = [];
+    const props = {
+      round: null,
+      now,
+      onOpen: (request: PostRequest) => {
+        sent.push(request);
+        return Promise.resolve();
+      },
+    };
+    const closed = renderToStaticMarkup(<RoundOpener {...props} />);
+    assert.equal(
+      closed,
+      '<button type="button" class="linkbtn f-round-toggle">Ask every agent at once</button>',
+    );
+    const html = live([
+      {
+        render: () => RoundOpener(props),
+        then: (tree) => {
+          press(tree, 'Ask every agent at once');
+        },
+      },
+      {
+        render: () => RoundOpener(props),
+        then: (tree) => {
+          (find(tree, 'input').props['onChange'] as (event: object) => void)({
+            target: { value: 'Best bet?' },
+          });
+          (find(tree, 'select').props['onChange'] as (event: object) => void)({
+            target: { value: '5' },
+          });
+        },
+      },
+      {
+        render: () => RoundOpener(props),
+        then: (tree) => {
+          (find(tree, 'form').props['onSubmit'] as (event: object) => void)({
+            preventDefault: () => undefined,
+          });
+        },
+      },
+      { render: () => RoundOpener(props) },
+    ]);
+    assert.deepEqual(sent, [
+      { kind: 'round', text: 'Best bet?', minutes: 5, new_thread: 'Best bet?' },
+    ]);
+    assert.ok(html.includes('<label for="'));
+    assert.ok(html.includes('<option value="15">15 min</option>'));
+    assert.ok(html.includes('Opening</button>'));
+    // While a round is open, the control says until when, and opens no second one.
+    assert.equal(
+      renderToStaticMarkup(<RoundOpener {...props} round={open} />),
+      `<p class="f-round-note">A round is open. Closes at ${clock(open.closes_at)}, in 4 min.</p>`,
+    );
+  });
+
+  it('shows an open round with who entered, who has not, and each entry as it arrives', () => {
+    const html = renderToStaticMarkup(<RoundPanel round={open} agents={agents} now={now} />);
+    assert.ok(html.startsWith('<section class="f-round" aria-labelledby="round-title">'));
+    assert.ok(html.includes('<h2 id="round-title">Open round</h2>'));
+    assert.ok(
+      html.includes(`You asked · Closes at ${clock(open.closes_at)}, in 4 min · 1 of 3 entered`),
+    );
+    assert.ok(html.includes('<p class="f-round-text">Best bet?</p>'));
+    assert.ok(
+      html.includes(
+        '<tr><th scope="row">Agent 2</th><td><p>Keep the cache.</p><details class="f-detail">',
+      ),
+    );
+    assert.ok(html.includes('<span class="closed">Read the detail</span>'));
+    assert.ok(
+      html.includes('<tr><th scope="row">Agent 1</th><td><span class="dim">Not entered yet</span>'),
+    );
+    assert.ok(html.includes('href="#/thread/t-1/p-2"'));
+    assert.equal(renderToStaticMarkup(<RoundPanel round={null} agents={agents} now={now} />), '');
+  });
+
+  it('shows a closed round as one table with a row for each agent', () => {
+    const closed: RoundView = {
+      ...open,
+      open: false,
+      closed: {
+        type: 'round_closed',
+        seq: 9,
+        at: '2026-11-06T14:12:00Z',
+        round: 'p-2',
+        why: 'time',
+      },
+      not_entered: ['agent-3'],
+    };
+    const html = renderToStaticMarkup(<RoundPanel round={closed} agents={agents} now={now} />);
+    assert.ok(html.includes('<h2 id="round-title">Last round</h2>'));
+    assert.ok(
+      html.includes(`Closed at ${clock('2026-11-06T14:12:00Z')}: its time came · 1 of 2 entered`),
+    );
+    assert.ok(
+      html.includes(
+        '<table class="f-round-table"><thead><tr><th scope="col">Agent</th><th scope="col">Entry</th></tr></thead><tbody>',
+      ),
+    );
+    assert.equal(html.match(/<tr><th scope="row">/g)?.length, 2);
+    assert.ok(
+      html.includes('<tr><th scope="row">Agent 3</th><td><span class="dim">No entry</span>'),
+    );
+    // The text of an entry is text, never HTML.
+    const hostile = { ...closed, entries: [{ ...entry, post: { ...entry.post, text: HOSTILE } }] };
+    assert.ok(
+      !renderToStaticMarkup(<RoundPanel round={hostile} agents={agents} now={now} />).includes(
+        '<img',
+      ),
+    );
+  });
+
+  it('puts the round above the thread cards on the lab page', () => {
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    const data = {
+      setup: {
+        folder: '~/lab',
+        harnesses: HARNESSES,
+        question: 'Q',
+        defaults: DEFAULTS,
+        defaults_from: null,
+      },
+      lab: labView({ agents, round: open }),
+      threads: [summary({ thread: { id: 't-2', title: 'Cache', opened_by: 'agent-1' } })],
+      needs: [],
+      report: null,
+      answer: null,
+      version: 1,
+      error: null,
+      reload: () => undefined,
+    };
+    const html = renderToStaticMarkup(
+      <LabPage api={{} as Api} data={data} now={now} open={null} post={null} />,
+    );
+    assert.ok(html.indexOf('class="f-round"') < html.indexOf('class="f-wall"'));
+    assert.ok(html.includes('<p class="f-round-note">A round is open.'));
   });
 });

@@ -19,6 +19,8 @@ const NOUNS = {
   close: 'close',
   request: 'request',
   offer: 'offer',
+  round: 'round',
+  entry: 'entry',
 } as const satisfies Record<Post['kind'], string>;
 
 const CLAIMS: ReadonlySet<Post['kind']> = new Set(['result', 'proposal', 'ruled_out']);
@@ -49,7 +51,10 @@ export function tone(post: Post): MarkTone {
     case 'ask':
     case 'call':
     case 'request':
+    case 'round':
       return 'ask';
+    case 'entry':
+      return 'answer';
     case 'close':
       return 'answer';
     case 'plan':
@@ -105,6 +110,10 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
       return 'asked you for a move';
     case 'offer':
       return `offered files for your deliverable ${post.deliverable}`;
+    case 'round':
+      return 'asked every agent at once';
+    case 'entry':
+      return to?.author === PERSON ? 'entered your round' : `entered ${theirs}`;
     case 'answer':
       // The answer that carries out a coordinator's request: the person said yes to it, or a power decided it.
       if (post.for_request) {

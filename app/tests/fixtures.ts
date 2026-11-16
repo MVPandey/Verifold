@@ -238,6 +238,7 @@ export function labView(changes: Partial<LabView> = {}): LabView {
     removed_deliverables: [],
     deliverables_told_at: null,
     obstacles: [],
+    round: null,
     ...changes,
   };
 }
