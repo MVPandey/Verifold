@@ -197,6 +197,36 @@ async def test_one_doorbell_covers_a_burst_of_posts(served: ServedBoard, tmp_pat
     assert len([text for text in posts_by(served, 'bo') if text.startswith('Seen p-')]) == 3
 
 
+async def test_a_post_of_the_person_rings_at_once_and_an_agents_post_waits_for_a_quiet_board(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    # The board never counts as quiet here, so a doorbell that waits for a quiet board waits for an hour.
+    running = asyncio.create_task(loop_for(served, tmp_path, quiet=3_600, max_quiet=3_600).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        asked = await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+        # The short sleep shows that nothing rings for an agent's post.
+        await asyncio.sleep(0.05)
+        waited = [call['text'] for call in calls(log, 'prompt')]
+        # A post of the person for the agent ends that wait, and one doorbell covers both posts.
+        await lab.post(PostRequest(kind='message', text='Bo, take the tail.', thread='t-1', mentions=('bo',)), 'person')
+        await until(lambda: len(lab.board.turns) == 2)
+        # A post of the person that names nobody is for every agent, and it starts a turn with no wait at all.
+        await lab.post(PostRequest(kind='message', text='Change of plan.', thread='t-1'), 'person')
+        await until(lambda: len(lab.board.turns) == 3)
+        # Another agent's post still waits after it.
+        await lab.post(PostRequest(kind='ask', text='And now?', thread='t-1', mentions=('bo',)), 'ada')
+        await asyncio.sleep(0.05)
+    finally:
+        running.cancel()
+
+    assert waited == ['Start.']
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL, DOORBELL]
+    # The agent answered the first ask in the turn that the person's post started, and the second ask still waits.
+    assert [text for text in posts_by(served, 'bo') if text.startswith('Seen p-')] == [f'Seen {asked.post.id}.']
+
+
 async def test_an_agent_that_read_one_page_of_its_posts_gets_a_doorbell_for_the_rest(
     served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

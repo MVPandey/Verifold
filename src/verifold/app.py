@@ -140,7 +140,7 @@ class ServeOptions(Record):
     """0 picks a free port."""
     turn_timeout: float = Field(default=2 * 3_600, gt=0)
     quiet: float = Field(default=10, ge=0)
-    """Seconds without a new event on the board before an agent's doorbell rings."""
+    """Seconds without a new event on the board before an agent's doorbell rings. A post of the person rings at once."""
     max_quiet: float = Field(default=45, ge=0)
     """The most seconds that a doorbell waits for the board to go quiet."""
     web: Path = WEB_FOLDER

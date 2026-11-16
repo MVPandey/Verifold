@@ -4,7 +4,7 @@ Supervises one agent.
 The agent's harness owns its work. Verifold keeps the agent's ACP session open, rings a doorbell when posts for the
 agent arrive after it ended its turn, rings the alarm that the agent set for itself, and starts the harness again
 when its process fails. The doorbell waits for a quiet moment on the board, so that a burst of posts wakes the agent
-once.
+once. A post of the person rings at once.
 
 After Verifold restarts, the loop goes on from the agent's turns in the record. An agent that ended its last turn by
 its own choice waits again, with the same doorbell and the same alarm. So does every agent of a closed lab. Any
@@ -17,6 +17,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import takewhile
 from pathlib import Path
 
 from pydantic import Field, SecretStr
@@ -68,7 +69,7 @@ from verifold.runner.session import (
 from verifold.runner.snapshots import snapshot
 from verifold.server.activity import Activity
 from verifold.server.member import Member
-from verifold.society.attention import update
+from verifold.society.attention import update, wakes
 from verifold.society.board import Board
 from verifold.society.grants import agent_waits
 from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
@@ -86,7 +87,10 @@ class LoopSettings(Record):
     retry_after: float = Field(default=30, ge=0)
     """Seconds before the first restart of a failed harness. Each later restart waits twice as long."""
     quiet: float = Field(default=10, ge=0)
-    """Seconds without a new event on the board before a doorbell rings, so that one doorbell covers a burst."""
+    """
+    Seconds without a new event on the board before a doorbell rings, so that one doorbell covers a burst. A post
+    of the person rings without this wait.
+    """
     max_quiet: float = Field(default=45, ge=0)
     """The most seconds that a doorbell waits for the board to go quiet."""
     leave_grace: float = Field(default=5, ge=0)
@@ -466,7 +470,8 @@ class AgentLoop:
                 message = more_time_message(board.ends_at, AtTimeLimit.STOP)
                 return self._ring(f'{message} {DOORBELL}' if posts else message, due, late)
             if posts and not stopped:
-                if not settled:
+                # The person does not wait for a quiet board, also when the post is for every agent.
+                if not settled and not self._person_wrote():
                     await self._settle()
                     settled = True
                     continue
@@ -501,8 +506,16 @@ class AgentLoop:
             seq = lab.board.seq
             await lab.wait_for_change(seq, min(settings.quiet, left))
             # An agent that left the lab waits for nothing: its harness ends now, not when the board is quiet.
-            if lab.board.seq == seq or self._left():
+            # A post of the person that comes during the wait ends it.
+            if lab.board.seq == seq or self._left() or self._person_wrote():
                 return
+
+    def _person_wrote(self) -> bool:
+        # Whether a post of the person that is for the agent waits for its doorbell.
+        board, agent_id = self._lab.board, self._setup.agent.id
+        rung = max(self._notified, self._member.seen)
+        waiting = takewhile(lambda entry: entry.seq > rung, reversed(board.posts))
+        return any(entry.post.author == PERSON and wakes(board, agent_id, entry) for entry in waiting)
 
     async def _permission(self, request: PermissionRequest) -> str | None:
         board = self._lab.board
