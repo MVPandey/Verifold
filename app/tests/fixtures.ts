@@ -229,6 +229,8 @@ export function labView(changes: Partial<LabView> = {}): LabView {
       jobs: { at_time_limit: 'pause', at_exit: 'stop' },
       permissions: { while_you_decide: 'auto' },
       reviewers: { seats: null },
+      votes: { reveal_minutes: 10 },
+      reruns: { lease_minutes: 10 },
     },
     deliverables: [],
     removed_deliverables: [],

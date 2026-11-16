@@ -7,16 +7,35 @@ export const MAX_REVIEWER_SEATS = 20;
 export const SEATS_FOLLOW =
   'one seat for every five agents, one with three or four, none with fewer';
 
+/** The longest reveal time of votes and the longest lease of a rerun, in minutes, as the server allows: one day. */
+export const MAX_BOARD_MINUTES = 24 * 60;
+
+/** The reveal time of votes and the lease of a rerun while the person sets none, in minutes. */
+export const DEFAULT_MINUTES = 10;
+
+/**
+ * Return the whole number that a field's text names, `null` for an empty field, which sets no number, or
+ * `undefined` for a text that is no whole number from 0 to `max`.
+ */
+export function numberValue(text: string, max: number): number | null | undefined {
+  const trimmed = text.trim();
+  if (trimmed === '') return null;
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const value = Number(trimmed);
+  return value <= max ? value : undefined;
+}
+
 /**
  * Return the number of reviewer seats that a field's text names, `null` for an empty field, which sets no number,
  * or `undefined` for a text that is no whole number from 0 to 20.
  */
 export function seatsValue(text: string): number | null | undefined {
-  const trimmed = text.trim();
-  if (trimmed === '') return null;
-  if (!/^\d+$/.test(trimmed)) return undefined;
-  const seats = Number(trimmed);
-  return seats <= MAX_REVIEWER_SEATS ? seats : undefined;
+  return numberValue(text, MAX_REVIEWER_SEATS);
+}
+
+/** Return a number of minutes in words, such as "1 minute" or "10 minutes". */
+export function minutesWords(minutes: number): string {
+  return minutes === 1 ? '1 minute' : `${minutes} minutes`;
 }
 
 /** One answer to a setting: the value that it sends, and what the page says about it. */

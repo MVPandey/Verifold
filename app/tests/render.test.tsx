@@ -896,6 +896,7 @@ describe('a rerun that is wanted', () => {
     asked_by: ['agent-1'],
     asked_at: '2026-11-06T14:14:00Z',
     taken_by: [],
+    held_by: [],
     open_to: 'reviewer',
     ...changes,
   });
@@ -935,6 +936,22 @@ describe('a rerun that is wanted', () => {
     assert.ok(taken.includes('A rerun is wanted, asked 12 min ago. Taken by Tessel.'));
     // The person asked already, so the page offers no second request.
     assert.equal(taken.includes('Ask for an independent rerun'), false);
+    // The agent that took it holds it until its lease ends, and the line says until when.
+    const until = '2026-11-06T14:30:00Z';
+    const held = thread(
+      [
+        wanted({
+          taken_by: ['agent-2'],
+          held_by: [{ agent: 'agent-2', since: '2026-11-06T14:20:00Z', until }],
+        }),
+      ],
+      [claim],
+    );
+    assert.ok(
+      held.includes(
+        `A rerun is wanted, asked 12 min ago. Taken by Tessel. Held by Tessel until ${dayClock(until, now)}.</p>`,
+      ),
+    );
     // A post that nobody asked about has the button and no line.
     const plain = thread([wanted({ post: 'p-9' })], [claim]);
     assert.ok(plain.includes('Ask for an independent rerun') && !plain.includes('o-wanted'));
@@ -2906,6 +2923,8 @@ describe('the settings page', () => {
     jobs: { at_time_limit: 'pause', at_exit: 'stop' },
     permissions: { while_you_decide: 'wait' },
     reviewers: { seats: null },
+    votes: { reveal_minutes: 10 },
+    reruns: { lease_minutes: 10 },
   } as const;
   const view: SettingsView = {
     all_projects: {
@@ -3071,6 +3090,53 @@ describe('the settings page', () => {
     assert.ok(all.includes('This project has its own number, and it wins over this one.'));
     assert.equal(all.includes('verifold run'), false);
     assert.equal(seats(set, false).includes('has its own number'), false);
+  });
+
+  it('takes the minutes that a new post hides its votes and that a taker holds a rerun, or an empty field for ten', () => {
+    const project = page('project');
+    assert.ok(project.includes('<h3>Votes on a new post</h3>'));
+    assert.ok(
+      project.includes(
+        'an agent sees no votes on it until it votes on it itself, so that its vote is its own judgement.',
+      ),
+    );
+    assert.ok(project.includes('<h3>A rerun that an agent takes</h3>'));
+    assert.ok(project.includes('no other agent can take it.'));
+    assert.ok(
+      project.includes(
+        'type="number" min="0" max="1440" placeholder="Same as all projects" value=""/>',
+      ),
+    );
+    assert.equal(
+      project.split('<p class="note">Same as all projects. Now: 10 minutes.</p>').length - 1,
+      2,
+    );
+    // A project's file can hold both numbers for `verifold run`: neither gives an agent a permission.
+    assert.equal(project.split('verifold run').length - 1, 1);
+
+    const set = {
+      ...view.all_projects,
+      values: { votes: { reveal_minutes: 0 }, reruns: { lease_minutes: 1 } },
+      settings: {
+        ...view.all_projects.settings,
+        votes: { reveal_minutes: 0 },
+        reruns: { lease_minutes: 1 },
+      },
+    };
+    const all = renderToStaticMarkup(
+      <SettingsForm
+        view={{ ...view, all_projects: set }}
+        level="all"
+        labOpen
+        harnesses={HARNESSES}
+        disabled={false}
+        onChange={() => undefined}
+      />,
+    );
+    assert.ok(all.includes('placeholder="10 minutes" value="0"/>'));
+    assert.ok(all.includes('placeholder="10 minutes" value="1"/>'));
+    assert.ok(all.includes('<p class="note">Now: 0 minutes.</p>'));
+    assert.ok(all.includes('<p class="note">Now: 1 minute.</p>'));
   });
 });
 

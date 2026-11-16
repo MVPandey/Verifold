@@ -70,9 +70,22 @@ function takers(line: RerunLine, seats: number): string {
 }
 
 /**
+ * Return the leases that stand on a wanted rerun at `now`, such as "Ada until 14:22", or `null` when none does.
+ * A lease ends at its time without a new read of the lab, so the app leaves out a lease whose time has passed.
+ */
+export function heldUntil(line: RerunLine, agents: readonly AgentView[], now: Date): string | null {
+  const held = line.held_by.filter((lease) => new Date(lease.until).getTime() > now.getTime());
+  if (held.length === 0) return null;
+  return held
+    .map((lease) => `${ownName(agents, lease.agent)} until ${dayClock(lease.until, now)}`)
+    .join(' and ');
+}
+
+/**
  * Return the line of the reruns that are wanted for one post or in one thread, such as "A rerun is wanted, asked
  * 12 min ago. No agent has taken it. An agent in a reviewer seat can take it.", or `null` when none is wanted.
  * Nothing ends a wanted rerun but its check, so the line says how long the oldest has waited and who can take it.
+ * A taker holds the rerun for a while, and no other agent can take it then, so the line says who and until when.
  */
 export function wantedLine(
   wanted: readonly RerunLine[],
@@ -85,18 +98,21 @@ export function wantedLine(
   const asked = minutes > 0 ? `asked ${duration(minutes)} ago` : 'asked just now';
   if (more.length === 0) {
     const names = first.taken_by.map((id) => ownName(lab.agents, id)).join(', ');
+    const held = heldUntil(first, lab.agents, now);
     const taken = names
-      ? `Taken by ${names}.`
+      ? `Taken by ${names}.${held ? ` Held by ${held}.` : ''}`
       : `No agent has taken it. ${takers(first, lab.reviewer_seats)}`;
     return `A rerun is wanted, ${asked}. ${taken}`;
   }
   const taken = wanted.filter((line) => line.taken_by.length > 0).length;
+  const held = wanted.filter((line) => heldUntil(line, lab.agents, now) !== null).length;
   const stuck = wanted.filter((line) => line.open_to === 'none' && line.taken_by.length === 0);
   const count = `${wanted.length} reruns are wanted, the first ${asked}.`;
   const took = taken > 0 ? `Agents have taken ${taken} of them.` : 'No agent has taken one.';
+  const holds = held > 0 ? ` Agents hold ${held} of them now.` : '';
   return stuck.length > 0
-    ? `${count} ${took} No agent of this lab can take ${stuck.length} of them.`
-    : `${count} ${took}`;
+    ? `${count} ${took}${holds} No agent of this lab can take ${stuck.length} of them.`
+    : `${count} ${took}${holds}`;
 }
 
 /** Return the top bar's count of what waits for the person, or `null` when nothing waits. */

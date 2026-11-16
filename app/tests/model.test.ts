@@ -62,6 +62,7 @@ import {
 import { betweenLine, isSide, sideHeading, sideLines, sideReplyHint } from '../src/model/side.ts';
 import {
   ON_CALL,
+  heldUntil,
   needGroups,
   quietBand,
   reviewerLine,
@@ -72,7 +73,16 @@ import {
   whereLine,
 } from '../src/model/status.ts';
 import { wrapFocus } from '../src/model/focus.ts';
-import { AT_EXIT, labelOf, seatsValue, stopLine, valueAt } from '../src/model/settings.ts';
+import {
+  AT_EXIT,
+  MAX_BOARD_MINUTES,
+  labelOf,
+  minutesWords,
+  numberValue,
+  seatsValue,
+  stopLine,
+  valueAt,
+} from '../src/model/settings.ts';
 import {
   agentCount,
   defaultsLine,
@@ -427,6 +437,7 @@ describe('agents', () => {
       asked_by: ['agent-1'],
       asked_at,
       taken_by: [],
+      held_by: [],
       open_to: 'reviewer',
       ...changes,
     });
@@ -457,6 +468,35 @@ describe('agents', () => {
       ),
       'A rerun is wanted, asked just now. Taken by Tessel, agent-3.',
     );
+    // The agent that took it holds it until its lease ends. A lease whose time passed shows no longer.
+    const until = '2026-11-06T14:36:00Z';
+    const held = wanted(one, {
+      taken_by: ['agent-2'],
+      held_by: [{ agent: 'agent-2', since: '2026-11-06T14:20:00Z', until }],
+    });
+    assert.equal(
+      wantedLine([held], lab, now),
+      `A rerun is wanted, asked 12 min ago. Taken by Tessel. Held by Tessel until ${dayClock(until, now)}.`,
+    );
+    assert.equal(heldUntil(held, agents, new Date(until)), null);
+    assert.equal(
+      wantedLine([held], lab, new Date(until)),
+      'A rerun is wanted, asked 22 min ago. Taken by Tessel.',
+    );
+    assert.equal(
+      heldUntil(
+        {
+          ...held,
+          held_by: [
+            ...held.held_by,
+            { agent: 'agent-3', since: one, until: '2026-11-06T14:30:00Z' },
+          ],
+        },
+        agents,
+        now,
+      ),
+      `Tessel until ${dayClock(until, now)} and agent-3 until ${dayClock('2026-11-06T14:30:00Z', now)}`,
+    );
     // A thread with several wanted reruns has one line, from the one that has waited longest.
     const two = [wanted('2026-11-06T12:26:00Z'), wanted('2026-11-06T14:20:00Z', { post: 'p-4' })];
     assert.equal(
@@ -473,6 +513,10 @@ describe('agents', () => {
         now,
       ),
       '2 reruns are wanted, the first asked 2 h ago. Agents have taken 1 of them. No agent of this lab can take 1 of them.',
+    );
+    assert.equal(
+      wantedLine([held, wanted('2026-11-06T14:20:00Z', { post: 'p-4' })], lab, now),
+      '2 reruns are wanted, the first asked 12 min ago. Agents have taken 1 of them. Agents hold 1 of them now.',
     );
   });
 
@@ -1383,6 +1427,12 @@ describe('settings', () => {
       ['', ' 0 ', '3', '20', '21', '-1', '1.5', 'two'].map((text) => seatsValue(text)),
       [null, 0, 3, 20, undefined, undefined, undefined, undefined],
     );
+    // The reveal time of votes and the lease of a rerun are whole minutes from 0 to one day.
+    assert.deepEqual(
+      ['', '0', '10', '1440', '1441', '2.5'].map((text) => numberValue(text, MAX_BOARD_MINUTES)),
+      [null, 0, 10, 1440, undefined, undefined],
+    );
+    assert.deepEqual([0, 1, 10].map(minutesWords), ['0 minutes', '1 minute', '10 minutes']);
     assert.deepEqual(parseRoute('#/settings'), { page: 'settings' });
     assert.deepEqual(parseRoute('#/norms'), { page: 'norms' });
     assert.equal(href({ page: 'norms' }), '#/norms');

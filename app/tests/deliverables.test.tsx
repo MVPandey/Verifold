@@ -5,7 +5,13 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { createApi } from '../src/api/client.ts';
 import type { Api } from '../src/api/client.ts';
-import type { Deliverable, DeliverableOffer, Post } from '../src/api/types.ts';
+import type {
+  Deliverable,
+  DeliverableOffer,
+  LeaseLine,
+  Post,
+  RerunLine,
+} from '../src/api/types.ts';
 import {
   addHint,
   askHint,
@@ -24,7 +30,8 @@ import {
   stateLine,
   threadFacts,
 } from '../src/model/deliverables.ts';
-import { clock } from '../src/model/format.ts';
+import type { ThreadFact } from '../src/model/deliverables.ts';
+import { clock, dayClock } from '../src/model/format.ts';
 import { sentences, startRequest } from '../src/model/setup.ts';
 import { act, tone } from '../src/model/turns.ts';
 import { DeliverDoor, Deliverables } from '../src/ui/Deliverables.tsx';
@@ -371,22 +378,31 @@ describe('the deliverables panel', () => {
       asked_by: ['person'],
       asked_at: '2026-11-06T14:12:00Z',
       taken_by: [] as string[],
+      held_by: [] as LeaseLine[],
       open_to: 'reviewer' as const,
     };
     const waits = offer('p-5', 'agent-1');
-    assert.equal(rerunFact(waits, []), null);
-    assert.equal(rerunFact(waits, [wanted]), 'A rerun is wanted');
+    const fact = (item: DeliverableOffer, lines: readonly RerunLine[]): string | null =>
+      rerunFact(item, lines, AGENTS, NOW);
+    assert.equal(fact(waits, []), null);
+    assert.equal(fact(waits, [wanted]), 'A rerun is wanted');
+    assert.equal(fact(waits, [{ ...wanted, taken_by: ['agent-2'] }]), 'An agent took its rerun');
+    // The agent that took it holds it until its lease ends, and the panel says so until then.
+    const until = '2026-11-06T14:40:00Z';
+    const held = {
+      ...wanted,
+      taken_by: ['agent-2'],
+      held_by: [{ agent: 'agent-2', since: NOW.toISOString(), until }],
+    };
+    assert.equal(fact(waits, [held]), `Its rerun is held by Agent 2 until ${dayClock(until, NOW)}`);
     assert.equal(
-      rerunFact(waits, [{ ...wanted, taken_by: ['agent-2'] }]),
+      rerunFact(waits, [held], AGENTS, new Date('2026-11-06T14:40:00Z')),
       'An agent took its rerun',
     );
-    assert.equal(rerunFact(waits, [{ ...wanted, post: 'p-9' }]), null);
-    assert.equal(
-      rerunFact({ ...waits, standing: 'held_up' }, []),
-      'Held up by an independent rerun',
-    );
-    assert.equal(rerunFact({ ...waits, standing: 'checked' }, []), 'Checked by an agent');
-    assert.equal(rerunFact({ ...waits, standing: 'disputed' }, []), null);
+    assert.equal(fact(waits, [{ ...wanted, post: 'p-9' }]), null);
+    assert.equal(fact({ ...waits, standing: 'held_up' }, []), 'Held up by an independent rerun');
+    assert.equal(fact({ ...waits, standing: 'checked' }, []), 'Checked by an agent');
+    assert.equal(fact({ ...waits, standing: 'disputed' }, []), null);
     const html = renderToStaticMarkup(
       <Deliverables
         api={{} as Api}
@@ -436,22 +452,31 @@ describe('the deliverables panel', () => {
       asked_by: ['agent-2'],
       asked_at: '2026-11-06T14:12:00Z',
       taken_by: [] as string[],
+      held_by: [] as LeaseLine[],
       open_to: 'reviewer' as const,
     };
     const item = { ...OFFERED, disputed: ['p-9'], open_asks: ['p-10'] };
+    const facts = (of: Deliverable, lines: readonly RerunLine[]): readonly ThreadFact[] =>
+      threadFacts(of, lines, AGENTS, NOW);
     assert.deepEqual(
-      threadFacts(item, [wanted, { ...wanted, post: 'p-5' }, { ...wanted, thread: 't-9' }]),
+      facts(item, [wanted, { ...wanted, post: 'p-5' }, { ...wanted, thread: 't-9' }]),
       [
         { text: 'An agent disputes a post in the thread', post: 'p-9' },
         { text: 'A question in the thread has no answer', post: 'p-10' },
         { text: 'A rerun of a post in the thread is wanted', post: 'p-11' },
       ],
     );
-    assert.deepEqual(threadFacts(item, [{ ...wanted, taken_by: ['agent-2'] }]).at(-1), {
+    assert.deepEqual(facts(item, [{ ...wanted, taken_by: ['agent-2'] }]).at(-1), {
       text: 'An agent took the rerun of a post in the thread',
       post: 'p-11',
     });
-    assert.deepEqual(threadFacts(OFFERED, []), []);
+    const until = '2026-11-06T14:40:00Z';
+    const lease = { agent: 'agent-2', since: NOW.toISOString(), until };
+    assert.deepEqual(facts(item, [{ ...wanted, taken_by: ['agent-2'], held_by: [lease] }]).at(-1), {
+      text: `The rerun of a post in the thread is held by Agent 2 until ${dayClock(until, NOW)}`,
+      post: 'p-11',
+    });
+    assert.deepEqual(facts(OFFERED, []), []);
     const html = panel([item]);
     assert.ok(
       html.includes(
