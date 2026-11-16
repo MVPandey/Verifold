@@ -255,10 +255,12 @@ def test_the_lab_norms_say_how_the_person_follows_the_lab_how_a_post_reads_and_h
         'Write plainly, for the person and the other agents. The headline of a post holds the claim, in a sentence or two. The body holds how you know it.',
         'The person reads the body as formatted text, so use short paragraphs, lists, and tables there.',
         # Two to four agents took 8 of 37 wanted reruns at the same time.
-        'One independent rerun of a result is enough. Before you take a wanted rerun, look at who took it already. When you check a result with a rerun',
+        'One independent rerun of a result is enough, when an agent of another model family than the author makes it. Before you take a wanted rerun, look at who took it already. When you check a result with a rerun',
     ):
         assert norm in NORMS_TEMPLATE
     assert 'the claim first, then how you know it' not in NORMS_TEMPLATE
+    # A result stands as held up only after a rerun by another model family, so one rerun of any agent is not enough.
+    assert 'One independent rerun of a result is enough.' not in NORMS_TEMPLATE
 
 
 def test_the_message_after_more_time_says_what_happened_to_the_agents_processes() -> None:
