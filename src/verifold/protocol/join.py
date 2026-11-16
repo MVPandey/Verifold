@@ -58,8 +58,9 @@ type Standing = Literal['open', 'checked', 'held_up', 'disputed', 'conceded']
 type ObstacleState = Literal['open', 'taken_up', 'removed']
 """
 Where an obstacle stands, by the posts that build on it. An obstacle is a `ruled_out` post in a line of work, other
-than one that withdraws its author's own call, close, or round. A plan or a result whose author accepted an objection to it
-counts for none of these states.
+than one that withdraws its author's own call, close, or round. A plan or a result counts for none of these states
+when its author accepted an objection to it, ruled it out with a `ruled_out` that replies to it or builds on it, or
+left the lab.
 
 - `open`: no plan and no result builds on it.
 - `taken_up`: a plan or a result builds on it, and no result that builds on it stands.
@@ -493,7 +494,10 @@ SEALED_TEXT = 'Sealed until the round closes.'
 """The headline that the board shows an agent in place of the headline of another agent's entry while its round is open."""
 
 MAX_ENTRIES = 20
-"""The most entries whose lines the news of a round's close holds. `thread` shows every entry."""
+"""
+The most lines of entries that the closes of rounds in one news hold together, the older rounds first. They count
+in the news's `MAX_NEWS` lines of other posts. `thread` shows every entry.
+"""
 
 
 class RoundLine(Sparse):
@@ -506,8 +510,8 @@ class RoundLine(Sparse):
     """How many agents entered. Until the round closes, no other agent's entry shows you its content."""
     not_entered: int = 0
     """
-    How many agents the round still waits for: the agents of the lab that are not on call, have not left, and have
-    not entered. The round closes when none is left.
+    How many agents the round still waits for: the agents that it asked and that can still enter, as the board's
+    instructions say, and that have not entered. The round closes when none is left.
     """
     yours: PostId | None = None
     """Your entry, once you entered."""
@@ -519,7 +523,7 @@ class RoundNote(Record):
     round: PostLine
     why: RoundEnd
     entries: tuple[PostLine, ...] = ()
-    """The entries, oldest first, at most `MAX_ENTRIES`. `thread` shows each one whole."""
+    """The entries, oldest first. The notes of one news hold at most `MAX_ENTRIES`. `thread` shows each one whole."""
     left_out: int = 0
     """How many entries `entries` leaves out."""
 
@@ -533,9 +537,17 @@ brief was larger than a harness takes.
 
 MAX_CANDIDATES = 3
 """
-The most candidate answers that a brief lists, the newest ones. A brief is one tool result, and with five whole
-lines of candidates the largest brief was larger than a harness takes. `thread` shows every proposal.
+The most candidate answers that a brief lists with their whole lines, the newest ones. A brief is one tool result,
+and with five whole lines of candidates the largest brief was larger than a harness takes. The brief names every
+other candidate that stands by its ID and its author, and `thread` shows every proposal.
 """
+
+
+class CandidateRef(Sparse):
+    """A candidate answer that stands, by its ID and its author."""
+
+    id: PostId
+    author: AgentId
 
 
 class CandidateLine(Sparse):
@@ -1083,6 +1095,11 @@ class CandidatesView(Record):
 
     standing: tuple[CandidateView, ...] = ()
     """The candidates that stand, oldest first: the newest proposal of each author that its author did not concede."""
+    gone: tuple[PostView, ...] = ()
+    """
+    The proposals that stand no more, oldest first: each that its author conceded, which has the standing
+    `conceded`, or replaced with a newer one.
+    """
     closes_on: CandidateView | None = None
     """
     The candidate that the close that stands closes on. While the lab is closed, it is the lab's answer. `None`
@@ -1228,8 +1245,11 @@ class Brief(Record):
     The candidate answers that stand, newest last, at most `MAX_CANDIDATES`: the newest proposal of each author,
     in whatever thread for the whole lab it is, unless its author conceded it. The app shows each one to the person.
     """
-    more_candidates: int = 0
-    """How many candidates that stand `candidates` leaves out: the oldest ones."""
+    older_candidates: tuple[CandidateRef, ...] = ()
+    """
+    The other candidates that stand, oldest first, each by its ID and its author. An agent has one candidate at
+    most, so the list is never longer than the lab's agents.
+    """
     closes_on: PostId | None = None
     """
     The candidate that the close in `close` closes on. While the lab is closed, it is the lab's answer. `None` while

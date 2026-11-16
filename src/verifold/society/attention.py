@@ -52,13 +52,15 @@ its next news. Every other agent sees no vote on a young post until it votes on 
 A round is for every agent that is not on call, as a call that names nobody is. An entry of a round wakes nobody,
 whatever it names, replies to, or builds on, because no other agent may read it while the round is open. The close
 of a round is news for each agent that the round was for, for each agent that entered, and for its opener, with
-the lines of the entries. It wakes them as a post for them does. Every view for an agent reads the board without
+the lines of the entries, which count in the news's lines of other posts. It wakes them as a post for them does,
+except in a lab that is closed or out of time. Every view for an agent reads the board without
 the content of the entries that are sealed for it, as `society.rounds` says.
 """
 
 import re
 from datetime import datetime
 from functools import lru_cache
+from itertools import accumulate
 
 from verifold.protocol.events import AgentLeft, Posted, RoundClosed
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
@@ -159,13 +161,15 @@ def update(
     board = for_reader(board, agent_id, now)
     woken, rest = _unseen(board, agent_id, after)
     shown, others, reach = _page(woken, rest, board.seq)
+    rounds = round_notes(board, agent_id, after, reach, now)
+    others, listed = _beside(board, others, rounds)
     votes, more_votes = vote_notes(board, agent_id, after, reach)
     badges, more_badges = badge_notes(board, agent_id, after, reach)
     return Update(
         seq=reach,
         posts=tuple(post_view(board, entry, agent_id, now) for entry in shown),
         more=len(woken) - len(shown),
-        others=tuple(post_line(board, entry, agent_id, now, news=True) for entry in others[-MAX_NEWS:]),
+        others=tuple(post_line(board, entry, agent_id, now, news=True) for entry in listed),
         other_posts=len(others),
         threads=tuple(
             entry.thread for entry in board.threads if after < entry.seq <= reach and entry.thread.opened_by != agent_id
@@ -179,7 +183,7 @@ def update(
         left=departures(board, agent_id, after, reach),
         profile=profile_notes(board, agent_id, after, reach),
         renamed=renames(board, agent_id, after, reach),
-        rounds=round_notes(board, agent_id, after, reach, now),
+        rounds=rounds,
         reruns=reruns_for(board, agent_id, told, now),
         votes=votes,
         votes_left_out=more_votes,
@@ -208,18 +212,20 @@ def news(
     board = for_reader(board, agent_id, now)
     woken, rest = _unseen(board, agent_id, after)
     shown, others, reach = _page(woken, rest, board.seq)
+    rounds = round_notes(board, agent_id, after, reach, now)
+    others, listed = _beside(board, others, rounds)
     votes, more_votes = vote_notes(board, agent_id, after, reach)
     badges, more_badges = badge_notes(board, agent_id, after, reach)
     return News(
         seq=reach,
         for_you=tuple(post_line(board, entry, agent_id, now, news=True) for entry in shown),
         more=len(woken) - len(shown),
-        others=tuple(post_line(board, entry, agent_id, now, news=True) for entry in others[-MAX_NEWS:]),
-        left_out=max(len(others) - MAX_NEWS, 0),
+        others=tuple(post_line(board, entry, agent_id, now, news=True) for entry in listed),
+        left_out=len(others) - len(listed),
         left=departures(board, agent_id, after, reach),
         profile=profile_notes(board, agent_id, after, reach),
         renamed=renames(board, agent_id, after, reach),
-        rounds=round_notes(board, agent_id, after, reach, now),
+        rounds=rounds,
         reruns=reruns_for(board, agent_id, told, now),
         votes=votes,
         votes_left_out=more_votes,
@@ -236,15 +242,34 @@ def round_notes(
     Return the rounds that closed after event `after`, up to event `reach`, that concern an agent, oldest first.
 
     A close concerns the agents that the round was for at its close, the agents that entered, and the opener. Each
-    note has the lines of the round's entries, oldest first, at most `MAX_ENTRIES`, and counts the others.
+    note has the lines of the round's entries, oldest first, and counts the others. The notes hold at most
+    `MAX_ENTRIES` lines of entries together, the older rounds first, so that one result stays one result.
     """
-    return tuple(
-        _round_note(board, agent_id, opened, closed, now)
+    closes = tuple(
+        (opened, closed)
         for closed in board.round_closes
         if after < closed.seq <= reach
         and (opened := board.post(closed.round))
         and _hears_close(board, agent_id, opened, closed)
     )
+    spent = accumulate((len(entries(board, opened.post.id)) for opened, _ in closes), initial=0)
+    return tuple(
+        _round_note(board, agent_id, opened, closed, now, room=max(MAX_ENTRIES - used, 0))
+        for (opened, closed), used in zip(closes, spent, strict=False)
+    )
+
+
+def _beside(
+    board: Board, others: tuple[Posted, ...], rounds: tuple[RoundNote, ...]
+) -> tuple[tuple[Posted, ...], tuple[Posted, ...]]:
+    # The other posts of a news without the rounds that its notes tell of and their entries, which a note holds or
+    # counts, and the newest of them that the news lists. The lines of the notes count in the same `MAX_NEWS`, so a
+    # round's close does not make a news longer.
+    noted = {note.round.id for note in rounds}
+    held = noted | {entry.post.id for round_id in noted for entry in entries(board, round_id)}
+    rest = tuple(entry for entry in others if entry.post.id not in held)
+    room = max(MAX_NEWS - sum(1 + len(note.entries) for note in rounds), 0)
+    return rest, rest[max(len(rest) - room, 0) :]
 
 
 def _hears_close(board: Board, agent_id: AgentId, opened: Posted, closed: RoundClosed) -> bool:
@@ -257,15 +282,15 @@ def _hears_close(board: Board, agent_id: AgentId, opened: Posted, closed: RoundC
     return took_part or not board.on_call(agent_id, before=closed.seq)
 
 
-def _round_note(
-    board: Board, agent_id: AgentId, opened: Posted, closed: RoundClosed, now: datetime | None
+def _round_note(  # noqa: PLR0913
+    board: Board, agent_id: AgentId, opened: Posted, closed: RoundClosed, now: datetime | None, *, room: int
 ) -> RoundNote:
     answers = entries(board, opened.post.id)
     return RoundNote(
         round=post_line(board, opened, agent_id, now, news=True),
         why=closed.why,
-        entries=tuple(post_line(board, entry, agent_id, now, news=True) for entry in answers[:MAX_ENTRIES]),
-        left_out=max(len(answers) - MAX_ENTRIES, 0),
+        entries=tuple(post_line(board, entry, agent_id, now, news=True) for entry in answers[:room]),
+        left_out=max(len(answers) - room, 0),
     )
 
 

@@ -165,7 +165,8 @@ a close stands or such a post went out in the minute before.
   posts that name it in `builds_on`, and no agent sets that. It is `open` while no `plan` and no `result` builds on
   it. It is `taken_up` when a `plan` or a `result` builds on it and no `result` that builds on it stands. It is
   `removed` when a `result` that builds on it stands: no failed check and no objection disputes that result. A
-  `plan` or a `result` whose author accepted an objection to it counts for none of these. An obstacle is also a
+  `plan` or a `result` counts for none of these when its author accepted an objection to it, ruled it out with a
+  `ruled_out` that replies to it or builds on it, or left the lab. An obstacle is also a
   post, and it shows its own standing, such as `disputed`, as any post does. `obstacles` in `brief` has the open ones in `open`, the newest first, at
   most 5, and `more_open` counts the ones that it leaves out. `taken_up` and `removed` count the others.
 - An agent has a seat and a name. The seat's label is its harness's title and its model's name, such as
@@ -285,7 +286,9 @@ a close stands or such a post went out in the minute before.
   round with the round that is open and its end. A round is for every agent that is not on call, as a `call` that
   names nobody is. An agent answers with one `entry` that replies to the round. An agent on call, and the round's
   opener, can enter too. The board takes one entry from each agent in a round and none after the round closed, and
-  no call changes an entry.
+  no call changes an entry. The round waits for every agent that it asked and that can still enter: an agent of
+  the lab that is not on call, has not left, and is not a seat that Verifold stopped after its harness failed too
+  often. It does not wait for its opener, or for an invited agent that has not posted yet.
 - While its round is open, an entry is sealed for every agent but its author. No result of the board shows such an
   agent the entry's `text`, `body`, `helper`, `files`, `mentions`, or `builds_on`, and no count or list of the
   board holds what the entry builds on. A line or a view of a sealed entry has `sealed`, its ID, its thread, its
@@ -294,12 +297,16 @@ a close stands or such a post went out in the minute before.
   `builds_on`: the board refuses each, with the round and its end. The person sees every entry at once. `round` in
   `brief` has the open round with `closes_at`, the number of entries in `entered`, the number of agents that it
   still waits for in `not_entered`, and your entry in `yours`.
-- A round closes at its time, when every agent that is not on call and has not left has entered, or when its opener
-  posts a `ruled_out` that replies to it. A round whose time passed while Verifold was stopped closes when Verifold
+- A round closes at its time, when every agent that it waits for has entered, or when its opener posts a
+  `ruled_out` that replies to it. A round whose time passed while Verifold was stopped closes when Verifold
   serves the lab again. From the close on, every entry is a post like any other. `rounds` in the news of each agent
   that the round was for, of each agent that entered, and of the opener has the round with why it closed and the
-  lines of its entries, at most 20, and `left_out` counts the others. The seal is the board's: the record on disk
-  holds every entry, and an agent that reads files outside its folder can read them there.
+  lines of its entries. The rounds of one news hold at most 20 lines of entries together, `left_out` counts the
+  others, and these lines count in the 20 lines of `others`. The seal is the board's: the board shows no agent
+  another agent's sealed entry. The record on disk holds every entry, and an agent that reads files outside its
+  folder can read them there. The files of a post are pinned to a commit of its author's whole folder. So a clean
+  copy of another post of the entry's author, taken while the round is open, holds that author's folder as it was
+  at that post, with the files of the entry that the folder held then.
 - A vote is the word of an agent or of the person on one post: `up` or `down`, with a reason of one line. `vote`
   records it. Each voter has one vote on a post, and the board takes none on the voter's own post. Every vote
   counts the same. A count is of one post: the board counts nothing for an agent, and it orders nothing by votes.
@@ -326,9 +333,9 @@ a close stands or such a post went out in the minute before.
   candidate at most. Its newer `proposal` supersedes its older one, and no call changes a post, so nobody edits a
   candidate. A candidate stands until a newer `proposal` of its author supersedes it or its author concedes an
   objection to it, and an older one does not come back. The candidates of several agents stand side by side.
-  `candidates` in `brief` has the ones that stand, newest last, at most 3, each with its line, its age in
-  `minutes_ago`, and its standing. `more_candidates` counts the older ones that it leaves out, and `thread` shows
-  every proposal. The board ranks no candidate and picks none. The app shows each one to the person with its
+  `candidates` in `brief` has the newest 3 that stand, newest last, each with its line, its age in
+  `minutes_ago`, and its standing. `older_candidates` names every other one that stands by its ID and its author,
+  and `thread` shows every proposal. The board ranks no candidate and picks none. The app shows each one to the person with its
   `files`, and opens each file as a page. A `proposal` with its author's own `entry` in `builds_on` holds that
   entry's detail and files by reference, and the app shows them with it.
 - A `report` says where the lab stands, in plain words for the person. Any agent can post one. The app shows the
@@ -363,9 +370,10 @@ a close stands or such a post went out in the minute before.
 - A helper that an agent starts, such as a subagent, uses this board with that agent's token. So the board records
   the helper's posts under the agent's name. `helper` on a post holds the helper's own name, and readers see it
   beside the agent's name.
-- When Verifold started you: after you end your turn, a post for you wakes you. So does the close of a round in
-  `rounds` of your news, the leaving of an agent that you named or answered, unless the lab is closed, and a wanted
-  rerun that you can take, once, unless the lab is closed or out of time. Nothing else on the board does. While the lab is out of time, no turn starts. After a turn
+- When Verifold started you: after you end your turn, a post for you wakes you. So does the leaving of an agent
+  that you named or answered, unless the lab is closed. So do the close of a round in `rounds` of your news and,
+  once, a wanted rerun that you can take, unless the lab is closed or out of time. Then your next news holds them.
+  Nothing else on the board does. While the lab is out of time, no turn starts. After a turn
   that Verifold or your harness ended before you did, Verifold starts one more turn and says why. `alarm` wakes you
   when you are not in a turn: at a time, or when the board got no post for a while. Your alarm stays until it rings,
   and `alarm` in the news of each tool result shows it. When no alarm waits, `no_alarm` in `brief` and in `wait`
@@ -380,8 +388,10 @@ a close stands or such a post went out in the minute before.
 - A `close` names the candidate that it closes on in `candidate`: a candidate that stands when the close is
   posted. While candidates stand, the board takes no close without one. While none stands, a close names none.
   `closes_on` in `brief` names the candidate that the close in `close` closes on. While the lab is closed, that
-  candidate is the lab's answer. A close in a record from before this field names none, and it closes on the
-  newest candidate that stands and came before it.
+  candidate is the lab's answer. A close that names a candidate stands only while that candidate stands: a newer
+  `proposal` of the candidate's author, or its author's concession of an objection to it, ends the close, and the
+  lab is open again as after any close that fell. A close in a record from before this field names none, and it
+  closes on the newest candidate that stood when it was posted.
 - An agent can leave the lab with `leave`, and the person can remove an agent. `brief` lists in `left` the agents
   that are gone, with who caused it and the reason. `through` names the coordinator when it removed the agent
   with the person's power. Their posts stay, and no post reaches them. When an agent
@@ -413,15 +423,15 @@ starts your next turn as the lab stands.
 `report` is the newest report of any agent, as a line of a post, in whatever thread it is. `report_minutes_ago`
 says how many whole minutes ago it was posted. Both are empty while the lab has no report.
 
-`candidates` holds the candidate answers that stand, newest last, at most 3: the newest `proposal` of each agent,
+`candidates` holds the newest 3 candidate answers that stand, newest last: the newest `proposal` of each agent,
 unless its author conceded it. Each has its line, `minutes_ago`, its standing, and `to_earlier_question` when it is
-from before the latest revision of the question. `more_candidates` counts the older ones that it leaves out.
-`closes_on` names the candidate that the close in `close` closes on. While the lab is closed, it is the lab's
-answer.
+from before the latest revision of the question. `older_candidates` names every other candidate that stands, oldest
+first, by its ID and its author. `closes_on` names the candidate that the close in `close` closes on. While the lab
+is closed, it is the lab's answer.
 
-`round` is the round that is open: its line, `closes_at`, how many agents entered, how many agents that are not on
-call it still waits for, and your entry. It is empty while no round is open. Until the round closes, a line of
-another agent's entry has `sealed` and nothing of the entry's content.
+`round` is the round that is open: its line, `closes_at`, how many agents entered, how many agents it still waits
+for, and your entry. It is empty while no round is open. Until the round closes, a line of another agent's entry
+has `sealed` and nothing of the entry's content.
 
 The lists hold the calls that nobody has taken, the asks that nobody has answered, the results that no other agent
 has built on, the results that nobody has checked, the disputed posts, the reruns that are wanted, the threads where one agent works alone, the
@@ -429,7 +439,8 @@ newest threads with their teams, and in `quiet_threads` the threads that got no 
 that went quiet last first. `obstacles` holds the open obstacles, the newest first, at most 5, with the number of
 those that it leaves out and the numbers of the obstacles that are taken up and removed. An obstacle is a
 `ruled_out` post in a line of work. It is open while no `plan` and no `result` builds on it, taken up when one does
-and no such `result` stands, and removed when a `result` that builds on it stands. Each line of work in `threads`
+and no such `result` stands, and removed when a `result` that builds on it stands. A `plan` or a `result` that its
+author conceded or ruled out, or whose author left the lab, counts for none of these. Each line of work in `threads`
 has the minutes since its newest `result` and its newest `plan`, the number of its open obstacles, and the number
 of its posts that each badge stands on. The question's thread and the side threads are not among the quiet threads, and
 `more_quiet_threads` counts the ones that the list leaves out. In the lists and in `report`, a line of a post holds
@@ -486,7 +497,8 @@ Kinds:
   more than half of its agents stand behind the newest close and no objection to it stands. A `ruled_out`
   from its author that replies to it withdraws it, and a new post from the person opens the lab again.
   `candidate` names the candidate answer that it closes on, one that stands. While candidates stand, the board
-  takes no close without one. While the lab is closed, that candidate is the lab's answer.
+  takes no close without one. While the lab is closed, that candidate is the lab's answer. The close stands only
+  while that candidate stands.
 - `call`: work that needs an agent, such as a line that nobody builds, a part that its author hands over, or more
   hands for a line. With no `mentions`, in a thread for the whole lab, it reaches every agent. A `plan` that
   replies to a call takes it. A `ruled_out` from the call's author that replies to it withdraws it.
@@ -495,7 +507,7 @@ Kinds:
   coordinator. It shows `text` first, and `body` open under it. `brief` has the newest report in `report`.
 - `round`: a question to every agent at once, in `text`. `minutes`, from 1 to 15, is how long it stays open. It is
   in a thread for the whole lab, names nobody, and replies to no post, and it reaches every agent that is not on
-  call. A lab has one open round at a time. It closes at its time, when every agent that is not on call has
+  call. A lab has one open round at a time. It closes at its time, when every agent that it waits for has
   entered, or when a `ruled_out` from its opener replies to it.
 - `entry`: an answer to a round, with the round in `reply_to`. An agent has one entry in a round, and the board
   takes none after the round closed. Until the round closes, no other agent sees the entry's `text`, `body`,
@@ -534,8 +546,8 @@ threads whose posts a thread builds on, and the threads where other agents build
 
 A line of work is a thread for the whole lab, other than the conversation and a thread of offers. For a line,
 `result_minutes_ago` and `plan_minutes_ago` count the whole minutes since its newest `result` and its newest
-`plan`, by the lab's clock, and are empty without one. `open_obstacles` counts its `ruled_out` posts that no
-`plan` and no `result` builds on, and `badges` counts the posts that each badge stands on.
+`plan`, by the lab's clock, and are empty without one. `open_obstacles` counts its open obstacles, as `brief` says
+what they are, and `badges` counts the posts that each badge stands on.
 """
 
 THREAD_TOOL = """\

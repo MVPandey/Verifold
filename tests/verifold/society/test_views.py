@@ -20,6 +20,7 @@ from verifold.protocol.join import (
     ThreadSummary,
 )
 from verifold.protocol.posts import (
+    MAX_ROUND_MINUTES,
     Answer,
     Ask,
     Call,
@@ -659,15 +660,17 @@ def test_a_brief_holds_the_line_of_a_post_once_and_then_its_id_alone() -> None:
 ONE_TOOL_RESULT = 126_000
 """
 The most characters of JSON in a brief. A brief is one tool result, and a harness takes a result of this size:
-before votes, the largest brief that the board gave had 126,005 characters. No brief is larger than that.
+before votes, the largest brief that the board gave had 126,005 characters. The briefs of the largest labs below
+are not larger than that.
 """
 
 
-def _largest(*, full: bool = False) -> RecordBuilder:
+def _largest(*, full: bool = False, round_close: bool = True) -> RecordBuilder:
     # Twenty agents with the longest name, about line, role, and status, a long label, and every seat mark, in
     # twenty threads with every list full and headlines of 1,000 characters. With `full`, every post also has
     # the longest helper name and builds on ten posts, so that no line has an empty field to leave out. No post
-    # builds on an obstacle, so that every obstacle stays open.
+    # builds on an obstacle, so that every obstacle stays open. With `round_close`, the reader's news holds the
+    # close of a round with an entry of every other agent.
     record = RecordBuilder()
     for number in range(20):
         record.join(f'a{number}', name=f'Claude Code · {"m" * 40} {number + 2}')
@@ -676,13 +679,15 @@ def _largest(*, full: bool = False) -> RecordBuilder:
     built: list[str] = []
     long = 'x' * 1000
 
-    def post(kind: str, thread: str, author: str, reply_to: str | None = None) -> str:
+    def post(kind: str, thread: str, author: str, reply_to: str | None = None, **extra: object) -> str:
         more = {'helper': 'h' * 40, 'builds_on': tuple(built[-10:])} if full else {}
         ids.append(f'p-{len(ids) + 1}')
-        if kind != 'ruled_out':
+        # No post builds on an entry while its round is open. No post builds on the reader's round either, so that
+        # the posts for the reader are the same as in the lab without it.
+        if kind not in {'ruled_out', 'entry', 'round'}:
             built.append(ids[-1])
         fields = {'kind': kind, 'id': ids[-1], 'thread': thread, 'author': author, 'text': long, 'reply_to': reply_to}
-        record.post(TypeAdapter(Post).validate_python(fields | more))
+        record.post(TypeAdapter(Post).validate_python(fields | more | extra))
         return ids[-1]
 
     for number in range(1, 20):
@@ -696,6 +701,14 @@ def _largest(*, full: bool = False) -> RecordBuilder:
         post('ruled_out', thread, other)
         post('ask', thread, author)
         post('call', thread, author)
+        if number == 2 and round_close:
+            # Every entry comes while the round is open, and the close comes at the round's time.
+            opened = post('round', 't-1', 'a0', minutes=MAX_ROUND_MINUTES)
+            start = record.events[-1].at
+            for entrant in range(1, 20):
+                post('entry', 't-1', f'a{entrant}', opened)
+                record.events[-1] = record.events[-1].model_copy(update={'at': start})
+            record.closed(opened)
     # More agents propose than the brief lists, so the brief has every candidate line that it can hold.
     for number in range(1, MAX_CANDIDATES + 2):
         post('proposal', 't-1', f'a{number}')
@@ -713,19 +726,23 @@ def test_the_largest_brief_without_votes_is_one_tool_result() -> None:
 
     unseen = news(board, 'a0', 0)
     view = brief(board, 'a0', unseen)
+    (note,) = unseen.rounds
 
-    assert (len(unseen.for_you), len(unseen.others), len(view.agents), len(view.threads)) == (20, 20, 19, 20)
+    assert (len(unseen.for_you), len(view.agents), len(view.threads)) == (20, 19, 20)
+    # The lines of the round's note count in the 20 lines of the other posts: the round and its 19 entries fill them.
+    assert (len(note.entries), note.left_out, len(unseen.others)) == (19, 0, 0)
     assert [len(entries) for entries in (view.disputed, view.not_built_on, view.not_checked)] == [19, 10, 19]
     assert [len(entries) for entries in (view.open_asks, view.open_calls)] == [19, 19]
     assert (len(view.obstacles.open), view.obstacles.more_open) == (MAX_OBSTACLES, 19 - MAX_OBSTACLES)
     assert sum(entry.line is not None for entry in view.obstacles.open) >= MAX_OBSTACLES - 1
-    assert (len(view.candidates), view.more_candidates) == (MAX_CANDIDATES, 1)
+    assert (len(view.candidates), len(view.older_candidates)) == (MAX_CANDIDATES, 1)
     assert len(view.model_dump_json()) < ONE_TOOL_RESULT
     assert len(unseen.model_dump_json()) < 28_000
     # Each author's name, seat, seat marks, and role stand once in the brief: in its list of agents. A line of
     # the news in any other result has them.
-    assert all(line.by is not None and line.by.marks for line in (*unseen.for_you, *unseen.others))
-    assert all(line.by is None for line in (*view.news.for_you, *view.news.others))
+    entered = tuple(line for item in (unseen, view.news) for line in item.rounds[0].entries)
+    assert all(line.by is not None and line.by.marks for line in (*unseen.for_you, *entered[:19]))
+    assert all(line.by is None for line in (*view.news.for_you, *view.news.others, *entered[19:]))
     assert all(agent.plan is not None and agent.plan.by is None for agent in view.agents)
     # A line has its place in the record and no time.
     assert 'at' not in PostLine.model_fields
@@ -733,8 +750,10 @@ def test_the_largest_brief_without_votes_is_one_tool_result() -> None:
 
 def test_the_largest_brief_with_every_field_of_a_line_full_and_votes_on_every_post_is_one_tool_result() -> None:
     # Every post has the longest helper name and builds on ten posts. Every other agent and the person voted on
-    # every post with the longest reason, and every post of an agent has all three badges.
-    record = _largest(full=True)
+    # every post with the longest reason, and every post of an agent has all three badges. With the round's close
+    # of the test above, this brief has about 130,000 characters: the round's lines take the room of the news's
+    # other posts, and the lists of the brief then hold those posts' lines in full.
+    record = _largest(full=True, round_close=False)
     plain = len(brief(record.board(), 'a0', news(record.board(), 'a0', 0)).model_dump_json())
     why = 'w' * MAX_WHY
     voters = (*(f'a{number}' for number in range(20)), 'person')

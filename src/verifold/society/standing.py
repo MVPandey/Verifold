@@ -4,7 +4,7 @@ from verifold.protocol.agents import GUEST, UNKNOWN_FAMILY, Agent, same_family
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import PERSON, AgentId, PostId
 from verifold.protocol.join import Standing
-from verifold.protocol.posts import Answer, Check, Close, Objection, Plan, RuledOut
+from verifold.protocol.posts import Answer, Check, Close, Objection, Plan, Proposal, RuledOut
 from verifold.society.board import Board
 
 
@@ -152,16 +152,41 @@ def _overruled(objection_seq: int, objection: Objection, checks: tuple[tuple[int
     )
 
 
+def candidates(board: Board) -> tuple[Posted, ...]:
+    """
+    Return the candidate answers that stand, oldest first: the newest proposal of each author, unless its author conceded it.
+
+    A side thread takes no proposal, and a proposal there in a record from before that rule is no candidate.
+    `society.candidates` says what a candidate is. This function is here because a close stands only while the
+    candidate that it names stands.
+    """
+    newest = {
+        entry.post.author: entry
+        for entry in board.posts
+        if isinstance(entry.post, Proposal) and not board.is_side(entry.post.thread)
+    }
+    return tuple(
+        entry
+        for entry in sorted(newest.values(), key=lambda entry: entry.seq)
+        if standing(board, entry.post.id) != 'conceded'
+    )
+
+
 def closing(board: Board) -> Posted | None:
     """
     Return the post that says that the lab is done, when one stands: the newest close.
 
     It stands until an objection to it stands, its author concedes one, its author withdraws it with a ruled-out
     lead that replies to it, the person posts to the lab after it, or the person asks for changes to an offer of
-    files for a deliverable after it. An older close does not come back.
+    files for a deliverable after it. A close that names a candidate also stands only while that candidate stands,
+    so a newer proposal of the candidate's author, or its author's concession, ends the close too. A close from
+    before closes named a candidate names none, and this rule leaves it as it was. An older close does not come back.
     """
     entry = next((entry for entry in reversed(board.posts) if isinstance(entry.post, Close)), None)
     if entry is None or standing(board, entry.post.id) in {'disputed', 'conceded'}:
+        return None
+    named = entry.post.candidate if isinstance(entry.post, Close) else None
+    if named and all(candidate.post.id != named for candidate in candidates(board)):
         return None
     withdrawn = any(
         isinstance(reply.post, RuledOut) and reply.post.author == entry.post.author

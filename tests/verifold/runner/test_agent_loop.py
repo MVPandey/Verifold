@@ -49,6 +49,7 @@ from verifold.runner.session import AgentSession, PermissionChoice, PermissionRe
 from verifold.server.activity import Activity
 from verifold.server.lab import Lab
 from verifold.server.member import Member
+from verifold.society.attention import news
 from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
 from verifold.society.turns import before
 from verifold.society.views import needs_person
@@ -1428,6 +1429,33 @@ async def test_a_round_rings_the_agent_an_entry_rings_nobody_and_the_close_rings
         running.cancel()
 
     assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL, ROUND_CLOSED]
+
+
+async def test_the_close_of_a_round_rings_nobody_in_a_closed_lab_and_the_next_news_holds_it(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    await lab.post(PostRequest(kind='close', text='The answer stands.', thread='t-1'), 'ada')
+    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-2', accepts=True), 'bo')
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        await lab.post(PostRequest(kind='round', text='Best bet?', thread='t-1', minutes=10), 'ada')
+        question = lab.board.posts[-1].post.id
+        await until(lambda: len(lab.board.turns) == 2)
+        await lab.post(PostRequest(kind='ruled_out', text='Enough.', reply_to=question, thread='t-1'), 'ada')
+        assert lab.board.round_closes
+        await asyncio.sleep(0.3)
+        assert len(calls(log, 'prompt')) == 2
+        # bo's next news holds the close. The person's post opens the lab again and wakes bo.
+        member, _ = served.seat('bo')
+        assert [note.round.id for note in news(lab.board, 'bo', member.seen).rounds] == [question]
+        await lab.post(PostRequest(kind='message', text='Go on with line B.', thread='t-1'), 'person')
+        await until(lambda: len(lab.board.turns) == 3)
+    finally:
+        running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL, DOORBELL]
 
 
 class RealClock:

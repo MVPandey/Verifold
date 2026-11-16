@@ -152,15 +152,17 @@ def test_the_lab_norms_ask_agents_to_plan_together_keep_threads_apart_and_propos
         (
             "The lab's answer comes from candidates. When your line has a result that you can defend, propose it as a "
             'candidate answer: what the answer is, and what it rests on. Any agent can propose one, and several '
-            "candidates stand side by side. A candidate is its author's own: nobody edits it, and its author replaces "
-            'it with a newer one when the evidence changes. Object to a candidate when you see a problem in it. A lab '
-            'with one candidate that nobody questions has usually stopped looking.'
+            "candidates stand side by side. An agent has one candidate at a time. A candidate is its author's own: "
+            'nobody edits it, and its author replaces it with a newer one when the evidence changes. Object to a '
+            'candidate when you see a problem in it. A lab with one candidate that nobody questions has usually '
+            'stopped looking.'
         ),
+        # A post never changes, so the lab's answer is the candidate that the close names, with its files.
         (
             'Before the lab closes, the agents choose among the candidates that stand: by what was rerun and held up, '
-            'and by which objections stand. The close names the candidate that it closes on, and one agent then '
-            'writes the final answer file from it. When no candidate reaches the goal, the work goes on from the best '
-            'one.'
+            'and by which objections stand. The close names the candidate that it closes on. That candidate, with its '
+            "files, is the lab's answer, so its author brings it up to date before the close. When no candidate "
+            'reaches the goal, the work goes on from the best one.'
         ),
         "Keep the question's thread for the first plans and the candidate answers",
     ):
@@ -169,6 +171,7 @@ def test_the_lab_norms_ask_agents_to_plan_together_keep_threads_apart_and_propos
         'The newest proposal is the answer that the person sees',
         'A proposal is a draft',
         'so it holds the whole answer and not only your part',
+        'writes the final answer file from it',
     ):
         assert gone not in NORMS_TEMPLATE
 
@@ -181,7 +184,11 @@ def test_the_lab_norms_hold_the_goal_the_obstacle_the_seats_and_the_name() -> No
         'A result that says "this does not work" is a finding on the way.',
         'When the lab agrees that nothing works while most of its time is left, it has usually looked in too few places.',
         'Take that agreement as a signal to widen the search',
-        'An agent that thinks so posts a close, and each other agent agrees or objects.',
+        # The board takes no close without a candidate while one stands, also a close that says nothing is left.
+        (
+            'An agent that thinks so posts a close, and each other agent agrees or objects. While candidates stand, '
+            'the close names the one that the lab got furthest with.'
+        ),
         'A line that closed is no reason to end a turn',
         'set an alarm, because a post for you may never come',
         'An agent that the board cannot wake has no alarm, and it waits inside its turn.',
@@ -197,7 +204,7 @@ def test_the_lab_norms_hold_the_goal_the_obstacle_the_seats_and_the_name() -> No
         'The board lists the obstacles that nobody has taken up.',
         (
             'Read that list before you choose work, and build on an obstacle when you have a way to remove it: a plan '
-            'that builds on it takes it up, and a result that builds on it removes it.'
+            'that builds on it takes it up, and a result that builds on it and stands removes it.'
         ),
         'Two things that fail alone can work together.',
         "Do not assume a human's limits.",
