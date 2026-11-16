@@ -45,6 +45,7 @@ from verifold.society.reruns import (
     wanted_reruns,
 )
 from verifold.society.reviewers import free_seats, seats, seats_line
+from verifold.society.rounds import check_unsealed
 from verifold.society.standing import closing
 
 
@@ -377,8 +378,8 @@ def check_rerun(board: Board, rerun: RerunRequested) -> None:
     Check that somebody can ask for an independent rerun of a post.
 
     Raises:
-        RejectedEvent: The post does not exist, has no files as evidence, or has the checks of all the independent
-            reruns that one post gets.
+        RejectedEvent: The post does not exist, has no files as evidence, is an entry of a round that is open, or
+            has the checks of all the independent reruns that one post gets.
 
     """
     _check_member(board, rerun.by)
@@ -388,6 +389,7 @@ def check_rerun(board: Board, rerun: RerunRequested) -> None:
         raise RejectedEvent(f'Post {rerun.post} does not exist.')
     if not target.post.evidence:
         raise RejectedEvent(f'Post {rerun.post} has no files as evidence, so a rerun has nothing to run.')
+    check_unsealed(board, rerun.post, rerun.at, 'rerun request')
     if len(rerun_checks(board, rerun.post)) >= MAX_RERUNS:
         raise RejectedEvent(f'Post {rerun.post} has the checks of {MAX_RERUNS} independent reruns already.')
 

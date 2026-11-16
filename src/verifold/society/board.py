@@ -25,6 +25,7 @@ from verifold.protocol.events import (
     RerunRequested,
     RerunTaken,
     ReviewerSet,
+    RoundClosed,
     ThreadOpened,
     TimeRanOut,
     TimeSet,
@@ -64,6 +65,10 @@ class Board:
     """The agents that left the lab or that the person removed, oldest first."""
     threads: tuple[ThreadOpened, ...] = ()
     posts: tuple[Posted, ...] = ()
+    rounds: tuple[Posted, ...] = ()
+    """The posts that opened a round, oldest first. `society.rounds` says which one is open."""
+    round_closes: tuple[RoundClosed, ...] = ()
+    """Each close of a round that Verifold recorded, oldest first."""
     watches: tuple[WatchSet, ...] = ()
     alarms: tuple[AlarmSet, ...] = ()
     """The alarms that agents set, oldest first."""

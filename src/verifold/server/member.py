@@ -567,8 +567,9 @@ class Member:
         Return what happened since the agent last looked, once a post wakes it or `timeout` seconds pass.
 
         Posts that don't wake the agent count toward the update's summary, but they don't end the wait. The wait
-        also ends when an agent that this agent wrote to leaves the lab, when somebody asks for a rerun that this
-        agent can take, and when a lease that kept the agent from such a rerun ends without a check.
+        also ends when an agent that this agent wrote to leaves the lab, when a round that concerns the agent
+        closes, when somebody asks for a rerun that this agent can take, and when a lease that kept the agent from
+        such a rerun ends without a check.
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
@@ -580,7 +581,7 @@ class Member:
             now = self._lab.now()
             news = update(self._lab.board, self.agent_id, self._seen, now, told=self.told)
             remaining = deadline - loop.time()
-            if news.posts or news.left or news.reruns or remaining <= 0:
+            if news.posts or news.left or news.rounds or news.reruns or remaining <= 0:
                 self._seen = news.seq
                 self._tell(news.reruns, news.seq)
                 self._hear(now, news.others, news.posts)

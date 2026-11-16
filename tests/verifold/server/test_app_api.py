@@ -406,6 +406,40 @@ async def test_a_card_says_when_its_line_had_its_newest_result_and_the_lab_view_
     assert (obstacles[2]['post']['author'], obstacles[2]['at']) == ('bo', at['p-2'])
 
 
+async def test_the_person_opens_a_round_and_reads_each_entry_as_it_comes_and_then_the_close(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    opened = await client.post(
+        '/posts', json={'kind': 'round', 'text': 'Best bet?', 'new_thread': 'Best bet?', 'minutes': 5}
+    )
+    assert opened.status_code == 200
+    question = opened.json()['post']
+    first = (await client.get('/lab')).json()['round']
+    assert (first['round']['post']['text'], first['open'], first['closed'], first['entries']) == (
+        'Best bet?',
+        True,
+        None,
+        [],
+    )
+    assert first['not_entered'] == ['ada', 'bo']
+    assert first['closes_at'] == (lab.board.posts[-1].at + timedelta(minutes=5)).isoformat().replace('+00:00', 'Z')
+
+    entry = PostRequest(kind='entry', text='Keep the cache.', thread=question['thread'], reply_to=question['id'])
+    await lab.post(entry, 'bo')
+    # The person reads the entry whole while the round is open.
+    second = (await client.get('/lab')).json()['round']
+    assert ([item['post']['text'] for item in second['entries']], second['not_entered']) == (
+        ['Keep the cache.'],
+        ['ada'],
+    )
+    await lab.post(entry.model_copy(update={'text': 'Drop the night runs.'}), 'ada')
+    last = (await client.get('/lab')).json()['round']
+    assert (last['open'], last['closed']['why'], last['not_entered']) == (False, 'entered', [])
+    # The person enters no round.
+    refused = await client.post('/posts', json=entry.model_dump(mode='json', exclude_defaults=True))
+    assert refused.status_code == 400
+
+
 async def test_the_person_reads_a_side_thread_and_posts_in_it(client: httpx2.AsyncClient, lab: Lab) -> None:
     await lab.post(
         PostRequest(kind='message', text='Can you fetch it?', new_thread='Scoreboard', between=('bo',)), 'ada'

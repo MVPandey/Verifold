@@ -29,6 +29,8 @@ from verifold.protocol.events import (
     RerunRequested,
     RerunTaken,
     ReviewerSet,
+    RoundClosed,
+    RoundEnd,
     SettingsSet,
     ThreadOpened,
     TimeRanOut,
@@ -219,6 +221,12 @@ class RecordBuilder:
         """Add an agent's renewal of its lease on the rerun of a post, or with `held` false, its give-up."""
         seq, at = self._stamp()
         self.events.append(RerunLeaseSet(seq=seq, at=at, agent=agent_id, post=post_id, held=held))
+        return self
+
+    def closed(self, round_id: str, why: RoundEnd = 'time') -> 'RecordBuilder':
+        """Add Verifold's record that a round closed."""
+        seq, at = self._stamp()
+        self.events.append(RoundClosed(seq=seq, at=at, round=round_id, why=why))
         return self
 
     def turn(

@@ -63,7 +63,7 @@ from verifold.server.errors import LabExists, NoLab, SetupRejected
 from verifold.server.join import Members, join_server, token_digest
 from verifold.server.lab import Build, Lab, Stops
 from verifold.server.member import Member
-from verifold.server.timekeeper import keep_time
+from verifold.server.timekeeper import keep_rounds, keep_time
 from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.attention import update
 from verifold.society.board import Board
@@ -629,6 +629,7 @@ class Host:
         # A path that holds anything stays as it is, also a link that leads nowhere.
         write_missing_norms(self._project / LAB_FOLDER)
         group.create_task(keep_time(lab))
+        group.create_task(keep_rounds(lab))
         group.create_task(keep_jobs(lab, self._project, self._swept))
         self._refusals = Refusals(lab)
         group.create_task(self._refusals.run())

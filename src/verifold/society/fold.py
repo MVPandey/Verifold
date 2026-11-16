@@ -27,6 +27,7 @@ from verifold.protocol.events import (
     RerunRequested,
     RerunTaken,
     ReviewerSet,
+    RoundClosed,
     SettingsSet,
     ThreadOpened,
     TimeRanOut,
@@ -37,6 +38,7 @@ from verifold.protocol.events import (
     WatchSet,
     WentQuiet,
 )
+from verifold.protocol.posts import Round
 from verifold.society.board import Board
 from verifold.society.coordinator import check_answered, check_made, check_power
 from verifold.society.deliverables import (
@@ -47,6 +49,7 @@ from verifold.society.deliverables import (
     offers_title,
 )
 from verifold.society.errors import RejectedEvent
+from verifold.society.rounds import check_close, check_rounds
 from verifold.society.rules import (
     check_agent,
     check_alarm,
@@ -109,7 +112,12 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
         case Posted(post=post):
             check_post(board, post)
             check_offer(board, post)
-            return replace(board, seq=event.seq, posts=(*board.posts, event))
+            check_rounds(board, event)
+            rounds = (*board.rounds, event) if isinstance(post, Round) else board.rounds
+            return replace(board, seq=event.seq, posts=(*board.posts, event), rounds=rounds)
+        case RoundClosed():
+            check_close(board, event)
+            return replace(board, seq=event.seq, round_closes=(*board.round_closes, event))
         case WatchSet():
             check_watch(board, event)
             return replace(board, seq=event.seq, watches=(*board.watches, event))

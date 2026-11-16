@@ -27,7 +27,7 @@ from verifold.protocol.agents import (
     ValueId,
 )
 from verifold.protocol.deliverables import DeliverableLine
-from verifold.protocol.events import Note, Posted, Question, RequestAnswered
+from verifold.protocol.events import Note, Posted, Question, RequestAnswered, RoundEnd
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.moves import LabSetting, Move
 from verifold.protocol.posts import (
@@ -58,7 +58,7 @@ type Standing = Literal['open', 'checked', 'held_up', 'disputed', 'conceded']
 type ObstacleState = Literal['open', 'taken_up', 'removed']
 """
 Where an obstacle stands, by the posts that build on it. An obstacle is a `ruled_out` post in a line of work, other
-than one that withdraws its author's own call or close. A plan or a result whose author accepted an objection to it
+than one that withdraws its author's own call, close, or round. A plan or a result whose author accepted an objection to it
 counts for none of these states.
 
 - `open`: no plan and no result builds on it.
@@ -143,6 +143,8 @@ class PostRequest(Record):
     """
     for_person: bool = False
     """Whether the coordinator posts this for the person. With `new_thread`, the thread is one for the person too."""
+    minutes: int | None = None
+    """On a round: how many minutes it stays open, from 1 to `MAX_ROUND_MINUTES`. No other kind takes it."""
 
     @model_validator(mode='after')
     def _one_thread(self) -> Self:
@@ -302,6 +304,12 @@ class PostView(Record):
     """For a request for a move: whether it waits for the person's answer."""
     ended: RequestEnd | None = None
     """For a request for a move without an answer: why it waits for none. `None` while it waits."""
+    sealed: bool = False
+    """
+    Whether the post is an entry of a round that is open, which another agent wrote. `post` then holds the
+    entry's ID, thread, author, and the round in `reply_to`, with `SEALED_TEXT` as its headline and nothing else of
+    its content: no `body`, `helper`, `evidence`, `mentions`, or `builds_on`. The person sees every entry whole.
+    """
     up: int = 0
     """
     How many votes up stand on the post. Every vote counts the same. For an agent, zero also while the votes on
@@ -382,7 +390,7 @@ class PostLine(Sparse):
     together.
 
     A line leaves out each field that holds nothing, as `Sparse` says: `by`, `helper`, `body`, `reply_to`,
-    `builds_on`, `for_person`, `up`, `down`, and `badges`. It has `seq` and no time.
+    `builds_on`, `for_person`, `sealed`, `up`, `down`, and `badges`. It has `seq` and no time.
     """
 
     id: PostId
@@ -412,6 +420,11 @@ class PostLine(Sparse):
     Whether the lab's coordinator marked the post as one on the person's behalf. The author is still the
     coordinator: the mark is the coordinator's word, and a post by the person has `person` as its author.
     """
+    sealed: bool = False
+    """
+    Whether the post is an entry of a round that is open, which another agent wrote. The line then has
+    `SEALED_TEXT` as its headline, and nothing of the entry's content.
+    """
     up: int = 0
     """
     How many votes up stand on the post. `thread` shows each vote with its reason. For an agent, the line has no
@@ -432,11 +445,13 @@ class PostLine(Sparse):
         marks: tuple[int, int, tuple[Badge, ...]] = (0, 0, ()),
         *,
         news: bool = False,
+        sealed: bool = False,
     ) -> Self:
         """
         Return the line of a post on the board, with who wrote it. `marks` are its votes up and down and its badges.
 
-        With `news`, the line is one of the news, and a line of a post of the person holds its body too.
+        With `news`, the line is one of the news, and a line of a post of the person holds its body too. With
+        `sealed`, the post is a sealed entry, which the caller gives without its content.
         """
         post = entry.post
         text, body = line_text(post.text), ''
@@ -456,6 +471,7 @@ class PostLine(Sparse):
             reply_to=post.reply_to,
             builds_on=post.builds_on,
             for_person=post.for_person,
+            sealed=sealed,
             up=marks[0],
             down=marks[1],
             badges=marks[2],
@@ -469,6 +485,41 @@ class PostEntry(Sparse):
     id: PostId
     line: PostLine | None = None
     """The post's line. `None` when `news` or an earlier field of the same brief holds it."""
+
+
+SEALED_TEXT = 'Sealed until the round closes.'
+"""The headline that the board shows an agent in place of the headline of another agent's entry while its round is open."""
+
+MAX_ENTRIES = 20
+"""The most entries whose lines the news of a round's close holds. `thread` shows every entry."""
+
+
+class RoundLine(Sparse):
+    """The round that is open now: its line, when it closes, how many agents entered, how many it waits for, and yours."""
+
+    round: PostLine
+    closes_at: AwareDatetime
+    """When the round closes by the lab's clock, unless every agent that it waits for enters first."""
+    entered: int = 0
+    """How many agents entered. Until the round closes, no other agent's entry shows you its content."""
+    not_entered: int = 0
+    """
+    How many agents the round still waits for: the agents of the lab that are not on call, have not left, and have
+    not entered. The round closes when none is left.
+    """
+    yours: PostId | None = None
+    """Your entry, once you entered."""
+
+
+class RoundNote(Record):
+    """A round that closed: its line, why it closed, and the lines of its entries, which every agent sees from now on."""
+
+    round: PostLine
+    why: RoundEnd
+    entries: tuple[PostLine, ...] = ()
+    """The entries, oldest first, at most `MAX_ENTRIES`. `thread` shows each one whole."""
+    left_out: int = 0
+    """How many entries `entries` leaves out."""
 
 
 MAX_OBSTACLES = 5
@@ -696,6 +747,11 @@ class News(Record):
     """The changes that the person or the coordinator made to the agent's own profile since, oldest first."""
     renamed: tuple[RenameLine, ...] = ()
     """The other agents whose name changed since, each once, with its name now and the name that it had before."""
+    rounds: tuple[RoundNote, ...] = ()
+    """
+    The rounds that closed since, each with the lines of its entries, for an agent that the round was for, that
+    entered it, or that opened it. An entry shows to every agent from its round's close on.
+    """
     reruns: tuple[RerunLine, ...] = ()
     """
     The reruns that became wanted since and that the agent can take with `take_rerun`. A rerun is here once: a
@@ -1136,6 +1192,8 @@ class Brief(Record):
     """The newest report of any agent, in whatever thread it is. The app shows it to the person. `None` when the lab has none."""
     report_minutes_ago: int | None = None
     """How many whole minutes ago that report was posted. `None` when the lab has no report."""
+    round: RoundLine | None = None
+    """The round that is open now, or `None` while no round is open."""
     threads: tuple[ThreadSummary, ...] = ()
     """The threads that are not side threads, the most recently active first, at most `MAX_NEWS`."""
     more_threads: int = 0
@@ -1202,6 +1260,8 @@ class Update(Record):
     """The changes that the person or the coordinator made to the agent's own profile since, oldest first."""
     renamed: tuple[RenameLine, ...] = ()
     """The other agents whose name changed since, each once, with its name now and the name that it had before."""
+    rounds: tuple[RoundNote, ...] = ()
+    """The rounds that closed since, with the lines of their entries, as in the news. A close ends a `wait`."""
     reruns: tuple[RerunLine, ...] = ()
     """The reruns that became wanted since and that the agent can take with `take_rerun`, as in the news."""
     votes: tuple[VoteNote, ...] = ()

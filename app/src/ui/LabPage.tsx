@@ -42,6 +42,7 @@ import { CoordinatorSeat, OpenedForYou } from './Coordinator.tsx';
 import { DeliverDoor, Deliverables } from './Deliverables.tsx';
 import { ChipView, Composer, Exact, Files } from './parts.tsx';
 import { Who } from './Picture.tsx';
+import { RoundOpener, RoundPanel } from './Rounds.tsx';
 import { Turns } from './Thread.tsx';
 import { BadgeChip } from './Votes.tsx';
 
@@ -99,8 +100,9 @@ export function LabPage(props: PageProps & Place): ReactElement {
 }
 
 /**
- * The lab as a wall: the question and the answer so far, what waits for the person, the box that steers the lab,
- * the newest report, the band of a quiet lab, and one card for each thread. The cards stay in the order of their
+ * The lab as a wall: the question and the answer so far, what waits for the person, the box that steers the lab
+ * with the control that opens a round, the newest report, the band of a quiet lab, the newest round, and one card
+ * for each thread. The cards stay in the order of their
  * threads' numbers, so a status that changes moves no card. The side threads come after the cards as one folded group, one line each. `questionRead` is the question's thread, and `cardRead` is the thread of the open card.
  */
 export function Wall(
@@ -271,6 +273,14 @@ export function Wall(
             }
             onSend={(text) => send(text)}
           />
+          <RoundOpener
+            round={lab.round}
+            now={props.now}
+            onOpen={async (request) => {
+              await api.post(request);
+              data.reload();
+            }}
+          />
         </div>
       </section>
 
@@ -293,6 +303,7 @@ export function Wall(
           </p>
         ) : null}
         <QuietBand lab={lab} now={props.now} />
+        <RoundPanel round={lab.round} agents={lab.agents} now={props.now} />
         {crossing ? <p className="f-crossed">{crossing}</p> : null}
         {cards.length > 0 ? (
           <div className="f-wall">

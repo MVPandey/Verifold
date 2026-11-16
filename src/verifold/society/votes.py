@@ -50,6 +50,7 @@ from verifold.protocol.votes import (
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 from verifold.society.lifecycle import latest_time
+from verifold.society.rounds import check_unsealed
 from verifold.society.standing import standing
 
 
@@ -305,8 +306,8 @@ def check_vote(board: Board, vote: Voted) -> None:
 
     Raises:
         RejectedEvent: The voter is not in the lab, left it, or is a blind checker, the post does not exist, is
-            the voter's own, or is no work to judge, a vote up or down has no reason, or the voter takes back a
-            vote that it does not have.
+            the voter's own, is no work to judge, or is an entry of a round that is open, a vote up or down has no
+            reason, or the voter takes back a vote that it does not have.
 
     """
     _check_can(board, vote.by, 'votes on no post')
@@ -314,6 +315,7 @@ def check_vote(board: Board, vote: Voted) -> None:
     if target.post.author == vote.by:
         raise RejectedEvent(f'Post {vote.post} is your own. A vote on a post comes from another agent or the person.')
     _check_work(board, target, 'vote')
+    check_unsealed(board, vote.post, vote.at, 'vote')
     if vote.direction == 'none':
         if vote_of(board, vote.by, vote.post) is None:
             raise RejectedEvent(f'You have no vote on post {vote.post}, so there is none to take back.')
@@ -327,11 +329,13 @@ def check_badge(board: Board, change: BadgeSet) -> None:
 
     Raises:
         RejectedEvent: The one who makes the change is not in the lab, left it, or is a blind checker, the post
-            does not exist, or the change breaks a rule of its action, which the message names.
+            does not exist or is an entry of a round that is open, or the change breaks a rule of its action, which
+            the message names.
 
     """
     _check_can(board, change.by, 'gives no badge')
     target = _target(board, change.post)
+    check_unsealed(board, change.post, change.at, 'badge')
     changes = board.badges_on.get(change.post, ())
     held = _held(changes)
     if change.action == 'give':

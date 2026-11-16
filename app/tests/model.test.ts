@@ -6,6 +6,7 @@ import type {
   Post,
   PostView,
   RerunLine,
+  RoundView,
   ThreadSummary,
   Wait,
 } from '../src/api/types.ts';
@@ -73,6 +74,7 @@ import {
   whereLine,
 } from '../src/model/status.ts';
 import { wrapFocus } from '../src/model/focus.ts';
+import { enteredLine, roundRequest, roundRows, roundTime } from '../src/model/rounds.ts';
 import {
   AT_EXIT,
   MAX_BOARD_MINUTES,
@@ -2276,5 +2278,93 @@ describe('focus in the profile', () => {
     assert.equal(wrapFocus(4, -1, true), 3);
     assert.equal(wrapFocus(1, 0, false), 0);
     assert.equal(wrapFocus(0, -1, false), null);
+  });
+});
+
+describe('a round', () => {
+  const question = postView(result('p-2', { kind: 'round', minutes: 10, text: 'Best bet?' }));
+  const entry = (id: string, author: string): PostView =>
+    postView(
+      result(id, {
+        kind: 'entry',
+        author,
+        reply_to: 'p-2',
+        text: `${author} bets.`,
+      }),
+    );
+  const open: RoundView = {
+    round: question,
+    open: true,
+    closes_at: '2026-11-06T14:14:00Z',
+    closed: null,
+    entries: [entry('p-3', 'agent-2')],
+    not_entered: ['agent-1', 'agent-3'],
+  };
+
+  it('opens with the first line as the question and minutes from 1 to 15', () => {
+    assert.deepEqual(roundRequest('  Best bet?\nWith one reason.  ', 5), {
+      kind: 'round',
+      text: 'Best bet?',
+      body: 'With one reason.',
+      minutes: 5,
+      new_thread: 'Best bet?',
+    });
+    assert.equal(roundRequest('   ', 5), null);
+    assert.equal(roundRequest('Best bet?', 0), null);
+    assert.equal(roundRequest('Best bet?', 16), null);
+    assert.equal(roundRequest('Best bet?', 2.5), null);
+  });
+
+  it('says when it closes, who entered, and when and why it closed', () => {
+    const now = new Date('2026-11-06T14:09:30Z');
+    assert.equal(roundTime(open, now), `Closes at ${clock(open.closes_at)}, in 5 min`);
+    assert.equal(enteredLine(open), '1 of 3 entered');
+    const closed: RoundView = {
+      ...open,
+      open: false,
+      closed: {
+        type: 'round_closed',
+        seq: 9,
+        at: '2026-11-06T14:12:00Z',
+        round: 'p-2',
+        why: 'opener',
+      },
+    };
+    assert.equal(
+      roundTime(closed, now),
+      `Closed at ${clock('2026-11-06T14:12:00Z')}: its opener closed it`,
+    );
+    // A round whose time came before Verifold recorded its close closed at its time.
+    assert.equal(
+      roundTime({ ...open, open: false }, now),
+      `Closed at ${clock(open.closes_at)}: its time came`,
+    );
+  });
+
+  it('has a row for each entry in its order and then each agent that did not enter', () => {
+    assert.deepEqual(
+      roundRows({ ...open, entries: [entry('p-3', 'agent-2'), entry('p-4', 'agent-4')] }).map(
+        (row) => [row.agent, row.entry?.post.id ?? null],
+      ),
+      [
+        ['agent-2', 'p-3'],
+        ['agent-4', 'p-4'],
+        ['agent-1', null],
+        ['agent-3', null],
+      ],
+    );
+  });
+
+  it('writes the round and an entry as turns', () => {
+    const context = { called: (id: string) => id, author: null };
+    assert.equal(act(question.post, null, context), 'asked every agent at once');
+    assert.equal(
+      act(entry('p-3', 'agent-2').post, question.post, context),
+      'entered agent-1’s round',
+    );
+    const yours = { ...question.post, author: 'person' };
+    assert.equal(act(entry('p-3', 'agent-2').post, yours, context), 'entered your round');
+    assert.equal(tone(question.post), 'ask');
+    assert.equal(tone(entry('p-3', 'agent-2').post), 'answer');
   });
 });

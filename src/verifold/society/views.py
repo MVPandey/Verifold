@@ -37,6 +37,7 @@ from verifold.protocol.join import (
     ProfileResult,
     QuestionVersion,
     RevisionLine,
+    RoundLine,
     SideLine,
     ThreadLine,
     ThreadLink,
@@ -64,6 +65,7 @@ from verifold.society.lines import is_line_of_work, lines_of, question_thread
 from verifold.society.obstacles import obstacles
 from verifold.society.reruns import rerun_checks, reruns_wanted
 from verifold.society.reviewers import free_seats, holders, seats
+from verifold.society.rounds import closes_at, entries, for_reader, open_round, waits_for
 from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing, waits_for_person
 from verifold.society.turns import before
 from verifold.society.votes import marks
@@ -82,12 +84,13 @@ def thread_view(
     Each post has its counts, its badges, and its newest votes with their reasons: `NEWEST_VOTES` for an agent,
     so that a long thread with many voters stays one tool result. The post that `votes_of` names has
     `MAX_VOTE_LINES`, and so has every post for the person. A post whose votes are sealed for the agent at `now`
-    has no counts and no votes.
+    has no counts and no votes, and an entry that is sealed for it has no content.
 
     Raises:
         NotFound: No thread has this ID, or the thread has no post with the ID in `votes_of`.
 
     """
+    board = for_reader(board, agent_id, now)
     opened = board.thread(thread_id)
     if opened is None:
         raise NotFound(f'No thread has the ID {thread_id}.')
@@ -117,7 +120,9 @@ def thread_summaries(board: Board, agent_id: AgentId, now: datetime | None = Non
 
     The latest post of each thread shows its votes as `post_line` does for the agent at `now`, and the minutes since
     the newest result and plan of a line of work count to `now`. Without it, time counts from the board's newest post.
+    An entry that is sealed for the agent counts as a post, and its content counts for nothing.
     """
+    board = for_reader(board, agent_id, now)
     now = now or latest_time(board)
     crossed = crossings(board)
     lines = lines_of(board)
@@ -304,9 +309,11 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
     works.
 
     `now` dates the time that the lab has left, the report's age, the quiet threads, the votes that are sealed for
-    the agent, and the leases on the wanted reruns. Without it, time counts from the board's newest post. The
-    agents in a turn come from the record, because this package does no I/O and so knows no live activity.
+    the agent, the open round and the entries that are sealed for the agent, and the leases on the wanted reruns.
+    Without it, time counts from the board's newest post. The agents in a turn come from the record, because this
+    package does no I/O and so knows no live activity.
     """
+    board = for_reader(board, agent_id, now)
     now = now or latest_time(board)
     # An invited agent that has not posted may never come, so no agent reads it as a peer to ask or wait for. An
     # agent that left is no peer either, and the brief lists it apart.
@@ -470,6 +477,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         answer_to_earlier_question=bool(proposed) and to_earlier_question(board, proposed),
         report=report_line,
         report_minutes_ago=minutes_since(reported.at, now) if reported else None,
+        round=round_line(board, agent_id, now),
         threads=tuple(latest(summary) for summary in summaries[:MAX_NEWS]),
         more_threads=max(len(summaries) - MAX_NEWS, 0),
         side_threads=side[:MAX_NEWS],
@@ -496,6 +504,22 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         open_calls=listed(open_calls[-MAX_NEWS:]),
         reruns_wanted=reruns_wanted(board, now)[-MAX_NEWS:],
         news=news.model_copy(update={'for_you': known(news.for_you), 'others': known(news.others)}),
+    )
+
+
+def round_line(board: Board, agent_id: AgentId, now: datetime) -> RoundLine | None:
+    """Return the round that is open at `now` as one line for an agent, or `None` while no round is open."""
+    opened = open_round(board, now)
+    if opened is None:
+        return None
+    answers = entries(board, opened.post.id)
+    yours = next((entry.post.id for entry in answers if entry.post.author == agent_id), None)
+    return RoundLine(
+        round=post_line(board, opened, agent_id, now),
+        closes_at=closes_at(opened),
+        entered=len(answers),
+        not_entered=len(waits_for(board, opened)),
+        yours=yours,
     )
 
 

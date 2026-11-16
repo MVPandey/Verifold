@@ -40,6 +40,7 @@ from verifold.runner.messages import (
     OUT_OF_TIME,
     RERUN_WANTED,
     RESTARTED,
+    ROUND_CLOSED,
     STARTED_AGAIN,
     alarm_message,
     back_message,
@@ -455,10 +456,11 @@ class AgentLoop:
             # An agent that this agent wrote to and that left wakes it as a post does: no answer comes from it.
             # Like the alarm, that does not wake an agent in a closed lab, where agents leave because it is done.
             # A rerun that this agent can take wakes it once, as a call does. Like the alarm, it does not in a lab
-            # that is out of time or closed, and it rings when the lab has time or is open again.
+            # that is out of time or closed, and it rings when the lab has time or is open again. The close of a
+            # round that concerns the agent wakes it as a post for it does.
             resting = board.out_of_time or lab_state(board) == 'closed'
             reruns = () if resting else news.reruns
-            posts = bool(news.posts or reruns or (news.left and lab_state(board) != 'closed'))
+            posts = bool(news.posts or news.rounds or reruns or (news.left and lab_state(board) != 'closed'))
             # The agent's own alarm. It does not ring in a lab that is out of time or closed.
             alarm = pending_alarm(board, agent_id)
             left = None
@@ -487,7 +489,10 @@ class AgentLoop:
                     settled = True
                     continue
                 self._notified, self._rung = board.seq, self._rung | told_of(board, reruns)
-                return self._ring(DOORBELL if news.posts else RERUN_WANTED if reruns else DEPARTURE, due, late)
+                bell = (
+                    DOORBELL if news.posts else ROUND_CLOSED if news.rounds else RERUN_WANTED if reruns else DEPARTURE
+                )
+                return self._ring(bell, due, late)
             if due:
                 return self._ring('', due, late)
             # A rerun that only a lease keeps from the agent comes free at the lease's end, which is no event.

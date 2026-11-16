@@ -27,6 +27,9 @@ DOORBELL = 'New posts for you on the lab board.'
 DEPARTURE = 'An agent that you named or answered on the lab board has left the lab.'
 """The message that wakes an agent after it ended its turn, when no post came and such an agent left."""
 
+ROUND_CLOSED = 'A round closed on the lab board, and its entries show to every agent now.'
+"""The message that wakes an agent for the close of a round that concerns it, when no post for it came."""
+
 RERUN_WANTED = 'An independent rerun that you can take is wanted on the lab board.'
 """The message that wakes an agent after it ended its turn, when no post came and it can take a rerun that is wanted."""
 

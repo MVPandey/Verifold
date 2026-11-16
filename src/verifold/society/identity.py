@@ -18,8 +18,10 @@ from verifold.protocol.votes import NEWEST_VOTES
 from verifold.society.board import Board
 from verifold.society.coordinator import request_end, request_waits
 from verifold.society.labels import is_numbered, plain
+from verifold.society.rounds import for_reader, sealed, stripped
 from verifold.society.standing import standing
-from verifold.society.votes import badge_lines, marks, sealed, vote_lines
+from verifold.society.votes import badge_lines, marks, vote_lines
+from verifold.society.votes import sealed as votes_sealed
 
 GUEST_LABEL = 'Own harness · model not reported'
 """The label of an invited agent's seat. It runs in a harness that Verifold does not know, and reports no model."""
@@ -98,11 +100,14 @@ def post_line(
     Return a post as one line for `reader` at `now`, with who wrote it, its votes up and down, and its badges.
 
     While the votes on the post are sealed for the reader, the line has no counts, as a line of a post without
-    votes. With `news`, the line is one of the news, which carries a post of the person with its body.
+    votes. While the post is an entry of an open round that another agent wrote, the line holds nothing of its
+    content. With `news`, the line is one of the news, which carries a post of the person with its body.
     """
+    hidden = sealed(board, reader, entry, now)
+    shown = stripped(entry) if hidden else entry
     up, down, badges = marks(board, entry.post.id)
-    counts = (0, 0) if sealed(board, reader, entry, now) else (up, down)
-    return PostLine.of(entry, byline(board, entry, MAX_SEAT), (*counts, badges), news=news)
+    counts = (0, 0) if votes_sealed(board, reader, entry, now) else (up, down)
+    return PostLine.of(shown, byline(board, entry, MAX_SEAT), (*counts, badges), news=news, sealed=hidden)
 
 
 def post_view(
@@ -111,17 +116,21 @@ def post_view(
     """
     Return a post with its time, who wrote it, where it stands, the posts that build on it, its votes, and its badges.
 
-    While the votes on the post are sealed for `reader` at `now`, it has no counts and no votes.
+    While the votes on the post are sealed for `reader` at `now`, it has no counts and no votes. While the post is
+    an entry of an open round that another agent wrote, it holds nothing of the entry's content, and no post
+    shows that a sealed entry builds on it.
     """
-    shown = not sealed(board, reader, entry, now)
+    hidden = sealed(board, reader, entry, now)
+    shown = not votes_sealed(board, reader, entry, now)
     up, down, _ = marks(board, entry.post.id) if shown else (0, 0, ())
     return PostView(
         seq=entry.seq,
         at=entry.at,
-        post=entry.post,
+        post=stripped(entry).post if hidden else entry.post,
+        sealed=hidden,
         by=byline(board, entry),
         standing=standing(board, entry.post.id),
-        built_on_by=tuple(other.post.id for other in board.built_on(entry.post.id)),
+        built_on_by=tuple(other.post.id for other in for_reader(board, reader, now).built_on(entry.post.id)),
         decision=board.answer_to(entry.post.id) if isinstance(entry.post, MoveRequest) else None,
         waits=request_waits(board, entry),
         ended=None if board.answer_to(entry.post.id) else request_end(board, entry),

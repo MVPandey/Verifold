@@ -36,6 +36,7 @@ from verifold.runner.messages import (
     OUT_OF_TIME,
     RERUN_WANTED,
     RESTARTED,
+    ROUND_CLOSED,
     STARTED_AGAIN,
     alarm_message,
     back_message,
@@ -1402,6 +1403,31 @@ async def test_a_rerun_that_a_lease_keeps_from_the_agent_wakes_it_only_when_the_
         running.cancel()
 
     assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', RERUN_WANTED]
+
+
+async def test_a_round_rings_the_agent_an_entry_rings_nobody_and_the_close_rings_once(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        await lab.post(PostRequest(kind='round', text='Best bet?', thread='t-1', minutes=10), 'ada')
+        question = lab.board.posts[-1].post.id
+        await until(lambda: len(lab.board.turns) == 2)
+        # An entry wakes nobody, also when it names the agent.
+        await lab.post(PostRequest(kind='entry', text='Ask bo.', reply_to=question, thread='t-1'), 'ada')
+        await asyncio.sleep(0.3)
+        assert len(calls(log, 'prompt')) == 2
+
+        # The opener's withdrawal is no post for bo. The close of the round rings for it.
+        await lab.post(PostRequest(kind='ruled_out', text='Enough.', reply_to=question, thread='t-1'), 'ada')
+        await until(lambda: len(lab.board.turns) == 3)
+        await asyncio.sleep(0.3)
+    finally:
+        running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL, ROUND_CLOSED]
 
 
 class RealClock:

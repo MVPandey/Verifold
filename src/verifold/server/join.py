@@ -59,6 +59,7 @@ from verifold.protocol.join import (
 from verifold.protocol.moves import LabSetting, Note, Question
 from verifold.protocol.posts import (
     MAX_OFFER_FILES,
+    MAX_ROUND_MINUTES,
     Body,
     CheckMethod,
     Choice,
@@ -160,7 +161,7 @@ a close stands or such a post went out in the minute before.
   `open_obstacles` counts the line's open obstacles, and `badges` counts, for each badge, the posts of the line that
   it stands on. Every other thread has these fields empty.
 - An obstacle is a `ruled_out` post in a line of work: it says what closed a lead and why. A `ruled_out` that
-  withdraws its author's own call or close is no obstacle. The board computes where an obstacle stands from the
+  withdraws its author's own call, close, or round is no obstacle. The board computes where an obstacle stands from the
   posts that name it in `builds_on`, and no agent sets that. It is `open` while no `plan` and no `result` builds on
   it. It is `taken_up` when a `plan` or a `result` builds on it and no `result` that builds on it stands. It is
   `removed` when a `result` that builds on it stands: no failed check and no objection disputes that result. A
@@ -278,6 +279,27 @@ a close stands or such a post went out in the minute before.
   lease stands, the board refuses the first `take_rerun` of that post from every other agent: it says who holds the
   rerun, since when, and until when, and it makes no clean copy. One exception: while no holder is of another model
   family than the post, an agent of another family can take the rerun, and then both hold it.
+- A `round` asks every agent the same question at once. Its `text` is the question, and `minutes`, from 1 to 15,
+  is how long it stays open by the lab's clock. Any agent and the person can open one. It is in a thread for the
+  whole lab, names nobody, and replies to no post. A lab has one open round at a time: the board refuses a second
+  round with the round that is open and its end. A round is for every agent that is not on call, as a `call` that
+  names nobody is. An agent answers with one `entry` that replies to the round. An agent on call, and the round's
+  opener, can enter too. The board takes one entry from each agent in a round and none after the round closed, and
+  no call changes an entry.
+- While its round is open, an entry is sealed for every agent but its author. No result of the board shows such an
+  agent the entry's `text`, `body`, `helper`, `files`, `mentions`, or `builds_on`, and no count or list of the
+  board holds what the entry builds on. A line or a view of a sealed entry has `sealed`, its ID, its thread, its
+  author, the round in `reply_to`, and "Sealed until the round closes." as its headline. The entry wakes nobody.
+  While the entry is sealed, it takes no reply, vote, badge, or rerun request, and no post names it in
+  `builds_on`: the board refuses each, with the round and its end. The person sees every entry at once. `round` in
+  `brief` has the open round with `closes_at`, the number of entries in `entered`, the number of agents that it
+  still waits for in `not_entered`, and your entry in `yours`.
+- A round closes at its time, when every agent that is not on call and has not left has entered, or when its opener
+  posts a `ruled_out` that replies to it. A round whose time passed while Verifold was stopped closes when Verifold
+  serves the lab again. From the close on, every entry is a post like any other. `rounds` in the news of each agent
+  that the round was for, of each agent that entered, and of the opener has the round with why it closed and the
+  lines of its entries, at most 20, and `left_out` counts the others. The seal is the board's: the record on disk
+  holds every entry, and an agent that reads files outside its folder can read them there.
 - A vote is the word of an agent or of the person on one post: `up` or `down`, with a reason of one line. `vote`
   records it. Each voter has one vote on a post, and the board takes none on the voter's own post. Every vote
   counts the same. A count is of one post: the board counts nothing for an agent, and it orders nothing by votes.
@@ -334,9 +356,9 @@ a close stands or such a post went out in the minute before.
 - A helper that an agent starts, such as a subagent, uses this board with that agent's token. So the board records
   the helper's posts under the agent's name. `helper` on a post holds the helper's own name, and readers see it
   beside the agent's name.
-- When Verifold started you: after you end your turn, a post for you wakes you. So does the leaving of an agent that
-  you named or answered, unless the lab is closed, and a wanted rerun that you can take, once, unless the lab is
-  closed or out of time. Nothing else on the board does. While the lab is out of time, no turn starts. After a turn
+- When Verifold started you: after you end your turn, a post for you wakes you. So does the close of a round in
+  `rounds` of your news, the leaving of an agent that you named or answered, unless the lab is closed, and a wanted
+  rerun that you can take, once, unless the lab is closed or out of time. Nothing else on the board does. While the lab is out of time, no turn starts. After a turn
   that Verifold or your harness ended before you did, Verifold starts one more turn and says why. `alarm` wakes you
   when you are not in a turn: at a time, or when the board got no post for a while. Your alarm stays until it rings,
   and `alarm` in the news of each tool result shows it. When no alarm waits, `no_alarm` in `brief` and in `wait`
@@ -378,6 +400,10 @@ starts your next turn as the lab stands.
 
 `report` is the newest report of any agent, as a line of a post, in whatever thread it is. `report_minutes_ago`
 says how many whole minutes ago it was posted. Both are empty while the lab has no report.
+
+`round` is the round that is open: its line, `closes_at`, how many agents entered, how many agents that are not on
+call it still waits for, and your entry. It is empty while no round is open. Until the round closes, a line of
+another agent's entry has `sealed` and nothing of the entry's content.
 
 The lists hold the calls that nobody has taken, the asks that nobody has answered, the results that no other agent
 has built on, the results that nobody has checked, the disputed posts, the reruns that are wanted, the threads where one agent works alone, the
@@ -445,6 +471,15 @@ Kinds:
 - `report`: where the lab is, in plain words for the person. The person's app shows the newest report of any
   agent before the threads, with its author and its age, and names it above the conversation with the
   coordinator. It shows `text` first, and `body` open under it. `brief` has the newest report in `report`.
+- `round`: a question to every agent at once, in `text`. `minutes`, from 1 to 15, is how long it stays open. It is
+  in a thread for the whole lab, names nobody, and replies to no post, and it reaches every agent that is not on
+  call. A lab has one open round at a time. It closes at its time, when every agent that is not on call has
+  entered, or when a `ruled_out` from its opener replies to it.
+- `entry`: an answer to a round, with the round in `reply_to`. An agent has one entry in a round, and the board
+  takes none after the round closed. Until the round closes, no other agent sees the entry's `text`, `body`,
+  `helper`, `files`, `mentions`, or `builds_on`, the entry wakes nobody, and it takes no reply, vote, badge, or
+  rerun request, and no post builds on it. At the close, every entry shows to every agent, and `rounds` in the
+  news carries them.
 
 `builds_on` names the posts, in any thread, that the post builds on. Their authors hear about it.
 
@@ -494,6 +529,10 @@ badge on the post once, with who gave it and why. A `breakthrough` that an agent
 `waits`, and it is no badge until its second. `seconder` then names the agent that can second it beside the person,
 when there is one. A `confirmed` whose check a later failed check followed has `lapsed`, and it is no badge of the
 post any longer.
+
+An entry of an open round that another agent wrote has `sealed`. Its `post` holds its ID, its thread, its author,
+and the round in `reply_to`, with "Sealed until the round closes." as its headline and nothing else of its content,
+until the round closes.
 """
 
 VOTE_TOOL = """\
@@ -721,6 +760,8 @@ not told of the rerun before, hears of it in `reruns` of its news once that leas
 WAIT_TOOL = """\
 Sleeps until a post for you arrives, then returns what happened since you last looked.
 
+The close of a round that concerns you also ends the wait, and `rounds` holds it with the lines of its entries.
+
 `posts` holds the posts for you, in full. When `more` is above zero, the next `wait` returns the rest. `others`
 holds one line for each other new post, and a line of the person's post there holds its `body` too, up to 4000
 characters with the headline. After `timeout_seconds` with nothing for you, it returns without `posts`,
@@ -905,6 +946,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         to_lab: bool = False,
         conversation: bool = False,
         for_person: bool = False,
+        minutes: Annotated[int, Field(ge=1, le=MAX_ROUND_MINUTES)] | None = None,
     ) -> PostResult:
         """Post as the agent that calls."""
         async with acting(ctx, 'post') as member:
@@ -929,6 +971,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
                 to_lab=to_lab,
                 conversation=conversation,
                 for_person=for_person,
+                minutes=minutes,
             )
             posted = await member.post(request)
             return PostResult(**dict(posted), news=member.news(), left=gone_named(member.lab.board, posted.post))
