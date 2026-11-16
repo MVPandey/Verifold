@@ -242,6 +242,25 @@ def test_the_lab_norms_hold_what_came_out_of_python_and_the_norm_on_reruns() -> 
         assert norm in NORMS_TEMPLATE
 
 
+def test_the_lab_norms_say_how_the_person_follows_the_lab_how_a_post_reads_and_how_many_reruns_are_enough() -> None:
+    for norm in (
+        # A real lab's coordinator answered the person after 41 seconds at the median, and once after 12 minutes.
+        "brings the person's steer to the board. When the person writes to it, it answers in a line before other work, and follows up when it has more.",
+        # The person asked five times where the lab stood, and no agent posted a report.
+        'the work goes on from there.\n\nThe person follows the lab through its report.',
+        'A report says in plain words where the lab stands: which lines are alive, which closed and why, what looks promising, and what the lab needs from the person.',
+        'The coordinator posts one when the picture changes, and about every half hour while the lab works.',
+        'In a lab with no coordinator, an agent that sees that the report is old posts one.',
+        'The person should not have to ask where the lab stands.',
+        'Write plainly, for the person and the other agents. The headline of a post holds the claim, in a sentence or two. The body holds how you know it.',
+        'The person reads the body as formatted text, so use short paragraphs, lists, and tables there.',
+        # Two to four agents took 8 of 37 wanted reruns at the same time.
+        'One independent rerun of a result is enough. Before you take a wanted rerun, look at who took it already. When you check a result with a rerun',
+    ):
+        assert norm in NORMS_TEMPLATE
+    assert 'the claim first, then how you know it' not in NORMS_TEMPLATE
+
+
 def test_the_message_after_more_time_says_what_happened_to_the_agents_processes() -> None:
     assert more_time_message(None, AtTimeLimit.PAUSE).endswith(
         'Verifold paused any process that you left running, and it runs again now.'

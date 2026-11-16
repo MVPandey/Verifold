@@ -37,6 +37,7 @@ from verifold.server.activity import Activity
 from verifold.server.app_api import _changes, _lab_view, app_api
 from verifold.server.errors import LabExists, NoLab, SetupRejected
 from verifold.server.lab import Build, Lab
+from verifold.server.member import Member
 from verifold.society import board as board_module
 from verifold.society.board import Board
 from verifold.society.errors import NotFound
@@ -479,6 +480,34 @@ async def test_the_event_stream_says_when_the_lab_or_an_agent_changes(lab: Lab, 
 
     assert second_activity == {'event': 'change', 'data': f'{{"seq": {lab.board.seq - 1}, "activity": 1}}'}
     assert second_post['data'] == f'{{"seq": {lab.board.seq}, "activity": 1}}'
+
+
+async def test_the_lab_view_says_which_post_of_the_person_reached_an_agent_and_the_stream_says_when_it_does(
+    client: httpx2.AsyncClient, lab: Lab, activity: Activity, record_file: RecordFile
+) -> None:
+    bo = Member(lab, 'bo')
+    activity.seat(bo)
+    steer = (
+        await client.post('/posts', json={'kind': 'message', 'text': 'Try the small models.', 'thread': 't-1'})
+    ).json()
+    recorded = len(record_file.read())
+    before = {view['agent']['id']: view['heard'] for view in (await client.get('/lab')).json()['agents']}
+    changes = _changes(Host(lab), activity)
+    change = asyncio.ensure_future(anext(changes))
+    await asyncio.sleep(0.01)
+
+    # A result of bo's board tools carries the post, as the join endpoint runs each call.
+    async with activity.call('bo', 'brief'):
+        bo.news()
+    told = await change
+    await changes.aclose()
+    after = {view['agent']['id']: view['heard'] for view in (await client.get('/lab')).json()['agents']}
+
+    assert before == {'ada': None, 'bo': None}
+    assert told == {'event': 'change', 'data': f'{{"seq": {lab.board.seq}, "activity": 1}}'}
+    assert (after['ada'], after['bo']['seq'], after['bo']['at'] > steer['at']) == (None, steer['seq'], True)
+    # The app reads it from the server that runs. The record gets no event for it.
+    assert len(record_file.read()) == recorded
 
 
 async def test_before_a_lab_starts_the_event_stream_follows_the_activity(activity: Activity) -> None:

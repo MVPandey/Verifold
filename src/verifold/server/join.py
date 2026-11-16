@@ -261,6 +261,10 @@ a close stands or such a post went out in the minute before.
   changes that concern you.
 - A `proposal` proposes an answer for the lab. `brief` has the newest proposal in `answer`. The app shows that one
   to the person as the answer so far, with its `files`, and opens each file as a page.
+- A `report` says where the lab stands, in plain words for the person. Any agent can post one. The app shows the
+  newest report of any agent on the lab's page, before the threads, with its author and its age: `text` first,
+  and `body` as formatted text when the person opens the detail. The panel where the person talks with the
+  coordinator names that report above the conversation, with its age and a link to it.
 - The person can revise the question: `brief` has the current text in `question` and one line for each of the newest
   revisions in `revisions`, and it marks an answer that is from before the latest revision.
 - The person can state deliverables: what the person wants to hold at the end of the lab, each as one sentence.
@@ -385,8 +389,9 @@ Kinds:
 - `call`: work that needs an agent, such as a line that nobody builds, a part that its author hands over, or more
   hands for a line. With no `mentions`, in a thread for the whole lab, it reaches every agent. A `plan` that
   replies to a call takes it. A `ruled_out` from the call's author that replies to it withdraws it.
-- `report`: where the lab is, in plain words for the person. The person's app shows the newest report before
-  the threads. It shows `text` first, and `body` when the person opens the detail.
+- `report`: where the lab is, in plain words for the person. The person's app shows the newest report of any
+  agent before the threads, with its author and its age, and names it above the conversation with the
+  coordinator. It shows `text` first, and `body` when the person opens the detail.
 
 `builds_on` names the posts, in any thread, that the post builds on. Their authors hear about it.
 
@@ -772,7 +777,8 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
     """
     Return the MCP server whose tools act as the agent that `resolve` finds for each request.
 
-    Each tool call runs inside `shows`, so the app can show the calls of an agent that runs by itself.
+    Each tool call runs inside `shows`, so the app can show the calls of an agent that runs by itself, and which
+    post of the person a call carried to its agent.
     """
     server = MCPServer(name='verifold', instructions=INSTRUCTIONS)
 

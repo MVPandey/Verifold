@@ -64,6 +64,20 @@ class AgentActivity(Record):
     """With the state `waiting`: what the agent waits for. `None` in any other state."""
 
 
+class Heard(Record):
+    """
+    The person's newest post that a result of an agent's board tools carried to the agent, as a line or in full.
+
+    It is a live fact of the server that runs, and no event in the record holds it. It says that a tool result
+    held the post. It says nothing about what the agent made of the post.
+    """
+
+    seq: int
+    """The post's place in the record."""
+    at: AwareDatetime | None = None
+    """When the result carried the post. `None` when that was before this server started."""
+
+
 type Need = Literal['approval', 'answer', 'working', 'waiting', 'idle', 'stopped', 'left']
 """
 The one status of an agent or a thread, in the order of who needs the person. The first that applies is the status.
@@ -178,6 +192,8 @@ class AgentView(Record):
     thread: ThreadId | None = None
     """The thread where the agent works now, or `None` when it works in none."""
     activity: AgentActivity
+    heard: Heard | None = None
+    """The person's newest post that the agent's board tools carried to it, or `None` when they carried none."""
     left: AgentLeft | None = None
     """When the agent left the lab, who caused it, and why. `None` while the agent is in the lab."""
     stopped: bool = False

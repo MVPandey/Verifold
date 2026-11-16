@@ -29,6 +29,12 @@ export function duration(minutes: number): string {
   return rest ? `${hours} h ${rest} min` : `${hours} h`;
 }
 
+/** Return how long ago an ISO time was, as `just now`, `26 min ago`, or `1 h 5 min ago`. */
+export function ago(iso: string, now: Date): string {
+  const minutes = minutesBetween(iso, now);
+  return minutes < 1 ? 'just now' : `${duration(minutes)} ago`;
+}
+
 /** Return a token count as `900`, `463k`, or `74M`. */
 export function tokens(count: number): string {
   if (count < 1_000) return String(count);

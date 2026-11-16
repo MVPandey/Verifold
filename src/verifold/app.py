@@ -965,6 +965,7 @@ class Host:
             seat_ok=self.check_seat,
         )
         self._members.add_guest(member, digest)
+        self._activity.seat(member)
         # A `brief` leaves no mark on the record, so an agent that only read the board shows as invited again.
         called = own or any(
             (
@@ -993,6 +994,7 @@ class Host:
             adds=self.add_seat,
             seat_ok=self.check_seat,
         )
+        self._activity.seat(member)
         setup = AgentSetup(
             agent=agent,
             harness=self._catalog[agent.harness],

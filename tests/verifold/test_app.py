@@ -598,8 +598,10 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
     async with serving(project, catalog={'fake': FAKE_HARNESS}) as client:
         resumed = await state_of(client, 'agent-2')
         async with board_of(url, token) as board:
+            unread = (await client.get('/lab')).json()['agents'][1]['heard']
             since = await board.call_tool('wait', {'timeout_seconds': 0})
             again = await board.call_tool('brief', {})
+            heard = (await client.get('/lab')).json()['agents'][1]['heard']
         async with board_of(url, f'{token}x') as board:
             wrong = await board.call_tool('brief', {})
         # A new invitation gives the agent a new token, and the old one opens nothing.
@@ -617,6 +619,11 @@ async def test_the_person_invites_an_agent_that_runs_by_itself_and_the_invitatio
     # The agent gets what the board got after its own last post, also across the restart.
     assert since.structured_content is not None
     assert 'Go on with the tail.' in [entry['post']['text'] for entry in since.structured_content['posts']]
+    # The app's view says that the result of that call carried the person's post, and when.
+    steer = next(
+        event for event in record(project) if isinstance(event, Posted) and event.post.text.startswith('Go on')
+    )
+    assert (unread, heard['seq'], heard['at'] is not None) == (None, steer.seq, True)
     assert wrong.is_error
     assert (renewed['agent'], renewed['name'], new_token != token) == ('agent-2', 'Reader', True)
     assert (launched.status_code, old.is_error, new.is_error) == (404, True, False)

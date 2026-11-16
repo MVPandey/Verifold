@@ -540,6 +540,7 @@ def _agent_view(
         status=status,
         thread=lab.working.get(agent_id),
         activity=activity.shown(agent_id),
+        heard=activity.heard(agent_id),
         left=board.gone(agent_id),
         # The record says so until the agent's next turn starts. The person's new start shows at once.
         stopped=before(board, agent_id).stopped and activity.of(agent_id).state == 'stopped',

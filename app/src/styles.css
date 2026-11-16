@@ -1981,6 +1981,8 @@ a.file:hover {
   border: 1px solid var(--line);
   text-align: left;
   vertical-align: top;
+  /* A narrow screen wraps a cell between words, and a table that is still too wide scrolls. */
+  overflow-wrap: break-word;
 }
 .md th {
   background: var(--card);
@@ -2866,6 +2868,25 @@ body.with-panel {
 .k-public {
   padding: 10px 0 2px;
   font-size: 12.5px;
+  color: var(--muted);
+}
+.k-report {
+  margin: 0;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--ink2);
+}
+.k-report a {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.k-heard {
+  margin-top: 6px;
+  padding-left: 17px;
+  font-size: 13px;
+  line-height: 1.45;
   color: var(--muted);
 }
 .k-say {

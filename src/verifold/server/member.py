@@ -1,11 +1,12 @@
 """One agent's seat in its lab."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 from verifold.protocol.agents import GUEST, Picture
+from verifold.protocol.app import Heard
 from verifold.protocol.events import AgentLeft, AlarmSet, Posted, RerunRequested, WatchSet
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
@@ -26,7 +27,7 @@ from verifold.protocol.posts import FileEvidence
 from verifold.protocol.votes import Badge, BadgeAction, Direction
 from verifold.server.errors import CannotWake, EvidenceRejected, HasLeft, NoCleanCopy, OutOfTime, UnknownAgent
 from verifold.server.lab import Adds, Lab
-from verifold.society.attention import news, update
+from verifold.society.attention import news, update, wakes
 from verifold.society.deliverables import live
 from verifold.society.errors import RejectedEvent
 from verifold.society.identity import post_view
@@ -62,7 +63,8 @@ class Member:
     What one agent does in its lab: post, read, watch, and wait.
 
     The member remembers how far its agent has read. `news` and `wait` return only what came after, so the agent
-    gets each post once, and a post that it got during a turn does not wake it later.
+    gets each post once, and a post that it got during a turn does not wake it later. It also remembers the
+    person's newest post that a result carried to the agent, and when, which the person's app shows.
     """
 
     def __init__(  # noqa: PLR0913
@@ -91,6 +93,7 @@ class Member:
         self._lab = lab
         self.agent_id = agent_id
         self._seen = lab.board.seq if seen is None else seen
+        self._heard = self._heard_before()
         self.void = False
         """Whether the agent got a new token, so that this seat's open `wait` must return nothing more."""
         self._pin = pin
@@ -101,6 +104,16 @@ class Member:
     def seen(self) -> int:
         """The last event that the agent got, from `news` or `wait`."""
         return self._seen
+
+    @property
+    def heard(self) -> Heard | None:
+        """
+        The person's newest post that a result of the agent's board tools carried to it, and when.
+
+        A seat that starts at a place in the record, as after a restart of Verifold, has no time for the posts
+        before that place.
+        """
+        return self._heard
 
     @property
     def lab(self) -> Lab:
@@ -227,7 +240,30 @@ class Member:
     def _unseen(self) -> News:
         unseen = news(self._lab.board, self.agent_id, self._seen)
         self._seen = unseen.seq
+        self._hear(line.seq for line in (*unseen.for_you, *unseen.others) if line.author == PERSON)
         return unseen
+
+    def _hear(self, carried: Iterable[int]) -> None:
+        # The places of the person's posts that a result carries to the agent now. They come after every earlier one.
+        if newest := max(carried, default=0):
+            self._heard = Heard(seq=newest, at=self._lab.now())
+
+    def _heard_before(self) -> Heard | None:
+        # The person's newest post for the agent between its join and the place where it is. The agent's news
+        # brought it every post for it up to that place, at a time that this seat does not know.
+        board = self._lab.board
+        joined = board.agent(self.agent_id)
+        if joined is None:
+            return None
+        mine = (
+            entry.seq
+            for entry in reversed(board.posts)
+            if joined.seq < entry.seq <= self._seen
+            and entry.post.author == PERSON
+            and wakes(board, self.agent_id, entry)
+        )
+        newest = next(mine, None)
+        return Heard(seq=newest) if newest else None
 
     def rewind(self, seq: int) -> None:
         """
@@ -236,6 +272,8 @@ class Member:
         A turn that fails can lose the tool results that carried them, so the agent gets them once more.
         """
         self._seen = min(self._seen, seq)
+        if self._heard and self._heard.seq > self._seen:
+            self._heard = self._heard_before()
 
     def threads(self) -> ThreadList:
         """
@@ -455,5 +493,7 @@ class Member:
             remaining = deadline - loop.time()
             if news.posts or news.left or news.reruns or remaining <= 0:
                 self._seen = news.seq
+                full = (view.seq for view in news.posts if view.post.author == PERSON)
+                self._hear((*full, *(line.seq for line in news.others if line.author == PERSON)))
                 return news
             await self._lab.wait_for_change(news.seq, remaining)

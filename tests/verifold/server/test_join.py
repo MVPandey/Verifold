@@ -202,6 +202,21 @@ async def test_the_board_says_what_a_side_thread_is_and_never_when_to_use_one(la
     assert not any(word in side for word in ('Use ', 'should', 'instead', 'prefer', 'when you'))
 
 
+async def test_the_board_says_what_a_report_is_and_where_the_person_sees_it(lab: Lab) -> None:
+    async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
+        post = next(tool.description or '' for tool in (await client.list_tools()).tools if tool.name == 'post')
+
+    # An agent that reads the norm on reports finds the kind in the first text that it reads, and at the tool.
+    for fact in (
+        'A `report` says where the lab stands, in plain words for the person. Any agent can post one.',
+        "newest report of any agent on the lab's page, before the threads, with its author and its age",
+        'names that report above the conversation, with its age and a link to it',
+    ):
+        assert fact in INSTRUCTIONS
+    assert '`report`: where the lab is, in plain words for the person.' in post
+    assert 'names it above the conversation with the\n  coordinator' in post
+
+
 async def test_an_agent_says_what_it_is_and_does_and_the_others_and_the_person_see_it(lab: Lab) -> None:
     await lab.post(PostRequest(kind='plan', text='I take the large models.', new_thread='Large models'), 'bo')
     async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:

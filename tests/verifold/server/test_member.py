@@ -6,6 +6,8 @@ from conftest import agent
 from fakes import FakeCopies
 
 from verifold.protocol.agents import Agent, ModelSpec
+from verifold.protocol.app import Heard
+from verifold.protocol.ids import PERSON
 from verifold.protocol.join import ManifestLine, PostRequest
 from verifold.protocol.posts import FileEvidence
 from verifold.server.errors import EvidenceRejected, NoCleanCopy, OutOfTime
@@ -13,6 +15,7 @@ from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.society.errors import RejectedEvent
 from verifold.society.standing import standing
+from verifold.store.record_file import RecordFile
 
 EVIDENCE = (FileEvidence(path='bench.json', commit='c' * 40),)
 
@@ -94,6 +97,50 @@ async def test_a_rewind_brings_back_the_posts_that_a_failed_turn_lost(lab: Lab) 
 
     assert [entry.post.text for entry in again.posts] == ['Which layer?']
     assert bo.seen == lab.board.seq
+
+
+async def test_a_member_keeps_the_persons_newest_post_that_a_result_carried_and_when_and_records_nothing(
+    lab: Lab, record_file: RecordFile
+) -> None:
+    bo = Member(lab, 'bo')
+    start = bo.seen
+    await lab.post(PostRequest(kind='message', text='Side note.', thread='t-1'), 'ada')
+    bo.news()
+    no_post_of_the_person = bo.heard
+    steer = await lab.post(PostRequest(kind='message', text='Try the small models.', thread='t-1'), PERSON)
+    recorded = len(record_file.read())
+    not_read = bo.heard
+
+    # A line of the news carries the post, and the time is the lab's clock at that result.
+    bo.news()
+    by_news = bo.heard
+    # A post of the person that is for ada alone reaches bo as a line among the other posts.
+    aside = await lab.post(PostRequest(kind='answer', text='Keep that one.', thread='t-1', reply_to='p-1'), PERSON)
+    await bo.wait(timeout=0)
+    by_wait = bo.heard
+    # A failed turn can have lost both results, so neither counts as carried.
+    bo.rewind(start)
+
+    assert (no_post_of_the_person, not_read) == (None, None)
+    assert by_news == Heard(seq=steer.seq, at=steer.at + timedelta(seconds=1))
+    assert by_wait is not None
+    assert (by_wait.seq, by_wait.at is not None and by_wait.at > aside.at) == (aside.seq, True)
+    assert bo.heard is None
+    # The place and its time are facts of this server, and no event holds them.
+    assert len(record_file.read()) == recorded + 1
+
+
+async def test_a_seat_that_starts_at_a_place_in_the_record_knows_what_reached_its_agent_and_not_when(lab: Lab) -> None:
+    steer = await lab.post(PostRequest(kind='message', text='Try the small models.', thread='t-1'), PERSON)
+    await lab.post(PostRequest(kind='answer', text='Keep that one.', thread='t-1', reply_to='p-1'), PERSON)
+    await lab.join(agent('cy'))
+
+    # The agent's news brought it every post for it up to its place. The answer to ada is not for bo.
+    assert Member(lab, 'bo', seen=lab.board.seq).heard == Heard(seq=steer.seq)
+    assert Member(lab, 'bo', seen=steer.seq - 1).heard is None
+    # No result carried a post from before the agent joined, and the person has no seat that reads news.
+    assert Member(lab, 'cy').heard is None
+    assert Member(lab, PERSON).heard is None
 
 
 async def test_the_first_brief_says_how_the_board_works_and_every_brief_carries_the_news(lab: Lab) -> None:

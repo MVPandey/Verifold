@@ -191,6 +191,7 @@ export function createApi(
           error: view.error ?? null,
           status: view.status ?? '',
           thread: view.thread ?? null,
+          heard: view.heard ?? null,
           left: view.left ?? null,
           stopped: view.stopped ?? false,
         })),
