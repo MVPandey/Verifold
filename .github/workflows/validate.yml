@@ -90,6 +90,9 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
-      - run: npm --prefix app audit --audit-level=high
+      # The script fails on an advisory of high or critical severity, as `npm audit --audit-level=high` does, and
+      # holds the short list of advisories that are exempt, each with its reason.
+      - run: node --test .github/scripts/audit-app.test.mjs
+      - run: node .github/scripts/audit-app.mjs
       - run: uv export --frozen --no-dev --no-emit-project --output-file requirements.txt
       - run: uvx pip-audit@2.10.1 --requirement requirements.txt --disable-pip --strict

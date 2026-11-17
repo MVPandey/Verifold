@@ -72,7 +72,7 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
                 name='codex',
                 title='Codex',
                 executable='codex',
-                command=_adapter('@agentclientprotocol/codex-acp@2.5.0'),
+                command=_adapter('@agentclientprotocol/codex-acp@2.7.0'),
                 family='openai',
                 # The adapter's own default mode: Codex works in its sandbox, and Codex's own reviewer decides each
                 # request to leave it, as when the person runs Codex with auto review. Not `workspace-write`: that
