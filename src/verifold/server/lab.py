@@ -389,7 +389,8 @@ class Lab:
         The revision comes with a post of the person in the question's thread, which names nobody. So it reaches
         the agents and opens a closed lab again as the person's other words to the lab do, and the thread shows
         each version in order. A lab from before the question had a thread gets one thread for these posts. With
-        `on`, the desk revises the question on the person's word, and the post is the desk's post for the person.
+        `on`, the desk revises the question on the person's word, and the post is the desk's post for the person,
+        which opens a closed lab again in the same way.
         """
         # The event strips the text, so the same text with spaces around it is no revision.
         question = question.strip()
@@ -415,7 +416,7 @@ class Lab:
 
         It comes with a post of the person in the question's thread, which names nobody. So it reaches the agents
         and opens a closed lab again, as the person's other words to the lab do. With `on`, the desk states it on
-        the person's word, and the post is the desk's post for the person.
+        the person's word, and the post is the desk's post for the person, which opens a closed lab again too.
 
         Raises:
             RejectedEvent: The lab has too many deliverables.

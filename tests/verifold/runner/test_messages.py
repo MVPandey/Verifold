@@ -398,7 +398,7 @@ def test_the_lab_norms_say_when_the_coordinator_posts_the_reading_reviews_it_and
         ),
         'Every agent then works toward the same idea of an answer.',
         'the person can correct a wrong reading at minute 4 instead of after two hours of work toward the wrong goal.',
-        'In a lab with no coordinator, an agent that finds no reading posts one.',
+        'Any agent that finds no reading posts one, so that the lab is never without one.',
         (
             'About every two hours, and whenever the person corrects the lab, the coordinator steps back from the work '
             'and reviews the reading. It opens a round that asks every agent what the lab assumes, what it is not '

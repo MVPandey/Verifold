@@ -7,6 +7,7 @@ from verifold.protocol.ids import PERSON
 from verifold.protocol.join import News
 from verifold.protocol.posts import Message, Objection, Plan, Reading, Result
 from verifold.society.attention import news, wakes
+from verifold.society.candidates import NO_READING_CLOSE, check_read, has_reading
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import fold
 from verifold.society.identity import post_line
@@ -28,26 +29,54 @@ def refusal(record: RecordBuilder) -> str:
     return str(refused.value)
 
 
-def test_the_coordinator_posts_the_reading_and_every_other_agent_is_refused_while_it_holds_the_seat() -> None:
+def test_the_coordinator_posts_a_newer_reading_and_every_other_agent_is_refused_while_it_holds_the_seat() -> None:
     board = lab().coordinator('ada').post(reading('p-1', 'ada', body=DETAIL)).board()
+    first = lab().coordinator('ada').post(reading('p-1', 'ada'))
+    newer = (
+        'The lab has its reading, and ada holds the coordinator seat, so only ada posts a newer reading of the '
+        'question.'
+    )
 
     assert standing_reading(board) is board.posts[-1]
-    assert refusal(lab().coordinator('ada').post(reading('p-1', 'bo'))) == (
-        'ada holds the coordinator seat, so only ada posts the reading of the question.'
-    )
+    assert refusal(first.copy().post(reading('p-2', 'bo'))) == newer
+    assert refusal(first.copy().on_call('bo').post(reading('p-2', 'bo'))) == newer
+    newest = standing_reading(first.copy().post(reading('p-2', 'ada')).board())
+    assert newest is not None
+    assert newest.post.id == 'p-2'
     # A coordinator whose seat is on call still posts it.
     assert standing_reading(lab().coordinator('ada').on_call('ada').post(reading('p-1', 'ada')).board())
     # The seat of an agent that left is free again, and any agent that works posts the reading.
     assert standing_reading(lab().coordinator('ada').leave('ada').post(reading('p-1', 'bo')).board())
 
 
-def test_without_a_coordinator_any_agent_that_works_posts_the_reading_and_neither_the_person_nor_an_agent_on_call() -> (
+def test_the_first_reading_comes_from_any_agent_so_that_no_seat_keeps_the_lab_from_its_reading_and_its_close() -> None:
+    # A coordinator that never posts a reading, or that is on call, keeps no lab without one.
+    held = lab().coordinator('ada').on_call('ada')
+    by_another = held.copy().post(reading('p-1', 'bo')).board()
+    on_call = held.copy().on_call('cy').post(reading('p-1', 'cy')).board()
+    alone = lab().on_call('cy').post(reading('p-1', 'cy')).board()
+
+    assert [standing_reading(board) is board.posts[-1] for board in (by_another, on_call, alone)] == [True] * 3
+    assert has_reading(by_another)
+    assert not has_reading(held.board())
+    check_read(by_another)
+    with pytest.raises(RejectedEvent) as refused:
+        check_read(held.board())
+    assert str(refused.value) == NO_READING_CLOSE
+    # The first reading stands, so the coordinator's rule holds for a newer one.
+    assert refusal(held.copy().post(reading('p-1', 'bo')).post(reading('p-2', 'cy'))).startswith(
+        'The lab has its reading, and ada holds the coordinator seat'
+    )
+
+
+def test_without_a_coordinator_any_agent_that_works_posts_a_newer_reading_and_neither_the_person_nor_one_on_call() -> (
     None
 ):
     assert standing_reading(lab().post(reading('p-1', 'cy')).board())
-    assert refusal(lab().on_call('cy').post(reading('p-1', 'cy'))) == (
-        'Your seat is on call, so you post no reading. In a lab where nobody holds the coordinator seat, an agent '
-        'that is not on call posts it.'
+    assert standing_reading(lab().post(reading('p-1', 'cy')).post(reading('p-2', 'bo')).board())
+    assert refusal(lab().on_call('cy').post(reading('p-1', 'ada')).post(reading('p-2', 'cy'))) == (
+        'The lab has its reading, and your seat is on call, so you post no newer one. In a lab where nobody holds '
+        'the coordinator seat, an agent that is not on call posts a newer reading.'
     )
     assert refusal(lab().post(reading('p-1', PERSON))) == (
         "A reading is the lab's word on how it reads your question. A reply to it tells the lab where it reads the "

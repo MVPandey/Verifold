@@ -494,11 +494,11 @@ def _named_in(board: Board, text: str) -> frozenset[AgentId]:
 
 def _to_listeners(board: Board, agent_id: AgentId, entry: Posted, *, on_call: bool) -> bool:
     # The person's words in the thread of a deliverable's offers, which name nobody and reply to no post, are for
-    # the agents that offered files there or said that they watch it. When none of them is in the lab, the words
-    # are for the whole lab, so that somebody hears them. `closing` reads the same list, so only such words open
-    # a closed lab again.
+    # the agents that offered files there or said that they watch it, and so are the desk's words for the person.
+    # When none of them is in the lab, the words are for the whole lab, so that somebody hears them. `closing`
+    # reads the same list, so only such words open a closed lab again.
     post = entry.post
-    if post.author != PERSON or post.mentions or post.reply_to:
+    if not speaks_for_person(post) or post.mentions or post.reply_to:
         return False
     heard = board.offer_listeners(post.thread, entry.seq)
     return agent_id in heard or (not heard and not on_call)

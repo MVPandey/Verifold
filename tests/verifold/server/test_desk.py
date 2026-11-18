@@ -24,6 +24,7 @@ from verifold.server.join import DESK_READS, DESK_TOOLS, join_server
 from verifold.server.lab import Lab
 from verifold.server.member import Files, Member
 from verifold.society.errors import NotFound, RejectedEvent
+from verifold.society.lifecycle import lab_state
 from verifold.store.record_file import RecordFile
 
 TOKEN = 'person-secret'
@@ -187,6 +188,32 @@ async def test_the_desk_opens_a_round_revises_the_question_and_changes_deliverab
         await dee.deliverable(on, 'remove')
     with pytest.raises(RejectedEvent, match='takes the new sentence'):
         await dee.deliverable(on, 'change', 'd-1')
+
+
+async def test_what_the_desk_does_on_the_persons_word_opens_a_closed_lab_and_its_reply_to_the_person_does_not(
+    desk_lab: Lab,
+) -> None:
+    on = await said(desk_lab, 'Narrow the question, and ask the lab for a script.')
+    await desk_lab.post(PostRequest(kind='reading', text='An answer says yes or no.', thread='t-1'), 'ada')
+    dee = Member(desk_lab, 'dee')
+
+    async def closed() -> str:
+        done = await desk_lab.post(PostRequest(kind='close', text='Done.', thread='t-1'), 'ada')
+        agreed = PostRequest(kind='answer', text='Yes.', thread='t-1', reply_to=done.post.id, accepts=True)
+        await desk_lab.post(agreed, 'bo')
+        return lab_state(desk_lab.board)
+
+    states = [await closed()]
+    await dee.reply('The lab says it is done.')
+    states.append(lab_state(desk_lab.board))
+    await dee.revise_question(on, 'Does the tail hold?')
+    states += [lab_state(desk_lab.board), await closed()]
+    await dee.deliverable(on, 'add', text='A script that runs the tail.')
+    states += [lab_state(desk_lab.board), await closed()]
+    await dee.open_round(on, 'What holds the tail?', 5, thread='t-1')
+    states.append(lab_state(desk_lab.board))
+
+    assert states == ['closed', 'closed', 'open', 'closed', 'open', 'closed', 'open']
 
 
 async def test_the_desk_sets_the_time_and_ends_an_agents_turn_on_the_persons_word(desk_lab: Lab, clock: Clock) -> None:

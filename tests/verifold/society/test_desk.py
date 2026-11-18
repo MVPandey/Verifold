@@ -411,16 +411,49 @@ def test_the_desks_brief_holds_the_labs_facts_and_no_list_of_its_work_in_a_lab_o
     assert len(view.model_dump_json()) < 6_000 < len(worker.model_dump_json())
 
 
-def test_the_persons_words_in_the_desk_chat_and_the_desks_post_for_the_person_open_no_closed_lab() -> None:
+def test_the_desks_post_on_the_persons_word_opens_a_closed_lab_as_the_persons_own_post_does() -> None:
     record = lab().desk('dee').post(Close(id='p-1', thread='t-1', author='ada', text='Done.'))
     record.post(Answer(id='p-2', thread='t-1', author='bo', text='Yes.', reply_to='p-1', accepts=True))
     closed = record.board()
+    # The person's words in the desk chat and the desk's plain reply there are for the desk and the person alone.
     record.post(Message(id='p-3', thread='t-9', author='person', text='What did the lab find?'))
-    record.post(for_person('p-4', on='p-3'))
+    record.post(Message(id='p-4', thread='t-9', author='dee', text='It found 9x and closed.'))
     later = record.board()
+    told = record.copy().post(for_person('p-5', on='p-3')).board()
+    asked = record.copy().post(
+        Round(id='p-5', thread='t-1', author='dee', text='What holds?', minutes=5, for_person=True, on='p-3')
+    )
+    # A reply of the desk for the person opens nothing, as the person's own reply does not.
+    replied = record.copy().post(for_person('p-5', on='p-3', reply_to='p-1')).board()
     steered = record.copy().post(Message(id='p-5', thread='t-1', author='person', text='Go on.')).board()
 
-    assert (lab_state(closed), lab_state(later), lab_state(steered)) == ('closed', 'closed', 'open')
+    assert [lab_state(board) for board in (closed, later, told, asked.board(), replied, steered)] == [
+        'closed',
+        'closed',
+        'open',
+        'open',
+        'closed',
+        'open',
+    ]
+
+
+def test_the_desks_post_for_the_person_in_a_thread_of_offers_reaches_the_agents_there_as_the_persons_post_does() -> (
+    None
+):
+    offered = lab().desk('dee').post(SAID).deliverable('d-1', 'A report.', 'p-3').offer('p-4', 'bo', 'd-1', 't-2')
+    board = offered.copy().post(for_person('p-5', thread='t-2')).board()
+    posted = board.posts[-1]
+    gone = offered.leave('bo')
+    gone.post(Close(id='p-5', thread='t-1', author='ada', text='Done.'))
+    gone.post(Answer(id='p-6', thread='t-1', author='cy', text='Yes.', reply_to='p-5', accepts=True))
+    closed = gone.board()
+    alone = gone.post(for_person('p-7', thread='t-2')).board()
+
+    # bo offered files there, so the desk's words there are for bo, as the person's words would be.
+    assert [agent for agent in ('ada', 'bo', 'cy') if wakes(board, agent, posted)] == ['bo']
+    # With no agent there, they are for every agent, and they open a closed lab, as the person's words would.
+    assert [agent for agent in ('ada', 'cy') if wakes(alone, agent, alone.posts[-1])] == ['ada', 'cy']
+    assert (lab_state(closed), lab_state(alone)) == ('closed', 'open')
 
 
 def test_a_budget_names_the_desk_and_the_persons_post_or_neither() -> None:
