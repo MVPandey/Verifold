@@ -1638,6 +1638,27 @@ async def test_a_start_with_a_budget_and_a_disk_limit_measures_the_lab_and_keeps
     assert lab['disk']['total'] >= sum(lab['disk']['folders'].values())
 
 
+async def test_a_new_disk_limit_counts_the_files_as_they_are_after_the_person_freed_space(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A unit of the disk limit is 64 KB here, so that a test file of 8 MB passes a limit of 1 MB.
+    monkeypatch.setattr('verifold.society.budget.GB', 64 * 1024)
+    bulk = project / '.verifold' / 'reruns' / 'bulk.bin'
+    bulk.parent.mkdir(parents=True)
+    bulk.write_bytes(os.urandom(8 * 1024**2))
+    async with serving(project, ONE_AGENT.model_copy(update={'disk_gb': 16})) as client:
+        lab = (await client.get('/lab')).json()
+        while lab['limit'] != 'disk':
+            await asyncio.sleep(0.01)
+            lab = (await client.get('/lab')).json()
+        # The person frees the space and sets a limit below what the files took before. The lab measures again.
+        bulk.unlink()
+        freed = (await client.post('/disk', json={'limit_gb': 64})).json()
+
+    assert (freed['limit'], freed['settings']['disk']['limit_gb']) == (None, 64)
+    assert freed['disk']['total'] < 64 * 64 * 1024 < lab['disk']['total']
+
+
 async def test_the_persons_reveal_time_and_lease_apply_to_the_running_lab(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

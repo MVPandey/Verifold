@@ -511,8 +511,20 @@ class Host:
             # The lab follows the person's choice, also when the files held it already but the lab doesn't.
             if getattr(getattr(running, section), name) != chosen:
                 changed = getattr(running, section).model_copy(update={name: chosen})
+                if section == 'disk':
+                    await self.measure_disk()
                 await self._lab.set_settings(running.model_copy(update={section: changed}))
         return self.settings()
+
+    async def measure_disk(self) -> None:
+        """
+        Measure the lab's files now, before a new disk limit, so that the limit counts what they take at this moment.
+
+        Verifold measures at the end of each turn, and no turn of the lab's work ends while the lab stands at its disk
+        limit. So the last measure can be from before the person freed some space.
+        """
+        if self._disk is not None:
+            await _measured(self._disk)
 
     def setup(self) -> SetupView:
         """Return the harnesses that this computer has, and the folder's lab, if any."""

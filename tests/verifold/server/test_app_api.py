@@ -99,6 +99,9 @@ class Host:
             raise SettingsUnwritable("Can't write .verifold/settings.json: No space left on device")
         return self.settings()
 
+    async def measure_disk(self) -> None:
+        """Measure nothing: each test gives the lab its measure."""
+
     def norms(self) -> NormsView:
         if self.norms_text == 'a link':
             raise NormsUnreadable('.verifold/LAB.md is a link. Verifold reads only a regular file here.')

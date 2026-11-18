@@ -132,6 +132,10 @@ class Host(Protocol):
         """Change one setting, and apply the change to the folder's lab."""
         ...
 
+    async def measure_disk(self) -> None:
+        """Measure the lab's files now, so that a new disk limit counts what they take at this moment."""
+        ...
+
     def norms(self) -> NormsView:
         """Return the lab's norms files, or the defaults that a new lab gets."""
         ...
@@ -430,6 +434,7 @@ def _limit_routes(api: FastAPI, host: Host, activity: Activity, authorized: para
         lab = _lab(host)
         settings = lab.board.settings
         if settings.disk.limit_gb != request.limit_gb:
+            await host.measure_disk()
             await lab.set_settings(settings.model_copy(update={'disk': DiskSettings(limit_gb=request.limit_gb)}))
         return _view_of(lab, activity)
 
