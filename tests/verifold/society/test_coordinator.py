@@ -21,8 +21,15 @@ from verifold.protocol.moves import (
 from verifold.protocol.posts import Answer, Ask, Close, Message, Plan, Post, Proposal, Result
 from verifold.protocol.settings import Settings
 from verifold.protocol.threads import Thread
-from verifold.society.attention import left_line, news, wakes, watches_thread
-from verifold.society.coordinator import joined_by, permission_choice, time_given, undo_of
+from verifold.society.attention import left_line, news, update, wakes, watches_thread
+from verifold.society.coordinator import (
+    joined_by,
+    no_reply_line,
+    permission_choice,
+    time_given,
+    undo_of,
+    waiting_for_reply,
+)
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import fold
 from verifold.society.labels import awaits_model
@@ -678,3 +685,158 @@ def test_an_unlisted_model_of_a_seat_that_a_move_added_reserves_no_name() -> Non
     assert 'person' in model_words(listed.board()).values()
     assert awaits_model('Fake · model not listed', 'Fake')
     assert awaits_model('Fake · model not listed 2', 'Fake')
+
+
+STATUS = Message(id='p-1', thread='t-2', author='person', text='Status update?', body='Where is the depth run?')
+"""The person's message in the conversation of `talk`. It is event 9, at 12:08."""
+
+
+def waiting(record: RecordBuilder) -> list[str]:
+    return [entry.post.id for entry in waiting_for_reply(record.board())]
+
+
+def test_the_persons_post_in_the_conversation_waits_for_a_reply_and_only_the_coordinators_brief_shows_it() -> None:
+    board = talk().post(STATUS).board()
+    now = board.posts[-1].at + timedelta(minutes=14, seconds=50)
+
+    shown = brief(board, 'ada', news(board, 'ada', 0, now), now=now)
+    waits = shown.person_waits
+
+    assert [entry.post.id for entry in waiting_for_reply(board)] == ['p-1']
+    assert waits is not None
+    # The entry is short: the headline and no body. The news of the same brief holds the whole post.
+    assert (waits.line.id, waits.line.text, waits.line.body, waits.minutes, waits.more) == (
+        'p-1',
+        'Status update?',
+        '',
+        14,
+        0,
+    )
+    assert [line.body for line in shown.news.for_you] == ['Where is the depth run?']
+    # The brief says it once: its news has no line of its own.
+    assert shown.news.no_reply == ''
+    assert shown.model_dump_json().count('for your reply') == 0
+    line = "The person's post p-1 in the conversation has waited 14 minutes for your reply."
+    assert news(board, 'ada', 0, now).no_reply == line
+    assert update(board, 'ada', 0, now).no_reply == line
+    assert news(board, 'ada', board.seq, now).no_reply == line
+    # No other agent gets it, in its brief or in its news.
+    for other in ('bo', 'cy'):
+        assert brief(board, other, news(board, other, 0, now), now=now).person_waits is None
+        assert (news(board, other, 0, now).no_reply, update(board, other, 0, now).no_reply) == ('', '')
+    # Time counts from the newest post without a clock, and the line says so in words.
+    assert no_reply_line(board, 'ada') == (
+        "The person's post p-1 in the conversation has waited less than a minute for your reply."
+    )
+    assert no_reply_line(board, 'ada', board.posts[-1].at + timedelta(seconds=90)) == (
+        "The person's post p-1 in the conversation has waited 1 minute for your reply."
+    )
+
+
+def test_any_post_of_the_coordinator_in_the_conversation_after_it_is_the_reply_and_no_other_post_is() -> None:
+    said = talk().post(STATUS)
+
+    # A post of the coordinator in another thread, or of another agent in the conversation, is no reply.
+    assert waiting(said.copy().post(Message(id='p-2', thread='t-1', author='ada', text='Two lines are alive.'))) == [
+        'p-1'
+    ]
+    assert waiting(said.copy().post(Message(id='p-2', thread='t-2', author='bo', text='I can answer that.'))) == ['p-1']
+    # Any kind of post of the coordinator there is the reply: a message, an ask, or a request for a move.
+    for reply in (
+        Message(id='p-2', thread='t-2', author='ada', text='Two lines are alive.'),
+        Ask(id='p-2', thread='t-2', author='ada', text='Depth or width first?'),
+    ):
+        replied = said.copy().post(reply)
+        board = replied.board()
+        assert waiting(replied) == []
+        assert brief(board, 'ada', News(seq=board.seq)).person_waits is None
+        assert news(board, 'ada', 0).no_reply == ''
+    assert waiting(said.copy().request('p-2', 'ada', MORE)) == []
+    # A reply comes after the post. The coordinator's post before it answers nothing.
+    early = talk().post(Message(id='p-1', thread='t-2', author='ada', text='I hold the seat.'))
+    assert waiting(early.post(STATUS.model_copy(update={'id': 'p-2'}))) == ['p-2']
+
+
+def test_the_oldest_post_that_waits_comes_first_with_a_count_of_the_later_ones_and_one_reply_answers_all() -> None:
+    record = talk().post(STATUS).post(Message(id='p-2', thread='t-2', author='person', text='Hello?'))
+    board = record.board()
+    now = board.posts[0].at + timedelta(minutes=20)
+
+    waits = brief(board, 'ada', News(seq=board.seq), now=now).person_waits
+
+    assert waits is not None
+    assert (waits.line.id, waits.minutes, waits.more) == ('p-1', 20, 1)
+    assert news(board, 'ada', board.seq, now).no_reply == (
+        "The person's post p-1 in the conversation has waited 20 minutes for your reply. 1 later post of the "
+        'person there waits too.'
+    )
+    record.post(Message(id='p-3', thread='t-2', author='person', text='Anyone?'))
+    assert no_reply_line(record.board(), 'ada', now).endswith(' 2 later posts of the person there wait too.')
+    record.post(Message(id='p-4', thread='t-2', author='ada', text='Two lines are alive.'))
+    assert waiting(record) == []
+    # A post of the person after the reply waits again, by itself.
+    record.post(Message(id='p-5', thread='t-2', author='person', text='Which two?'))
+    assert waiting(record) == ['p-5']
+
+
+def test_an_answer_of_the_person_in_the_conversation_waits_for_no_reply_and_a_later_message_does() -> None:
+    asked = talk().post(Ask(id='p-1', thread='t-2', author='ada', text='Depth or width first?'))
+    asked.post(Answer(id='p-2', thread='t-2', author='person', text='Depth.', reply_to='p-1'))
+    # The person's yes to a request is an answer too.
+    asked.request('p-3', 'ada', MORE).post(Answer(id='p-4', thread='t-2', author='person', text='Yes.', reply_to='p-3'))
+    board = asked.board()
+
+    assert waiting(asked) == []
+    assert brief(board, 'ada', News(seq=board.seq)).person_waits is None
+    assert news(board, 'ada', 0).no_reply == ''
+    asked.post(STATUS.model_copy(update={'id': 'p-5'}))
+    assert waiting(asked) == ['p-5']
+    # An answer after a message that waits leaves the message waiting, and the brief counts only the message.
+    asked.post(Answer(id='p-6', thread='t-2', author='person', text='Depth, still.', reply_to='p-1'))
+    board = asked.board()
+    held = brief(board, 'ada', News(seq=board.seq)).person_waits
+    assert waiting(asked) == ['p-5']
+    assert held is not None
+    assert (held.line.id, held.more) == ('p-5', 0)
+
+
+def test_the_reply_is_from_the_agent_that_holds_the_seat_when_it_posts_and_a_new_holder_reads_what_waits() -> None:
+    reply = Message(id='p-2', thread='t-2', author='ada', text='Two lines are alive.')
+
+    # The agent that held the seat answered before it gave the seat up.
+    assert waiting(talk().post(STATUS).post(reply).coordinator('bo')) == []
+    # Without a reply, the post waits for the new holder, and only its brief shows it.
+    passed = talk().post(STATUS).coordinator('bo')
+    board = passed.board()
+    held = brief(board, 'bo', News(seq=board.seq)).person_waits
+    assert held is not None
+    assert held.line.id == 'p-1'
+    assert brief(board, 'ada', News(seq=board.seq)).person_waits is None
+    assert (news(board, 'bo', 0).no_reply != '', news(board, 'ada', 0).no_reply) == (True, '')
+    # A post of the former holder after the change is no reply.
+    assert waiting(passed.post(reply)) == ['p-1']
+
+
+def test_a_lab_without_a_coordinator_or_a_conversation_shows_no_post_that_waits_and_an_old_record_loads() -> None:
+    plain = lab().coordinator('ada').board()
+    assert waiting_for_reply(plain) == ()
+    assert brief(plain, 'ada', News(seq=plain.seq)).person_waits is None
+    assert news(plain, 'ada', 0).no_reply == ''
+    # The post waits while nobody holds the seat, and no agent reads it then: nobody is there to reply.
+    for nobody in (talk().post(STATUS).coordinator(None), talk().post(STATUS).leave('ada')):
+        board = nobody.board()
+        assert waiting(nobody) == ['p-1']
+        assert board.coordinator is None
+        for agent in ('ada', 'bo', 'cy'):
+            assert brief(board, agent, News(seq=board.seq)).person_waits is None
+            assert news(board, agent, 0).no_reply == ''
+    # A record from before keeps its events as they were: the fact comes from the posts, and no event holds it.
+    old = TypeAdapter(Event).validate_json(
+        '{"seq": 9, "at": "2026-11-06T12:08:00Z", "type": "posted", '
+        '"post": {"kind": "message", "id": "p-1", "thread": "t-2", "author": "person", "text": "Status update?"}}'
+    )
+    record = talk()
+    record.events.append(old)
+    assert waiting(record) == ['p-1']
+    # The news of a result from before this field reads as one without a post that waits.
+    assert News.model_validate({'seq': 9}).no_reply == ''

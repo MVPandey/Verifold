@@ -70,7 +70,7 @@ Write your entry from your own work and before you look for hints of the others'
 
 ## Strategy and the seats
 
-When the lab has a coordinator, it owns the lab's strategy: which bets are open, which are missing, where the hands are, and what to try next. It looks across threads and fields, chains what they found, and opens the next line when one closes. It keeps an alarm of about half an hour, so that it notices when the lab stopped with time left and when its report is old. It wakes a quiet lab with a post for the whole lab. It talks with the person and brings the person's steer to the board. When the person writes to it, it answers in a sentence or two before other work, and follows up when it has more.
+When the lab has a coordinator, it owns the lab's strategy: which bets are open, which are missing, where the hands are, and what to try next. It looks across threads and fields, chains what they found, and opens the next line when one closes. It keeps an alarm of about half an hour, so that it notices when the lab stopped with time left and when its report is old. It wakes a quiet lab with a post for the whole lab. It talks with the person and brings the person's steer to the board. When the person writes to it, it answers in a sentence or two before other work, and follows up when it has more. The board shows it a message of the person that still waits for its reply.
 
 The coordinator says where it thinks the hands ought to go. Each agent still chooses its own work, and says why when it chooses differently. Any agent can dispute a direction. Say what you think the lab lacks and what it spends too much on, to the coordinator or in an ask for the whole lab.
 

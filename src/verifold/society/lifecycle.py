@@ -98,8 +98,9 @@ def minutes_left(board: Board, now: datetime) -> float | None:
     return max((board.ends_at - now).total_seconds() / 60, 0)
 
 
-def _minutes(left: float) -> str:
-    whole = int(left)
+def minutes_text(minutes: float) -> str:
+    """Return a span of minutes in words, in whole minutes: "less than a minute", "1 minute", or "14 minutes"."""
+    whole = int(minutes)
     if whole == 0:
         return 'less than a minute'
     return '1 minute' if whole == 1 else f'{whole} minutes'
@@ -141,7 +142,7 @@ def no_alarm_line(board: Board, agent_id: AgentId, now: datetime | None = None) 
         if left is None or board.ends_at is None:
             starts += ' The lab has no time limit.'
         else:
-            starts += f' The lab ends at {utc(board.ends_at)}, {_minutes(left)} from now.'
+            starts += f' The lab ends at {utc(board.ends_at)}, {minutes_text(left)} from now.'
     close = closing(board)
     if close is None:
         stands = 'No close stands.'

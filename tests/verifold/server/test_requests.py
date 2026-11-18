@@ -569,6 +569,7 @@ async def test_the_person_reads_the_conversation_switches_powers_and_answers_req
     ) as client:
         empty = (await client.get('/conversation')).json()
         said = await client.post('/posts', json={'kind': 'message', 'text': 'Where are we?', 'conversation': True})
+        asked = (await client.get('/conversation')).json()
         time = await led.request(MORE, 'The depth run needs it.', '', 'ada')
         seat = await led.request(AddMove(seat=AddSeat(harness='fake')), 'One more hand.', '', 'ada')
         wrong = await led.request(AddMove(seat=AddSeat(harness='nope')), 'Another harness.', '', 'ada')
@@ -588,6 +589,8 @@ async def test_the_person_reads_the_conversation_switches_powers_and_answers_req
     assert (empty['coordinator'], empty['thread'], empty['waits'], empty['deeds']) == ('ada', None, [], [])
     assert [power['on'] for power in empty['powers']] == [False] * 5
     assert said.status_code == 200
+    # The person's message waits for the coordinator's reply, and the coordinator's request after it is one.
+    assert (empty['no_reply'], asked['no_reply'], waiting['no_reply']) == ([], [said.json()['post']['id']], [])
     assert waiting['waits'] == [time.post.id, seat.post.id, wrong.post.id]
     assert waiting['thread']['thread']['conversation'] is True
     assert lab_view['needs_you'] == 3

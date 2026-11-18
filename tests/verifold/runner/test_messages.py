@@ -283,6 +283,8 @@ def test_the_lab_norms_say_how_the_person_follows_the_lab_how_a_post_reads_and_h
     for norm in (
         # A real lab's coordinator answered the person after 41 seconds at the median, and once after 12 minutes.
         "brings the person's steer to the board. When the person writes to it, it answers in a sentence or two before other work, and follows up when it has more.",
+        # The coordinator read "Status update?" 34 seconds after it came and never replied in a turn of 112 minutes.
+        'The board shows it a message of the person that still waits for its reply.',
         # An agent has one alarm, and in a busy lab an alarm for a quiet board never rings, so no report came of it.
         'It keeps an alarm of about half an hour, so that it notices when the lab stopped with time left and when its report is old.',
         # The person asked five times where the lab stood, and no agent posted a report.

@@ -543,6 +543,23 @@ other candidate that stands by its ID and its author, and `thread` shows every p
 """
 
 
+class PersonWait(Sparse):
+    """
+    The person's oldest post in the conversation that waits for the coordinator's reply, and how long it has waited.
+
+    A post of the person in the conversation, other than an `answer`, waits for a reply until the agent that holds
+    the coordinator seat posts in the conversation after it. Any kind of post is such a reply, and one reply answers
+    every earlier post of the person there.
+    """
+
+    line: PostLine
+    """The post's line: its headline, cut as in the other lists of `brief`, and no `body`. `thread` shows the post."""
+    minutes: int = 0
+    """How many whole minutes ago the person posted it, by the lab's clock."""
+    more: int = 0
+    """How many later posts of the person in the conversation wait for the reply too."""
+
+
 class CandidateRef(Sparse):
     """A candidate answer that stands, by its ID and its author."""
 
@@ -814,6 +831,13 @@ class News(Record):
     """How many older changes to badges `badges` leaves out."""
     alarm: AlarmLine | None = None
     """The alarm that waits for the agent. `None` means that no alarm waits."""
+    no_reply: str = ''
+    """
+    For the agent that holds the coordinator seat: one line about the person's posts in the conversation that wait
+    for its reply. It names the oldest one with the minutes that it has waited, and it counts the later ones. Every
+    result carries the line while such a post waits, and the line wakes nobody. It is empty while no post waits,
+    for every other agent, and in the news of `brief`, because `person_waits` holds the same fact there.
+    """
 
 
 class PostResult(PostView):
@@ -1233,6 +1257,12 @@ class Brief(Record):
     """
     conversation: ThreadId | None = None
     """The thread where the person and the coordinator talk, which every agent can read. `None` while the lab has none."""
+    person_waits: PersonWait | None = None
+    """
+    For the agent that holds the coordinator seat: the person's oldest post in the conversation that waits for its
+    reply. It has the post's line, the minutes that the post has waited, and the number of later posts that wait.
+    `None` while no post waits, and for every other agent.
+    """
     powers: tuple[Power, ...] = ()
     """
     The kinds of move for which the person switched on a power of the coordinator. A request of the coordinator
@@ -1347,5 +1377,7 @@ class Update(Record):
     lab stands now, how much time the lab has left, and whether a close stands. Empty while an alarm waits, and for
     an agent that Verifold cannot wake.
     """
+    no_reply: str = ''
+    """The same line as `no_reply` in the news: the person's post in the conversation that waits for your reply."""
     ends_at: AwareDatetime | None = None
     """When the lab ends. At that time Verifold stops the agents' turns. `None` means no time limit."""

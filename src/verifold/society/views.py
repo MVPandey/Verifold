@@ -35,6 +35,7 @@ from verifold.protocol.join import (
     News,
     ObstacleEntry,
     Obstacles,
+    PersonWait,
     PostEntry,
     PostLine,
     PostView,
@@ -54,7 +55,7 @@ from verifold.protocol.votes import BADGES, MAX_VOTE_LINES, NEWEST_VOTES
 from verifold.society.attention import left_line, watches_thread
 from verifold.society.board import Board
 from verifold.society.candidates import candidates, closes_on, gone, own_entry
-from verifold.society.coordinator import request_waits
+from verifold.society.coordinator import request_waits, waiting_for_reply
 from verifold.society.deliverables import deliverable_lines
 from verifold.society.errors import NotFound
 from verifold.society.identity import post_line, post_view, seat_label
@@ -306,17 +307,17 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
 
     It holds the agent's own line, the lab's state and the time that it has left, how many agents are in a turn
     and how many have an alarm that waits, the other agents with their latest plans, the candidate answers that
-    stand with the one that a close closes on, and the newest report with its age. Then come the threads: the
-    newest ones, one line for each side thread, the threads where one agent works alone, and the threads that got
-    no post for a long while. Then come the posts by where they stand: the disputed posts, the results that nobody
-    has built on, the results that nobody has checked, the open obstacles with the counts of the others, the asks
-    that nobody has answered, and the calls that need an agent. The order ranks nothing. `how` says how the board
-    works.
+    stand with the one that a close closes on, and the newest report with its age. For the agent that holds the
+    coordinator seat, it holds the person's oldest post in the conversation that waits for its reply, with its age
+    and the number of later ones that wait too. Then come the threads: the newest ones, one line for each side
+    thread, the threads where one agent works alone, and the threads that got no post for a long while. Then come
+    the posts by where they stand: the disputed posts, the results that nobody has built on, the results that
+    nobody has checked, the open obstacles with the counts of the others, the asks that nobody has answered, and
+    the calls that need an agent. The order ranks nothing. `how` says how the board works.
 
-    `now` dates the time that the lab has left, the ages of the report and the candidates, the quiet threads, the
-    votes that are sealed for the agent, the open round and the entries that are sealed for the agent, and the
-    leases on the wanted reruns.
-    Without it, time counts from the board's newest post. The agents in a turn come from the record, because this
+    `now` dates the time that the lab has left, the ages of the report, the candidates, and the person's post that
+    waits for a reply, the quiet threads, the votes that are sealed for the agent, the open round and the entries
+    that are sealed for the agent, and the leases on the wanted reruns. Without it, time counts from the board's newest post. The agents in a turn come from the record, because this
     package does no I/O and so knows no live activity.
     """
     board = for_reader(board, agent_id, now)
@@ -406,6 +407,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
     you = board.agent(agent_id)
     close_line = post_line(board, done, agent_id, now) if done else None
     report_line = post_line(board, reported, agent_id, now) if reported else None
+    waits = _person_waits(board, agent_id, now)
     your_line = _agent_line(board, you.agent, working, agent_id, now) if you else None
     lines = tuple(_agent_line(board, agent, working, agent_id, now) for agent in others)
     # A post whose line the brief holds already is its ID alone in the lists of posts, so the brief holds each
@@ -415,6 +417,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         *news.others,
         close_line,
         report_line,
+        waits.line if waits else None,
         *(line for agent in (your_line, *lines) if agent for line in (agent.plan, agent.latest)),
         *(summary.latest for summary in summaries[:MAX_NEWS]),
     )
@@ -477,6 +480,7 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         vote_reveal_minutes=board.settings.votes.reveal_minutes,
         rerun_lease_minutes=board.settings.reruns.lease_minutes,
         conversation=board.conversation,
+        person_waits=waits,
         powers=tuple(power for power in POWERS if power in board.powers),
         left=tuple(left_line(board, entry) for entry in board.left),
         candidates=tuple(
@@ -522,12 +526,25 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
             update={
                 'for_you': known(news.for_you),
                 'others': known(news.others),
+                # `person_waits` holds the post that the line names, so the brief says it once.
+                'no_reply': '',
                 'rounds': tuple(
                     note.model_copy(update={'round': known((note.round,))[0], 'entries': known(note.entries)})
                     for note in news.rounds
                 ),
             }
         ),
+    )
+
+
+def _person_waits(board: Board, agent_id: AgentId, now: datetime) -> PersonWait | None:
+    # Only the agent that holds the coordinator seat reads which posts of the person wait for its reply.
+    waiting = waiting_for_reply(board) if agent_id == board.coordinator else ()
+    if not waiting:
+        return None
+    oldest = waiting[0]
+    return PersonWait(
+        line=post_line(board, oldest, agent_id, now), minutes=minutes_since(oldest.at, now) or 0, more=len(waiting) - 1
     )
 
 

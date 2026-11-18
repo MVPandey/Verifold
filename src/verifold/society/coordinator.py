@@ -33,6 +33,7 @@ from verifold.protocol.posts import Answer, Ask, Close, MoveRequest, PermissionS
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
+from verifold.society.lifecycle import latest_time, minutes_text
 from verifold.society.standing import waits_for_person
 
 _TOLD = 2
@@ -293,6 +294,46 @@ def request_waits(board: Board, entry: Posted) -> bool:
 def _ask_waits(board: Board, move: PermissionMove) -> bool:
     asked = board.post(move.ask)
     return bool(asked and waits_for_person(board, move.ask) and not board.gone(asked.post.author))
+
+
+def waiting_for_reply(board: Board) -> tuple[Posted, ...]:
+    """
+    Return the person's posts in the conversation that wait for the coordinator's reply, oldest first.
+
+    A post of the person there waits until an agent posts in the conversation after it while that agent holds the
+    coordinator seat. Any kind of post is such a reply, and one reply answers every earlier post of the person. So
+    a reply from an agent that gave the seat up later still counts, and a post of another agent counts for nothing.
+    An `answer` of the person, such as its yes to a request or its choice on an ask, is itself a reply and asks
+    nothing, so it waits for none. A lab without a conversation has no such post.
+    """
+    talk = board.conversation
+    posts = board.thread_posts(talk) if talk else ()
+    replied = next((entry.seq for entry in reversed(posts) if entry.post.author == board.coordinator_at(entry.seq)), 0)
+    return tuple(
+        entry
+        for entry in posts
+        if entry.post.author == PERSON and not isinstance(entry.post, Answer) and entry.seq > replied
+    )
+
+
+def no_reply_line(board: Board, agent_id: AgentId, now: datetime | None = None) -> str:
+    """
+    Return one line for the agent that holds the coordinator seat about the person's posts that wait for its reply.
+
+    The line names the oldest of them with the whole minutes that it has waited by the lab's clock, and counts the
+    later ones. It is empty while no post waits, and for every other agent. Without `now`, time counts from the
+    board's newest post.
+    """
+    waiting = waiting_for_reply(board) if agent_id == board.coordinator else ()
+    if not waiting:
+        return ''
+    oldest, more = waiting[0], len(waiting) - 1
+    waited = minutes_text(max(((now or latest_time(board)) - oldest.at).total_seconds() / 60, 0))
+    line = f"The person's post {oldest.post.id} in the conversation has waited {waited} for your reply."
+    if more:
+        posts, wait = ('post', 'waits') if more == 1 else ('posts', 'wait')
+        line += f' {more} later {posts} of the person there {wait} too.'
+    return line
 
 
 def permission_choice(board: Board, move: PermissionMove, by: AgentId) -> tuple[Ask, str]:

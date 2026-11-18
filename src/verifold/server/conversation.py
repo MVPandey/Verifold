@@ -6,7 +6,7 @@ from verifold.protocol.ids import PERSON
 from verifold.protocol.moves import PermissionMove, power_of
 from verifold.protocol.posts import MoveRequest
 from verifold.society.board import Board
-from verifold.society.coordinator import joined_by, undo_of
+from verifold.society.coordinator import joined_by, undo_of, waiting_for_reply
 from verifold.society.views import needs_person, post_view, thread_view
 
 
@@ -25,6 +25,7 @@ def conversation_view(board: Board) -> ConversationView:
             for item in needs_person(board)
             if item.post.thread == talk and item.post.author == board.coordinator
         ),
+        no_reply=tuple(entry.post.id for entry in waiting_for_reply(board)),
         asks=tuple(post_view(board, entry, PERSON) for entry in board.posts if entry.post.id in asked),
         powers=_powers(board),
         deeds=_deeds(board),
