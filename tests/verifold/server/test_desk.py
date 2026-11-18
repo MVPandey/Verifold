@@ -297,3 +297,21 @@ async def test_the_app_shows_the_desk_chat_and_each_action_under_the_post_that_i
     assert view.actions[1].change == 'added'
     assert view.actions[3].agent == 'ada'
     assert [agent.desk for agent in lab.agents] == [False, False, True]
+
+
+async def test_a_record_with_a_desk_and_its_actions_loads_again_as_it_was(
+    desk_lab: Lab, record_file: RecordFile
+) -> None:
+    on = await said(desk_lab)
+    dee = Member(desk_lab, 'dee')
+    await dee.say(on, 'The person asks for the tail.', thread='t-1')
+    await dee.set_time(on, 30)
+    await desk_lab.start_turn('ada', 'session-1', desk_lab.board.seq)
+    await dee.interrupt(on, 'ada')
+
+    again = Lab.load(record_file).board
+
+    assert (again.desk, again.desk_chat) == ('dee', 't-2')
+    assert again.interrupts == desk_lab.board.interrupts
+    assert again.times == desk_lab.board.times
+    assert again.posts == desk_lab.board.posts
