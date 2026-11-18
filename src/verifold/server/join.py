@@ -38,7 +38,7 @@ from verifold.protocol.agents import (
     ValueId,
 )
 from verifold.protocol.deliverables import Sentence
-from verifold.protocol.events import MAX_ALARM_MINUTES, AgentLeft, Reason
+from verifold.protocol.events import MAX_ALARM_MINUTES, AgentLeft, Reason, SeatNotes
 from verifold.protocol.ids import AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
     AgentHeadline,
@@ -49,6 +49,7 @@ from verifold.protocol.join import (
     DeskFile,
     MoveForm,
     MoveKind,
+    NotesResult,
     Overview,
     PostRequest,
     PostResult,
@@ -82,6 +83,7 @@ from verifold.society.attention import gone_named
 from verifold.society.errors import SocietyError
 from verifold.society.lifecycle import alarm_line
 from verifold.society.reruns import wanted_reruns
+from verifold.society.views import minutes_since
 from verifold.society.votes import vote_of
 from verifold.store.errors import RecordChanged
 
@@ -111,6 +113,19 @@ a close stands or such a post went out in the minute before.
   their teams, `one_agent_threads` the threads where one agent works alone, and `quiet_threads` the threads, other
   than the question's thread and the side threads, that got no post for an hour or more. The order of these fields
   ranks nothing.
+- A brief has at most 120000 characters of JSON, because a harness takes one tool result of about that size. When
+  the board holds more, the brief cuts whole lines from some of its parts, and `cut` has one line for each part
+  that it cut: how many lines it left out and which tool shows them. In a list of posts, a post whose line the
+  brief cut is its ID alone. The brief never cuts `how`, the question, `your_line`, your notes, the lab's state,
+  time, budget, and limits, `person_waits`, the reading, the open round, or a line of a post for you in `news`.
+  When the brief has too little room for the posts for you, `news` ends earlier, `more` counts the rest, and the
+  next result brings them.
+- `notes` keeps a text of at most 6000 characters for your own seat, and a new text replaces the earlier one. The
+  record keeps each text with your seat, the earlier ones too. Each `brief` of yours has your notes whole in
+  `notes`, with `notes_minutes_ago`, also after your harness shortened your session, and no other agent's brief has
+  them.
+  The person reads them in the app, on your profile. The record on disk holds them, so an agent that reads files
+  outside its folder can read them there.
 - `threads` and `thread` read the board, and `post` writes to it. The kind of a post says what it does. A `plan`
   says what its author does next.
 - `text` is one headline, and `body` holds the detail, up to 20000 characters. The person's app shows a headline
@@ -504,6 +519,20 @@ says how many whole minutes ago it was posted. Both are empty while the lab has 
 `reading` is the lab's reading of the question: the newest `reading`, as a line of a post, in whatever thread it
 is. `reading_minutes_ago` says how many whole minutes ago it was posted. While the lab has no reading, the brief
 leaves both out, and `no_reading` says so, with the minutes since the lab opened.
+
+`notes` is your seat's notes, whole, the text that you keep with the tool `notes`, and `notes_minutes_ago` says how
+many whole minutes ago you last changed them. Both are left out while you keep none. No other agent's brief has
+them.
+
+`cut` has one line for each part that the brief cut to stay within 120000 characters of JSON: how many lines it
+left out and which tool shows them. It is left out while the brief holds the whole board. The brief never cuts your
+own line, your notes, the question, the lab's state, time, budget, and limits, `person_waits`, the reading, the
+open round, or a line of a post for you in `news`, which ends earlier when the brief has too little room for them.
+It cuts only these parts, in this order, the oldest lines first: `quiet_threads`, `one_agent_threads`,
+`side_threads`, `reruns_wanted`, the reruns of the news, the lines of the posts in `open_calls`, `open_asks`,
+`obstacles`, `not_checked`, `not_built_on`, and `disputed`, which keep their IDs, `left`, the other posts of the
+news, `threads`, the entries of the closed rounds in the news, the offers of the deliverables, the lines of the
+candidates, which `older_candidates` then names, and the lines of the other agents' plans and latest posts.
 
 `person_waits` is there for the agent that holds the coordinator seat while a post of the person in the
 conversation waits for its reply. It has the oldest such post as a line, the whole minutes that the post has waited
@@ -990,6 +1019,19 @@ objection or failed check while it is disputed.
 """
 """Each tool's description, as every harness reads it. The module's note says what these texts may hold."""
 
+NOTES_TOOL = """\
+Reads or replaces the notes of your seat: a text that you keep for yourself, of at most 6000 characters.
+
+Without `text`, the call returns your notes as they are. With `text`, the text replaces your notes, and an empty
+text clears them. A text that is your notes already records nothing. The board refuses a longer text, and the
+refusal says how long it is. The record keeps each text with your seat, the earlier ones too, so the notes stay
+after a restart of Verifold. Each `brief` of yours has your notes whole in `notes`, with their age in
+`notes_minutes_ago`, also after your harness shortened your session. Each agent reads and writes the notes of its
+own seat only: no other agent's `brief` or call of this tool has them. The person reads them in the app, on your
+profile. The record on disk holds them, so an agent that reads files outside its folder can read them there.
+Verifold acts on no text of them. The result has your notes, their age in `minutes_ago`, and your `news`.
+"""
+
 ON = """\
 `on` names the person's post in the desk chat that the action rests on: a post of the person, in the desk chat, from
 the last 60 minutes by the lab's clock. The board refuses the action for any other post, and the refusal says why.
@@ -1137,8 +1179,8 @@ DESK_TOOLS = frozenset(
 )
 """The tools that the desk alone has. Every other agent's list of tools leaves them out."""
 
-DESK_READS = frozenset({'brief', 'threads', 'thread'})
-"""The tools that the desk has beside its own. Its list of tools holds no other."""
+DESK_READS = frozenset({'brief', 'threads', 'thread', 'notes'})
+"""The tools that the desk has beside its own: the board's reads and its own notes. Its list of tools holds no other."""
 
 
 class Members:
@@ -1305,6 +1347,17 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
             )
 
     _profile_tool(server, acting)
+
+    @server.tool(description=NOTES_TOOL)
+    async def notes(ctx: Context, text: SeatNotes | None = None) -> NotesResult:
+        """Return the notes of the seat that calls, or replace them with `text`."""
+        async with acting(ctx, 'notes') as member:
+            kept = await member.notes(text)
+            return NotesResult(
+                notes=kept.text if kept else '',
+                minutes_ago=minutes_since(kept.at, member.lab.now()) if kept else None,
+                news=member.news(),
+            )
 
     @server.tool(description=LEAVE_TOOL)
     async def leave(ctx: Context, reason: Reason = '') -> AgentLeft:

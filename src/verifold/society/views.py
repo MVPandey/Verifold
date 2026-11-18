@@ -6,7 +6,9 @@ the board is the agent's choice, and the person's norms are in the lab's `LAB.md
 """
 
 from collections import Counter
+from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
+from itertools import accumulate
 
 from verifold.protocol.agents import GUEST, POWERS, Agent
 from verifold.protocol.events import (
@@ -35,6 +37,7 @@ from verifold.protocol.join import (
     CandidatesView,
     CandidateView,
     DiskLine,
+    LeftLine,
     News,
     ObstacleEntry,
     Obstacles,
@@ -44,8 +47,10 @@ from verifold.protocol.join import (
     PostView,
     ProfileResult,
     QuestionVersion,
+    RerunLine,
     RevisionLine,
     RoundLine,
+    RoundNote,
     SideLine,
     ThreadLine,
     ThreadLink,
@@ -63,6 +68,7 @@ from verifold.society.candidates import candidates, closes_on, gone, own_entry
 from verifold.society.coordinator import request_waits, waiting_for_reply
 from verifold.society.deliverables import deliverable_lines
 from verifold.society.errors import NotFound
+from verifold.society.fit import CUTS, Keep, Part, cut_line, fit
 from verifold.society.identity import post_line, post_view, seat_label
 from verifold.society.lifecycle import (
     alarm_line,
@@ -317,7 +323,7 @@ def _built_on(board: Board, entry: Posted) -> bool:
     )
 
 
-def brief(  # noqa: PLR0913
+def brief(  # noqa: PLR0913, PLR0915
     board: Board,
     agent_id: AgentId,
     news: News,
@@ -325,13 +331,14 @@ def brief(  # noqa: PLR0913
     *,
     now: datetime | None = None,
     disk: DiskUse | None = None,
+    page: Callable[[int], News] | None = None,
 ) -> Brief:
     """
     Return the lab for one agent in one read.
 
-    It holds the agent's own line, the lab's state and the time that it has left, how many agents are in a turn
-    and how many have an alarm that waits, the other agents with their latest plans, the candidate answers that
-    stand with the one that a close closes on, the newest report with its age, and the lab's reading of the
+    It holds the agent's own line and notes, the lab's state and the time that it has left, how many agents are in
+    a turn and how many have an alarm that waits, the other agents with their latest plans, the candidate answers
+    that stand with the one that a close closes on, the newest report with its age, and the lab's reading of the
     question with its age, or a line that says that the lab has none. For the agent that holds the coordinator
     seat, it holds the person's oldest post in the conversation that waits for its reply, with its age and the
     number of later ones that wait too. Then come the threads: the newest ones, one line for each side
@@ -340,11 +347,16 @@ def brief(  # noqa: PLR0913
     nobody has checked, the open obstacles with the counts of the others, the asks that nobody has answered, and
     the calls that need an agent. The order ranks nothing. `how` says how the board works.
 
-    `now` dates the time that the lab has left, the ages of the report, the reading, the candidates, and the
-    person's post that waits for a reply, the quiet threads, the votes that are sealed for the agent, the open round
-    and the entries that are sealed for the agent, and the leases on the wanted reruns. Without it, time counts from the board's newest post. The agents in a turn come from the record, because this
-    package does no I/O and so knows no live activity. For the same reason, `disk` is what Verifold measured of
-    the lab's files last, or `None`.
+    The brief has `MAX_BRIEF` characters of JSON at most. The board cuts whole lines as `society.fit` says, and
+    `cut` says what it left out. `page` returns the agent's news with at most the given number of posts for it,
+    so that the news can end earlier than `news` does. Without it, the brief holds `news` as it is.
+
+    `now` dates the time that the lab has left, the ages of the report, the reading, the notes, the candidates,
+    and the person's post that waits for a reply, the quiet threads, the votes that are sealed for the agent, the
+    open round and the entries that are sealed for the agent, and the leases on the wanted reruns. Without it,
+    time counts from the board's newest post. The agents in a turn come from the record, because this package does
+    no I/O and so knows no live activity. For the same reason, `disk` is what Verifold measured of the lab's files
+    last, or `None`.
     """
     board = for_reader(board, agent_id, now)
     now = now or latest_time(board)
@@ -371,8 +383,8 @@ def brief(  # noqa: PLR0913
         entry
         for entry, state in stands
         if isinstance(entry.post, Result) and entry.post.author != agent_id and state == 'open'
-    )
-    disputed = tuple(entry for entry, state in stands if state == 'disputed')
+    )[-MAX_NEWS:]
+    disputed = tuple(entry for entry, state in stands if state == 'disputed')[-MAX_NEWS:]
     open_asks = tuple(
         entry
         for entry in board.posts
@@ -383,7 +395,7 @@ def brief(  # noqa: PLR0913
         and entry.post.thread not in (board.conversation, board.desk_chat)
         and not is_answered(board, entry.post.id)
         and not board.gone(entry.post.author)
-    )
+    )[-MAX_NEWS:]
     open_calls = tuple(
         entry
         for entry in board.posts
@@ -391,7 +403,7 @@ def brief(  # noqa: PLR0913
         and entry.post.author != agent_id
         and entry.post.thread not in not_mine
         and is_open_call(board, entry.post.id)
-    )
+    )[-MAX_NEWS:]
     every = thread_summaries(board, agent_id, now)
     summaries, side = work_threads(every), side_lines(every, agent_id)
     # A thread counts when an agent's latest plan or result is in it, so a thread that holds only notes is no line.
@@ -429,7 +441,7 @@ def brief(  # noqa: PLR0913
         and entry.post.author != agent_id
         and state not in {'conceded', 'disputed'}
         and not _built_on(board, entry)
-    )
+    )[-MAX_LEADS:]
     found = obstacles(board)
     blocking = tuple(item.entry for item in reversed(found) if item.state == 'open')
     standing_candidates = candidates(board)
@@ -444,32 +456,33 @@ def brief(  # noqa: PLR0913
     reading_line = post_line(board, reading, agent_id, now) if reading else None
     waits = _person_waits(board, agent_id, now)
     your_line = _agent_line(board, you.agent, working, agent_id, now) if you else None
-    lines = tuple(_agent_line(board, agent, working, agent_id, now) for agent in others)
-    # A post whose line the brief holds already is its ID alone in the lists of posts, so the brief holds each
-    # headline once.
-    held = (
-        *news.for_you,
-        *news.others,
-        close_line,
-        report_line,
-        reading_line,
-        waits.line if waits else None,
-        *(line for agent in (your_line, *lines) if agent for line in (agent.plan, agent.latest)),
-        *(summary.latest for summary in summaries[:MAX_NEWS]),
-    )
-    # Each candidate has its whole line, so a later list of posts holds its ID alone.
-    told = {line.id for line in held if line} | {entry.post.id for entry in shown}
+    agent_lines = tuple(_agent_line(board, agent, working, agent_id, now) for agent in others)
+    wanted = reruns_wanted(board, now)[-MAX_NEWS:]
+    gone_lines = tuple(left_line(board, entry) for entry in board.left)
+    delivered = deliverable_lines(board)
+    offers = sorted((offer for line in delivered for offer in line.offers), key=lambda offer: offer.at)
+    notes = board.notes_of(agent_id)
+    # The agents that posted last keep the lines of their plans and latest posts longest.
+    posted_last = {entry.post.author: entry.seq for entry in board.posts}
+    recent = tuple(sorted((agent.id for agent in others), key=lambda agent: posted_last.get(agent, 0)))
 
     # The brief's list of agents says who each agent is, so a line in the brief's own lists says who wrote the
     # post only for an author that the list does not hold, or whose seat had another label then.
     labels = {agent.id: seat_label(board, agent.id) for agent in (*others, *((you.agent,) if you else ()))}
+    made: dict[tuple[PostId, bool], PostLine] = {}
 
     def line(entry: Posted, *, news: bool = False) -> PostLine:
-        # The person is in no list of agents, so a line of the news keeps the person's body.
-        seat = labels.get(entry.post.author)
-        if seat is None:
-            return post_line(board, entry, agent_id, now, news=news)
-        return _own_line(board, entry, seat, agent_id, now)
+        # The person is in no list of agents, so a line of the news keeps the person's body. The board can build
+        # the brief more than once to fit it, so each line is made once.
+        key = (entry.post.id, news)
+        if key not in made:
+            seat = labels.get(entry.post.author)
+            made[key] = (
+                post_line(board, entry, agent_id, now, news=news)
+                if seat is None
+                else _own_line(board, entry, seat, agent_id, now)
+            )
+        return made[key]
 
     def known(lines: tuple[PostLine, ...]) -> tuple[PostLine, ...]:
         # The lines of the news that this brief carries follow the same rule, so no author's name, seat, and
@@ -481,25 +494,26 @@ def brief(  # noqa: PLR0913
         entry = board.post(summary.latest.id) if summary.latest else None
         return summary.model_copy(update={'latest': line(entry)}) if entry else summary
 
-    def listed(entries: tuple[Posted, ...]) -> tuple[PostEntry, ...]:
-        shown = tuple(
-            PostEntry(id=entry.post.id, line=None if entry.post.id in told else line(entry)) for entry in entries
-        )
-        told.update(entry.post.id for entry in entries)
-        return shown
+    pages = {len(news.for_you): news}
 
-    return Brief(
+    def news_of(most: int) -> News:
+        if page is not None and most not in pages:
+            pages[most] = page(most)
+        return pages.get(most, news)
+
+    base = Brief(
         you=agent_id,
+        how=how,
         your_line=your_line,
         your_alarm=alarm_line(board, agent_id),
         no_alarm=no_alarm_line(board, agent_id, now),
-        how=how,
+        notes=notes.text if notes else None,
+        notes_minutes_ago=minutes_since(notes.at, now) if notes else None,
         question=board.question,
         revisions=tuple(
             RevisionLine(at=entry.at, note=entry.note, post=entry.post, by=entry.by, request=entry.request)
             for entry in board.revisions[-MAX_LEADS:]
         ),
-        deliverables=deliverable_lines(board),
         state=lab_state(board),
         close=close_line,
         close_agreed=agreed(board, done) if done else (),
@@ -510,7 +524,6 @@ def brief(  # noqa: PLR0913
         disk=DiskLine(folder=disk.folders.get(agent_id), lab=disk.total, limit=disk_limit(board)) if disk else None,
         in_turn=sum(before(board, agent).cut_off for agent in run),
         alarms_waiting=sum(pending_alarm(board, joined.agent.id) is not None for joined in board.agents),
-        agents=lines,
         coordinator=board.coordinator,
         coordinator_open=board.coordinator_open,
         reviewers=holders(board),
@@ -523,18 +536,6 @@ def brief(  # noqa: PLR0913
         desk_chat=board.desk_chat,
         person_waits=waits,
         powers=tuple(power for power in POWERS if power in board.powers),
-        left=tuple(left_line(board, entry) for entry in board.left),
-        candidates=tuple(
-            CandidateLine(
-                line=line(entry),
-                minutes_ago=minutes_since(entry.at, now) or 0,
-                standing=standing(board, entry.post.id),
-                to_earlier_question=to_earlier_question(board, entry),
-                rests_on=rests_on(board, entry),
-            )
-            for entry in shown
-        ),
-        older_candidates=tuple(CandidateRef(id=entry.post.id, author=entry.post.author) for entry in older),
         closes_on=named.post.id if named else None,
         report=report_line,
         report_minutes_ago=minutes_since(reported.at, now) if reported else None,
@@ -542,44 +543,200 @@ def brief(  # noqa: PLR0913
         reading_minutes_ago=minutes_since(reading.at, now) if reading else None,
         no_reading=None if reading else _no_reading(board, now),
         round=round_line(board, agent_id, now),
-        threads=tuple(latest(summary) for summary in summaries[:MAX_NEWS]),
-        more_threads=max(len(summaries) - MAX_NEWS, 0),
-        side_threads=side[:MAX_NEWS],
-        more_side_threads=max(len(side) - MAX_NEWS, 0),
-        one_agent_threads=alone[:MAX_LEADS],
-        quiet_threads=tuple(
-            ThreadLine(id=summary.thread.id, title=summary.thread.title, team=summary.team, last_at=summary.last_at)
-            for summary in quiet[:MAX_LEADS]
-        ),
-        more_quiet_threads=max(len(quiet) - MAX_LEADS, 0),
-        disputed=listed(disputed[-MAX_NEWS:]),
-        not_built_on=listed(not_built_on[-MAX_LEADS:]),
-        not_checked=listed(not_checked[-MAX_NEWS:]),
         obstacles=Obstacles(
-            open=tuple(
-                ObstacleEntry(id=entry.id, line=entry.line, standing=standing(board, entry.id))
-                for entry in listed(blocking[:MAX_OBSTACLES])
-            ),
             more_open=max(len(blocking) - MAX_OBSTACLES, 0),
             taken_up=sum(item.state == 'taken_up' for item in found),
             removed=sum(item.state == 'removed' for item in found),
         ),
-        open_asks=listed(open_asks[-MAX_NEWS:]),
-        open_calls=listed(open_calls[-MAX_NEWS:]),
-        reruns_wanted=reruns_wanted(board, now)[-MAX_NEWS:],
-        news=news.model_copy(
+        news=news,
+    )
+    shown_candidates = {
+        entry.post.id: CandidateLine(
+            line=line(entry),
+            minutes_ago=minutes_since(entry.at, now) or 0,
+            standing=standing(board, entry.post.id),
+            to_earlier_question=to_earlier_question(board, entry),
+            rests_on=rests_on(board, entry),
+        )
+        for entry in shown
+    }
+    blocked = {entry.post.id: standing(board, entry.post.id) for entry in blocking[:MAX_OBSTACLES]}
+
+    def render(keep: Keep) -> Brief:
+        cuts: dict[Part, tuple[int, tuple[str, ...]]] = {}
+
+        def kept[T](
+            part: Part, items: Sequence[T], *, last: bool = True, name: Callable[[T], str] | None = None
+        ) -> tuple[T, ...]:
+            # The lines of a part that the budget keeps: the last ones, or with `last` false the first ones. The
+            # cut names the lines that it left out by `name`.
+            room = min(keep.get(part, len(items)), len(items))
+            taken, dropped = (
+                (items[len(items) - room :], items[: len(items) - room]) if last else (items[:room], items[room:])
+            )
+            if dropped:
+                cuts[part] = (len(dropped), tuple(name(item) for item in dropped) if name else ())
+            return tuple(taken)
+
+        heard = news_of(keep.get('news.for_you', len(news.for_you)))
+        if len(heard.for_you) < len(news.for_you):
+            cuts['news.for_you'] = (len(news.for_you) - len(heard.for_you), ())
+        heard_others = kept('news.others', heard.others)
+        rounds = _rounds(heard.rounds, keep.get('news.rounds'), cuts, known)
+        reruns = kept('news.reruns', heard.reruns, last=False)
+        lined = set(kept('agents', recent, name=str))
+        agents = tuple(
+            agent if agent.id in lined else agent.model_copy(update={'plan': None, 'latest': None})
+            for agent in agent_lines
+        )
+        threads = kept('threads', summaries[:MAX_NEWS], last=False)
+        whole = kept('candidates', shown)
+        # A post whose line the brief holds already is its ID alone in the lists of posts, so the brief holds each
+        # headline once.
+        held = (
+            *heard.for_you,
+            *heard_others,
+            close_line,
+            report_line,
+            reading_line,
+            waits.line if waits else None,
+            *(post for agent in (your_line, *agents) if agent for post in (agent.plan, agent.latest)),
+            *(summary.latest for summary in threads),
+        )
+        # Each candidate has its whole line, so a later list of posts holds its ID alone.
+        told = {post.id for post in held if post} | {entry.post.id for entry in whole}
+
+        def listed(part: Part, entries: tuple[Posted, ...], *, last: bool = True) -> tuple[PostEntry, ...]:
+            # The posts whose lines the budget keeps, of those that the brief does not hold yet. A post whose line
+            # the budget cut is its ID alone in each later list too.
+            fresh = tuple(entry for entry in entries if entry.post.id not in told)
+            lines = {entry.post.id for entry in kept(part, fresh, last=last)}
+            told.update(entry.post.id for entry in entries)
+            return tuple(
+                PostEntry(id=entry.post.id, line=line(entry) if entry.post.id in lines else None) for entry in entries
+            )
+
+        # The lists of posts come in the order of their fields, so each one leaves out the lines of the ones before.
+        lists = {
+            'disputed': listed('disputed', disputed),
+            'not_built_on': listed('not_built_on', not_built_on),
+            'not_checked': listed('not_checked', not_checked),
+            'obstacles': listed('obstacles', blocking[:MAX_OBSTACLES], last=False),
+            'open_asks': listed('open_asks', open_asks),
+            'open_calls': listed('open_calls', open_calls),
+        }
+        side_kept = kept('side_threads', side[:MAX_NEWS], last=False)
+        quiet_kept = kept('quiet_threads', quiet[:MAX_LEADS], last=False)
+        offered = {offer.post for offer in kept('offers', offers)}
+        news_kept = heard.model_copy(
             update={
-                'for_you': known(news.for_you),
-                'others': known(news.others),
+                'for_you': known(heard.for_you),
+                'others': known(heard_others),
+                'left_out': heard.left_out + len(heard.others) - len(heard_others),
                 # `person_waits` holds the post that the line names, so the brief says it once.
                 'no_reply': '',
-                'rounds': tuple(
-                    note.model_copy(update={'round': known((note.round,))[0], 'entries': known(note.entries)})
-                    for note in news.rounds
-                ),
+                'rounds': rounds,
+                'reruns': reruns,
             }
-        ),
+        )
+        offers_kept = (
+            tuple(
+                line.model_copy(update={'offers': tuple(offer for offer in line.offers if offer.post in offered)})
+                for line in delivered
+            )
+            if 'offers' in cuts
+            else delivered
+        )
+        update = {
+            'deliverables': offers_kept,
+            'agents': agents,
+            'left': kept('left', gone_lines, name=_left),
+            'candidates': tuple(shown_candidates[entry.post.id] for entry in whole),
+            'older_candidates': tuple(
+                CandidateRef(id=entry.post.id, author=entry.post.author)
+                for entry in (*older, *shown[: len(shown) - len(whole)])
+            ),
+            'threads': tuple(latest(summary) for summary in threads),
+            'more_threads': len(summaries) - len(threads),
+            'side_threads': side_kept,
+            'more_side_threads': len(side) - len(side_kept),
+            'one_agent_threads': kept('one_agent_threads', alone[:MAX_LEADS], last=False),
+            'quiet_threads': tuple(
+                ThreadLine(id=summary.thread.id, title=summary.thread.title, team=summary.team, last_at=summary.last_at)
+                for summary in quiet_kept
+            ),
+            'more_quiet_threads': len(quiet) - len(quiet_kept),
+            **lists,
+            'obstacles': base.obstacles.model_copy(
+                update={
+                    'open': tuple(
+                        ObstacleEntry(id=entry.id, line=entry.line, standing=blocked[entry.id])
+                        for entry in lists['obstacles']
+                    )
+                }
+            ),
+            'reruns_wanted': kept('reruns_wanted', wanted, name=_rerun),
+            'news': news_kept,
+        }
+        return base.model_copy(
+            update=update | {'cut': tuple(cut_line(part, *cuts[part]) for part in CUTS if part in cuts)}
+        )
+
+    full: dict[Part, int] = {
+        'quiet_threads': min(len(quiet), MAX_LEADS),
+        'one_agent_threads': min(len(alone), MAX_LEADS),
+        'side_threads': min(len(side), MAX_NEWS),
+        'reruns_wanted': len(wanted),
+        'news.reruns': len(news.reruns),
+        'open_calls': len(open_calls),
+        'open_asks': len(open_asks),
+        'obstacles': min(len(blocking), MAX_OBSTACLES),
+        'not_checked': len(not_checked),
+        'not_built_on': len(not_built_on),
+        'disputed': len(disputed),
+        'left': len(gone_lines),
+        'news.others': len(news.others),
+        'threads': min(len(summaries), MAX_NEWS),
+        'news.rounds': sum(len(note.entries) for note in news.rounds),
+        'offers': len(offers),
+        'candidates': len(shown),
+        'agents': len(recent),
+        **({'news.for_you': len(news.for_you)} if page else {}),
+    }
+    return fit(render, full)
+
+
+def _rounds(
+    notes: tuple[RoundNote, ...],
+    room: int | None,
+    cuts: dict[Part, tuple[int, tuple[str, ...]]],
+    known: Callable[[tuple[PostLine, ...]], tuple[PostLine, ...]],
+) -> tuple[RoundNote, ...]:
+    # The closed rounds of the news with the lines of their entries that the budget keeps, the older rounds first
+    # as in the news, and each round counts the entries that it leaves out.
+    total = sum(len(note.entries) for note in notes)
+    room = total if room is None else min(room, total)
+    if room < total:
+        cuts['news.rounds'] = (total - room, ())
+    spent = accumulate((len(note.entries) for note in notes), initial=0)
+    return tuple(
+        note.model_copy(
+            update={
+                'round': known((note.round,))[0],
+                'entries': known(note.entries[: max(room - used, 0)]),
+                'left_out': note.left_out + len(note.entries) - len(note.entries[: max(room - used, 0)]),
+            }
+        )
+        for note, used in zip(notes, spent, strict=False)
     )
+
+
+def _rerun(line: RerunLine) -> str:
+    return line.post
+
+
+def _left(line: LeftLine) -> str:
+    return line.id
 
 
 def _person_waits(board: Board, agent_id: AgentId, now: datetime) -> PersonWait | None:

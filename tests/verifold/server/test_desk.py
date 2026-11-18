@@ -94,7 +94,7 @@ async def test_the_desk_lists_its_own_tools_and_every_other_agent_lists_the_tool
         refused = await other.call_tool('set_time', {'on': 'p-1', 'minutes': 0})
 
     assert mine == DESK_TOOLS | DESK_READS
-    assert len(theirs) == 15
+    assert len(theirs) == 16
     assert not theirs & DESK_TOOLS
     assert refused.is_error
     assert "This tool is the desk's" in text_of(refused)
@@ -357,3 +357,34 @@ async def test_the_overview_has_the_budget_what_the_lab_spent_and_the_disk_again
     assert view.limit_reached == 'tokens'
     assert view.disk is not None
     assert (view.disk.lab, view.disk.limit) == (4_096, 1024**3)
+
+
+async def test_the_desk_keeps_notes_for_its_seat_and_reads_them_in_its_brief_and_the_person_in_the_app(
+    desk_lab: Lab,
+) -> None:
+    async with Client(join_server(lambda _: Member(desk_lab, 'dee'))) as desk:
+        tools = {tool.name for tool in (await desk.list_tools()).tools}
+        kept = await desk.call_tool('notes', {'text': 'The person wants the tail first.'})
+        brief = await desk.call_tool('brief', {})
+
+    class Host:
+        lab = desk_lab
+
+    transport = httpx2.ASGITransport(app=app_api(Host(), Activity(), SecretStr(TOKEN)))  # ty: ignore[invalid-argument-type]
+    async with httpx2.AsyncClient(
+        transport=transport, base_url='http://lab', headers={'Authorization': f'Bearer {TOKEN}'}
+    ) as client:
+        response = await client.get('/lab')
+
+    assert 'notes' in tools
+    assert kept.structured_content is not None
+    assert kept.structured_content['notes'] == 'The person wants the tail first.'
+    assert brief.structured_content is not None
+    assert brief.structured_content['notes'] == 'The person wants the tail first.'
+    view = LabView.model_validate(response.json())
+    assert [(one.agent.id, one.notes) for one in view.agents] == [
+        ('ada', ''),
+        ('bo', ''),
+        ('dee', 'The person wants the tail first.'),
+    ]
+    assert view.agents[2].notes_at == desk_lab.board.notes[-1].at

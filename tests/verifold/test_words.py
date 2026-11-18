@@ -60,6 +60,7 @@ from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.coordinator import no_reply_line
 from verifold.society.deliverables import OFFERS_TITLE
+from verifold.society.fit import CUTS, cut_line
 from verifold.society.lifecycle import no_alarm_line
 from verifold.society.reruns import COPY_MINUTES
 from verifold.store.errors import RecordChanged
@@ -213,6 +214,7 @@ def messages() -> dict[str, str]:
         **{f'norms changed {name}': text.format(path=NORMS) for name, text in NORMS_CHANGED.items()},
         'no alarm': no_alarm_line(board, 'ada', START),
         **{f'no reply {posts}': no_reply_line(_waiting(posts), 'ada') for posts in (1, 2, 3)},
+        **{f'cut {part} {count}': cut_line(part, count, ('p-1', 'p-2')[:count]) for part in CUTS for count in (1, 2)},
         'no alarm, a close stands': no_alarm_line(closing.board(), 'bo'),
         'no alarm, a closed lab': no_alarm_line(
             closing.post(
@@ -309,7 +311,7 @@ async def test_no_tool_of_the_board_describes_itself_or_its_result_with_an_order
     async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
         tools = (await client.list_tools()).tools
 
-    assert len(tools) == 15
+    assert len(tools) == 16
     for tool in tools:
         assert tool.description, tool.name
         assert orders(tool.description) == [], tool.name

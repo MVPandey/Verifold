@@ -148,6 +148,8 @@ describe('the API client', () => {
     );
     assert.deepEqual([old?.need, old?.flag, old?.edits], ['idle', '', []]);
     assert.deepEqual([old?.in_turn, old?.about_by, old?.chosen_name], [false, null, '']);
+    // A server from before the notes of a seat sends none.
+    assert.deepEqual([old?.notes, old?.notes_at], ['', null]);
     // A server from before it says of no agent which post of the person reached it.
     assert.equal(old?.heard, null);
     assert.deepEqual(old?.outcomes, { built_on: [], held: [], refuted: [], open_asks: [] });

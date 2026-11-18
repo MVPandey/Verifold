@@ -1,7 +1,7 @@
 import pytest
 from builders import START, RecordBuilder, lab
 
-from verifold.protocol.events import LabOpened, ProfileSet, TurnEnded, WentQuiet
+from verifold.protocol.events import LabOpened, NotesSet, ProfileSet, TurnEnded, WentQuiet
 from verifold.protocol.posts import Message, Result
 from verifold.protocol.usage import Usage
 from verifold.society.errors import RejectedEvent
@@ -78,3 +78,29 @@ def test_a_blind_checker_has_no_role_and_an_unknown_agent_cannot_set_one() -> No
         apply(record.board(), profile.model_copy(update={'seq': record.board().seq + 1}))
     with pytest.raises(RejectedEvent, match='zed is not an agent'):
         apply(record.board(), profile.model_copy(update={'seq': record.board().seq + 1, 'agent': 'zed'}))
+
+
+def test_a_seat_keeps_its_latest_notes_and_the_record_keeps_each_text() -> None:
+    record = lab().post(Result(id='p-1', thread='t-1', author='ada', text='Holds.')).join('dee', checks='p-1')
+    board = record.board()
+
+    def notes(agent: str, text: str) -> NotesSet:
+        return NotesSet(seq=board.seq + 1, at=START, agent=agent, text=text)
+
+    first = apply(board, notes('ada', 'Next: the tail.'))
+    board = first
+    second = apply(board, notes('ada', 'Next: the head.'))
+    board = second
+    cleared = apply(board, notes('ada', ''))
+
+    assert (first.notes_of('ada'), first.notes_of('bo')) == (first.notes[-1], None)
+    assert second.notes_of('ada') == second.notes[-1]
+    assert [entry.text for entry in cleared.notes] == ['Next: the tail.', 'Next: the head.', '']
+    assert cleared.notes_of('ada') is None
+    with pytest.raises(RejectedEvent, match='blind checker posts one check and keeps no notes'):
+        apply(board, notes('dee', 'Mine.'))
+    with pytest.raises(RejectedEvent, match='zed is not an agent'):
+        apply(board, notes('zed', 'Mine.'))
+    gone = record.leave('bo').board()
+    with pytest.raises(RejectedEvent, match='bo left this lab'):
+        apply(gone, NotesSet(seq=gone.seq + 1, at=START, agent='bo', text='Mine.'))

@@ -1,15 +1,18 @@
 from datetime import datetime, timedelta
+from functools import partial
 
 import pytest
 from builders import RecordBuilder, lab
 from pydantic import TypeAdapter
 
-from verifold.protocol.events import AlarmSet, BudgetSet, LimitReached, Posted, TurnEnded
+from verifold.protocol.events import MAX_SEAT_NOTES, AlarmSet, BudgetSet, LimitReached, NotesSet, Posted, TurnEnded
 from verifold.protocol.join import (
+    MAX_BRIEF,
     MAX_CANDIDATES,
     MAX_LINE,
     MAX_NEWS,
     MAX_OBSTACLES,
+    MAX_PERSON_LINE,
     QUIET_MINUTES,
     Brief,
     CandidatesView,
@@ -44,8 +47,11 @@ from verifold.protocol.posts import (
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.protocol.usage import DiskUse, Usage
 from verifold.protocol.votes import BADGES, MAX_NOTES, MAX_WHY, BadgeNote, VoteNote
+from verifold.server.join import INSTRUCTIONS
+from verifold.society import views
 from verifold.society.attention import news
 from verifold.society.errors import NotFound
+from verifold.society.fit import CUTS, fit
 from verifold.society.identity import post_line
 from verifold.society.standing import is_open_call, takers
 from verifold.society.views import (
@@ -713,9 +719,9 @@ def test_a_brief_holds_the_line_of_a_post_once_and_then_its_id_alone() -> None:
 
 ONE_TOOL_RESULT = 126_000
 """
-The most characters of JSON in a brief. A brief is one tool result, and a harness takes a result of this size:
-before votes, the largest brief that the board gave had 126,005 characters. The briefs of the largest labs below
-are not larger than that.
+The most characters of JSON in one tool result that a harness takes: before votes, the largest brief that the board
+gave had 126,005 characters. The board cuts every brief to `MAX_BRIEF`, a few thousand characters below it, and the
+briefs of the largest labs below are not larger than that.
 """
 
 
@@ -901,9 +907,8 @@ def test_the_largest_brief_with_the_longest_reading_of_the_question_is_one_tool_
 
 def test_the_largest_brief_with_every_field_of_a_line_full_and_votes_on_every_post_is_one_tool_result() -> None:
     # Every post has the longest helper name and builds on ten posts. Every other agent and the person voted on
-    # every post with the longest reason, and every post of an agent has all three badges. With the round's close
-    # of the test above, this brief has about 130,000 characters: the round's lines take the room of the news's
-    # other posts, and the lists of the brief then hold those posts' lines in full.
+    # every post with the longest reason, and every post of an agent has all three badges. The board cuts this
+    # brief to fit: `cut` says what it left out.
     record = _largest(full=True, round_close=False)
     plain = len(brief(record.board(), 'a0', news(record.board(), 'a0', 0)).model_dump_json())
     why = 'w' * MAX_WHY
@@ -936,5 +941,169 @@ def test_the_largest_brief_with_every_field_of_a_line_full_and_votes_on_every_po
     notes = News(seq=1, votes=votes, votes_left_out=99, badges=badges, badges_left_out=99).model_dump_json()
     assert plain < len(view.model_dump_json())
     assert len(view.model_dump_json()) + len(notes) < ONE_TOOL_RESULT
+    assert view.cut
     # No reason of a vote or a badge is in the brief's lines.
     assert why not in view.model_dump_json()
+
+
+def _far_larger() -> tuple[RecordBuilder, int]:
+    # A lab far larger than the largest one above. Twenty agents with the longest profiles work in sixty threads,
+    # five more agents left, and two agents talk in ten side threads. Each thread has every kind of post, each with
+    # the longest headline and helper name and ten posts in `builds_on`, and its results have files, a rerun that
+    # holds, a challenge, and a request of the person for an independent rerun. Every post has votes with the
+    # longest reason and a badge, every agent but the reader proposes, three deliverables have offers of ten agents,
+    # and the coordinator has the longest notes and reading and the person's longest posts wait for its reply.
+    # Then a round closes with an entry of every other agent, more of the person's longest posts for every agent
+    # come than a news holds, and a second round opens. It returns the record and the event before the round that
+    # closes, where the reader's news starts.
+    record = RecordBuilder()
+    for number in range(25):
+        record.join(f'a{number}', name=f'Claude Code · {"m" * 40} {number + 2}')
+    for number in range(20, 25):
+        record.leave(f'a{number}', reason='r' * 200)
+    record.reviewer_seats(20).thread('t-1', opened_by='a0').coordinator('a0')
+    record.thread('t-99', opened_by='person', conversation=True)
+    built: list[str] = []
+    long = 'x' * 1000
+    files = (FileEvidence(path='run.py', commit='c' * 40),)
+
+    def post(kind: str, thread: str, author: str, reply_to: str | None = None, **extra: object) -> str:
+        post_id = f'p-{len(record.events) + 1}'
+        fields = {'kind': kind, 'id': post_id, 'thread': thread, 'author': author, 'text': long, 'reply_to': reply_to}
+        more = {'helper': 'h' * 40, 'builds_on': tuple(built[-10:])} if kind not in {'entry', 'round'} else {}
+        record.post(TypeAdapter(Post).validate_python(fields | more | extra))
+        if kind not in {'ruled_out', 'entry', 'round'}:
+            built.append(post_id)
+        return post_id
+
+    for number in range(1, 61):
+        thread, author, other = f't-{number + 1}', f'a{number % 19 + 1}', f'a{(number + 1) % 19 + 1}'
+        record.thread(thread, opened_by=author)
+        post('plan', thread, author)
+        results = (post('result', thread, author, evidence=files), post('result', thread, author, evidence=files))
+        for result in results:
+            post('check', thread, other, result, outcome='holds', method='rerun')
+            post('check', thread, other, result, outcome='holds', method='challenge', body='On other dates.')
+        record.rerun('person', results[0])
+        post('objection', thread, other, results[1])
+        post('ruled_out', thread, other)
+        post('ask', thread, author)
+        post('call', thread, author)
+    for number in range(10):
+        record.thread(f't-{number + 70}', opened_by='a1', between=('a1', 'a2'))
+        post('message', f't-{number + 70}', 'a1')
+    for number in range(1, 4):
+        record.deliverable(f'd-{number}', 's' * 300, f'p-{len(record.events) + 1}')
+        for offerer in range(1, 11):
+            record.offer(f'p-{len(record.events) + 1}', f'a{offerer}', f'd-{number}', f't-{number + 80}')
+    for number in range(1, 20):
+        post('proposal', 't-1', f'a{number}')
+    post('reading', 't-1', 'a0', text='r' * MAX_HEADLINE, body='b' * MAX_BODY)
+    why = 'w' * MAX_WHY
+    for entry in tuple(event for event in record.events if isinstance(event, Posted) and event.post.author != 'person'):
+        for number, voter in enumerate(f'a{number}' for number in range(10) if f'a{number}' != entry.post.author):
+            record.vote(voter, entry.post.id, 'up' if number % 2 else 'down', why)
+        record.badge('person', entry.post.id, 'promising', reason=why)
+    for number in range(20):
+        agent = f'a{number}'
+        record.profile(agent, name=f'{"N" * 21}{number:03d}', about='a' * 240, role='r' * 40, status='s' * 140)
+        record.reviewer(agent, by='person')
+    notes = ('Doing "the tail".\n' * 400)[:MAX_SEAT_NOTES]
+    seq, at = record._stamp()
+    record.events.append(NotesSet(seq=seq, at=at, agent='a0', text=notes))
+    for number in range(3):
+        record.post(Message(id=f'p-90{number}', thread='t-99', author='person', text='h' * 1000, body='b' * MAX_BODY))
+    after = record.events[-1].seq
+    opened = post('round', 't-1', 'a1', minutes=MAX_ROUND_MINUTES)
+    start = record.events[-1].at
+    for entrant in range(2, 20):
+        post('entry', 't-1', f'a{entrant}', opened)
+        record.events[-1] = record.events[-1].model_copy(update={'at': start})
+    record.closed(opened)
+    for number in range(MAX_NEWS + 5):
+        record.post(
+            Message(id=f'p-95{number:02d}', thread='t-1', author='person', text='h' * 1000, body='b' * MAX_BODY)
+        )
+    post('round', 't-1', 'a2', minutes=MAX_ROUND_MINUTES)
+    return record, after
+
+
+def test_the_brief_of_a_lab_far_larger_than_the_largest_fits_one_tool_result_and_cuts_nothing_that_it_must_keep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record, after = _far_larger()
+    board = record.board()
+    now = board.posts[-1].at
+
+    def page(most: int) -> News:
+        return news(board, 'a0', after, now, most=most)
+
+    first = brief(board, 'a0', page(MAX_NEWS), INSTRUCTIONS, now=now, page=page)
+    later = brief(board, 'a5', news(board, 'a5', 0, now), now=now)
+    # The same briefs with room for all: the parts that are never cut are the same in both.
+    monkeypatch.setattr(views, 'fit', partial(fit, budget=10**9))
+    whole = brief(board, 'a0', page(MAX_NEWS), INSTRUCTIONS, now=now, page=page)
+
+    assert len(whole.model_dump_json()) > ONE_TOOL_RESULT + 100_000
+    for view in (first, later):
+        # A few thousand characters of headroom stay for the next field.
+        assert len(view.model_dump_json()) <= MAX_BRIEF <= ONE_TOOL_RESULT - 5_000
+    never_cut = (
+        'how',
+        'you',
+        'your_line',
+        'notes',
+        'notes_minutes_ago',
+        'question',
+        'revisions',
+        'state',
+        'ends_at',
+        'minutes_left',
+        'budget',
+        'limit_reached',
+        'person_waits',
+        'reading',
+        'reading_minutes_ago',
+        'round',
+        'report',
+        'close',
+        'coordinator',
+        'reviewers',
+        'powers',
+    )
+    assert {name: getattr(first, name) for name in never_cut} == {name: getattr(whole, name) for name in never_cut}
+    assert first.notes is not None
+    assert len(first.notes) == MAX_SEAT_NOTES
+    assert (first.how, first.round is not None, first.person_waits is not None) == (INSTRUCTIONS, True, True)
+    assert first.reading is not None
+    # The posts for the reader are whole lines, the person's with their bodies, and none is lost: the news ends
+    # earlier, and `more` counts the posts that the next result brings.
+    held = len(first.news.for_you)
+    assert 0 < held < MAX_NEWS
+    assert first.news.for_you == whole.news.for_you[:held]
+    persons = tuple(line for line in first.news.for_you if line.author == 'person')
+    assert persons
+    assert all(line.body.startswith('b' * (MAX_PERSON_LINE - 1000)) for line in persons)
+    assert first.news.more == whole.news.more + MAX_NEWS - held
+    assert first.news.seq == first.news.for_you[-1].seq
+    assert (first.news.votes, first.news.badges) == (whole.news.votes, whole.news.badges)
+    # Each agent stays in the list, the candidates stay by their IDs, and each list of posts keeps its IDs.
+    assert [agent.id for agent in first.agents] == [agent.id for agent in whole.agents]
+    assert {ref.id for ref in first.older_candidates} | {line.line.id for line in first.candidates} == {
+        ref.id for ref in whole.older_candidates
+    } | {line.line.id for line in whole.candidates}
+    for name in ('disputed', 'not_built_on', 'not_checked', 'open_asks', 'open_calls'):
+        assert [entry.id for entry in getattr(first, name)] == [entry.id for entry in getattr(whole, name)]
+    # The brief says what it cut, part by part, in the order of the cuts, and which tool shows it.
+    assert whole.cut == ()
+    assert first.cut[0] == f'`quiet_threads` leaves out {len(whole.quiet_threads)} lines. `threads` shows every thread.'
+    assert any(line.startswith('`news` leaves out') for line in first.cut)
+    shows = ('`thread` show', '`threads` show', '`take_rerun` takes', 'result has them')
+    assert all(any(way in line for way in shows) for line in first.cut)
+    names = {'reruns': 'news.reruns', 'others': 'news.others', 'rounds': 'news.rounds', 'deliverables': 'offers'}
+    parts = [names.get(word, word) for line in first.cut if (word := line.split('`')[1]) != 'news'] + ['news.for_you']
+    assert parts == sorted(parts, key=CUTS.index)
+    assert {'side_threads', 'reruns_wanted', 'news.reruns', 'left', 'news.rounds', 'offers', 'agents'} < set(parts)
+    assert first.quiet_threads == first.one_agent_threads == first.side_threads == ()
+    assert later.cut
+    assert later.notes is None

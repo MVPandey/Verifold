@@ -29,6 +29,7 @@ import {
 import type { SeatAction } from '../model/identity.ts';
 import { href } from '../model/route.ts';
 import { whereLine } from '../model/status.ts';
+import { Detail } from './Markdown.tsx';
 import { Mark, MarksAndRoles, Picture, Profiles } from './Picture.tsx';
 
 /**
@@ -150,6 +151,22 @@ export function ProfileSheet(props: {
           <dd>{costLine(view)}</dd>
         </dl>
         {view.error && !view.left ? <Failure error={view.error} /> : null}
+        {view.notes ? (
+          <>
+            <h3>Notes</h3>
+            <p className="i-prov">
+              The agent keeps these notes for itself.
+              {view.notes_at ? (
+                <>
+                  {' '}
+                  Last change:{' '}
+                  <time dateTime={view.notes_at}>{dayClock(view.notes_at, props.now)}</time>.
+                </>
+              ) : null}
+            </p>
+            <Detail post={agent.id} body={view.notes} files={[]} />
+          </>
+        ) : null}
 
         <h3>What became of its posts</h3>
         <dl>

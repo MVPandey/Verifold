@@ -403,6 +403,11 @@ def _zero(count: int) -> bool:
     return count == 0
 
 
+def _none(lines: tuple[str, ...]) -> bool:
+    """Return whether a brief cut nothing. A field that came after its record leaves out its JSON then."""
+    return not lines
+
+
 def _cut(text: str, keep: int) -> str:
     # The mark says that the text was cut, how long it is, and where all of it is.
     return f'{text[:keep]}… [cut: {len(text)} characters, `thread` shows all of it]'
@@ -535,11 +540,14 @@ class PostLine(Sparse):
 
 
 class PostEntry(Sparse):
-    """A post in a list of a brief: its line, or its ID alone when the brief holds its line already."""
+    """A post in a list of a brief: its line, or its ID alone when the brief holds its line already or cut it."""
 
     id: PostId
     line: PostLine | None = None
-    """The post's line. `None` when `news` or an earlier field of the same brief holds it."""
+    """
+    The post's line. `None` when `news` or an earlier field of the same brief holds it, and when the brief cut it
+    to stay within `MAX_BRIEF`, as `cut` in the brief then says.
+    """
 
 
 SEALED_TEXT = 'Sealed until the round closes.'
@@ -1296,6 +1304,23 @@ class DiskLine(Record):
     """The lab's disk limit in bytes. `None` means no limit."""
 
 
+MAX_BRIEF = 120_000
+"""
+The most characters of JSON in a brief. A brief is one tool result, and a harness takes a result of about 126,000
+characters. The board keeps a margin below that, so a brief with a new field still fits.
+"""
+
+
+class NotesResult(Record):
+    """What the `notes` tool returns: your seat's notes as they stand after the call, their age, and your news."""
+
+    notes: str = ''
+    """Your seat's notes, whole. Empty while you keep none."""
+    minutes_ago: int | None = None
+    """How many whole minutes ago you last changed them, by the lab's clock. `None` while you keep none."""
+    news: News | None = None
+
+
 class Brief(Record):
     """
     The lab for one agent, in one read: how the board works, the lab's state and time, who works on what, and the posts.
@@ -1303,6 +1328,9 @@ class Brief(Record):
     The fields say what is on the board. Their order ranks nothing: the lists of threads come first, and then the
     lists of posts by the alphabet of their names. In those lists of posts, a post whose line the brief holds
     already, in `news` or in an earlier field, is its ID alone.
+
+    A brief has `MAX_BRIEF` characters of JSON at most. When the lab holds more, the board cuts whole lines from
+    some parts, and `cut` says what it left out and which tool shows it.
     """
 
     you: AgentId
@@ -1315,8 +1343,26 @@ class Brief(Record):
     """The alarm that waits for you. `None` means that no alarm waits, and `no_alarm` then says what starts your next turn."""
     no_alarm: str = ''
     """The same line as `no_alarm` in the result of `wait`. Empty while an alarm waits."""
+    notes: str | None = Field(default=None, exclude_if=unset)
+    """
+    Your seat's notes, whole: the text that you keep with `notes`. No other agent's brief holds them, and the board
+    never cuts them. Left out while you keep none.
+    """
+    notes_minutes_ago: int | None = Field(default=None, exclude_if=unset)
+    """How many whole minutes ago you last changed your notes, by the lab's clock. Left out while you keep none."""
     how: str = ''
     """How the board works. The first brief of a session carries it, and later ones leave it out."""
+    cut: tuple[str, ...] = Field(default=(), exclude_if=_none)
+    """
+    What the board left out of this brief so that it stays within `MAX_BRIEF`: one line for each part that it cut,
+    with how many lines it left out and which tool shows them. Left out while the brief holds the whole board.
+
+    The board never cuts `how`, the question, your own line, your notes, the lab's state, time, budget, and limits,
+    `person_waits`, the reading, the round that is open, or a line of a post for you in the news. When the brief has
+    too little room for the posts for you, the news ends earlier, and the next result brings the rest. It cuts the
+    other parts in a fixed order, as the description of `brief` says, and it cuts each part only as far as it needs
+    to.
+    """
     question: Question
     """The question that the lab works on now. The person can revise it."""
     revisions: tuple[RevisionLine, ...] = ()
@@ -1352,7 +1398,10 @@ class Brief(Record):
     alarms_waiting: int = 0
     """How many agents of the lab have an alarm that waits, the reader among them."""
     agents: tuple[AgentLine, ...] = ()
-    """The other agents that are in the lab."""
+    """
+    The other agents that are in the lab. The board never cuts an agent from the list. It can cut the lines of an
+    agent's plan and latest post, and `cut` then names the agent.
+    """
     coordinator: AgentId | None = None
     """The agent that holds the lab's coordinator seat, or `None` when nobody does."""
     coordinator_open: bool = True

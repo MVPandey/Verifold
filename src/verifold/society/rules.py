@@ -16,6 +16,7 @@ from verifold.protocol.events import (
     AgentNamed,
     AlarmSet,
     CoordinatorSet,
+    NotesSet,
     OnCallSet,
     ProfileSet,
     QuestionRevised,
@@ -285,6 +286,22 @@ def check_alarm(board: Board, alarm: AlarmSet) -> None:
         raise RejectedEvent('A blind checker posts one check and sets no alarm.')
     if board.is_desk(alarm.agent):
         raise RejectedEvent('A post of the person in the desk chat wakes the desk, and the desk sets no alarm.')
+
+
+def check_notes(board: Board, notes: NotesSet) -> None:
+    """
+    Check that a seat's agent can keep notes. Only the agent itself keeps them, the desk among the agents.
+
+    Raises:
+        RejectedEvent: The agent is not in the lab, left it, or is a blind checker.
+
+    """
+    joined = board.agent(notes.agent)
+    if not joined:
+        raise RejectedEvent(f'{notes.agent} is not an agent in this lab.')
+    _check_here(board, notes.agent)
+    if joined.agent.checks:
+        raise RejectedEvent('A blind checker posts one check and keeps no notes.')
 
 
 def check_profile(board: Board, profile: ProfileSet) -> None:
