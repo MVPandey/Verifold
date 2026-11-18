@@ -13,6 +13,7 @@ import type {
 } from '../api/types.ts';
 import { authorName, labTotal } from './agents.ts';
 import { ago, clock, dayClock } from './format.ts';
+import { halted, haltWords } from './limits.ts';
 import { AT_EXIT, AT_TIME_LIMIT } from './settings.ts';
 
 /** A tab of the panel for the coordinator. */
@@ -56,7 +57,7 @@ export function talkLabel(name: string, waits: number): string {
  */
 export function wakes(holder: AgentView, lab: LabView): boolean {
   const stopped = holder.stopped || holder.activity.state === 'stopped';
-  return holder.agent.harness !== GUEST && !stopped && !lab.out_of_time;
+  return holder.agent.harness !== GUEST && !stopped && !halted(lab);
 }
 
 /** The line under a message of the person in the conversation: the message's post, and where the message is. */
@@ -98,9 +99,8 @@ function heardWords(holder: AgentView, lab: LabView, said: PostView, now: Date):
     if (activity.state === 'void') {
       return `The invitation of ${name} is void, so ${name} cannot use the board. Invite it again from its profile.`;
     }
-    if (lab.out_of_time) {
-      return `The lab is out of time, so the board takes no post from ${name}. ${fact(name)}`;
-    }
+    const stops = haltWords(lab);
+    if (stops) return `${stops}, so the board takes no post from ${name}. ${fact(name)}`;
     if (when) return `${name} runs by itself and ${when}.`;
     return activity.state === 'invited'
       ? `${name} has not joined the lab yet.`
@@ -112,7 +112,8 @@ function heardWords(holder: AgentView, lab: LabView, said: PostView, now: Date):
   if (activity.state === 'stopped') {
     return `${name} is stopped, so no message wakes it.${activity.detail ? ` ${activity.detail}` : ''}`;
   }
-  if (lab.out_of_time) return `The lab is out of time, so no turn of ${name} starts. ${fact(name)}`;
+  const stops = haltWords(lab);
+  if (stops) return `${stops}, so no turn of ${name} starts. ${fact(name)}`;
   if (holder.in_turn) {
     // The record holds a failure only while no turn started after it, so the harness is on its way back.
     if (holder.error !== null) {

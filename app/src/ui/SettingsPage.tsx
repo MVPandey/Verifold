@@ -10,6 +10,7 @@ import type {
   SettingsLevel,
   SettingsView,
 } from '../api/types.ts';
+import { DEFAULT_DISK_GB, MAX_DISK_GB } from '../model/limits.ts';
 import { defaultsLine } from '../model/setup.ts';
 import {
   AT_EXIT,
@@ -194,6 +195,7 @@ export function SettingsForm(props: {
         { field: SEATS, current: file.settings.reviewers.seats },
         { field: REVEAL, current: file.settings.votes.reveal_minutes },
         { field: LEASE, current: file.settings.reruns.lease_minutes },
+        { field: DISK, current: file.settings.disk.limit_gb },
       ].map(({ field, current }) => (
         <NumberSetting
           // The field starts again from the file after each save.
@@ -221,7 +223,8 @@ export function SettingsForm(props: {
 
 /** What the page says about one setting that takes a whole number, and the number's limits. */
 interface NumberField {
-  readonly key: 'reviewers.seats' | 'votes.reveal_minutes' | 'reruns.lease_minutes';
+  readonly key:
+    'reviewers.seats' | 'votes.reveal_minutes' | 'reruns.lease_minutes' | 'disk.limit_gb';
   readonly title: string;
   readonly detail: string;
   readonly label: string;
@@ -268,6 +271,20 @@ const LEASE: NumberField = {
   empty: `${DEFAULT_MINUTES} minutes`,
   words: (minutes) => minutesWords(minutes ?? DEFAULT_MINUTES),
   run: 'does not take this number from this project’s file.',
+};
+
+const DISK: NumberField = {
+  key: 'disk.limit_gb',
+  title: 'Disk limit',
+  detail: `The most gigabytes that the agents’ folders, the clean copies for reruns, and the snapshots may take together. Verifold measures them at the end of each turn. At the limit the agents stop, as at the time limit, until you raise it. Leave the field empty, and the limit is ${DEFAULT_DISK_GB} GB. With 0, the lab has no disk limit.`,
+  label: 'Gigabytes',
+  max: MAX_DISK_GB,
+  empty: `${DEFAULT_DISK_GB} GB`,
+  words: (gigabytes) => {
+    const limit = gigabytes ?? DEFAULT_DISK_GB;
+    return limit === 0 ? 'no disk limit' : `${limit} GB`;
+  },
+  run: 'takes only a lower limit from this project’s file.',
 };
 
 /**

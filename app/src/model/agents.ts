@@ -1,6 +1,7 @@
 import { GUEST, PERSON } from '../api/types.ts';
 import type { AgentActivity, AgentLeft, AgentView } from '../api/types.ts';
 import { dayClock, duration, minutesBetween, money, tokens } from './format.ts';
+import { retryLine } from './limits.ts';
 
 /** The dot before an agent's state. */
 export type Dot = 'live' | 'wait' | 'idle' | 'stop';
@@ -114,6 +115,12 @@ export function stateLine(activity: AgentActivity, now: Date): StateLine {
       // An agent that waits for more time or for its own process is in no turn. The line is the server's own.
       if (activity.waits_for === 'time') {
         return { text: activity.detail || 'The lab is out of time.', dot: 'idle' };
+      }
+      if (activity.waits_for === 'limit') {
+        return { text: activity.detail || 'The lab reached a limit.', dot: 'idle' };
+      }
+      if (activity.waits_for === 'retry' && activity.retry) {
+        return { text: retryLine(activity.retry, now), dot: 'stop' };
       }
       if (activity.waits_for === 'process') {
         return {

@@ -23,11 +23,12 @@ from verifold.protocol.deliverables import (
     RemovedDeliverable,
     Sentence,
 )
-from verifold.protocol.events import AgentLeft, Note, Question, RoundClosed
+from verifold.protocol.events import AgentLeft, Limit, Note, Question, RoundClosed
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import AgentId, PostId, ThreadId
 from verifold.protocol.join import (
     AlarmLine,
+    BudgetLine,
     LabState,
     ObstacleState,
     PostLine,
@@ -42,13 +43,16 @@ from verifold.protocol.posts import MAX_HEADLINE, Body
 from verifold.protocol.record import Record
 from verifold.protocol.settings import (
     MAX_BOARD_MINUTES,
+    MAX_BUDGET_DOLLARS,
+    MAX_BUDGET_TOKENS,
+    MAX_DISK_GB,
     MAX_MINUTES,
     MAX_REVIEWER_SEATS,
     Settings,
     SettingsLevel,
     SetupDefaults,
 )
-from verifold.protocol.usage import Usage
+from verifold.protocol.usage import DiskUse, Usage
 from verifold.protocol.votes import Badge, BadgeAction, Direction, ProposalLine, Why
 
 type AgentState = Literal['starting', 'working', 'waiting', 'idle', 'stopped', 'invited', 'here', 'listening', 'void']
@@ -61,12 +65,28 @@ no digest of its token, so only a new invitation lets it join.
 """
 
 
-type WaitsFor = Literal['person', 'time', 'process']
+type WaitsFor = Literal['person', 'time', 'limit', 'process', 'retry']
 """
 What an agent in the state `waiting` waits for. `person`: its harness waits for the person's answer inside a turn
-that runs. `time`: the lab is out of time, and the agent's turn starts when the person gives it more. `process`:
-the agent ended its turn while a process that it started still ran, and its turn starts when the process ends.
+that runs. `time`: the lab is out of time, and the agent's turn starts when the person gives it more. `limit`: the
+lab reached its budget or its disk limit, and the agent's turn starts when the person raises it. `process`: the
+agent ended its turn while a process that it started still ran, and its turn starts when the process ends.
+`retry`: its harness failed, and Verifold starts it again at the time in `retry`.
 """
+
+
+class Retry(Record):
+    """A harness that failed and that Verifold starts again: how often it failed in a row, and when it tries again."""
+
+    failures: int = Field(ge=1)
+    """How many times in a row the harness failed. The agent's `error` is the last one."""
+    at: AwareDatetime
+    """When Verifold starts the harness again."""
+    provider_limit: bool = False
+    """
+    Whether the error says that the provider limits the harness, such as a rate limit, a usage limit, a quota, or
+    the HTTP status 429. Verifold then waits until the reset time that the error names, when it names one.
+    """
 
 
 class AgentActivity(Record):
@@ -78,6 +98,8 @@ class AgentActivity(Record):
     at: AwareDatetime | None = None
     waits_for: WaitsFor | None = None
     """With the state `waiting`: what the agent waits for. `None` in any other state."""
+    retry: Retry | None = None
+    """While the agent waits for `retry`: how its harness failed, and when Verifold starts it again."""
 
 
 class Heard(Record):
@@ -346,6 +368,12 @@ class LabView(Record):
     """When the agents stop. `None` means no time limit."""
     out_of_time: bool = False
     """The lab reached its end. Its agents wait until the person gives it more time."""
+    budget: BudgetLine = BudgetLine()
+    """The lab's budget, what it spent, and what is left."""
+    limit: Limit | None = None
+    """The budget or the disk limit that the lab reached. Its agents wait until the person raises it."""
+    disk: DiskUse | None = None
+    """What the lab's files take on disk, as Verifold measured them last. `None` before the first measure."""
     state: LabState = 'open'
     """Whether the lab's agents say that it is done. A closed lab is not stopped: the person can go on."""
     close: PostLine | None = None
@@ -541,6 +569,12 @@ class StartRequest(Record):
     """How long a new post hides its votes, in place of `votes.reveal_minutes` of the files. `None` takes the files'."""
     lease_minutes: int | None = Field(default=None, ge=0, le=MAX_BOARD_MINUTES)
     """How long a take holds a rerun, in place of `reruns.lease_minutes` of the files. `None` takes the files'."""
+    budget_tokens: int | None = Field(default=None, ge=1, le=MAX_BUDGET_TOKENS)
+    """The lab's budget in tokens. `None` means no budget in tokens."""
+    budget_dollars: float | None = Field(default=None, gt=0, le=MAX_BUDGET_DOLLARS)
+    """The lab's budget in US dollars. `None` means no budget in dollars."""
+    disk_gb: int | None = Field(default=None, ge=0, le=MAX_DISK_GB)
+    """The lab's disk limit, in place of `disk.limit_gb` of the files. `None` takes the files'."""
     deliverables: tuple[Sentence, ...] = Field(default=(), max_length=MAX_DELIVERABLES)
     """What the person wants to hold at the end of the lab, each as one sentence. They can add more while it runs."""
 
@@ -574,6 +608,7 @@ type SettingKey = Literal[
     'reviewers.seats',
     'votes.reveal_minutes',
     'reruns.lease_minutes',
+    'disk.limit_gb',
     'setup',
 ]
 """The settings that the app changes. Harness commands are not among them, so the app can't change what a lab runs."""
@@ -747,6 +782,19 @@ class DeliverableDecision(Record):
     """The offer that the person accepts, wants changed, or accepted before."""
     text: Annotated[str, StringConstraints(strip_whitespace=True, max_length=MAX_HEADLINE)] = ''
     """With `ask_changes`: what the person wants changed. It reaches the offer's author as a reply to the offer."""
+
+
+class BudgetRequest(Record):
+    """The person sets the lab's budget. It replaces the earlier one, and `None` sets no budget of that kind."""
+
+    tokens: int | None = Field(default=None, ge=1, le=MAX_BUDGET_TOKENS)
+    dollars: float | None = Field(default=None, gt=0, le=MAX_BUDGET_DOLLARS)
+
+
+class DiskRequest(Record):
+    """The person sets the lab's disk limit, in gigabytes. Zero means no limit."""
+
+    limit_gb: int = Field(ge=0, le=MAX_DISK_GB)
 
 
 class TimeRequest(Record):

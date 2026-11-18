@@ -13,10 +13,11 @@ from datetime import datetime
 from pathlib import Path
 
 from verifold.protocol.agents import Agent
-from verifold.protocol.events import AlarmSet
+from verifold.protocol.events import AlarmSet, Halt, Limit
 from verifold.protocol.ids import PERSON
 from verifold.protocol.settings import AtTimeLimit
 from verifold.society.board import Board
+from verifold.society.budget import LIMIT_NAMES, budget_line
 from verifold.society.deliverables import stated
 from verifold.society.lifecycle import utc as _utc
 from verifold.society.lines import question_thread
@@ -36,6 +37,7 @@ RERUN_WANTED = 'An independent rerun that you can take is wanted on the lab boar
 
 IN_TURN = 'while you were in a turn'
 OUT_OF_TIME = 'while the lab was out of time'
+AT_LIMIT = 'while the lab stood at its budget or its disk limit'
 CLOSED = 'while the lab was closed'
 """Why an alarm rings after its time, in the cases that Verifold knows."""
 
@@ -240,6 +242,36 @@ JOBS_AFTER_TIME = {
 def more_time_message(ends_at: datetime | None, jobs: AtTimeLimit) -> str:
     """Return the message that resumes an agent whose turn stopped when the lab ran out of time, per `jobs`."""
     return f'Your last turn stopped when the lab ran out of time. {time_facts(ends_at, jobs)}'
+
+
+def limit_message(limit: Limit, board: Board, jobs: AtTimeLimit) -> str:
+    """Return the message that resumes an agent whose turn stopped when the lab reached a limit, per `jobs`."""
+    return f'Your last turn stopped when the lab reached its {LIMIT_NAMES[limit]}. {limit_facts(limit, board, jobs)}'
+
+
+def go_on_message(halt: Halt, board: Board, jobs: AtTimeLimit) -> str:
+    """Return the message that resumes an agent whose turn stopped at the lab's time or at another of its limits."""
+    return more_time_message(board.ends_at, jobs) if halt == 'time' else limit_message(halt, board, jobs)
+
+
+def go_on_facts(halt: Halt, board: Board, jobs: AtTimeLimit) -> str:
+    """Return what an agent that waited at the lab's time or at another of its limits gets when the lab goes on."""
+    return time_facts(board.ends_at, jobs) if halt == 'time' else limit_facts(halt, board, jobs)
+
+
+def limit_facts(limit: Limit, board: Board, jobs: AtTimeLimit) -> str:
+    """Return what an agent that waited at a limit gets: the limit as it is now, and what happened to its processes."""
+    if limit == 'disk':
+        most = board.settings.disk.limit_gb
+        now = f' The disk limit is now {most} GB.' if most else ' The lab has no disk limit now.'
+        return f'The person changed the disk limit.{now}{JOBS_AFTER_TIME[jobs]}'
+    line = budget_line(board)
+    left = (
+        *((f'{line.tokens_left:,} tokens',) if line.tokens_left is not None else ()),
+        *((f'{line.dollars_left:.2f} dollars',) if line.dollars_left is not None else ()),
+    )
+    budget = f' The budget has {" and ".join(left)} left.' if left else ' The lab has no budget now.'
+    return f'The person changed the budget.{budget}{JOBS_AFTER_TIME[jobs]}'
 
 
 def time_facts(ends_at: datetime | None, jobs: AtTimeLimit) -> str:

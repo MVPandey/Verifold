@@ -5,13 +5,15 @@ from builders import START, RecordBuilder, lab
 
 from verifold.protocol.events import RerunTaken
 from verifold.protocol.join import LeaseLine, News
-from verifold.protocol.posts import Check, FileEvidence, Message, Objection, Result
+from verifold.protocol.posts import Answer, Check, Close, FileEvidence, Message, Objection, Result
 from verifold.protocol.settings import RerunSettings, ReviewerSettings, Settings
 from verifold.society.attention import news, update
 from verifold.society.errors import RejectedEvent
 from verifold.society.reruns import (
+    COPY_MINUTES,
     MAX_RERUNS,
     can_take,
+    copy_kept_until,
     kept_until,
     lease_of,
     lease_refusal,
@@ -719,3 +721,55 @@ def test_a_failed_turn_that_does_not_end_the_rerun_frees_no_request() -> None:
 def test_only_a_blind_checkers_turn_can_end_a_rerun() -> None:
     with pytest.raises(RejectedEvent, match='ada is not a blind checker'):
         lab().post(RESULT).turn('ada', error='It crashed.', rerun_failed=True).board()
+
+
+def test_a_take_keeps_its_clean_copy_while_its_lease_stands_and_for_the_fewest_minutes_at_least() -> None:
+    record = wanted().take('cy', 'p-1')
+    taken = record.events[-1].at
+    board = record.board()
+
+    assert copy_kept_until(board, 'p-1', taken) == taken + timedelta(minutes=COPY_MINUTES)
+    assert copy_kept_until(board, 'p-1', taken + timedelta(minutes=COPY_MINUTES)) is None
+    # A longer lease keeps the copy as long, and a lab with no leases keeps it for the fewest minutes.
+    longer = wanted().settings(Settings(reruns=RerunSettings(lease_minutes=45))).take('cy', 'p-1')
+    at = longer.events[-1].at
+    assert copy_kept_until(longer.board(), 'p-1', at) == at + timedelta(minutes=45)
+    none = wanted().settings(Settings(reruns=RerunSettings(lease_minutes=0))).take('cy', 'p-1')
+    assert copy_kept_until(none.board(), 'p-1', at) == at + timedelta(minutes=COPY_MINUTES)
+    # A take dated after the moment, as from a clock that jumped, keeps nothing.
+    assert copy_kept_until(board, 'p-1', taken - timedelta(minutes=1)) is None
+
+
+def test_a_renewal_moves_the_time_and_a_lease_given_up_needs_the_copy_no_more() -> None:
+    record = wanted().take('cy', 'p-1')
+    renewed = record.copy().lease('cy', 'p-1')
+    at = renewed.events[-1].at
+
+    assert copy_kept_until(renewed.board(), 'p-1', at) == at + timedelta(minutes=COPY_MINUTES)
+    given_up = record.copy().lease('cy', 'p-1', held=False)
+    assert copy_kept_until(given_up.board(), 'p-1', given_up.events[-1].at) is None
+    # A take after the give-up needs it again.
+    again = given_up.copy().lease('cy', 'p-1')
+    assert copy_kept_until(again.board(), 'p-1', again.events[-1].at) is not None
+
+
+def test_a_copy_that_another_take_still_needs_stays_and_a_settled_rerun_needs_none() -> None:
+    # bo's lease keeps out ada's family only, so cy of another family takes the rerun too. bo gives its lease up.
+    record = lab().reviewer_seats(0).post(RESULT).rerun('ada', 'p-1').take('bo', 'p-1').take('cy', 'p-1')
+    record.lease('bo', 'p-1', held=False)
+    cy_took = record.events[-2].at
+
+    assert copy_kept_until(record.board(), 'p-1', cy_took) == cy_took + timedelta(minutes=COPY_MINUTES)
+    settled = record.post(rerun_check('cy', take=len(record.events) - 1))
+    assert copy_kept_until(settled.board(), 'p-1', cy_took) is None
+    assert copy_kept_until(settled.board(), 'p-9', cy_took) is None
+
+
+def test_a_take_of_an_agent_that_left_and_a_closed_lab_need_no_copy() -> None:
+    record = wanted().take('cy', 'p-1')
+    at = record.events[-1].at
+
+    assert copy_kept_until(record.copy().leave('cy').board(), 'p-1', at) is None
+    record.post(Close(id='p-2', thread='t-1', author='ada', text='Done.'))
+    record.post(Answer(id='p-3', thread='t-1', author='bo', text='Agreed.', reply_to='p-2', accepts=True))
+    assert copy_kept_until(record.board(), 'p-1', at) is None

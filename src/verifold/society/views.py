@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 from verifold.protocol.agents import GUEST, POWERS, Agent
 from verifold.protocol.events import (
+    ERROR_AT_LIMIT,
     ERROR_MODEL_REFUSED,
     ERROR_OUT_OF_TIME,
     ERROR_RAN_PAST,
@@ -32,6 +33,7 @@ from verifold.protocol.join import (
     CandidateRef,
     CandidatesView,
     CandidateView,
+    DiskLine,
     News,
     ObstacleEntry,
     Obstacles,
@@ -51,9 +53,11 @@ from verifold.protocol.join import (
 )
 from verifold.protocol.posts import Ask, Call, Check, Close, Objection, Plan, Proposal, Report, Result
 from verifold.protocol.threads import Thread
+from verifold.protocol.usage import DiskUse
 from verifold.protocol.votes import BADGES, MAX_VOTE_LINES, NEWEST_VOTES
 from verifold.society.attention import left_line, watches_thread
 from verifold.society.board import Board
+from verifold.society.budget import budget_line, disk_limit
 from verifold.society.candidates import candidates, closes_on, gone, own_entry
 from verifold.society.coordinator import request_waits, waiting_for_reply
 from verifold.society.deliverables import deliverable_lines
@@ -301,7 +305,15 @@ def _built_on(board: Board, entry: Posted) -> bool:
     )
 
 
-def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: datetime | None = None) -> Brief:
+def brief(  # noqa: PLR0913
+    board: Board,
+    agent_id: AgentId,
+    news: News,
+    how: str = '',
+    *,
+    now: datetime | None = None,
+    disk: DiskUse | None = None,
+) -> Brief:
     """
     Return the lab for one agent in one read.
 
@@ -318,7 +330,8 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
     `now` dates the time that the lab has left, the ages of the report, the candidates, and the person's post that
     waits for a reply, the quiet threads, the votes that are sealed for the agent, the open round and the entries
     that are sealed for the agent, and the leases on the wanted reruns. Without it, time counts from the board's newest post. The agents in a turn come from the record, because this
-    package does no I/O and so knows no live activity.
+    package does no I/O and so knows no live activity. For the same reason, `disk` is what Verifold measured of
+    the lab's files last, or `None`.
     """
     board = for_reader(board, agent_id, now)
     now = now or latest_time(board)
@@ -469,6 +482,9 @@ def brief(board: Board, agent_id: AgentId, news: News, how: str = '', *, now: da
         close_agreed=agreed(board, done) if done else (),
         ends_at=board.ends_at,
         minutes_left=minutes_left(board, now),
+        budget=budget_line(board),
+        limit_reached=board.at_limit,
+        disk=DiskLine(folder=disk.folders.get(agent_id), lab=disk.total, limit=disk_limit(board)) if disk else None,
         in_turn=sum(before(board, agent).cut_off for agent in run),
         alarms_waiting=sum(pending_alarm(board, joined.agent.id) is not None for joined in board.agents),
         agents=lines,
@@ -649,6 +665,8 @@ def _reason(failed: TurnEnded | None) -> str | None:
         return 'Its harness refused the model.'
     if failed.error.startswith((ERROR_OUT_OF_TIME, ERROR_RAN_PAST)):
         return 'Verifold stopped its turn at the time limit.'
+    if failed.error.startswith(ERROR_AT_LIMIT):
+        return "Verifold stopped its turn at the lab's budget or disk limit."
     return 'Its harness failed to start.' if failed.no_turn else 'Its last turn ended with an error.'
 
 

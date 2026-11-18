@@ -3363,6 +3363,8 @@ describe('the setup screen', () => {
             ],
             auto_mode: true,
             minutes: null,
+            budget_tokens: null,
+            budget_dollars: null,
           },
           defaults_from: null,
         }}
@@ -3391,7 +3393,7 @@ describe('the setup screen', () => {
           folder: '~/code',
           harnesses: HARNESSES,
           question: null,
-          defaults: { agents: [{ ...seat, on_call: true }], auto_mode: true, minutes: null },
+          defaults: { ...DEFAULTS, agents: [{ ...seat, on_call: true }] },
           defaults_from: null,
         }}
         onStarted={() => undefined}
@@ -3441,6 +3443,7 @@ describe('the settings page', () => {
     reviewers: { seats: null },
     votes: { reveal_minutes: 10 },
     reruns: { lease_minutes: 10 },
+    disk: { limit_gb: 100 },
   } as const;
   const view: SettingsView = {
     all_projects: {
@@ -3470,6 +3473,8 @@ describe('the settings page', () => {
         agents: [{ harness: 'claude-code', count: 2, model: 'opus', effort: null, mode: null }],
         auto_mode: false,
         minutes: 90,
+        budget_tokens: null,
+        budget_dollars: null,
       },
     },
     lab: pause,
@@ -3517,10 +3522,15 @@ describe('the settings page', () => {
     assert.equal(html.includes('has its own setting'), false);
     assert.ok(html.includes('Claude Code: 2 agents (opus). No auto mode. Time limit: 1 h 30 min.'));
     assert.ok(html.includes('Use the choices for all projects'));
+    assert.ok(html.includes('takes only a lower limit from this project’s file.'));
   });
 
   it('shows the settings for all projects with the defaults where the file has nothing', () => {
     const html = page('all');
+
+    assert.ok(html.includes('<h3>Disk limit</h3>'));
+    assert.ok(html.includes('placeholder="100 GB"'));
+    assert.ok(html.includes('Now: 100 GB.'));
 
     assert.ok(html.includes('~/.verifold/settings.json'));
     assert.equal(html.includes('Same as all projects'), false);

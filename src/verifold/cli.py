@@ -94,8 +94,8 @@ def _start(args: argparse.Namespace) -> StartRequest:
     Return what `verifold run` starts: the command line's choices, and the saved choices for new labs for the rest.
 
     `verifold run` starts at once, without showing the saved choices, and a project's file can come from someone else.
-    So a project's file can make the lab stricter, not looser: it can turn auto mode off and shorten the time limit,
-    and each of its seats gives only a harness, a count, a model, and an effort. Its modes, roles, families,
+    So a project's file can make the lab stricter, not looser: it can turn auto mode off, shorten the time limit,
+    lower the budget and the disk limit, and each of its seats gives only a harness, a count, a model, and an effort. Its modes, roles, families,
     coordinator, powers, and on-call marks are not used, and neither is its number of reviewer seats, and the command says so.
     Under `--ask-me`, no saved agent gets a mode.
 
@@ -115,7 +115,9 @@ def _start(args: argparse.Namespace) -> StartRequest:
         saved = values[SettingsLevel.PROJECT].get('setup')
         from_project = not own and isinstance(saved, dict) and 'agents' in saved
         agents = _saved_agents(here, catalog_with(files.harnesses), drop_modes=args.ask_me, from_project=from_project)
-    shorter = min((minutes for minutes in (everywhere.minutes, here.minutes) if minutes is not None), default=None)
+    shorter = _lower(everywhere.minutes, here.minutes)
+    tokens = _lower(everywhere.budget_tokens, here.budget_tokens)
+    dollars = _lower(everywhere.budget_dollars, here.budget_dollars)
     return StartRequest(
         question=args.question,
         agents=agents,
@@ -127,9 +129,38 @@ def _start(args: argparse.Namespace) -> StartRequest:
             values, 'votes', 'reveal_minutes', 'the minutes that a new post hides its votes', own=own
         ),
         lease_minutes=_own_minutes(values, 'reruns', 'lease_minutes', 'the minutes that a take holds a rerun', own=own),
+        budget_tokens=tokens if args.budget_tokens is None else args.budget_tokens,
+        budget_dollars=dollars if args.budget_dollars is None else args.budget_dollars,
+        disk_gb=_disk_gb(values, own=own),
         # A deliverable is the person's own sentence for this lab, as the question is. No settings file holds one.
         deliverables=tuple(args.deliverable or ()),
     )
+
+
+def _lower[T: (int, float)](*values: T | None) -> T | None:
+    # The lowest of the values that are set: the stricter time limit or budget. `None` means none is set.
+    return min((value for value in values if value is not None), default=None)
+
+
+def _disk_gb(values: Mapping[SettingsLevel, SettingsValues], *, own: bool) -> int | None:
+    """
+    Return the disk limit that `verifold run` starts with, or `None` for what the files add up to.
+
+    A project's file can lower the disk limit and cannot raise it: zero means no limit, so it counts as the
+    highest. A higher limit from a project's file is not used, and the command says so.
+    """
+    project = values[SettingsLevel.PROJECT].get('disk')
+    if own or not (isinstance(project, dict) and 'limit_gb' in project):
+        return None
+    mine = settings_of({SettingsLevel.ALL: values[SettingsLevel.ALL]}).disk.limit_gb
+    theirs = settings_of(values).disk.limit_gb
+    if not mine or (theirs and theirs <= mine):
+        return None
+    _say(
+        "Did not use the disk limit from this project's settings file, because it is higher than yours for all "
+        'projects: `verifold run` takes only a lower one from a project.'
+    )
+    return mine
 
 
 def _reviewer_seats(values: Mapping[SettingsLevel, SettingsValues], *, own: bool) -> int | Literal['size'] | None:
@@ -224,7 +255,12 @@ def _plan(start: StartRequest) -> str:
     waits = f'. {NOTHING_STARTS}' if all(choice.on_call for choice in start.agents) else ''
     wanted = len(start.deliverables)
     deliverables = f'; {wanted} {"deliverable" if wanted == 1 else "deliverables"}' if wanted else ''
-    return f'{agents}; {"auto mode" if start.auto_mode else "no auto mode"}; {time}{deliverables}{waits}'
+    spend = (
+        *((f'{start.budget_tokens:,} tokens',) if start.budget_tokens else ()),
+        *((f'{start.budget_dollars:g} dollars',) if start.budget_dollars else ()),
+    )
+    budget = f'; a budget of {" and ".join(spend)}' if spend else ''
+    return f'{agents}; {"auto mode" if start.auto_mode else "no auto mode"}; {time}{budget}{deliverables}{waits}'
 
 
 def _agent_words(choice: AgentChoice) -> str:
@@ -400,6 +436,18 @@ def _parser() -> argparse.ArgumentParser:
         '--minutes',
         type=int,
         help='How long the agents may work. You can give the lab more time from the app. Default: your saved time limit, or none.',
+    )
+    run.add_argument(
+        '--budget-tokens',
+        type=int,
+        metavar='TOKENS',
+        help='The most tokens, input and output together, that the agents may spend. At that budget the agents stop, as at the time limit, until you raise it in the app. Default: your saved budget, or none.',
+    )
+    run.add_argument(
+        '--budget-dollars',
+        type=float,
+        metavar='DOLLARS',
+        help='The most US dollars that the agents may spend, as the harnesses report their cost. A harness that reports no cost adds nothing. Default: your saved budget, or none.',
     )
     run.add_argument(
         '--ask-me',

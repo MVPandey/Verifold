@@ -65,6 +65,8 @@ function slowServer(): {
     badge: () => Promise.reject(new Error('unused')),
     rerun: () => Promise.reject(new Error('unused')),
     setTime: () => Promise.reject(new Error('unused')),
+    setBudget: () => Promise.reject(new Error('unused')),
+    setDisk: () => Promise.reject(new Error('unused')),
     reviseQuestion: () => Promise.reject(new Error('unused')),
     addAgents: () => Promise.reject(new Error('unused')),
     addDeliverable: () => Promise.reject(new Error('unused')),

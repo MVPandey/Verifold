@@ -47,7 +47,13 @@ export const OFFER: Offer = {
 };
 
 /** Verifold's defaults for new labs: one agent of each harness, auto mode, and no time limit. */
-export const DEFAULTS: SetupDefaults = { agents: null, auto_mode: true, minutes: null };
+export const DEFAULTS: SetupDefaults = {
+  agents: null,
+  auto_mode: true,
+  minutes: null,
+  budget_tokens: null,
+  budget_dollars: null,
+};
 
 export const HARNESSES: readonly HarnessOption[] = [
   {
@@ -222,6 +228,16 @@ export function labView(changes: Partial<LabView> = {}): LabView {
     reviewer_seats_set: null,
     ends_at: null,
     out_of_time: false,
+    budget: {
+      tokens: null,
+      dollars: null,
+      spent_tokens: 0,
+      spent_dollars: 0,
+      tokens_left: null,
+      dollars_left: null,
+    },
+    limit: null,
+    disk: null,
     state: 'open',
     close: null,
     close_agreed: 0,
@@ -233,6 +249,7 @@ export function labView(changes: Partial<LabView> = {}): LabView {
       reviewers: { seats: null },
       votes: { reveal_minutes: 10 },
       reruns: { lease_minutes: 10 },
+      disk: { limit_gb: 100 },
     },
     deliverables: [],
     removed_deliverables: [],

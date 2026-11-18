@@ -12,6 +12,13 @@ MAX_MINUTES = 7 * 24 * 60
 """The longest time that the person can give a lab at once: one week."""
 
 
+MAX_BUDGET_TOKENS = 10**12
+"""The largest budget in tokens that the person can give a lab."""
+
+MAX_BUDGET_DOLLARS = 1_000_000.0
+"""The largest budget in US dollars that the person can give a lab."""
+
+
 class AtTimeLimit(StrEnum):
     """What happens to the processes that agents left running when the lab's time ends, or the person stops it."""
 
@@ -101,6 +108,24 @@ class RerunSettings(Record):
     """
 
 
+MAX_DISK_GB = 100_000
+"""The largest disk limit that the person can set, in gigabytes."""
+
+DEFAULT_DISK_GB = 100
+"""The disk limit of a lab while the person sets none, in gigabytes."""
+
+
+class DiskSettings(Record):
+    """How much disk the lab's files may take before Verifold stops the agents."""
+
+    limit_gb: int = Field(default=DEFAULT_DISK_GB, ge=0, le=MAX_DISK_GB)
+    """
+    The most gigabytes that the agents' folders, the clean copies for reruns, and the snapshots may take together.
+    When Verifold measures more at the end of a turn, the agents stop as at the time limit, until the person raises
+    the limit. Zero means no limit.
+    """
+
+
 class Settings(Record):
     """
     The person's settings, with Verifold's defaults for anything they leave out.
@@ -115,6 +140,7 @@ class Settings(Record):
     reviewers: ReviewerSettings = ReviewerSettings()
     votes: VoteSettings = VoteSettings()
     reruns: RerunSettings = RerunSettings()
+    disk: DiskSettings = DiskSettings()
 
 
 class HarnessSettings(Record):
@@ -155,6 +181,10 @@ class SetupDefaults(Record):
     auto_mode: bool = True
     minutes: int | None = Field(default=None, ge=1, le=MAX_MINUTES)
     """How long the agents may work. `None` means no time limit."""
+    budget_tokens: int | None = Field(default=None, ge=1, le=MAX_BUDGET_TOKENS)
+    """The lab's budget in tokens, input and output together. `None` means no budget in tokens."""
+    budget_dollars: float | None = Field(default=None, gt=0, le=MAX_BUDGET_DOLLARS)
+    """The lab's budget in US dollars, as the harnesses report their cost. `None` means no budget in dollars."""
 
 
 class SettingsFile(Record):
@@ -170,6 +200,7 @@ class SettingsFile(Record):
     reviewers: ReviewerSettings = ReviewerSettings()
     votes: VoteSettings = VoteSettings()
     reruns: RerunSettings = RerunSettings()
+    disk: DiskSettings = DiskSettings()
     setup: SetupDefaults = SetupDefaults()
     harnesses: dict[Label, HarnessSettings] = Field(default_factory=dict)
 
@@ -192,4 +223,5 @@ class SettingsFile(Record):
             reviewers=self.reviewers,
             votes=self.votes,
             reruns=self.reruns,
+            disk=self.disk,
         )

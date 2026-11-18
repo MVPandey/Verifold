@@ -6,12 +6,13 @@ from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import acp
 import pytest
 from builders import START, until
 from conftest import ServedBoard, agent, serve_board
 from fakes import FAKE_HARNESS, FakeCopies
 
-from verifold.protocol.app import AgentState, WaitsFor
+from verifold.protocol.app import AgentState, Retry, WaitsFor
 from verifold.protocol.events import AlarmSet, TurnStarted, TurnSummary
 from verifold.protocol.join import MAX_NEWS, PostRequest
 from verifold.protocol.posts import Ask, FileEvidence, PermissionShown, QuestionShown
@@ -41,6 +42,7 @@ from verifold.runner.messages import (
     alarm_message,
     back_message,
     cut_short_message,
+    limit_message,
     more_time_message,
     time_facts,
 )
@@ -936,10 +938,17 @@ class Recorded(Activity):
         self.changes: list[tuple[str, str, str]] = []
         self.waits: list[WaitsFor | None] = []
 
-    async def set(self, agent_id: str, state: AgentState, detail: str = '', waits_for: WaitsFor | None = None) -> None:
+    async def set(
+        self,
+        agent_id: str,
+        state: AgentState,
+        detail: str = '',
+        waits_for: WaitsFor | None = None,
+        retry: Retry | None = None,
+    ) -> None:
         self.changes.append((agent_id, state, detail))
         self.waits.append(waits_for)
-        await super().set(agent_id, state, detail, waits_for)
+        await super().set(agent_id, state, detail, waits_for, retry)
 
 
 @pytest.mark.usefixtures('log')
@@ -2048,3 +2057,88 @@ async def test_a_post_from_before_the_agents_last_turn_that_it_never_read_rings_
 
     assert prompts(log) == [f'{back(tmp_path)}\n\n{DOORBELL}']
     assert posts_by(served, 'bo')[-1].startswith('Seen p-')
+
+
+async def test_reaching_the_budget_stops_the_turn_until_the_person_sets_a_new_budget(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_SLOW', '1')
+    lab = served.lab
+    activity = Recorded()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
+    try:
+        await until(lambda: bool(calls(log, 'prompt')))
+        await lab.set_budget(1_000, None)
+        # Another agent's turn ends with the tokens that reach the budget, and the record says so in its step.
+        await lab.end_turn(TurnSummary(agent='ada', seconds=1, usage=Usage(input_tokens=900, output_tokens=200)))
+        await until(lambda: activity.of('bo').state == 'waiting')
+        cancelled = 'The lab reached its budget in tokens, so Verifold cancelled the turn.'
+        assert [turn.error for turn in lab.board.turns if turn.agent == 'bo'] == [cancelled]
+        assert calls(log, 'cancel')
+        assert (activity.of('bo').waits_for, lab.board.halted) == ('limit', 'tokens')
+
+        await lab.set_budget(5_000, None)
+        await until(lambda: len(calls(log, 'prompt')) == 2)
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+    said = str(calls(log, 'prompt')[1]['text'])
+    assert said == limit_message('tokens', lab.board, lab.board.settings.jobs.at_time_limit)
+    assert said.startswith('Your last turn stopped when the lab reached its budget in tokens. The person changed')
+    assert 'The budget has 3,900 tokens left.' in said
+
+
+def failing(error: Exception) -> object:
+    async def send(*_: object) -> None:
+        raise error
+
+    return send
+
+
+async def test_a_harness_that_a_providers_limit_stops_waits_for_the_reset_and_is_not_stopped(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reset = START + timedelta(hours=3)
+    error = acp.RequestError(-32603, 'Internal error', {'details': f'usage limit reached|{int(reset.timestamp())}'})
+    monkeypatch.setattr(AgentSession, 'send', failing(error))
+    activity = Activity()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity, max_failures=1).run())
+    try:
+        await until(lambda: activity.of('bo').waits_for == 'retry')
+        shown = activity.of('bo')
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+    assert shown.state == 'waiting'
+    assert shown.retry == Retry(failures=1, at=reset, provider_limit=True)
+    # The record keeps what the harness said, and a provider's limit does not stop the seat.
+    (failed,) = served.lab.board.turns
+    assert failed.error == f'RequestError: Internal error {{"details": "usage limit reached|{int(reset.timestamp())}"}}'
+    assert not failed.stopped
+
+
+async def test_a_harness_that_a_providers_limit_stops_without_a_reset_time_retries_and_the_wait_shows(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(AgentSession, 'send', failing(RuntimeError('429 Too Many Requests')))
+    activity = Activity()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity, retry_after=0.05, max_retry_after=600).run())
+    try:
+        await until(lambda: (retry := activity.of('bo').retry) is not None and retry.failures >= 3)
+        retry = activity.of('bo').retry
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+    assert retry is not None
+    assert retry.provider_limit
+    # Three failures in a row stop a seat whose harness fails in another way. A provider's limit stops none.
+    assert not any(turn.stopped for turn in served.lab.board.turns)
+    assert served.lab.board.turns[0].error == 'RuntimeError: 429 Too Many Requests'
+    # The wait counts from the lab's clock after the failure that it follows.
+    assert retry.at > served.lab.board.turns[retry.failures - 1].at

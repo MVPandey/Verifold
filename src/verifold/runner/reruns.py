@@ -26,6 +26,7 @@ reaches its own folders through directory handles that follow no link.
 import asyncio
 import hashlib
 import os
+import re
 import secrets
 import stat
 import time
@@ -42,7 +43,9 @@ from verifold.runner.folders import LAB_FOLDER
 from verifold.runner.git import GitError
 from verifold.runner.objects import Objects, PinnedCommit, Running, entries, object_hash, read_pinned, whole
 from verifold.server.errors import NoCleanCopy
+from verifold.server.lab import Lab
 from verifold.server.member import MadeCopy
+from verifold.society.reruns import copy_kept_until
 
 RERUNS = 'reruns'
 """The folder in the lab's folder that holds the clean copies. It is Verifold's own, and no agent's folder holds it."""
@@ -67,6 +70,15 @@ server of the same lab, and its unfinished folder is no leftover. No export runs
 """
 EXPORTS_AT_ONCE = 2
 """How many exports run at the same time. The others wait, so slow ones cannot use up the server's threads."""
+
+FRESH_SECONDS = 60.0
+"""
+How long after an export a post's copies stay, also when the record does not need them yet. The take that an export
+is for comes into the record a moment after the copy.
+"""
+
+_POST_FOLDER = re.compile(r'p-[1-9][0-9]*')
+"""The name of the folder that holds a post's copies: the post's ID. Verifold deletes no folder of another name."""
 
 _FILE_MODES = {b'100644': 0o444, b'100664': 0o444, b'100755': 0o555, b'120000': 0o444}
 """
@@ -102,6 +114,16 @@ class _Job(PinnedCommit):
     post_id: PostId
     leftover: float = LEFTOVER_SECONDS
     """How old an unfinished folder or file of an export is before this export removes it."""
+
+
+@dataclass(frozen=True, slots=True)
+class Pruned:
+    """What a prune of the clean copies did."""
+
+    gone: tuple[PostId, ...] = ()
+    """The posts whose copies it deleted."""
+    fresh: float | None = None
+    """The seconds until the copies that it left because their export was fresh may go, or `None` when it left none."""
 
 
 class _Differs(Exception):
@@ -173,6 +195,22 @@ class CleanCopies:
             why = error.strerror if isinstance(error, OSError) and error.strerror else error
             raise NoCleanCopy(f'Verifold could not make the clean copy of post {post.id}: {why}') from error
 
+    async def posts(self) -> frozenset[PostId]:
+        """Return the posts whose copies are in Verifold's own folder for reruns: each folder with a post's ID."""
+        return await asyncio.to_thread(_posts, self._project.resolve())
+
+    async def prune(self, keep: frozenset[PostId]) -> Pruned:
+        """
+        Delete the clean copies of every post but those in `keep`, and return what went.
+
+        A post's copies are the folder with the post's ID in Verifold's own folder for reruns, and only such a
+        folder goes, by its name and never through a link: a link there goes as a link, and so does a link inside
+        a copy. The copies that this server makes now stay, and so do the copies of an export less than
+        `FRESH_SECONDS` ago.
+        """
+        busy = frozenset(post for post, _ in self._making)
+        return await asyncio.to_thread(_prune, self._project.resolve(), keep | busy)
+
     async def kept(self, claim: Posted, digest: str) -> MadeCopy | None:
         """
         Return the clean copy of a post's files as a take left it, or `None` when it is not there as it was.
@@ -197,6 +235,78 @@ class CleanCopies:
                 leftover=self._leftover,
             )
             return await asyncio.to_thread(_export, job)
+
+
+async def keep_copies(lab: Lab, copies: CleanCopies) -> None:
+    """
+    Delete each clean copy once nothing needs it, as `copy_kept_until` says, and every copy when the lab closes.
+
+    It looks when the board changes, when the time that a copy is kept for passes, and when a copy that it left
+    because its export was fresh is fresh no more. Run it while the lab runs. The first look also deletes the copies
+    that an earlier run of Verifold left and that nothing needs.
+    """
+    while True:
+        # Only the copies that are there count, so a look costs as much as the copies on disk, whatever the record.
+        present = await copies.posts()
+        board, now = lab.board, lab.now()
+        kept = {post: until for post in present if (until := copy_kept_until(board, post, now))}
+        pruned = await copies.prune(frozenset(kept))
+        due = min(kept.values(), default=None)
+        waits = [wait for wait in ((due - now).total_seconds() if due else None, pruned.fresh) if wait is not None]
+        await lab.wait_for_change(board.seq, min(waits, default=None))
+
+
+@contextmanager
+def _copies_folder(project: Path) -> Generator[int]:
+    """
+    Open Verifold's own folder for the copies as `_own` does, and give its handle. It makes no folder.
+
+    Raises:
+        OSError: The folder is not there, or it is not a folder of this user's, or it lies behind a link.
+
+    """
+    held: list[int] = []
+    try:
+        held.append(_folder(project / LAB_FOLDER, str(project / LAB_FOLDER), None))
+        held.append(_folder(project / LAB_FOLDER / RERUNS, RERUNS, held[-1]))
+        yield held[-1]
+    finally:
+        for handle in held:
+            os.close(handle)
+
+
+def _posts(project: Path) -> frozenset[PostId]:
+    try:
+        with _copies_folder(project) as home:
+            return frozenset(name for name in os.listdir(home) if _POST_FOLDER.fullmatch(name))  # noqa: PTH208
+    except OSError:
+        return frozenset()
+
+
+def _prune(project: Path, keep: frozenset[PostId]) -> Pruned:
+    # A folder that is not there, or not a folder of this user's, holds no copy to delete.
+    gone: list[PostId] = []
+    fresh: list[float] = []
+    try:
+        with _copies_folder(project) as home:
+            _prune_in(home, keep, gone, fresh)
+    except OSError:
+        return Pruned(gone=tuple(gone))
+    return Pruned(gone=tuple(gone), fresh=min(fresh, default=None))
+
+
+def _prune_in(home: int, keep: frozenset[PostId], gone: list[PostId], fresh: list[float]) -> None:
+    now = time.time()
+    for name in os.listdir(home):
+        if not _POST_FOLDER.fullmatch(name) or name in keep:
+            continue
+        with suppress(OSError):
+            age = now - os.lstat(name, dir_fd=home).st_mtime
+            if 0 <= age < FRESH_SECONDS:
+                fresh.append(FRESH_SECONDS - age)
+                continue
+            _remove(home, name)
+            gone.append(name)
 
 
 def _export(job: _Job) -> MadeCopy:

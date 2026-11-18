@@ -343,6 +343,58 @@ def test_a_projects_saved_choices_make_run_stricter_but_never_looser(
     assert printed.index('Started a lab') < printed.index('Open the lab')
 
 
+def test_run_takes_a_budget_from_the_command_line_and_a_lower_one_from_a_projects_file(
+    serves: list[StartRequest | None], project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    global_settings(project, {'setup': {'budget_tokens': 5_000_000, 'budget_dollars': 40}})
+    project_settings(project, {'setup': {'budget_tokens': 9_000_000, 'budget_dollars': 25.5}})
+
+    main(['run', 'Does it hold?', '--agent', 'codex'])
+    main(['run', 'Does it hold?', '--agent', 'codex', '--budget-tokens', '200000', '--budget-dollars', '3'])
+
+    first, second = serves
+    assert first is not None
+    assert second is not None
+    # The project's file lowers the budget in dollars, and it cannot raise the one in tokens.
+    assert (first.budget_tokens, first.budget_dollars) == (5_000_000, 25.5)
+    assert (second.budget_tokens, second.budget_dollars) == (200_000, 3)
+    printed = capsys.readouterr().out
+    assert 'no time limit; a budget of 5,000,000 tokens and 25.5 dollars.' in printed
+    assert 'a budget of 200,000 tokens and 3 dollars.' in printed
+
+
+@pytest.mark.parametrize(
+    ('mine', 'theirs', 'limit'),
+    [
+        # A lower disk limit of a project counts, and a higher one or none does not. Zero means no limit.
+        (None, 50, None),
+        (None, 500, 100),
+        (200, 0, 200),
+        (0, 20, None),
+        (40, None, None),
+    ],
+)
+def test_run_takes_only_a_lower_disk_limit_from_a_projects_file(
+    serves: list[StartRequest | None],
+    project: Path,
+    capsys: pytest.CaptureFixture[str],
+    mine: int | None,
+    theirs: int | None,
+    limit: int | None,
+) -> None:
+    global_settings(project, {} if mine is None else {'disk': {'limit_gb': mine}})
+    project_settings(project, {} if theirs is None else {'disk': {'limit_gb': theirs}})
+
+    main(['run', 'Does it hold?', '--agent', 'codex:mini'])
+
+    (started,) = serves
+    assert started is not None
+    assert started.disk_gb == limit
+    assert ("Did not use the disk limit from this project's settings file" in capsys.readouterr().out) == (
+        limit is not None
+    )
+
+
 @pytest.mark.parametrize(
     ('mine', 'theirs', 'seats'),
     [

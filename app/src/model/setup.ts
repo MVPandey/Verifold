@@ -9,7 +9,7 @@ import type {
   SetupDefaults,
   StartRequest,
 } from '../api/types.ts';
-import { duration } from './format.ts';
+import { duration, money, tokens } from './format.ts';
 
 /** The most agents that a lab starts in all, as the server allows. */
 export const MAX_AGENTS = 20;
@@ -154,6 +154,15 @@ export function agentCount(seats: readonly Seat[]): number {
   return seats.reduce((sum, seat) => sum + seat.count, 0);
 }
 
+/** A lab's budget in tokens and in US dollars. `null` means no budget of that kind. */
+export interface Budget {
+  readonly tokens: number | null;
+  readonly dollars: number | null;
+}
+
+/** A lab without a budget. */
+export const NO_BUDGET: Budget = { tokens: null, dollars: null };
+
 /**
  * Return the request that starts a lab with the person's choices. `deliverables` is the text of the setup's field,
  * with one sentence on each line.
@@ -164,6 +173,7 @@ export function startRequest(
   autoMode: boolean,
   minutes: number | null,
   deliverables = '',
+  budget: Budget = NO_BUDGET,
 ): StartRequest {
   const wanted = sentences(deliverables);
   return {
@@ -171,6 +181,8 @@ export function startRequest(
     agents: chosenAgents(seats),
     auto_mode: autoMode,
     ...(minutes ? { minutes } : {}),
+    ...(budget.tokens ? { budget_tokens: budget.tokens } : {}),
+    ...(budget.dollars ? { budget_dollars: budget.dollars } : {}),
     ...(wanted.length > 0 ? { deliverables: wanted } : {}),
   };
 }
@@ -191,9 +203,16 @@ export function setupChoices(
   seats: readonly Seat[],
   autoMode: boolean,
   minutes: number | null,
+  budget: Budget = NO_BUDGET,
 ): SetupChoices {
   const saved = seats.map((seat) => ({ ...seat, powers: [] }));
-  return { agents: chosenAgents(saved), auto_mode: autoMode, minutes };
+  return {
+    agents: chosenAgents(saved),
+    auto_mode: autoMode,
+    minutes,
+    budget_tokens: budget.tokens,
+    budget_dollars: budget.dollars,
+  };
 }
 
 function chosenAgents(seats: readonly Seat[]): readonly AgentChoice[] {
@@ -224,7 +243,12 @@ export function defaultsLine(defaults: SetupDefaults, harnesses: readonly Harnes
       : defaults.agents.map((choice) => agentWords(choice, harnesses)).join('; ');
   const time =
     defaults.minutes === null ? 'No time limit' : `Time limit: ${duration(defaults.minutes)}`;
-  return `${agents}. ${defaults.auto_mode ? 'Auto mode' : 'No auto mode'}. ${time}.`;
+  const kinds = [
+    defaults.budget_tokens ? `${tokens(defaults.budget_tokens)} tokens` : null,
+    defaults.budget_dollars ? money(defaults.budget_dollars) : null,
+  ].filter((kind) => kind !== null);
+  const budget = kinds.length > 0 ? ` Budget: ${kinds.join(' and ')}.` : '';
+  return `${agents}. ${defaults.auto_mode ? 'Auto mode' : 'No auto mode'}. ${time}.${budget}`;
 }
 
 function agentWords(choice: SavedChoice, harnesses: readonly HarnessOption[]): string {

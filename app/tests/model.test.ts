@@ -1575,6 +1575,8 @@ describe('choices for new labs', () => {
     ],
     auto_mode: false,
     minutes: 45,
+    budget_tokens: null,
+    budget_dollars: null,
   };
 
   it('start the setup, with nothing for a harness that this computer lacks', () => {
@@ -1614,6 +1616,8 @@ describe('choices for new labs', () => {
       ],
       auto_mode: true,
       minutes: null,
+      budget_tokens: null,
+      budget_dollars: null,
     };
     assert.deepEqual(firstSeats(both, seats), [
       { ...newSeat('claude-code'), model: 'opus', role: 'driver' },
@@ -1641,7 +1645,17 @@ describe('choices for new labs', () => {
       agents: [{ harness: 'claude-code', count: 2, model: 'opus', mode: 'plan' }],
       auto_mode: false,
       minutes: 45,
+      budget_tokens: null,
+      budget_dollars: null,
     });
+    assert.deepEqual(
+      setupChoices(picks, false, 45, { tokens: 5_000_000, dollars: 20 }).budget_dollars,
+      20,
+    );
+    assert.equal(
+      defaultsLine({ ...DEFAULTS, budget_tokens: 5_000_000, budget_dollars: 20 }, HARNESSES),
+      'One agent of each harness that this computer has. Auto mode. No time limit. Budget: 5M tokens and $20.00.',
+    );
     assert.equal(
       defaultsLine(saved, HARNESSES),
       'Claude Code: 2 agents (opus, plan mode); Codex: 3 agents (low effort). No auto mode. Time limit: 45 min.',

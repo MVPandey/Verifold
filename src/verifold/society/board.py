@@ -11,10 +11,14 @@ from verifold.protocol.events import (
     AgentLeft,
     AlarmSet,
     BadgeSet,
+    BudgetSet,
     CoordinatorSet,
     DeliverableDecided,
     DeliverableSet,
+    Halt,
     LabOpened,
+    Limit,
+    LimitReached,
     OnCallSet,
     Posted,
     PowerSet,
@@ -88,6 +92,14 @@ class Board:
     leases: tuple[RerunLeaseSet, ...] = ()
     """Each time that an agent renewed or gave up its lease on a rerun that it took, oldest first."""
     times: tuple[TimeSet | TimeRanOut, ...] = ()
+    budgets: tuple[BudgetSet, ...] = ()
+    """Each budget that the person set, oldest first."""
+    limits: tuple[LimitReached, ...] = ()
+    """Each time that the lab reached its budget or its disk limit, oldest first."""
+    spent_tokens: int = 0
+    """The input and output tokens of every turn so far, as the harnesses reported them."""
+    spent_dollars: float = 0.0
+    """The cost of every turn so far, of the harnesses that report one."""
     settings: Settings = field(default_factory=Settings)
     """The person's settings for the lab: the latest that the record holds, or the defaults."""
     seat_numbers: tuple[tuple[int, int | None], ...] = ()
@@ -131,6 +143,33 @@ class Board:
     def out_of_time(self) -> bool:
         """Whether the lab reached its end, and the person has not set a new end since."""
         return bool(self.times) and isinstance(self.times[-1], TimeRanOut)
+
+    @property
+    def budget(self) -> BudgetSet | None:
+        """The budget that the person set last, or `None` while the lab has none."""
+        return self.budgets[-1] if self.budgets else None
+
+    @property
+    def at_limit(self) -> Limit | None:
+        """
+        The budget or the disk limit that the lab reached and that stops its agents now, or `None`.
+
+        A budget stands as reached until the person sets the budget again, and the disk limit until the person
+        changes it. The record says so again when the lab still has reached it then.
+        """
+        if not self.limits:
+            return None
+        last = self.limits[-1]
+        if last.limit == 'disk':
+            then = self.settings_at(last.seq).disk.limit_gb
+            changed = any(seq > last.seq and settings.disk.limit_gb != then for seq, settings in self.settings_history)
+            return None if changed else last.limit
+        return None if self.budgets and self.budgets[-1].seq > last.seq else last.limit
+
+    @property
+    def halted(self) -> Halt | None:
+        """Why the lab's agents stop now: its time ran out, or it reached its budget or its disk limit. `None` otherwise."""
+        return 'time' if self.out_of_time else self.at_limit
 
     # ponytail: the lookups of agents and threads scan the tuples. The posts have an index.
     def agent(self, agent_id: AgentId) -> AgentJoined | None:

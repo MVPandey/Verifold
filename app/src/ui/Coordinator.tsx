@@ -40,6 +40,7 @@ import { clock } from '../model/format.ts';
 import { personAnswer, split } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import type { PageProps } from './hooks.ts';
+import { halted } from '../model/limits.ts';
 import { Words } from './Markdown.tsx';
 import { Exact, HarnessAsk } from './parts.tsx';
 import { Name, Who } from './Picture.tsx';
@@ -137,8 +138,8 @@ export function Panel(props: {
 }): ReactElement {
   const { view, holder, tab, lab } = props;
   const name = holder.agent.name;
-  // Out of time or closed, no agent works, and the line under the name says so.
-  const resting = lab.out_of_time || lab.state === 'closed';
+  // Out of time, at a limit, or closed, no agent works, and the line under the name says so.
+  const resting = halted(lab) || lab.state === 'closed';
   const shared: Shared = {
     api: props.api,
     view,

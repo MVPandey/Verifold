@@ -14,11 +14,13 @@ from verifold.protocol.events import (
     AgentNamed,
     AlarmSet,
     BadgeSet,
+    BudgetSet,
     CoordinatorSet,
     DeliverableDecided,
     DeliverableSet,
     Event,
     LabOpened,
+    LimitReached,
     OnCallSet,
     PermissionGranted,
     Posted,
@@ -68,10 +70,12 @@ from verifold.protocol.posts import (
 )
 from verifold.protocol.settings import Settings
 from verifold.protocol.threads import CONVERSATION_TITLE, QUESTION_TITLE, Carries, Thread
+from verifold.protocol.usage import DiskUse
 from verifold.protocol.votes import Badge, BadgeAction, Direction
 from verifold.server.changes import wait_until
 from verifold.server.errors import LabExists, SetupRejected
 from verifold.society.board import Board
+from verifold.society.budget import reached
 from verifold.society.candidates import check_names_candidate
 from verifold.society.coordinator import check_asks, permission_choice, power_covers, time_given
 from verifold.society.deliverables import accepted, check_decidable, live, offers_title, told_at
@@ -124,7 +128,9 @@ class Lab:
     Every change goes through one lock: the lab checks the event against the board, writes it to the record, and then
     wakes the callers that wait for new events. An event that breaks a rule never reaches the record. Each change
     also records the close of a round that is due, before its own events and after them, so a round closes in the
-    step of the entry, the withdrawal, or the change of the lab's agents that ends it.
+    step of the entry, the withdrawal, or the change of the lab's agents that ends it. After them, it records that
+    the lab reached its budget or its disk limit, in the step of the turn's end, the new budget, the new disk
+    limit, or the measure of the disk that reaches it.
     """
 
     def __init__(self, record: RecordFile, board: Board, clock: Clock = utc_now, stops: Stops = _stops_nothing) -> None:
@@ -134,6 +140,7 @@ class Lab:
         self._board = board
         self._stops = stops
         self._changed = asyncio.Condition()
+        self._disk: DiskUse | None = None
 
     @classmethod
     def load(cls, record: RecordFile, clock: Clock = utc_now, stops: Stops = _stops_nothing) -> Self:
@@ -190,6 +197,16 @@ class Lab:
     def board(self) -> Board:
         """The board after every event so far."""
         return self._board
+
+    @property
+    def disk(self) -> DiskUse | None:
+        """What the lab's files took on disk when Verifold measured them last, or `None` before the first measure."""
+        return self._disk
+
+    async def measured(self, disk: DiskUse) -> None:
+        """Keep what the lab's files take on disk now. The record says so when they reach the lab's disk limit."""
+        self._disk = disk
+        await self._commit()
 
     async def join(  # noqa: PLR0913
         self,
@@ -824,6 +841,18 @@ class Lab:
         """Record that the lab ends `left` from now. A `left` of zero stops the agents now."""
         await self._commit(lambda _, seq, at: TimeSet(seq=seq, at=at, ends_at=at + left))
 
+    async def set_budget(self, tokens: int | None, dollars: float | None) -> None:
+        """
+        Record the lab's budget in tokens and in dollars. It replaces the earlier one, and `None` sets none of a kind.
+
+        A budget that the lab has spent already stops the agents in the same step. The same budget again records
+        nothing.
+        """
+        budget = self._board.budget
+        if ((budget.tokens, budget.dollars) if budget else (None, None)) == (tokens, dollars):
+            return
+        await self._commit(lambda _, seq, at: BudgetSet(seq=seq, at=at, tokens=tokens, dollars=dollars))
+
     async def set_settings(self, settings: Settings) -> None:
         """Record the person's settings for the lab. The lab follows the latest ones."""
         await self._commit(lambda _, seq, at: SettingsSet(seq=seq, at=at, settings=settings))
@@ -984,6 +1013,7 @@ class Lab:
                 board = apply(board, event)
                 events.append(event)
             board = _close_rounds(board, at, events)
+            board = _reach_limits(board, at, events, self._disk)
             if not events:
                 return board
             self._write(*events)
@@ -1270,6 +1300,20 @@ def _close_rounds(board: Board, at: datetime, events: list[Event]) -> Board:
         board = apply(board, event)
         events.append(event)
     return board
+
+
+def _reach_limits(board: Board, at: datetime, events: list[Event], disk: DiskUse | None) -> Board:
+    # The record's note that the lab reached its budget or its disk limit, added to the events of one step. The
+    # record's rules check it again.
+    if board.at_limit is not None:
+        return board
+    total = disk.total if disk else None
+    limit = reached(board, total)
+    if limit is None:
+        return board
+    event = LimitReached(seq=board.seq + 1, at=at, limit=limit, disk_bytes=total if limit == 'disk' else None)
+    events.append(event)
+    return apply(board, event)
 
 
 def _headline(text: str) -> str:

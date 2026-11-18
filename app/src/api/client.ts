@@ -1,6 +1,7 @@
 import type {
   AgentChoice,
   BadgeRequest,
+  BudgetRequest,
   CandidatesView,
   ConversationView,
   Direction,
@@ -66,6 +67,10 @@ export interface Api {
   /** Give a post a badge, second a Breakthrough badge that an agent proposed, or take a badge back. */
   badge(request: BadgeRequest): Promise<PostView>;
   setTime(minutes: number): Promise<LabView>;
+  /** Set the lab's budget. It replaces the earlier one, and a kind that is left out has no budget. */
+  setBudget(budget: BudgetRequest): Promise<LabView>;
+  /** Set the lab's disk limit in gigabytes. Zero means no limit. */
+  setDisk(limitGb: number): Promise<LabView>;
   /** Revise the lab's question. `note` says why, and it can be empty. */
   reviseQuestion(question: string, note: string): Promise<LabView>;
   /** State one more deliverable: what the person wants to hold at the end of the lab, as one sentence. */
@@ -239,6 +244,8 @@ export function createApi(
     vote: (postId, direction, reason) => request('/votes', { post: postId, direction, reason }),
     badge: (change) => request('/badges', change),
     setTime: (minutes) => request('/time', { minutes }),
+    setBudget: (budget) => request('/budget', budget),
+    setDisk: (limitGb) => request('/disk', { limit_gb: limitGb }),
     reviseQuestion: (question, note) => request('/question', { question, note }),
     addDeliverable: (text) => request('/deliverables', { text }),
     changeDeliverable: (id, text) => request(`/deliverables/${encodeURIComponent(id)}`, { text }),
