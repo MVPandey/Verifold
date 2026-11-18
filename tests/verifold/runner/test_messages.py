@@ -112,7 +112,7 @@ def test_the_lab_norms_are_plain_text_for_one_read_and_the_doorbell_is_one_line(
     assert '`' not in NORMS_TEMPLATE
     # Each norm has its reason and what it looks like in practice, so the file is longer than a list of rules.
     # An agent still reads it whole at the start of its work.
-    assert len(NORMS_TEMPLATE) < 25_200
+    assert len(NORMS_TEMPLATE) < 25_400
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -213,10 +213,12 @@ def test_the_lab_norms_hold_the_goal_the_obstacle_the_seats_and_the_name() -> No
         'A result that says "this does not work" is a finding on the way.',
         'When the lab agrees that nothing works while most of its time is left, it has usually looked in too few places.',
         'Take that agreement as a signal to widen the search',
-        # The board takes no close without a candidate while one stands, also a close that says nothing is left.
+        # The board takes no close without a candidate while one stands, also a close that says nothing is left,
+        # and no close before the lab's reading.
         (
-            'An agent that thinks so posts a close, and each other agent agrees or objects. While candidates stand, '
-            'the close names the one that the lab got furthest with.'
+            'An agent that thinks so posts a close, and each other agent agrees or objects. A close comes after the '
+            "lab's reading, because the person judges the answer by how the lab read the question. While candidates "
+            'stand, the close names the one that the lab got furthest with.'
         ),
         'A line that closed is no reason to end a turn',
         'set an alarm, because a post for you may never come',

@@ -72,13 +72,24 @@ from itertools import accumulate
 
 from verifold.protocol.events import AgentLeft, Posted, RoundClosed
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
-from verifold.protocol.join import MAX_ENTRIES, MAX_NEWS, LeftLine, News, ProfileNote, RenameLine, RoundNote, Update
+from verifold.protocol.join import (
+    MAX_ENTRIES,
+    MAX_NEWS,
+    LabFacts,
+    LeftLine,
+    News,
+    ProfileNote,
+    RenameLine,
+    RoundNote,
+    Update,
+)
 from verifold.protocol.posts import Ask, Call, Check, Close, Entry, Post, Reading, Round
 from verifold.society.board import Board
+from verifold.society.budget import budget_line
 from verifold.society.coordinator import no_reply_line
 from verifold.society.desk import speaks_for_person
 from verifold.society.identity import post_line, post_view
-from verifold.society.lifecycle import alarm_line, no_alarm_line
+from verifold.society.lifecycle import alarm_line, lab_state, latest_time, minutes_left, no_alarm_line
 from verifold.society.lines import lines_of
 from verifold.society.reruns import RerunKey, reruns_for
 from verifold.society.rounds import entries, for_reader
@@ -227,9 +238,11 @@ def news(  # noqa: PLR0913
     It holds at most `most` posts for the agent, `MAX_NEWS` unless a brief needs fewer, the oldest first, and
     reaches as far as `update` does. So a post for the agent is never left out. Of the other posts it holds the
     newest. `now` decides which votes and which entries are sealed and which leases on reruns stand, and `told` is
-    as in `update`.
+    as in `update`. The desk's news is small, as `desk_news` says.
     """
     board = for_reader(board, agent_id, now)
+    if board.is_desk(agent_id):
+        return desk_news(board, agent_id, after, now, most=most)
     woken, rest = _unseen(board, agent_id, after)
     shown, others, reach = _page(woken, rest, board.seq, most)
     rounds = round_notes(board, agent_id, after, reach, now)
@@ -253,6 +266,38 @@ def news(  # noqa: PLR0913
         badges_left_out=more_badges,
         alarm=alarm_line(board, agent_id),
         no_reply=no_reply_line(board, agent_id, now),
+    )
+
+
+def desk_news(board: Board, desk: AgentId, after: int, now: datetime | None = None, *, most: int = MAX_NEWS) -> News:
+    """
+    Return the desk's news after event `after`: the person's posts, the replies to the desk's, and the lab's facts.
+
+    The person's posts are the ones in the desk chat, and the desk's posts are the ones that it made for the person.
+    The news holds at most `most` of the person's posts, the oldest first, and of the replies the newest `MAX_NEWS`.
+    It holds no other post, no round, no rerun, no vote, and no badge, so it stays small in a lab of any size. `now`
+    dates the lab's time.
+    """
+    told = {entry.post.id for entry in board.posts if entry.post.author == desk and entry.post.on is not None}
+    later = tuple(entry for entry in board.posts if entry.seq > after and entry.post.author != desk)
+    woken = tuple(entry for entry in later if wakes(board, desk, entry))
+    answers = tuple(entry for entry in later if entry.post.reply_to in told)
+    shown, replies, reach = _page(woken, answers, board.seq, most)
+    listed = replies[-MAX_NEWS:]
+    lab = LabFacts(
+        state=lab_state(board),
+        halted=board.halted,
+        ends_at=board.ends_at,
+        minutes_left=minutes_left(board, now or latest_time(board)),
+        budget=budget_line(board),
+    )
+    return News(
+        seq=reach,
+        for_you=tuple(post_line(board, entry, desk, now, news=True) for entry in shown),
+        more=len(woken) - len(shown),
+        others=tuple(post_line(board, entry, desk, now, news=True) for entry in listed),
+        left_out=len(replies) - len(listed),
+        lab=lab,
     )
 
 

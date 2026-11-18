@@ -156,6 +156,7 @@ async def test_new_sentences_and_removals_send_one_post_in_a_minute_for_the_whol
 
 async def test_a_new_sentence_and_a_removal_send_no_post_and_open_no_lab_while_a_close_stands(asked: Lab) -> None:
     await asked.add_deliverable(SCRIPT)
+    await asked.post(PostRequest(kind='reading', text='The lab reads the question as asked.', thread='t-1'), 'ada')
     close = await asked.post(PostRequest(kind='close', text='Nothing is left.', thread='t-1'), 'ada')
     await asked.post(
         PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to=close.post.id, accepts=True), 'bo'
@@ -436,6 +437,7 @@ async def test_a_decision_on_an_offer_that_its_author_replaced_names_the_newer_o
 
 async def test_a_request_for_changes_opens_a_closed_lab_again_and_an_acceptance_does_not(asked: Lab) -> None:
     offered = await asked.offer('ada', 'd-1', await pin(('answer.md',)), 'The answer.')
+    await asked.post(PostRequest(kind='reading', text='The lab reads the question as asked.', thread='t-1'), 'ada')
     close = await asked.post(PostRequest(kind='close', text='Nothing is left.', thread='t-1'), 'ada')
     await asked.post(
         PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to=close.post.id, accepts=True), 'bo'

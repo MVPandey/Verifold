@@ -384,7 +384,8 @@ def brief(  # noqa: PLR0913, PLR0915
     thread, the threads where one agent works alone, and the threads that got no post for a long while. Then come
     the posts by where they stand: the disputed posts, the results that nobody has built on, the results that
     nobody has checked, the open obstacles with the counts of the others, the asks that nobody has answered, and
-    the calls that need an agent. The order ranks nothing. `how` says how the board works.
+    the calls that need an agent. The order ranks nothing. `how` says how the board works. The desk's brief holds
+    the lab's facts and the desk's news, and no list of the lab's work, as `_desk_brief` says.
 
     The brief has `MAX_BRIEF` characters of JSON at most. The board cuts whole lines as `society.fit` says, and
     `cut` says what it left out. `page` returns the agent's news with at most the given number of posts for it,
@@ -593,6 +594,8 @@ def brief(  # noqa: PLR0913, PLR0915
         ),
         news=news,
     )
+    if board.is_desk(agent_id):
+        return _desk_brief(base, news, news_of, cut=page is not None)
     shown_candidates = {
         entry.post.id: CandidateLine(
             line=line(entry),
@@ -748,6 +751,24 @@ def brief(  # noqa: PLR0913, PLR0915
         **({'news.for_you': len(news.for_you)} if page else {}),
     }
     return fit(render, full)
+
+
+def _desk_brief(base: Brief, news: News, news_of: Callable[[int], News], *, cut: bool) -> Brief:
+    """
+    Return the desk's brief: the lab's facts and the desk's news, with no list of the lab's work.
+
+    The desk reads the lab on demand with `overview`, `threads`, and `thread`, so its brief stays small in a lab of
+    any size. With `cut`, the news ends earlier when the brief has too little room for the person's posts.
+    """
+    # The brief lists no obstacle, so it counts none beyond a list.
+    lean = base.model_copy(update={'obstacles': Obstacles()})
+
+    def render(keep: Keep) -> Brief:
+        heard = news_of(keep.get('news.for_you', len(news.for_you)))
+        dropped = len(news.for_you) - len(heard.for_you)
+        return lean.model_copy(update={'news': heard, 'cut': (cut_line('news.for_you', dropped),) if dropped else ()})
+
+    return fit(render, {'news.for_you': len(news.for_you)} if cut else {})
 
 
 def _rounds(

@@ -362,7 +362,53 @@ def test_the_brief_names_the_desk_apart_and_counts_no_turn_of_it() -> None:
     assert (view.desk, view.desk_chat) == ('dee', 't-9')
     assert [line.id for line in view.agents] == ['bo', 'cy']
     assert view.in_turn == 1
-    assert ([line.id for line in desk_view.agents], desk_view.desk) == (['ada', 'bo', 'cy'], 'dee')
+    # The desk reads the lab's agents with `overview`, so its brief lists none.
+    assert (desk_view.agents, desk_view.desk, desk_view.in_turn) == ((), 'dee', 1)
+
+
+def test_the_desks_news_holds_the_persons_posts_the_replies_to_its_posts_for_the_person_and_the_lab() -> None:
+    record = desked().post(for_person('p-3'))
+    record.post(Result(id='p-4', thread='t-1', author='ada', text='Holds.', evidence=(FILE,)))
+    record.post(Message(id='p-5', thread='t-1', author='bo', text='On it.', reply_to='p-3'))
+    record.post(Message(id='p-6', thread='t-1', author='person', text='Look at the tail, everyone.'))
+    record.post(Round(id='p-7', thread='t-1', author='ada', text='Bets?', minutes=1)).closed('p-7')
+    record.vote('ada', 'p-3').named('bo', 'Bob')
+    record.post(Message(id='p-8', thread='t-9', author='person', text='And now?'))
+    record.events.append(BudgetSet(**stamp(record), tokens=5_000))
+    board = record.board()
+    told = board.post('p-3')
+    assert told is not None
+
+    heard = news(board, 'dee', 0)
+    later = news(board, 'dee', told.seq)
+
+    assert [line.id for line in heard.for_you] == ['p-2', 'p-8']
+    assert [line.id for line in heard.others] == ['p-5']
+    assert (heard.rounds, heard.votes, heard.badges, heard.renamed, heard.reruns, heard.left) == ((),) * 6
+    assert heard.lab is not None
+    assert (heard.lab.state, heard.lab.halted, heard.lab.budget.tokens) == ('open', None, 5_000)
+    assert ([line.id for line in later.for_you], [line.id for line in later.others]) == (['p-8'], ['p-5'])
+    # The news of every other agent has no facts of the lab, so its size stays as it was.
+    assert news(board, 'ada', 0).lab is None
+    assert '"lab"' not in news(board, 'ada', 0).model_dump_json()
+
+
+def test_the_desks_brief_holds_the_labs_facts_and_no_list_of_its_work_in_a_lab_of_any_size() -> None:
+    record = desked().coordinator('ada')
+    for number in range(3, 203):
+        author = ('ada', 'bo', 'cy')[number % 3]
+        text = f'Result {number}: ' + 'x' * 250
+        record.post(Result(id=f'p-{number}', thread='t-1', author=author, text=text, evidence=(FILE,)))
+    record.post(Proposal(id='p-203', thread='t-1', author='bo', text='It holds.', builds_on=('p-4',)))
+    board = record.board()
+
+    view = brief(board, 'dee', news(board, 'dee', 0))
+    worker = brief(board, 'bo', news(board, 'bo', 0))
+
+    assert (view.agents, view.candidates, view.threads, view.not_checked, view.not_built_on) == ((),) * 5
+    assert (view.desk, view.desk_chat, view.coordinator, view.state) == ('dee', 't-9', 'ada', 'open')
+    assert [line.id for line in view.news.for_you] == ['p-2']
+    assert len(view.model_dump_json()) < 6_000 < len(worker.model_dump_json())
 
 
 def test_the_persons_words_in_the_desk_chat_and_the_desks_post_for_the_person_open_no_closed_lab() -> None:
