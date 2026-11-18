@@ -20,6 +20,7 @@ from verifold.society.coordinator import request_end, request_waits
 from verifold.society.labels import is_numbered, plain
 from verifold.society.rounds import for_reader, sealed, stripped
 from verifold.society.standing import standing
+from verifold.society.tested import how_tested
 from verifold.society.votes import badge_lines, marks, vote_lines
 from verifold.society.votes import sealed as votes_sealed
 
@@ -98,7 +99,7 @@ def post_line(
     board: Board, entry: Posted, reader: AgentId, now: datetime | None = None, *, news: bool = False
 ) -> PostLine:
     """
-    Return a post as one line for `reader` at `now`, with who wrote it, its votes up and down, and its badges.
+    Return a post as one line for `reader` at `now`: who wrote it, its votes, its badges, and how checks tested it.
 
     While the votes on the post are sealed for the reader, the line has no counts, as a line of a post without
     votes. While the post is an entry of an open round that another agent wrote, the line holds nothing of its
@@ -108,7 +109,14 @@ def post_line(
     shown = stripped(entry) if hidden else entry
     up, down, badges = marks(board, entry.post.id)
     counts = (0, 0) if votes_sealed(board, reader, entry, now) else (up, down)
-    return PostLine.of(shown, byline(board, entry, MAX_SEAT), (*counts, badges), news=news, sealed=hidden)
+    return PostLine.of(
+        shown,
+        byline(board, entry, MAX_SEAT),
+        (*counts, badges),
+        news=news,
+        sealed=hidden,
+        tested=how_tested(board, entry.post.id),
+    )
 
 
 def post_view(
@@ -116,6 +124,8 @@ def post_view(
 ) -> PostView:
     """
     Return a post with its time, who wrote it, where it stands, the posts that build on it, its votes, and its badges.
+
+    A result also has how checks tested it.
 
     While the votes on the post are sealed for `reader` at `now`, it has no counts and no votes. While the post is
     an entry of an open round that another agent wrote, it holds nothing of the entry's content, and no post
@@ -131,6 +141,7 @@ def post_view(
         sealed=hidden,
         by=byline(board, entry),
         standing=standing(board, entry.post.id),
+        tested=how_tested(board, entry.post.id),
         built_on_by=tuple(other.post.id for other in for_reader(board, reader, now).built_on(entry.post.id)),
         decision=board.answer_to(entry.post.id) if isinstance(entry.post, MoveRequest) else None,
         waits=request_waits(board, entry),

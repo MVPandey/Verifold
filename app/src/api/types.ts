@@ -38,6 +38,12 @@ export type PostKind =
   | 'entry';
 export type Standing = 'open' | 'checked' | 'held_up' | 'disputed' | 'conceded';
 
+/**
+ * How checks tested a result, beside where it stands: a rerun of its own files holds, a challenge on something
+ * that its author did not use holds, or such a challenge fails.
+ */
+export type Tested = 'reproduced' | 'challenged' | 'challenge_failed';
+
 export interface ModelSpec {
   readonly family: string;
   readonly name: string | null;
@@ -963,7 +969,8 @@ export type Post =
   | (PostBase & {
       readonly kind: 'check';
       readonly outcome: 'holds' | 'fails';
-      readonly method: 'rerun' | 'code_read' | 'ratings';
+      /** `challenge`: the author tested the claim on something that the post's author did not use. */
+      readonly method: 'rerun' | 'code_read' | 'ratings' | 'challenge';
       /**
        * The event with which the author took the rerun of the post, when this is the check of that take. The
        * author was given the clean copy of the post's pinned files, and the check's files are its own. Verifold
@@ -1019,6 +1026,8 @@ export interface PostView {
   /** Who wrote the post. `null` for a post of the person. */
   readonly by: Byline | null;
   readonly standing: Standing;
+  /** For a result: how checks tested it. Absent in a view from before the field. */
+  readonly tested?: readonly Tested[];
   /** The posts that build on this one, oldest first. */
   readonly built_on_by: readonly string[];
   /** For a request for a move: its answer, or `null` while it has none. */
@@ -1125,8 +1134,24 @@ export interface CandidateView {
   readonly results: number;
   /** The results among them that have no check of an independent rerun. The name is from before agents took reruns. */
   readonly no_blind_rerun: readonly string[];
+  /** The results that the candidate builds on directly, counted by how each stands. `null` when it builds on none. */
+  readonly rests_on?: RestsOn | null;
   /** The author's own entry of a round that the candidate builds on. Its detail and files are the candidate's too. */
   readonly entry: PostView | null;
+}
+
+/**
+ * The results that a candidate builds on directly, each once, by how each stands: a challenge holds, only a rerun
+ * holds, only other checks hold, nothing checked it, it is disputed, or its author conceded it. A count of zero is
+ * absent, and the counts add up to the number of those results.
+ */
+export interface RestsOn {
+  readonly challenged?: number;
+  readonly reproduced_only?: number;
+  readonly checked_otherwise?: number;
+  readonly not_checked?: number;
+  readonly disputed?: number;
+  readonly conceded?: number;
 }
 
 /** The candidate answers that stand, oldest first, and the one that the close that stands closes on. */
@@ -1202,6 +1227,10 @@ export interface ThreadSummary {
   readonly disputed: number;
   readonly checked: number;
   readonly not_checked: number;
+  /** How many results of the thread stand and have a challenge that holds. Absent while it is zero. */
+  readonly challenged?: number;
+  /** How many results of the thread stand and have a rerun that holds and no challenge that holds. Absent at zero. */
+  readonly reproduced_only?: number;
   readonly open_asks: number;
   /** How many calls in the thread still need an agent. */
   readonly open_calls: number;

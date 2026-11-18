@@ -169,6 +169,29 @@ export function allOnCall(seats: readonly Seat[]): boolean {
   return chosen.length > 0 && chosen.every((seat) => seat.onCall);
 }
 
+/**
+ * Return the model family of every seat that starts agents, when they are all of one family, or `null`. A seat has
+ * the family that the person typed, or else its harness's. Capitals and spaces around a family do not matter, as
+ * the server compares them. The desk is no part of the lab's work and checks nothing, so its family does not count.
+ */
+export function oneFamily(
+  seats: readonly Seat[],
+  harnesses: readonly HarnessOption[],
+): string | null {
+  const families = seats
+    .filter((seat) => seat.count > 0 && !seat.desk)
+    .map(
+      (seat) =>
+        seat.family.trim() ||
+        harnesses.find((option) => option.name === seat.harness)?.family.trim() ||
+        '',
+    );
+  const [first] = families;
+  if (first === undefined || first === '') return null;
+  const same = families.every((family) => family.toLowerCase() === first.toLowerCase());
+  return same ? first : null;
+}
+
 /** Return how many agents the seats start. */
 export function agentCount(seats: readonly Seat[]): number {
   return seats.reduce((sum, seat) => sum + seat.count, 0);

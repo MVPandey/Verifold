@@ -15,6 +15,7 @@ from verifold.protocol.join import (
     CandidatesView,
     News,
     PostLine,
+    RestsOn,
     ThreadLine,
     ThreadLink,
     ThreadSummary,
@@ -27,9 +28,11 @@ from verifold.protocol.posts import (
     Ask,
     Call,
     Check,
+    CheckMethod,
     FileEvidence,
     Message,
     Objection,
+    Outcome,
     Plan,
     Post,
     Proposal,
@@ -113,6 +116,42 @@ def test_a_summary_shows_the_latest_post_and_how_results_and_asks_stand(record: 
     assert summary.latest is not None
     assert (summary.latest.author, summary.latest.kind, summary.latest.text) == ('bo', 'ask', 'Which seed?')
     assert (summary.disputed, summary.checked, summary.not_checked, summary.open_asks) == (1, 1, 1, 1)
+
+
+def test_a_summary_counts_the_results_that_stand_and_were_challenged_or_only_reproduced(record: RecordBuilder) -> None:
+    def check(post_id: str, target: str, method: CheckMethod, outcome: Outcome) -> Check:
+        body = 'On the 2015 to 2019 data.' if method == 'challenge' else ''
+        return Check(
+            id=post_id,
+            thread='t-1',
+            author='cy',
+            text='So.',
+            reply_to=target,
+            outcome=outcome,
+            method=method,
+            body=body,
+        )
+
+    for number in range(1, 6):
+        record.post(Result(id=f'p-{number}', thread='t-1', author='ada', text=f'Finding {number}.'))
+    record.post(check('p-6', 'p-1', 'rerun', 'holds')).post(check('p-7', 'p-2', 'rerun', 'holds'))
+    record.post(check('p-8', 'p-2', 'challenge', 'holds')).post(check('p-9', 'p-3', 'challenge', 'holds'))
+    # A challenge that fails disputes its result, so the result stands no more and counts for neither.
+    record.post(check('p-10', 'p-4', 'rerun', 'holds')).post(check('p-11', 'p-4', 'challenge', 'fails'))
+    plain = thread_summaries(RecordBuilder().join('ada').thread('t-1', opened_by='ada').board(), 'ada')
+
+    (summary,) = thread_summaries(record.board(), 'bo')
+    view = brief(record.board(), 'bo', News(seq=0))
+
+    assert (summary.challenged, summary.reproduced_only, summary.disputed, summary.not_checked) == (2, 1, 1, 1)
+    assert (view.threads[0].challenged, view.threads[0].reproduced_only) == (2, 1)
+    assert [(line.id, line.line.tested if line.line else None) for line in view.disputed] == [
+        ('p-4', ('reproduced', 'challenge_failed'))
+    ]
+    # A count of zero says nothing, so a thread without such results is as long as before.
+    assert 'challenged' not in plain[0].model_dump_json()
+    assert 'reproduced_only' not in plain[0].model_dump_json()
+    assert '"challenged":2,"reproduced_only":1' in summary.model_dump_json()
 
 
 def test_an_ask_to_the_person_waits_for_the_persons_answer_not_an_agents(record: RecordBuilder) -> None:
@@ -399,11 +438,22 @@ def test_each_candidate_shows_the_person_what_it_builds_on_and_the_brief_lists_i
         ('p-3', 'open'),
     ]
     assert (bo.results, bo.no_blind_rerun, bo.entry) == (2, ('p-2',), None)
-    # The brief's list of agents says who wrote each one, so a line has no byline of its own.
-    assert [(line.line.id, line.line.by, line.standing) for line in lines] == [
-        ('p-5', None, 'open'),
-        ('p-7', None, 'open'),
+    # The candidate rests on three results: the blind rerun reproduced one, and nobody checked the other two. bo's
+    # earlier proposal, which this one replaced, builds on nothing and is no candidate any more.
+    rested = RestsOn(reproduced_only=1, not_checked=2)
+    assert (bo.rests_on, cy.rests_on) == (rested, None)
+    assert [(under.post.id, under.tested) for under in bo.builds_on] == [
+        ('p-1', ('reproduced',)),
+        ('p-2', ()),
+        ('p-3', ()),
     ]
+    # The brief's list of agents says who wrote each one, so a line has no byline of its own.
+    assert [(line.line.id, line.line.by, line.standing, line.rests_on) for line in lines] == [
+        ('p-5', None, 'open', None),
+        ('p-7', None, 'open', rested),
+    ]
+    assert '"rests_on":{"reproduced_only":1,"not_checked":2}' in lines[1].model_dump_json()
+    assert 'rests_on' not in lines[0].model_dump_json()
 
     # A blind rerun that fails, or one from the author's own family, is still a blind rerun.
     record.join('eve', family='anthropic', checks='p-2')
@@ -750,6 +800,40 @@ def test_the_largest_brief_without_votes_is_one_tool_result() -> None:
     assert all(agent.plan is not None and agent.plan.by is None for agent in view.agents)
     # A line has its place in the record and no time.
     assert 'at' not in PostLine.model_fields
+
+
+def test_the_largest_brief_with_every_result_reproduced_challenged_or_both_is_one_tool_result() -> None:
+    # Each result has a rerun that holds. One in three also has a challenge that holds, and one in three a challenge
+    # that holds and one that fails, so every line of a result carries marks, and the threads count them.
+    record = _largest()
+    results = tuple(event.post for event in record.events if isinstance(event, Posted) and event.post.kind == 'result')
+    tests = (('rerun', 'holds'), ('challenge', 'holds'), ('challenge', 'fails'))
+    for number, result in enumerate(results):
+        checker = 'a1' if result.author != 'a1' else 'a2'
+        for method, outcome in tests[: number % 3 + 1]:
+            check = Check(
+                id=f'p-{len(record.events) + 1}',
+                thread=result.thread,
+                author=checker,
+                text='x' * 1000,
+                body='On other dates.',
+                reply_to=result.id,
+                outcome=outcome,
+                method=method,
+            )
+            record.post(check)
+    board = record.board()
+
+    view = brief(board, 'a0', news(board, 'a0', 0))
+    lines = (*view.news.for_you, *view.news.others, *(entry.line for entry in view.disputed if entry.line))
+    marked = tuple(line for line in lines if line.kind == 'result')
+
+    assert marked
+    assert all(line.tested for line in marked)
+    assert ('reproduced', 'challenged', 'challenge_failed') in {line.tested for line in marked}
+    assert sum(summary.challenged for summary in view.threads) > 0
+    assert sum(summary.reproduced_only for summary in view.threads) > 0
+    assert len(view.model_dump_json()) < ONE_TOOL_RESULT
 
 
 def test_the_largest_brief_with_a_budget_that_the_lab_reached_and_its_disk_use_is_one_tool_result() -> None:

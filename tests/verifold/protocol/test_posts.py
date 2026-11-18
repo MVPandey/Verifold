@@ -1,7 +1,7 @@
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from verifold.protocol.posts import Answer, Check, FileEvidence, Message, Post
+from verifold.protocol.posts import Answer, Check, CheckMethod, FileEvidence, Message, Post
 
 posts = TypeAdapter(Post)
 
@@ -70,3 +70,25 @@ def test_evidence_names_a_full_commit() -> None:
     assert FileEvidence(path='results/run.json', commit='0' * 40).path == 'results/run.json'
     with pytest.raises(ValidationError, match='commit'):
         FileEvidence(path='results/run.json', commit='abc123')
+
+
+@pytest.mark.parametrize('body', ['', '  \n '])
+def test_a_challenge_needs_a_body_that_says_what_it_changed(body: str) -> None:
+    def check(method: CheckMethod, body: str) -> Check:
+        return Check(
+            id='p-2',
+            thread='t-1',
+            author='bo',
+            text='It fails.',
+            reply_to='p-1',
+            outcome='fails',
+            method=method,
+            body=body,
+        )
+
+    with pytest.raises(ValidationError, match='needs a `body`: what it changed from the post'):
+        check('challenge', body)
+
+    # Another method takes a check without a body, as before.
+    assert check('rerun', body).body == body
+    assert check('challenge', 'On 2019 to 2021 the edge is gone.').method == 'challenge'

@@ -497,6 +497,53 @@ describe('an opened thread', () => {
     assert.ok(html.includes('Blind rerun'));
   });
 
+  it('shows beside a result’s standing whether it was reproduced, challenged, or failed a challenge', () => {
+    const claim = {
+      ...postView(result('p-1'), 1, 'disputed'),
+      tested: ['reproduced', 'challenge_failed'],
+    } as const;
+    const challenge = postView(
+      {
+        ...result('p-2', {
+          author: 'agent-2',
+          reply_to: 'p-1',
+          body: 'On 2019 to 2021 the edge is gone.',
+        }),
+        kind: 'check',
+        method: 'challenge',
+        outcome: 'fails',
+      },
+      2,
+    );
+    const marked = renderToStaticMarkup(
+      <Turns
+        view={{
+          thread: { id: 't-1', title: 'A', opened_by: 'agent-1' },
+          watching: false,
+          members: [],
+          posts: [claim, challenge],
+        }}
+        agents={agents}
+        needs={[]}
+        question={null}
+        reruns={[]}
+        seats={0}
+        now={new Date('2026-11-06T14:26:00Z')}
+        onRerun={() => Promise.resolve()}
+        onSend={() => Promise.resolve()}
+        target="p-2"
+      />,
+    );
+    assert.ok(
+      marked.includes(
+        '<span class="f-st fs-dis">Disputed</span><span class="f-st fs-ok">Reproduced</span><span class="f-st fs-dis">Challenge failed</span>',
+      ),
+    );
+    assert.ok(marked.includes('challenged Agent 1’s result: it fails'));
+    // A post without marks, as in a view from before them, shows its standing alone.
+    assert.ok(!html.includes('Reproduced') && !html.includes('Challenge'));
+  });
+
   it('puts on a post’s first line the name, the seat as it was when the post was written, and no role', () => {
     const tessel = agentView('agent-1', {
       agent: { ...agentView('agent-1').agent, name: 'Tessel' },
@@ -1829,6 +1876,15 @@ describe('the lab page', () => {
       'No result yet',
       '3 open obstacles',
     ]);
+    // A line says how many of its results that stand were challenged, and how many were only reproduced.
+    const last = '2026-11-06T14:14:00Z';
+    assert.deepEqual(
+      lineFacts(summary({ last_result_at: last, challenged: 1, reproduced_only: 2 }), now),
+      ['Last result 12 min ago', '1 challenged', '2 reproduced only'],
+    );
+    assert.deepEqual(lineFacts(summary({ reproduced_only: 0, challenged: 0 }), now), [
+      'No result yet',
+    ]);
   });
 
   const obstacle = (
@@ -2585,27 +2641,31 @@ describe('the lab page', () => {
     assert.ok(!wall('t-2', thread('t-1', 'person', posts), none, current).includes(line));
   });
 
-  it('links a candidate’s files, and says which results under it have no blind rerun', () => {
+  it('links a candidate’s files, says what it rests on, and which results under it have no independent rerun', () => {
     const file = { type: 'file' as const, path: 'answer.md', commit: 'c'.repeat(40) };
     const proposal = result('p-2', { kind: 'proposal', text: 'Yes, 12x.', evidence: [file] });
     const posts = [result('p-1', { kind: 'message', author: 'person', text: 'Faster?' }), proposal];
     const answer = answerOf(proposal, {
       builds_on: [
-        postView(
-          result('p-7', { thread: 't-2', text: 'Rerun blind.', evidence: [file] }),
-          7,
-          'held_up',
-        ),
+        {
+          ...postView(
+            result('p-7', { thread: 't-2', text: 'Rerun blind.', evidence: [file] }),
+            7,
+            'held_up',
+          ),
+          tested: ['reproduced', 'challenged'],
+        },
         postView(result('p-8', { thread: 't-2', text: 'Not rerun.', evidence: [file] }), 8),
         postView(result('p-9', { thread: 't-2', text: 'A reading.' }), 9),
       ],
       results: 2,
       no_blind_rerun: ['p-8'],
+      rests_on: { challenged: 1, not_checked: 2 },
     });
     const closed = wall('t-2', thread('t-1', 'person', posts), none, answer);
     assert.ok(closed.includes('href="#/file/p-2/answer.md"'));
     assert.ok(
-      closed.includes('Builds on 3 posts. 1 of 2 results with files has no independent rerun.'),
+      closed.includes('Builds on 3 posts. Rests on 3 results: 1 challenged, 2 not checked.'),
     );
     assert.ok(!closed.includes('Not rerun.'));
     const open = wall('t-1', thread('t-1', 'person', posts), none, answer);
@@ -2614,15 +2674,24 @@ describe('the lab page', () => {
         '<a href="#/thread/t-2/p-8">Not rerun.</a><span class="dim"> · no independent rerun</span>',
       ),
     );
-    // Nothing under the answer can be rerun, so the page says nothing about reruns.
-    const reading = {
+    // Each result under the candidate shows how checks tested it, beside where it stands.
+    assert.ok(
+      open.includes(
+        '<span class="f-st fs-hold">Held up</span> <span class="f-st fs-ok">Reproduced</span><span class="f-st fs-hold">Challenged</span>',
+      ),
+    );
+    // A candidate that builds on no result rests on none, and the card says nothing of it.
+    const message = postView(result('p-9', { kind: 'message', thread: 't-2', text: 'A note.' }), 9);
+    const talk = {
       ...answer,
-      builds_on: answer.builds_on.slice(2),
+      builds_on: [message],
       results: 0,
       no_blind_rerun: [],
+      rests_on: null,
     };
-    const plain = wall('t-2', thread('t-1', 'person', posts), none, reading);
-    assert.ok(plain.includes('Builds on 1 post.') && !plain.includes('independent rerun'));
+    const plain = wall('t-2', thread('t-1', 'person', posts), none, talk);
+    assert.ok(plain.includes('Builds on 1 post.</p>') && !plain.includes('Rests on'));
+    assert.ok(!plain.includes('independent rerun'));
   });
 
   it('shows a Markdown file as a page of text, with no image, HTML, or script link', () => {

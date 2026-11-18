@@ -1,6 +1,7 @@
 """The agents of a lab."""
 
 import re
+from collections.abc import Iterable
 from typing import Annotated, Literal, Self
 
 from pydantic import AfterValidator, Field, StringConstraints, field_validator, model_validator
@@ -42,6 +43,12 @@ type Family = Annotated[str, AfterValidator(one_line), StringConstraints(min_len
 def same_family(one: str, other: str) -> bool:
     """Return whether two model families are the same, whatever their capitals and the spaces around them."""
     return one.strip().casefold() == other.strip().casefold()
+
+
+def one_family(families: Iterable[str]) -> str | None:
+    """Return the family when every family of `families` is the same one, or `None` when they differ or are none."""
+    given = tuple(families)
+    return given[0] if given and all(same_family(family, given[0]) for family in given) else None
 
 
 def one_line(text: str) -> str:

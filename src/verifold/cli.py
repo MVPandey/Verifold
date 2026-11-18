@@ -19,7 +19,7 @@ from pydantic import ValidationError
 from verifold import DISTRIBUTION
 from verifold.app import SERVER_FILE, ServeHooks, ServeOptions, serve, stop_lab
 from verifold.harnesses.catalog import CATALOG, HarnessEntry, available, catalog_with
-from verifold.protocol.agents import MAX_AGENTS, AgentChoice
+from verifold.protocol.agents import MAX_AGENTS, AgentChoice, one_family
 from verifold.protocol.app import StartRequest
 from verifold.protocol.settings import SettingsLevel, SetupDefaults
 from verifold.runner.errors import NoAgentFolder, NoFileManager, RunnerError
@@ -62,13 +62,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         _folder(args.agent, open_it=not args.no_browser)
         return
     try:
-        start = _start(args) if args.command == 'run' else None
+        start, catalog = _start(args) if args.command == 'run' else (None, CATALOG)
     except (ValidationError, SettingsInvalid, SetupRejected) as error:
         sys.exit(f'verifold: {error}')
     _say(f'Serving Verifold for {Path.cwd()}. Its record is .verifold/record.jsonl. Press Ctrl+C to stop.')
     try:
         links: list[str] = []
-        announce = partial(_announce, links, open_browser=not args.no_browser, plan=_plan(start) if start else None)
+        plan = _plan(start, catalog) if start else ()
+        announce = partial(_announce, links, open_browser=not args.no_browser, plan=plan)
         options = ServeOptions(desktop=not args.no_browser)
         serving = serve(Path.cwd(), start, options=options, hooks=ServeHooks(ready=announce, swept=_report))
         asyncio.run(_until_stopped(serving, partial(_open_again, links, open_browser=not args.no_browser)))
@@ -89,9 +90,11 @@ def _reported(error: BaseException) -> BaseException:
     return error
 
 
-def _start(args: argparse.Namespace) -> StartRequest:
+def _start(args: argparse.Namespace) -> tuple[StartRequest, Mapping[str, HarnessEntry]]:
     """
     Return what `verifold run` starts: the command line's choices, and the saved choices for new labs for the rest.
+
+    The harnesses that the lab can start come with it, the person's own entries among them.
 
     `verifold run` starts at once, without showing the saved choices, and a project's file can come from someone else.
     So a project's file can make the lab stricter, not looser: it can turn auto mode off, shorten the time limit,
@@ -110,16 +113,17 @@ def _start(args: argparse.Namespace) -> StartRequest:
     everywhere, here = settings_of({SettingsLevel.ALL: values[SettingsLevel.ALL]}).setup, files.setup
     # In the home folder, the project's file is the person's own file for all projects.
     own = settings_path(SettingsLevel.PROJECT, project).resolve() == settings_path(SettingsLevel.ALL, project).resolve()
+    catalog = catalog_with(files.harnesses)
     if args.agent:
         agents = tuple(_agent(value) for value in args.agent)
     else:
         saved = values[SettingsLevel.PROJECT].get('setup')
         from_project = not own and isinstance(saved, dict) and 'agents' in saved
-        agents = _saved_agents(here, catalog_with(files.harnesses), drop_modes=args.ask_me, from_project=from_project)
+        agents = _saved_agents(here, catalog, drop_modes=args.ask_me, from_project=from_project)
     shorter = _lower(everywhere.minutes, here.minutes)
     tokens = _lower(everywhere.budget_tokens, here.budget_tokens)
     dollars = _lower(everywhere.budget_dollars, here.budget_dollars)
-    return StartRequest(
+    start = StartRequest(
         question=args.question,
         agents=agents,
         auto_mode=everywhere.auto_mode and here.auto_mode and not args.ask_me,
@@ -136,6 +140,7 @@ def _start(args: argparse.Namespace) -> StartRequest:
         # A deliverable is the person's own sentence for this lab, as the question is. No settings file holds one.
         deliverables=tuple(args.deliverable or ()),
     )
+    return start, catalog
 
 
 def _lower[T: (int, float)](*values: T | None) -> T | None:
@@ -248,9 +253,25 @@ PROJECT_DROPS: Mapping[str, str | bool | tuple[()] | None] = MappingProxyType(
 NOTHING_STARTS = 'Every seat is on call, so no agent starts until a post names one'
 """What `verifold run` adds when the lab that it starts has only on-call seats."""
 
+ONE_FAMILY = (
+    'Every seat is of one model family, {family}. An independent check is a check by an agent of another family, '
+    'and without one no result can stand as held up.'
+)
+"""What `verifold run` says when every seat of the lab that it starts is of one model family, as the setup does."""
 
-def _plan(start: StartRequest) -> str:
-    # What `verifold run` starts, in words, so that the person sees the saved choices that it used.
+
+def _plan(start: StartRequest, catalog: Mapping[str, HarnessEntry]) -> tuple[str, ...]:
+    # What `verifold run` starts, in words, so that the person sees the saved choices that it used. A seat has the
+    # family that the person stated, or else its harness's. A harness that the lab cannot start states none. The
+    # desk is no part of the lab's work and checks nothing, so its family does not count.
+    working = tuple(choice for choice in start.agents if not choice.desk)
+    entries = tuple(catalog.get(choice.harness) for choice in working)
+    families = tuple(choice.family or entry.family for choice, entry in zip(working, entries, strict=True) if entry)
+    family = one_family(families) if all(entries) else None
+    return (f'Started a lab with {_started(start)}.', *((ONE_FAMILY.format(family=family),) if family else ()))
+
+
+def _started(start: StartRequest) -> str:
     agents = ', '.join(_agent_words(choice) for choice in start.agents)
     time = f'a time limit of {start.minutes} min' if start.minutes else 'no time limit'
     waits = f'. {NOTHING_STARTS}' if all(choice.on_call for choice in start.agents) else ''
@@ -351,10 +372,10 @@ def _say(text: str) -> None:
         print(text, flush=True)
 
 
-def _announce(links: list[str], link: str, *, open_browser: bool, plan: str | None = None) -> None:
+def _announce(links: list[str], link: str, *, open_browser: bool, plan: tuple[str, ...] = ()) -> None:
     # The plan shows once the server is up, so that it never comes before an error about the folder.
-    if plan:
-        _say(f'Started a lab with {plan}.')
+    for line in plan:
+        _say(line)
     _say(f'Open the lab: {link}')
     if open_browser:
         webbrowser.open(link)

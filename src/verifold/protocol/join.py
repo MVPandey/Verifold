@@ -55,6 +55,28 @@ type LabState = Literal['open', 'closing', 'closed']
 type Standing = Literal['open', 'checked', 'held_up', 'disputed', 'conceded']
 """Where a post stands after the objections, checks, and answers to it."""
 
+type Tested = Literal['reproduced', 'challenged', 'challenge_failed']
+"""
+How checks tested a result, beside where it stands. A check whose own author conceded an objection to it counts for
+none of these.
+
+- `reproduced`: a check with the method `rerun` holds. The checker ran the result's own files and got its numbers.
+- `challenged`: a check with the method `challenge` holds. The checker tested the claim on something that the
+  result's author did not use, and the claim held.
+- `challenge_failed`: a check with the method `challenge` fails. As every failed check does, it disputes the result.
+"""
+
+type Support = Literal['challenged', 'reproduced_only', 'checked_otherwise', 'not_checked', 'disputed', 'conceded']
+"""
+How a result stands under the work that builds on it: the first that applies.
+
+- `disputed` and `conceded`: the result has that standing.
+- `not_checked`: no check of it counts, and no objection to it stands. Its standing is `open`.
+- `challenged`: a challenge of it holds.
+- `reproduced_only`: a rerun of it holds, and no challenge does.
+- `checked_otherwise`: a check of it holds, and none of them is a rerun or a challenge, such as a read of its code.
+"""
+
 type ObstacleState = Literal['open', 'taken_up', 'removed']
 """
 Where an obstacle stands, by the posts that build on it. An obstacle is a `ruled_out` post in a line of work, other
@@ -305,6 +327,8 @@ class PostView(Record):
     by: Byline | None = None
     """Who wrote the post. `None` for a post of the person."""
     standing: Standing
+    tested: tuple[Tested, ...] = ()
+    """For a result: how checks tested it, beside where it stands, as `Tested` says. Empty for every other kind."""
     built_on_by: tuple[PostId, ...] = ()
     """The posts that name this one in `builds_on`, oldest first."""
     decision: RequestAnswered | None = None
@@ -369,6 +393,16 @@ does not carry the person's long posts again and again.
 """
 
 
+def _zero(count: int) -> bool:
+    """
+    Return whether a count is zero.
+
+    A count that came after its record leaves a zero out of its JSON, so a brief without what it counts is as long
+    as before.
+    """
+    return count == 0
+
+
 def _cut(text: str, keep: int) -> str:
     # The mark says that the text was cut, how long it is, and where all of it is.
     return f'{text[:keep]}… [cut: {len(text)} characters, `thread` shows all of it]'
@@ -399,7 +433,7 @@ class PostLine(Sparse):
     together.
 
     A line leaves out each field that holds nothing, as `Sparse` says: `by`, `helper`, `body`, `reply_to`,
-    `builds_on`, `for_person`, `on`, `sealed`, `up`, `down`, and `badges`. It has `seq` and no time.
+    `builds_on`, `for_person`, `on`, `sealed`, `up`, `down`, `badges`, and `tested`. It has `seq` and no time.
     """
 
     id: PostId
@@ -448,11 +482,13 @@ class PostLine(Sparse):
     """How many votes down stand on the post."""
     badges: tuple[Badge, ...] = ()
     """The badges that stand on the post, each once. A `breakthrough` is here only after its second."""
+    tested: tuple[Tested, ...] = ()
+    """For a result: how checks tested it, as `Tested` says, in that order. Empty for every other kind of post."""
     seq: int
     """The post's place in the record. A line has no time: `thread` has the time of each post."""
 
     @classmethod
-    def of(
+    def of(  # noqa: PLR0913
         cls,
         entry: Posted,
         by: Byline | None = None,
@@ -460,12 +496,14 @@ class PostLine(Sparse):
         *,
         news: bool = False,
         sealed: bool = False,
+        tested: tuple[Tested, ...] = (),
     ) -> Self:
         """
         Return the line of a post on the board, with who wrote it. `marks` are its votes up and down and its badges.
 
         With `news`, the line is one of the news, and a line of a post of the person holds its body too. With
-        `sealed`, the post is a sealed entry, which the caller gives without its content.
+        `sealed`, the post is a sealed entry, which the caller gives without its content. `tested` says how checks
+        tested a result.
         """
         post = entry.post
         text, body = line_text(post.text), ''
@@ -491,6 +529,7 @@ class PostLine(Sparse):
             up=marks[0],
             down=marks[1],
             badges=marks[2],
+            tested=tested,
             seq=entry.seq,
         )
 
@@ -580,6 +619,22 @@ class CandidateRef(Sparse):
     author: AgentId
 
 
+class RestsOn(Sparse):
+    """
+    The results that a candidate answer builds on directly, by how each stands under it, as `Support` says.
+
+    They are the posts of the kind `result` in its `builds_on`, and each one counts once. A brief is one tool result,
+    so a count of zero is left out, and the number of results is the sum of the counts.
+    """
+
+    challenged: int = 0
+    reproduced_only: int = 0
+    checked_otherwise: int = 0
+    not_checked: int = 0
+    disputed: int = 0
+    conceded: int = 0
+
+
 class CandidateLine(Sparse):
     """
     A candidate answer in a brief: its line, how many whole minutes ago it was posted, and where it stands.
@@ -593,6 +648,8 @@ class CandidateLine(Sparse):
     """Where the candidate stands as a post, such as `checked` or `disputed`. Left out while it is `open`."""
     to_earlier_question: bool = False
     """Whether the person revised the question after the candidate, so that it answers an earlier version."""
+    rests_on: RestsOn | None = None
+    """The results that the candidate builds on directly, counted by how each stands. `None` when it builds on none."""
 
 
 class ObstacleEntry(PostEntry):
@@ -639,6 +696,8 @@ class ThreadSummary(Record):
     A thread at a glance: its latest post, how its results and asks stand, and where its ideas come from and where they go.
 
     `checked` counts results that a check holds up, and `not_checked` counts results that nobody has checked yet.
+    Of the results that stand, as `Support` says, `challenged` counts the ones that a challenge held, and
+    `reproduced_only` the ones that a rerun reproduced and no challenge held.
 
     A line of work is a thread for the whole lab, other than the conversation with the coordinator and a thread of
     offers. Only a line of work has the facts from `result_minutes_ago` to `badges`, and every other thread has
@@ -655,6 +714,13 @@ class ThreadSummary(Record):
     disputed: int = 0
     checked: int = 0
     not_checked: int = 0
+    challenged: int = Field(default=0, exclude_if=_zero)
+    """How many results of the thread stand and have a challenge that holds. Left out while it is zero."""
+    reproduced_only: int = Field(default=0, exclude_if=_zero)
+    """
+    How many results of the thread stand and have a rerun that holds, and no challenge that holds. Left out while it
+    is zero.
+    """
     open_asks: int = 0
     open_calls: int = 0
     """How many calls in the thread still need an agent: nobody took them, and their callers did not withdraw them."""
@@ -1120,6 +1186,8 @@ class CandidateView(Record):
     """How many of `builds_on` are results with files, which an agent can rerun from a clean copy."""
     no_blind_rerun: tuple[PostId, ...] = ()
     """The results among them that have no check of an independent rerun. The name is from before agents took reruns."""
+    rests_on: RestsOn | None = None
+    """The results that the candidate builds on directly, counted by how each stands. `None` when it builds on none."""
     entry: PostView | None = None
     """
     The entry of a round that the proposal builds on and that its own author wrote, when it builds on one. The

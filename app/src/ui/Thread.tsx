@@ -5,7 +5,7 @@ import type { AgentView, PostView, RerunLine, ThreadView } from '../api/types.ts
 import { PERSON } from '../api/types.ts';
 import { author, authorName, called } from '../model/agents.ts';
 import { clock } from '../model/format.ts';
-import { builtOnLabel, isLong, standingChip } from '../model/posts.ts';
+import { builtOnLabel, isLong, standingChip, testedChips } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { offersReplyHint } from '../model/deliverables.ts';
 import { sideReplyHint } from '../model/side.ts';
@@ -279,6 +279,9 @@ export function Turn(
             author: agent,
           })}{' '}
           {chip ? <ChipView chip={chip} /> : null}
+          {testedChips(props.item.tested).map((mark) => (
+            <ChipView key={mark.label} chip={mark} />
+          ))}
           <Badges item={props.item} />
         </p>
         {post.builds_on

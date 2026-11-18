@@ -31,6 +31,7 @@ from verifold.society.lines import lines_of
 from verifold.society.obstacles import obstacles
 from verifold.society.reruns import reruns_wanted
 from verifold.society.standing import candidates, closing, standing
+from verifold.society.tested import rests_on
 from verifold.society.turns import before
 from verifold.society.views import (
     minutes_since,
@@ -99,6 +100,7 @@ def overview(
                 minutes_ago=minutes_since(entry.at, now) or 0,
                 standing=standing(board, entry.post.id),
                 to_earlier_question=to_earlier_question(board, entry),
+                rests_on=rests_on(board, entry),
             )
             for entry in standing_now[-MAX_NEWS:]
         ),

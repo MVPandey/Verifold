@@ -4,7 +4,13 @@ import { describe, it } from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { Api } from '../src/api/client.ts';
-import type { AgentActivity, BudgetLine, LabView } from '../src/api/types.ts';
+import type {
+  AgentActivity,
+  BudgetLine,
+  LabView,
+  SavedChoice,
+  SetupDefaults,
+} from '../src/api/types.ts';
 import { clock } from '../src/model/format.ts';
 import { addHint } from '../src/model/deliverables.ts';
 import { stateLine } from '../src/model/agents.ts';
@@ -186,5 +192,40 @@ describe('the setup of a lab', () => {
     assert.ok(html.includes('How much may the agents spend?'));
     assert.ok(html.includes('value="2000000"'));
     assert.ok(html.includes('value="12.5"'));
+  });
+
+  it('says in one line when every seat is of one model family, and what an independent check is', () => {
+    const setup = (agents: SetupDefaults['agents']): string =>
+      renderToStaticMarkup(
+        <SetupPage
+          api={{} as Api}
+          setup={{
+            folder: '~/code',
+            harnesses: HARNESSES.map((option) => ({ ...option, available: true })),
+            question: null,
+            defaults: { ...DEFAULTS, agents },
+            defaults_from: null,
+          }}
+          onStarted={() => undefined}
+          onRefresh={() => undefined}
+        />,
+      );
+    const seat = (changes: Partial<SavedChoice>): SavedChoice => ({
+      harness: 'claude-code',
+      count: 1,
+      model: null,
+      effort: null,
+      mode: null,
+      ...changes,
+    });
+    const line =
+      'Every seat is of one model family, anthropic. An independent check is a check by an agent of another family, and without one no result can stand as held up.';
+    assert.ok(setup([seat({ count: 2 })]).includes(line));
+    // A lab of on-call seats has the line too, beside the line that says that no agent starts by itself.
+    const called = setup([seat({ on_call: true })]);
+    assert.ok(called.includes(line) && called.includes('Every seat is on call'));
+    // Two families, or a seat whose family the person stated as another, say nothing.
+    assert.ok(!setup(null).includes('one model family'));
+    assert.ok(!setup([seat({ family: 'google' }), seat({})]).includes('one model family'));
   });
 });

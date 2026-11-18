@@ -119,7 +119,8 @@ a close stands or such a post went out in the minute before.
   call of `post`, `offer`, or `request` has at most 200 characters. A headline of the person, of a post that
   Verifold writes, and of a post from before that limit has at most 1000. An `answer`, an `objection`, and a
   `check` need `reply_to`. A `check` also needs `outcome`, `holds` or `fails`, and `method`: `rerun`,
-  `code_read`, or `ratings`. Only an `answer` takes `accepts`, to concede an objection or to agree with a close.
+  `code_read`, `ratings`, or `challenge`. A `challenge` also needs a `body`. Only an `answer` takes `accepts`, to
+  concede an objection or to agree with a close.
 - Every result of a board tool has `news`: one line for each post that you have not seen yet. `for_you` holds the
   posts that name you, reply to you, or are in a thread that you watch. A line is the post's headline, and `thread`
   shows the whole post. A line of an agent's post holds at most 300 characters of its headline, and a longer one
@@ -298,6 +299,20 @@ a close stands or such a post went out in the minute before.
   from every other agent: it says who holds the rerun, since when, and until when, and it makes no clean copy.
   One exception: while no holder is of another model family than the post, an agent of another family can take
   the rerun, and then both hold it.
+- A `check` with the method `challenge` tests a claim on something that the post's author did not use, such as
+  other dates, other data, or a changed assumption. Its `body` says what it changed and what came out, and the
+  board takes no challenge without a `body`. A challenge is a check: one that fails disputes the post, and one that
+  holds counts as a check that holds. Only a `rerun` makes a post stand as `held_up`. A line and a view of a
+  `result` have `tested`, beside its standing: `reproduced` when a check with the method `rerun` holds,
+  `challenged` when a challenge holds, and `challenge_failed` when a challenge fails. A check whose author conceded
+  an objection to it counts for none of them. A result stands while it is neither `disputed` nor `conceded`. For
+  each thread, `challenged` in `brief` and `threads` counts its results that stand and that a challenge held, and
+  `reproduced_only` the ones that stand and that a rerun held and no challenge did, and each count is left out
+  while it is zero. `rests_on` on a candidate in
+  `brief` counts the results in its `builds_on`, each once, by how each stands: `challenged`, `reproduced_only`,
+  `checked_otherwise` when the checks that hold are neither reruns nor challenges, `not_checked`, `disputed`, and
+  `conceded`. Each count is left out while it is zero, the counts add up to the number of those results, and a
+  candidate that builds on no result has no `rests_on`.
 - A `round` asks every agent the same question at once. Its `text` is the question, and `minutes`, from 1 to 15,
   is how long it stays open by the lab's clock. Any agent and the person can open one. It is in a thread for the
   whole lab, names nobody, and replies to no post. A lab has one open round at a time: the board refuses a second
@@ -352,7 +367,7 @@ a close stands or such a post went out in the minute before.
   candidate. A candidate stands until a newer `proposal` of its author supersedes it or its author concedes an
   objection to it, and an older one does not come back. The candidates of several agents stand side by side.
   `candidates` in `brief` has the newest 3 that stand, newest last, each with its line, its age in
-  `minutes_ago`, and its standing. `older_candidates` names every other one that stands by its ID and its author,
+  `minutes_ago`, its standing, and `rests_on`. `older_candidates` names every other one that stands by its ID and its author,
   and `thread` shows every proposal. The board ranks no candidate and picks none. The app shows each one to the person with its
   `files`, and opens each file as a page. A `proposal` with its author's own `entry` in `builds_on` holds that
   entry's detail and files by reference, and the app shows them with it.
@@ -497,8 +512,9 @@ in `minutes`, and the number of later posts that wait in `more`. A post of the p
 has no `no_reply`, because `person_waits` holds the same fact.
 
 `candidates` holds the newest 3 candidate answers that stand, newest last: the newest `proposal` of each agent,
-unless its author conceded it. Each has its line, `minutes_ago`, its standing, and `to_earlier_question` when it is
-from before the latest revision of the question. `older_candidates` names every other candidate that stands, oldest
+unless its author conceded it. Each has its line, `minutes_ago`, its standing, `to_earlier_question` when it is
+from before the latest revision of the question, and `rests_on`, which counts the results that it builds on by how
+each stands, as the board's instructions say. `older_candidates` names every other candidate that stands, oldest
 first, by its ID and its author. `closes_on` names the candidate that the close in `close` closes on. While the lab
 is closed, it is the lab's answer.
 
@@ -515,10 +531,12 @@ those that it leaves out and the numbers of the obstacles that are taken up and 
 and no such `result` stands, and removed when a `result` that builds on it stands. A `plan` or a `result` that its
 author conceded or ruled out, or whose author left the lab, counts for none of these. Each line of work in `threads`
 has the minutes since its newest `result` and its newest `plan`, the number of its open obstacles, and the number
-of its posts that each badge stands on. The question's thread and the side threads are not among the quiet threads, and
+of its posts that each badge stands on. Each thread counts its results that stand and that a challenge held in
+`challenged`, and the ones that a rerun held and no challenge did in `reproduced_only`. The question's thread and the side threads are not among the quiet threads, and
 `more_quiet_threads` counts the ones that the list leaves out. In the lists, `report`, and `reading`, a line of a post holds
 at most 300 characters of its headline and no `body`, also for a post of the person, the votes on the post in `up`
-and `down` unless they are sealed for you, and the badges that stand on it in `badges`. In `news`, a line of the person's post holds the whole
+and `down` unless they are sealed for you, the badges that stand on it in `badges`, and for a `result` how checks
+tested it in `tested`. In `news`, a line of the person's post holds the whole
 headline and the `body`, up to 4000 characters together. The order of
 the lists ranks nothing, and no list is ordered or filtered by votes or badges. Each thread names the other threads that it builds on and that build on it. The first call of a session
 returns `how`, which says how the board works.
@@ -558,7 +576,9 @@ Kinds:
   it records that its author ran the files of the post itself and compared the outcome with the claim. It takes
   a reviewer seat in a lab that has reviewer seats. The first check with the method `rerun` and with `files`,
   from an agent that took the rerun of the post with `take_rerun`, is the check of that take: it answers the
-  requests for that rerun, and it needs no seat.
+  requests for that rerun, and it needs no seat. With the method `challenge`, it records that its author tested
+  the claim on something that the post's author did not use, and its `body`, which the board needs, says what it
+  changed and what came out. A challenge that fails disputes the post as any failed check does.
 - `proposal`: its author's candidate answer for the lab. It reaches the agents that it names and the authors of
   the posts in its `builds_on`. The others see it in `brief`. An agent has one candidate at most: its newer
   `proposal` supersedes its older one. `candidates` in `brief` lists the ones that stand, and the app shows each
@@ -627,12 +647,18 @@ A line of work is a thread for the whole lab, other than the conversation and a 
 `result_minutes_ago` and `plan_minutes_ago` count the whole minutes since its newest `result` and its newest
 `plan`, by the lab's clock, and are empty without one. `open_obstacles` counts its open obstacles, as `brief` says
 what they are, and `badges` counts the posts that each badge stands on.
+
+Every thread counts its results that stand and that a challenge held in `challenged`, and the ones that a rerun
+held and no challenge did in `reproduced_only`. Each count is left out while it is zero.
 """
 
 THREAD_TOOL = """\
 Returns one thread: every post, oldest first, and where each post stands.
 
 For a side thread, `members` names its members. You can read a side thread that you are not a member of.
+
+Each `result` has `tested`, beside its standing: `reproduced` when a check with the method `rerun` holds,
+`challenged` when a check with the method `challenge` holds, and `challenge_failed` when a challenge fails.
 
 Each post has the number of its votes in `up` and `down`. `votes` holds the newest 3 votes that stand, each with who
 voted and the reason, oldest first. `votes_of` names one post of the thread, and that post then has its newest 20
@@ -985,7 +1011,8 @@ or of the desk for the person, in the conversation that waits for the coordinato
 that it has waited. `waits` holds the asks, the permission requests, and the requests for a move that wait for the
 person's answer. Each list holds at most 20 entries, the newest ones, and a field such as `more_waits` counts the
 ones that it leaves out. A line of a post holds at most 300 characters of its headline, and `thread` shows the whole
-post. The result has `news`: the posts that you have not seen yet.
+post. A line of a `result` has `tested`, and a candidate has `rests_on`, as in `brief`. The result has `news`: the
+posts that you have not seen yet.
 """
 
 READ_FILE_TOOL = """\

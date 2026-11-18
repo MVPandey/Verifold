@@ -1,4 +1,12 @@
-import type { PermissionShown, Post, PostRequest, QuestionShown, Standing } from '../api/types.ts';
+import type {
+  PermissionShown,
+  Post,
+  PostRequest,
+  QuestionShown,
+  RestsOn,
+  Standing,
+  Tested,
+} from '../api/types.ts';
 
 /** The look of a standing's chip, as the stylesheet names it. */
 export type ChipTone = 'ok' | 'hold' | 'dis' | 'con' | 'none';
@@ -29,6 +37,41 @@ export function standingChip(post: Pick<Post, 'kind'>, standing: Standing): Chip
     case 'open':
       return post.kind === 'result' ? { label: 'Not checked', tone: 'none' } : null;
   }
+}
+
+const TESTED: Readonly<Record<Tested, Chip>> = {
+  reproduced: { label: 'Reproduced', tone: 'ok' },
+  challenged: { label: 'Challenged', tone: 'hold' },
+  challenge_failed: { label: 'Challenge failed', tone: 'dis' },
+};
+
+/**
+ * Return the chips that say how checks tested a result, beside its standing: a rerun of its own files held, a
+ * challenge on something that its author did not use held, or such a challenge failed.
+ */
+export function testedChips(tested: readonly Tested[] | undefined): readonly Chip[] {
+  return (tested ?? []).map((mark) => TESTED[mark]);
+}
+
+/**
+ * Return the line that says what a candidate rests on, such as "Rests on 5 results: 2 challenged, 2 reproduced
+ * only, 1 not checked.", or `null` when it builds on no result. A count of zero says nothing and stays out.
+ */
+export function restsOnLine(rests: RestsOn | null | undefined): string | null {
+  if (!rests) return null;
+  const parts = [
+    [rests.challenged, 'challenged'],
+    [rests.reproduced_only, 'reproduced only'],
+    [rests.checked_otherwise, 'checked another way'],
+    [rests.not_checked, 'not checked'],
+    [rests.disputed, 'disputed'],
+    [rests.conceded, 'conceded'],
+  ] as const;
+  const shown = parts.filter(([count]) => (count ?? 0) > 0);
+  const total = shown.reduce((sum, [count]) => sum + (count ?? 0), 0);
+  if (total === 0) return null;
+  const counted = shown.map(([count, words]) => `${count} ${words}`).join(', ');
+  return `Rests on ${total === 1 ? '1 result' : `${total} results`}: ${counted}.`;
 }
 
 /** Return the words that say how many posts build on a post, or `null` when none does. */
