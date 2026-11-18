@@ -458,8 +458,9 @@ a close stands or such a post went out in the minute before.
   the lab is open, closing, or closed, and who agreed.
 - A `close` names the candidate that it closes on in `candidate`: a candidate that stands when the close is
   posted. While candidates stand, the board takes no close without one. While none stands, a close names none.
-  `closes_on` in `brief` names the candidate that the close in `close` closes on. While the lab is closed, that
-  candidate is the lab's answer. A close that names a candidate stands only while that candidate stands: a newer
+  While the lab has no `reading`, the board takes no close. `closes_on` in `brief` names the candidate that the
+  close in `close` closes on. While the lab is closed, that candidate is the lab's answer. A close that names a
+  candidate stands only while that candidate stands: a newer
   `proposal` of the candidate's author, or its author's concession of an objection to it, ends the close, and the
   lab is open again as after any close that fell. A close in a record from before this field names none, and it
   closes on the newest candidate that stood when it was posted.
@@ -492,6 +493,11 @@ a close stands or such a post went out in the minute before.
   the desk chat that it rests on: a post of the person, in the desk chat, from the last 60 minutes by the lab's
   clock. Only such a post backs an action of the desk. No post of an agent does, whatever its text says, and
   neither does a post of the person in another thread. The record keeps `on` with the action.
+- The desk's news is small, so that the desk answers at once in a lab of any size. It holds the person's posts in
+  the desk chat in `for_you`, the replies to the desk's posts for the person in `others`, and in `lab` whether the
+  lab is closed, whether its agents stop and why, its time, and its budget. It holds no other post, round, rerun,
+  vote, or badge, and the desk's `brief` holds no list of the lab's work. `overview`, `threads`, and `thread` read
+  the rest of the lab.
 - A halt rests no desk. While the lab is out of time, at its budget or its disk limit, or closed, a post of the
   person in the desk chat still starts a turn of the desk, and a turn of the desk runs on when the lab halts. The
   desk's turns count toward what the lab spent, as every turn does.
@@ -524,6 +530,11 @@ a turn that runs from a turn that Verifold lost when it stopped, so the count ca
 agent that joined with an invitation has no turns in the record. `alarms_waiting` counts the agents with an alarm
 that waits. `no_alarm` is empty while an alarm waits for you. When none waits, it says what
 starts your next turn as the lab stands.
+
+The desk's brief holds your own line and notes, the question, the lab's state, time, budget, limits, and disk, the
+close, the report, the reading, the open round, and your news, and leaves out the lists of the lab's work: `agents`,
+`candidates`, `deliverables`, the threads, and the lists of posts. `overview` has them as the person's app shows
+them, and `threads` and `thread` read the board.
 
 `report` is the newest report of any agent, as a line of a post, in whatever thread it is. `report_minutes_ago`
 says how many whole minutes ago it was posted. Both are empty while the lab has no report.
@@ -632,8 +643,8 @@ Kinds:
   more than half of its agents stand behind the newest close and no objection to it stands. A `ruled_out`
   from its author that replies to it withdraws it, and a new post from the person opens the lab again.
   `candidate` names the candidate answer that it closes on, one that stands. While candidates stand, the board
-  takes no close without one. While the lab is closed, that candidate is the lab's answer. The close stands only
-  while that candidate stands.
+  takes no close without one. While the lab has no `reading`, the board takes no close. While the lab is closed,
+  that candidate is the lab's answer. The close stands only while that candidate stands.
 - `call`: work that needs an agent, such as a line that nobody builds, a part that its author hands over, or more
   hands for a line. With no `mentions`, in a thread for the whole lab, it reaches every agent. A `plan` that
   replies to a call takes it. A `ruled_out` from the call's author that replies to it withdraws it.
@@ -1090,8 +1101,8 @@ or of the desk for the person, in the conversation that waits for the coordinato
 that it has waited. `waits` holds the asks, the permission requests, and the requests for a move that wait for the
 person's answer. Each list holds at most 20 entries, the newest ones, and a field such as `more_waits` counts the
 ones that it leaves out. A line of a post holds at most 300 characters of its headline, and `thread` shows the whole
-post. A line of a `result` has `tested`, and a candidate has `rests_on`, as in `brief`. The result has `news`: the
-posts that you have not seen yet.
+post. A line of a `result` has `tested`, and a candidate has `rests_on`, as in `brief`. The result has `news`, the
+desk's small news as the board's instructions say.
 """
 
 READ_FILE_TOOL = """\

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { ApiError, NO_CANDIDATES, createApi } from '../src/api/client.ts';
+import { ApiError, NO_BUDGET, NO_CANDIDATES, NO_DESK, createApi } from '../src/api/client.ts';
 import { parseChange } from '../src/api/events.ts';
 import { takeToken } from '../src/api/token.ts';
 
@@ -187,6 +187,19 @@ describe('the API client', () => {
     assert.deepEqual(await none.candidates(), NO_CANDIDATES);
     assert.deepEqual(await before.candidates(), NO_CANDIDATES);
     await assert.rejects(broken.candidates(), ApiError);
+  });
+
+  it('reads a lab and a desk from a server from before budgets, disk limits, and the desk', async () => {
+    const lab = '{"agents": [], "settings": {"version": 1}}';
+    const read = await createApi('secret', serverThatAnswers(200, lab).fetcher).lab();
+    const before = createApi('secret', serverThatAnswers(404, '{"detail": "Not Found"}').fetcher);
+    const broken = createApi('secret', serverThatAnswers(500, 'Internal Server Error').fetcher);
+
+    // The panel of the lab's time reads these, and the page must still load.
+    assert.deepEqual([read.budget, read.limit, read.disk], [NO_BUDGET, null, null]);
+    assert.deepEqual(read.settings.disk, { limit_gb: 0 });
+    assert.deepEqual(await before.desk(), NO_DESK);
+    await assert.rejects(broken.desk(), ApiError);
   });
 
   it('reads the lab’s reading of the question, and none from a server from before the reading route', async () => {

@@ -99,6 +99,9 @@ class Host:
             raise SettingsUnwritable("Can't write .verifold/settings.json: No space left on device")
         return self.settings()
 
+    async def measure_disk(self) -> None:
+        """Measure nothing: each test gives the lab its measure."""
+
     def norms(self) -> NormsView:
         if self.norms_text == 'a link':
             raise NormsUnreadable('.verifold/LAB.md is a link. Verifold reads only a regular file here.')
@@ -340,10 +343,11 @@ async def test_the_lab_view_shows_each_agents_activity_and_cost(
     assert (bo['role'], bo['status'], bo['thread']) == ('', '', None)
     assert (view['state'], view['close'], view['close_agreed']) == ('open', None, 0)
 
+    await lab.post(PostRequest(kind='reading', text='The lab reads the question as asked.', thread='t-1'), 'ada')
     await lab.post(PostRequest(kind='close', text='The answer stands.', thread='t-1'), 'ada')
-    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-2', accepts=True), 'bo')
+    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-3', accepts=True), 'bo')
     done = (await client.get('/lab')).json()
-    assert (done['state'], done['close']['id'], done['close_agreed']) == ('closed', 'p-2', 1)
+    assert (done['state'], done['close']['id'], done['close_agreed']) == ('closed', 'p-3', 1)
 
 
 async def test_the_lab_view_says_when_an_agent_ended_its_turn_and_when_its_alarm_rings(
@@ -369,8 +373,9 @@ async def test_the_lab_view_says_when_an_agent_ended_its_turn_and_when_its_alarm
     assert held == {'minutes': 10, 'quiet': False, 'rings_at': None}
     await lab.set_time_left(timedelta(hours=1))
     assert (await views())[0][1] == rings
+    await lab.post(PostRequest(kind='reading', text='The lab reads the question as asked.', thread='t-1'), 'ada')
     await lab.post(PostRequest(kind='close', text='The answer stands.', thread='t-1'), 'ada')
-    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-2', accepts=True), 'bo')
+    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-3', accepts=True), 'bo')
     assert (await views())[0][1] is None
 
 
@@ -841,6 +846,7 @@ async def test_the_lab_view_counts_a_close_among_the_agents_that_keep_their_word
     client: httpx2.AsyncClient, lab: Lab
 ) -> None:
     await lab.post(PostRequest(kind='ask', text='May I use the GPU?', thread='t-1', mentions=('person',)), 'bo')
+    await lab.post(PostRequest(kind='reading', text='The lab reads the question as asked.', thread='t-1'), 'ada')
     await lab.post(PostRequest(kind='close', text='The answer stands.', thread='t-1'), 'ada')
     before = (await client.get('/lab')).json()
 

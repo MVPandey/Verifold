@@ -121,6 +121,7 @@ WITH_RECORD = '; 1 deliverable: the record of findings.'
 """How the line of what `verifold run` started ends for such a lab."""
 
 
+@pytest.mark.usefixtures('project')
 def test_run_takes_the_facts_of_a_seat_after_a_comma_and_a_harness_more_than_once(
     serves: list[StartRequest | None], capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -211,6 +212,7 @@ def test_run_refuses_a_fact_of_a_seat_that_it_does_not_know(agent: str) -> None:
         main(['run', 'Does it hold?', '--agent', agent])
 
 
+@pytest.mark.usefixtures('project')
 def test_run_takes_a_desk_after_a_comma_and_refuses_a_second_one_or_a_desk_with_another_seat(
     serves: list[StartRequest | None], capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -307,6 +309,7 @@ def test_run_refuses_a_model_id_that_is_not_one_printable_line() -> None:
         main(['run', 'Does it hold?', '--agent', 'codex:gpt\u202e6'])
 
 
+@pytest.mark.usefixtures('project')
 def test_run_takes_grants_for_every_agent(serves: list[StartRequest | None]) -> None:
     main(['run', 'Does it hold?', '--agent', 'codex', '--allow', './gpu', '--allow', 'make test'])
 

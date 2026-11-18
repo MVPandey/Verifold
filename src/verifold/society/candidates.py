@@ -14,7 +14,7 @@ candidate that stood when it was posted, which is what such a lab showed as its 
 
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import PostId
-from verifold.protocol.posts import Close, Entry, Proposal
+from verifold.protocol.posts import Close, Entry, Proposal, Reading
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 from verifold.society.standing import candidates
@@ -103,6 +103,30 @@ def check_names_candidate(board: Board, close: Close) -> None:
     """
     if close.candidate is None and candidates(board):
         raise RejectedEvent(f'A close names the candidate that it closes on, in `candidate`. {_standing_line(board)}')
+
+
+NO_READING_CLOSE = (
+    "The lab has no reading of the question yet, so the board takes no close. A close comes after the lab's "
+    '`reading`: the agent that holds the coordinator seat posts it, or, while nobody holds the seat, any agent '
+    'that is not on call.'
+)
+"""Why the board refuses a new close in a lab without a reading."""
+
+
+def check_read(board: Board) -> None:
+    """
+    Check that the lab has its reading of the question before a new close.
+
+    The person judges the lab's answer against how the lab read the question, so a close comes after a reading. A
+    record from before readings holds closes without one, so the board checks this for a new close only, and not as
+    a rule of the record.
+
+    Raises:
+        RejectedEvent: The lab has no reading.
+
+    """
+    if not any(isinstance(entry.post, Reading) for entry in board.posts):
+        raise RejectedEvent(NO_READING_CLOSE)
 
 
 def _standing_line(board: Board) -> str:

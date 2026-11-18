@@ -2,8 +2,7 @@ import type { AgentView, DeskAction, DeskView, PostView } from '../api/types.ts'
 import { authorName } from './agents.ts';
 import { clock } from './format.ts';
 
-/** The panel for the desk has no view before a lab starts. */
-export const NO_DESK: DeskView = { desk: null, thread: null, actions: [] };
+export { NO_DESK } from '../api/client.ts';
 
 /** Return the agent that holds the desk seat and is in the lab, or `null`. */
 export function deskOf(agents: readonly AgentView[]): AgentView | null {

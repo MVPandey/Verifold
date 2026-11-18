@@ -27,7 +27,7 @@ from verifold.protocol.agents import (
     ValueId,
 )
 from verifold.protocol.deliverables import DeliverableLine
-from verifold.protocol.events import Limit, Note, Posted, Question, RequestAnswered, RoundEnd
+from verifold.protocol.events import Halt, Limit, Note, Posted, Question, RequestAnswered, RoundEnd
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.moves import LabSetting, Move
 from verifold.protocol.posts import (
@@ -881,6 +881,39 @@ class RerunLine(Record):
     """Who can take the rerun now by the reviewer seats. A lease in `held_by` keeps out more agents."""
 
 
+class BudgetLine(Record):
+    """
+    The lab's budget, what the lab spent, and what is left, from the ends of its turns in the record.
+
+    In tokens, the lab spent the input and the output tokens that the harnesses reported, cached input tokens among
+    them. In dollars, it spent the costs that the harnesses reported: a turn of a harness that reports no cost adds
+    nothing. A turn reports what it spent when it ends, and a turn that Verifold cancels reports no tokens.
+    """
+
+    tokens: int | None = None
+    """The budget in tokens. `None` means no budget in tokens."""
+    dollars: float | None = None
+    """The budget in US dollars. `None` means no budget in dollars."""
+    spent_tokens: int = 0
+    spent_dollars: float = 0
+    tokens_left: int | None = None
+    """The tokens that the budget has left, zero once the lab spent it. `None` without a budget in tokens."""
+    dollars_left: float | None = None
+    """The dollars that the budget has left, zero once the lab spent it. `None` without a budget in dollars."""
+
+
+class LabFacts(Record):
+    """The lab as a whole, in the desk's news: whether it is closed, whether its agents stop and why, its time, and its budget."""
+
+    state: LabState = 'open'
+    halted: Halt | None = None
+    """Why the agents of the lab's work stop now: `time`, or the limit that the lab reached. `None` while they do not."""
+    ends_at: AwareDatetime | None = None
+    minutes_left: float | None = None
+    """How many minutes the lab has left. Zero when it is out of time, and `None` without a time limit."""
+    budget: BudgetLine = BudgetLine()
+
+
 class News(Record):
     """
     The posts that an agent has not seen yet, oldest first, with the agent's alarm.
@@ -891,6 +924,10 @@ class News(Record):
     at most `MAX_NEWS` of them. When more wait, the news stops at the last one that it holds, and the next result
     brings the others. `others` holds the newest of the remaining posts. A line is a post's headline, and a line of
     a post of the person has its body too. `thread` shows the whole post.
+
+    The desk's news is small, so that the desk answers at once in a lab of any size. `for_you` holds the person's
+    posts in the desk chat, `others` the replies to the desk's posts for the person, and `lab` the lab as a whole.
+    It holds no other post and no other note: `overview`, `threads`, and `thread` read the rest of the lab.
     """
 
     seq: int
@@ -944,6 +981,11 @@ class News(Record):
     for its reply. It names the oldest one with the minutes that it has waited, and it counts the later ones. Every
     result carries the line while such a post waits, and the line wakes nobody. It is empty while no post waits,
     for every other agent, and in the news of `brief`, because `person_waits` holds the same fact there.
+    """
+    lab: LabFacts | None = Field(default=None, exclude_if=unset)
+    """
+    For the desk alone: the lab as a whole, whether it is closed, whether its agents stop and why, its time, and its
+    budget. Left out for every other agent, whose `brief` has these facts.
     """
 
 
@@ -1290,27 +1332,6 @@ class ProfileResult(Record):
     """How many reviewer seats the lab has. With zero, a check and a rerun request take no seat."""
     reviewer_seats_free: int = 0
     news: News | None = None
-
-
-class BudgetLine(Record):
-    """
-    The lab's budget, what the lab spent, and what is left, from the ends of its turns in the record.
-
-    In tokens, the lab spent the input and the output tokens that the harnesses reported, cached input tokens among
-    them. In dollars, it spent the costs that the harnesses reported: a turn of a harness that reports no cost adds
-    nothing. A turn reports what it spent when it ends, and a turn that Verifold cancels reports no tokens.
-    """
-
-    tokens: int | None = None
-    """The budget in tokens. `None` means no budget in tokens."""
-    dollars: float | None = None
-    """The budget in US dollars. `None` means no budget in dollars."""
-    spent_tokens: int = 0
-    spent_dollars: float = 0
-    tokens_left: int | None = None
-    """The tokens that the budget has left, zero once the lab spent it. `None` without a budget in tokens."""
-    dollars_left: float | None = None
-    """The dollars that the budget has left, zero once the lab spent it. `None` without a budget in dollars."""
 
 
 class DiskLine(Record):
