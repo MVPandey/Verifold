@@ -40,11 +40,12 @@ class Thread(Record):
     A post in a side thread reaches the members that watch it, and not every agent. The person and every agent
     that reads the board can read it. Any other thread is a thread for the whole lab.
     """
-    carries: Carries | None = None
+    carries: Carries | None = Field(default=None, exclude_if=unset)
     """
     For the thread that Verifold opened for an agent's requests of one kind: that kind. Only the runner sets it, so
     an agent's own thread with a like title never gets a tracked ask. `None` for any other thread, and in a record
-    from before Verifold kept it.
+    from before Verifold kept it. A thread without it leaves it out of its JSON, so that a brief of many threads
+    has room for its other facts.
     """
     conversation: bool = False
     """

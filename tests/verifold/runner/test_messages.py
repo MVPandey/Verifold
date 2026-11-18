@@ -112,7 +112,7 @@ def test_the_lab_norms_are_plain_text_for_one_read_and_the_doorbell_is_one_line(
     assert '`' not in NORMS_TEMPLATE
     # Each norm has its reason and what it looks like in practice, so the file is longer than a list of rules.
     # An agent still reads it whole at the start of its work.
-    assert len(NORMS_TEMPLATE) < 22_500
+    assert len(NORMS_TEMPLATE) < 23_500
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -306,6 +306,36 @@ def test_the_lab_norms_hold_what_came_out_of_python_and_the_norm_on_reruns() -> 
         'Ask the person only about money, scope, access, or time, and about a norm in this file that blocks the goal.',
     ):
         assert norm in NORMS_TEMPLATE
+
+
+def test_the_lab_norms_tell_reproducing_a_result_from_challenging_it_and_name_a_round_on_what_to_drop() -> None:
+    evidence = NORMS_TEMPLATE.split('## Evidence')[1].split('\n## ')[0]
+    rounds = NORMS_TEMPLATE.split('## Rounds')[1].split('\n## ')[0]
+    # In a lab of one model family, 121 checks were reruns that matched, and every claim was a case picked with
+    # hindsight. In a lab of two families, 13 of 49 checks failed and found two errors.
+    for norm in (
+        'Reproducing a result and challenging it are different checks.',
+        'The person wants to know which results were tested beyond the data that produced them.',
+        'A rerun that matches shows that the script gives the same numbers again.',
+        (
+            'It says nothing about whether the claim holds on other dates, on other data, or without a choice that '
+            'was made after the outcome was known.'
+        ),
+        (
+            'So when a claim reaches beyond its own data, challenge it: test it on something that its author did not '
+            'use, and say in the challenge what you changed and what came out.'
+        ),
+        'A challenge that fails is among the most useful posts in a lab.',
+        'Before a candidate goes to a close, the results that it rests on should have been challenged.',
+    ):
+        assert norm in evidence
+    # The review of the reading is in the section on strategy, so the section on rounds points to it.
+    assert (
+        'The coordinator opens one at each review of the reading, as the section on strategy and the seats says'
+        in rounds
+    )
+    assert 'a round that asks which line each agent would drop, and why, are examples.' in rounds
+    assert 'about every hour' not in NORMS_TEMPLATE
 
 
 def test_the_lab_norms_say_how_the_person_follows_the_lab_how_a_post_reads_and_how_many_reruns_are_enough() -> None:

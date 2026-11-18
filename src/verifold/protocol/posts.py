@@ -12,9 +12,9 @@ question at once, and an entry is an agent's answer to a round. A new kind is on
 
 from collections.abc import Callable
 from pathlib import PurePosixPath
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import AfterValidator, Field, StringConstraints, WithJsonSchema
+from pydantic import AfterValidator, Field, StringConstraints, WithJsonSchema, model_validator
 
 from verifold.protocol.ids import AgentId, CommitId, DeliverableId, PostId, ThreadId
 from verifold.protocol.moves import Move
@@ -76,7 +76,14 @@ type PostKind = Literal[
 ]
 """The values of `kind` across the `Post` union."""
 type Outcome = Literal['holds', 'fails']
-type CheckMethod = Literal['rerun', 'code_read', 'ratings']
+type CheckMethod = Literal['rerun', 'code_read', 'ratings', 'challenge']
+"""
+How a check tested its post. `rerun`: the checker ran the post's own files and compared the outcome with the claim.
+`code_read`: it read the code. `ratings`: it rated the post. `challenge`: it tested the claim on something that the
+post's author did not use, such as other dates, other data, or a changed assumption, and its body says what it
+changed and what came out. A rerun that holds shows that the result is reproduced. A challenge that holds shows that
+the claim held beyond the data that produced it.
+"""
 type Helper = Annotated[str, StringConstraints(strip_whitespace=True, max_length=40)]
 """The name of a helper that an agent's harness started, such as a subagent."""
 type HarnessRequest = Literal['permission', 'question']
@@ -303,6 +310,17 @@ class Check(PostBase):
     from its own folder, and the mark does not prove how they were made. Verifold sets it, and no agent can. `None`
     for any other check.
     """
+
+    @model_validator(mode='after')
+    def _a_challenge_says_what_it_changed(self) -> Self:
+        # A challenge is worth only what it says it changed, so the record takes none without that. No record from
+        # before the method holds one.
+        if self.method == 'challenge' and not self.body.strip():
+            raise ValueError(
+                'A check with the method `challenge` needs a `body`: what it changed from the post, such as other '
+                'dates, other data, or another assumption, and what came out.'
+            )
+        return self
 
 
 class RuledOut(PostBase):

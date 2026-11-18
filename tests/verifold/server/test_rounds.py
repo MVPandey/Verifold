@@ -272,10 +272,13 @@ def test_the_norms_say_when_to_open_a_round_and_how_to_enter_it() -> None:
             'the others think. Agents that read each other first end up with the same few ideas.'
         ),
         (
-            'Open a round when the lab needs every view at once. The coordinator opens one about every hour: what '
-            "did you find, what is your best bet, what would you drop. Any agent opens a wild round when the lab's "
-            'lines are all of one kind: one idea from outside the kinds that the lab has tried, with no judgement of '
-            'it until the round closes.'
+            'Open a round when the lab needs every view at once. The coordinator opens one at each review of the '
+            "reading, as the section on strategy and the seats says, and when the lab's lines stall. A round that "
+            'asks what each agent found and what its best bet is, and a round that asks which line each agent would '
+            'drop, and why, are examples. Few agents say in a thread that a line of the lab is not worth its hands, '
+            "and the sealed entries show where those doubts agree. Any agent opens a wild round when the lab's lines "
+            'are all of one kind: one idea from outside the kinds that the lab has tried, with no judgement of it '
+            'until the round closes.'
         ),
         (
             "Write your entry from your own work and before you look for hints of the others' entries. After the "

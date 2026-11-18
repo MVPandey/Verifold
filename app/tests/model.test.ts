@@ -41,8 +41,10 @@ import {
   personMessage,
   clip,
   isLong,
+  restsOnLine,
   split,
   standingChip,
+  testedChips,
   titleOf,
 } from '../src/model/posts.ts';
 import { crossedLine, crossLines } from '../src/model/crossings.ts';
@@ -103,6 +105,7 @@ import {
   firstSeats,
   needsModel,
   newSeat,
+  oneFamily,
   removeSeat,
   seatChoice,
   withSeat,
@@ -312,6 +315,34 @@ describe('posts', () => {
     assert.equal(lookalike.text.startsWith('Permission needed:'), true);
     assert.equal(harnessRequest(lookalike), null);
     assert.equal(harnessRequest(ask('p-1', 'agent-1', [], 'question')), 'question');
+  });
+
+  it('names how checks tested a result beside its standing, in short words', () => {
+    assert.deepEqual(testedChips(undefined), []);
+    assert.deepEqual(
+      testedChips(['reproduced', 'challenged', 'challenge_failed']).map((chip) => chip.label),
+      ['Reproduced', 'Challenged', 'Challenge failed'],
+    );
+    assert.deepEqual(testedChips(['challenge_failed']), [
+      { label: 'Challenge failed', tone: 'dis' },
+    ]);
+  });
+
+  it('says what a candidate rests on, and nothing when it builds on no result', () => {
+    assert.equal(
+      restsOnLine({ challenged: 2, reproduced_only: 2, not_checked: 1 }),
+      'Rests on 5 results: 2 challenged, 2 reproduced only, 1 not checked.',
+    );
+    // Each kind of result has its words, and a count of zero says nothing.
+    assert.equal(
+      restsOnLine({ checked_otherwise: 1, disputed: 2, conceded: 1 }),
+      'Rests on 4 results: 1 checked another way, 2 disputed, 1 conceded.',
+    );
+    assert.equal(restsOnLine({ not_checked: 1 }), 'Rests on 1 result: 1 not checked.');
+    assert.equal(restsOnLine({ reproduced_only: 2 }), 'Rests on 2 results: 2 reproduced only.');
+    assert.equal(restsOnLine(null), null);
+    assert.equal(restsOnLine(undefined), null);
+    assert.equal(restsOnLine({}), null);
   });
 });
 
@@ -713,6 +744,7 @@ describe('turns', () => {
         line({ kind: 'check', method: 'rerun', outcome: 'holds' }),
         line({ kind: 'check', method: 'code_read', outcome: 'fails' }),
         line({ kind: 'check', method: 'ratings', outcome: 'holds' }),
+        line({ kind: 'check', method: 'challenge', outcome: 'fails' }),
         line({ kind: 'message' }),
         line({ kind: 'message', reply_to: null }, null),
         line({ kind: 'report', reply_to: null }, null),
@@ -735,6 +767,7 @@ describe('turns', () => {
         'reran agent-2’s result: it holds',
         'read the code of agent-2’s result: it fails',
         'rated agent-2’s result: it holds',
+        'challenged agent-2’s result: it fails',
         'replied to agent-2',
         'posted a message',
         'reported to you',
@@ -1404,6 +1437,28 @@ describe('setup', () => {
     // A seat with no agent starts nothing, so it does not count.
     assert.equal(allOnCall([called, newSeat('claude-code', 0)]), true);
     assert.equal(allOnCall([newSeat('claude-code', 0)]), false);
+  });
+
+  it('names the one model family of a lab whose seats are all of it', () => {
+    const claude = newSeat('claude-code');
+    assert.equal(oneFamily([claude, { ...claude, onCall: true }], HARNESSES), 'anthropic');
+    assert.equal(oneFamily([claude, newSeat('codex')], HARNESSES), null);
+    // A seat with no agent starts nothing, and a lab of on-call seats is still of their family.
+    assert.equal(oneFamily([claude, newSeat('codex', 0)], HARNESSES), 'anthropic');
+    assert.equal(oneFamily([{ ...newSeat('codex'), onCall: true }], HARNESSES), 'openai');
+    // A family that the person states is the seat's, whatever its capitals and spaces.
+    assert.equal(
+      oneFamily([claude, { ...newSeat('codex'), family: ' Anthropic ' }], HARNESSES),
+      'anthropic',
+    );
+    assert.equal(
+      oneFamily([{ ...claude, family: 'google' }, newSeat('claude-code')], HARNESSES),
+      null,
+    );
+    assert.equal(oneFamily([newSeat('claude-code', 0)], HARNESSES), null);
+    // The desk checks nothing, so a desk of another family makes no independent check.
+    assert.equal(oneFamily([claude, { ...newSeat('codex'), desk: true }], HARNESSES), 'anthropic');
+    assert.equal(oneFamily([newSeat('unknown-harness')], HARNESSES), null);
   });
 
   it('lets the person type a model that the harness does not list', () => {

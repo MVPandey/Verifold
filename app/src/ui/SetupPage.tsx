@@ -13,6 +13,7 @@ import {
   initials,
   modelSummary,
   needsModel,
+  oneFamily,
   removeSeat,
   setupChoices,
   startRequest,
@@ -62,6 +63,7 @@ export function SetupPage(props: {
   const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const total = agentCount(picks);
+  const family = oneFamily(picks, props.setup.harnesses);
   // A saved time limit that isn't one of the usual ones gets a button of its own.
   const [times] = useState<readonly TimeChoice[]>(() =>
     TIMES.some((time) => time.minutes === defaults.minutes)
@@ -247,6 +249,12 @@ export function SetupPage(props: {
         <p className="quiet">
           Every seat is on call, so no agent starts until a post names one. Your first post in the
           lab can do that.
+        </p>
+      ) : null}
+      {family ? (
+        <p className="quiet">
+          Every seat is of one model family, {family}. An independent check is a check by an agent
+          of another family, and without one no result can stand as held up.
         </p>
       ) : null}
       <p className="savechoices">

@@ -79,6 +79,7 @@ from verifold.society.reruns import rerun_checks, reruns_wanted
 from verifold.society.reviewers import free_seats, holders, seats
 from verifold.society.rounds import closes_at, entries, for_reader, open_round, waits_for
 from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing, waits_for_person
+from verifold.society.tested import rests_on, support
 from verifold.society.turns import before
 from verifold.society.votes import marks
 
@@ -248,6 +249,7 @@ def _summary(  # noqa: PLR0913
 ) -> ThreadSummary:
     entries = tuple(entry for entry in board.posts if entry.post.thread == opened.thread.id)
     results = tuple(standing(board, entry.post.id) for entry in entries if isinstance(entry.post, Result))
+    supports = tuple(support(board, entry.post.id) for entry in entries if isinstance(entry.post, Result))
     latest = entries[-1] if entries else None
     incoming = tuple((source, built) for source, built in crossed if built.post.thread == opened.thread.id)
     # The facts of a line of work. Every other thread has them empty.
@@ -264,6 +266,8 @@ def _summary(  # noqa: PLR0913
         disputed=results.count('disputed'),
         checked=sum(state in {'checked', 'held_up'} for state in results),
         not_checked=results.count('open'),
+        challenged=supports.count('challenged'),
+        reproduced_only=supports.count('reproduced_only'),
         # Nobody waits for the answer to an ask whose author left.
         open_asks=sum(
             isinstance(entry.post, Ask) and not is_answered(board, entry.post.id) and not board.gone(entry.post.author)
@@ -526,6 +530,7 @@ def brief(  # noqa: PLR0913
                 minutes_ago=minutes_since(entry.at, now) or 0,
                 standing=standing(board, entry.post.id),
                 to_earlier_question=to_earlier_question(board, entry),
+                rests_on=rests_on(board, entry),
             )
             for entry in shown
         ),
@@ -777,7 +782,11 @@ def candidates_view(board: Board) -> CandidatesView:
 
 
 def candidate_view(board: Board, entry: Posted) -> CandidateView:
-    """Return a candidate answer for the person with the posts that it builds on and its author's own entry."""
+    """
+    Return a candidate answer for the person with the posts that it builds on and its author's own entry.
+
+    The results among those posts are counted by how each stands.
+    """
     under = tuple(post for post_id in entry.post.builds_on if (post := board.post(post_id)))
     results = tuple(post for post in under if _can_rerun(post))
     entered = own_entry(board, entry)
@@ -787,6 +796,7 @@ def candidate_view(board: Board, entry: Posted) -> CandidateView:
         builds_on=tuple(post_view(board, post, PERSON) for post in under),
         results=len(results),
         no_blind_rerun=tuple(post.post.id for post in _not_rerun(board, results)),
+        rests_on=rests_on(board, entry),
         entry=post_view(board, entered, PERSON) if entered else None,
     )
 

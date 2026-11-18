@@ -3,17 +3,22 @@ import type { Obstacle, ObstacleState, ThreadSummary } from '../api/types.ts';
 import { ago } from './format.ts';
 
 /**
- * Return the facts of a thread's card: how long ago the newest result of its line came, and how many of its
- * obstacles are open when any are. A side thread, the conversation, and a thread of offers are no line of work,
- * so they have none.
+ * Return the facts of a thread's card: how long ago the newest result of its line came, how many of its results
+ * that stand were challenged and how many only reproduced, when any were, and how many of its obstacles are open
+ * when any are. A side thread, the conversation, and a thread of offers are no line of work, so they have none.
  */
 export function lineFacts(summary: ThreadSummary, now: Date): readonly string[] {
   const { thread, members, last_result_at: last, open_obstacles: open } = summary;
   if (members.length > 0 || thread.conversation || thread.deliverable) return [];
   const result = last ? `Last result ${ago(last, now)}` : 'No result yet';
-  return open === 0
-    ? [result]
-    : [result, open === 1 ? '1 open obstacle' : `${open} open obstacles`];
+  const challenged = summary.challenged ?? 0;
+  const reproduced = summary.reproduced_only ?? 0;
+  return [
+    result,
+    ...(challenged > 0 ? [`${challenged} challenged`] : []),
+    ...(reproduced > 0 ? [`${reproduced} reproduced only`] : []),
+    ...(open === 0 ? [] : [open === 1 ? '1 open obstacle' : `${open} open obstacles`]),
+  ];
 }
 
 /** The obstacles in one state, with the words of the group's row. */

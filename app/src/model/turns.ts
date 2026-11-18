@@ -165,7 +165,11 @@ export function rerunChecks(
   return new Set(authors).size;
 }
 
-function checked(method: 'rerun' | 'code_read' | 'ratings', theirs: string, how: string): string {
+function checked(
+  method: 'rerun' | 'code_read' | 'ratings' | 'challenge',
+  theirs: string,
+  how: string,
+): string {
   switch (method) {
     case 'rerun':
       return `reran ${theirs}${how}`;
@@ -173,6 +177,8 @@ function checked(method: 'rerun' | 'code_read' | 'ratings', theirs: string, how:
       return `read the code of ${theirs}`;
     case 'ratings':
       return `rated ${theirs}`;
+    case 'challenge':
+      return `challenged ${theirs}`;
   }
 }
 

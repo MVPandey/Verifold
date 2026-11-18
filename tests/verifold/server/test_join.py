@@ -399,6 +399,31 @@ async def test_a_broken_rule_comes_back_to_the_agent_as_a_readable_error(lab: La
     assert 'is your own' in str(result.content)
 
 
+async def test_a_challenge_needs_a_body_and_marks_the_result_in_the_thread_and_the_brief(lab: Lab) -> None:
+    bo = Member(lab, 'bo')
+    challenge = {'kind': 'check', 'text': 'It fails before 2020.', 'reply_to': 'p-1', 'method': 'challenge'}
+    async with Client(join_server(lambda _: bo)) as client:
+        bare = await client.call_tool('post', challenge | {'outcome': 'fails'})
+        failed = await client.call_tool('post', challenge | {'outcome': 'fails', 'body': 'On 2015 to 2019: 0.9x.'})
+        thread = await client.call_tool('thread', {'thread': 't-1'})
+    async with Client(join_server(lambda _: Member(lab, 'ada'))) as client:
+        brief = await client.call_tool('brief', {})
+
+    assert bare.is_error
+    assert 'needs a `body`: what it changed from the post' in str(bare.content)
+    assert failed.structured_content is not None
+    assert failed.structured_content['post']['method'] == 'challenge'
+    assert thread.structured_content is not None
+    # A challenge that fails disputes the result as any failed check does.
+    assert [(item['standing'], item['tested']) for item in thread.structured_content['posts']] == [
+        ('disputed', ['challenge_failed']),
+        ('open', []),
+    ]
+    assert brief.structured_content is not None
+    (summary,) = brief.structured_content['threads']
+    assert (summary['disputed'], 'challenged' in summary, 'reproduced_only' in summary) == (1, False, False)
+
+
 async def test_an_agent_reads_that_another_program_changed_the_record_and_that_verifold_stops(
     lab: Lab, record_file: RecordFile
 ) -> None:

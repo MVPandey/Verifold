@@ -24,7 +24,15 @@ import { deskOf } from '../model/desk.ts';
 import type { Docked } from '../model/deliverables.ts';
 import { ago, clock, dayClock, duration, minutesBetween } from '../model/format.ts';
 import { builderLine, lineFacts, obstacleGroups } from '../model/obstacles.ts';
-import { clip, isLong, personMessage, personReply, standingChip } from '../model/posts.ts';
+import {
+  clip,
+  isLong,
+  personMessage,
+  personReply,
+  restsOnLine,
+  standingChip,
+  testedChips,
+} from '../model/posts.ts';
 import { isRevision, noteLabel, revisedBy, revisedLine } from '../model/question.ts';
 import { href } from '../model/route.ts';
 import { hasNew, markSeen, readSeen } from '../model/seen.ts';
@@ -915,22 +923,22 @@ function Body(props: {
 }
 
 /**
- * What a candidate answer builds on: how many posts, and how many of the results with files among them have no
- * check of an independent rerun. With `open`, each post follows with where it stands.
+ * What a candidate answer builds on: how many posts, and how the results among them stand, such as "Rests on 5
+ * results: 2 challenged, 2 reproduced only, 1 not checked". With `open`, each post follows with where it stands,
+ * how checks tested it, and whether a result with files has no check of an independent rerun.
  */
 function Under(props: {
   readonly view: CandidateView;
   readonly open: boolean;
 }): ReactElement | null {
-  const { builds_on: posts, results, no_blind_rerun: waits } = props.view;
+  const { builds_on: posts, no_blind_rerun: waits } = props.view;
   if (posts.length === 0) return null;
+  const rests = restsOnLine(props.view.rests_on);
   return (
     <div className="f-under">
       <p>
         Builds on {posts.length === 1 ? '1 post' : `${posts.length} posts`}.
-        {results > 0
-          ? ` ${waits.length} of ${results} ${results === 1 ? 'result' : 'results'} with files ${waits.length === 1 ? 'has' : 'have'} no independent rerun.`
-          : null}
+        {rests ? ` ${rests}` : null}
       </p>
       {props.open ? (
         <ul>
@@ -941,6 +949,9 @@ function Under(props: {
                   standingChip(item.post, item.standing) ?? { label: 'Not checked', tone: 'none' }
                 }
               />{' '}
+              {testedChips(item.tested).map((mark) => (
+                <ChipView key={mark.label} chip={mark} />
+              ))}{' '}
               {hasBreakthrough(item) ? <BadgeChip badge="breakthrough" /> : null}{' '}
               <a href={href({ page: 'thread', id: item.post.thread, post: item.post.id })}>
                 {clip(item.post.text)}
@@ -1102,6 +1113,9 @@ function Card(props: {
           ) : summary.thread.deliverable ? null : (
             <span className={`f-st fs-count-${status.edge}`}>{status.label}</span>
           )}
+          {testedChips(head?.tested).map((mark) => (
+            <ChipView key={mark.label} chip={mark} />
+          ))}
           {status.openAsks ? <span className="f-st fs-ask">{status.openAsks}</span> : null}
           {status.openCalls ? <span className="f-st fs-ask">{status.openCalls}</span> : null}
           {props.breakthrough ? <BadgeChip badge="breakthrough" /> : null}

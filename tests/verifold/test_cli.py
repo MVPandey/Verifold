@@ -149,6 +149,53 @@ def test_run_takes_the_facts_of_a_seat_after_a_comma_and_a_harness_more_than_onc
     ) in capsys.readouterr().out
 
 
+ONE_FAMILY = (
+    'Every seat is of one model family, {family}. An independent check is a check by an agent of another family, '
+    'and without one no result can stand as held up.'
+)
+
+
+@pytest.mark.usefixtures('project', 'serves')
+@pytest.mark.parametrize(
+    ('agents', 'family'),
+    [
+        (['claude-code:opus', 'claude-code:fable'], 'anthropic'),
+        (['claude-code', 'codex'], None),
+        # A lab of on-call seats starts nothing by itself, and its seats are still of one family.
+        (['codex,on-call', 'codex:mini,on-call'], 'openai'),
+        (['claude-code,on-call', 'codex,on-call'], None),
+        # A family that the person states is the seat's own.
+        (['claude-code', 'codex,family=Anthropic'], 'anthropic'),
+        (['claude-code', 'claude-code,family=google'], None),
+        # The desk checks nothing, so a desk of another family makes no independent check.
+        (['claude-code', 'codex,desk'], 'anthropic'),
+    ],
+)
+def test_run_says_in_one_line_when_every_seat_is_of_one_model_family(
+    agents: list[str], family: str | None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    main(['run', 'Does it hold?', *(word for agent in agents for word in ('--agent', agent))])
+
+    printed = capsys.readouterr().out.splitlines()
+    started = next(index for index, line in enumerate(printed) if line.startswith('Started a lab'))
+    lines = [line for line in printed if 'model family' in line]
+    assert lines == ([ONE_FAMILY.format(family=family)] if family else [])
+    # The fact comes right after what the command starts, and before the link.
+    if family:
+        assert printed[started + 1] == lines[0]
+        assert printed[started + 2].startswith('Open the lab')
+
+
+@pytest.mark.usefixtures('project', 'serves')
+def test_run_says_nothing_of_families_for_a_harness_that_it_does_not_know(capsys: pytest.CaptureFixture[str]) -> None:
+    # The server refuses such a harness when it starts the lab. The stand-in here starts anything.
+    main(['run', 'Does it hold?', '--agent', 'claude-code', '--agent', 'nobody-knows'])
+
+    printed = capsys.readouterr().out
+    assert 'Started a lab with 1 claude-code, 1 nobody-knows' in printed
+    assert 'model family' not in printed
+
+
 @pytest.mark.usefixtures('project')
 @pytest.mark.parametrize('agent', ['codex,driver', 'codex,role=', 'codex,coordinator=yes', 'codex,'])
 def test_run_refuses_a_fact_of_a_seat_that_it_does_not_know(agent: str) -> None:
