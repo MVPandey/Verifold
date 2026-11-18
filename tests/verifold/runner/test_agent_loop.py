@@ -588,8 +588,9 @@ async def test_an_alarm_does_not_ring_in_a_closed_lab_and_rings_with_the_doorbel
     served: ServedBoard, tmp_path: Path, log: Path
 ) -> None:
     lab = served.lab
+    await lab.post(PostRequest(kind='reading', text='The lab reads the question as asked.', thread='t-1'), 'ada')
     await lab.post(PostRequest(kind='close', text='The answer stands.', thread='t-1'), 'ada')
-    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-2', accepts=True), 'bo')
+    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-3', accepts=True), 'bo')
     activity = Activity()
     running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
     try:
@@ -1336,8 +1337,9 @@ async def test_no_alarm_rings_after_an_agent_behind_the_close_left_a_closed_lab(
 ) -> None:
     lab = served.lab
     await lab.join(agent('cy'))
+    await lab.post(PostRequest(kind='reading', text='The lab reads the question as asked.', thread='t-1'), 'ada')
     await lab.post(PostRequest(kind='close', text='The answer stands.', thread='t-1'), 'ada')
-    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-2', accepts=True), 'cy')
+    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-3', accepts=True), 'cy')
     activity = Activity()
     running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
     try:
@@ -1445,8 +1447,9 @@ async def test_the_close_of_a_round_rings_nobody_in_a_closed_lab_and_the_next_ne
     served: ServedBoard, tmp_path: Path, log: Path
 ) -> None:
     lab = served.lab
+    await lab.post(PostRequest(kind='reading', text='The lab reads the question as asked.', thread='t-1'), 'ada')
     await lab.post(PostRequest(kind='close', text='The answer stands.', thread='t-1'), 'ada')
-    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-2', accepts=True), 'bo')
+    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-3', accepts=True), 'bo')
     running = asyncio.create_task(loop_for(served, tmp_path).run())
     try:
         await until(lambda: len(lab.board.turns) == 1)
@@ -1545,6 +1548,8 @@ async def test_a_rerun_that_a_lease_kept_out_rings_no_doorbell_in_a_closed_lab_a
             return tuple(FileEvidence(path=path, commit='d' * 40) for path in paths)
 
         served.pin = pin
+        # A close comes after the lab's reading, which bo reads in its first turn.
+        await lab.post(PostRequest(kind='reading', text='The lab reads the question as asked.', thread='t-1'), 'ada')
         running = asyncio.create_task(loop_for(served, tmp_path).run())
         try:
             await until(lambda: len(lab.board.turns) == 1)
@@ -1995,8 +2000,9 @@ async def test_no_agent_of_a_closed_lab_gets_a_message_when_verifold_restarts(
     served: ServedBoard, tmp_path: Path, log: Path
 ) -> None:
     lab = served.lab
+    await lab.post(PostRequest(kind='reading', text='The lab reads the question as asked.', thread='t-1'), 'ada')
     await lab.post(PostRequest(kind='close', text='The answer stands.', thread='t-1'), 'ada')
-    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-2', accepts=True), 'bo')
+    await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-3', accepts=True), 'bo')
     # The stop cut the agent's turn off. In an open lab the agent would go on at once.
     await lab.start_turn('bo', 'session-bo', lab.board.seq)
     assert lab_state(lab.board) == 'closed'

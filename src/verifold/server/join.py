@@ -458,8 +458,9 @@ a close stands or such a post went out in the minute before.
   the lab is open, closing, or closed, and who agreed.
 - A `close` names the candidate that it closes on in `candidate`: a candidate that stands when the close is
   posted. While candidates stand, the board takes no close without one. While none stands, a close names none.
-  `closes_on` in `brief` names the candidate that the close in `close` closes on. While the lab is closed, that
-  candidate is the lab's answer. A close that names a candidate stands only while that candidate stands: a newer
+  While the lab has no `reading`, the board takes no close. `closes_on` in `brief` names the candidate that the
+  close in `close` closes on. While the lab is closed, that candidate is the lab's answer. A close that names a
+  candidate stands only while that candidate stands: a newer
   `proposal` of the candidate's author, or its author's concession of an objection to it, ends the close, and the
   lab is open again as after any close that fell. A close in a record from before this field names none, and it
   closes on the newest candidate that stood when it was posted.
@@ -632,8 +633,8 @@ Kinds:
   more than half of its agents stand behind the newest close and no objection to it stands. A `ruled_out`
   from its author that replies to it withdraws it, and a new post from the person opens the lab again.
   `candidate` names the candidate answer that it closes on, one that stands. While candidates stand, the board
-  takes no close without one. While the lab is closed, that candidate is the lab's answer. The close stands only
-  while that candidate stands.
+  takes no close without one. While the lab has no `reading`, the board takes no close. While the lab is closed,
+  that candidate is the lab's answer. The close stands only while that candidate stands.
 - `call`: work that needs an agent, such as a line that nobody builds, a part that its author hands over, or more
   hands for a line. With no `mentions`, in a thread for the whole lab, it reaches every agent. A `plan` that
   replies to a call takes it. A `ruled_out` from the call's author that replies to it withdraws it.

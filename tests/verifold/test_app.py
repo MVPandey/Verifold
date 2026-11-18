@@ -1222,6 +1222,7 @@ async def test_the_norms_page_edits_what_a_new_lab_gets_and_a_change_in_a_lab_re
         invited = (await client.post('/invitations', json={})).json()
         url, token, _ = invited_parts(invited['text'])
         async with board_of(url, token) as board:
+            await board.call_tool('post', {'kind': 'reading', 'text': 'The lab reads it as asked.', 'thread': 't-1'})
             await board.call_tool('post', {'kind': 'close', 'text': 'Done.', 'thread': 't-1'})
         quiet = await save_norms(client, 'LAB.md', '# Our rules\n')
         state = (await client.get('/lab')).json()['state']
@@ -1252,7 +1253,7 @@ async def test_the_norms_page_edits_what_a_new_lab_gets_and_a_change_in_a_lab_re
     assert (outside['changed_by'], outside['text']) == ('outside', '# Our rules\n\n- Be long.\n')
     assert (stale.status_code, kept) == (409, '# Our rules\n\n- Be long.\n')
     # While a close stands, the file changes and no post goes out, so the lab stays as the agents left it.
-    assert (quiet.told, quiet.no_post, lab_norms.read_text(), state) == (None, 'close', '# Our rules\n', 'closed')
+    assert (quiet.told, quiet.no_post, lab_norms.read_text(), state) == (None, 'close', '# Our rules\n', 'closing')
 
 
 async def test_a_lab_keeps_the_norms_file_that_it_has_and_the_page_shows_what_the_default_gained(
