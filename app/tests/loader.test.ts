@@ -53,6 +53,7 @@ function slowServer(): {
         powers: [],
         deeds: [],
       }),
+    desk: () => answer('desk', { desk: null, thread: null, actions: [] }),
     setPower: () => Promise.reject(new Error('unused')),
     answerRequest: () => Promise.reject(new Error('unused')),
     takeMinutesBack: () => Promise.reject(new Error('unused')),
@@ -133,6 +134,7 @@ describe('the loader', () => {
       'report',
       'candidates',
       'conversation',
+      'desk',
       'lab',
     ]);
     assert.equal(state.data().lab?.question, 'stopped');
@@ -163,6 +165,7 @@ describe('the loader', () => {
       'report',
       'candidates',
       'conversation',
+      'desk',
     ]);
     assert.equal(loader.stale(), false);
     assert.equal(state.data().error, null);

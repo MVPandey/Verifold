@@ -62,7 +62,7 @@ export interface Picture {
 }
 
 /** A seat that an agent holds. */
-export type SeatMark = 'coordinator' | 'reviewer' | 'on_call';
+export type SeatMark = 'coordinator' | 'reviewer' | 'on_call' | 'desk';
 
 /** A post by its ID and its thread, so that the app can link to it. */
 export interface PostRef {
@@ -272,6 +272,8 @@ export interface AgentView {
   readonly on_call: boolean;
   /** Whether the agent holds the lab's coordinator seat. */
   readonly coordinator: boolean;
+  /** Whether the agent's seat is the lab's desk, which answers the person in the desk chat. Absent from older views. */
+  readonly desk?: boolean;
   /** What the agent says that it does now. */
   readonly status: string;
   /** The thread where the agent works now, or `null` when it works in none. */
@@ -732,6 +734,7 @@ export interface SavedChoice {
   readonly family?: string | null;
   readonly on_call?: boolean;
   readonly coordinator?: boolean;
+  readonly desk?: boolean;
 }
 
 /** What new labs start with unless the person chooses otherwise. */
@@ -773,6 +776,8 @@ export interface AgentChoice {
   readonly coordinator?: boolean;
   /** The powers that the person switches on for the coordinator from the start. Only the coordinator's seat has any. */
   readonly powers?: readonly Power[];
+  /** Whether the seat is the lab's desk. A lab has one, its seat has one agent, and it holds no other seat. */
+  readonly desk?: boolean;
 }
 
 /** The person invites an agent that runs by itself, and can state the facts of its seat. */
@@ -827,10 +832,12 @@ export interface Thread {
   readonly carries?: 'permission' | 'question' | null;
   /** Whether this is the thread where the person and the lab's coordinator talk. */
   readonly conversation?: boolean;
-  /** Whether the lab's coordinator opened the thread for the person. */
+  /** Whether the lab's coordinator, or the desk, opened the thread for the person. */
   readonly for_person?: boolean;
   /** For the thread that holds the offers of files for one deliverable: that deliverable. */
   readonly deliverable?: string | null;
+  /** Whether this is the desk chat, where the person and the desk talk. Absent when it is not. */
+  readonly desk?: boolean;
 }
 
 /** A kind of move that the person can hand to the lab's coordinator. Each one is off until the person switches it on. */
@@ -897,8 +904,10 @@ interface PostBase {
   readonly evidence: readonly FileEvidence[];
   /** Whether the post is for the whole lab. Only the lab's coordinator and the person can mark a post so. */
   readonly to_lab?: boolean;
-  /** Whether the lab's coordinator posted this for the person. Only the coordinator can mark a post so. */
+  /** Whether the lab's coordinator, or the desk, posted this for the person. Only they can mark a post so. */
   readonly for_person?: boolean;
+  /** For the desk's post for the person: the person's post in the desk chat that it rests on. Absent otherwise. */
+  readonly on?: string;
 }
 
 export type Post =
@@ -1068,6 +1077,36 @@ export interface ConversationView {
   readonly powers: readonly PowerView[];
   /** The moves that came from the coordinator's requests, newest first. */
   readonly deeds: readonly Deed[];
+}
+
+/** What the desk did on the person's word. */
+export type DeskDeed = 'post' | 'round' | 'question' | 'deliverable' | 'time' | 'interrupt';
+
+/** One action of the desk, with the person's post in the desk chat that it rests on. */
+export interface DeskAction {
+  readonly on: string;
+  readonly at: string;
+  readonly kind: DeskDeed;
+  /** The post that the action made: the desk's post for the person, its round, or the post that tells the lab. */
+  readonly post: string | null;
+  readonly thread: string | null;
+  /** For the end of a turn: the agent whose turn the desk ended. */
+  readonly agent: string | null;
+  /** For a change of a deliverable: its ID, and what the desk did to it. */
+  readonly deliverable: string | null;
+  readonly change: 'added' | 'changed' | 'removed' | null;
+  /** For a new end of the lab: the end that the desk set. */
+  readonly ends_at: string | null;
+}
+
+/** What the panel for the desk shows: the desk, the desk chat, and what the desk did on the person's word. */
+export interface DeskView {
+  /** The agent that holds the desk seat, or `null` while the lab has none. */
+  readonly desk: string | null;
+  /** The desk chat, or `null` while the lab has none. */
+  readonly thread: ThreadView | null;
+  /** Each action of the desk, oldest first. */
+  readonly actions: readonly DeskAction[];
 }
 
 /** A candidate answer: an agent's newest proposal, and each post that it builds on with where it stands. */

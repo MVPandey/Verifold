@@ -242,14 +242,18 @@ export function removedHeading(count: number): string {
   return `${count} removed ${count === 1 ? 'deliverable' : 'deliverables'} with offers`;
 }
 
-/** The panel that is docked beside the wall: a tab of the panel for the coordinator, the deliverables, or none. */
-export type Docked = Tab | 'deliver' | null;
+/**
+ * The panel that is docked beside the wall: a tab of the panel for the coordinator, the deliverables, the desk
+ * chat, or none.
+ */
+export type Docked = Tab | 'deliver' | 'desk' | null;
 
 /**
  * Return whether a panel is docked, so that the page makes room for it. A tab of the panel for the coordinator
- * shows only while an agent holds the coordinator seat.
+ * shows only while an agent holds the coordinator seat, and the desk chat only while the lab has a desk.
  */
-export function isDocked(panel: Docked, hasCoordinator: boolean): boolean {
+export function isDocked(panel: Docked, hasCoordinator: boolean, hasDesk = false): boolean {
+  if (panel === 'desk') return hasDesk;
   return panel === 'deliver' || (panel !== null && hasCoordinator);
 }
 

@@ -35,6 +35,8 @@ export interface Seat {
   readonly coordinator: boolean;
   /** The powers that the person switches on for the coordinator from the start. Only the coordinator's seat sends them. */
   readonly powers: readonly Power[];
+  /** Whether the seat is the lab's desk. A lab has one desk, its seat holds one agent, and it holds no other seat. */
+  readonly desk: boolean;
 }
 
 /** Return a seat of a harness with the person's own settings and no facts. */
@@ -51,6 +53,7 @@ export function newSeat(harness: string, count = 1): Seat {
     onCall: false,
     coordinator: false,
     powers: [],
+    desk: false,
   };
 }
 
@@ -93,22 +96,39 @@ export function firstSeats(
       coordinator: choice.coordinator ?? false,
       // A saved choice switches on no power. The person does that for each lab.
       powers: [],
+      desk: choice.desk ?? false,
     }));
   });
 }
 
 /**
- * Return the seats with the seat at `index` replaced. A lab has one coordinator, so a seat that becomes the
- * coordinator's holds one agent, and no other seat is the coordinator's.
+ * Return the seats with the seat at `index` replaced. A lab has one coordinator and one desk, so a seat that becomes
+ * the coordinator's or the desk holds one agent, and no other seat is the coordinator's or the desk. The desk holds
+ * no other seat, so a seat that becomes the desk is not the coordinator's and not on call.
  */
 export function withSeat(seats: readonly Seat[], index: number, changed: Seat): readonly Seat[] {
   // A seat with no agent takes one only while the lab has room for it.
   const room = MAX_AGENTS - agentCount(seats.filter((_, at) => at !== index));
-  const seat = changed.coordinator
-    ? { ...changed, count: Math.min(1, room, Math.max(changed.count, 1)) }
-    : changed;
-  return seats.map((old, at) =>
-    at === index ? seat : seat.coordinator ? { ...old, coordinator: false } : old,
+  const old = seats[index];
+  // A seat becomes the desk, or one of its other seats: the one that the person ticked last stays.
+  const desked = changed.desk && !old?.desk;
+  const facts = desked
+    ? { ...changed, coordinator: false, onCall: false, powers: [] }
+    : changed.desk && (changed.coordinator || changed.onCall)
+      ? { ...changed, desk: false }
+      : changed;
+  const seat =
+    facts.coordinator || facts.desk
+      ? { ...facts, count: Math.min(1, room, Math.max(facts.count, 1)) }
+      : facts;
+  return seats.map((other, at) =>
+    at === index
+      ? seat
+      : {
+          ...other,
+          ...(seat.coordinator ? { coordinator: false } : {}),
+          ...(seat.desk ? { desk: false } : {}),
+        },
   );
 }
 
@@ -133,7 +153,7 @@ export function step(seats: readonly Seat[], index: number, change: number): rea
   // A count never grows past the room that the other seats leave, and a step down always works.
   return seats.map((seat, at) => {
     if (at !== index) return seat;
-    const most = seat.coordinator ? 1 : Math.max(room, seat.count);
+    const most = seat.coordinator || seat.desk ? 1 : Math.max(room, seat.count);
     return { ...seat, count: Math.max(0, Math.min(most, seat.count + change)) };
   });
 }
@@ -232,6 +252,7 @@ export function seatChoice(seat: Seat): AgentChoice {
     ...(seat.onCall ? { on_call: true } : {}),
     ...(seat.coordinator ? { coordinator: true } : {}),
     ...(seat.coordinator && seat.powers.length > 0 ? { powers: seat.powers } : {}),
+    ...(seat.desk ? { desk: true } : {}),
   };
 }
 
@@ -261,6 +282,7 @@ function agentWords(choice: SavedChoice, harnesses: readonly HarnessOption[]): s
     choice.role ? `role: ${choice.role}` : null,
     choice.coordinator ? 'coordinator' : null,
     choice.on_call ? 'on call' : null,
+    choice.desk ? 'desk' : null,
   ].filter((detail) => detail !== null);
   const agents = `${title}: ${choice.count} ${choice.count === 1 ? 'agent' : 'agents'}`;
   return details.length > 0 ? `${agents} (${details.join(', ')})` : agents;
@@ -323,6 +345,7 @@ export function modelSummary(pick: Seat, offer: Offer | null, family = ''): stri
     pick.role.trim(),
     pick.coordinator ? 'coordinator' : '',
     pick.onCall ? 'on call' : '',
+    pick.desk ? 'desk' : '',
   ].filter(Boolean);
   const model = modelLine(pick, offer);
   return facts.length > 0 ? `${model} · ${facts.join(', ')}` : model;

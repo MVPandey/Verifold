@@ -4,6 +4,7 @@ import type {
   BudgetRequest,
   CandidatesView,
   ConversationView,
+  DeskView,
   Direction,
   DeliverableDecision,
   FileText,
@@ -111,6 +112,8 @@ export interface Api {
   startAgain(agentId: string): Promise<LabView>;
   /** The conversation with the coordinator, the coordinator's powers, and what was done for the person. */
   conversation(): Promise<ConversationView>;
+  /** The desk chat, and what the desk did on the person's word. */
+  desk(): Promise<DeskView>;
   /** Switch a power of the coordinator on or off. */
   setPower(power: Power, on: boolean): Promise<ConversationView>;
   /** Answer a request of the coordinator for a move. `minutes` gives another amount of time than the request names. */
@@ -270,6 +273,7 @@ export function createApi(
       request(`/agents/${encodeURIComponent(agentId)}`, undefined, 'DELETE'),
     startAgain: (agentId) => request(`/agents/${encodeURIComponent(agentId)}/start`, {}),
     conversation: () => request('/conversation'),
+    desk: () => request('/desk'),
     setPower: (power, on) => request('/powers', { power, on }),
     answerRequest: (postId, yes, minutes) =>
       request(`/requests/${encodeURIComponent(postId)}`, {
