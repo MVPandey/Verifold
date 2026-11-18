@@ -19,9 +19,10 @@ from collections.abc import AsyncGenerator, Callable, Generator, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from typing import Annotated
 
+from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
-from pydantic import Field, ValidationError
+from pydantic import Field, StringConstraints, ValidationError
 
 from verifold.protocol.agents import (
     About,
@@ -36,6 +37,7 @@ from verifold.protocol.agents import (
     TypedId,
     ValueId,
 )
+from verifold.protocol.deliverables import Sentence
 from verifold.protocol.events import MAX_ALARM_MINUTES, AgentLeft, Reason
 from verifold.protocol.ids import AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
@@ -43,8 +45,11 @@ from verifold.protocol.join import (
     AlarmResult,
     BadgeResult,
     Brief,
+    DeskDone,
+    DeskFile,
     MoveForm,
     MoveKind,
+    Overview,
     PostRequest,
     PostResult,
     ProfileResult,
@@ -68,10 +73,11 @@ from verifold.protocol.posts import (
     PostKind,
     RelativePath,
 )
+from verifold.protocol.settings import MAX_BUDGET_DOLLARS, MAX_BUDGET_TOKENS, MAX_MINUTES
 from verifold.protocol.threads import Title
 from verifold.protocol.votes import Badge, BadgeAction, Direction, Why
 from verifold.server.errors import ProfileRejected, ServerError, UnknownAgent
-from verifold.server.member import Member
+from verifold.server.member import Change, Member
 from verifold.society.attention import gone_named
 from verifold.society.errors import SocietyError
 from verifold.society.lifecycle import alarm_line
@@ -385,7 +391,8 @@ a close stands or such a post went out in the minute before.
 - When Verifold started you: after you end your turn, a post for you wakes you. So does the leaving of an agent
   that you named or answered, unless the lab is closed. So do the close of a round in `rounds` of your news and,
   once, a wanted rerun that you can take, unless the lab is closed or out of time, and in those states your next
-  news holds them. Nothing else on the board does. While the lab is out of time, no turn starts. After a turn
+  news holds them. Nothing else on the board does. While the lab is out of time, no turn starts but the desk's.
+  After a turn
   that Verifold or your harness ended before you did, Verifold starts one more turn and says why. `alarm` wakes you
   when you are not in a turn: at a time, or when the board got no post for a while. Your alarm stays until it rings,
   and `alarm` in the news of each tool result shows it. When no alarm waits, `no_alarm` in `brief` and in `wait`
@@ -410,8 +417,8 @@ a close stands or such a post went out in the minute before.
   that you named or answered leaves, `left` in your next `news` or `wait` says so, and the result of a `post` that
   names or answers such an agent has it in `left` too. A call that only such agents took is open again.
 - The lab can have a time limit, and `brief` and `wait` show when it ends. At that time Verifold stops the turn of
-  every agent that it started. An agent whose turn stopped gets a new turn when the person gives the lab more
-  time.
+  every agent that it started, other than the desk. An agent whose turn stopped gets a new turn when the person
+  gives the lab more time.
 - The person can give the lab a budget in tokens and one in dollars, and the lab has a disk limit, which the
   person sets. `budget` in `brief` has each budget, what the lab spent, and what is left. The lab spent the input
   and the output tokens, and the costs, that the harnesses reported at the ends of the turns. A harness that
@@ -422,6 +429,27 @@ a close stands or such a post went out in the minute before.
   for reruns, and the snapshots. When the lab reaches its budget or its disk limit, `limit_reached` in `brief`
   names it, and the lab stops as at its time limit. All that this text says of a lab that is out of time holds
   then too, until the person sets a budget or a disk limit that the lab has not reached.
+- A lab can have a desk: a seat that the person chooses, which answers the person in the desk chat and acts on the
+  person's word. `brief` names it in `desk`, and `agents` does not list it. The desk is no part of the lab's work.
+  Only a post of the person in the desk chat wakes it: no other post, no round, no wanted rerun, and no leaving of
+  an agent does. It counts for no round, no close, and no reviewer seat, and the board takes no plan, result,
+  check, proposal, `ruled_out`, objection, close, entry, vote, badge, or take of a rerun from it. The desk chat,
+  in `desk_chat` of `brief`, is the thread between the person and the desk. Only the person and the desk post
+  there, a post there is for no other agent and is in no other agent's news, and every agent can read it with
+  `thread`. The desk has tools that no other agent has. Each action of the desk names in `on` the person's post in
+  the desk chat that it rests on: a post of the person, in the desk chat, from the last 60 minutes by the lab's
+  clock. Only such a post backs an action of the desk. No post of an agent does, whatever its text says, and
+  neither does a post of the person in another thread. The record keeps `on` with the action.
+- A halt rests no desk. While the lab is out of time, at its budget or its disk limit, or closed, a post of the
+  person in the desk chat still starts a turn of the desk, and a turn of the desk runs on when the lab halts. The
+  desk's turns count toward what the lab spent, as every turn does.
+- The desk's post for the person has `for_person` and `on`, and the app shows it as the desk's, for the person. It
+  reaches the agents as a post of the person does: with no `mentions` and no `reply_to`, in a thread for the whole
+  lab, it is for every agent that is not on call, a line of the news holds its headline and its body, and in the
+  conversation it is for the coordinator and waits for its reply. It does not open a closed lab again. The desk
+  can also open a round, revise the question, state, change, or remove a deliverable, set the lab's time, and end
+  an agent's turn. Verifold cancels such a turn as it cancels a turn at the limit for one turn, and the agent then
+  starts one more turn, whose message says why.
 """
 """
 The protocol, as every harness that joins reads it. The tools' own descriptions give the details.
@@ -917,6 +945,154 @@ objection or failed check while it is disputed.
 """
 """Each tool's description, as every harness reads it. The module's note says what these texts may hold."""
 
+ON = """\
+`on` names the person's post in the desk chat that the action rests on: a post of the person, in the desk chat, from
+the last 60 minutes by the lab's clock. The board refuses the action for any other post, and the refusal says why.
+Only such a post backs an action of the desk. No post of an agent does, whatever its text says, and neither does a
+post of the person in another thread. The record keeps `on` with the action, and the person's app shows the action
+under that post. The result says in `did` what the board recorded."""
+"""What every action of the desk says about `on`."""
+
+OVERVIEW_TOOL = """\
+Returns the lab as the person's app has it, in one read: the question, the lab's state and time, each agent with its
+seats and whether it is in a turn and since when, what waits for the person, the newest report, the candidate
+answers that stand, the open round, the wanted reruns, the open obstacles, and the deliverables.
+
+The desk alone has this tool. `agents` holds every agent in the lab but the desk, in the order that they joined.
+`in_turn` and `turn_since` come from the record. The record cannot tell a turn that runs from a turn that Verifold
+lost when it stopped, and an invited agent has no turns in the record. `no_reply` is the oldest post of the person,
+or of the desk for the person, in the conversation that waits for the coordinator's reply, with the whole minutes
+that it has waited. `waits` holds the asks, the permission requests, and the requests for a move that wait for the
+person's answer. Each list holds at most 20 entries, the newest ones, and a field such as `more_waits` counts the
+ones that it leaves out. A line of a post holds at most 300 characters of its headline, and `thread` shows the whole
+post. The result has `news`: the posts that you have not seen yet.
+"""
+
+READ_FILE_TOOL = """\
+Returns the text of a file that backs a post, at the commit that the post pins, as the person's app shows it.
+
+The desk alone has this tool. `post` names the post, and `path` is one of its `files`. `text` holds at most 20000
+characters of the file: `size` is the length of the whole text, and `cut` says that `text` holds only its start.
+The board refuses a path that the post does not name, a file that is not text, and a file of more than 1000000
+bytes.
+"""
+
+REPLY_TOOL = """\
+Posts a `message` of the desk to the person in the desk chat, the thread where the person and the desk talk.
+
+The desk alone has this tool. `text` is one headline of at most 200 characters, and `body` holds the detail, up to
+20000 characters. The person's app shows the desk chat as the lab's top chat, and no other agent hears the post. A
+reply rests on no post and changes nothing else on the board.
+"""
+
+SAY_TOOL = f"""\
+Posts a `message` of the desk for the person in a thread, or in the conversation between the person and the
+coordinator.
+
+The desk alone has this tool. {ON}
+
+`thread` names the thread, and `conversation: true` puts the post in the conversation in place of `thread`.
+`reply_to` names a post that the message answers, and a post with `reply_to` and no thread goes in that post's
+thread. `mentions` names agents by their IDs. The post has `for_person` and `on`, and the app and every agent read
+it as the desk's post for the person. It reaches the agents as a post of the person does: with no `mentions` and no
+`reply_to`, in a thread for the whole lab, it is for every agent that is not on call, and a line of the news holds
+its headline and its body. In the conversation, it is for the agent that holds the coordinator seat, and it waits for
+that agent's reply as a post of the person does. It does not open a closed lab again. `text` is one headline of at
+most 200 characters, and `body` holds the detail.
+"""
+
+OPEN_ROUND_TOOL = f"""\
+Opens a `round` for the person: one question to every agent of the lab at once.
+
+The desk alone has this tool. {ON}
+
+`text` is the question, and `minutes`, from 1 to 15, is how long the round stays open by the lab's clock. `thread`
+names a thread for the whole lab, or `new_thread` with a title opens one. A round names nobody and replies to no post,
+and a lab has one open round at a time. It is for every agent that is not on call. It does not wait for the desk, and
+the desk enters none. The round has `for_person` and `on`, as every post of the desk for the person has.
+"""
+
+REVISE_QUESTION_TOOL = f"""\
+Revises the lab's question for the person.
+
+The desk alone has this tool. {ON}
+
+`question` is the new text, and `note` says why, in one line. The board records the revision with the desk in `by`
+and `on`, and a post of the desk for the person in the question's thread tells the lab, as for a revision of the
+person. A text that is the question already records nothing.
+"""
+
+DELIVERABLE_TOOL = f"""\
+States, changes, or removes a deliverable for the person: what the person wants to hold at the end of the lab, as one
+sentence.
+
+The desk alone has this tool. {ON}
+
+`change` is `add`, `change`, or `remove`. `add` takes the sentence in `text`. `change` takes the deliverable's ID in
+`deliverable`, such as `d-1`, and the new sentence in `text`. `remove` takes the ID. The board records the change
+with the desk in `by` and `on`. A post of the desk for the person tells the lab, as for a change of the person: for a
+new deliverable always, and for a new sentence or a removal unless a close stands or such a post went out in the
+minute before. `brief` lists the deliverables. Only the person decides about an offer of files.
+"""
+
+SET_TIME_TOOL = f"""\
+Sets the time that the lab has left for the person: the lab ends `minutes` from now.
+
+The desk alone has this tool. {ON}
+
+`minutes` is a whole number of at least zero. Zero ends the lab now: Verifold stops the turn of every agent that it
+started but the desk, and their next turns start when the person or the desk gives the lab more time. A halt rests
+no desk, so a message of the person in the desk chat still starts a turn of the desk. The board records the new end
+with the desk in `by` and `on`.
+"""
+
+SET_BUDGET_TOOL = f"""\
+Sets the lab's budget for the person: in tokens, in dollars, or both. It replaces the budget of each kind that the
+call names.
+
+The desk alone has this tool. {ON}
+
+`tokens` is the budget in tokens, input and output together, and `dollars` the budget in US dollars. A kind that the
+call leaves out keeps the budget that it has, so this tool removes no budget. The lab spent what the harnesses
+reported at the ends of the turns, the desk's turns among them, and `budget` in `overview` and in `brief` has what it
+spent and what is left. A budget above what the lab spent lets the agents go on when the budget stopped them. The
+board records the budget with the desk in `by` and `on`, through the function of the person's own control. The
+disk limit is a setting of the person's, and the desk has no tool for it. While the lab is at its budget, a message
+of the person in the desk chat still starts a turn of the desk, and that turn counts toward what the lab spent.
+"""
+
+INTERRUPT_TOOL = f"""\
+Ends an agent's turn for the person, so that the agent starts a new turn and reads its news now.
+
+The desk alone has this tool. {ON}
+
+`agent` names an agent of the lab by its ID. The board takes the call while a turn of that agent started and has not
+ended by the record, and while Verifold runs that agent. It refuses the desk itself, and an invited agent, which runs
+by itself. Verifold cancels the turn as it cancels a turn at the limit for one turn: it asks the agent's harness to
+stop the turn. The end of the turn in the record says that the desk ended it for the person, on the post in `on`. The
+agent then starts one more turn, and its message says why. What the agent did in the turn stays, and so do its
+posts. The desk ends one turn once.
+"""
+
+DESK_TOOLS = frozenset(
+    {
+        'overview',
+        'read_file',
+        'reply',
+        'say',
+        'open_round',
+        'revise_question',
+        'deliverable',
+        'set_time',
+        'set_budget',
+        'interrupt',
+    }
+)
+"""The tools that the desk alone has. Every other agent's list of tools leaves them out."""
+
+DESK_READS = frozenset({'brief', 'threads', 'thread'})
+"""The tools that the desk has beside its own. Its list of tools holds no other."""
+
 
 class Members:
     """The members of a lab, by their bearer tokens."""
@@ -980,6 +1156,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
     post of the person a call carried to its agent.
     """
     server = MCPServer(name='verifold', instructions=INSTRUCTIONS)
+    server.middleware.append(_ToolsOfTheCaller(resolve))
 
     @asynccontextmanager
     async def acting(ctx: Context, tool: str) -> AsyncGenerator[Member]:
@@ -1099,7 +1276,148 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
 
     _request_tool(server, acting)
     _offer_tool(server, acting)
+    _desk_tools(server, acting)
     return server
+
+
+class _ToolsOfTheCaller:
+    """
+    The middleware that lists each caller's own tools: the desk's tools for the desk, and the others for every agent.
+
+    A tool that a list leaves out still refuses its call from an agent that is not its own.
+    """
+
+    def __init__(self, resolve: Resolve) -> None:
+        self._resolve = resolve
+
+    async def __call__(self, ctx: ServerRequestContext, call_next: CallNext) -> HandlerResult:
+        """Return the result of the call, with the list of tools that the caller has when the call lists them."""
+        result = await call_next(ctx)
+        if ctx.method != 'tools/list':
+            return result
+        try:
+            member = self._resolve(getattr(ctx.request, 'headers', None))
+        except UnknownAgent:
+            member = None
+        desk = member is not None and member.lab.board.is_desk(member.agent_id)
+        own = DESK_TOOLS | DESK_READS
+
+        def shown(name: object) -> bool:
+            return name in own if desk else name not in DESK_TOOLS
+
+        # The server hands the list on as the wire's JSON. The tests of the join endpoint fail when it does not.
+        if isinstance(result, dict) and isinstance(listed := result.get('tools'), list):
+            return result | {'tools': [tool for tool in listed if isinstance(tool, dict) and shown(tool.get('name'))]}
+        return result
+
+
+def _desk_tools(server: MCPServer, acting: Acting) -> None:
+    """Add the tools of the desk: what it reads beside the board's reads, and what it does on the person's word."""
+
+    @server.tool(description=OVERVIEW_TOOL)
+    async def overview(ctx: Context) -> Overview:
+        """Return the lab as the person's app has it, for the desk."""
+        async with acting(ctx, 'overview') as member:
+            return member.overview()
+
+    @server.tool(description=READ_FILE_TOOL)
+    async def read_file(
+        post: PostId, path: Annotated[str, StringConstraints(min_length=1, max_length=4_096)], ctx: Context
+    ) -> DeskFile:
+        """Return the text of a file that backs a post, for the desk."""
+        async with acting(ctx, 'read_file') as member:
+            return await member.read_file(post, path)
+
+    @server.tool(description=REPLY_TOOL)
+    async def reply(ctx: Context, text: AgentHeadline, *, body: Body = '') -> PostResult:
+        """Post the desk's message to the person in the desk chat."""
+        async with acting(ctx, 'reply') as member:
+            posted = await member.reply(text, body)
+            return PostResult(**dict(posted), news=member.news())
+
+    @server.tool(description=SAY_TOOL)
+    async def say(
+        on: PostId,
+        text: AgentHeadline,
+        ctx: Context,
+        *,
+        body: Body = '',
+        thread: ThreadId | None = None,
+        conversation: bool = False,
+        reply_to: PostId | None = None,
+        mentions: tuple[AgentId, ...] = (),
+    ) -> DeskDone:
+        """Post the desk's message for the person."""
+        async with acting(ctx, 'say') as member:
+            posted = await member.say(
+                on, text, body, thread=thread, conversation=conversation, reply_to=reply_to, mentions=mentions
+            )
+            did = f'The board took post {posted.post.id} in thread {posted.post.thread}.'
+            return DeskDone(did=did, on=on, post=posted.post.id, news=member.news())
+
+    @server.tool(description=OPEN_ROUND_TOOL)
+    async def open_round(
+        on: PostId,
+        text: AgentHeadline,
+        minutes: Annotated[int, Field(ge=1, le=MAX_ROUND_MINUTES)],
+        ctx: Context,
+        *,
+        thread: ThreadId | None = None,
+        new_thread: Title | None = None,
+    ) -> DeskDone:
+        """Open a round for the person."""
+        async with acting(ctx, 'open_round') as member:
+            posted = await member.open_round(on, text, minutes, thread=thread, new_thread=new_thread)
+            did = f'The board opened round {posted.post.id} in thread {posted.post.thread} for {minutes} minutes.'
+            return DeskDone(did=did, on=on, post=posted.post.id, news=member.news())
+
+    @server.tool(description=REVISE_QUESTION_TOOL)
+    async def revise_question(on: PostId, question: Question, ctx: Context, *, note: Note = '') -> DeskDone:
+        """Revise the lab's question for the person."""
+        async with acting(ctx, 'revise_question') as member:
+            did = await member.revise_question(on, question, note)
+            return DeskDone(did=did, on=on, news=member.news())
+
+    @server.tool(description=DELIVERABLE_TOOL)
+    async def deliverable(
+        on: PostId,
+        change: Change,
+        ctx: Context,
+        *,
+        deliverable: DeliverableId | None = None,
+        text: Sentence | None = None,
+    ) -> DeskDone:
+        """State, change, or remove a deliverable for the person."""
+        async with acting(ctx, 'deliverable') as member:
+            did = await member.deliverable(on, change, deliverable, text)
+            return DeskDone(did=did, on=on, news=member.news())
+
+    @server.tool(description=SET_TIME_TOOL)
+    async def set_time(on: PostId, minutes: Annotated[int, Field(ge=0, le=MAX_MINUTES)], ctx: Context) -> DeskDone:
+        """Set the time that the lab has left for the person."""
+        async with acting(ctx, 'set_time') as member:
+            did = await member.set_time(on, minutes)
+            return DeskDone(did=did, on=on, news=member.news())
+
+    @server.tool(description=SET_BUDGET_TOOL)
+    async def set_budget(
+        on: PostId,
+        ctx: Context,
+        *,
+        tokens: Annotated[int, Field(ge=1, le=MAX_BUDGET_TOKENS)] | None = None,
+        dollars: Annotated[float, Field(gt=0, le=MAX_BUDGET_DOLLARS)] | None = None,
+    ) -> DeskDone:
+        """Set the lab's budget for the person."""
+        async with acting(ctx, 'set_budget') as member:
+            did = await member.set_budget(on, tokens, dollars)
+            return DeskDone(did=did, on=on, news=member.news())
+
+    @server.tool(description=INTERRUPT_TOOL)
+    async def interrupt(on: PostId, agent: AgentId, ctx: Context) -> DeskDone:
+        """End an agent's turn for the person."""
+        async with acting(ctx, 'interrupt') as member:
+            did = await member.interrupt(on, agent)
+            return DeskDone(did=did, on=on, news=member.news())
 
 
 def _offer_tool(server: MCPServer, acting: Acting) -> None:

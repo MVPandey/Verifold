@@ -6,7 +6,7 @@ from typing import Annotated, Literal, Self
 from pydantic import AfterValidator, Field, StringConstraints, field_validator, model_validator
 
 from verifold.protocol.ids import AgentId, PostId
-from verifold.protocol.record import Record
+from verifold.protocol.record import Record, unset
 
 type Label = Annotated[str, StringConstraints(min_length=1, max_length=40)]
 
@@ -103,8 +103,10 @@ class Picture(Record):
     symbol: Symbol
 
 
-type SeatMark = Literal['coordinator', 'reviewer', 'on_call']
-"""A seat that an agent holds, as the record has it: the coordinator seat, a reviewer seat, or a seat on call."""
+type SeatMark = Literal['coordinator', 'reviewer', 'on_call', 'desk']
+"""
+A seat that an agent holds, as the record has it: the coordinator seat, a reviewer seat, a seat on call, or the desk.
+"""
 
 
 class ModelSpec(Record):
@@ -210,11 +212,18 @@ class SeatFacts(Record):
     The model family of the seat's model. `None` takes the family of the harness's entry, or for an invited agent
     says that nobody stated one.
     """
+    desk: bool = Field(default=False, exclude_if=unset)
+    """
+    Whether the seat is the lab's desk. The desk answers the person in the desk chat and acts on the person's word.
+    It is no part of the lab's work. A lab has one desk at most, and the desk holds no other seat.
+    """
 
     @model_validator(mode='after')
     def _powers_of_the_coordinator(self) -> Self:
         if self.powers and not self.coordinator:
             raise ValueError('Only the seat of the coordinator has powers.')
+        if self.desk and (self.coordinator or self.on_call):
+            raise ValueError('The desk holds no other seat: it is not the coordinator and not on call.')
         return self
 
     @field_validator('family')
@@ -246,6 +255,8 @@ class AgentChoice(SeatFacts):
     def _one_coordinator(self) -> Self:
         if self.coordinator and self.count > 1:
             raise ValueError('A lab has one coordinator, so the seat of the coordinator has one agent.')
+        if self.desk and self.count > 1:
+            raise ValueError('A lab has one desk, so the seat of the desk has one agent.')
         return self
 
 
@@ -254,8 +265,13 @@ def _within_limit(agents: tuple[AgentChoice, ...]) -> tuple[AgentChoice, ...]:
         raise ValueError(f'A lab starts at most {MAX_AGENTS} agents in all.')
     if sum(agent.coordinator for agent in agents) > 1:
         raise ValueError('A lab has one coordinator. Mark one seat as the coordinator.')
+    if sum(agent.desk for agent in agents) > 1:
+        raise ValueError('A lab has one desk. Mark one seat as the desk.')
     return agents
 
 
 type AgentChoices = Annotated[tuple[AgentChoice, ...], Field(min_length=1), AfterValidator(_within_limit)]
-"""The seats that a lab starts with: at least one, at most `MAX_AGENTS` agents in all, and one coordinator at most."""
+"""
+The seats that a lab starts with: at least one, at most `MAX_AGENTS` agents in all, one coordinator at most, and one
+desk at most.
+"""

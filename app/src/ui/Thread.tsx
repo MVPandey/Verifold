@@ -28,6 +28,7 @@ import type { Depth } from '../model/turns.ts';
 import { hasBreakthrough } from '../model/votes.ts';
 import { messageOf } from '../api/client.ts';
 import { ForYou } from './Coordinator.tsx';
+import { byDesk } from '../model/desk.ts';
 import { browserStore } from './hooks.ts';
 import { Detail } from './Markdown.tsx';
 import { ChipView, Composer, HarnessAsk, Mark, New } from './parts.tsx';
@@ -259,7 +260,12 @@ export function Turn(
           )}
           {post.helper ? <span className="f-tag">helper {post.helper}</span> : null}
           {tag ? <span className="f-tag">{tag}</span> : null}
-          <ForYou marked={post.for_person} agents={agents} author={post.author} />
+          <ForYou
+            marked={post.for_person}
+            agents={agents}
+            author={post.author}
+            desk={byDesk(post)}
+          />
           {/* The coordinator's post for the whole lab woke every agent that is not on call. */}
           {post.to_lab && post.author !== PERSON ? (
             <span className="f-tag">to the whole lab</span>

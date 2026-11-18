@@ -14,6 +14,7 @@ from fakes import FAKE_HARNESS, FakeCopies
 
 from verifold.protocol.app import AgentState, Retry, WaitsFor
 from verifold.protocol.events import AlarmSet, TurnStarted, TurnSummary
+from verifold.protocol.ids import PERSON
 from verifold.protocol.join import MAX_NEWS, PostRequest
 from verifold.protocol.posts import Ask, FileEvidence, PermissionShown, QuestionShown
 from verifold.protocol.settings import (
@@ -49,7 +50,7 @@ from verifold.runner.messages import (
 from verifold.runner.permissions import Refusals
 from verifold.runner.session import AgentSession, PermissionChoice, PermissionRequest, TurnResult
 from verifold.server.activity import Activity
-from verifold.server.lab import Lab
+from verifold.server.lab import Lab, Said
 from verifold.server.member import Member
 from verifold.society.attention import news
 from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
@@ -2142,3 +2143,123 @@ async def test_a_harness_that_a_providers_limit_stops_without_a_reset_time_retri
     assert served.lab.board.turns[0].error == 'RuntimeError: 429 Too Many Requests'
     # The wait counts from the lab's clock after the failure that it follows.
     assert retry.at > served.lab.board.turns[retry.failures - 1].at
+
+
+async def test_a_turn_that_the_desk_ends_for_the_person_is_cancelled_and_the_agent_goes_on_at_once(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    await lab.join(agent('dee'), desk=True)
+    said = await lab.post(PostRequest(kind='message', text='Wake bo.', thread=lab.board.desk_chat), PERSON)
+    # Every turn of this agent runs until Verifold cuts it short, so the desk has a turn to end.
+    monkeypatch.setenv('FAKE_ACP_SLOW', '1')
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.starts) == 1)
+        await lab.interrupt('bo', Said(by='dee', post=said.post.id))
+        await until(lambda: len(calls(log, 'prompt')) >= 2)
+    finally:
+        running.cancel()
+
+    why = (
+        f'The desk ended the turn for the person, on post {said.post.id} of the person in the desk chat, and '
+        'Verifold cancelled it.'
+    )
+    assert [call['text'] for call in calls(log, 'prompt')][:2] == ['Start.', cut_short_message(why)]
+    assert calls(log, 'cancel')
+    assert lab.board.turns[0].error == why
+    assert len(lab.board.starts) == 2
+
+
+async def test_a_post_of_the_desk_for_the_person_rings_at_once_and_the_persons_words_to_the_desk_ring_nobody_else(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    await lab.join(agent('dee'), desk=True)
+    # The board never counts as quiet here, so a doorbell that waits for a quiet board waits for an hour.
+    running = asyncio.create_task(loop_for(served, tmp_path, quiet=3_600, max_quiet=3_600).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        said = await lab.post(PostRequest(kind='message', text='Tell bo.', thread=lab.board.desk_chat), PERSON)
+        # The short sleep shows that the person's words to the desk ring no other agent.
+        await asyncio.sleep(0.05)
+        quiet = [call['text'] for call in calls(log, 'prompt')]
+        await Member(lab, 'dee').say(said.post.id, 'The person asks bo for the tail.', thread='t-1', mentions=('bo',))
+        await until(lambda: len(lab.board.turns) == 2)
+    finally:
+        running.cancel()
+
+    assert quiet == ['Start.']
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL]
+
+
+def desk_loop(served: ServedBoard, tmp_path: Path) -> AgentLoop:
+    """Return the loop of the desk `dee`, which the test seated, with the fake harness and no quiet window."""
+    member, token = served.seat('dee')
+    joined = served.lab.board.agent('dee')
+    assert joined is not None
+    folder = tmp_path / '.verifold' / 'agents' / 'dee'
+    folder.mkdir(parents=True, exist_ok=True)
+    setup = AgentSetup(
+        agent=joined.agent,
+        harness=FAKE_HARNESS,
+        lab=tmp_path,
+        folder=folder,
+        log=tmp_path / 'dee.log',
+        token=token,
+        start='Start.',
+    )
+    return AgentLoop(member, setup, LoopSettings(mcp_url=served.url, retry_after=0.0, quiet=0.0))
+
+
+async def test_a_halt_rests_no_desk_and_the_desks_turns_count_toward_what_the_lab_spent(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    await lab.join(agent('dee'), desk=True)
+    monkeypatch.setenv('FAKE_ACP_DESK', 'dee')
+    await lab.set_budget(1_000, None)
+    # Another agent's turn ends with the tokens that reach the budget, so every agent but the desk rests.
+    await lab.end_turn(TurnSummary(agent='ada', seconds=1, usage=Usage(input_tokens=900, output_tokens=200)))
+    running = asyncio.create_task(desk_loop(served, tmp_path).run())
+    try:
+        await until(lambda: sum(turn.agent == 'dee' for turn in lab.board.turns) == 1)
+        await lab.post(PostRequest(kind='message', text='Where does it stand?', thread=lab.board.desk_chat), PERSON)
+        await until(lambda: sum(turn.agent == 'dee' for turn in lab.board.turns) == 2)
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+    assert lab.board.halted == 'tokens'
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL]
+    assert [turn.error for turn in lab.board.turns if turn.agent == 'dee'] == [None, None]
+    # The desk's turns count toward what the lab spent, as every turn does.
+    desk = sum(turn.usage.input_tokens + turn.usage.output_tokens for turn in lab.board.turns if turn.agent == 'dee')
+    assert desk > 0
+    assert lab.board.spent_tokens == 1_100 + desk
+    replies = [entry.post.text for entry in lab.board.posts if entry.post.author == 'dee']
+    assert replies == ['The desk dee read you.', 'The desk dee read you.']
+
+
+async def test_a_turn_of_the_desk_runs_on_when_the_lab_runs_out_of_time(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    await lab.join(agent('dee'), desk=True)
+    monkeypatch.setenv('FAKE_ACP_DESK', 'dee')
+    monkeypatch.setenv('FAKE_ACP_TURN_SECONDS', '0.5')
+    running = asyncio.create_task(desk_loop(served, tmp_path).run())
+    try:
+        await until(lambda: any(start.agent == 'dee' for start in lab.board.starts))
+        await lab.set_time_left(timedelta(0))
+        await lab.run_out_of_time()
+        await until(lambda: any(turn.agent == 'dee' for turn in lab.board.turns))
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+    assert lab.board.halted == 'time'
+    assert [turn.error for turn in lab.board.turns if turn.agent == 'dee'] == [None]
+    assert not calls(log, 'cancel')

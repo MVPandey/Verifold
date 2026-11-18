@@ -36,12 +36,14 @@ def seats(board: Board) -> int:
     Return how many reviewer seats the lab has: the number that the person set, or else the number for its size.
 
     The size counts the agents that are in the lab now: each agent that Verifold started and each invited agent
-    that came, without the agents that left. A checker in a record from before agents took reruns is none.
+    that came, without the agents that left and without the desk, which is no part of the lab's work. A checker in a
+    record from before agents took reruns is none.
     """
     chosen = board.settings.reviewers.seats
     if chosen is not None:
         return chosen
-    return default_seats(sum(not joined.agent.checks and board.here(joined) for joined in board.agents))
+    workers = (joined for joined in board.agents if not joined.agent.checks and not board.is_desk(joined.agent.id))
+    return default_seats(sum(board.here(joined) for joined in workers))
 
 
 def holders(board: Board) -> tuple[AgentId, ...]:

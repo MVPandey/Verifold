@@ -146,14 +146,19 @@ def test_only_the_coordinator_marks_a_post_or_a_thread_as_one_for_the_person() -
     assert woken(started(), steer.model_copy(update={'mentions': ('bo',)})) == {'bo'}
     wide = Message(id='p-1', thread='t-2', author='person', text='To everyone.', to_lab=True)
     refused(talk().post(wide), 'is the conversation with the person, and a post with `to_lab` is for the whole lab')
-    refused(started().post(forged), 'Only the agent that holds the coordinator seat marks a post')
-    refused(started().coordinator('bo').post(steer), 'Only the agent that holds the coordinator seat marks a post')
+    refused(
+        started().post(forged), 'Only the agent that holds the coordinator seat, and the desk with `on`, mark a post'
+    )
+    refused(
+        started().coordinator('bo').post(steer),
+        'Only the agent that holds the coordinator seat, and the desk with `on`, mark a post',
+    )
     refused(lab().post(forged.model_copy(update={'id': 'p-1'})), 'Only the agent that holds the coordinator seat')
 
     opened = talk().thread('t-3', opened_by='ada', for_person=True).board()
     assert opened.threads[-1].thread.for_person
-    refused(talk().thread('t-3', opened_by='bo', for_person=True), 'opens a thread for the person')
-    refused(lab().thread('t-2', opened_by='ada', for_person=True), 'opens a thread for the person')
+    refused(talk().thread('t-3', opened_by='bo', for_person=True), 'open a thread for the person')
+    refused(lab().thread('t-2', opened_by='ada', for_person=True), 'open a thread for the person')
 
 
 def test_a_post_for_the_person_does_not_open_a_closed_lab_again() -> None:

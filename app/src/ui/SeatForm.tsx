@@ -18,6 +18,8 @@ export interface Facts {
   readonly coordinator: boolean;
   /** The powers that the person switches on for the coordinator from the start. */
   readonly powers?: readonly Power[];
+  /** Whether the seat is the lab's desk. Only a seat that Verifold starts can be the desk. */
+  readonly desk?: boolean;
 }
 
 /**
@@ -39,17 +41,22 @@ export function SeatFields(props: {
       ) : (
         <Typed title={option.title} pick={seat} onPick={props.onSeat} />
       )}
-      <FactFields value={seat} family={option.family} onChange={props.onSeat} />
+      <FactFields value={seat} family={option.family} onChange={props.onSeat} desk />
     </>
   );
 }
 
-/** The fields for a seat's facts: its role, its model family, whether it is on call, and whether it is the coordinator's. */
+/**
+ * The fields for a seat's facts: its role, its model family, whether it is on call, whether it is the coordinator's,
+ * and, for a seat that Verifold starts, whether it is the desk.
+ */
 export function FactFields<T extends Facts>(props: {
   readonly value: T;
   /** The family that the seat has when the person states none. */
   readonly family: string;
   readonly onChange: (value: T) => void;
+  /** Whether the seat can be the desk. An invited agent cannot. */
+  readonly desk?: boolean;
 }): ReactElement {
   const { value } = props;
   const roleId = useId();
@@ -93,6 +100,16 @@ export function FactFields<T extends Facts>(props: {
           value={value.powers ?? []}
           onChange={(powers) => props.onChange({ ...value, powers })}
         />
+      ) : null}
+      {props.desk ? (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={value.desk ?? false}
+            onChange={(event) => props.onChange({ ...value, desk: event.target.checked })}
+          />
+          Desk. It answers you in the desk chat and acts on your word. A lab has one.
+        </label>
       ) : null}
     </>
   );

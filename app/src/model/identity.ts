@@ -53,6 +53,7 @@ export function seatMarks(view: AgentView): readonly string[] {
     view.coordinator ? 'Coordinator' : null,
     view.reviewer ? 'Reviewer seat' : null,
     view.on_call ? 'On call' : null,
+    view.desk ? 'Desk' : null,
   ].filter((mark) => mark !== null);
 }
 

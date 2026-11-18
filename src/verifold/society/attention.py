@@ -43,6 +43,11 @@ whose wish the post is and changes nothing about who hears it: the mark for the 
 the person there waits for the coordinator's reply, as `society.coordinator` says, the news and the update of the
 agent that holds the seat say so in one line. The line wakes nobody.
 
+The desk chat is the thread where the person and the lab's desk talk. A post of the person there is for the desk
+and for no other agent, and it is in no other agent's news. The desk hears nothing else: no post outside the desk
+chat is for it, and no round, rerun, or leaving of an agent is news for it. A post of the desk for the person
+carries the person's word, so it reaches the agents as a post of the person does.
+
 An agent that left the lab is news for the agents that wrote to it: the ones whose posts name it or reply to it.
 
 A post that is for an agent wakes it. The agent's news holds every post that it has not seen, and says which are for
@@ -70,6 +75,7 @@ from verifold.protocol.join import MAX_ENTRIES, MAX_NEWS, LeftLine, News, Profil
 from verifold.protocol.posts import Ask, Call, Check, Close, Entry, Post, Round
 from verifold.society.board import Board
 from verifold.society.coordinator import no_reply_line
+from verifold.society.desk import speaks_for_person
 from verifold.society.identity import post_line, post_view
 from verifold.society.lifecycle import alarm_line, no_alarm_line
 from verifold.society.lines import lines_of
@@ -120,8 +126,14 @@ def wakes(
     """
     post = entry.post
     reader = board.agent(agent_id)
-    if post.author == agent_id or (reader and reader.agent.checks) or board.gone(agent_id) or isinstance(post, Entry):
-        return False
+    no_one = (reader and reader.agent.checks) or board.gone(agent_id) or isinstance(post, Entry)
+    excluded = post.author == agent_id or bool(no_one)
+    # A lab without a desk has no desk chat, so its posts cost no look for one.
+    in_chat = bool(board.desks) and post.thread == board.desk_chat
+    desk = bool(board.desks) and board.is_desk(agent_id)
+    if excluded or desk or in_chat:
+        # The person's words in the desk chat are for the desk, and nothing else on the board is.
+        return not excluded and desk and in_chat and post.author == PERSON
     on_call = bool(reader) and board.on_call(agent_id)
     offers = board.holds_offers(post.thread)
     heard = offers and _to_listeners(board, agent_id, entry, on_call=on_call)
@@ -132,13 +144,13 @@ def wakes(
         # A side thread is for the members that watch it. No post in it is for every agent, the person's neither.
         # The same holds for the conversation, where the person's words are for the coordinator, whatever it watches,
         # and for the thread of the offers for a deliverable, which the person reads in the panel.
-        told = talk and post.author == PERSON and agent_id == board.coordinator
+        told = talk and speaks_for_person(post) and agent_id == board.coordinator
         return told or watches_thread(board, agent_id, post.thread)
     if reader and on_call:
         # No post for every agent is for an on-call agent, but a close is once the agent counts for it.
         if isinstance(post, Close) and board.counts(reader, before=entry.seq):
             return True
-    elif _for_everyone(board, entry) or (post.author == PERSON and not post.mentions and not post.reply_to):
+    elif _for_everyone(board, entry) or (speaks_for_person(post) and not post.mentions and not post.reply_to):
         # The person's words that name nobody are for every agent, whoever watches the thread.
         return True
     working = lines_of(board) if working is None else working
@@ -279,7 +291,7 @@ def _beside(
 
 def _hears_close(board: Board, agent_id: AgentId, opened: Posted, closed: RoundClosed) -> bool:
     reader = board.agent(agent_id)
-    if reader is None or reader.agent.checks or board.gone(agent_id):
+    if reader is None or reader.agent.checks or board.gone(agent_id) or board.is_desk(agent_id):
         return False
     took_part = agent_id == opened.post.author or any(
         entry.post.author == agent_id for entry in entries(board, opened.post.id)
@@ -369,8 +381,11 @@ def departures(board: Board, agent_id: AgentId, after: int, reach: int) -> tuple
     Return the agents that left after event `after`, up to event `reach`, and that an agent wrote to before.
 
     An agent wrote to another when one of its posts names the other, in `mentions` or in its text, or replies to
-    one of the other's posts. So an agent that waits for an answer learns that none comes.
+    one of the other's posts. So an agent that waits for an answer learns that none comes. The desk writes for the
+    person, so no leaving is news for it.
     """
+    if board.is_desk(agent_id):
+        return ()
     return tuple(
         left_line(board, left)
         for left in board.left
@@ -399,12 +414,14 @@ def _wrote_to(board: Board, agent_id: AgentId, left: AgentLeft) -> bool:
 
 
 def _unseen(board: Board, agent_id: AgentId, after: int) -> tuple[tuple[Posted, ...], tuple[Posted, ...]]:
-    # The posts by others after `after`: first the ones for the agent, then the rest.
+    # The posts by others after `after`: first the ones for the agent, then the rest. The desk chat is in the
+    # news of the desk alone.
     working = lines_of(board)
+    chat = None if board.is_desk(agent_id) else board.desk_chat
     marked = tuple(
         (wakes(board, agent_id, entry, working), entry)
         for entry in board.posts
-        if entry.seq > after and entry.post.author != agent_id
+        if entry.seq > after and entry.post.author != agent_id and entry.post.thread != chat
     )
     return tuple(entry for woken, entry in marked if woken), tuple(entry for woken, entry in marked if not woken)
 
@@ -460,8 +477,8 @@ def _named(board: Board, agent_id: AgentId, post: Post) -> bool:
 
 def _addresses(post: Post) -> bool:
     # The posts whose names wake an on-call agent: an ask or a call, which address the agents that they name, and
-    # the person's post.
-    return isinstance(post, Ask | Call) or post.author == PERSON
+    # the person's post, the desk's post for the person among them.
+    return isinstance(post, Ask | Call) or speaks_for_person(post)
 
 
 def _for_everyone(board: Board, entry: Posted) -> bool:

@@ -19,6 +19,7 @@ import { coordinatorOf } from '../model/coordinator.ts';
 import type { Tab } from '../model/coordinator.ts';
 import { crossedLine, crossLines } from '../model/crossings.ts';
 import { deliverLine, isDocked } from '../model/deliverables.ts';
+import { deskOf } from '../model/desk.ts';
 import type { Docked } from '../model/deliverables.ts';
 import { ago, clock, dayClock, duration, minutesBetween } from '../model/format.ts';
 import { builderLine, lineFacts, obstacleGroups } from '../model/obstacles.ts';
@@ -40,6 +41,7 @@ import { browserStore, useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
 import { Detail, Words } from './Markdown.tsx';
 import { CoordinatorSeat, OpenedForYou } from './Coordinator.tsx';
+import { DeskSeat } from './Desk.tsx';
 import { DeliverDoor, Deliverables } from './Deliverables.tsx';
 import { ChipView, Composer, Exact, Files, New } from './parts.tsx';
 import { Who } from './Picture.tsx';
@@ -116,7 +118,7 @@ export function Wall(
   const questionId = question?.thread.id ?? null;
   // The panel that is docked beside the wall: a tab of the panel for the coordinator, or the deliverables.
   const [panel, setPanel] = useState<Docked>(props.panel ?? null);
-  const docked = isDocked(panel, coordinatorOf(lab.agents) !== null);
+  const docked = isDocked(panel, coordinatorOf(lab.agents) !== null, deskOf(lab.agents) !== null);
   useEffect(() => {
     // The page makes room for the docked panel, so the person reads the wall and the panel at once. This is
     // the one place that does it: a switch from one panel to the other keeps the room.
@@ -168,7 +170,8 @@ export function Wall(
     lab.removed_deliverables.filter((item) => item.active).map((item) => item.thread),
   );
   const cards = threads
-    .filter((summary) => summary !== question && !isSide(summary))
+    // The desk chat shows in its own panel, so the wall has no card for it.
+    .filter((summary) => summary !== question && !isSide(summary) && summary.thread.desk !== true)
     .map((summary) =>
       surfaced.has(summary.thread.id)
         ? { ...summary, thread: { ...summary.thread, deliverable: null } }
@@ -261,7 +264,18 @@ export function Wall(
               {deliverLine(lab.deliverables) ? <span>{deliverLine(lab.deliverables)}</span> : null}
             </a>
           ) : null}
-          <CoordinatorSeat {...props} tab={panel === 'deliver' ? null : panel} onTab={setPanel} />
+          <DeskSeat
+            {...props}
+            open={panel === 'desk'}
+            onOpen={(open) => {
+              setPanel(open ? 'desk' : null);
+            }}
+          />
+          <CoordinatorSeat
+            {...props}
+            tab={panel === 'deliver' || panel === 'desk' ? null : panel}
+            onTab={setPanel}
+          />
           <Composer
             variant="steer"
             label="Steer the lab"

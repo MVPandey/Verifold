@@ -123,15 +123,21 @@ def no_alarm_line(board: Board, agent_id: AgentId, now: datetime | None = None) 
 
     The line speaks of a turn that the agent ends itself, because Verifold resumes once a turn that it or the
     harness cut short. It gives no advice. It is empty while an alarm waits, because the result shows that alarm,
-    and for an agent that Verifold cannot wake: an invited agent, a blind checker, or an agent that left. Without
-    `now`, time counts from the board's newest post.
+    and for an agent that Verifold cannot wake: an invited agent, a blind checker, or an agent that left. For the
+    desk, it says that a post of the person in the desk chat starts its next turn in every state of the lab, because
+    a halt rests no desk. Without `now`, time counts from the board's newest post.
     """
     joined = board.agent(agent_id)
     if joined is None or joined.agent.harness == GUEST or joined.agent.checks or board.gone(agent_id):
         return ''
+    if board.is_desk(agent_id):
+        return (
+            'The desk sets no alarm. After you end this turn, your next turn starts only when a post of the person '
+            'in the desk chat arrives, also while the lab is out of time, at its budget or its disk limit, or closed.'
+        )
+    left = minutes_left(board, now or latest_time(board))
     if pending_alarm(board, agent_id):
         return ''
-    left = minutes_left(board, now or latest_time(board))
     state = lab_state(board)
     if left == 0:
         starts = (

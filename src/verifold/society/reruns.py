@@ -80,12 +80,13 @@ def wanted_reruns(board: Board, post_id: PostId) -> tuple[RerunRequested, ...]:
 
 def _free(board: Board, post_id: PostId) -> tuple[AgentId, ...]:
     # The agents of the lab that could still take the rerun of a post, whatever seats they hold: each agent that
-    # is in the lab, did not write the post, and has not taken its rerun.
+    # is in the lab, did not write the post, and has not taken its rerun. The desk is no part of the lab's work.
     target = board.post(post_id)
     return tuple(
         joined.agent.id
         for joined in board.agents
         if not joined.agent.checks
+        and not board.is_desk(joined.agent.id)
         and board.here(joined)
         and (target is None or target.post.author != joined.agent.id)
         and board.take(joined.agent.id, post_id) is None

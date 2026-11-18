@@ -35,6 +35,7 @@ from verifold.protocol.threads import Thread
 from verifold.society.board import Board
 from verifold.society.candidates import check_candidate
 from verifold.society.coordinator import check_marked_thread, check_marks, check_removal, check_reviser
+from verifold.society.desk import check_desk_chat
 from verifold.society.errors import RejectedEvent
 from verifold.society.lifecycle import lab_state
 from verifold.society.reruns import (
@@ -93,10 +94,11 @@ def check_on_call(board: Board, event: OnCallSet) -> None:
     Check that a seat can go on call or come off it.
 
     Raises:
-        RejectedEvent: The agent is not in the lab, left it, or is a blind checker.
+        RejectedEvent: The agent is not in the lab, left it, is a blind checker, or is the desk.
 
     """
     _check_seat(board, event.agent)
+    _check_not_desk(board, event.agent, 'a seat on call')
 
 
 def check_coordinator(board: Board, event: CoordinatorSet) -> None:
@@ -114,6 +116,7 @@ def check_coordinator(board: Board, event: CoordinatorSet) -> None:
     """
     if event.agent:
         _check_seat(board, event.agent)
+        _check_not_desk(board, event.agent, 'the coordinator seat')
     if event.by == PERSON:
         return
     _check_seat(board, event.by)
@@ -134,6 +137,12 @@ def check_coordinator(board: Board, event: CoordinatorSet) -> None:
             'The person closed the coordinator seat, so no agent takes it by itself. The person can give it to an '
             'agent or open it.'
         )
+
+
+def _check_not_desk(board: Board, agent_id: AgentId, seat: str) -> None:
+    # The desk is no part of the lab's work, so it holds no other seat.
+    if board.is_desk(agent_id):
+        raise RejectedEvent(f"{agent_id} is the lab's desk, and the desk holds no other seat, so it takes no {seat}.")
 
 
 def _check_seat(board: Board, agent_id: AgentId) -> None:
@@ -160,7 +169,8 @@ def check_revision(board: Board, revision: QuestionRevised) -> None:
     told = board.posts[-1] if board.posts else None
     if told is None or told.post.id != revision.post or told.post.author != revision.by or told.seq != board.seq:
         raise RejectedEvent(f'Post {revision.post} is not the post of the person that tells the lab of this revision.')
-    if revision.by != PERSON or revision.request:
+    # A revision of the desk rests on the person's post in `on`, which `society.desk` checks.
+    if (revision.by != PERSON or revision.request) and revision.on is None:
         check_reviser(board, revision)
 
 
@@ -201,6 +211,8 @@ def check_thread(board: Board, thread: Thread) -> None:
         _check_between(board, thread)
     if thread.conversation or thread.for_person:
         check_marked_thread(board, thread)
+    if thread.desk:
+        check_desk_chat(board, thread)
 
 
 def check_post(board: Board, post: Post) -> None:
@@ -271,6 +283,8 @@ def check_alarm(board: Board, alarm: AlarmSet) -> None:
     _check_here(board, alarm.agent)
     if joined.agent.checks:
         raise RejectedEvent('A blind checker posts one check and sets no alarm.')
+    if board.is_desk(alarm.agent):
+        raise RejectedEvent('A post of the person in the desk chat wakes the desk, and the desk sets no alarm.')
 
 
 def check_profile(board: Board, profile: ProfileSet) -> None:
@@ -341,6 +355,8 @@ def check_reviewer(board: Board, event: ReviewerSet) -> None:
 
     """
     _check_seat(board, event.agent)
+    if event.reviewer:
+        _check_not_desk(board, event.agent, 'reviewer seat')
     if event.by == PERSON:
         return
     if event.by != event.agent:
@@ -385,6 +401,8 @@ def check_rerun(board: Board, rerun: RerunRequested) -> None:
     """
     _check_member(board, rerun.by)
     _check_here(board, rerun.by)
+    if board.is_desk(rerun.by):
+        raise RejectedEvent("The desk is no part of the lab's work, so it asks for no rerun.")
     target = board.post(rerun.post)
     if target is None:
         raise RejectedEvent(f'Post {rerun.post} does not exist.')
@@ -407,6 +425,8 @@ def check_take(board: Board, take: RerunTaken) -> None:
     if not board.agent(take.agent):
         raise RejectedEvent(f'{take.agent} is not an agent in this lab.')
     _check_here(board, take.agent)
+    if board.is_desk(take.agent):
+        raise RejectedEvent("The desk is no part of the lab's work, so it takes no rerun.")
     target = board.post(take.post)
     if target is None:
         raise RejectedEvent(f'Post {take.post} does not exist.')

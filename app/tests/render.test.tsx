@@ -1822,6 +1822,27 @@ describe('the lab page', () => {
     assert.equal(page('{}').includes('f-side'), false);
   });
 
+  it('has no card for the desk chat, which shows in its own panel', () => {
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    const chat = summary({
+      thread: { id: 't-6', title: 'The person and the desk', opened_by: 'person', desk: true },
+      posts: 2,
+    });
+    const html = renderToStaticMarkup(
+      <Wall
+        api={{} as Api}
+        data={{ ...data, threads: [chat, ...threads] }}
+        now={now}
+        open={null}
+        post={null}
+        questionRead={none}
+        cardRead={none}
+      />,
+    );
+
+    assert.equal(html.includes('id="card-t-6"'), false);
+  });
+
   it('marks the group and the line of a side thread that has a new post', () => {
     Object.assign(globalThis, {
       window: { localStorage: { getItem: () => '{"t-1":9,"t-2":9,"t-3":9}' } },

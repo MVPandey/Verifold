@@ -156,6 +156,39 @@ def test_run_refuses_a_fact_of_a_seat_that_it_does_not_know(agent: str) -> None:
         main(['run', 'Does it hold?', '--agent', agent])
 
 
+def test_run_takes_a_desk_after_a_comma_and_refuses_a_second_one_or_a_desk_with_another_seat(
+    serves: list[StartRequest | None], capsys: pytest.CaptureFixture[str]
+) -> None:
+    main(['run', 'Does it hold?', '--agent', 'codex', '--agent', 'claude-code:opus:high,desk'])
+
+    assert [start.agents for start in serves if start] == [
+        (AgentChoice(harness='codex'), AgentChoice(harness='claude-code', model='opus', effort='high', desk=True))
+    ]
+    assert '1 claude-code (opus, high effort, desk)' in capsys.readouterr().out
+    with pytest.raises(SystemExit, match='A lab has one desk'):
+        main(['run', 'Does it hold?', '--agent', 'codex,desk', '--agent', 'claude-code,desk'])
+    with pytest.raises(SystemExit, match='holds no other seat'):
+        main(['run', 'Does it hold?', '--agent', 'codex,desk,coordinator'])
+
+
+def test_a_projects_file_makes_no_seat_the_desk(
+    serves: list[StartRequest | None], project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seats = [{'harness': 'codex'}, {'harness': 'codex', 'model': 'mini', 'desk': True}]
+    global_settings(project, {'setup': {'agents': seats}})
+    main(['run', 'Does it hold?'])
+    capsys.readouterr()
+    project_settings(project, {'setup': {'agents': seats}})
+    main(['run', 'Does it hold?'])
+    cloned = capsys.readouterr().out
+
+    # The desk acts on the person's word, so only the person's own settings seat one.
+    mine, plain = (start.agents for start in serves if start)
+    assert [choice.desk for choice in mine] == [False, True]
+    assert [choice.desk for choice in plain] == [False, False]
+    assert "Did not use desk from this project's saved choices for new labs" in cloned
+
+
 @pytest.mark.usefixtures('project')
 def test_run_refuses_two_coordinators() -> None:
     with pytest.raises(SystemExit, match='A lab has one coordinator'):

@@ -2,10 +2,10 @@
 
 from typing import Annotated, Final, Literal
 
-from pydantic import StringConstraints
+from pydantic import Field, StringConstraints
 
 from verifold.protocol.ids import AgentId, DeliverableId, ThreadId
-from verifold.protocol.record import Record
+from verifold.protocol.record import Record, unset
 
 MAX_TITLE = 200
 """The most characters in a thread's title."""
@@ -18,6 +18,9 @@ QUESTION_TITLE: Final = 'The question'
 
 CONVERSATION_TITLE: Final = 'The person and the coordinator'
 """The title of the thread where the person and the lab's coordinator talk."""
+
+DESK_TITLE: Final = 'The person and the desk'
+"""The title of the desk chat, the thread where the person and the lab's desk talk."""
 
 
 type Carries = Literal['permission', 'question']
@@ -50,7 +53,16 @@ class Thread(Record):
     coordinator there is for the person.
     """
     for_person: bool = False
-    """Whether the lab's coordinator opened the thread for the person. Only the coordinator can mark a thread so."""
+    """
+    Whether the lab's coordinator, or the lab's desk, opened the thread for the person. Only they can mark a thread
+    so.
+    """
+    desk: bool = Field(default=False, exclude_if=unset)
+    """
+    Whether this is the desk chat: the thread where the person and the lab's desk talk. A lab has one at most, and
+    it opens when the desk joins. Only the person and the desk post there. A post of the person there is for the
+    desk and for no other agent, and a post of the desk there is for the person.
+    """
     deliverable: DeliverableId | None = None
     """
     For the thread that holds the offers of files for one deliverable of the person: that deliverable. The first

@@ -7,8 +7,12 @@ from verifold.society.board import Board
 
 
 def is_line_of_work(thread: Thread) -> bool:
-    """Return whether a thread is a line of work: one for the whole lab, and not the conversation or a thread of offers."""
-    return not (thread.between or thread.conversation or thread.deliverable)
+    """
+    Return whether a thread is a line of work: one for the whole lab, and no talk with the person and no offers.
+
+    The conversation, the desk chat, and a thread of offers are no lines of work.
+    """
+    return not (thread.between or thread.conversation or thread.desk or thread.deliverable)
 
 
 def question_thread(board: Board) -> ThreadId | None:
@@ -31,7 +35,11 @@ def lines_of(board: Board) -> dict[AgentId, ThreadId | None]:
     workers = {
         joined.agent.id for joined in board.agents if not joined.agent.checks and not board.gone(joined.agent.id)
     }
-    talk = {opened.thread.id for opened in board.threads if opened.thread.between or opened.thread.conversation}
+    talk = {
+        opened.thread.id
+        for opened in board.threads
+        if opened.thread.between or opened.thread.conversation or opened.thread.desk
+    }
     beside = talk | {question}
     lines: dict[AgentId, ThreadId | None] = {}
     for entry in board.posts:

@@ -41,7 +41,7 @@ from verifold.app import (
 from verifold.harnesses.catalog import CATALOG as BUILT_IN
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent, AgentChoice, ModelSpec
-from verifold.protocol.app import AgentView, LabView, NormsView, StartRequest
+from verifold.protocol.app import AgentView, DeskView, LabView, NormsView, StartRequest
 from verifold.protocol.events import (
     AgentJoined,
     AgentNamed,
@@ -2303,3 +2303,65 @@ async def test_a_coordinators_move_adds_a_seat_with_what_the_person_saw_and_noth
     lines = {line['id']: line for line in brief.structured_content['agents']}
     assert (lines['agent-4']['given_role'], lines['agent-4']['given_by']) == ('maker side', 'agent-2')
     assert (lines['agent-3']['given_role'], lines['agent-3']['given_by']) == ('depth run', 'agent-2')
+
+
+async def test_the_desk_starts_at_the_persons_first_post_in_the_desk_chat_and_answers_there(
+    project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_DESK', 'agent-2')
+    start = StartRequest(
+        question='Does it hold?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='fake', desk=True))
+    )
+    async with serving(project, start, {'fake': FAKE_HARNESS}, options=FAST) as client:
+        await until(lambda: turns_of(project, 'agent-1') == 1, timeout=60)
+        # The person's words to the lab are for every agent of the work, and not for the desk.
+        steer = await client.post('/posts', json={'kind': 'message', 'text': 'Look at the tail.', 'thread': 't-1'})
+        await until(lambda: at_rest(project, ('agent-1',), after=steer.json()['seq']), timeout=60)
+        quiet = turns_of(project, 'agent-2')
+        again = await client.post('/agents', json={'harness': 'fake', 'desk': True})
+        chat = DeskView.model_validate((await client.get('/desk')).json())
+        assert chat.thread is not None
+        await client.post('/posts', json={'kind': 'message', 'text': 'Where does it stand?', 'thread': 't-2'})
+        await until(lambda: turns_of(project, 'agent-2') == 1, timeout=60)
+        answered = DeskView.model_validate((await client.get('/desk')).json())
+        lab = await views(client)
+
+    assert (quiet, again.status_code) == (0, 400)
+    assert 'has its desk already: agent-2' in again.json()['detail']
+    assert (chat.desk, chat.thread.thread.id) == ('agent-2', 't-2')
+    assert answered.thread is not None
+    assert [item.post.text for item in answered.thread.posts] == ['Where does it stand?', 'The desk agent-2 read you.']
+    assert (lab['agent-2'].desk, lab['agent-1'].desk) == (True, False)
+    first = prompts_of(log, 'agent-2')[0]
+    assert "The person made your seat the lab's desk. The desk chat, thread t-2 on the board" in first
+    assert "agent-2) holds the lab's desk seat" in prompts_of(log, 'agent-1')[0]
+    # The other agents do not hear the person's words to the desk.
+    assert len(prompts_of(log, 'agent-1')) == 2
+
+
+async def test_an_invitation_takes_no_desk(project: Path) -> None:
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),))
+    async with serving(project, start, {'fake': FAKE_HARNESS}) as client:
+        refused = await client.post('/invitations', json={'desk': True})
+
+    assert refused.status_code == 400
+    assert 'The desk is a seat that Verifold starts' in refused.json()['detail']
+
+
+async def test_the_desk_starts_at_the_persons_first_post_while_the_lab_is_out_of_time(
+    project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_DESK', 'agent-2')
+    start = StartRequest(
+        question='Does it hold?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='fake', desk=True))
+    )
+    async with serving(project, start, {'fake': FAKE_HARNESS}, options=FAST) as client:
+        await until(lambda: turns_of(project, 'agent-1') == 1, timeout=60)
+        await client.post('/time', json={'minutes': 0})
+        await until(lambda: any(isinstance(event, TimeRanOut) for event in record(project)), timeout=60)
+        await client.post('/posts', json={'kind': 'message', 'text': 'Where does it stand?', 'thread': 't-2'})
+        await until(lambda: turns_of(project, 'agent-2') == 1, timeout=60)
+
+    # Only the person's message to the desk started a turn while the lab was out of time.
+    assert turns_of(project, 'agent-1') == 1
+    assert len(prompts_of(log, 'agent-2')) == 1

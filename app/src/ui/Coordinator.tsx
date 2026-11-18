@@ -36,6 +36,7 @@ import {
   yesLabel,
 } from '../model/coordinator.ts';
 import type { Around, Detail, Tab } from '../model/coordinator.ts';
+import { byDesk } from '../model/desk.ts';
 import { clock } from '../model/format.ts';
 import { personAnswer, split } from '../model/posts.ts';
 import { href } from '../model/route.ts';
@@ -267,8 +268,10 @@ function Say(props: Shared & { readonly item: PostView }): ReactElement {
   const { item } = props;
   const { post, at } = item;
   const mine = post.author === PERSON;
-  // Any agent can post in this thread. Only the coordinator's posts are the coordinator's side of the talk.
-  const other = !mine && post.author !== props.view.coordinator;
+  // Any agent can post in this thread. Only the coordinator's posts are the coordinator's side of the talk. The
+  // desk's post for the person is the person's side, and its mark says so.
+  const desk = byDesk(post);
+  const other = !mine && !desk && post.author !== props.view.coordinator;
   const waits = props.view.waits.includes(post.id);
   const boxed = post.kind === 'request' || (post.kind === 'ask' && waits);
   return (
@@ -279,6 +282,7 @@ function Say(props: Shared & { readonly item: PostView }): ReactElement {
       <p className="k-who">
         <b>{mine ? 'You' : authorName(props.lab.agents, post.author)}</b>
         {other ? <span className="f-tag">not the coordinator</span> : null}
+        <ForYou marked={desk} agents={props.lab.agents} author={post.author} desk />
         <time dateTime={at}>{clock(at)}</time>
       </p>
       {post.kind === 'request' ? (
@@ -587,7 +591,7 @@ function Answer(props: {
 }
 
 /** A box where the person writes: the first line is the headline, and the rest is the detail. */
-function Write(props: {
+export function Write(props: {
   readonly placeholder: string;
   readonly hint: string;
   readonly button?: string;
@@ -742,15 +746,19 @@ export function OpenedForYou(props: {
 }
 
 /**
- * The mark on a post that the coordinator posted on the person's behalf. The words of the post are the
- * coordinator's, so the mark names who posted it.
+ * The mark on a post that the coordinator or the desk posted on the person's behalf. The words of the post are
+ * that agent's, so the mark names who posted it. The desk's post rests on a message of the person in the desk chat.
  */
 export function ForYou(props: {
   readonly marked: boolean | undefined;
   readonly agents: readonly AgentView[];
   readonly author: string;
+  readonly desk?: boolean;
 }): ReactElement | null {
   if (!props.marked) return null;
+  if (props.desk) {
+    return <span className="k-for">the desk, for you</span>;
+  }
   return <span className="k-for">posted for you by {authorName(props.agents, props.author)}</span>;
 }
 

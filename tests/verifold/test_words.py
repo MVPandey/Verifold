@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from builders import START, RecordBuilder
+from conftest import agent
 from mcp import Client
 
 from verifold.app import NORMS_CHANGED, NORMS_TEMPLATE
@@ -42,8 +43,19 @@ from verifold.runner.messages import (
     more_time_message,
     start_message,
 )
-from verifold.server.join import INSTRUCTIONS, join_server
-from verifold.server.lab import ACCEPTED, CHANGED, REMOVED, STATED, TAKEN_BACK, Lab
+from verifold.server.join import DESK_READS, DESK_TOOLS, INSTRUCTIONS, join_server
+from verifold.server.lab import (
+    ACCEPTED,
+    CHANGED,
+    CHANGED_FOR_PERSON,
+    REMOVED,
+    REMOVED_FOR_PERSON,
+    REVISED_BY_DESK,
+    STATED,
+    STATED_FOR_PERSON,
+    TAKEN_BACK,
+    Lab,
+)
 from verifold.server.member import Member
 from verifold.society.board import Board
 from verifold.society.coordinator import no_reply_line
@@ -141,6 +153,7 @@ def messages() -> dict[str, str]:
     alarm = AlarmSet(seq=9, at=START, agent='ada', minutes=20, quiet=True, stays=True)
     seats = RecordBuilder().join('ada').join('bo').on_call('ada').coordinator('ada')
     closing = RecordBuilder().join('ada').join('bo').thread('t-1', opened_by='ada')
+    desk = RecordBuilder().join('ada').desk('dee').board()
     closing.post(Close(id='p-1', thread='t-1', author='ada', text='It holds.'))
     return {
         'doorbell': DOORBELL,
@@ -153,6 +166,16 @@ def messages() -> dict[str, str]:
         'cut short': cut_short_message('The harness stopped: max_tokens.'),
         'start': start,
         'start alone': start_message(RecordBuilder().join('ada').board(), ada, NORMS),
+        'start of the desk': start_message(desk, desk.agents[-1].agent, NORMS),
+        'start beside a desk': start_message(desk, ada, NORMS),
+        'no alarm of the desk': no_alarm_line(desk, 'dee'),
+        'no alarm of the desk, no time': no_alarm_line(
+            RecordBuilder().join('ada').desk('dee').time_set(START + timedelta(minutes=5)).ran_out().board(), 'dee'
+        ),
+        'cut short by the desk': cut_short_message(
+            'The desk ended the turn for the person, on post p-2 of the person in the desk chat, and Verifold '
+            'cancelled it.'
+        ),
         'start with deliverables': start_message(
             RecordBuilder().deliverable('d-1', 'One page.').join('ada').board(), ada, NORMS
         ),
@@ -162,6 +185,10 @@ def messages() -> dict[str, str]:
                 ('stated', STATED),
                 ('changed', CHANGED),
                 ('removed', REMOVED),
+                ('stated for the person', STATED_FOR_PERSON),
+                ('changed for the person', CHANGED_FOR_PERSON),
+                ('removed for the person', REMOVED_FOR_PERSON),
+                ('revised for the person', REVISED_BY_DESK),
                 ('accepted', ACCEPTED),
                 ('taken back', TAKEN_BACK),
                 ('thread', OFFERS_TITLE),
@@ -283,6 +310,19 @@ async def test_no_tool_of_the_board_describes_itself_or_its_result_with_an_order
         tools = (await client.list_tools()).tools
 
     assert len(tools) == 15
+    for tool in tools:
+        assert tool.description, tool.name
+        assert orders(tool.description) == [], tool.name
+        for text in (*_descriptions(tool.input_schema), *_descriptions(tool.output_schema)):
+            assert orders(text) == [], (tool.name, text)
+
+
+async def test_no_tool_of_the_desk_describes_itself_or_its_result_with_an_order(lab: Lab) -> None:
+    await lab.join(agent('dee'), desk=True)
+    async with Client(join_server(lambda _: Member(lab, 'dee'))) as client:
+        tools = (await client.list_tools()).tools
+
+    assert {tool.name for tool in tools} == DESK_TOOLS | DESK_READS
     for tool in tools:
         assert tool.description, tool.name
         assert orders(tool.description) == [], tool.name

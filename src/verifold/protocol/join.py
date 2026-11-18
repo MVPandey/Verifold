@@ -45,7 +45,7 @@ from verifold.protocol.posts import (
     RelativePath,
     fits_a_headline,
 )
-from verifold.protocol.record import Record
+from verifold.protocol.record import Record, unset
 from verifold.protocol.threads import Thread, Title
 from verifold.protocol.votes import Badge, BadgeLine, BadgeNote, Direction, VoteLine, VoteNote
 
@@ -143,7 +143,12 @@ class PostRequest(Record):
     and `new_thread`. The lab opens that thread with the first such post.
     """
     for_person: bool = False
-    """Whether the coordinator posts this for the person. With `new_thread`, the thread is one for the person too."""
+    """
+    Whether the coordinator, or the desk with `on`, posts this for the person. With `new_thread`, the thread is one
+    for the person too.
+    """
+    on: PostId | None = None
+    """For a post of the desk for the person: the person's post in the desk chat that it rests on."""
     minutes: int | None = None
     """On a round: how many minutes it stays open, from 1 to `MAX_ROUND_MINUTES`. No other kind takes it."""
     candidate: PostId | None = None
@@ -156,7 +161,8 @@ class PostRequest(Record):
         if self.kind == 'offer':
             raise ValueError('An offer of files for a deliverable goes through the `offer` tool.')
         if self.conversation:
-            if self.thread or self.new_thread or self.for_person:
+            # The desk's post for the person is the person's side of the conversation, so it takes the mark there.
+            if self.thread or self.new_thread or (self.for_person and self.on is None):
                 raise ValueError('`conversation` stands alone: without thread, new_thread, and for_person.')
             return self
         if (self.thread is None) == (self.new_thread is None):
@@ -393,7 +399,7 @@ class PostLine(Sparse):
     together.
 
     A line leaves out each field that holds nothing, as `Sparse` says: `by`, `helper`, `body`, `reply_to`,
-    `builds_on`, `for_person`, `sealed`, `up`, `down`, and `badges`. It has `seq` and no time.
+    `builds_on`, `for_person`, `on`, `sealed`, `up`, `down`, and `badges`. It has `seq` and no time.
     """
 
     id: PostId
@@ -420,8 +426,13 @@ class PostLine(Sparse):
     builds_on: tuple[PostId, ...] = ()
     for_person: bool = False
     """
-    Whether the lab's coordinator marked the post as one on the person's behalf. The author is still the
-    coordinator: the mark is the coordinator's word, and a post by the person has `person` as its author.
+    Whether the lab's coordinator, or the lab's desk, marked the post as one on the person's behalf. The author is
+    still that agent: the mark is its word, and a post by the person has `person` as its author.
+    """
+    on: PostId | None = None
+    """
+    For a post of the desk for the person: the person's post in the desk chat that it rests on. Such a post reaches
+    the agents as a post of the person does, and a line of the news holds its body too.
     """
     sealed: bool = False
     """
@@ -458,7 +469,8 @@ class PostLine(Sparse):
         """
         post = entry.post
         text, body = line_text(post.text), ''
-        if news and post.author == PERSON:
+        # The desk's post for the person carries the person's word, so a line of the news holds it as the person's.
+        if news and (post.author == PERSON or post.on is not None):
             # The person's headline has the record's limit of 1,000, so the line has room for it and the body's start.
             whole = holds_whole(post.text, post.body)
             text, body = post.text, post.body if whole else _cut(post.body, MAX_PERSON_LINE - len(post.text))
@@ -474,6 +486,7 @@ class PostLine(Sparse):
             reply_to=post.reply_to,
             builds_on=post.builds_on,
             for_person=post.for_person,
+            on=post.on,
             sealed=sealed,
             up=marks[0],
             down=marks[1],
@@ -1295,6 +1308,13 @@ class Brief(Record):
     """
     conversation: ThreadId | None = None
     """The thread where the person and the coordinator talk, which every agent can read. `None` while the lab has none."""
+    desk: AgentId | None = Field(default=None, exclude_if=unset)
+    """
+    The agent that holds the lab's desk seat, or `None` while the lab has no desk. The desk is no part of the lab's
+    work, and `agents` does not list it. Its posts for the person reach the agents as the person's posts do.
+    """
+    desk_chat: ThreadId | None = Field(default=None, exclude_if=unset)
+    """The thread where the person and the desk talk. `None` while the lab has no desk."""
     person_waits: PersonWait | None = None
     """
     For the agent that holds the coordinator seat: the person's oldest post in the conversation that waits for its
@@ -1419,3 +1439,120 @@ class Update(Record):
     """The same line as `no_reply` in the news: the person's post in the conversation that waits for your reply."""
     ends_at: AwareDatetime | None = None
     """When the lab ends. At that time Verifold stops the agents' turns. `None` means no time limit."""
+
+
+MAX_DESK_FILE = 20_000
+"""The most characters of a file that the desk's `read_file` returns. A longer file is cut, and the result says so."""
+
+
+class SeatLine(Sparse):
+    """One agent of the lab as the desk's overview shows it: who it is, its seats, and its turn by the record."""
+
+    id: AgentId
+    name: Name
+    seat: str = ''
+    """The label of the agent's seat. Empty when the label is the agent's name."""
+    marks: tuple[SeatMark, ...] = ()
+    """The seats that the agent holds now."""
+    status: str = ''
+    """What the agent says that it does now."""
+    thread: ThreadId | None = None
+    """The thread where the agent works now."""
+    in_turn: bool = False
+    """
+    Whether a turn of the agent started and has not ended, by the record. The record cannot tell a turn that runs
+    from a turn that Verifold lost when it stopped. An invited agent has no turns in the record.
+    """
+    turn_since: AwareDatetime | None = None
+    """When the agent's turn that runs started, by the record."""
+    turn_ended_at: AwareDatetime | None = None
+    """When the agent's last turn ended, while it is in no turn."""
+    invited: bool = False
+    """Whether the agent joined with an invitation and runs by itself. Verifold cannot end its turn."""
+    stopped: bool = False
+    """Whether Verifold stopped the agent after its harness failed too often in a row."""
+
+
+class Overview(Record):
+    """
+    What the desk's `overview` returns: the lab as the person's app has it, in one read of bounded size.
+
+    Each list holds at most `MAX_NEWS` entries, the newest ones, and counts the ones that it leaves out.
+    """
+
+    question: Question
+    state: LabState = 'open'
+    close: PostLine | None = None
+    """The close that stands, or `None`."""
+    closes_on: PostId | None = None
+    """The candidate that the close in `close` closes on."""
+    ends_at: AwareDatetime | None = None
+    minutes_left: float | None = None
+    """How many minutes the lab has left. Zero when it is out of time, and `None` without a time limit."""
+    agents: tuple[SeatLine, ...] = ()
+    """Every agent in the lab but the desk, in the order that they joined."""
+    left: int = 0
+    """How many agents left the lab or were removed."""
+    coordinator: AgentId | None = None
+    conversation: ThreadId | None = None
+    """The thread where the person and the coordinator talk."""
+    desk_chat: ThreadId | None = None
+    """The thread where the person and the desk talk."""
+    out_of_time: bool = False
+    """Whether the lab is out of time. While it is, or while `limit_reached` names a limit, every agent but the desk rests."""
+    no_reply: PersonWait | None = None
+    """
+    The oldest post of the person, or of the desk for the person, in the conversation that waits for the
+    coordinator's reply, with the whole minutes that it has waited and how many later posts wait.
+    """
+    waits: tuple[PostLine, ...] = ()
+    """What waits for the person's answer: asks, permission requests of harnesses, and requests for a move."""
+    more_waits: int = 0
+    report: PostLine | None = None
+    """The newest report of any agent."""
+    report_minutes_ago: int | None = None
+    candidates: tuple[CandidateLine, ...] = ()
+    """The candidate answers that stand, newest last."""
+    more_candidates: int = 0
+    round: RoundLine | None = None
+    """The round that is open now."""
+    reruns_wanted: tuple[RerunLine, ...] = ()
+    more_reruns: int = 0
+    obstacles: tuple[PostLine, ...] = ()
+    """The open obstacles, the newest first, at most `MAX_OBSTACLES`."""
+    more_obstacles: int = 0
+    deliverables: tuple[DeliverableLine, ...] = ()
+    budget: BudgetLine = BudgetLine()
+    """The lab's budget in tokens and in dollars, what the lab spent, and what is left."""
+    limit_reached: Limit | None = None
+    """The budget or the disk limit that stops the agents of the work now, or `None`."""
+    disk: DiskLine | None = None
+    """What the lab's files take on disk against its disk limit, or `None` until Verifold measured them."""
+    news: News | None = None
+
+
+class DeskFile(Record):
+    """What the desk's `read_file` returns: the text of a file that backs a post, at the commit that the post pins."""
+
+    post: PostId
+    path: str
+    commit: str
+    text: str
+    """The file's text, at most `MAX_DESK_FILE` characters."""
+    size: int
+    """How many characters the file has."""
+    cut: bool = False
+    """Whether `text` holds only the start of the file."""
+    news: News | None = None
+
+
+class DeskDone(Record):
+    """What an action of the desk returns: what the board recorded, the post of the person that it rests on, and the news."""
+
+    did: str
+    """What the board recorded, as one sentence of Verifold."""
+    on: PostId
+    """The person's post in the desk chat that the action rests on."""
+    post: PostId | None = None
+    """The post that the action made, when it made one."""
+    news: News | None = None

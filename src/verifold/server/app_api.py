@@ -28,6 +28,7 @@ from verifold.protocol.app import (
     DeliverableDecision,
     DeliverableRequest,
     DeliverableView,
+    DeskView,
     DiskRequest,
     FolderRequest,
     FolderView,
@@ -65,6 +66,7 @@ from verifold.protocol.settings import DiskSettings
 from verifold.protocol.usage import DiskUse, Usage
 from verifold.server.activity import Activity
 from verifold.server.conversation import conversation_view
+from verifold.server.desk_chat import desk_view
 from verifold.server.errors import LabExists, NoLab, ServerError, SetupRejected
 from verifold.server.lab import Build, Lab
 from verifold.server.member import Member
@@ -325,6 +327,11 @@ def _coordinator_routes(api: FastAPI, host: Host, authorized: params.Depends) ->
     @api.get('/conversation', dependencies=[authorized])
     async def conversation() -> ConversationView:
         return conversation_view(_lab(host).board)
+
+    @api.get('/desk', dependencies=[authorized])
+    async def desk() -> DeskView:
+        # The person writes to the desk with a post in the desk chat, as in any thread.
+        return desk_view(_lab(host).board)
 
     @api.post('/powers', dependencies=[authorized])
     async def power(change: PowerChange) -> ConversationView:
@@ -627,6 +634,7 @@ def _agent_view(
         role=role,
         on_call=board.on_call(agent_id),
         coordinator=board.coordinator == agent_id,
+        desk=board.is_desk(agent_id),
         status=status,
         thread=lab.working.get(agent_id),
         activity=activity.shown(agent_id),

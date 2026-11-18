@@ -492,3 +492,7 @@ def _check_can(board: Board, by: AgentId, what: str) -> None:
         raise RejectedEvent(f'{by} left this lab, so the board takes no post and no other change from it.')
     if joined.agent.checks:
         raise RejectedEvent(f'A blind checker posts one check and {what}.')
+    if board.is_desk(by):
+        raise RejectedEvent(
+            f"The desk is no part of the lab's work, so it {what}. The person's votes and badges are the person's own."
+        )

@@ -18,7 +18,7 @@ from pydantic import AfterValidator, Field, StringConstraints, WithJsonSchema
 
 from verifold.protocol.ids import AgentId, CommitId, DeliverableId, PostId, ThreadId
 from verifold.protocol.moves import Move
-from verifold.protocol.record import Record
+from verifold.protocol.record import Record, unset
 
 MAX_HEADLINE = 1_000
 """
@@ -138,10 +138,15 @@ class PostBase(Record):
     """
     for_person: bool = False
     """
-    Whether the lab's coordinator posted this for the person: the post carries what the person wants, in the
-    coordinator's words. Only the agent that holds the coordinator seat can mark a post so. The mark says whose
-    wish the post is, and `to_lab` says who hears it. Verifold sets `to_lab` on such a post where a post for the
-    whole lab can stand.
+    Whether the lab's coordinator, or the lab's desk, posted this for the person: the post carries what the person
+    wants, in the coordinator's or the desk's words. Only the agent that holds the coordinator seat, and the desk
+    with `on`, can mark a post so. The mark says whose wish the post is, and `to_lab` says who hears it. Verifold
+    sets `to_lab` on such a post of the coordinator where a post for the whole lab can stand.
+    """
+    on: PostId | None = Field(default=None, exclude_if=unset)
+    """
+    For a post that the lab's desk made for the person: the person's post in the desk chat that it rests on. Only
+    such a post has it, and it has `for_person` too. It reaches the agents as a post of the person does.
     """
 
 
