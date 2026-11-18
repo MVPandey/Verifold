@@ -515,6 +515,31 @@ async def test_the_report_route_gives_the_newest_report_or_nothing(client: httpx
     )
 
 
+async def test_the_reading_route_gives_the_labs_reading_or_nothing_and_the_person_replies_to_it(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    before = (await client.get('/reading')).json()
+    refused = await client.post('/posts', json={'kind': 'reading', 'text': 'Any speedup counts.', 'thread': 't-1'})
+    await lab.post(PostRequest(kind='reading', text='Any speedup counts.', thread='t-1'), 'bo')
+    await lab.post(PostRequest(kind='reading', text='12x on random input.', body='No verdict.', thread='t-1'), 'ada')
+    reply = {'kind': 'message', 'text': 'Read it as a goal.', 'thread': 't-1', 'reply_to': 'p-3'}
+    replied = await client.post('/posts', json=reply)
+
+    after = (await client.get('/reading')).json()
+
+    assert before is None
+    assert refused.status_code == 400
+    assert "A reading is the lab's word on how it reads your question." in refused.json()['detail']
+    assert (after['post']['id'], after['post']['kind'], after['post']['text'], after['post']['body']) == (
+        'p-3',
+        'reading',
+        '12x on random input.',
+        'No verdict.',
+    )
+    # The person's reply to the reading is an ordinary post of the person, and the reading still stands.
+    assert (replied.status_code, replied.json()['post']['reply_to']) == (200, 'p-3')
+
+
 async def test_needs_you_lists_open_asks_to_the_person_until_answered(client: httpx2.AsyncClient, lab: Lab) -> None:
     await lab.post(PostRequest(kind='ask', text='Rent a GPU?', thread='t-1', mentions=('person',)), 'bo')
 

@@ -5,9 +5,9 @@ A post's `kind` says what it does in the society, and `builds_on` says which pos
 shows how an idea moved from one agent's work into another's. A plan says what its author does next, an objection
 disputes its target, an answer can concede an objection, a check tests another agent's post, a proposal is its
 author's candidate answer for the lab, a close says that the lab is done and names the candidate that it closes on,
-a report tells the person where the lab is, a call offers work that another agent can take, an offer holds files for
-a deliverable of the person, a round asks every agent the same question at once, and an entry is an agent's answer
-to a round. A new kind is one more model in the `Post` union.
+a report tells the person where the lab is, a reading says how the lab reads the question, a call offers work that
+another agent can take, an offer holds files for a deliverable of the person, a round asks every agent the same
+question at once, and an entry is an agent's answer to a round. A new kind is one more model in the `Post` union.
 """
 
 from collections.abc import Callable
@@ -66,6 +66,7 @@ type PostKind = Literal[
     'check',
     'ruled_out',
     'report',
+    'reading',
     'call',
     'close',
     'request',
@@ -321,6 +322,19 @@ class Report(PostBase):
     kind: Literal['report'] = 'report'
 
 
+class Reading(PostBase):
+    """
+    How the lab reads the question: what counts as an answer, what the lab assumes, and what it leaves out.
+
+    `text` is the reading in a sentence or two, and `body` holds the detail. The newest reading is the lab's
+    reading, and it replaces every older one. The person's app shows it at the top of the lab's page. It is for
+    every agent that is not on call. While an agent holds the coordinator seat, only that agent posts one.
+    While nobody holds it, any agent of the lab that is not on call does. A record from before readings holds none.
+    """
+
+    kind: Literal['reading'] = 'reading'
+
+
 class Call(PostBase):
     """
     Work that needs an agent: a line that nobody builds, a part to hand over, or more hands for a line.
@@ -428,6 +442,7 @@ type Post = Annotated[
     | Check
     | RuledOut
     | Report
+    | Reading
     | Call
     | Close
     | MoveRequest

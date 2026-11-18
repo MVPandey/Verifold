@@ -86,6 +86,7 @@ from verifold.society.standing import agreed, closing, standing
 from verifold.society.turns import before
 from verifold.society.views import (
     candidates_view,
+    latest_reading,
     latest_report,
     line_times,
     needs_person,
@@ -284,14 +285,6 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     async def thread(thread_id: ThreadId) -> ThreadView:
         return thread_view(current().board, PERSON, thread_id)
 
-    @api.get('/report', dependencies=[authorized])
-    async def report() -> PostView | None:
-        return latest_report(current().board)
-
-    @api.get('/candidates', dependencies=[authorized])
-    async def candidates() -> CandidatesView:
-        return candidates_view(current().board)
-
     @api.get('/posts/{post_id}/file', dependencies=[authorized])
     async def file(post_id: PostId, path: str) -> FileText:
         return await host.file_text(post_id, path)
@@ -317,8 +310,25 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
     async def events() -> EventSourceResponse:
         return EventSourceResponse(_changes(host, activity))
 
+    _pinned_routes(api, host, authorized)
     _seat_routes(api, host, activity, authorized)
     return api
+
+
+def _pinned_routes(api: FastAPI, host: Host, authorized: params.Depends) -> None:
+    """Add the posts that the lab page pins for the person: the lab's reading, its newest report, and its candidates."""
+
+    @api.get('/reading', dependencies=[authorized])
+    async def reading() -> PostView | None:
+        return latest_reading(_lab(host).board)
+
+    @api.get('/report', dependencies=[authorized])
+    async def report() -> PostView | None:
+        return latest_report(_lab(host).board)
+
+    @api.get('/candidates', dependencies=[authorized])
+    async def candidates() -> CandidatesView:
+        return candidates_view(_lab(host).board)
 
 
 def _coordinator_routes(api: FastAPI, host: Host, authorized: params.Depends) -> None:

@@ -35,12 +35,12 @@ import { repliesLabel } from '../src/model/turns.ts';
 import { markSeen, readSeen } from '../src/model/seen.ts';
 import { browserStore } from '../src/ui/hooks.ts';
 import type { ThreadRead } from '../src/ui/hooks.ts';
-import { LabPage, QuestionForm, ReportCard, Wall } from '../src/ui/LabPage.tsx';
+import { LabPage, QuestionForm, ReadingCard, ReportCard, Wall } from '../src/ui/LabPage.tsx';
 import { Failed } from '../src/ui/App.tsx';
 import { Boundary, Detail, Markdown, Words } from '../src/ui/Markdown.tsx';
 import { NeedsPage } from '../src/ui/NeedsPage.tsx';
 import { NormsForm, savedLine } from '../src/ui/NormsPage.tsx';
-import { HarnessAsk } from '../src/ui/parts.tsx';
+import { Composer, HarnessAsk } from '../src/ui/parts.tsx';
 import { Mark } from '../src/ui/Picture.tsx';
 import { SettingsForm } from '../src/ui/SettingsPage.tsx';
 import { SetupPage } from '../src/ui/SetupPage.tsx';
@@ -1383,6 +1383,128 @@ describe('the lab page', () => {
       { render: () => <>{Detail(open)}</> },
     ]);
     assert.ok(folded.includes('<details class="f-detail"><summary'));
+  });
+
+  const reading = postView(
+    {
+      ...result('p-20', { author: 'agent-1', thread: 't-1' }),
+      kind: 'reading',
+      text: 'An answer is a sort that is 12x faster on random input. A verdict that none is fails the question.',
+      body: 'We **assume** input of a million keys.\n\nWe leave out sorted input.',
+    },
+    20,
+  );
+
+  it('pins the lab’s reading of the question above the report, with its detail open and a box for a reply', () => {
+    Object.assign(globalThis, { window: { localStorage: { getItem: () => '{}' } } });
+    const report = postView({ ...result('p-30', { author: 'agent-2' }), kind: 'report' }, 30);
+    const html = renderToStaticMarkup(
+      <LabPage
+        api={{} as Api}
+        data={{ ...data, reading, report }}
+        now={now}
+        open={null}
+        post={null}
+      />,
+    );
+    assert.ok(html.includes('<section class="f-report" aria-labelledby="reading-title">'));
+    assert.ok(html.includes('<h2 id="reading-title">How the lab reads your question</h2>'));
+    // The fixture's posts are from 14:04, and the page's clock says 14:26.
+    assert.ok(html.includes('Agent 1 posted it <time dateTime="2026-11-06T14:04:00Z" title='));
+    assert.ok(html.includes('>22 min ago</time>'));
+    assert.ok(
+      html.includes(
+        '<p class="f-report-text">An answer is a sort that is 12x faster on random input. A verdict that none is fails the question.</p>',
+      ),
+    );
+    assert.ok(html.includes('<a href="#/thread/t-1/p-20">See it in its thread</a>'));
+    assert.ok(html.includes('aria-label="Detail of the reading"'));
+    assert.ok(html.includes('<p>We <strong>assume</strong> input of a million keys.</p>'));
+    assert.ok(html.includes('aria-label="Reply to the reading"'));
+    assert.ok(html.includes('placeholder="Say where the lab reads your question wrong"'));
+    assert.ok(html.includes('Your reply reaches Agent 1 and the agents that watch its thread.'));
+    // The reading stands above the report, and both stand above the wall.
+    assert.ok(html.indexOf('reading-title') < html.indexOf('report-title'));
+    assert.ok(html.indexOf('report-title') < html.indexOf('f-wall'));
+    // A reading that an agent objected to says so.
+    const disputed = renderToStaticMarkup(
+      <ReadingCard
+        reading={{ ...reading, standing: 'disputed' }}
+        agents={[]}
+        opened={data.lab.opened_at}
+        now={now}
+        onReply={() => Promise.resolve()}
+      />,
+    );
+    assert.ok(disputed.includes('Disputed'));
+  });
+
+  it('says that the lab has not said how it reads the question, and how long ago it opened', () => {
+    const html = page('{}');
+    assert.ok(html.includes('<h2 id="reading-title">How the lab reads your question</h2>'));
+    // The lab opened at 14:00, and the page's clock says 14:26.
+    assert.ok(
+      html.includes(
+        '<p class="dim">The lab has not said how it reads your question. It opened 26 min ago.</p>',
+      ),
+    );
+    assert.equal(html.includes('Reply to the reading'), false);
+    assert.ok(html.indexOf('reading-title') < html.indexOf('f-wall'));
+  });
+
+  it('posts the person’s reply to the reading in its thread, as a reply to the reading', async () => {
+    storage();
+    const sent: PostRequest[] = [];
+    let reloads = 0;
+    const api = {
+      post: (request: PostRequest) => {
+        sent.push(request);
+        return Promise.resolve(reading);
+      },
+    } as unknown as Api;
+    const none: ThreadRead = { view: null, error: null };
+    const props = {
+      api,
+      data: {
+        ...data,
+        reading,
+        reload: () => {
+          reloads += 1;
+        },
+      },
+      now,
+      open: null,
+      post: null,
+      questionRead: none,
+      cardRead: none,
+    };
+    let send: ((text: string) => Promise<void>) | undefined;
+    live([
+      {
+        render: () => Wall(props),
+        then: (tree) => {
+          const card = tree.find((element) => element.type === ReadingCard);
+          assert.ok(card);
+          const box = elementsOf(ReadingCard(card.props as Parameters<typeof ReadingCard>[0])).find(
+            (element) => element.type === Composer,
+          );
+          send = box?.props['onSend'] as typeof send;
+        },
+      },
+      { render: () => Wall(props) },
+    ]);
+    assert.ok(send);
+    await send('Read 12x as a hard target.\nNot as far as the data permits.');
+    assert.deepEqual(sent, [
+      {
+        kind: 'message',
+        thread: 't-1',
+        reply_to: 'p-20',
+        text: 'Read 12x as a hard target.',
+        body: 'Not as far as the data permits.',
+      },
+    ]);
+    assert.equal(reloads, 1);
   });
 
   it('names on each card the threads that it builds on and that build on it', () => {

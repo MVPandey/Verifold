@@ -15,6 +15,7 @@ const NOUNS = {
   check: 'check',
   ruled_out: 'ruled-out lead',
   report: 'report',
+  reading: 'reading',
   call: 'call',
   close: 'close',
   request: 'request',
@@ -60,6 +61,7 @@ export function tone(post: Post): MarkTone {
     case 'plan':
     case 'message':
     case 'report':
+    case 'reading':
       return 'quiet';
   }
 }
@@ -84,7 +86,9 @@ export interface ActContext {
  */
 export function act(post: Post, to: Post | null, context: ActContext): string {
   const them = to ? context.called(to.author) : 'a post';
-  const theirs = to ? `${them}’s ${NOUNS[to.kind]}` : 'a post';
+  // The person's own post is "your message" in a line that the person reads.
+  const owner = to?.author === PERSON ? 'your' : `${them}’s`;
+  const theirs = to ? `${owner} ${NOUNS[to.kind]}` : 'a post';
   const reply = post.reply_to === null ? '' : ` in reply to ${theirs}`;
   switch (post.kind) {
     case 'result':
@@ -130,6 +134,8 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
     }
     case 'report':
       return `reported to you${reply}`;
+    case 'reading':
+      return `said how the lab reads your question${reply}`;
     case 'message':
       return post.reply_to === null ? 'posted a message' : `replied to ${them}`;
   }
@@ -416,6 +422,7 @@ const PLURALS = {
   call: ['call', 'calls'],
   ask: ['question', 'questions'],
   report: ['report', 'reports'],
+  reading: ['reading', 'readings'],
   close: ['close', 'closes'],
   request: ['request', 'requests'],
   offer: ['offer', 'offers'],

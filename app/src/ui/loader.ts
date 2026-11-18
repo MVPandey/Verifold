@@ -18,6 +18,8 @@ export interface LabData {
   readonly needs: readonly PostView[];
   /** The newest report for the person, or `null` when no agent has posted one. */
   readonly report: PostView | null;
+  /** The lab's reading of the question, or `null` when no agent has posted one. */
+  readonly reading?: PostView | null;
   /** The candidate answers with what each builds on, and the one that a close closes on. */
   readonly candidates: CandidatesView;
   /** The conversation with the coordinator, its powers, and what it did for the person. `null` before a lab starts. */
@@ -35,6 +37,7 @@ export const EMPTY: LabData = {
   threads: [],
   needs: [],
   report: null,
+  reading: null,
   candidates: NO_CANDIDATES,
   conversation: null,
   desk: null,
@@ -50,7 +53,7 @@ export type Apply = (update: (old: LabData) => LabData) => void;
 
 /** Reads the lab from the server, and keeps the reads in order. */
 export interface Loader {
-  /** Read the whole lab: the setup, the lab view, the threads, the asks to the person, and the newest report. */
+  /** Read the whole lab: the setup, the lab view, the threads, the asks to the person, the report, and the reading. */
   readonly full: () => void;
   /** Read only the lab view, which holds what each agent is doing. */
   readonly activity: () => void;
@@ -142,16 +145,17 @@ export function createLoader(api: Api, apply: Apply): Loader {
 async function readLab(api: Api): Promise<Omit<LabData, 'version'>> {
   const setup = await api.setup();
   if (setup.question === null) return { ...EMPTY, setup };
-  const [lab, threads, needs, report, candidates, conversation, desk] = await Promise.all([
+  const [lab, threads, needs, report, reading, candidates, conversation, desk] = await Promise.all([
     api.lab(),
     api.threads(),
     api.needs(),
     api.report(),
+    api.reading(),
     api.candidates(),
     api.conversation(),
     api.desk(),
   ]);
-  return { setup, lab, threads, needs, report, candidates, conversation, desk, error: null };
+  return { setup, lab, threads, needs, report, reading, candidates, conversation, desk, error: null };
 }
 
 /**

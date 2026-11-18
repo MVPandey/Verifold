@@ -30,7 +30,7 @@ from verifold.protocol.events import (
     WatchSet,
 )
 from verifold.protocol.ids import PERSON, AgentId
-from verifold.protocol.posts import Answer, Check, Close, Objection, Post, Proposal
+from verifold.protocol.posts import Answer, Check, Close, Objection, Post, Proposal, Reading
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
 from verifold.society.candidates import check_candidate
@@ -498,6 +498,8 @@ def _check_for_lab(board: Board, post: Post) -> None:
         )
     if isinstance(post, Close):
         _check_close(board, post)
+    if isinstance(post, Reading):
+        _check_reading(board, post)
     if not post.to_lab:
         return
     if post.author not in (PERSON, board.coordinator):
@@ -506,6 +508,32 @@ def _check_for_lab(board: Board, post: Post) -> None:
         raise RejectedEvent(
             'A post for the whole lab is in a thread for the whole lab, names nobody in `mentions`, and replies to '
             'no post.'
+        )
+
+
+def _check_reading(board: Board, reading: Reading) -> None:
+    # The lab's reading of the question is for every agent, so it stands in a thread for the whole lab. The agent
+    # that holds the coordinator seat posts it, and in a lab where nobody holds the seat, an agent that works does.
+    if board.is_side(reading.thread) or reading.thread == board.conversation or board.holds_offers(reading.thread):
+        raise RejectedEvent(
+            'A reading is for the whole lab, so it is in a thread for the whole lab: not a side thread, the '
+            'conversation, or a thread of offers.'
+        )
+    if reading.author == PERSON:
+        raise RejectedEvent(
+            "A reading is the lab's word on how it reads your question. A reply to it tells the lab where it reads "
+            'the question wrong.'
+        )
+    holder = board.coordinator
+    if holder:
+        if reading.author != holder:
+            raise RejectedEvent(
+                f'{holder} holds the coordinator seat, so only {holder} posts the reading of the question.'
+            )
+    elif board.on_call(reading.author):
+        raise RejectedEvent(
+            'Your seat is on call, so you post no reading. In a lab where nobody holds the coordinator seat, an '
+            'agent that is not on call posts it.'
         )
 
 

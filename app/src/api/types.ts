@@ -29,6 +29,7 @@ export type PostKind =
   | 'check'
   | 'ruled_out'
   | 'report'
+  | 'reading'
   | 'call'
   | 'close'
   | 'request'
@@ -920,6 +921,7 @@ export type Post =
         | 'proposal'
         | 'ruled_out'
         | 'report'
+        | 'reading'
         | 'call'
         | 'close';
     })

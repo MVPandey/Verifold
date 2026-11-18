@@ -52,7 +52,7 @@ from verifold.protocol.join import (
     ThreadSummary,
     ThreadView,
 )
-from verifold.protocol.posts import Ask, Call, Check, Close, Objection, Plan, Proposal, Report, Result
+from verifold.protocol.posts import Ask, Call, Check, Close, Objection, Plan, Proposal, Reading, Report, Result
 from verifold.protocol.threads import Thread
 from verifold.protocol.usage import DiskUse
 from verifold.protocol.votes import BADGES, MAX_VOTE_LINES, NEWEST_VOTES
@@ -69,6 +69,7 @@ from verifold.society.lifecycle import (
     lab_state,
     latest_time,
     minutes_left,
+    minutes_text,
     no_alarm_line,
     pending_alarm,
 )
@@ -184,10 +185,10 @@ def crossings(board: Board) -> tuple[Crossing, ...]:
     An idea crosses when a post names, in `builds_on`, a post that another agent wrote in another thread. A link
     inside one thread, or between two posts of one agent, is the ordinary course of one line of work. A link to or
     from a post of the person is none either, because every line of work starts from the person's question. Nor is
-    a report's link, because a report names its sources and builds nothing on them.
+    the link of a report or of a reading, because such a post names its sources and builds nothing on them.
     """
     by_id = {entry.post.id: entry for entry in board.posts}
-    built = (entry for entry in board.posts if not isinstance(entry.post, Report | Close))
+    built = (entry for entry in board.posts if not isinstance(entry.post, Report | Reading | Close))
     pairs = ((by_id.get(source), entry) for entry in built for source in dict.fromkeys(entry.post.builds_on))
     return tuple(
         (source, entry)
@@ -299,15 +300,15 @@ def _built_on(board: Board, entry: Posted) -> bool:
     """
     Return whether work builds on a result already.
 
-    Another agent of the lab builds on it with any post but a report, a check, or an objection, which name a post
-    and build nothing. The result's own author builds on it with a later result, so only the newest result of an
-    author's chain still waits.
+    Another agent of the lab builds on it with any post but a report, a reading, a check, or an objection, which name
+    a post and build nothing. The result's own author builds on it with a later result, so only the newest result of
+    an author's chain still waits.
     """
     workers = {joined.agent.id for joined in board.agents if not joined.agent.checks}
     return any(
         isinstance(other.post, Result)
         if other.post.author == entry.post.author
-        else other.post.author in workers and not isinstance(other.post, Report | Check | Objection | Close)
+        else other.post.author in workers and not isinstance(other.post, Report | Reading | Check | Objection | Close)
         for other in board.built_on(entry.post.id)
     )
 
@@ -326,17 +327,18 @@ def brief(  # noqa: PLR0913
 
     It holds the agent's own line, the lab's state and the time that it has left, how many agents are in a turn
     and how many have an alarm that waits, the other agents with their latest plans, the candidate answers that
-    stand with the one that a close closes on, and the newest report with its age. For the agent that holds the
-    coordinator seat, it holds the person's oldest post in the conversation that waits for its reply, with its age
-    and the number of later ones that wait too. Then come the threads: the newest ones, one line for each side
+    stand with the one that a close closes on, the newest report with its age, and the lab's reading of the
+    question with its age, or a line that says that the lab has none. For the agent that holds the coordinator
+    seat, it holds the person's oldest post in the conversation that waits for its reply, with its age and the
+    number of later ones that wait too. Then come the threads: the newest ones, one line for each side
     thread, the threads where one agent works alone, and the threads that got no post for a long while. Then come
     the posts by where they stand: the disputed posts, the results that nobody has built on, the results that
     nobody has checked, the open obstacles with the counts of the others, the asks that nobody has answered, and
     the calls that need an agent. The order ranks nothing. `how` says how the board works.
 
-    `now` dates the time that the lab has left, the ages of the report, the candidates, and the person's post that
-    waits for a reply, the quiet threads, the votes that are sealed for the agent, the open round and the entries
-    that are sealed for the agent, and the leases on the wanted reruns. Without it, time counts from the board's newest post. The agents in a turn come from the record, because this
+    `now` dates the time that the lab has left, the ages of the report, the reading, the candidates, and the
+    person's post that waits for a reply, the quiet threads, the votes that are sealed for the agent, the open round
+    and the entries that are sealed for the agent, and the leases on the wanted reruns. Without it, time counts from the board's newest post. The agents in a turn come from the record, because this
     package does no I/O and so knows no live activity. For the same reason, `disk` is what Verifold measured of
     the lab's files last, or `None`.
     """
@@ -429,11 +431,13 @@ def brief(  # noqa: PLR0913
     standing_candidates = candidates(board)
     older, shown = standing_candidates[:-MAX_CANDIDATES], standing_candidates[-MAX_CANDIDATES:]
     reported = newest_report(board)
+    reading = standing_reading(board)
     done = closing(board)
     named = closes_on(board, done) if done else None
     you = board.agent(agent_id)
     close_line = post_line(board, done, agent_id, now) if done else None
     report_line = post_line(board, reported, agent_id, now) if reported else None
+    reading_line = post_line(board, reading, agent_id, now) if reading else None
     waits = _person_waits(board, agent_id, now)
     your_line = _agent_line(board, you.agent, working, agent_id, now) if you else None
     lines = tuple(_agent_line(board, agent, working, agent_id, now) for agent in others)
@@ -444,6 +448,7 @@ def brief(  # noqa: PLR0913
         *news.others,
         close_line,
         report_line,
+        reading_line,
         waits.line if waits else None,
         *(line for agent in (your_line, *lines) if agent for line in (agent.plan, agent.latest)),
         *(summary.latest for summary in summaries[:MAX_NEWS]),
@@ -528,6 +533,9 @@ def brief(  # noqa: PLR0913
         closes_on=named.post.id if named else None,
         report=report_line,
         report_minutes_ago=minutes_since(reported.at, now) if reported else None,
+        reading=reading_line,
+        reading_minutes_ago=minutes_since(reading.at, now) if reading else None,
+        no_reading=None if reading else _no_reading(board, now),
         round=round_line(board, agent_id, now),
         threads=tuple(latest(summary) for summary in summaries[:MAX_NEWS]),
         more_threads=max(len(summaries) - MAX_NEWS, 0),
@@ -808,3 +816,20 @@ def latest_report(board: Board) -> PostView | None:
     """Return the newest report that an agent posted, as the person's app shows it, or `None`."""
     entry = newest_report(board)
     return post_view(board, entry, PERSON) if entry else None
+
+
+def standing_reading(board: Board) -> Posted | None:
+    """Return the lab's reading of the question: the newest reading, in whatever thread it is, or `None` without one."""
+    return next((entry for entry in reversed(board.posts) if isinstance(entry.post, Reading)), None)
+
+
+def latest_reading(board: Board) -> PostView | None:
+    """Return the lab's reading of the question, as the person's app shows it, or `None`."""
+    entry = standing_reading(board)
+    return post_view(board, entry, PERSON) if entry else None
+
+
+def _no_reading(board: Board, now: datetime) -> str:
+    """Return the line of a lab without a reading: that it has none, and how long ago the lab opened."""
+    opened = minutes_text(max((now - board.opened.at).total_seconds() / 60, 0))
+    return f'No `reading` yet. The lab opened {opened} ago.'

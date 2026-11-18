@@ -9,6 +9,7 @@ import type {
   LabView,
   Need,
   Obstacle,
+  Post,
   PostView,
   QuestionVersion,
   ThreadLink,
@@ -23,7 +24,7 @@ import { deskOf } from '../model/desk.ts';
 import type { Docked } from '../model/deliverables.ts';
 import { ago, clock, dayClock, duration, minutesBetween } from '../model/format.ts';
 import { builderLine, lineFacts, obstacleGroups } from '../model/obstacles.ts';
-import { clip, isLong, personMessage, standingChip } from '../model/posts.ts';
+import { clip, isLong, personMessage, personReply, standingChip } from '../model/posts.ts';
 import { isRevision, noteLabel, revisedBy, revisedLine } from '../model/question.ts';
 import { href } from '../model/route.ts';
 import { hasNew, markSeen, readSeen } from '../model/seen.ts';
@@ -104,7 +105,8 @@ export function LabPage(props: PageProps & Place): ReactElement {
 
 /**
  * The lab as a wall: the question and the candidate answers, what waits for the person, the box that steers the lab
- * with the control that opens a round, the newest report, the band of a quiet lab, the newest round, and one card
+ * with the control that opens a round, the lab's reading of the question, the newest report, the band of a quiet
+ * lab, the newest round, and one card
  * for each thread. The cards stay in the order of their
  * threads' numbers, so a status that changes moves no card. The side threads come after the cards as one folded group, one line each. `questionRead` is the question's thread, and `cardRead` is the thread of the open card.
  */
@@ -309,6 +311,17 @@ export function Wall(
         </section>
       ) : null}
 
+      <ReadingCard
+        reading={data.reading ?? null}
+        agents={lab.agents}
+        opened={lab.opened_at}
+        now={props.now}
+        onReply={async (text, to) => {
+          const request = personReply(text, to);
+          if (request) await api.post(request);
+          data.reload();
+        }}
+      />
       {data.report ? <ReportCard report={data.report} agents={lab.agents} now={props.now} /> : null}
 
       <div className="f-body">
@@ -658,6 +671,72 @@ export function ReportCard(props: {
         files={post.evidence}
         open
         label="Detail of the report"
+      />
+    </section>
+  );
+}
+
+/**
+ * How the lab reads the person's question, pinned above the report: the newest reading of an agent, who posted it
+ * and how long ago, where it stands when an agent disputes it, what it says, its detail open as on the report card,
+ * and a box for the person's reply to it. Without a reading, a line says that the lab has not said how it reads the
+ * question, and how long ago the lab opened.
+ */
+export function ReadingCard(props: {
+  readonly reading: PostView | null;
+  readonly agents: readonly AgentView[];
+  /** When the lab opened. */
+  readonly opened: string;
+  readonly now: Date;
+  /** Post the person's reply to the reading. */
+  readonly onReply: (text: string, to: Post) => Promise<void>;
+}): ReactElement {
+  const head = <h2 id="reading-title">How the lab reads your question</h2>;
+  if (props.reading === null) {
+    return (
+      <section className="f-report" aria-labelledby="reading-title">
+        <div className="f-report-head">{head}</div>
+        <p className="dim">
+          The lab has not said how it reads your question. It opened {ago(props.opened, props.now)}.
+        </p>
+      </section>
+    );
+  }
+  const { post, at, standing } = props.reading;
+  const chip = standingChip(post, standing);
+  const author = authorName(props.agents, post.author);
+  return (
+    <section className="f-report" aria-labelledby="reading-title">
+      <div className="f-report-head">
+        {head}
+        <span className="f-by">
+          {author} posted it{' '}
+          <time dateTime={at} title={clock(at)}>
+            {ago(at, props.now)}
+          </time>
+        </span>
+        {chip ? <ChipView chip={chip} /> : null}
+        <a href={href({ page: 'thread', id: post.thread, post: post.id })}>See it in its thread</a>
+      </div>
+      <p className="f-report-text">{post.text}</p>
+      {/* The key opens the detail of a new reading, also after the person folded an earlier one. */}
+      <Detail
+        key={post.id}
+        post={post.id}
+        body={post.body}
+        files={post.evidence}
+        open
+        label="Detail of the reading"
+      />
+      <Composer
+        // A new reading gets an empty box.
+        key={`reply-${post.id}`}
+        variant="reply"
+        label="Reply to the reading"
+        placeholder="Say where the lab reads your question wrong"
+        button="Reply"
+        hint={`Your reply reaches ${author} and the agents that watch its thread.`}
+        onSend={(text) => props.onReply(text, post)}
       />
     </section>
   );

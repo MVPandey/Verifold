@@ -11,7 +11,18 @@ from typing import Literal
 from verifold.protocol.app import NEEDS, AgentActivity, Need, Outcomes, PostRef, ProfileEdit, Wait
 from verifold.protocol.events import Posted, ProfileSet
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
-from verifold.protocol.posts import Answer, Ask, Check, Close, MoveRequest, Objection, Report, Result, RuledOut
+from verifold.protocol.posts import (
+    Answer,
+    Ask,
+    Check,
+    Close,
+    MoveRequest,
+    Objection,
+    Reading,
+    Report,
+    Result,
+    RuledOut,
+)
 from verifold.society.board import Board
 from verifold.society.lines import lines_of, withdraws
 from verifold.society.standing import is_answered, standing
@@ -159,7 +170,7 @@ def all_outcomes(board: Board) -> dict[AgentId, Outcomes]:
             if any(
                 other.post.author != post.author
                 and other.post.author in workers
-                and not isinstance(other.post, Report | Check | Objection | Close)
+                and not isinstance(other.post, Report | Reading | Check | Objection | Close)
                 for other in board.built_on(post.id)
             ):
                 lists['built_on'].append(entry)

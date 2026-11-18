@@ -42,6 +42,7 @@ function slowServer(): {
     threads: () => answer('threads', []),
     needs: () => answer('needs', []),
     report: () => answer('report', null),
+    reading: () => answer('reading', null),
     candidates: () => answer('candidates', NO_CANDIDATES),
     conversation: () =>
       answer('conversation', {
@@ -132,6 +133,7 @@ describe('the loader', () => {
       'threads',
       'needs',
       'report',
+      'reading',
       'candidates',
       'conversation',
       'desk',
@@ -163,6 +165,7 @@ describe('the loader', () => {
       'threads',
       'needs',
       'report',
+      'reading',
       'candidates',
       'conversation',
       'desk',

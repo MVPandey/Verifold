@@ -33,6 +33,7 @@ from verifold.protocol.posts import (
     Plan,
     Post,
     Proposal,
+    Reading,
     Report,
     Result,
     RuledOut,
@@ -791,6 +792,24 @@ def test_the_largest_brief_of_a_coordinator_with_the_persons_longest_posts_that_
     assert (waits.line.id, waits.line.body, waits.more) == ('p-900', '', 2)
     assert len(waits.line.text) < MAX_LINE + 100
     # The entry adds one line of a post, cut as the brief's other lines are, and no body.
+    assert len(view.model_dump_json()) - len(brief(plain, 'a0', news(plain, 'a0', 0)).model_dump_json()) < 1_000
+    assert len(view.model_dump_json()) < ONE_TOOL_RESULT
+    assert 'b' * 100 not in view.model_dump_json()
+
+
+def test_the_largest_brief_with_the_longest_reading_of_the_question_is_one_tool_result() -> None:
+    plain = _largest().board()
+    record = _largest().post(
+        Reading(id='p-900', thread='t-1', author='a1', text='r' * MAX_HEADLINE, body='b' * MAX_BODY)
+    )
+    board = record.board()
+
+    view = brief(board, 'a0', news(board, 'a0', 0))
+
+    assert view.reading is not None
+    assert (view.reading.id, view.reading.body, view.no_reading) == ('p-900', '', None)
+    assert len(view.reading.text) < MAX_LINE + 100
+    # The reading adds one line of a post, cut as the brief's other lines are, and no body.
     assert len(view.model_dump_json()) - len(brief(plain, 'a0', news(plain, 'a0', 0)).model_dump_json()) < 1_000
     assert len(view.model_dump_json()) < ONE_TOOL_RESULT
     assert 'b' * 100 not in view.model_dump_json()

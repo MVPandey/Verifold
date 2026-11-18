@@ -27,7 +27,8 @@ in such a thread. A close is for it once it has posted, because from then on it 
 decide whether the lab is done.
 
 The lab's coordinator and the person can mark a post as one for the whole lab. It is then for every agent that is
-not on call, as the person's post that names nobody is.
+not on call, as the person's post that names nobody is. A reading of the question is for every such agent too,
+whatever it names, because it changes what counts as an answer.
 
 A side thread is a thread between named agents. Its members are those agents and every agent that posted in it or
 started to watch it since. A member watches it until it says otherwise, and then it hears nothing from the thread
@@ -72,7 +73,7 @@ from itertools import accumulate
 from verifold.protocol.events import AgentLeft, Posted, RoundClosed
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.join import MAX_ENTRIES, MAX_NEWS, LeftLine, News, ProfileNote, RenameLine, RoundNote, Update
-from verifold.protocol.posts import Ask, Call, Check, Close, Entry, Post, Round
+from verifold.protocol.posts import Ask, Call, Check, Close, Entry, Post, Reading, Round
 from verifold.society.board import Board
 from verifold.society.coordinator import no_reply_line
 from verifold.society.desk import speaks_for_person
@@ -486,8 +487,9 @@ def _for_everyone(board: Board, entry: Posted) -> bool:
     # reader and takes none away. An ask that replies to a post is for that post's author. A call that replies to a
     # post, such as the caller's own result, still asks every agent for hands.
     post = entry.post
-    # Whether the lab is done concerns every agent, whatever the post names, and so does a round, which names nobody.
-    if isinstance(post, Close | Round) or post.to_lab:
+    # Whether the lab is done concerns every agent, whatever the post names, and so does a round, which names nobody,
+    # and the lab's reading of the question, which says what counts as an answer.
+    if isinstance(post, Close | Round | Reading) or post.to_lab:
         return True
     open_ask = isinstance(post, Call) or (isinstance(post, Ask) and not post.reply_to)
     return not post.mentions and (open_ask or _opens_thread(board, entry))
