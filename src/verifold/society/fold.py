@@ -19,6 +19,7 @@ from verifold.protocol.events import (
     Event,
     LabOpened,
     LimitReached,
+    NotesSet,
     OnCallSet,
     PermissionGranted,
     Posted,
@@ -64,6 +65,7 @@ from verifold.society.rules import (
     check_lease,
     check_left,
     check_named,
+    check_notes,
     check_on_call,
     check_post,
     check_profile,
@@ -146,6 +148,9 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
         case ProfileSet():
             check_profile(board, event)
             return _profiled(board, event)
+        case NotesSet():
+            check_notes(board, event)
+            return replace(board, seq=event.seq, notes=(*board.notes, event))
         case ReviewerSet():
             check_reviewer(board, event)
             return replace(board, seq=event.seq, reviewers=(*board.reviewers, event))

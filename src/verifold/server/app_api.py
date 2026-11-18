@@ -625,6 +625,7 @@ def _agent_view(
     role, status = board.profile(agent_id)
     given, giver = board.given_role(agent_id)
     flag = board.flag(agent_id)
+    notes = board.notes_of(agent_id)
     return AgentView(
         agent=joined.agent,
         seat=seat_label(board, agent_id),
@@ -639,6 +640,8 @@ def _agent_view(
         need=lab.needs[agent_id],
         in_turn=in_turn(activity.shown(agent_id)),
         about_by=board.about_by(agent_id),
+        notes=notes.text if notes else '',
+        notes_at=notes.at if notes else None,
         outcomes=lab.became.get(agent_id, Outcomes()),
         turns_started=sum(start.agent == agent_id for start in board.starts),
         role=role,

@@ -20,6 +20,7 @@ from verifold.protocol.events import (
     LabOpened,
     Limit,
     LimitReached,
+    NotesSet,
     OnCallSet,
     Posted,
     PowerSet,
@@ -89,6 +90,8 @@ class Board:
     """The alarms that agents set, oldest first."""
     profiles: tuple[ProfileSet, ...] = ()
     """What each agent said about itself, oldest first."""
+    notes: tuple[NotesSet, ...] = ()
+    """Each text that a seat's agent kept as its notes, oldest first."""
     starts: tuple[TurnStarted, ...] = ()
     """The starts of the agents' turns, oldest first. A record from before Verifold kept them has none."""
     turns: tuple[TurnEnded, ...] = ()
@@ -416,6 +419,11 @@ class Board:
         role = next((entry.role for entry in reversed(mine) if entry.role is not None), '')
         status = next((entry.status for entry in reversed(mine) if entry.status is not None), '')
         return role, status
+
+    def notes_of(self, agent_id: AgentId) -> NotesSet | None:
+        """Return a seat's notes as they stand: the latest text that its agent kept, or `None` while it kept none."""
+        latest = next((entry for entry in reversed(self.notes) if entry.agent == agent_id), None)
+        return latest if latest and latest.text else None
 
     def failure(self, agent_id: AgentId) -> TurnEnded | None:
         """

@@ -112,7 +112,7 @@ def test_the_lab_norms_are_plain_text_for_one_read_and_the_doorbell_is_one_line(
     assert '`' not in NORMS_TEMPLATE
     # Each norm has its reason and what it looks like in practice, so the file is longer than a list of rules.
     # An agent still reads it whole at the start of its work.
-    assert len(NORMS_TEMPLATE) < 23_500
+    assert len(NORMS_TEMPLATE) < 24_100
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -293,6 +293,23 @@ def test_the_lab_norms_say_when_a_helper_suits_the_work_and_how_its_posts_are_na
         'You answer for what your helper posts.',
     ):
         assert norm in NORMS_TEMPLATE
+
+
+def test_the_lab_norms_say_why_an_agent_keeps_notes_what_goes_in_them_and_when_it_changes_them() -> None:
+    helpers = NORMS_TEMPLATE.split('## Helpers', 1)[1].split('## ', 1)[0]
+
+    for norm in (
+        'In a lab that runs for days, your harness shortens your session many times',
+        'The person wants you to go on where you were after each one',
+        "The board is the lab's memory, and your notes are your own",
+        'The board is for what the others need.',
+        'what you are doing, what you learned that is not on the board yet, and what is next',
+        'Keep them current when you finish a step and when your plan changes',
+        'The person can read them.',
+    ):
+        assert norm in helpers
+    # The board hands nothing over from one agent to another, so the norm promises no handover.
+    assert 'hand' not in helpers.split('your harness shortens', 1)[1]
 
 
 def test_the_lab_norms_hold_what_came_out_of_python_and_the_norm_on_reruns() -> None:

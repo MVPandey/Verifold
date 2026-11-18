@@ -7,7 +7,7 @@ add up to. Events are never changed or removed.
 
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, AwareDatetime, Field, StringConstraints
+from pydantic import AfterValidator, AwareDatetime, Field, StringConstraints, WithJsonSchema
 
 from verifold.protocol.agents import (
     About,
@@ -239,6 +239,40 @@ class ProfileSet(EventBase):
     """The role that `by` gives the agent's seat. An empty text takes it back."""
     flag: Reason | None = None
     """The coordinator's reason for a flag on the profile, as one line. An empty text takes the flag back."""
+
+
+MAX_SEAT_NOTES = 6_000
+"""
+The most characters of a seat's notes. The seat's every brief carries them whole, and a brief is one tool result, so
+the notes have a limit.
+"""
+
+
+def _fits_the_notes(text: str) -> str:
+    # The schema's own error for `max_length` names the limit and not the length, so the agent cannot tell how much
+    # to cut.
+    if len(text) > MAX_SEAT_NOTES:
+        raise ValueError(f'The notes have {len(text)} characters, and the limit is {MAX_SEAT_NOTES}.')
+    return text
+
+
+type SeatNotes = Annotated[
+    str, AfterValidator(_fits_the_notes), WithJsonSchema({'type': 'string', 'maxLength': MAX_SEAT_NOTES})
+]
+"""The text of a seat's notes, `MAX_SEAT_NOTES` characters at most. An empty text means that the seat has none."""
+
+
+class NotesSet(EventBase):
+    """
+    A seat's notes from now on: a text that the seat's agent wrote for itself, in place of its earlier notes.
+
+    The board shows a seat's notes to that seat's agent in its brief and to the person in the app, and the record
+    keeps every earlier text. The code never acts on the text. The desk can keep notes too.
+    """
+
+    type: Literal['notes_set'] = 'notes_set'
+    agent: AgentId
+    text: SeatNotes = ''
 
 
 class ReviewerSet(EventBase):
@@ -694,6 +728,7 @@ type Event = Annotated[
     | Posted
     | WatchSet
     | ProfileSet
+    | NotesSet
     | ReviewerSet
     | AlarmSet
     | TurnStarted

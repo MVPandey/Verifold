@@ -3011,6 +3011,18 @@ describe('the lab page', () => {
     assert.equal(sheet({ ...first, about_by: 'agent-2' }).includes('Written by'), false);
   });
 
+  it('shows the notes that an agent keeps for itself behind a fold, and no heading without them', () => {
+    const notes = 'Doing: the tail test.\n\nNext: rerun p-9 on the 2025 data.';
+    const html = sheet({ ...first, notes, notes_at: '2026-11-06T13:58:00Z' });
+    assert.ok(html.includes('<h3>Notes</h3>'));
+    assert.ok(html.includes('The agent keeps these notes for itself. Last change: <time'));
+    // The fold holds the text whole, as plain text until the person opens it.
+    assert.ok(html.includes('<details class="f-detail">'));
+    assert.ok(html.includes('Doing: the tail test.'));
+    assert.ok(html.includes('Next: rerun p-9 on the 2025 data.'));
+    assert.equal(sheet(first).includes('<h3>Notes</h3>'), false);
+  });
+
   it('counts an approval inside a turn as in a turn, and shows the band of a lab that is out of time', () => {
     const asking = {
       state: 'waiting',

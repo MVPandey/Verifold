@@ -7,8 +7,19 @@ from mcp import Client
 from mcp.types import TextContent
 
 from verifold.protocol.agents import Agent, ModelSpec
+from verifold.protocol.events import MAX_SEAT_NOTES
 from verifold.protocol.ids import PERSON
-from verifold.protocol.join import MAX_PERSON_LINE, AlarmLine, AlarmResult, Brief, News, PostRequest, ThreadList, Update
+from verifold.protocol.join import (
+    MAX_BRIEF,
+    MAX_PERSON_LINE,
+    AlarmLine,
+    AlarmResult,
+    Brief,
+    News,
+    PostRequest,
+    ThreadList,
+    Update,
+)
 from verifold.protocol.posts import FileEvidence
 from verifold.server.activity import Activity
 from verifold.server.errors import HasLeft, UnknownAgent
@@ -116,6 +127,7 @@ async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
         'watch',
         'alarm',
         'profile',
+        'notes',
         'leave',
         'rerun',
         'take_rerun',
@@ -790,3 +802,65 @@ async def test_each_result_of_the_coordinator_says_once_that_the_persons_post_wa
     assert [str(content).count('for your reply') for content in shown] == [0, 1, 1, 1, 0, 0, 0, 0, 0]
     assert others[0]['person_waits'] is None
     assert (reply_of['news']['no_reply'], after_of['person_waits']) == ('', None)
+
+
+async def test_an_agent_keeps_notes_for_its_seat_and_reads_them_whole_in_each_brief_and_no_other_agent_does(
+    lab: Lab, record_file: RecordFile
+) -> None:
+    text = 'Doing: the tail test on the 2025 data.\n\nLearned: the loader drops the last day.\n\nNext: rerun p-1.'
+    ada, bo = Member(lab, 'ada'), Member(lab, 'bo')
+    async with Client(join_server(lambda _: ada)) as client:
+        written = await client.call_tool('notes', {'text': text})
+        again = await client.call_tool('notes', {'text': text})
+        read = await client.call_tool('notes', {})
+        whole = await client.call_tool('notes', {'text': 'n' * MAX_SEAT_NOTES})
+        too_long = await client.call_tool('notes', {'text': 'n' * (MAX_SEAT_NOTES + 1)})
+        await client.call_tool('notes', {'text': text})
+        brief = Brief.model_validate((await client.call_tool('brief', {})).structured_content)
+    async with Client(join_server(lambda _: bo)) as client:
+        own = await client.call_tool('notes', {})
+        other = Brief.model_validate((await client.call_tool('brief', {})).structured_content)
+
+    assert written.structured_content is not None
+    assert (written.structured_content['notes'], written.structured_content['minutes_ago']) == (text, 0)
+    assert 'news' in written.structured_content
+    assert read.structured_content == again.structured_content
+    assert not whole.is_error
+    assert too_long.is_error
+    assert f'The notes have {MAX_SEAT_NOTES + 1} characters, and the limit is {MAX_SEAT_NOTES}.' in str(
+        too_long.content
+    )
+    # Each text is in the record with the seat, and a text that is the notes already adds nothing.
+    assert [(entry.agent, len(entry.text)) for entry in lab.board.notes] == [
+        ('ada', len(text)),
+        ('ada', MAX_SEAT_NOTES),
+        ('ada', len(text)),
+    ]
+    assert (brief.notes, brief.notes_minutes_ago) == (text, 0)
+    # Bo reads its own seat's notes, which it has none of, and its brief holds nothing of ada's.
+    assert own.structured_content is not None
+    assert (own.structured_content['notes'], own.structured_content['minutes_ago']) == ('', None)
+    assert (other.notes, other.notes_minutes_ago) == (None, None)
+    assert 'Learned' not in other.model_dump_json()
+    assert '"notes"' not in other.model_dump_json()
+
+    # The notes come back after a restart of Verifold, from the record.
+    again_lab = Lab.load(record_file)
+    assert Member(again_lab, 'ada').brief('').notes == text
+    await Member(again_lab, 'ada').notes('')
+    assert (again_lab.board.notes_of('ada'), Member(again_lab, 'ada').brief('').notes) == (None, None)
+
+
+def test_the_board_says_how_large_a_brief_is_what_it_never_cuts_and_where_the_notes_of_a_seat_are() -> None:
+    board, tool = (' '.join(text.split()) for text in (INSTRUCTIONS, BRIEF_TOOL))
+
+    for text in (board, tool):
+        assert f'{MAX_BRIEF} characters of JSON' in text
+        assert 'never cuts' in text
+    notes = board.split('- `notes` keeps', 1)[1].split(' - ', 1)[0]
+    assert f'a text of at most {MAX_SEAT_NOTES} characters for your own seat' in notes
+    assert 'also after your harness shortened your session' in notes
+    assert "no other agent's brief has them" in notes
+    assert 'The person reads them in the app, on your profile.' in notes
+    # The board hands no notes from one agent to another, and the texts promise no handover.
+    assert 'hand' not in notes

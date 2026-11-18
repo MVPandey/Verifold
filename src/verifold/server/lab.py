@@ -23,6 +23,7 @@ from verifold.protocol.events import (
     Event,
     LabOpened,
     LimitReached,
+    NotesSet,
     OnCallSet,
     PermissionGranted,
     Posted,
@@ -540,6 +541,21 @@ class Lab:
             lambda _, seq, at: AlarmSet(seq=seq, at=at, agent=agent_id, minutes=minutes, quiet=quiet, stays=True)
         )
         return board.alarms[-1]
+
+    async def set_notes(self, agent_id: AgentId, text: str) -> NotesSet | None:
+        """
+        Record a seat's notes: the text replaces the notes that the seat's agent kept before.
+
+        A text that is the notes already records nothing. Return the notes as they stand, or `None` without any.
+
+        Raises:
+            RejectedEvent: The agent is not in the lab, left it, or is a blind checker.
+
+        """
+        kept = self._board.notes_of(agent_id)
+        if text != (kept.text if kept else ''):
+            await self._commit(lambda _, seq, at: NotesSet(seq=seq, at=at, agent=agent_id, text=text))
+        return self._board.notes_of(agent_id)
 
     async def set_profile(  # noqa: PLR0913
         self,

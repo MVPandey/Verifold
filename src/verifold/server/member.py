@@ -9,11 +9,12 @@ from typing import Literal, Protocol
 
 from verifold.protocol.agents import GUEST, Picture
 from verifold.protocol.app import Heard
-from verifold.protocol.events import AgentLeft, AlarmSet, Posted, RerunRequested, RerunTaken, WatchSet
+from verifold.protocol.events import AgentLeft, AlarmSet, NotesSet, Posted, RerunRequested, RerunTaken, WatchSet
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
     MAX_DESK_FILE,
     MAX_MANIFEST,
+    MAX_NEWS,
     Brief,
     DeskFile,
     FileText,
@@ -295,19 +296,46 @@ class Member:
         """
         Return the lab in one read: its state and time, the other agents and their plans, the threads, and the posts.
 
-        `how` says how the board works. Only the member's first brief carries it.
+        `how` says how the board works. Only the member's first brief carries it. The brief can end its news
+        earlier than another result would, to stay one tool result, so the agent counts as having seen only what
+        the brief's news holds.
         """
         first, self._briefed = not self._briefed, True
         lab = self._lab
-        return brief(lab.board, self.agent_id, self._unseen(), how if first else '', now=lab.now(), disk=lab.disk)
+        now = lab.now()
+
+        def page(most: int) -> News:
+            return news(lab.board, self.agent_id, self._seen, now, told=self.told, most=most)
+
+        made = brief(lab.board, self.agent_id, page(MAX_NEWS), how if first else '', now=now, disk=lab.disk, page=page)
+        self._saw(made.news, now)
+        return made
 
     def _unseen(self) -> News:
         now = self._lab.now()
         unseen = news(self._lab.board, self.agent_id, self._seen, now, told=self.told)
+        self._saw(unseen, now)
+        return unseen
+
+    def _saw(self, unseen: News, now: datetime) -> None:
+        # What a result carries to the agent counts as seen: its posts, its reruns, and the person's posts.
         self._seen = unseen.seq
         self._tell(unseen.reruns, unseen.seq)
         self._hear(now, (*unseen.for_you, *unseen.others))
-        return unseen
+
+    async def notes(self, text: str | None = None) -> NotesSet | None:
+        """
+        Return the notes of the agent's seat, or with `text`, replace them first. An empty text clears them.
+
+        Return `None` while the seat keeps no notes.
+
+        Raises:
+            RejectedEvent: The agent is a blind checker.
+
+        """
+        if text is None:
+            return self._lab.board.notes_of(self.agent_id)
+        return await self._lab.set_notes(self.agent_id, text)
 
     def _hear(self, now: datetime, lines: Iterable[PostLine], full: Iterable[PostView] = ()) -> None:
         # The person's posts in the conversation that a result carries to the agent now, each by its place and

@@ -253,6 +253,10 @@ export interface AgentView {
   readonly about: string;
   /** Who wrote the about line: the agent itself, or the coordinator that rewrote it. `null` without one. */
   readonly about_by: string | null;
+  /** The notes that the agent keeps for its own seat, whole. Empty while it keeps none. */
+  readonly notes: string;
+  /** When the agent last changed its notes, or `null` while it keeps none. */
+  readonly notes_at: string | null;
   /**
    * Whether a turn of the agent runs now. A turn in which the harness waits for the person's answer runs. An
    * agent that waits for more time or for its own process is in no turn.

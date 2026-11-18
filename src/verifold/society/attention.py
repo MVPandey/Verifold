@@ -212,23 +212,26 @@ def update(
     )
 
 
-def news(
+def news(  # noqa: PLR0913
     board: Board,
     agent_id: AgentId,
     after: int,
     now: datetime | None = None,
     told: frozenset[RerunKey] = frozenset(),
+    *,
+    most: int = MAX_NEWS,
 ) -> News:
     """
     Return one line for each post after event `after` that an agent did not write.
 
-    It holds at most `MAX_NEWS` posts for the agent, the oldest first, and reaches as far as `update` does. So a post
-    for the agent is never left out. Of the other posts it holds the newest. `now` decides which votes and which
-    entries are sealed and which leases on reruns stand, and `told` is as in `update`.
+    It holds at most `most` posts for the agent, `MAX_NEWS` unless a brief needs fewer, the oldest first, and
+    reaches as far as `update` does. So a post for the agent is never left out. Of the other posts it holds the
+    newest. `now` decides which votes and which entries are sealed and which leases on reruns stand, and `told` is
+    as in `update`.
     """
     board = for_reader(board, agent_id, now)
     woken, rest = _unseen(board, agent_id, after)
-    shown, others, reach = _page(woken, rest, board.seq)
+    shown, others, reach = _page(woken, rest, board.seq, most)
     rounds = round_notes(board, agent_id, after, reach, now)
     others, listed = _beside(board, others, rounds)
     votes, more_votes = vote_notes(board, agent_id, after, reach)
@@ -428,11 +431,12 @@ def _unseen(board: Board, agent_id: AgentId, after: int) -> tuple[tuple[Posted, 
 
 
 def _page(
-    woken: tuple[Posted, ...], rest: tuple[Posted, ...], seq: int
+    woken: tuple[Posted, ...], rest: tuple[Posted, ...], seq: int, most: int = MAX_NEWS
 ) -> tuple[tuple[Posted, ...], tuple[Posted, ...], int]:
-    # The posts for the agent that fit in one result, the other posts up to the same event, and that event.
-    shown = woken[:MAX_NEWS]
-    reach = shown[-1].seq if len(woken) > MAX_NEWS else seq
+    # The posts for the agent that fit in one result, the other posts up to the same event, and that event. A page
+    # holds one post for the agent at least.
+    shown = woken[: max(most, 1)]
+    reach = shown[-1].seq if len(woken) > len(shown) else seq
     return shown, tuple(entry for entry in rest if entry.seq <= reach), reach
 
 

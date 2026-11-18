@@ -221,6 +221,10 @@ class AgentView(Record):
     """
     about_by: AgentId | None = None
     """Who wrote the about line: the agent itself, or the coordinator that rewrote it. `None` without one."""
+    notes: str = ''
+    """The notes that the agent keeps for its own seat, whole. Empty while it keeps none."""
+    notes_at: AwareDatetime | None = None
+    """When the agent last changed its notes. `None` while it keeps none."""
     outcomes: Outcomes = Outcomes()
     turns_started: int = 0
     """How many turns of the agent started. It is above `turns` while a turn runs."""
