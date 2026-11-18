@@ -8,10 +8,12 @@ I/O and so knows no live activity.
 from datetime import datetime
 
 from verifold.protocol.agents import GUEST
+from verifold.protocol.deliverables import DeliverableLine
 from verifold.protocol.ids import AgentId, ThreadId
 from verifold.protocol.join import (
     MAX_NEWS,
     MAX_OBSTACLES,
+    MAX_OVERVIEW_OFFERS,
     CandidateLine,
     DiskLine,
     News,
@@ -52,8 +54,9 @@ def overview(
     Those are what waits for the person, the lab's reading of the question, the newest report, the candidate
     answers that stand, the open round, the
     wanted reruns, the open obstacles, the deliverables, and the person's post in the conversation that waits for
-    the coordinator's reply. Each list holds its newest `MAX_NEWS` entries at most, and counts the others. `disk` is
-    what Verifold measured of the lab's files last.
+    the coordinator's reply. Each list holds its newest `MAX_NEWS` entries at most, and counts the others. Each
+    deliverable holds its newest `MAX_OVERVIEW_OFFERS` offers, with the accepted one among them, and counts the
+    others. `disk` is what Verifold measured of the lab's files last.
     """
     working = lines_of(board)
     done = closing(board)
@@ -110,13 +113,20 @@ def overview(
         more_reruns=max(len(wanted) - MAX_NEWS, 0),
         obstacles=tuple(post_line(board, entry, desk, now) for entry in blocking[:MAX_OBSTACLES]),
         more_obstacles=max(len(blocking) - MAX_OBSTACLES, 0),
-        deliverables=deliverable_lines(board),
+        deliverables=tuple(_bounded(line) for line in deliverable_lines(board)),
         out_of_time=board.out_of_time,
         budget=budget_line(board),
         limit_reached=board.at_limit,
         disk=DiskLine(lab=disk.total, limit=disk_limit(board)) if disk else None,
         news=news,
     )
+
+
+def _bounded(line: DeliverableLine) -> DeliverableLine:
+    # The newest offers of a deliverable, and the accepted one among them whatever its age, in their order.
+    kept = sorted(line.offers, key=lambda offer: (offer.state == 'accepted', offer.at))[-MAX_OVERVIEW_OFFERS:]
+    offers = tuple(offer for offer in line.offers if offer in kept)
+    return line.model_copy(update={'offers': offers, 'more_offers': len(line.offers) - len(offers)})
 
 
 def _seat_line(board: Board, agent_id: AgentId, working: dict[AgentId, ThreadId | None]) -> SeatLine:

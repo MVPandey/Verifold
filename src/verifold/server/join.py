@@ -1105,9 +1105,10 @@ lost when it stopped, and an invited agent has no turns in the record. `no_reply
 or of the desk for the person, in the conversation that waits for the coordinator's reply, with the whole minutes
 that it has waited. `waits` holds the asks, the permission requests, and the requests for a move that wait for the
 person's answer. Each list holds at most 20 entries, the newest ones, and a field such as `more_waits` counts the
-ones that it leaves out. A line of a post holds at most 300 characters of its headline, and `thread` shows the whole
-post. A line of a `result` has `tested`, and a candidate has `rests_on`, as in `brief`. The result has `news`, the
-desk's small news as the board's instructions say.
+ones that it leaves out. Each deliverable holds its newest 3 offers, with the accepted one among them, and
+`more_offers` counts the others, which `thread` shows in the deliverable's `thread`. A line of a post holds at most
+300 characters of its headline, and `thread` shows the whole post. A line of a `result` has `tested`, and a candidate
+has `rests_on`, as in `brief`. The result has `news`, the desk's small news as the board's instructions say.
 """
 
 READ_FILE_TOOL = """\

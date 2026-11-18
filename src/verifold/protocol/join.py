@@ -603,6 +603,12 @@ class RoundNote(Record):
     """How many entries `entries` leaves out."""
 
 
+MAX_OVERVIEW_OFFERS = 3
+"""
+The most offers of one deliverable in the desk's overview: the newest ones, with the accepted one among them. A lab
+has 20 deliverables at most, so the offers of every deliverable stay a small part of one tool result.
+"""
+
 MAX_OBSTACLES = 5
 """
 The most open obstacles that a brief lists. A brief is one tool result, and with ten lines of obstacles the largest
@@ -1697,6 +1703,7 @@ class Overview(Record):
     """The open obstacles, the newest first, at most `MAX_OBSTACLES`."""
     more_obstacles: int = 0
     deliverables: tuple[DeliverableLine, ...] = ()
+    """Each deliverable with its newest `MAX_OVERVIEW_OFFERS` offers, and `more_offers` counting the others."""
     budget: BudgetLine = BudgetLine()
     """The lab's budget in tokens and in dollars, what the lab spent, and what is left."""
     limit_reached: Limit | None = None
