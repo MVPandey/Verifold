@@ -878,6 +878,11 @@ details[open] > summary .opened {
   max-height: min(50vh, 480px);
   overflow-y: auto;
 }
+/* The reply box under the reading lines up with the card's text. */
+.f-report .f-reply {
+  padding-left: 0;
+  padding-right: 0;
+}
 @media (max-width: 1400px) {
   .f-report {
     margin-left: 32px;

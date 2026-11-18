@@ -187,6 +187,20 @@ describe('the API client', () => {
     await assert.rejects(broken.candidates(), ApiError);
   });
 
+  it('reads the lab’s reading of the question, and none from a server from before the reading route', async () => {
+    const server = serverThatAnswers(200, 'null');
+    const before = createApi('secret', serverThatAnswers(404, '{"detail": "Not Found"}').fetcher);
+    const broken = createApi('secret', serverThatAnswers(500, 'Internal Server Error').fetcher);
+
+    assert.equal(await createApi('secret', server.fetcher).reading(), null);
+    assert.deepEqual(
+      server.calls.map((call) => call.input),
+      ['/api/reading'],
+    );
+    assert.equal(await before.reading(), null);
+    await assert.rejects(broken.reading(), ApiError);
+  });
+
   it('turns a refusal into an error with the server reason', async () => {
     const refusals = [
       [409, '{"detail": "This folder has a lab already."}', 'This folder has a lab already.'],

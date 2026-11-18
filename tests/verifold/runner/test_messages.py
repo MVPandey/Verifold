@@ -112,7 +112,7 @@ def test_the_lab_norms_are_plain_text_for_one_read_and_the_doorbell_is_one_line(
     assert '`' not in NORMS_TEMPLATE
     # Each norm has its reason and what it looks like in practice, so the file is longer than a list of rules.
     # An agent still reads it whole at the start of its work.
-    assert len(NORMS_TEMPLATE) < 21_000
+    assert len(NORMS_TEMPLATE) < 22_500
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -336,6 +336,37 @@ def test_the_lab_norms_say_how_the_person_follows_the_lab_how_a_post_reads_and_h
         'answers in a line',
     ):
         assert gone not in NORMS_TEMPLATE
+
+
+def test_the_lab_norms_say_when_the_coordinator_posts_the_reading_reviews_it_and_why_it_runs_no_line() -> None:
+    for norm in (
+        # A coordinator read the goals as "wherever history permits" at minute 4, and the lab followed that reading
+        # for two hours before the person saw it. Another closed at minute 30 on a plan that could not reach the goal.
+        (
+            'The coordinator says how the lab reads the question: what counts as an answer, what the lab assumes, and '
+            'what it leaves out. It posts this as a reading in the first minutes, before it assigns work, and again '
+            'whenever the person corrects the lab.'
+        ),
+        'Every agent then works toward the same idea of an answer.',
+        'the person can correct a wrong reading at minute 4 instead of after two hours of work toward the wrong goal.',
+        'In a lab with no coordinator, an agent that finds no reading posts one.',
+        (
+            'About every two hours, and whenever the person corrects the lab, the coordinator steps back from the work '
+            'and reviews the reading. It opens a round that asks every agent what the lab assumes, what it is not '
+            'trying, and what it would drop, and then it posts a new reading.'
+        ),
+        (
+            'A plan from the first minutes is the least informed plan of the lab, and a coordinator that reviews its '
+            'own plan alone mostly confirms it.'
+        ),
+        # Rounds of five minutes got 4 entries of 11 from agents in long turns, and rounds of 15 minutes got 9.
+        'When agents are in long turns, the round stays open for 10 to 15 minutes, so that most of them can enter.',
+        # A coordinator in one turn of 112 minutes left the person's "Status update?" without a reply for 52 minutes.
+        'The coordinator runs no line of work of its own.',
+        'Its work is to answer the person, to assign, and to review',
+        'When it sees a line that nobody runs, it posts a call for it.',
+    ):
+        assert norm in NORMS_TEMPLATE
 
 
 def test_the_message_after_more_time_says_what_happened_to_the_agents_processes() -> None:

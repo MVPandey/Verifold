@@ -84,6 +84,22 @@ export function personMessage(text: string, thread?: string): PostRequest | null
 }
 
 /**
+ * Return the person's reply to a post, in the post's thread, or `null` for empty text. It reaches the post's author
+ * and the agents that watch the thread, as any reply does.
+ */
+export function personReply(text: string, to: Post): PostRequest | null {
+  const { headline, body } = split(text);
+  if (!headline) return null;
+  return {
+    kind: 'message',
+    thread: to.thread,
+    reply_to: to.id,
+    text: headline,
+    ...(body ? { body } : {}),
+  };
+}
+
+/**
  * Return the person's answer to an ask, or `null` when they gave no choice and no words.
  *
  * A chosen option is the headline and the person's words become the body, so an agent's harness reads the option

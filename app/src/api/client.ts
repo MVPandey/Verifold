@@ -52,6 +52,8 @@ export interface Api {
   needs(): Promise<readonly PostView[]>;
   /** The newest report that an agent wrote for the person, or `null` when the lab has none. */
   report(): Promise<PostView | null>;
+  /** The lab's reading of the question: the newest reading of an agent, or `null` when the lab has none. */
+  reading(): Promise<PostView | null>;
   /** The candidate answers with what each builds on, and the one that a close closes on. */
   candidates(): Promise<CandidatesView>;
   /** The text of a file that backs a post. */
@@ -231,6 +233,12 @@ export function createApi(
       })),
     needs: () => request('/needs'),
     report: () => request('/report'),
+    // A server from before this route has none, and the page must still load.
+    reading: () =>
+      request<PostView | null>('/reading').catch((failure: unknown) => {
+        if (failure instanceof ApiError && failure.status === 404) return null;
+        throw failure;
+      }),
     // A server from before this route has none, and the page must still load.
     candidates: () =>
       request<CandidatesView>('/candidates').catch((failure: unknown) => {

@@ -32,7 +32,14 @@ from verifold.society.obstacles import obstacles
 from verifold.society.reruns import reruns_wanted
 from verifold.society.standing import candidates, closing, standing
 from verifold.society.turns import before
-from verifold.society.views import minutes_since, newest_report, round_line, to_earlier_question, waiting_posts
+from verifold.society.views import (
+    minutes_since,
+    newest_report,
+    round_line,
+    standing_reading,
+    to_earlier_question,
+    waiting_posts,
+)
 
 
 def overview(
@@ -41,7 +48,8 @@ def overview(
     """
     Return the lab for the desk at `now`: its time, budget, and disk, its agents and their turns, and what the app shows.
 
-    Those are what waits for the person, the newest report, the candidate answers that stand, the open round, the
+    Those are what waits for the person, the lab's reading of the question, the newest report, the candidate
+    answers that stand, the open round, the
     wanted reruns, the open obstacles, the deliverables, and the person's post in the conversation that waits for
     the coordinator's reply. Each list holds its newest `MAX_NEWS` entries at most, and counts the others. `disk` is
     what Verifold measured of the lab's files last.
@@ -51,6 +59,7 @@ def overview(
     named = closes_on(board, done) if done else None
     waits = waiting_posts(board)
     reported = newest_report(board)
+    reading = standing_reading(board)
     standing_now = candidates(board)
     wanted = reruns_wanted(board, now)
     blocking = tuple(found.entry for found in reversed(obstacles(board)) if found.state == 'open')
@@ -82,6 +91,8 @@ def overview(
         more_waits=max(len(waits) - MAX_NEWS, 0),
         report=post_line(board, reported, desk, now) if reported else None,
         report_minutes_ago=minutes_since(reported.at, now) if reported else None,
+        reading=post_line(board, reading, desk, now) if reading else None,
+        reading_minutes_ago=minutes_since(reading.at, now) if reading else None,
         candidates=tuple(
             CandidateLine(
                 line=post_line(board, entry, desk, now),
