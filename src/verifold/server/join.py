@@ -14,6 +14,7 @@ every state of the lab.
 """
 
 import hashlib
+import json
 import secrets
 from collections.abc import AsyncGenerator, Callable, Generator, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
@@ -1281,7 +1282,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
     post of the person a call carried to its agent.
     """
     server = MCPServer(name='verifold', instructions=INSTRUCTIONS)
-    server.middleware.append(_ToolsOfTheCaller(resolve))
+    server.middleware.extend((_ToolsOfTheCaller(resolve), _compact_results))
 
     @asynccontextmanager
     async def acting(ctx: Context, tool: str) -> AsyncGenerator[Member]:
@@ -1447,6 +1448,35 @@ class _ToolsOfTheCaller:
         if isinstance(result, dict) and isinstance(listed := result.get('tools'), list):
             return result | {'tools': [tool for tool in listed if isinstance(tool, dict) and shown(tool.get('name'))]}
         return result
+
+
+async def _compact_results(ctx: ServerRequestContext, call_next: CallNext) -> HandlerResult:
+    """
+    Return the result of a call, with the text of a tool's result as compact JSON.
+
+    The MCP server writes the text of a result that a tool returns as JSON with an indent of two spaces, which made
+    the largest brief about a fifth larger than its JSON. A harness takes one tool result of a bounded size, and the
+    board measures each brief by its compact JSON. The result's structured content stays as it is, and so does the
+    text of an error, which is no JSON.
+    """
+    result = await call_next(ctx)
+    if ctx.method != 'tools/call' or not isinstance(result, dict) or result.get('isError'):
+        return result
+    content = result.get('content')
+    if 'structuredContent' not in result or not isinstance(content, list):
+        return result
+    return result | {'content': [_compact(block) for block in content]}
+
+
+def _compact(block: object) -> object:
+    # A text block that holds JSON, written again without spaces. Any other block stays as it is.
+    if not isinstance(block, dict) or block.get('type') != 'text' or not isinstance(text := block.get('text'), str):
+        return block
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return block
+    return block | {'text': json.dumps(data, ensure_ascii=False, separators=(',', ':'))}
 
 
 def _desk_tools(server: MCPServer, acting: Acting) -> None:

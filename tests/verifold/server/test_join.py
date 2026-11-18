@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 from conftest import agent
@@ -23,7 +24,7 @@ from verifold.protocol.join import (
 from verifold.protocol.posts import FileEvidence
 from verifold.server.activity import Activity
 from verifold.server.errors import HasLeft, UnknownAgent
-from verifold.server.join import BRIEF_TOOL, INSTRUCTIONS, Members, join_server, token_digest
+from verifold.server.join import BRIEF_TOOL, INSTRUCTIONS, Members, _compact, join_server, token_digest
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.store.record_file import RecordFile
@@ -472,6 +473,24 @@ async def test_a_read_of_a_thread_starts_at_its_summary_and_keeps_the_persons_po
     assert whole.structured_content is not None
     assert 'earlier' not in whole.structured_content
     assert ids(again) == ['p-3', 'p-4']
+
+
+async def test_a_tool_result_is_compact_json_and_an_error_keeps_its_words(lab: Lab) -> None:
+    async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
+        briefed = await client.call_tool('brief', {})
+        refused = await client.call_tool(
+            'post', {'kind': 'objection', 'text': 'Mine.', 'thread': 't-1', 'reply_to': 'p-9'}
+        )
+
+    (text,) = (part.text for part in briefed.content if isinstance(part, TextContent))
+    # The text holds the same JSON as the structured content, without the spaces of an indent.
+    assert json.loads(text) == briefed.structured_content
+    assert text == json.dumps(briefed.structured_content, ensure_ascii=False, separators=(',', ':'))
+    assert refused.is_error
+    assert 'Post p-9 does not exist.' in str(refused.content)
+    # A block that holds no JSON, and a block of another kind, stay as they are.
+    assert _compact({'type': 'text', 'text': 'Not JSON.'}) == {'type': 'text', 'text': 'Not JSON.'}
+    assert _compact({'type': 'image', 'data': ''}) == {'type': 'image', 'data': ''}
 
 
 async def test_an_agent_reads_that_another_program_changed_the_record_and_that_verifold_stops(
