@@ -619,6 +619,7 @@ class Host:
             powers=choice.powers,
             first=first,
             given=given,
+            desk=choice.desk,
         )
         return agent
 
@@ -703,8 +704,10 @@ class Host:
         group, settings = self._group, self._settings
         if group is None or settings is None:
             raise SetupRejected('Attach the host to the server before a lab starts.')
-        if lab.board.on_call(agent.id) and not before(lab.board, agent.id).worked:
-            # Verifold starts no turn for an on-call agent. The folder comes now, so that a failure shows here.
+        waits = lab.board.on_call(agent.id) or lab.board.is_desk(agent.id)
+        if waits and not before(lab.board, agent.id).worked:
+            # Verifold starts no turn for an on-call agent, or for the desk before the person writes to it. The
+            # folder comes now, so that a failure shows here.
             await agent_folder(self._project, agent.id)
             await self._activity.set(agent.id, 'idle')
             self._loops[agent.id] = group.create_task(self._run_when_called(lab, agent, settings))
@@ -721,15 +724,18 @@ class Host:
     async def _run_when_called(self, lab: Lab, agent: Agent, settings: LoopSettings) -> None:
         # An on-call agent that never worked has no harness and no turn. It starts when the first post for it
         # arrives, or when the person takes its seat off call. Its first message then holds the facts of that
-        # moment. After a restart the wait starts again from the agent's join, so a post from before still counts.
-        # No harness starts while the lab is out of time or at a limit, because no turn can run then.
+        # moment. The desk starts in the same way at the first post of the person in the desk chat. After a restart
+        # the wait starts again from the agent's join, so a post from before still counts. No harness starts while
+        # the lab is out of time or at a limit, because no turn can run then. The desk's turn is the one exception,
+        # because the person can ask it where the lab stands and tell it to give the lab more.
         seen = before(lab.board, agent.id).seen
         while True:
             board = lab.board
             if board.gone(agent.id):
                 return
-            called = not board.on_call(agent.id) or update(board, agent.id, seen).posts
-            if called and board.halted is None:
+            waits = board.on_call(agent.id) or board.is_desk(agent.id)
+            called = not waits or update(board, agent.id, seen).posts
+            if called and (board.halted is None or board.is_desk(agent.id)):
                 break
             await lab.wait_for_change(board.seq)
         # The agent can have a new name by now, so its seat and its first message take it from the board.
@@ -842,6 +848,8 @@ class Host:
             members = _members(lab.board)
             if members + choice.count > MAX_AGENTS:
                 raise SetupRejected(f'A lab has at most {MAX_AGENTS} agents, and this one has {members}.')
+            if choice.desk and lab.board.desk:
+                raise SetupRejected(f'The lab has its desk already: {lab.board.desk}. A lab has one desk at most.')
             for _ in range(choice.count):
                 number = _free_number(lab.board)
                 # The folder comes first. An agent that the record holds and that has no folder could never start.
@@ -895,6 +903,11 @@ class Host:
         """
         lab = self._running()
         request = request or InviteRequest()
+        if request.desk:
+            raise SetupRejected(
+                'An invited agent runs by itself, so Verifold cannot start its turn when you write to it. The desk is '
+                'a seat that Verifold starts: add it with the form that adds an agent.'
+            )
         name = request.name
         # One at a time, with the adds, so that two requests cannot pass the limit or take the same number.
         async with self._adding:
@@ -1015,6 +1028,7 @@ class Host:
             copies=self._copies,
             adds=self.add_seat,
             seat_ok=self.check_seat,
+            files=self.file_text,
         )
         self._activity.seat(member)
         setup = AgentSetup(

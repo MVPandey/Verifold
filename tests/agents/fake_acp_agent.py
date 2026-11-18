@@ -7,6 +7,7 @@ Environment variables change its behavior: `FAKE_ACP_LOG` logs each call, `FAKE_
 first, `FAKE_ACP_COMMAND` asks permission for that shell command, which the request names by its call's ID only, `FAKE_ACP_ABORT` makes the only "no" to that request an answer that stops the turn, `FAKE_ACP_QUESTION` asks its user which branch to take, as a form, `FAKE_ACP_CRASH` exits during a turn, `FAKE_ACP_SLOW` makes a turn take a minute, and `FAKE_ACP_CHILD` starts a
 child that holds the agent's pipes open and writes its process ID to that path. `FAKE_ACP_JOB` starts a job in a
 session of its own, the way that a harness starts a background command, and writes its process ID to that path.
+`FAKE_ACP_DESK` makes the agent of that name reply in the desk chat in each turn,
 `FAKE_ACP_LEAVE` makes the agent of that name leave the lab at the end of its first turn, and
 `FAKE_ACP_SLOW_AFTER_LEAVE` makes that turn take a minute more.
 `FAKE_ACP_RESULT` makes the agent of that name post a result with a file and ask for a rerun of it, and
@@ -189,7 +190,9 @@ class FakeAgent(acp.Agent):
         if os.environ.get('FAKE_ACP_SLOW'):
             await asyncio.sleep(60)
         # The doorbell can follow other news, such as a restart of Verifold.
-        if text.endswith((DOORBELL, RERUN_WANTED)):
+        if os.environ.get('FAKE_ACP_DESK') == self._name:
+            await self._call('reply', {'text': f'The desk {self._name} read you.'})
+        elif text.endswith((DOORBELL, RERUN_WANTED)):
             await self._answer_news()
         elif os.environ.get('FAKE_ACP_RESULT') == self._name:
             await self._post_result()

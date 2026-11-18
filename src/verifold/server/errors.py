@@ -43,3 +43,7 @@ class CannotWake(ServerError):
 
 class ProfileRejected(ServerError):
     """A call of `profile` gave fields that do not go together. The message says which."""
+
+
+class DeskOnly(ServerError):
+    """An agent that is not the lab's desk called a tool of the desk. The message says so."""

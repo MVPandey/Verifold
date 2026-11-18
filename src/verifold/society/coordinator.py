@@ -32,6 +32,7 @@ from verifold.protocol.moves import Move, PermissionMove, QuestionMove, RemoveMo
 from verifold.protocol.posts import Answer, Ask, Close, MoveRequest, PermissionShown, Post, Proposal
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
+from verifold.society.desk import speaks_for_person
 from verifold.society.errors import RejectedEvent
 from verifold.society.lifecycle import latest_time, minutes_text
 from verifold.society.standing import waits_for_person
@@ -66,15 +67,20 @@ def check_marked_thread(board: Board, thread: Thread) -> None:
 
     """
     holder = board.coordinator
-    if thread.for_person and (thread.opened_by != holder or thread.conversation):
-        raise RejectedEvent('Only the agent that holds the coordinator seat opens a thread for the person.')
+    # The desk opens a thread for the person with its post for the person, which `society.desk` checks.
+    opener = (holder, board.desk)
+    if thread.for_person and (thread.opened_by not in opener or thread.conversation):
+        raise RejectedEvent(
+            'Only the agent that holds the coordinator seat, and the desk, open a thread for the person.'
+        )
     if not thread.conversation:
         return
     if thread.between:
         raise RejectedEvent('The conversation with the person is no side thread.')
     if board.conversation:
         raise RejectedEvent(f'The lab has its conversation with the person already: {board.conversation}.')
-    if holder is None or thread.opened_by not in (PERSON, holder):
+    # The desk's post for the person is the person's side of the conversation, so it can open the thread too.
+    if holder is None or thread.opened_by not in (PERSON, holder, board.desk):
         raise RejectedEvent('The person and the agent that holds the coordinator seat open their conversation.')
 
 
@@ -87,8 +93,12 @@ def check_marks(board: Board, post: Post, thread: Thread) -> None:
             names a move that cannot be made, or an answer claims a request that did not get a yes for it.
 
     """
-    if post.for_person and post.author != board.coordinator:
-        raise RejectedEvent('Only the agent that holds the coordinator seat marks a post as one for the person.')
+    # The desk marks its post for the person with `on`, which `society.desk` checks.
+    desk = post.on is not None and post.author == board.desk
+    if post.for_person and post.author != board.coordinator and not desk:
+        raise RejectedEvent(
+            'Only the agent that holds the coordinator seat, and the desk with `on`, mark a post as one for the person.'
+        )
     if post.for_person and isinstance(post, Proposal | Close):
         raise RejectedEvent(
             f"A {post.kind} is the agents' own word, so no {post.kind} is marked as one for the person."
@@ -305,7 +315,8 @@ def waiting_for_reply(board: Board) -> tuple[Posted, ...]:
     coordinator seat. Any kind of post is such a reply, and one reply answers every earlier post of the person. So
     a reply from an agent that gave the seat up later still counts, and a post of another agent counts for nothing.
     An `answer` of the person, such as its yes to a request or its choice on an ask, is itself a reply and asks
-    nothing, so it waits for none. A lab without a conversation has no such post.
+    nothing, so it waits for none. The desk's post for the person there carries the person's word, so it waits as
+    a post of the person does. A lab without a conversation has no such post.
     """
     talk = board.conversation
     posts = board.thread_posts(talk) if talk else ()
@@ -313,7 +324,7 @@ def waiting_for_reply(board: Board) -> tuple[Posted, ...]:
     return tuple(
         entry
         for entry in posts
-        if entry.post.author == PERSON and not isinstance(entry.post, Answer) and entry.seq > replied
+        if speaks_for_person(entry.post) and not isinstance(entry.post, Answer) and entry.seq > replied
     )
 
 
@@ -330,7 +341,9 @@ def no_reply_line(board: Board, agent_id: AgentId, now: datetime | None = None) 
         return ''
     oldest, more = waiting[0], len(waiting) - 1
     waited = minutes_text(max(((now or latest_time(board)) - oldest.at).total_seconds() / 60, 0))
-    line = f"The person's post {oldest.post.id} in the conversation has waited {waited} for your reply."
+    post = oldest.post.id
+    whose = f"The person's post {post}" if oldest.post.author == PERSON else f"The desk's post {post} for the person"
+    line = f'{whose} in the conversation has waited {waited} for your reply.'
     if more:
         posts, wait = ('post', 'waits') if more == 1 else ('posts', 'wait')
         line += f' {more} later {posts} of the person there {wait} too.'

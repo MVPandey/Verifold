@@ -204,11 +204,11 @@ def _offer_line(
 
 def check_deliverable(board: Board, event: DeliverableSet) -> None:
     """
-    Check that the person can state, change, or remove a deliverable.
+    Check that the person, or the desk on the person's word, can state, change, or remove a deliverable.
 
     A new deliverable has the next free ID. A change gives a known deliverable another sentence, and a removal
-    is final for its ID. When the event names a post, that post is the person's and the board's newest: it tells
-    the lab. A new deliverable in a lab with agents comes with such a post. A new sentence and a removal can come
+    is final for its ID. When the event names a post, that post is the board's newest, and its author is the one
+    in `by`: it tells the lab. A new deliverable in a lab with agents comes with such a post. A new sentence and a removal can come
     without one, and the agents then read the change in `brief`.
 
     Raises:
@@ -232,8 +232,9 @@ def check_deliverable(board: Board, event: DeliverableSet) -> None:
                 'A new deliverable in a lab with agents comes with the post of the person that tells them.'
             )
         return
+    # The desk's change comes with the desk's post for the person, which `society.desk` checks.
     told = board.posts[-1] if board.posts else None
-    if told is None or told.post.id != event.post or told.post.author != PERSON or told.seq != board.seq:
+    if told is None or told.post.id != event.post or told.post.author != event.by or told.seq != board.seq:
         raise RejectedEvent(f'Post {event.post} is not the post of the person that tells the lab of this deliverable.')
 
 

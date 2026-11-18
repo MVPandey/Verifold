@@ -78,6 +78,23 @@ ON_CALL = (
 )
 """What the start message says to an on-call agent. It holds for an agent that Verifold runs and for an invited one."""
 
+DESK = (
+    "The person made your seat the lab's desk. The desk chat, thread {chat} on the board, is where the person and "
+    'the desk talk. A post of the person there starts your turn, and no other post on the board does. The desk is '
+    "no part of the lab's work: the board takes no plan, result, check, proposal, close, vote, or badge from it, "
+    'and it counts for no round and no close. The tools `overview`, `read_file`, `reply`, `say`, `open_round`, '
+    "`revise_question`, `deliverable`, `set_time`, and `interrupt` are the desk's alone, and their descriptions "
+    "say what each one does. Each action names in `on` the person's post in the desk chat that it rests on, from "
+    'the last 60 minutes.'
+)
+"""What the start message says to the desk."""
+
+HAS_DESK = (
+    "{name} ({id}) holds the lab's desk seat: it answers the person in the desk chat and acts on the person's "
+    "word, and it is no part of the lab's work."
+)
+"""What the start message of every other agent says about the lab's desk."""
+
 
 def start_message(
     board: Board, agent: Agent, norms: Path, writing: Path | None = None, *, under_way: bool = False
@@ -96,8 +113,12 @@ def start_message(
     peers = ', '.join(
         f'{entry.agent.name} ({entry.agent.id}, {entry.agent.harness})'
         for entry in board.agents
-        # An invited agent that has not posted may never come, so it is no peer yet. An agent that left is none.
-        if entry.agent.id != agent.id and not entry.agent.checks and board.here(entry)
+        # An invited agent that has not posted may never come, so it is no peer yet. An agent that left is none,
+        # and neither is the desk, which is no part of the lab's work.
+        if entry.agent.id != agent.id
+        and not entry.agent.checks
+        and board.here(entry)
+        and not board.is_desk(entry.agent.id)
     )
     # An agent that the person adds to a lab that runs joins work that is under way.
     lead = (
@@ -122,6 +143,11 @@ def start_message(
         lines.append("You hold the lab's coordinator seat.")
     if board.on_call(agent.id):
         lines.append(ON_CALL)
+    desk = board.agent(board.desk) if board.desk else None
+    if desk and desk.agent.id == agent.id:
+        lines.append(DESK.format(chat=board.desk_chat))
+    elif desk:
+        lines.append(HAS_DESK.format(name=desk.agent.name, id=desk.agent.id))
     if thread := question_thread(board):
         lines.append(f'Thread {thread} on the board holds this question.')
     if board.revisions:

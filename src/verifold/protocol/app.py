@@ -25,7 +25,7 @@ from verifold.protocol.deliverables import (
 )
 from verifold.protocol.events import AgentLeft, Limit, Note, Question, RoundClosed
 from verifold.protocol.grants import Grant
-from verifold.protocol.ids import AgentId, PostId, ThreadId
+from verifold.protocol.ids import AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
     AlarmLine,
     BudgetLine,
@@ -230,6 +230,8 @@ class AgentView(Record):
     """Whether the person put the agent's seat on call, so that only a post for the agent itself wakes it."""
     coordinator: bool = False
     """Whether the agent holds the lab's coordinator seat."""
+    desk: bool = False
+    """Whether the agent's seat is the lab's desk, which answers the person in the desk chat and acts on the person's word."""
     status: str = ''
     """What the agent says that it does now."""
     thread: ThreadId | None = None
@@ -733,9 +735,9 @@ class ConversationView(Record):
     """The posts of that thread that wait for the person's answer: requests for a move, and asks."""
     no_reply: tuple[PostId, ...] = ()
     """
-    The person's posts in that thread that wait for the coordinator's reply, oldest first. A post of the person
-    there, other than an `answer`, waits until an agent posts in the thread after it while that agent holds the
-    coordinator seat. The coordinator's `brief` and its news say the same.
+    The person's posts in that thread that wait for the coordinator's reply, oldest first, with the desk's posts for
+    the person there. Such a post, other than an `answer`, waits until an agent posts in the thread after it while
+    that agent holds the coordinator seat. The coordinator's `brief` and its news say the same.
     """
     asks: tuple[PostView, ...] = ()
     """The permission requests that the requests in the conversation name, each with what its harness asks for."""
@@ -801,3 +803,46 @@ class TimeRequest(Record):
     """The person sets how much longer the agents may work, counted from now. Zero stops them now."""
 
     minutes: int = Field(ge=0, le=MAX_MINUTES)
+
+
+type DeskDeed = Literal['post', 'round', 'question', 'deliverable', 'time', 'interrupt']
+"""
+What the desk did on the person's word: a post for the person, a round, a revision of the question, a change of a
+deliverable, a new end of the lab, or the end of an agent's turn.
+"""
+
+
+class DeskAction(Record):
+    """
+    One action of the desk, with the person's post in the desk chat that it rests on, as the record keeps it.
+
+    The app writes its own line for each kind, so no text of an agent stands in its sentence.
+    """
+
+    on: PostId
+    """The person's post in the desk chat that the action rests on."""
+    at: AwareDatetime
+    kind: DeskDeed
+    post: PostId | None = None
+    """The post that the action made: the desk's post for the person, its round, or the post that tells the lab."""
+    thread: ThreadId | None = None
+    """The thread of that post."""
+    agent: AgentId | None = None
+    """For the end of a turn: the agent whose turn the desk ended."""
+    deliverable: DeliverableId | None = None
+    """For a change of a deliverable: its ID."""
+    change: Literal['added', 'changed', 'removed'] | None = None
+    """For a change of a deliverable: what the desk did to it."""
+    ends_at: AwareDatetime | None = None
+    """For a new end of the lab: the end that the desk set."""
+
+
+class DeskView(Record):
+    """What the person's panel for the desk shows: the desk, the desk chat, and what the desk did on the person's word."""
+
+    desk: AgentId | None = None
+    """The agent that holds the desk seat, or `None` while the lab has none."""
+    thread: ThreadView | None = None
+    """The desk chat, or `None` while the lab has none."""
+    actions: tuple[DeskAction, ...] = ()
+    """Each action of the desk, oldest first. The app shows each one under the post of the person that it rests on."""

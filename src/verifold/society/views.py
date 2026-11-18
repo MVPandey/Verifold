@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from verifold.protocol.agents import GUEST, POWERS, Agent
 from verifold.protocol.events import (
     ERROR_AT_LIMIT,
+    ERROR_INTERRUPTED,
     ERROR_MODEL_REFUSED,
     ERROR_OUT_OF_TIME,
     ERROR_RAN_PAST,
@@ -130,16 +131,19 @@ def thread_summaries(board: Board, agent_id: AgentId, now: datetime | None = Non
 
     The latest post of each thread shows its votes as `post_line` does for the agent at `now`, and the minutes since
     the newest result and plan of a line of work count to `now`. Without it, time counts from the board's newest post.
-    An entry that is sealed for the agent counts as a post, and its content counts for nothing.
+    An entry that is sealed for the agent counts as a post, and its content counts for nothing. The desk chat is
+    among them for the person and the desk only: its posts are for them, and `thread` reads it for any agent.
     """
     board = for_reader(board, agent_id, now)
     now = now or latest_time(board)
     crossed = crossings(board)
     lines = lines_of(board)
     blocked = Counter(found.entry.post.thread for found in obstacles(board) if found.state == 'open')
+    apart = agent_id != PERSON and not board.is_desk(agent_id)
     summaries = (
         _summary(board, agent_id, opened, crossed, lines, now=now, blocked=blocked[opened.thread.id])
         for opened in board.threads
+        if not (apart and opened.thread.desk)
     )
     return tuple(sorted(summaries, key=lambda summary: summary.last_at, reverse=True))
 
@@ -217,10 +221,13 @@ def team(board: Board, opened: ThreadOpened, lines: dict[AgentId, ThreadId | Non
     # person, blind checkers, and agents that left are in no team. The question's thread has none, and neither has a
     # side thread, where no agent works.
     thread = opened.thread
-    if thread.between or thread.conversation or thread.id == question_thread(board):
+    if thread.between or thread.conversation or thread.desk or thread.id == question_thread(board):
         return ()
+    # The desk posts for the person and works in no thread, also in a thread that it opened for the person.
     workers = tuple(
-        joined.agent.id for joined in board.agents if not joined.agent.checks and not board.gone(joined.agent.id)
+        joined.agent.id
+        for joined in board.agents
+        if not joined.agent.checks and not board.gone(joined.agent.id) and not board.is_desk(joined.agent.id)
     )
     first = next((entry.post for entry in board.posts if entry.post.thread == thread.id), None)
     called = isinstance(first, Call) and first.author == thread.opened_by
@@ -336,11 +343,15 @@ def brief(  # noqa: PLR0913
     board = for_reader(board, agent_id, now)
     now = now or latest_time(board)
     # An invited agent that has not posted may never come, so no agent reads it as a peer to ask or wait for. An
-    # agent that left is no peer either, and the brief lists it apart.
+    # agent that left is no peer either, and the brief lists it apart. The desk is no part of the lab's work, and
+    # `desk` names it.
     others = tuple(
         joined.agent
         for joined in board.agents
-        if joined.agent.id != agent_id and not joined.agent.checks and board.here(joined)
+        if joined.agent.id != agent_id
+        and not joined.agent.checks
+        and board.here(joined)
+        and not board.is_desk(joined.agent.id)
     )
     stands = tuple((entry, standing(board, entry.post.id)) for entry in board.posts)
     # An ask or a call in a side thread is talk for the thread's members, and its side line counts it for the
@@ -363,7 +374,7 @@ def brief(  # noqa: PLR0913
         and entry.post.author != agent_id
         and entry.post.mentions != (PERSON,)
         and entry.post.thread not in not_mine
-        and entry.post.thread != board.conversation
+        and entry.post.thread not in (board.conversation, board.desk_chat)
         and not is_answered(board, entry.post.id)
         and not board.gone(entry.post.author)
     )
@@ -396,11 +407,14 @@ def brief(  # noqa: PLR0913
         reverse=True,
     )
     # The agents that Verifold runs. An invited agent has no turns in the record, and a blind checker is no agent
-    # of the lab.
+    # of the lab. Nor is the desk, which is no part of the lab's work.
     run = tuple(
         joined.agent.id
         for joined in board.agents
-        if not joined.agent.checks and joined.agent.harness != GUEST and not board.gone(joined.agent.id)
+        if not joined.agent.checks
+        and joined.agent.harness != GUEST
+        and not board.gone(joined.agent.id)
+        and not board.is_desk(joined.agent.id)
     )
     not_built_on = tuple(
         entry
@@ -496,6 +510,8 @@ def brief(  # noqa: PLR0913
         vote_reveal_minutes=board.settings.votes.reveal_minutes,
         rerun_lease_minutes=board.settings.reruns.lease_minutes,
         conversation=board.conversation,
+        desk=board.desk,
+        desk_chat=board.desk_chat,
         person_waits=waits,
         powers=tuple(power for power in POWERS if power in board.powers),
         left=tuple(left_line(board, entry) for entry in board.left),
@@ -667,6 +683,8 @@ def _reason(failed: TurnEnded | None) -> str | None:
         return 'Verifold stopped its turn at the time limit.'
     if failed.error.startswith(ERROR_AT_LIMIT):
         return "Verifold stopped its turn at the lab's budget or disk limit."
+    if failed.error.startswith(ERROR_INTERRUPTED):
+        return 'The desk ended its last turn for the person.'
     return 'Its harness failed to start.' if failed.no_turn else 'Its last turn ended with an error.'
 
 
@@ -681,7 +699,12 @@ def needs_person(board: Board) -> tuple[PostView, ...]:
     An ask that carried a harness's request is not among them after Verifold ended the request.
     The ask of an agent that left is not among them: nobody waits for its answer.
     """
-    return tuple(post_view(board, entry, PERSON) for entry in board.posts if _waits_for_person(board, entry))
+    return tuple(post_view(board, entry, PERSON) for entry in waiting_posts(board))
+
+
+def waiting_posts(board: Board) -> tuple[Posted, ...]:
+    """Return the entries of the posts that wait for the person's answer, oldest first, as `needs_person` says."""
+    return tuple(entry for entry in board.posts if _waits_for_person(board, entry))
 
 
 def _waits_for_person(board: Board, entry: Posted) -> bool:

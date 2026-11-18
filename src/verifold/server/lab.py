@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Final, Self, assert_never
 
@@ -18,6 +19,7 @@ from verifold.protocol.events import (
     CoordinatorSet,
     DeliverableDecided,
     DeliverableSet,
+    DeskSet,
     Event,
     LabOpened,
     LimitReached,
@@ -38,6 +40,7 @@ from verifold.protocol.events import (
     TimeRanOut,
     TimeSet,
     TurnEnded,
+    TurnInterrupted,
     TurnStarted,
     TurnSummary,
     Voted,
@@ -69,7 +72,7 @@ from verifold.protocol.posts import (
     QuestionShown,
 )
 from verifold.protocol.settings import Settings
-from verifold.protocol.threads import CONVERSATION_TITLE, QUESTION_TITLE, Carries, Thread
+from verifold.protocol.threads import CONVERSATION_TITLE, DESK_TITLE, QUESTION_TITLE, Carries, Thread
 from verifold.protocol.usage import DiskUse
 from verifold.protocol.votes import Badge, BadgeAction, Direction
 from verifold.server.changes import wait_until
@@ -103,6 +106,14 @@ Adds one agent to the lab in the seat that a move describes, and starts it. The 
 first, in the same step as the agent, so that it says where the agent came from. The agent is the coordinator
 that asked for the seat: a role of the seat is recorded as given by it.
 """
+
+
+@dataclass(frozen=True, slots=True)
+class Said:
+    """The person's word that an action of the desk rests on: the desk that acts, and the person's post in the desk chat."""
+
+    by: AgentId
+    post: PostId
 
 
 type Stops = Callable[[RecordChanged], None]
@@ -217,13 +228,15 @@ class Lab:
         powers: tuple[Power, ...] = (),
         first: tuple[Build, ...] = (),
         given: tuple[str, AgentId] | None = None,
+        desk: bool = False,
     ) -> AgentJoined:
         """
         Add an agent to the lab.
 
         With `on_call`, the person put its seat on call. With `coordinator`, the person made it the lab's
-        coordinator, and `powers` are the powers that the person switched on for it. The record takes all of them
-        in the same step as the agent. `first` are events that come before the agent in that step, such as the
+        coordinator, and `powers` are the powers that the person switched on for it. With `desk`, the person made
+        its seat the lab's desk, and the desk chat opens with it when the lab has none. The record takes all of
+        them in the same step as the agent. `first` are events that come before the agent in that step, such as the
         yes to the request that asked for it. `given` is a role for the seat and the coordinator that gives it:
         the record keeps it as the coordinator's word, in the same step.
 
@@ -235,6 +248,10 @@ class Lab:
         if agent.checks:
             raise RejectedEvent('No agent joins a lab as the checker of one post. An agent of the lab takes a rerun.')
         builds: list[Build] = [*first, lambda _, seq, at: AgentJoined(seq=seq, at=at, agent=agent)]
+        if desk:
+            builds.append(lambda _, seq, at: DeskSet(seq=seq, at=at, agent=agent.id))
+            if not self._board.desk_chat:
+                builds.append(_open_thread(DESK_TITLE, PERSON, desk=True))
         if on_call:
             builds.append(lambda _, seq, at: OnCallSet(seq=seq, at=at, agent=agent.id, on_call=True))
         if coordinator:
@@ -364,19 +381,20 @@ class Lab:
         body = '' if headline == question else question
         return await self.post(PostRequest(kind='message', text=headline, body=body, new_thread=QUESTION_TITLE), PERSON)
 
-    async def revise_question(self, question: str, note: str = '') -> QuestionRevised | None:
+    async def revise_question(self, question: str, note: str = '', on: Said | None = None) -> QuestionRevised | None:
         """
         Record that the person revised the question, and return the revision, or `None` when the text is the same.
 
         The revision comes with a post of the person in the question's thread, which names nobody. So it reaches
         the agents and opens a closed lab again as the person's other words to the lab do, and the thread shows
-        each version in order. A lab from before the question had a thread gets one thread for these posts.
+        each version in order. A lab from before the question had a thread gets one thread for these posts. With
+        `on`, the desk revises the question on the person's word, and the post is the desk's post for the person.
         """
         # The event strips the text, so the same text with spaces around it is no revision.
         question = question.strip()
         if question == self._board.question:
             return None
-        board = await self._commit(*_revision(self._board, question, note, PERSON))
+        board = await self._commit(*_revision(self._board, question, note, on.by if on else PERSON, on=on))
         return board.revisions[-1]
 
     async def state_deliverables(self, texts: tuple[str, ...]) -> None:
@@ -390,56 +408,66 @@ class Lab:
         if texts:
             await self._commit(*(_deliverable(None, text, told=False) for text in texts))
 
-    async def add_deliverable(self, text: str) -> DeliverableSet:
+    async def add_deliverable(self, text: str, on: Said | None = None) -> DeliverableSet:
         """
         Record that the person stated one more deliverable, and return it.
 
         It comes with a post of the person in the question's thread, which names nobody. So it reaches the agents
-        and opens a closed lab again, as the person's other words to the lab do.
+        and opens a closed lab again, as the person's other words to the lab do. With `on`, the desk states it on
+        the person's word, and the post is the desk's post for the person.
 
         Raises:
             RejectedEvent: The lab has too many deliverables.
 
         """
-        said = f'{STATED.format(id=_next_deliverable(self._board))}{text}'
-        board = await self._commit(*_told_lab(self._board, said), _deliverable(None, text))
+        form = STATED_FOR_PERSON if on else STATED
+        said = f'{form.format(id=_next_deliverable(self._board))}{text}'
+        board = await self._commit(*_told_lab(self._board, said, on), _deliverable(None, text, on=on))
         return board.deliverables[-1]
 
-    async def change_deliverable(self, deliverable_id: DeliverableId, text: str) -> None:
+    async def change_deliverable(self, deliverable_id: DeliverableId, text: str, on: Said | None = None) -> bool:
         """
-        Record that the person changed the sentence of a deliverable. The same sentence again records nothing.
+        Record that the person changed the sentence of a deliverable, and return whether the record took a change.
 
-        The record keeps the earlier sentence. The offers for the deliverable stay, and so does an acceptance.
-        `_change` says when a post of the person tells the lab.
+        The same sentence again records nothing. The record keeps the earlier sentence. The offers for the
+        deliverable stay, and so does an acceptance. `_change` says when a post tells the lab. With `on`, the desk
+        makes the change on the person's word.
 
         Raises:
             RejectedEvent: The lab has no such deliverable.
 
         """
         if live(self._board, deliverable_id).text == text:
-            return
-        await self._change(f'{CHANGED.format(id=deliverable_id)}{text}', deliverable_id, text, removed=False)
+            return False
+        said = f'{(CHANGED_FOR_PERSON if on else CHANGED).format(id=deliverable_id)}{text}'
+        await self._change(said, deliverable_id, text, removed=False, on=on)
+        return True
 
-    async def remove_deliverable(self, deliverable_id: DeliverableId) -> None:
+    async def remove_deliverable(self, deliverable_id: DeliverableId, on: Said | None = None) -> None:
         """
         Record that the person removed a deliverable. Its offers stay on the board as posts.
+
+        With `on`, the desk removes it on the person's word.
 
         Raises:
             RejectedEvent: The lab has no such deliverable.
 
         """
         text = live(self._board, deliverable_id).text
-        await self._change(f'{REMOVED.format(id=deliverable_id)}{text}', deliverable_id, text, removed=True)
+        said = f'{(REMOVED_FOR_PERSON if on else REMOVED).format(id=deliverable_id)}{text}'
+        await self._change(said, deliverable_id, text, removed=True, on=on)
 
-    async def _change(self, said: str, deliverable_id: DeliverableId, text: str, *, removed: bool) -> None:
+    async def _change(
+        self, said: str, deliverable_id: DeliverableId, text: str, *, removed: bool, on: Said | None = None
+    ) -> None:
         # A new sentence or a removal is no new work for the lab. So its post does not open a closed lab again:
         # while a close stands, the record takes the change without a post. For the whole list, one such post
         # goes out in `TOLD_WINDOW` at most. The agents read every change in `brief`.
         board = self._board
         last = told_at(board)
         quiet = closing(board) is not None or (last is not None and self._clock() - last < TOLD_WINDOW)
-        tells = () if quiet else _told_lab(board, said)
-        await self._commit(*tells, _deliverable(deliverable_id, text, removed=removed, told=not quiet))
+        tells = () if quiet else _told_lab(board, said, on)
+        await self._commit(*tells, _deliverable(deliverable_id, text, removed=removed, told=not quiet, on=on))
 
     async def offer(  # noqa: PLR0913
         self,
@@ -837,9 +865,32 @@ class Lab:
         """Return the time on the clock that dates the lab's events."""
         return self._clock()
 
-    async def set_time_left(self, left: timedelta) -> None:
-        """Record that the lab ends `left` from now. A `left` of zero stops the agents now."""
-        await self._commit(lambda _, seq, at: TimeSet(seq=seq, at=at, ends_at=at + left))
+    async def set_time_left(self, left: timedelta, on: Said | None = None) -> TimeSet:
+        """
+        Record that the lab ends `left` from now, and return the new end. A `left` of zero stops the agents now.
+
+        With `on`, the desk sets it on the person's word.
+        """
+        by = on.by if on else PERSON
+        post = on.post if on else None
+        board = await self._commit(lambda _, seq, at: TimeSet(seq=seq, at=at, ends_at=at + left, by=by, on=post))
+        return next(entry for entry in reversed(board.times) if isinstance(entry, TimeSet))
+
+    async def interrupt(self, agent_id: AgentId, on: Said) -> TurnInterrupted:
+        """
+        Record that the desk ends an agent's turn for the person, and return the record's entry.
+
+        The agent's loop cancels the turn when it sees the entry, and the agent then starts one more turn.
+
+        Raises:
+            RejectedEvent: The agent is in no turn by the record, Verifold does not run it, or `on` is no post of
+                the person in the desk chat from the last hour.
+
+        """
+        board = await self._commit(
+            lambda _, seq, at: TurnInterrupted(seq=seq, at=at, agent=agent_id, by=on.by, on=on.post)
+        )
+        return board.interrupts[-1]
 
     async def set_budget(self, tokens: int | None, dollars: float | None) -> None:
         """
@@ -1048,6 +1099,9 @@ REVISED_TITLE: Final = 'The question, revised'
 REVISED_FOR_PERSON: Final = 'The coordinator revised the question for the person: '
 """How that post starts when the coordinator revised the question with the person's power."""
 
+REVISED_BY_DESK: Final = 'The desk revised the question for the person: '
+"""How that post starts when the desk revised the question on the person's word."""
+
 YES: Final = 'Yes'
 NO: Final = 'Not now'
 """The person's answer to a request for a move, as the conversation shows it."""
@@ -1061,6 +1115,11 @@ CHANGED: Final = 'The person changed the sentence of the deliverable {id} to: '
 
 REMOVED: Final = 'The person removed the deliverable {id}: '
 """How that post starts when the person removed a deliverable. The sentence that it had follows it."""
+
+STATED_FOR_PERSON: Final = 'The desk stated a deliverable for the person, {id}: '
+CHANGED_FOR_PERSON: Final = 'The desk changed the sentence of the deliverable {id} for the person to: '
+REMOVED_FOR_PERSON: Final = 'The desk removed the deliverable {id} for the person: '
+"""How these posts start when the desk made the change on the person's word."""
 
 ACCEPTED: Final = 'The person accepted these files for the deliverable {id}.'
 """The person's reply to an offer that they accepted."""
@@ -1079,8 +1138,16 @@ def _next_deliverable(board: Board) -> DeliverableId:
     return f'd-{len({entry.deliverable for entry in board.deliverables}) + 1}'
 
 
-def _deliverable(deliverable_id: DeliverableId | None, text: str, *, removed: bool = False, told: bool = True) -> Build:
-    # Without an ID, the deliverable is a new one. With `told`, the board's newest post tells the lab of it.
+def _deliverable(
+    deliverable_id: DeliverableId | None,
+    text: str,
+    *,
+    removed: bool = False,
+    told: bool = True,
+    on: Said | None = None,
+) -> Build:
+    # Without an ID, the deliverable is a new one. With `told`, the board's newest post tells the lab of it. With
+    # `on`, the desk makes the change on the person's word.
     return lambda board, seq, at: DeliverableSet(
         seq=seq,
         at=at,
@@ -1088,12 +1155,14 @@ def _deliverable(deliverable_id: DeliverableId | None, text: str, *, removed: bo
         text=text,
         removed=removed,
         post=board.posts[-1].post.id if told else None,
+        by=on.by if on else PERSON,
+        on=on.post if on else None,
     )
 
 
-def _told_lab(board: Board, said: str) -> tuple[Build, ...]:
-    # The person's post that tells the lab of a deliverable, in the question's thread. A lab from before the
-    # question had a thread gets one thread for these posts.
+def _told_lab(board: Board, said: str, on: Said | None = None) -> tuple[Build, ...]:
+    # The person's post that tells the lab of a deliverable, in the question's thread, or the desk's post for the
+    # person with `on`. A lab from before the question had a thread gets one thread for these posts.
     thread = question_thread(board) or next(
         (
             opened.thread.id
@@ -1102,9 +1171,17 @@ def _told_lab(board: Board, said: str) -> tuple[Build, ...]:
         ),
         None,
     )
-    opens = () if thread else (_open_thread(DELIVERABLES_TITLE, PERSON),)
-    request = PostRequest(kind='message', text=said, thread=thread, new_thread=None if thread else DELIVERABLES_TITLE)
-    return (*opens, _add_post(request, PERSON, ()))
+    author = on.by if on else PERSON
+    opens = () if thread else (_open_thread(DELIVERABLES_TITLE, author, for_person=on is not None),)
+    request = PostRequest(
+        kind='message',
+        text=said,
+        thread=thread,
+        new_thread=None if thread else DELIVERABLES_TITLE,
+        for_person=on is not None,
+        on=on.post if on else None,
+    )
+    return (*opens, _add_post(request, author, ()))
 
 
 def _decision(
@@ -1129,12 +1206,15 @@ def _decision(
     )
 
 
-def _revision(board: Board, question: str, note: str, by: AgentId, *, requested: bool = False) -> tuple[Build, ...]:
+def _revision(  # noqa: PLR0913
+    board: Board, question: str, note: str, by: AgentId, *, requested: bool = False, on: Said | None = None
+) -> tuple[Build, ...]:
     # The post that tells the lab of a revision, in the question's thread, and the revision after it. A lab from
     # before the question had a thread gets one thread for these posts, whoever revised the question first. With
-    # `requested`, the revision is the move of the request that just got its yes.
+    # `requested`, the revision is the move of the request that just got its yes. With `on`, the desk revised it.
     earlier = {told.post.thread for revision in board.revisions if (told := board.post(revision.post))}
-    whole = f'{REVISED if by == PERSON else REVISED_FOR_PERSON}{question}'
+    opening = REVISED if by == PERSON else REVISED_BY_DESK if on else REVISED_FOR_PERSON
+    whole = f'{opening}{question}'
     text = _headline(whole)
     # A question that fits in the headline is not repeated in the body.
     parts = ('' if text == whole else question, f'Why: {note}' if note else '')
@@ -1155,8 +1235,9 @@ def _revision(board: Board, question: str, note: str, by: AgentId, *, requested:
         thread=thread,
         new_thread=None if thread else REVISED_TITLE,
         for_person=by != PERSON,
+        on=on.post if on else None,
     )
-    opens = (_open_thread(REVISED_TITLE, by),) if thread is None else ()
+    opens = (_open_thread(REVISED_TITLE, by, for_person=on is not None),) if thread is None else ()
     return (
         *opens,
         _add_post(request, by, ()),
@@ -1168,6 +1249,7 @@ def _revision(board: Board, question: str, note: str, by: AgentId, *, requested:
             post=board.posts[-1].post.id,
             by=by,
             request=board.answers[-1].request if requested else None,
+            on=on.post if on else None,
         ),
     )
 
@@ -1332,6 +1414,7 @@ def _open_thread(  # noqa: PLR0913
     conversation: bool = False,
     for_person: bool = False,
     deliverable: DeliverableId | None = None,
+    desk: bool = False,
 ) -> Build:
     # The author is always in its own side thread, and comes first. An agent that names itself changes nothing.
     members = tuple(dict.fromkeys((opened_by, *between))) if between else ()
@@ -1346,6 +1429,7 @@ def _open_thread(  # noqa: PLR0913
             conversation=conversation,
             for_person=for_person,
             deliverable=deliverable,
+            desk=desk,
         )
         return ThreadOpened(seq=seq, at=at, thread=thread)
 

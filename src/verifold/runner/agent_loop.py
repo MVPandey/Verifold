@@ -27,6 +27,7 @@ from verifold.protocol.agents import Agent
 from verifold.protocol.app import AgentState, Retry, WaitsFor
 from verifold.protocol.events import (
     ERROR_AT_LIMIT,
+    ERROR_INTERRUPTED,
     ERROR_OUT_OF_TIME,
     ERROR_RAN_PAST,
     AlarmSet,
@@ -84,6 +85,7 @@ from verifold.server.member import Member
 from verifold.society.attention import update, wakes
 from verifold.society.board import Board
 from verifold.society.budget import LIMIT_NAMES
+from verifold.society.desk import interrupted, speaks_for_person
 from verifold.society.grants import agent_waits
 from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
 from verifold.society.reruns import RerunKey, kept_until, told_of
@@ -216,6 +218,8 @@ class AgentLoop:
         """The message that carries that ring, until its turn ends. A harness that fails before gets it again."""
         self._cut_short = ''
         """Why the agent's last turn ended without the agent's choice, or empty when the agent ended it."""
+        self._interrupted = False
+        """Whether the desk ended the agent's last turn, so that the agent goes on also after a cut in a row."""
 
     async def run(self) -> None:
         """Run the agent until it fails too often, or until the caller cancels the loop."""
@@ -329,9 +333,11 @@ class AgentLoop:
             await self._while_halted()
             current = self._lab.board
             return go_on_message(stopped, current, current.settings.jobs.at_time_limit), resumed
-        if self._cut_short and not resumed:
+        if self._cut_short and (not resumed or self._interrupted):
             # The agent did not choose to stop, so no post may be on its way. It goes on once. A second cut in a
-            # row waits for a post, so a turn that always fails does not repeat.
+            # row waits for a post, so a turn that always fails does not repeat. A turn that the desk ended goes
+            # on whatever came before, because the person's word wants the agent's next turn now.
+            self._interrupted = False
             return cut_short_message(self._cut_short), True
         return await self._news(), False
 
@@ -346,7 +352,7 @@ class AgentLoop:
         if model:
             # A name that says "default model" names the model that the harness reported, from the first turn on.
             await self._lab.name_by_model(self._setup.agent.id, self._setup.harness.title, model.name)
-        await self._lab.start_turn(
+        turn = await self._lab.start_turn(
             self._setup.agent.id,
             session.id,
             self._seen_at_turn,
@@ -357,7 +363,7 @@ class AgentLoop:
         self._in_turn = True
         try:
             async with asyncio.timeout(self._settings.turn_timeout) as limit:
-                stopper = asyncio.create_task(self._stop_when_halted(limit))
+                stopper = asyncio.create_task(self._stop_when_halted(limit, turn.seq))
                 self._turn_over.clear()
                 try:
                     result = await session.send(message)
@@ -379,15 +385,21 @@ class AgentLoop:
                 await self._record(started, Usage(), session.turn_cost(), error)
                 self._cut_short = ''
                 return None
-            halt = self._lab.board.halted
+            halt = self._halt()
+            cut = interrupted(self._lab.board, self._setup.agent.id, turn.seq)
             if halt == 'time':
                 error = f'{ERROR_OUT_OF_TIME}, so Verifold cancelled the turn.'
             elif halt:
                 error = f'{ERROR_AT_LIMIT} {LIMIT_NAMES[halt]}, so Verifold cancelled the turn.'
+            elif cut:
+                error = (
+                    f'{ERROR_INTERRUPTED}, on post {cut.on} of the person in the desk chat, and Verifold cancelled it.'
+                )
             else:
                 error = f'{ERROR_RAN_PAST} {self._settings.turn_timeout:g} seconds and was cancelled.'
             await self._record(started, Usage(), session.turn_cost(), error)
             self._cut_short = '' if halt else error
+            self._interrupted = bool(cut) and not halt
             if not halt:
                 await self._report('idle')
             return halt
@@ -397,11 +409,12 @@ class AgentLoop:
         await self._report('idle')
         return None
 
-    async def _stop_when_halted(self, limit: asyncio.Timeout) -> None:
+    async def _stop_when_halted(self, limit: asyncio.Timeout, started: int) -> None:
         # An agent that leaves the lab stops in the same way. The board refuses it from then on, so its turn can
-        # only spend tokens. After its own `leave` it gets a moment to end the turn by itself.
-        lab = self._lab
-        while lab.board.halted is None and not self._left():
+        # only spend tokens. After its own `leave` it gets a moment to end the turn by itself. A turn that the desk
+        # ends for the person after its start, event `started`, stops in the same way too.
+        lab, agent_id = self._lab, self._setup.agent.id
+        while self._halt() is None and not self._left() and not interrupted(lab.board, agent_id, started):
             await lab.wait_for_change(lab.board.seq)
         left = lab.board.gone(self._setup.agent.id)
         if left and left.by != PERSON:
@@ -428,17 +441,24 @@ class AgentLoop:
     def _left(self) -> bool:
         return self._lab.board.gone(self._setup.agent.id) is not None
 
+    def _halt(self) -> Halt | None:
+        # Why the lab rests this agent now: its time ran out, or it reached a limit. The halt rests no desk, because
+        # only a post of the person in the desk chat starts a turn of the desk, and the person can ask the desk where
+        # the lab stands or tell it to give the lab more. The desk's turns count toward what the lab spent.
+        board = self._lab.board
+        return None if board.is_desk(self._setup.agent.id) else board.halted
+
     async def _while_halted(self) -> Halt | None:
         # Wait while the lab is out of time or at a limit. Return why the lab was, or `None` when it was not.
         lab = self._lab
-        halt = lab.board.halted
+        halt = self._halt()
         if halt is None or self._left():
             return None
         if halt == 'time':
             await self._report('waiting', 'The lab is out of time. The person can give it more.', 'time')
         else:
             await self._report('waiting', f'The lab reached its {LIMIT_NAMES[halt]}. The person can raise it.', 'limit')
-        while lab.board.halted is not None and not self._left():
+        while self._halt() is not None and not self._left():
             await lab.wait_for_change(lab.board.seq)
         return halt
 
@@ -469,8 +489,9 @@ class AgentLoop:
 
     def _jobs_stopped(self, board: Board) -> Halt | None:
         # Why the lab stopped the agent's processes after its last turn, when the time limit or another limit did.
-        # The record shows a stop also when the lab went on before this look.
-        if board.settings.jobs.at_time_limit is not AtTimeLimit.STOP:
+        # The record shows a stop also when the lab went on before this look. A halt rests no desk, so the lab's
+        # going on wakes no desk either.
+        if board.settings.jobs.at_time_limit is not AtTimeLimit.STOP or board.is_desk(self._setup.agent.id):
             return None
         times = (entry.seq for entry in board.times if isinstance(entry, TimeRanOut) and entry.seq > self._turn_ended)
         limits = ((entry.seq, entry.limit) for entry in board.limits if entry.seq > self._turn_ended)
@@ -581,11 +602,12 @@ class AgentLoop:
                 return
 
     def _person_wrote(self) -> bool:
-        # Whether a post of the person that is for the agent waits for its doorbell.
+        # Whether a post of the person that is for the agent waits for its doorbell. The desk's post for the person
+        # carries the person's word, so it rings at once too.
         board, agent_id = self._lab.board, self._setup.agent.id
         rung = max(self._notified, self._member.seen)
         waiting = takewhile(lambda entry: entry.seq > rung, reversed(board.posts))
-        return any(entry.post.author == PERSON and wakes(board, agent_id, entry) for entry in waiting)
+        return any(speaks_for_person(entry.post) and wakes(board, agent_id, entry) for entry in waiting)
 
     async def _permission(self, request: PermissionRequest) -> str | None:
         board = self._lab.board

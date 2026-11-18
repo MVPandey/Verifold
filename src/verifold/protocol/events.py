@@ -26,7 +26,7 @@ from verifold.protocol.grants import Grant
 from verifold.protocol.ids import PERSON, AgentId, CommitId, DeliverableId, PostId, ThreadId
 from verifold.protocol.moves import Note, Question
 from verifold.protocol.posts import Post
-from verifold.protocol.record import Record
+from verifold.protocol.record import Record, by_person, unset
 from verifold.protocol.settings import MAX_BUDGET_DOLLARS, MAX_BUDGET_TOKENS, MAX_MINUTES, Settings
 from verifold.protocol.threads import Thread
 from verifold.protocol.usage import Usage
@@ -57,7 +57,8 @@ class QuestionRevised(EventBase):
     The person revised the lab's question. The lab works on the newest text, and the record keeps every version.
 
     `post` is the post that tells the lab, which comes just before this event: the person's own, or the
-    coordinator's post for the person when `by` names the coordinator. No agent tool records a revision by itself.
+    coordinator's or the desk's post for the person when `by` names one of them. No agent tool records a revision
+    by itself.
     """
 
     type: Literal['question_revised'] = 'question_revised'
@@ -73,6 +74,11 @@ class QuestionRevised(EventBase):
     """
     The coordinator's request that the revision came from: the person said yes to it, or the power decided it.
     `None` for a revision that the person made by themselves.
+    """
+    on: PostId | None = Field(default=None, exclude_if=unset)
+    """
+    With `by` the lab's desk: the person's post in the desk chat that the revision rests on. `None` for every other
+    revision.
     """
 
 
@@ -115,6 +121,21 @@ class OnCallSet(EventBase):
     type: Literal['on_call_set'] = 'on_call_set'
     agent: AgentId
     on_call: bool
+
+
+class DeskSet(EventBase):
+    """
+    The person made an agent's seat the lab's desk, in the step in which the agent joined.
+
+    The desk answers the person in the desk chat, and it acts on the person's word: each of its actions names the
+    person's post in the desk chat that it rests on. It is no part of the lab's work. Only a post of the person in
+    the desk chat wakes it, it counts for no round, no close, and no reviewer seat, and the board takes no plan,
+    result, check, proposal, ruled-out lead, objection, close, entry, vote, badge, or take of a rerun from it. A
+    lab has one desk at most. No agent tool records this event.
+    """
+
+    type: Literal['desk_set'] = 'desk_set'
+    agent: AgentId
 
 
 class CoordinatorSet(EventBase):
@@ -342,13 +363,17 @@ class TimeSet(EventBase):
     A new end of the lab. At `ends_at`, the agents stop until the lab gets more time.
 
     The person sets it. The coordinator's request for more time sets it too: with the person's yes, or at once
-    while the person's power for more time is on.
+    while the person's power for more time is on. So does the lab's desk on the person's word, with `on`.
     """
 
     type: Literal['time_set'] = 'time_set'
     ends_at: AwareDatetime
     request: PostId | None = None
     """The coordinator's request for more time that set this end, with its yes just before. `None` for the person's own."""
+    by: AgentId = Field(default=PERSON, exclude_if=by_person)
+    """Who set this end: the person, or the lab's desk on the person's word. A record from before this field holds the person."""
+    on: PostId | None = Field(default=None, exclude_if=unset)
+    """With `by` the desk: the person's post in the desk chat that this end rests on."""
 
 
 class TimeRanOut(EventBase):
@@ -478,6 +503,23 @@ ERROR_RAN_PAST = 'The turn ran past'
 
 ERROR_AT_LIMIT = 'The lab reached its'
 """How the error of a turn that Verifold cancelled at the lab's budget or disk limit starts."""
+ERROR_INTERRUPTED = 'The desk ended the turn for the person'
+"""How the error of a turn that Verifold cancelled for the lab's desk starts."""
+
+
+class TurnInterrupted(EventBase):
+    """
+    The lab's desk ended an agent's turn for the person, so that the agent starts a new turn and reads its news now.
+
+    Verifold cancels the turn as it cancels a turn at the limit for one turn, and the end of the turn says why. The
+    agent then starts one more turn. `on` is the person's post in the desk chat that the interrupt rests on.
+    """
+
+    type: Literal['turn_interrupted'] = 'turn_interrupted'
+    agent: AgentId
+    by: AgentId
+    """The agent that holds the desk seat."""
+    on: PostId
 
 
 class TurnEnded(EventBase, TurnSummary):
@@ -594,13 +636,13 @@ class BadgeSet(EventBase):
 
 class DeliverableSet(EventBase):
     """
-    The person stated a deliverable, changed its sentence, or removed it.
+    The person stated a deliverable, changed its sentence, or removed it, or the lab's desk did on the person's word.
 
     A deliverable is what the person wants to hold at the end of the lab, as one sentence. A new ID states one, a
     known ID with a new text changes its sentence, and `removed` removes it. The record keeps every earlier
-    sentence. `post` is the person's post that tells the lab, which comes just before this event. A deliverable
-    that the person stated when the lab opened, before any agent joined, has none. No agent tool records this
-    event.
+    sentence. `post` is the post that tells the lab, which comes just before this event: the person's own, or the
+    desk's post for the person. A deliverable that the person stated when the lab opened, before any agent joined,
+    has none. No agent tool records this event, other than the desk's with `on`.
     """
 
     type: Literal['deliverable_set'] = 'deliverable_set'
@@ -609,6 +651,13 @@ class DeliverableSet(EventBase):
     """The sentence from now on. With `removed`, the sentence that the deliverable had last."""
     removed: bool = False
     post: PostId | None = None
+    by: AgentId = Field(default=PERSON, exclude_if=by_person)
+    """
+    Who made the change: the person, or the lab's desk on the person's word. The post that tells the lab is then
+    the desk's post for the person. A record from before this field holds the person.
+    """
+    on: PostId | None = Field(default=None, exclude_if=unset)
+    """With `by` the desk: the person's post in the desk chat that the change rests on."""
 
 
 class DeliverableDecided(EventBase):
@@ -634,6 +683,7 @@ type Event = Annotated[
     | AgentJoined
     | AgentNamed
     | OnCallSet
+    | DeskSet
     | CoordinatorSet
     | AgentLeft
     | ThreadOpened
@@ -644,6 +694,7 @@ type Event = Annotated[
     | AlarmSet
     | TurnStarted
     | TurnEnded
+    | TurnInterrupted
     | RerunRequested
     | RerunTaken
     | RerunLeaseSet

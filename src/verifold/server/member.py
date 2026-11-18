@@ -3,19 +3,23 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from verifold.protocol.agents import GUEST, Picture
 from verifold.protocol.app import Heard
 from verifold.protocol.events import AgentLeft, AlarmSet, Posted, RerunRequested, RerunTaken, WatchSet
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
+    MAX_DESK_FILE,
     MAX_MANIFEST,
     Brief,
+    DeskFile,
+    FileText,
     ManifestLine,
     News,
+    Overview,
     PostLine,
     PostRequest,
     PostView,
@@ -30,18 +34,35 @@ from verifold.protocol.join import (
 from verifold.protocol.moves import AddMove, AddSeat, Move
 from verifold.protocol.posts import FileEvidence
 from verifold.protocol.votes import Badge, BadgeAction, Direction
-from verifold.server.errors import CannotWake, EvidenceRejected, HasLeft, NoCleanCopy, OutOfTime, UnknownAgent
-from verifold.server.lab import Adds, Lab
+from verifold.server.errors import (
+    CannotWake,
+    DeskOnly,
+    EvidenceRejected,
+    HasLeft,
+    NoCleanCopy,
+    OutOfTime,
+    UnknownAgent,
+)
+from verifold.server.lab import Adds, Lab, Said
 from verifold.society.attention import news, update, wakes
 from verifold.society.budget import LIMIT_NAMES
 from verifold.society.deliverables import live
+from verifold.society.desk import check_on, speaks_for_person
 from verifold.society.errors import RejectedEvent
 from verifold.society.identity import post_view
+from verifold.society.lifecycle import utc
+from verifold.society.overview import overview
 from verifold.society.reruns import RerunKey, kept_until, lease_of, open_take, told_of
 from verifold.society.views import brief, profile_result, side_lines, thread_summaries, thread_view, work_threads
 
 type Pin = Callable[[tuple[str, ...]], Awaitable[tuple[FileEvidence, ...]]]
 """Commits an agent's folder and returns each named file pinned to that commit."""
+
+type Files = Callable[[PostId, str], Awaitable[FileText]]
+"""Reads a file that backs a post, at the commit that the post pins, as the person's app reads it."""
+
+type Change = Literal['add', 'change', 'remove']
+"""What the desk does to a deliverable on the person's word."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +120,7 @@ class Member:
         copies: CleanCopy | None = None,
         adds: Adds | None = None,
         seat_ok: Callable[[AddSeat], None] | None = None,
+        files: Files | None = None,
     ) -> None:
         """
         Seat an agent that has joined the lab. It has read everything up to now, or up to event `seen` when given.
@@ -109,7 +131,9 @@ class Member:
         `adds` starts an agent for the coordinator's move that adds one. Without it, the lab refuses such a move
         while the coordinator's power over agents is on, and the request waits for the person otherwise.
         `seat_ok` refuses a seat whose harness this computer does not have, when the coordinator asks for it.
+        `files` reads a file that backs a post for the desk. Without it, the desk reads no file.
         """
+        self._files = files
         self._adds = adds
         self._seat_ok = seat_ok
         self._lab = lab
@@ -287,15 +311,15 @@ class Member:
 
     def _hear(self, now: datetime, lines: Iterable[PostLine], full: Iterable[PostView] = ()) -> None:
         # The person's posts in the conversation that a result carries to the agent now, each by its place and
-        # whether the result holds it whole.
+        # whether the result holds it whole. The desk's posts for the person there count as the person's.
         talk = self._lab.board.conversation
         carried = (
             *(
                 (line.seq, holds_whole(line.text, line.body))
                 for line in lines
-                if line.author == PERSON and line.thread == talk
+                if (line.author == PERSON or line.on is not None) and line.thread == talk
             ),
-            *((view.seq, True) for view in full if view.post.author == PERSON and view.post.thread == talk),
+            *((view.seq, True) for view in full if speaks_for_person(view.post) and view.post.thread == talk),
         )
         newest = max(carried, default=None)
         heard = self.heard
@@ -316,7 +340,7 @@ class Member:
             entry
             for entry in reversed(board.posts)
             if joined.seq < entry.seq <= self._seen
-            and entry.post.author == PERSON
+            and speaks_for_person(entry.post)
             and entry.post.thread == board.conversation
             and wakes(board, self.agent_id, entry)
         )
@@ -597,3 +621,208 @@ class Member:
             free = kept_until(self._lab.board, self.agent_id, now, self.told)
             frees = remaining if free is None else min(remaining, (free - now).total_seconds())
             await self._lab.wait_for_change(news.seq, frees)
+
+    def check_desk(self) -> None:
+        """
+        Check that the agent holds the lab's desk seat. The join endpoint calls it before every tool of the desk.
+
+        Raises:
+            DeskOnly: The agent does not hold the desk seat.
+
+        """
+        if self._lab.board.desk != self.agent_id:
+            raise DeskOnly(
+                "This tool is the desk's, and only the agent that holds the lab's desk seat calls it. "
+                f'{self.agent_id} does not hold that seat.'
+            )
+
+    def _said(self, on: PostId) -> Said:
+        # The person's word that an action rests on. The record's rules check it again in the step of the action,
+        # and this check refuses an action that would record nothing before the board looks at anything else.
+        self.check_desk()
+        check_on(self._lab.board, self.agent_id, on, self._lab.now())
+        return Said(by=self.agent_id, post=on)
+
+    def overview(self) -> Overview:
+        """Return the lab as the person's app has it, for the desk, with the desk's news."""
+        self.check_desk()
+        return overview(self._lab.board, self.agent_id, self._lab.now(), self.news())
+
+    async def read_file(self, post_id: PostId, path: str) -> DeskFile:
+        """
+        Return the text of a file that backs a post, at the commit that the post pins, for the desk.
+
+        The text holds `MAX_DESK_FILE` characters at most, so the result stays one tool result.
+
+        Raises:
+            DeskOnly: The agent does not hold the desk seat.
+            NotFound: The post names no such file, or Verifold does not show it, as the person's app says.
+
+        """
+        self.check_desk()
+        if self._files is None:
+            raise DeskOnly('This lab cannot read files for the desk.')
+        read = await self._files(post_id, path)
+        text = read.text
+        return DeskFile(
+            post=post_id,
+            path=read.path,
+            commit=read.commit,
+            text=text[:MAX_DESK_FILE],
+            size=len(text),
+            cut=len(text) > MAX_DESK_FILE,
+            news=self.news(),
+        )
+
+    async def reply(self, text: str, body: str = '') -> PostView:
+        """
+        Post the desk's message to the person in the desk chat, and return it as it stands.
+
+        Raises:
+            DeskOnly: The agent does not hold the desk seat.
+
+        """
+        self.check_desk()
+        chat = self._lab.board.desk_chat
+        return await self.post(PostRequest(kind='message', text=text, body=body, thread=chat))
+
+    async def say(  # noqa: PLR0913
+        self,
+        on: PostId,
+        text: str,
+        body: str = '',
+        *,
+        thread: ThreadId | None = None,
+        conversation: bool = False,
+        reply_to: PostId | None = None,
+        mentions: tuple[AgentId, ...] = (),
+    ) -> PostView:
+        """
+        Post the desk's message for the person in a thread or in the conversation, and return it as it stands.
+
+        Raises:
+            DeskOnly: The agent does not hold the desk seat.
+            RejectedEvent: `on` is no post of the person in the desk chat from the last hour, or the board refuses
+                the post.
+
+        """
+        self._said(on)
+        if reply_to and thread is None and not conversation:
+            answered = self._lab.board.post(reply_to)
+            thread = answered.post.thread if answered else None
+        request = PostRequest(
+            kind='message',
+            text=text,
+            body=body,
+            thread=None if conversation else thread,
+            conversation=conversation,
+            reply_to=reply_to,
+            mentions=mentions,
+            for_person=True,
+            on=on,
+        )
+        return await self.post(request)
+
+    async def open_round(
+        self,
+        on: PostId,
+        text: str,
+        minutes: int,
+        *,
+        thread: ThreadId | None = None,
+        new_thread: str | None = None,
+    ) -> PostView:
+        """
+        Open a round for the person, and return it as it stands.
+
+        Raises:
+            DeskOnly: The agent does not hold the desk seat.
+            RejectedEvent: `on` is no post of the person in the desk chat from the last hour, or the board refuses
+                the round.
+
+        """
+        self._said(on)
+        request = PostRequest(
+            kind='round',
+            text=text,
+            minutes=minutes,
+            thread=thread,
+            new_thread=new_thread,
+            for_person=True,
+            on=on,
+        )
+        return await self.post(request)
+
+    async def revise_question(self, on: PostId, question: str, note: str = '') -> str:
+        """
+        Revise the lab's question for the person, and return what the board recorded, as one sentence.
+
+        Raises:
+            DeskOnly: The agent does not hold the desk seat.
+            RejectedEvent: `on` is no post of the person in the desk chat from the last hour.
+
+        """
+        said = self._said(on)
+        revised = await self._lab.revise_question(question, note, on=said)
+        if revised is None:
+            return 'The question has this text already, so the board recorded nothing.'
+        return f'The board revised the question, and post {revised.post} tells the lab.'
+
+    async def deliverable(
+        self, on: PostId, change: Change, deliverable_id: DeliverableId | None = None, text: str | None = None
+    ) -> str:
+        """
+        State, change, or remove a deliverable for the person, and return what the board recorded, as one sentence.
+
+        Raises:
+            DeskOnly: The agent does not hold the desk seat.
+            RejectedEvent: `on` is no post of the person in the desk chat from the last hour, the change misses
+                its deliverable or its sentence, or the lab has no such deliverable.
+
+        """
+        said = self._said(on)
+        if change == 'add':
+            if not text or deliverable_id:
+                raise RejectedEvent('`add` takes the sentence in `text` and no `deliverable`.')
+            stated = await self._lab.add_deliverable(text, on=said)
+            return f'The board stated the deliverable {stated.deliverable}.'
+        if deliverable_id is None:
+            raise RejectedEvent(f'`{change}` names the deliverable in `deliverable`, such as `d-1`.')
+        if change == 'remove':
+            await self._lab.remove_deliverable(deliverable_id, on=said)
+            return f'The board removed the deliverable {deliverable_id}.'
+        if not text:
+            raise RejectedEvent('`change` takes the new sentence in `text`.')
+        if not await self._lab.change_deliverable(deliverable_id, text, on=said):
+            return f'The deliverable {deliverable_id} has this sentence already, so the board recorded nothing.'
+        return f'The board changed the sentence of the deliverable {deliverable_id}.'
+
+    async def set_time(self, on: PostId, minutes: int) -> str:
+        """
+        Set the time that the lab has left for the person, and return what the board recorded, as one sentence.
+
+        Raises:
+            DeskOnly: The agent does not hold the desk seat.
+            RejectedEvent: `on` is no post of the person in the desk chat from the last hour.
+
+        """
+        said = self._said(on)
+        ends = await self._lab.set_time_left(timedelta(minutes=minutes), on=said)
+        return f'The board set the end of the lab to {utc(ends.ends_at)}.'
+
+    async def interrupt(self, on: PostId, agent_id: AgentId) -> str:
+        """
+        End an agent's turn for the person, and return what the board recorded, as one sentence.
+
+        Raises:
+            DeskOnly: The agent does not hold the desk seat.
+            RejectedEvent: `on` is no post of the person in the desk chat from the last hour, or the agent is in no
+                turn that Verifold can end.
+
+        """
+        said = self._said(on)
+        await self._lab.interrupt(agent_id, said)
+        return (
+            f'The board recorded the end of the turn of {agent_id}. Verifold cancels that turn, and {agent_id} '
+            'starts one more turn.'
+        )

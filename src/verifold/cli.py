@@ -95,8 +95,9 @@ def _start(args: argparse.Namespace) -> StartRequest:
 
     `verifold run` starts at once, without showing the saved choices, and a project's file can come from someone else.
     So a project's file can make the lab stricter, not looser: it can turn auto mode off, shorten the time limit,
-    lower the budget and the disk limit, and each of its seats gives only a harness, a count, a model, and an effort. Its modes, roles, families,
-    coordinator, powers, and on-call marks are not used, and neither is its number of reviewer seats, and the command says so.
+    lower the budget and the disk limit, and each of its seats gives only a harness, a count, a model, and an effort.
+    Its modes, roles, families, coordinator, powers, on-call marks, and desk are not used, and neither is its number
+    of reviewer seats, and the command says so.
     Under `--ask-me`, no saved agent gets a mode.
 
     Raises:
@@ -209,7 +210,7 @@ def _saved_agents(
     # A seat from a project's file gives only its harness, count, model, and effort. The rest could loosen the lab
     # or speak as the person: a family makes a rerun count as independent, a role reaches the agents as the
     # person's word, a coordinator reads as the person's choice, its powers would hand the person's moves to an
-    # agent, and a lab of on-call seats starts nothing.
+    # agent, a lab of on-call seats starts nothing, and a desk acts on the person's word.
     dropped = PROJECT_DROPS if from_project else {'mode': None} if drop_modes else {}
     unused: set[str] = set()
     kept: list[AgentChoice] = []
@@ -240,7 +241,7 @@ def _saved_agents(
 
 
 PROJECT_DROPS: Mapping[str, str | bool | tuple[()] | None] = MappingProxyType(
-    {'mode': None, 'role': '', 'family': None, 'coordinator': False, 'on_call': False, 'powers': ()}
+    {'mode': None, 'role': '', 'family': None, 'coordinator': False, 'on_call': False, 'powers': (), 'desk': False}
 )
 """What `verifold run` sets back in a seat that comes from a project's settings file."""
 
@@ -275,6 +276,7 @@ def _agent_words(choice: AgentChoice) -> str:
             choice.coordinator and 'coordinator',
             f'powers: {", ".join(choice.powers)}' if choice.powers else None,
             choice.on_call and 'on call',
+            choice.desk and 'desk',
         )
         if detail
     ]
@@ -430,7 +432,7 @@ def _parser() -> argparse.ArgumentParser:
         '--agent',
         action='append',
         metavar='HARNESS[:MODEL[:EFFORT[:MODE]]][,FACT...]',
-        help=f'Add an agent: {", ".join(CATALOG)}, or a harness from your settings, with an optional model, effort, and mode. You can name a harness more than once. After a comma come the facts of the seat, each optional: role=TEXT, family=TEXT, coordinator, on-call. Example: claude-code:opus,role=driver,coordinator. Default: your saved choices for new labs, or one agent of each harness that this computer has.',
+        help=f'Add an agent: {", ".join(CATALOG)}, or a harness from your settings, with an optional model, effort, and mode. You can name a harness more than once. After a comma come the facts of the seat, each optional: role=TEXT, family=TEXT, coordinator, on-call, desk. The desk answers you in the desk chat and acts on your word, and a lab has one desk at most. Example: claude-code:opus,role=driver,coordinator. Default: your saved choices for new labs, or one agent of each harness that this computer has.',
     )
     run.add_argument(
         '--minutes',
@@ -488,12 +490,12 @@ def _agent(value: str) -> AgentChoice:
         key, _, text = fact.strip().partition('=')
         if key in ('role', 'family') and text.strip():
             given[key] = text.strip()
-        elif key in ('coordinator', 'on-call') and not text:
+        elif key in ('coordinator', 'on-call', 'desk') and not text:
             given[key.replace('-', '_')] = True
         else:
             raise SetupRejected(
                 f'--agent {value}: "{fact.strip()}" is not a fact of a seat. Give role=TEXT, family=TEXT, coordinator, '
-                'or on-call.'
+                'on-call, or desk.'
             )
     return AgentChoice.model_validate(
         {'harness': harness, 'model': model or None, 'effort': effort or None, 'mode': mode or None} | given

@@ -61,11 +61,12 @@ def seat_label(board: Board, agent_id: AgentId, before: int | None = None) -> st
 
 
 def seat_marks(board: Board, agent_id: AgentId) -> tuple[SeatMark, ...]:
-    """Return the seats that an agent holds now, in a fixed order: coordinator, reviewer, on call."""
+    """Return the seats that an agent holds now, in a fixed order: coordinator, reviewer, on call, desk."""
     held: tuple[tuple[SeatMark, bool], ...] = (
         ('coordinator', board.coordinator == agent_id),
         ('reviewer', board.reviewer(agent_id)),
         ('on_call', board.on_call(agent_id)),
+        ('desk', board.is_desk(agent_id)),
     )
     return tuple(mark for mark, holds in held if holds)
 

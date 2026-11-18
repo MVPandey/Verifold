@@ -15,6 +15,7 @@ from verifold.protocol.events import (
     CoordinatorSet,
     DeliverableDecided,
     DeliverableSet,
+    DeskSet,
     Halt,
     LabOpened,
     Limit,
@@ -34,6 +35,7 @@ from verifold.protocol.events import (
     TimeRanOut,
     TimeSet,
     TurnEnded,
+    TurnInterrupted,
     TurnStarted,
     Voted,
     WatchSet,
@@ -65,6 +67,10 @@ class Board:
     """Each time that the person put a seat on call or took it off, oldest first."""
     coordinators: tuple[CoordinatorSet, ...] = ()
     """Each change of the lab's coordinator, oldest first."""
+    desks: tuple[DeskSet, ...] = ()
+    """Each seat that the person made the lab's desk, oldest first."""
+    interrupts: tuple[TurnInterrupted, ...] = ()
+    """Each turn that the desk ended for the person, oldest first."""
     left: tuple[AgentLeft, ...] = ()
     """The agents that left the lab or that the person removed, oldest first."""
     threads: tuple[ThreadOpened, ...] = ()
@@ -197,6 +203,9 @@ class Board:
         """
         if before is not None and joined.seq > before:
             return False
+        # The desk is no part of the lab's work, so it counts on neither side of a close.
+        if self.is_desk(joined.agent.id):
+            return False
         if self.on_call(joined.agent.id, before):
             return self._posted(joined.agent.id, before)
         return self.came(joined, before)
@@ -265,6 +274,25 @@ class Board:
     def coordinator_at(self, seq: int) -> AgentId | None:
         """Return the agent that the record named as the holder of the coordinator seat just before an event, or `None`."""
         return next((entry.agent for entry in reversed(self.coordinators) if entry.seq < seq), None)
+
+    @property
+    def desk(self) -> AgentId | None:
+        """The agent that holds the lab's desk seat, or `None`. An agent that left the lab holds it no longer."""
+        holder = self.desks[-1].agent if self.desks else None
+        return holder if holder and not self.gone(holder) else None
+
+    def is_desk(self, agent_id: AgentId) -> bool:
+        """
+        Return whether an agent's seat is or was the lab's desk.
+
+        The person makes a seat the desk when the agent joins, and the seat stays so, also after the agent left.
+        """
+        return any(entry.agent == agent_id for entry in self.desks)
+
+    @property
+    def desk_chat(self) -> ThreadId | None:
+        """The thread where the person and the lab's desk talk, or `None` while the lab has none."""
+        return next((entry.thread.id for entry in self.threads if entry.thread.desk), None)
 
     @property
     def conversation(self) -> ThreadId | None:
@@ -427,7 +455,10 @@ class Board:
                 *((watch.seq, watch.agent) for watch in self.watches if watch.thread == thread_id and watch.watching),
             )
         )
-        agents = {joined.agent.id for joined in self.agents if not joined.agent.checks}
+        # The desk posts for the person, so a post of the desk in a side thread makes it no member.
+        agents = {
+            joined.agent.id for joined in self.agents if not joined.agent.checks and not self.is_desk(joined.agent.id)
+        }
         return tuple(dict.fromkeys((*opened.thread.between, *(agent for _, agent in came if agent in agents))))
 
     def offers(self, deliverable_id: DeliverableId) -> tuple[Posted, ...]:

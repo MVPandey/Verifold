@@ -81,8 +81,9 @@ def waits_for(board: Board, opened: Posted, before: int | None = None) -> tuple[
 
     A round waits for every agent that it was for and that can still enter: an agent of the lab that is known to
     be in it, so not an invited agent that has not posted yet, and that is not on call, has not left, and is not a
-    seat that Verifold stopped. It does not wait for its opener, which asked the question. The opener and an agent
-    on call can still enter. With `before`, the list is as it was just before that event, as at a round's close.
+    seat that Verifold stopped. It does not wait for its opener, which asked the question, or for the desk, which is
+    no part of the lab's work. The opener and an agent on call can still enter. With `before`, the list is as it was
+    just before that event, as at a round's close.
     """
     ahead = lambda seq: before is None or seq < before
     entered = {entry.post.author for entry in entries(board, opened.post.id) if ahead(entry.seq)}
@@ -93,6 +94,7 @@ def waits_for(board: Board, opened: Posted, before: int | None = None) -> tuple[
         if ahead(joined.seq)
         and not joined.agent.checks
         and joined.agent.id != opened.post.author
+        and not board.is_desk(joined.agent.id)
         and board.came(joined, before)
         and joined.agent.id not in gone
         and not board.on_call(joined.agent.id, before)

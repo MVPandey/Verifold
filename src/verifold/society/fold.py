@@ -15,6 +15,7 @@ from verifold.protocol.events import (
     CoordinatorSet,
     DeliverableDecided,
     DeliverableSet,
+    DeskSet,
     Event,
     LabOpened,
     LimitReached,
@@ -35,6 +36,7 @@ from verifold.protocol.events import (
     TimeRanOut,
     TimeSet,
     TurnEnded,
+    TurnInterrupted,
     TurnStarted,
     Voted,
     WatchSet,
@@ -52,6 +54,7 @@ from verifold.society.deliverables import (
     check_offers_thread,
     offers_title,
 )
+from verifold.society.desk import check_desk_move, check_desk_post, check_desk_set, check_interrupt
 from verifold.society.errors import RejectedEvent
 from verifold.society.rounds import check_close, check_rounds
 from verifold.society.rules import (
@@ -93,6 +96,7 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
             raise RejectedEvent('A record has one lab_opened event, and it comes first.')
         case QuestionRevised():
             check_revision(board, event)
+            check_desk_move(board, event)
             return replace(board, seq=event.seq, revisions=(*board.revisions, event))
         case AgentJoined(agent=agent):
             check_agent(board, agent)
@@ -103,6 +107,9 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
         case OnCallSet():
             check_on_call(board, event)
             return replace(board, seq=event.seq, on_calls=(*board.on_calls, event))
+        case DeskSet():
+            check_desk_set(board, event)
+            return replace(board, seq=event.seq, desks=(*board.desks, event))
         case CoordinatorSet():
             check_coordinator(board, event)
             return replace(board, seq=event.seq, coordinators=(*board.coordinators, event))
@@ -117,6 +124,7 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
             check_post(board, post)
             check_offer(board, post)
             check_rounds(board, event)
+            check_desk_post(board, event)
             rounds = (*board.rounds, event) if isinstance(post, Round) else board.rounds
             # A close that names no candidate closes on what stood just before it, also after a later concession.
             unnamed = (
@@ -153,6 +161,9 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
                 spent_tokens=board.spent_tokens + usage.input_tokens + usage.output_tokens,
                 spent_dollars=board.spent_dollars + max(cost or 0.0, 0.0),
             )
+        case TurnInterrupted():
+            check_interrupt(board, event)
+            return replace(board, seq=event.seq, interrupts=(*board.interrupts, event))
         case RerunRequested():
             check_rerun(board, event)
             return replace(board, seq=event.seq, reruns=(*board.reruns, event))
@@ -165,6 +176,7 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
         case TimeSet():
             check_time(event)
             check_made(board, event)
+            check_desk_move(board, event)
             return replace(board, seq=event.seq, times=(*board.times, event))
         case TimeRanOut():
             check_time_out(board, event)
@@ -199,6 +211,7 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
             return with_badge(board, event)
         case DeliverableSet():
             check_deliverable(board, event)
+            check_desk_move(board, event)
             return _stated(board, event)
         case DeliverableDecided():
             check_decision(board, event)

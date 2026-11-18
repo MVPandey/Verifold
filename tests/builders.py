@@ -17,6 +17,7 @@ from verifold.protocol.events import (
     CoordinatorSet,
     DeliverableDecided,
     DeliverableSet,
+    DeskSet,
     Event,
     LabOpened,
     OnCallSet,
@@ -43,7 +44,7 @@ from verifold.protocol.events import (
 from verifold.protocol.moves import Move
 from verifold.protocol.posts import Ask, FileEvidence, FileOffer, Message, MoveRequest, PermissionShown, Post
 from verifold.protocol.settings import ReviewerSettings, Settings
-from verifold.protocol.threads import Thread
+from verifold.protocol.threads import DESK_TITLE, Thread
 from verifold.protocol.usage import Usage
 from verifold.society.board import Board
 from verifold.society.fold import fold
@@ -87,6 +88,16 @@ class RecordBuilder:
             checks=checks,
         )
         self.events.append(AgentJoined(seq=seq, at=at, agent=agent))
+        return self
+
+    def desk(self, agent_id: str, thread_id: str = 't-9') -> 'RecordBuilder':
+        """Add an agent whose seat the person makes the lab's desk, and the desk chat `thread_id` in the same step."""
+        self.join(agent_id)
+        seq, at = self._stamp()
+        self.events.append(DeskSet(seq=seq, at=at, agent=agent_id))
+        seq, at = self._stamp()
+        chat = Thread(id=thread_id, title=DESK_TITLE, opened_by='person', desk=True)
+        self.events.append(ThreadOpened(seq=seq, at=at, thread=chat))
         return self
 
     def named(self, agent_id: str, name: str) -> 'RecordBuilder':

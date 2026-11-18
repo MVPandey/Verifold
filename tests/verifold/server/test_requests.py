@@ -529,7 +529,7 @@ async def test_the_coordinator_asks_through_its_tool_and_the_board_refuses_every
     assert seats == [AddSeat(harness='fake')] * 4
     assert 'minutes' in str(no_amount.content)
     assert 'Only the agent that holds the coordinator seat asks' in str(other.content)
-    assert 'Only the agent that holds the coordinator seat marks' in str(forged.content)
+    assert 'Only the agent that holds the coordinator seat, and the desk with `on`, mark' in str(forged.content)
 
     talk = led.board.conversation
     assert said.structured_content is not None

@@ -193,13 +193,14 @@ def closing(board: Board) -> Posted | None:
         for reply in board.replies(entry.post.id)
     )
     # The person's new words to the lab open it again: the agents have something to do. Words in a side thread
-    # reach only its members, and words in the conversation reach the coordinator, so they are not words to the lab.
+    # reach only its members, words in the conversation reach the coordinator, and words in the desk chat reach
+    # the desk, so they are not words to the lab.
     steered = any(
         later.post.author == PERSON
         and later.post.reply_to is None
         and later.seq > entry.seq
         and not board.is_side(later.post.thread)
-        and later.post.thread != board.conversation
+        and later.post.thread not in (board.conversation, board.desk_chat)
         and not _for_listeners(board, later)
         for later in board.posts
     )
