@@ -1,6 +1,7 @@
 import type {
   AgentChoice,
   BadgeRequest,
+  BudgetLine,
   BudgetRequest,
   CandidatesView,
   ConversationView,
@@ -29,6 +30,19 @@ import type {
 
 /** The candidates of a lab where no agent has proposed an answer. */
 export const NO_CANDIDATES: CandidatesView = { standing: [], gone: [], closes_on: null };
+
+/** The panel for the desk of a lab without a desk, and of a lab before it starts. */
+export const NO_DESK: DeskView = { desk: null, thread: null, actions: [] };
+
+/** The budget line of a lab without a budget that has spent nothing, as a server from before budgets has it. */
+export const NO_BUDGET: BudgetLine = {
+  tokens: null,
+  dollars: null,
+  spent_tokens: 0,
+  spent_dollars: 0,
+  tokens_left: null,
+  dollars_left: null,
+};
 
 /** A request that the server refused, with the server's reason. */
 export class ApiError extends Error {
@@ -182,6 +196,11 @@ export function createApi(
         removed_deliverables: lab.removed_deliverables ?? [],
         deliverables_told_at: lab.deliverables_told_at ?? null,
         obstacles: lab.obstacles ?? [],
+        // A server from before the budget and the disk limit has neither, so its lab has no limit of either kind.
+        budget: lab.budget ?? NO_BUDGET,
+        limit: lab.limit ?? null,
+        disk: lab.disk ?? null,
+        settings: { ...lab.settings, disk: lab.settings?.disk ?? { limit_gb: 0 } },
         agents: lab.agents.map((view) => ({
           ...view,
           agent: { ...view.agent, given_role: view.agent.given_role ?? '' },
@@ -283,7 +302,12 @@ export function createApi(
       request(`/agents/${encodeURIComponent(agentId)}`, undefined, 'DELETE'),
     startAgain: (agentId) => request(`/agents/${encodeURIComponent(agentId)}/start`, {}),
     conversation: () => request('/conversation'),
-    desk: () => request('/desk'),
+    // A server from before this route has none, and the page must still load.
+    desk: () =>
+      request<DeskView>('/desk').catch((failure: unknown) => {
+        if (failure instanceof ApiError && failure.status === 404) return NO_DESK;
+        throw failure;
+      }),
     setPower: (power, on) => request('/powers', { power, on }),
     answerRequest: (postId, yes, minutes) =>
       request(`/requests/${encodeURIComponent(postId)}`, {
