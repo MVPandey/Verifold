@@ -37,9 +37,19 @@ export function actionLine(action: DeskAction, agents: readonly AgentView[]): st
       return action.ends_at
         ? `Set the lab to end at ${clock(action.ends_at)}`
         : 'Set the lab’s time';
+    case 'budget':
+      return `Set the budget to ${budgetWords(action)}`;
     case 'interrupt':
       return `Ended the turn of ${action.agent ? authorName(agents, action.agent) : 'an agent'}, so it reads its news now`;
   }
+}
+
+function budgetWords(action: DeskAction): string {
+  const kinds = [
+    action.tokens ? `${action.tokens.toLocaleString('en-US')} tokens` : null,
+    action.dollars ? `$${String(action.dollars)}` : null,
+  ].filter((kind) => kind !== null);
+  return kinds.length > 0 ? kinds.join(' and ') : 'none';
 }
 
 /** Return the actions of the desk that rest on one post of the person, oldest first. */

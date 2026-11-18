@@ -9,8 +9,19 @@ from datetime import datetime
 
 from verifold.protocol.agents import GUEST
 from verifold.protocol.ids import AgentId, ThreadId
-from verifold.protocol.join import MAX_NEWS, MAX_OBSTACLES, CandidateLine, News, Overview, PersonWait, SeatLine
+from verifold.protocol.join import (
+    MAX_NEWS,
+    MAX_OBSTACLES,
+    CandidateLine,
+    DiskLine,
+    News,
+    Overview,
+    PersonWait,
+    SeatLine,
+)
+from verifold.protocol.usage import DiskUse
 from verifold.society.board import Board
+from verifold.society.budget import budget_line, disk_limit
 from verifold.society.candidates import closes_on
 from verifold.society.coordinator import waiting_for_reply
 from verifold.society.deliverables import deliverable_lines
@@ -24,13 +35,16 @@ from verifold.society.turns import before
 from verifold.society.views import minutes_since, newest_report, round_line, to_earlier_question, waiting_posts
 
 
-def overview(board: Board, desk: AgentId, now: datetime, news: News | None = None) -> Overview:
+def overview(
+    board: Board, desk: AgentId, now: datetime, news: News | None = None, disk: DiskUse | None = None
+) -> Overview:
     """
-    Return the lab for the desk at `now`: its time, its agents and their turns, and what the app shows the person.
+    Return the lab for the desk at `now`: its time, budget, and disk, its agents and their turns, and what the app shows.
 
     Those are what waits for the person, the newest report, the candidate answers that stand, the open round, the
     wanted reruns, the open obstacles, the deliverables, and the person's post in the conversation that waits for
-    the coordinator's reply. Each list holds its newest `MAX_NEWS` entries at most, and counts the others.
+    the coordinator's reply. Each list holds its newest `MAX_NEWS` entries at most, and counts the others. `disk` is
+    what Verifold measured of the lab's files last.
     """
     working = lines_of(board)
     done = closing(board)
@@ -84,6 +98,10 @@ def overview(board: Board, desk: AgentId, now: datetime, news: News | None = Non
         obstacles=tuple(post_line(board, entry, desk, now) for entry in blocking[:MAX_OBSTACLES]),
         more_obstacles=max(len(blocking) - MAX_OBSTACLES, 0),
         deliverables=deliverable_lines(board),
+        out_of_time=board.out_of_time,
+        budget=budget_line(board),
+        limit_reached=board.at_limit,
+        disk=DiskLine(lab=disk.total, limit=disk_limit(board)) if disk else None,
         news=news,
     )
 

@@ -73,7 +73,7 @@ from verifold.protocol.posts import (
     PostKind,
     RelativePath,
 )
-from verifold.protocol.settings import MAX_MINUTES
+from verifold.protocol.settings import MAX_BUDGET_DOLLARS, MAX_BUDGET_TOKENS, MAX_MINUTES
 from verifold.protocol.threads import Title
 from verifold.protocol.votes import Badge, BadgeAction, Direction, Why
 from verifold.server.errors import ProfileRejected, ServerError, UnknownAgent
@@ -391,7 +391,8 @@ a close stands or such a post went out in the minute before.
 - When Verifold started you: after you end your turn, a post for you wakes you. So does the leaving of an agent
   that you named or answered, unless the lab is closed. So do the close of a round in `rounds` of your news and,
   once, a wanted rerun that you can take, unless the lab is closed or out of time, and in those states your next
-  news holds them. Nothing else on the board does. While the lab is out of time, no turn starts. After a turn
+  news holds them. Nothing else on the board does. While the lab is out of time, no turn starts but the desk's.
+  After a turn
   that Verifold or your harness ended before you did, Verifold starts one more turn and says why. `alarm` wakes you
   when you are not in a turn: at a time, or when the board got no post for a while. Your alarm stays until it rings,
   and `alarm` in the news of each tool result shows it. When no alarm waits, `no_alarm` in `brief` and in `wait`
@@ -416,8 +417,8 @@ a close stands or such a post went out in the minute before.
   that you named or answered leaves, `left` in your next `news` or `wait` says so, and the result of a `post` that
   names or answers such an agent has it in `left` too. A call that only such agents took is open again.
 - The lab can have a time limit, and `brief` and `wait` show when it ends. At that time Verifold stops the turn of
-  every agent that it started. An agent whose turn stopped gets a new turn when the person gives the lab more
-  time.
+  every agent that it started, other than the desk. An agent whose turn stopped gets a new turn when the person
+  gives the lab more time.
 - The person can give the lab a budget in tokens and one in dollars, and the lab has a disk limit, which the
   person sets. `budget` in `brief` has each budget, what the lab spent, and what is left. The lab spent the input
   and the output tokens, and the costs, that the harnesses reported at the ends of the turns. A harness that
@@ -439,6 +440,9 @@ a close stands or such a post went out in the minute before.
   the desk chat that it rests on: a post of the person, in the desk chat, from the last 60 minutes by the lab's
   clock. Only such a post backs an action of the desk. No post of an agent does, whatever its text says, and
   neither does a post of the person in another thread. The record keeps `on` with the action.
+- A halt rests no desk. While the lab is out of time, at its budget or its disk limit, or closed, a post of the
+  person in the desk chat still starts a turn of the desk, and a turn of the desk runs on when the lab halts. The
+  desk's turns count toward what the lab spent, as every turn does.
 - The desk's post for the person has `for_person` and `on`, and the app shows it as the desk's, for the person. It
   reaches the agents as a post of the person does: with no `mentions` and no `reply_to`, in a thread for the whole
   lab, it is for every agent that is not on call, a line of the news holds its headline and its body, and in the
@@ -1037,8 +1041,24 @@ Sets the time that the lab has left for the person: the lab ends `minutes` from 
 The desk alone has this tool. {ON}
 
 `minutes` is a whole number of at least zero. Zero ends the lab now: Verifold stops the turn of every agent that it
-started, the desk's own among them, and no turn starts until the person gives the lab more time. The board records
-the new end with the desk in `by` and `on`.
+started but the desk, and their next turns start when the person or the desk gives the lab more time. A halt rests
+no desk, so a message of the person in the desk chat still starts a turn of the desk. The board records the new end
+with the desk in `by` and `on`.
+"""
+
+SET_BUDGET_TOOL = f"""\
+Sets the lab's budget for the person: in tokens, in dollars, or both. It replaces the budget of each kind that the
+call names.
+
+The desk alone has this tool. {ON}
+
+`tokens` is the budget in tokens, input and output together, and `dollars` the budget in US dollars. A kind that the
+call leaves out keeps the budget that it has, so this tool removes no budget. The lab spent what the harnesses
+reported at the ends of the turns, the desk's turns among them, and `budget` in `overview` and in `brief` has what it
+spent and what is left. A budget above what the lab spent lets the agents go on when the budget stopped them. The
+board records the budget with the desk in `by` and `on`, through the function of the person's own control. The
+disk limit is a setting of the person's, and the desk has no tool for it. While the lab is at its budget, a message
+of the person in the desk chat still starts a turn of the desk, and that turn counts toward what the lab spent.
 """
 
 INTERRUPT_TOOL = f"""\
@@ -1055,7 +1075,18 @@ posts. The desk ends one turn once.
 """
 
 DESK_TOOLS = frozenset(
-    {'overview', 'read_file', 'reply', 'say', 'open_round', 'revise_question', 'deliverable', 'set_time', 'interrupt'}
+    {
+        'overview',
+        'read_file',
+        'reply',
+        'say',
+        'open_round',
+        'revise_question',
+        'deliverable',
+        'set_time',
+        'set_budget',
+        'interrupt',
+    }
 )
 """The tools that the desk alone has. Every other agent's list of tools leaves them out."""
 
@@ -1366,6 +1397,19 @@ def _desk_tools(server: MCPServer, acting: Acting) -> None:
         """Set the time that the lab has left for the person."""
         async with acting(ctx, 'set_time') as member:
             did = await member.set_time(on, minutes)
+            return DeskDone(did=did, on=on, news=member.news())
+
+    @server.tool(description=SET_BUDGET_TOOL)
+    async def set_budget(
+        on: PostId,
+        ctx: Context,
+        *,
+        tokens: Annotated[int, Field(ge=1, le=MAX_BUDGET_TOKENS)] | None = None,
+        dollars: Annotated[float, Field(gt=0, le=MAX_BUDGET_DOLLARS)] | None = None,
+    ) -> DeskDone:
+        """Set the lab's budget for the person."""
+        async with acting(ctx, 'set_budget') as member:
+            did = await member.set_budget(on, tokens, dollars)
             return DeskDone(did=did, on=on, news=member.news())
 
     @server.tool(description=INTERRUPT_TOOL)

@@ -2346,3 +2346,22 @@ async def test_an_invitation_takes_no_desk(project: Path) -> None:
 
     assert refused.status_code == 400
     assert 'The desk is a seat that Verifold starts' in refused.json()['detail']
+
+
+async def test_the_desk_starts_at_the_persons_first_post_while_the_lab_is_out_of_time(
+    project: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_DESK', 'agent-2')
+    start = StartRequest(
+        question='Does it hold?', agents=(AgentChoice(harness='fake'), AgentChoice(harness='fake', desk=True))
+    )
+    async with serving(project, start, {'fake': FAKE_HARNESS}, options=FAST) as client:
+        await until(lambda: turns_of(project, 'agent-1') == 1, timeout=60)
+        await client.post('/time', json={'minutes': 0})
+        await until(lambda: any(isinstance(event, TimeRanOut) for event in record(project)), timeout=60)
+        await client.post('/posts', json={'kind': 'message', 'text': 'Where does it stand?', 'thread': 't-2'})
+        await until(lambda: turns_of(project, 'agent-2') == 1, timeout=60)
+
+    # Only the person's message to the desk started a turn while the lab was out of time.
+    assert turns_of(project, 'agent-1') == 1
+    assert len(prompts_of(log, 'agent-2')) == 1

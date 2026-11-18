@@ -182,6 +182,7 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
             check_time_out(board, event)
             return replace(board, seq=event.seq, times=(*board.times, event))
         case BudgetSet():
+            check_desk_move(board, event)
             return replace(board, seq=event.seq, budgets=(*board.budgets, event))
         case LimitReached():
             check_limit(board, event)

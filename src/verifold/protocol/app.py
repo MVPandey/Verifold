@@ -805,10 +805,10 @@ class TimeRequest(Record):
     minutes: int = Field(ge=0, le=MAX_MINUTES)
 
 
-type DeskDeed = Literal['post', 'round', 'question', 'deliverable', 'time', 'interrupt']
+type DeskDeed = Literal['post', 'round', 'question', 'deliverable', 'time', 'budget', 'interrupt']
 """
 What the desk did on the person's word: a post for the person, a round, a revision of the question, a change of a
-deliverable, a new end of the lab, or the end of an agent's turn.
+deliverable, a new end of the lab, a new budget, or the end of an agent's turn.
 """
 
 
@@ -835,6 +835,9 @@ class DeskAction(Record):
     """For a change of a deliverable: what the desk did to it."""
     ends_at: AwareDatetime | None = None
     """For a new end of the lab: the end that the desk set."""
+    tokens: int | None = None
+    dollars: float | None = None
+    """For a new budget: the budget in tokens and in dollars that the desk set. `None` for a kind without one."""
 
 
 class DeskView(Record):

@@ -7,6 +7,7 @@ from builders import START, RecordBuilder, lab
 from verifold.protocol.agents import GUEST, AgentChoice
 from verifold.protocol.events import (
     AlarmSet,
+    BudgetSet,
     DeliverableSet,
     DeskSet,
     Event,
@@ -374,3 +375,15 @@ def test_the_persons_words_in_the_desk_chat_and_the_desks_post_for_the_person_op
     steered = record.copy().post(Message(id='p-5', thread='t-1', author='person', text='Go on.')).board()
 
     assert (lab_state(closed), lab_state(later), lab_state(steered)) == ('closed', 'closed', 'open')
+
+
+def test_a_budget_names_the_desk_and_the_persons_post_or_neither() -> None:
+    record = desked()
+
+    record.events.append(BudgetSet(**stamp(record), tokens=5_000, by='dee', on='p-2'))
+    assert record.board().budget == record.events[-1]
+    assert 'Only a move of the desk names' in refusal(record, BudgetSet(**stamp(record), tokens=9, on='p-2'))
+    assert 'ada does not hold the desk seat' in refusal(
+        record, BudgetSet(**stamp(record), tokens=9, by='ada', on='p-2')
+    )
+    assert 'Post p-1 is a post of ada' in refusal(record, BudgetSet(**stamp(record), tokens=9, by='dee', on='p-1'))

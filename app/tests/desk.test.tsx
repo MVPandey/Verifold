@@ -87,6 +87,8 @@ describe('the desk', () => {
       action('deliverable', { deliverable: 'd-2', change: 'changed' }),
       action('deliverable', { deliverable: 'd-2', change: 'removed' }),
       action('interrupt', { agent: 'agent-2' }),
+      action('budget', { tokens: 2_000_000, dollars: 40 }),
+      action('budget', { tokens: null, dollars: 12.5 }),
     ].map((item) => actionLine(item, AGENTS));
 
     assert.deepEqual(lines, [
@@ -97,6 +99,8 @@ describe('the desk', () => {
       'Changed the sentence of the deliverable d-2 for you',
       'Removed the deliverable d-2 for you',
       'Ended the turn of Agent 2, so it reads its news now',
+      'Set the budget to 2,000,000 tokens and $40',
+      'Set the budget to $12.5',
     ]);
     assert.ok(
       actionLine(action('time', { ends_at: NOW.toISOString() }), AGENTS).startsWith(

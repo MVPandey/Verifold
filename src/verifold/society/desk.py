@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 
 from verifold.protocol.agents import GUEST
 from verifold.protocol.events import (
+    BudgetSet,
     DeliverableSet,
     DeskSet,
     Posted,
@@ -169,9 +170,9 @@ def check_desk_post(board: Board, event: Posted) -> None:
     check_on(board, post.author, post.on, event.at)
 
 
-def check_desk_move(board: Board, event: TimeSet | DeliverableSet | QuestionRevised) -> None:
+def check_desk_move(board: Board, event: TimeSet | BudgetSet | DeliverableSet | QuestionRevised) -> None:
     """
-    Check a new end of the lab, a change of a deliverable, or a revision of the question by the desk.
+    Check a new end of the lab, a new budget, a change of a deliverable, or a revision of the question by the desk.
 
     Such a move names the desk in `by` and the person's post that it rests on in `on`. Every other move names
     nobody in `on`. A change of a deliverable and a revision of the question come with the desk's post for the

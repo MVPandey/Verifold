@@ -892,17 +892,20 @@ class Lab:
         )
         return board.interrupts[-1]
 
-    async def set_budget(self, tokens: int | None, dollars: float | None) -> None:
+    async def set_budget(self, tokens: int | None, dollars: float | None, on: Said | None = None) -> bool:
         """
-        Record the lab's budget in tokens and in dollars. It replaces the earlier one, and `None` sets none of a kind.
+        Record the lab's budget in tokens and in dollars, and return whether the record took a change.
 
-        A budget that the lab has spent already stops the agents in the same step. The same budget again records
-        nothing.
+        It replaces the earlier one, and `None` sets none of a kind. A budget that the lab has spent already stops
+        the agents in the same step. The same budget again records nothing. With `on`, the desk sets it on the
+        person's word.
         """
         budget = self._board.budget
         if ((budget.tokens, budget.dollars) if budget else (None, None)) == (tokens, dollars):
-            return
-        await self._commit(lambda _, seq, at: BudgetSet(seq=seq, at=at, tokens=tokens, dollars=dollars))
+            return False
+        by, post = (on.by, on.post) if on else (PERSON, None)
+        await self._commit(lambda _, seq, at: BudgetSet(seq=seq, at=at, tokens=tokens, dollars=dollars, by=by, on=post))
+        return True
 
     async def set_settings(self, settings: Settings) -> None:
         """Record the person's settings for the lab. The lab follows the latest ones."""

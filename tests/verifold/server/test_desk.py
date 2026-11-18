@@ -10,12 +10,15 @@ from mcp.types import CallToolResult
 from pydantic import SecretStr
 
 from verifold.protocol.app import DeskView, LabView
-from verifold.protocol.events import TimeSet
+from verifold.protocol.events import TimeSet, TurnSummary
 from verifold.protocol.ids import PERSON
 from verifold.protocol.join import MAX_DESK_FILE, FileText, PostRequest
+from verifold.protocol.settings import DiskSettings
 from verifold.protocol.threads import DESK_TITLE
+from verifold.protocol.usage import DiskUse, Usage
 from verifold.server.activity import Activity
 from verifold.server.app_api import app_api
+from verifold.server.desk_chat import desk_actions
 from verifold.server.errors import DeskOnly
 from verifold.server.join import DESK_READS, DESK_TOOLS, join_server
 from verifold.server.lab import Lab
@@ -315,3 +318,42 @@ async def test_a_record_with_a_desk_and_its_actions_loads_again_as_it_was(
     assert again.interrupts == desk_lab.board.interrupts
     assert again.times == desk_lab.board.times
     assert again.posts == desk_lab.board.posts
+
+
+async def test_the_desk_sets_the_budget_on_the_persons_word_and_keeps_the_kind_that_it_leaves_out(
+    desk_lab: Lab,
+) -> None:
+    await desk_lab.set_budget(None, 40.0)
+    on = await said(desk_lab, 'Give the lab two million tokens.')
+    async with Client(join_server(lambda _: Member(desk_lab, 'dee'))) as desk:
+        result = await desk.call_tool('set_budget', {'on': on, 'tokens': 2_000_000})
+    dee = Member(desk_lab, 'dee')
+    same = await dee.set_budget(on, tokens=2_000_000)
+    board = desk_lab.board
+    budget = board.budgets[-1]
+
+    assert result.structured_content is not None
+    assert result.structured_content['did'] == 'The board set the budget of the lab to 2,000,000 tokens and 40 dollars.'
+    assert (budget.tokens, budget.dollars, budget.by, budget.on) == (2_000_000, 40.0, 'dee', on)
+    # The person's own budget names nobody: the record holds the person.
+    assert (board.budgets[0].by, board.budgets[0].on) == (PERSON, None)
+    assert same == 'The lab has this budget already, so the board recorded nothing.'
+    assert desk_actions(board)[-1].kind == 'budget'
+    assert (desk_actions(board)[-1].tokens, desk_actions(board)[-1].dollars) == (2_000_000, 40.0)
+    with pytest.raises(RejectedEvent, match='names no budget'):
+        await dee.set_budget(on)
+    with pytest.raises(DeskOnly):
+        await Member(desk_lab, 'ada').set_budget(on, tokens=5)
+
+
+async def test_the_overview_has_the_budget_what_the_lab_spent_and_the_disk_against_its_limit(desk_lab: Lab) -> None:
+    await desk_lab.set_settings(desk_lab.board.settings.model_copy(update={'disk': DiskSettings(limit_gb=1)}))
+    await desk_lab.set_budget(1_000, None)
+    await desk_lab.end_turn(TurnSummary(agent='ada', seconds=1, usage=Usage(input_tokens=900, output_tokens=200)))
+    await desk_lab.measured(DiskUse(at=START, folders={'ada': 10}, total=4_096))
+    view = Member(desk_lab, 'dee').overview()
+
+    assert (view.budget.tokens, view.budget.spent_tokens, view.budget.tokens_left) == (1_000, 1_100, 0)
+    assert view.limit_reached == 'tokens'
+    assert view.disk is not None
+    assert (view.disk.lab, view.disk.limit) == (4_096, 1024**3)

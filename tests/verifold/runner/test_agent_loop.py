@@ -2191,3 +2191,75 @@ async def test_a_post_of_the_desk_for_the_person_rings_at_once_and_the_persons_w
 
     assert quiet == ['Start.']
     assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL]
+
+
+def desk_loop(served: ServedBoard, tmp_path: Path) -> AgentLoop:
+    """Return the loop of the desk `dee`, which the test seated, with the fake harness and no quiet window."""
+    member, token = served.seat('dee')
+    joined = served.lab.board.agent('dee')
+    assert joined is not None
+    folder = tmp_path / '.verifold' / 'agents' / 'dee'
+    folder.mkdir(parents=True, exist_ok=True)
+    setup = AgentSetup(
+        agent=joined.agent,
+        harness=FAKE_HARNESS,
+        lab=tmp_path,
+        folder=folder,
+        log=tmp_path / 'dee.log',
+        token=token,
+        start='Start.',
+    )
+    return AgentLoop(member, setup, LoopSettings(mcp_url=served.url, retry_after=0.0, quiet=0.0))
+
+
+async def test_a_halt_rests_no_desk_and_the_desks_turns_count_toward_what_the_lab_spent(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    await lab.join(agent('dee'), desk=True)
+    monkeypatch.setenv('FAKE_ACP_DESK', 'dee')
+    await lab.set_budget(1_000, None)
+    # Another agent's turn ends with the tokens that reach the budget, so every agent but the desk rests.
+    await lab.end_turn(TurnSummary(agent='ada', seconds=1, usage=Usage(input_tokens=900, output_tokens=200)))
+    running = asyncio.create_task(desk_loop(served, tmp_path).run())
+    try:
+        await until(lambda: sum(turn.agent == 'dee' for turn in lab.board.turns) == 1)
+        await lab.post(PostRequest(kind='message', text='Where does it stand?', thread=lab.board.desk_chat), PERSON)
+        await until(lambda: sum(turn.agent == 'dee' for turn in lab.board.turns) == 2)
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+    assert lab.board.halted == 'tokens'
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', DOORBELL]
+    assert [turn.error for turn in lab.board.turns if turn.agent == 'dee'] == [None, None]
+    # The desk's turns count toward what the lab spent, as every turn does.
+    desk = sum(turn.usage.input_tokens + turn.usage.output_tokens for turn in lab.board.turns if turn.agent == 'dee')
+    assert desk > 0
+    assert lab.board.spent_tokens == 1_100 + desk
+    replies = [entry.post.text for entry in lab.board.posts if entry.post.author == 'dee']
+    assert replies == ['The desk dee read you.', 'The desk dee read you.']
+
+
+async def test_a_turn_of_the_desk_runs_on_when_the_lab_runs_out_of_time(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab = served.lab
+    await lab.join(agent('dee'), desk=True)
+    monkeypatch.setenv('FAKE_ACP_DESK', 'dee')
+    monkeypatch.setenv('FAKE_ACP_TURN_SECONDS', '0.5')
+    running = asyncio.create_task(desk_loop(served, tmp_path).run())
+    try:
+        await until(lambda: any(start.agent == 'dee' for start in lab.board.starts))
+        await lab.set_time_left(timedelta(0))
+        await lab.run_out_of_time()
+        await until(lambda: any(turn.agent == 'dee' for turn in lab.board.turns))
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+    assert lab.board.halted == 'time'
+    assert [turn.error for turn in lab.board.turns if turn.agent == 'dee'] == [None]
+    assert not calls(log, 'cancel')

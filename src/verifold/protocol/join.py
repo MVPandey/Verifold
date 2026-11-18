@@ -1498,6 +1498,8 @@ class Overview(Record):
     """The thread where the person and the coordinator talk."""
     desk_chat: ThreadId | None = None
     """The thread where the person and the desk talk."""
+    out_of_time: bool = False
+    """Whether the lab is out of time. While it is, or while `limit_reached` names a limit, every agent but the desk rests."""
     no_reply: PersonWait | None = None
     """
     The oldest post of the person, or of the desk for the person, in the conversation that waits for the
@@ -1520,6 +1522,12 @@ class Overview(Record):
     """The open obstacles, the newest first, at most `MAX_OBSTACLES`."""
     more_obstacles: int = 0
     deliverables: tuple[DeliverableLine, ...] = ()
+    budget: BudgetLine = BudgetLine()
+    """The lab's budget in tokens and in dollars, what the lab spent, and what is left."""
+    limit_reached: Limit | None = None
+    """The budget or the disk limit that stops the agents of the work now, or `None`."""
+    disk: DiskLine | None = None
+    """What the lab's files take on disk against its disk limit, or `None` until Verifold measured them."""
     news: News | None = None
 
 

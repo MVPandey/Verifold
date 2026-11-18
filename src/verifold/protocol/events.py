@@ -384,7 +384,7 @@ class TimeRanOut(EventBase):
 
 class BudgetSet(EventBase):
     """
-    The person set the lab's budget, which replaces the earlier one.
+    The person set the lab's budget, which replaces the earlier one, or the lab's desk did on the person's word.
 
     The lab has spent what the harnesses reported at the ends of its turns: in tokens, the input and the output
     tokens of `turn_ended.usage` together, and in dollars, the `cost_usd` of the turns whose harness reports a
@@ -397,6 +397,10 @@ class BudgetSet(EventBase):
     """The budget in tokens. `None` means no budget in tokens."""
     dollars: float | None = Field(default=None, gt=0, le=MAX_BUDGET_DOLLARS)
     """The budget in US dollars. `None` means no budget in dollars."""
+    by: AgentId = Field(default=PERSON, exclude_if=by_person)
+    """Who set it: the person, or the lab's desk on the person's word. A record from before this field holds the person."""
+    on: PostId | None = Field(default=None, exclude_if=unset)
+    """With `by` the desk: the person's post in the desk chat that this budget rests on."""
 
 
 type Limit = Literal['tokens', 'dollars', 'disk']

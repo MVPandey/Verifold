@@ -80,12 +80,13 @@ ON_CALL = (
 
 DESK = (
     "The person made your seat the lab's desk. The desk chat, thread {chat} on the board, is where the person and "
-    'the desk talk. A post of the person there starts your turn, and no other post on the board does. The desk is '
-    "no part of the lab's work: the board takes no plan, result, check, proposal, close, vote, or badge from it, "
-    'and it counts for no round and no close. The tools `overview`, `read_file`, `reply`, `say`, `open_round`, '
-    "`revise_question`, `deliverable`, `set_time`, and `interrupt` are the desk's alone, and their descriptions "
-    "say what each one does. Each action names in `on` the person's post in the desk chat that it rests on, from "
-    'the last 60 minutes.'
+    'the desk talk. A post of the person there starts your turn, also while the lab is out of time, at its budget '
+    'or its disk limit, or closed, and no other post on the board does. Your turns count toward what the lab '
+    "spent. The desk is no part of the lab's work: the board takes no plan, result, check, proposal, close, vote, "
+    'or badge from it, and it counts for no round and no close. The tools `overview`, `read_file`, `reply`, `say`, '
+    "`open_round`, `revise_question`, `deliverable`, `set_time`, `set_budget`, and `interrupt` are the desk's "
+    "alone, and their descriptions say what each one does. Each action names in `on` the person's post in the "
+    'desk chat that it rests on, from the last 60 minutes.'
 )
 """What the start message says to the desk."""
 

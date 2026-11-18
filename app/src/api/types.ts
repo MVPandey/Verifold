@@ -1080,7 +1080,8 @@ export interface ConversationView {
 }
 
 /** What the desk did on the person's word. */
-export type DeskDeed = 'post' | 'round' | 'question' | 'deliverable' | 'time' | 'interrupt';
+export type DeskDeed =
+  'post' | 'round' | 'question' | 'deliverable' | 'time' | 'budget' | 'interrupt';
 
 /** One action of the desk, with the person's post in the desk chat that it rests on. */
 export interface DeskAction {
@@ -1097,6 +1098,9 @@ export interface DeskAction {
   readonly change: 'added' | 'changed' | 'removed' | null;
   /** For a new end of the lab: the end that the desk set. */
   readonly ends_at: string | null;
+  /** For a new budget: the budget in tokens and in dollars that the desk set, `null` for a kind without one. */
+  readonly tokens?: number | null;
+  readonly dollars?: number | null;
 }
 
 /** What the panel for the desk shows: the desk, the desk chat, and what the desk did on the person's word. */

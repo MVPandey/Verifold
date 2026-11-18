@@ -646,7 +646,7 @@ class Member:
     def overview(self) -> Overview:
         """Return the lab as the person's app has it, for the desk, with the desk's news."""
         self.check_desk()
-        return overview(self._lab.board, self.agent_id, self._lab.now(), self.news())
+        return overview(self._lab.board, self.agent_id, self._lab.now(), self.news(), self._lab.disk)
 
     async def read_file(self, post_id: PostId, path: str) -> DeskFile:
         """
@@ -809,6 +809,30 @@ class Member:
         said = self._said(on)
         ends = await self._lab.set_time_left(timedelta(minutes=minutes), on=said)
         return f'The board set the end of the lab to {utc(ends.ends_at)}.'
+
+    async def set_budget(self, on: PostId, tokens: int | None = None, dollars: float | None = None) -> str:
+        """
+        Set the lab's budget for the person, and return what the board recorded, as one sentence.
+
+        A kind that the call leaves out keeps the budget that it has, so the desk removes no budget. The record
+        takes the budget through the function of the person's own route.
+
+        Raises:
+            DeskOnly: The agent does not hold the desk seat.
+            RejectedEvent: `on` is no post of the person in the desk chat from the last hour, or the call names
+                no budget.
+
+        """
+        said = self._said(on)
+        if tokens is None and dollars is None:
+            raise RejectedEvent('The call names no budget: `tokens`, `dollars`, or both.')
+        now = self._lab.board.budget
+        tokens = tokens if tokens is not None else now.tokens if now else None
+        dollars = dollars if dollars is not None else now.dollars if now else None
+        if not await self._lab.set_budget(tokens, dollars, on=said):
+            return 'The lab has this budget already, so the board recorded nothing.'
+        kinds = [*((f'{tokens:,} tokens',) if tokens else ()), *((f'{dollars:g} dollars',) if dollars else ())]
+        return f'The board set the budget of the lab to {" and ".join(kinds)}.'
 
     async def interrupt(self, on: PostId, agent_id: AgentId) -> str:
         """
