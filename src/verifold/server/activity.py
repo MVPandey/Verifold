@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Literal
 
-from verifold.protocol.app import AgentActivity, AgentState, Heard, WaitsFor
+from verifold.protocol.app import AgentActivity, AgentState, Heard, Retry, WaitsFor
 from verifold.protocol.ids import AgentId
 from verifold.server.changes import wait_until
 from verifold.server.lab import utc_now
@@ -53,12 +53,21 @@ class Activity:
         return seat.heard if seat else None
 
     async def set(
-        self, agent_id: AgentId, state: AgentState, detail: str = '', waits_for: WaitsFor | None = None
+        self,
+        agent_id: AgentId,
+        state: AgentState,
+        detail: str = '',
+        waits_for: WaitsFor | None = None,
+        retry: Retry | None = None,
     ) -> None:
-        """Record what an agent is doing now. `waits_for` says what an agent in the state `waiting` waits for."""
+        """
+        Record what an agent is doing now. `waits_for` says what an agent in the state `waiting` waits for.
+
+        `retry` says how the harness of an agent that waits for `retry` failed, and when it starts again.
+        """
         async with self._changed:
             self._by_agent[agent_id] = AgentActivity(
-                state=state, detail=detail[:200], at=self._clock(), waits_for=waits_for
+                state=state, detail=detail[:200], at=self._clock(), waits_for=waits_for, retry=retry
             )
             self.version += 1
             self._changed.notify_all()

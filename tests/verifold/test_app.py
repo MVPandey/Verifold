@@ -10,6 +10,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import AsyncGenerator, Iterator, Mapping
 from contextlib import asynccontextmanager, suppress
 from datetime import timedelta
@@ -181,7 +182,7 @@ async def test_the_person_starts_a_lab_from_the_setup_screen(
             }
         ],
         'question': None,
-        'defaults': {'agents': None, 'auto_mode': True, 'minutes': None},
+        'defaults': {'agents': None, 'auto_mode': True, 'minutes': None, 'budget_tokens': None, 'budget_dollars': None},
         'defaults_from': None,
     }
     assert (no_lab.status_code, started.status_code, again.status_code) == (409, 200, 409)
@@ -1371,6 +1372,21 @@ async def test_at_the_time_limit_the_agents_jobs_pause_and_more_time_resumes_the
     assert [found.pid for found in sweeps[1].paused] == [job]
 
 
+async def test_at_the_budget_the_agents_jobs_pause_and_a_new_budget_resumes_them(project: Path, job_file: Path) -> None:
+    async with serving(project, ONE_AGENT) as client:
+        await until(job_file.exists)
+        job = int(job_file.read_text())
+        # Each turn of the fake harness reports 18 tokens, so a budget of one token is spent after the first.
+        await until(lambda: bool(turns(project)))
+        stopped = (await client.post('/budget', json={'tokens': 1})).json()
+        await until(lambda: paused(job))
+        assert not any(paused(pid) for pid in harness_pids())
+        going = (await client.post('/budget', json={})).json()
+        await until(lambda: not paused(job))
+
+    assert (stopped['limit'], going['limit']) == ('tokens', None)
+
+
 async def test_with_stop_the_time_limit_ends_the_agents_jobs_but_not_their_harnesses(
     project: Path, job_file: Path
 ) -> None:
@@ -1540,8 +1556,9 @@ async def test_the_persons_change_applies_to_the_running_lab_but_an_agents_edit_
             'reviewers': {'seats': None},
             'votes': {'reveal_minutes': 10},
             'reruns': {'lease_minutes': 10},
+            'disk': {'limit_gb': 100},
         },
-        'defaults': {'agents': None, 'auto_mode': True, 'minutes': None},
+        'defaults': {'agents': None, 'auto_mode': True, 'minutes': None, 'budget_tokens': None, 'budget_dollars': None},
     }
     assert after['all_projects']['values'] == {'jobs': {'at_time_limit': 'stop'}}
     assert after['project']['settings']['jobs'] == {'at_time_limit': 'stop', 'at_exit': 'keep'}
@@ -1582,6 +1599,29 @@ async def test_a_start_can_name_the_reveal_time_and_the_lease_in_place_of_the_fi
         lab = (await client.get('/lab')).json()
 
     assert (lab['settings']['votes'], lab['settings']['reruns']) == ({'reveal_minutes': 0}, {'lease_minutes': 30})
+
+
+async def test_a_start_with_a_budget_and_a_disk_limit_measures_the_lab_and_keeps_no_copy_that_nothing_needs(
+    project: Path,
+) -> None:
+    left = project / '.verifold' / 'reruns' / 'p-7'
+    left.mkdir(parents=True)
+    old = time.time() - 3_600
+    os.utime(left, (old, old))
+    start = ONE_AGENT.model_copy(update={'budget_tokens': 50_000, 'budget_dollars': 2.5, 'disk_gb': 7})
+    async with serving(project, start) as client:
+        await until(lambda: not left.exists())
+        lab = (await client.get('/lab')).json()
+        while lab['disk'] is None:
+            await asyncio.sleep(0.01)
+            lab = (await client.get('/lab')).json()
+
+    assert (lab['budget']['tokens'], lab['budget']['dollars'], lab['settings']['disk']) == (
+        50_000,
+        2.5,
+        {'limit_gb': 7},
+    )
+    assert lab['disk']['total'] >= sum(lab['disk']['folders'].values())
 
 
 async def test_the_persons_reveal_time_and_lease_apply_to_the_running_lab(
@@ -1659,7 +1699,13 @@ async def test_saved_choices_for_new_labs_fill_the_setup_and_leave_a_running_lab
         setup = (await client.get('/setup')).json()
         wrong = await client.post('/settings', json={**change, 'value': 'all', 'revisions': revisions_of(changed)})
 
-    written = {'agents': [{'harness': 'fake', 'count': 3, 'model': 'small'}], 'auto_mode': False, 'minutes': None}
+    written = {
+        'agents': [{'harness': 'fake', 'count': 3, 'model': 'small'}],
+        'auto_mode': False,
+        'minutes': None,
+        'budget_tokens': None,
+        'budget_dollars': None,
+    }
     assert changed['project']['values'] == {'setup': written}
     # The setup names the file that its first choices come from, which here is the project's own.
     assert setup['defaults_from'] == changed['project']['path']
@@ -1694,7 +1740,13 @@ async def test_saved_choices_change_while_a_lab_runs_without_touching_the_lab(
     assert changed.json()['project']['defaults']['auto_mode'] is False
     assert lab_settings(project) == [(AtTimeLimit.PAUSE, AtExit.STOP)]
     # The lab's pages read no saved choices while the lab runs.
-    assert setup['defaults'] == {'agents': None, 'auto_mode': True, 'minutes': None}
+    assert setup['defaults'] == {
+        'agents': None,
+        'auto_mode': True,
+        'minutes': None,
+        'budget_tokens': None,
+        'budget_dollars': None,
+    }
 
 
 async def test_a_broken_settings_file_still_shows_the_setup_with_verifolds_defaults(project: Path) -> None:
@@ -1703,7 +1755,13 @@ async def test_a_broken_settings_file_still_shows_the_setup_with_verifolds_defau
         setup = await client.get('/setup')
 
     assert setup.status_code == 200
-    assert setup.json()['defaults'] == {'agents': None, 'auto_mode': True, 'minutes': None}
+    assert setup.json()['defaults'] == {
+        'agents': None,
+        'auto_mode': True,
+        'minutes': None,
+        'budget_tokens': None,
+        'budget_dollars': None,
+    }
 
 
 async def test_settings_can_change_before_a_lab_starts(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:

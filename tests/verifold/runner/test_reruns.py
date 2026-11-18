@@ -5,23 +5,31 @@ import hashlib
 import os
 import shutil
 import stat
+import threading
 import time
 import zlib
 from collections.abc import Sequence
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 from builders import START, until
+from conftest import agent
 from plants import BEFORE, FORMS, SENTENCE, fires, mine, no_fetch_switch, old_pin, old_snapshot, plain_git, plant
 
+from verifold.protocol.agents import ModelSpec
 from verifold.protocol.events import Posted
+from verifold.protocol.join import PostRequest
 from verifold.protocol.posts import FileEvidence, Result
+from verifold.protocol.settings import ReviewerSettings, Settings
 from verifold.runner import reruns
 from verifold.runner.folders import agent_folder
 from verifold.runner.git import GitError, git, own_git
 from verifold.runner.reruns import LEFTOVER_SECONDS, CleanCopies
 from verifold.runner.snapshots import pin, snapshot
 from verifold.server.errors import NoCleanCopy
+from verifold.server.lab import Lab
+from verifold.store.record_file import RecordFile
 
 FILES = {'notes.txt': 'How I got there.', 'result.txt': '11.8'}
 
@@ -783,3 +791,190 @@ async def test_a_second_check_of_one_agent_keeps_the_files_of_its_first_check_re
     assert await own_git(lab, 'show', f'{first[0].commit}:rerun.txt') == '11.8'
     assert await own_git(lab, 'show', f'{second[0].commit}:rerun.txt') == '11.9'
     assert await own_git(lab, 'rev-list', '--count', second[0].commit) == '2'
+
+
+OLD = time.time() - 2 * reruns.FRESH_SECONDS
+
+
+def a_copy(project: Path, post_id: str, *, fresh: bool = False) -> Path:
+    """Write a copy of a post's files where Verifold keeps it, as an export left it some time ago."""
+    home = project / '.verifold' / 'reruns' / post_id
+    folder = home / ('c' * 12)
+    (folder / 'inner').mkdir(parents=True)
+    (folder / 'result.txt').write_text('11.8')
+    (folder / 'inner' / 'data.csv').write_text('x,y\n')
+    (home / f'{"c" * 12}.manifest').write_text('manifest\n')
+    if not fresh:
+        os.utime(home, (OLD, OLD))
+    return home
+
+
+async def test_a_prune_deletes_the_copies_that_nothing_keeps_and_leaves_every_other_name(tmp_path: Path) -> None:
+    gone, kept, fresh = a_copy(tmp_path, 'p-1'), a_copy(tmp_path, 'p-2'), a_copy(tmp_path, 'p-3', fresh=True)
+    other = tmp_path / '.verifold' / 'reruns' / 'notes'
+    other.mkdir()
+    os.utime(other, (OLD, OLD))
+
+    pruned = await CleanCopies(tmp_path).prune(frozenset({'p-2'}))
+
+    assert pruned.gone == ('p-1',)
+    assert pruned.fresh is not None
+    assert 0 < pruned.fresh <= reruns.FRESH_SECONDS
+    assert not gone.exists()
+    assert (kept / ('c' * 12) / 'result.txt').exists()
+    assert (fresh / ('c' * 12) / 'result.txt').exists()
+    assert other.exists()
+
+
+async def test_a_prune_follows_no_link_out_of_the_copies_and_removes_a_link_as_a_link(tmp_path: Path) -> None:
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'precious.txt').write_text('keep me')
+    planted = a_copy(tmp_path, 'p-1')
+    (planted / ('c' * 12) / 'inner' / 'away').symlink_to(outside)
+    (planted / ('c' * 12) / 'away.txt').symlink_to(outside / 'precious.txt')
+    os.utime(planted, (OLD, OLD))
+    # A post's folder that is a link to a folder outside goes as the link, and the folder stays.
+    linked = tmp_path / '.verifold' / 'reruns' / 'p-2'
+    linked.symlink_to(outside, target_is_directory=True)
+    os.utime(linked, (OLD, OLD), follow_symlinks=False)
+    # A folder of a copy that nobody can read goes too.
+    shut = planted / ('c' * 12) / 'inner'
+    shut.chmod(0)
+
+    pruned = await CleanCopies(tmp_path).prune(frozenset())
+
+    assert sorted(pruned.gone) == ['p-1', 'p-2']
+    assert not planted.exists()
+    assert not linked.is_symlink()
+    assert (outside / 'precious.txt').read_text() == 'keep me'
+
+
+async def test_a_folder_for_the_copies_that_is_a_link_leads_to_no_delete(tmp_path: Path) -> None:
+    outside = tmp_path / 'outside'
+    a_copy(outside, 'p-1')
+    (tmp_path / '.verifold').mkdir()
+    (tmp_path / '.verifold' / 'reruns').symlink_to(outside / '.verifold' / 'reruns', target_is_directory=True)
+
+    pruned = await CleanCopies(tmp_path).prune(frozenset())
+
+    assert pruned.gone == ()
+    assert (outside / '.verifold' / 'reruns' / 'p-1' / ('c' * 12) / 'result.txt').exists()
+    # A project without copies has nothing to prune, and its folders stay as they are.
+    assert (await CleanCopies(tmp_path / 'empty').prune(frozenset())).gone == ()
+    assert not (tmp_path / 'empty').exists()
+
+
+async def test_a_prune_leaves_the_copies_of_an_export_that_runs_now(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = a_copy(tmp_path, 'p-4')
+    started, done = threading.Event(), threading.Event()
+
+    def slow(_: object) -> None:
+        # An export that runs until the test lets it end.
+        started.set()
+        done.wait(10)
+
+    monkeypatch.setattr(reruns, '_export', slow)
+    copies = CleanCopies(tmp_path)
+    making = asyncio.create_task(copies(await a_claim(tmp_path / 'author')))
+    await until(started.is_set)
+
+    pruned = await copies.prune(frozenset())
+    done.set()
+    await making
+
+    assert pruned.gone == ()
+    assert home.is_dir()
+
+
+class Clock:
+    """The lab's clock, which a test moves."""
+
+    def __init__(self) -> None:
+        self.now = START
+
+    def pass_minutes(self, minutes: float) -> None:
+        self.now += timedelta(minutes=minutes)
+
+
+async def a_lab_with_reruns(record: RecordFile, clock: Clock) -> Lab:
+    """A lab without reviewer seats where ada asked for the reruns of its results p-1, p-2, and p-3."""
+    lab = Lab.create(record, 'Does it hold?', clock=lambda: clock.now)
+    await lab.join(agent('ada'))
+    await lab.join(agent('bo'))
+    await lab.join(agent('cy').model_copy(update={'model': ModelSpec(family='openai')}))
+    await lab.set_settings(Settings(reviewers=ReviewerSettings(seats=0)))
+    evidence = (FileEvidence(path='result.txt', commit='c' * 40),)
+    await lab.post(PostRequest(kind='result', text='11.8x.', new_thread='Speed'), 'ada', evidence)
+    for number in (2, 3):
+        await lab.post(PostRequest(kind='result', text=f'Result {number}.', thread='t-1'), 'ada', evidence)
+    for post in ('p-1', 'p-2', 'p-3'):
+        await lab.request_rerun('ada', post)
+    return lab
+
+
+async def test_the_keeper_deletes_each_copy_once_nothing_needs_it_and_keeps_the_copies_that_a_take_needs(
+    tmp_path: Path, record_file: RecordFile
+) -> None:
+    clock = Clock()
+    lab = await a_lab_with_reruns(record_file, clock)
+    await lab.take_rerun('bo', 'p-1')
+    await lab.take_rerun('cy', 'p-2')
+    await lab.take_rerun('cy', 'p-3')
+    homes = {post: a_copy(tmp_path, post) for post in ('p-1', 'p-2', 'p-3', 'p-9')}
+    keeping = asyncio.create_task(reruns.keep_copies(lab, CleanCopies(tmp_path)))
+    try:
+        # A copy that no rerun of the record needs goes at the first look.
+        await until(lambda: not homes['p-9'].exists())
+        assert all(homes[post].exists() for post in ('p-1', 'p-2', 'p-3'))
+
+        # A lease that its agent gave up needs its copy no more, and the copies of other reruns stay.
+        await lab.give_up_rerun('bo', 'p-1')
+        await until(lambda: not homes['p-1'].exists())
+        assert homes['p-2'].exists()
+
+        # The check that settles a rerun ends its need for the copy.
+        taken = lab.board.take('cy', 'p-3')
+        assert taken is not None
+        await lab.post(
+            PostRequest.model_validate(
+                {'kind': 'check', 'text': 'Reran it.', 'reply_to': 'p-3', 'thread': 't-1', 'outcome': 'holds'}
+                | {'method': 'rerun'}
+            ),
+            'cy',
+            (FileEvidence(path='rerun.txt', commit='d' * 40),),
+            take=taken.seq,
+        )
+        await until(lambda: not homes['p-3'].exists())
+
+        # A renewal keeps a copy past the end of the first lease, and the end of the renewed lease ends it.
+        clock.pass_minutes(9)
+        await lab.renew_rerun('cy', 'p-2')
+        clock.pass_minutes(5)
+        await lab.post(PostRequest(kind='message', text='A note.', thread='t-1'), 'bo')
+        await asyncio.sleep(0.05)
+        assert homes['p-2'].exists()
+        clock.pass_minutes(6)
+        await lab.post(PostRequest(kind='message', text='Another note.', thread='t-1'), 'bo')
+        await until(lambda: not homes['p-2'].exists())
+    finally:
+        keeping.cancel()
+
+
+async def test_the_keeper_deletes_every_copy_when_the_lab_closes(tmp_path: Path, record_file: RecordFile) -> None:
+    clock = Clock()
+    lab = await a_lab_with_reruns(record_file, clock)
+    await lab.take_rerun('bo', 'p-1')
+    home = a_copy(tmp_path, 'p-1')
+    keeping = asyncio.create_task(reruns.keep_copies(lab, CleanCopies(tmp_path)))
+    try:
+        await asyncio.sleep(0.05)
+        assert home.exists()
+        await lab.post(PostRequest(kind='proposal', text='It holds.', thread='t-1'), 'ada')
+        await lab.post(PostRequest(kind='close', text='Done.', thread='t-1', candidate='p-4'), 'ada')
+        await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-5', accepts=True), 'bo')
+        await until(lambda: not home.exists())
+    finally:
+        keeping.cancel()

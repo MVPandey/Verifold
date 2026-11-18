@@ -11,11 +11,13 @@ from verifold.protocol.events import (
     AgentNamed,
     AlarmSet,
     BadgeSet,
+    BudgetSet,
     CoordinatorSet,
     DeliverableDecided,
     DeliverableSet,
     Event,
     LabOpened,
+    LimitReached,
     OnCallSet,
     PermissionGranted,
     Posted,
@@ -40,6 +42,7 @@ from verifold.protocol.events import (
 )
 from verifold.protocol.posts import Close, Round
 from verifold.society.board import Board
+from verifold.society.budget import check_limit
 from verifold.society.candidates import settled
 from verifold.society.coordinator import check_answered, check_made, check_power
 from verifold.society.deliverables import (
@@ -141,9 +144,15 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
         case TurnStarted():
             check_turn(board, event)
             return replace(board, seq=event.seq, starts=(*board.starts, event))
-        case TurnEnded():
+        case TurnEnded(usage=usage, cost_usd=cost):
             check_turn(board, event)
-            return replace(board, seq=event.seq, turns=(*board.turns, event))
+            return replace(
+                board,
+                seq=event.seq,
+                turns=(*board.turns, event),
+                spent_tokens=board.spent_tokens + usage.input_tokens + usage.output_tokens,
+                spent_dollars=board.spent_dollars + max(cost or 0.0, 0.0),
+            )
         case RerunRequested():
             check_rerun(board, event)
             return replace(board, seq=event.seq, reruns=(*board.reruns, event))
@@ -160,6 +169,11 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
         case TimeRanOut():
             check_time_out(board, event)
             return replace(board, seq=event.seq, times=(*board.times, event))
+        case BudgetSet():
+            return replace(board, seq=event.seq, budgets=(*board.budgets, event))
+        case LimitReached():
+            check_limit(board, event)
+            return replace(board, seq=event.seq, limits=(*board.limits, event))
         case WentQuiet():
             # A mark from an earlier version. It changes nothing on the board.
             return replace(board, seq=event.seq)

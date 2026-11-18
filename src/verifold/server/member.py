@@ -33,6 +33,7 @@ from verifold.protocol.votes import Badge, BadgeAction, Direction
 from verifold.server.errors import CannotWake, EvidenceRejected, HasLeft, NoCleanCopy, OutOfTime, UnknownAgent
 from verifold.server.lab import Adds, Lab
 from verifold.society.attention import news, update, wakes
+from verifold.society.budget import LIMIT_NAMES
 from verifold.society.deliverables import live
 from verifold.society.errors import RejectedEvent
 from verifold.society.identity import post_view
@@ -273,7 +274,8 @@ class Member:
         `how` says how the board works. Only the member's first brief carries it.
         """
         first, self._briefed = not self._briefed, True
-        return brief(self._lab.board, self.agent_id, self._unseen(), how if first else '', now=self._lab.now())
+        lab = self._lab
+        return brief(lab.board, self.agent_id, self._unseen(), how if first else '', now=lab.now(), disk=lab.disk)
 
     def _unseen(self) -> News:
         now = self._lab.now()
@@ -483,6 +485,11 @@ class Member:
                 "The lab's time ran out or the person stopped the lab, so the board takes no post, no rerun "
                 'request, no take of a rerun, no vote, and no badge from you now. The person can give the lab '
                 'more time.'
+            )
+        if board.at_limit and self._is_guest():
+            raise OutOfTime(
+                f'The lab reached its {LIMIT_NAMES[board.at_limit]}, so the board takes no post, no rerun request, '
+                'no take of a rerun, no vote, and no badge from you now. The person can raise it.'
             )
 
     async def set_alarm(self, minutes: float, *, quiet: bool) -> AlarmSet:

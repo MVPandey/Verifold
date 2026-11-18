@@ -33,7 +33,7 @@ from verifold.protocol.join import FileText, PostRequest
 from verifold.protocol.moves import AddSeat
 from verifold.protocol.posts import Ask, FileEvidence, Objection, PermissionShown, Result
 from verifold.protocol.settings import Settings
-from verifold.protocol.usage import Usage
+from verifold.protocol.usage import DiskUse, Usage
 from verifold.server import status as status_module
 from verifold.server.activity import Activity
 from verifold.server.app_api import _changes, _lab_view, app_api
@@ -237,6 +237,7 @@ async def test_settings_pass_through_and_refusals_say_why(client: httpx2.AsyncCl
         'reviewers': {'seats': None},
         'votes': {'reveal_minutes': 10},
         'reruns': {'lease_minutes': 10},
+        'disk': {'limit_gb': 100},
     }
     assert view['project']['path'] == '.verifold/settings.json'
     assert changed.status_code == 200
@@ -605,6 +606,28 @@ async def test_the_person_sets_how_long_the_agents_may_still_work(client: httpx2
     assert (stopping['ends_at'] is not None, stopping['out_of_time'], out['out_of_time']) == (True, False, True)
     assert more['out_of_time'] is False
     assert lab.board.ends_at == lab.board.times[-1].at + timedelta(minutes=30)
+    assert refused.status_code == 422
+
+
+async def test_the_person_sets_the_budget_and_the_disk_limit_and_the_lab_shows_what_it_spent(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    await lab.end_turn(
+        TurnSummary(agent='ada', seconds=1, usage=Usage(input_tokens=700, output_tokens=300), cost_usd=2)
+    )
+    before = (await client.get('/lab')).json()
+    stopped = (await client.post('/budget', json={'tokens': 1_000, 'dollars': 5})).json()
+    raised = (await client.post('/budget', json={'tokens': 4_000})).json()
+    await lab.measured(DiskUse(at=lab.now(), folders={'ada': 3 * 1024**3}, total=3 * 1024**3))
+    full = (await client.post('/disk', json={'limit_gb': 2})).json()
+    none = (await client.post('/disk', json={'limit_gb': 0})).json()
+    refused = await client.post('/budget', json={'tokens': 0})
+
+    assert (before['budget']['spent_tokens'], before['budget']['spent_dollars'], before['limit']) == (1_000, 2, None)
+    assert (stopped['limit'], stopped['budget']['tokens_left'], stopped['budget']['dollars_left']) == ('tokens', 0, 3)
+    assert (raised['limit'], raised['budget']['tokens_left'], raised['budget']['dollars']) == (None, 3_000, None)
+    assert (full['limit'], full['settings']['disk']['limit_gb'], full['disk']['total']) == ('disk', 2, 3 * 1024**3)
+    assert (none['limit'], none['settings']['disk']['limit_gb']) == (None, 0)
     assert refused.status_code == 422
 
 

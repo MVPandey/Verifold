@@ -137,10 +137,21 @@ export interface Agent {
 
 /**
  * What an agent in the state `waiting` waits for. `person`: its harness waits for the person's answer inside a
- * turn that runs. `time`: the lab is out of time. `process`: the agent ended its turn and waits for a process
- * that it left running.
+ * turn that runs. `time`: the lab is out of time. `limit`: the lab reached its budget or its disk limit.
+ * `process`: the agent ended its turn and waits for a process that it left running. `retry`: its harness failed,
+ * and Verifold starts it again at the time in `retry`.
  */
-export type WaitsFor = 'person' | 'time' | 'process';
+export type WaitsFor = 'person' | 'time' | 'limit' | 'process' | 'retry';
+
+/** A harness that failed and that Verifold starts again. */
+export interface Retry {
+  /** How many times in a row the harness failed. The agent's `error` is the last one. */
+  readonly failures: number;
+  /** When Verifold starts the harness again. */
+  readonly at: string;
+  /** Whether the error says that the provider limits the harness, such as a rate limit or a usage limit. */
+  readonly provider_limit: boolean;
+}
 
 export interface AgentActivity {
   readonly state: AgentState;
@@ -149,6 +160,8 @@ export interface AgentActivity {
   readonly at: string | null;
   /** With the state `waiting`: what the agent waits for. */
   readonly waits_for?: WaitsFor | null;
+  /** While the agent waits for `retry`: how its harness failed, and when Verifold starts it again. */
+  readonly retry?: Retry | null;
 }
 
 /**
@@ -169,6 +182,36 @@ export interface Usage {
   readonly input_tokens: number;
   readonly cached_input_tokens: number;
   readonly output_tokens: number;
+}
+
+/** A limit of the lab other than its time. */
+export type Limit = 'tokens' | 'dollars' | 'disk';
+
+/**
+ * The lab's budget, what it spent, and what is left, from the ends of its turns. A harness that reports no cost
+ * adds no dollars.
+ */
+export interface BudgetLine {
+  /** The budget in tokens, or `null` for none. */
+  readonly tokens: number | null;
+  /** The budget in US dollars, or `null` for none. */
+  readonly dollars: number | null;
+  readonly spent_tokens: number;
+  readonly spent_dollars: number;
+  readonly tokens_left: number | null;
+  readonly dollars_left: number | null;
+}
+
+/** The bytes that the lab's files take on disk, as Verifold measured them at the end of a turn. */
+export interface DiskUse {
+  readonly at: string;
+  /** Each agent's folder, by agent. */
+  readonly folders: Readonly<Record<string, number>>;
+  /** The clean copies for reruns. */
+  readonly reruns: number;
+  /** The snapshots of the agents' folders. */
+  readonly snapshots: number;
+  readonly total: number;
 }
 
 /** The record's entry for an agent that left the lab. */
@@ -399,6 +442,12 @@ export interface LabView {
   readonly reviewer_seats_set: number | null;
   readonly ends_at: string | null;
   readonly out_of_time: boolean;
+  /** The lab's budget, what it spent, and what is left. */
+  readonly budget: BudgetLine;
+  /** The budget or the disk limit that the lab reached. Its agents wait until the person raises it. */
+  readonly limit: Limit | null;
+  /** What the lab's files take on disk, as Verifold measured them last. `null` before the first measure. */
+  readonly disk: DiskUse | null;
   /** Whether the lab's agents say that it is done. A closed lab is not stopped. */
   readonly state: 'open' | 'closing' | 'closed';
   /** The post that says that the lab is done, while it stands. */
@@ -564,6 +613,11 @@ export interface RerunSettings {
   readonly lease_minutes: number;
 }
 
+export interface DiskSettings {
+  /** The most gigabytes that the lab's files may take before the agents stop. Zero means no limit. */
+  readonly limit_gb: number;
+}
+
 export interface Settings {
   readonly version: number;
   readonly jobs: JobSettings;
@@ -571,6 +625,7 @@ export interface Settings {
   readonly reviewers: ReviewerSettings;
   readonly votes: VoteSettings;
   readonly reruns: RerunSettings;
+  readonly disk: DiskSettings;
 }
 
 /** Where a setting lives: in one project's file, which wins, or in the file for all projects. */
@@ -603,6 +658,7 @@ export type SettingKey =
   | 'reviewers.seats'
   | 'votes.reveal_minutes'
   | 'reruns.lease_minutes'
+  | 'disk.limit_gb'
   | 'setup';
 
 /**
@@ -685,6 +741,10 @@ export interface SetupDefaults {
   readonly auto_mode: boolean;
   /** `null` means no time limit. */
   readonly minutes: number | null;
+  /** The budget in tokens. `null` means none. */
+  readonly budget_tokens: number | null;
+  /** The budget in US dollars. `null` means none. */
+  readonly budget_dollars: number | null;
 }
 
 /** The choices for new labs, as the app saves them. */
@@ -692,6 +752,8 @@ export interface SetupChoices {
   readonly agents: readonly AgentChoice[];
   readonly auto_mode: boolean;
   readonly minutes: number | null;
+  readonly budget_tokens: number | null;
+  readonly budget_dollars: number | null;
 }
 
 export interface AgentChoice {
@@ -745,8 +807,16 @@ export interface StartRequest {
   readonly agents: readonly AgentChoice[];
   readonly auto_mode: boolean;
   readonly minutes?: number;
+  readonly budget_tokens?: number;
+  readonly budget_dollars?: number;
   /** What the person wants to hold at the end of the lab, each as one sentence. */
   readonly deliverables?: readonly string[];
+}
+
+/** The person sets the lab's budget. It replaces the earlier one, and a kind that is left out has no budget. */
+export interface BudgetRequest {
+  readonly tokens?: number;
+  readonly dollars?: number;
 }
 
 export interface Thread {

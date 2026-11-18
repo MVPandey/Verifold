@@ -185,14 +185,15 @@ def power_covers(board: Board, move: Move, at: datetime) -> bool:
     Return whether a power of the coordinator covers a move at a moment, so that the move needs no yes of the person.
 
     The person's switch for that kind of move is on. The lab has time: its time did not run out, and the person
-    did not stop it. The move does not let the agents' processes run on after the lab stops or Verifold exits.
+    did not stop it. The lab stands at no budget or disk limit. The move does not let the agents' processes run on after the lab stops or Verifold exits.
     """
     return power_of(move) in board.powers and not _over(board, at) and not _outlasts_a_stop(move)
 
 
 def _over(board: Board, at: datetime) -> bool:
-    # Whether the lab's end passed, also when the record does not say so yet. The person stops a lab with its end.
-    return board.out_of_time or (board.ends_at is not None and at >= board.ends_at)
+    # Whether the lab's end passed, also when the record does not say so yet, or the lab stands at another limit.
+    # The person stops a lab with its end.
+    return board.halted is not None or (board.ends_at is not None and at >= board.ends_at)
 
 
 def _outlasts_a_stop(move: Move) -> bool:

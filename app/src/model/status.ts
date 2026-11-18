@@ -1,6 +1,7 @@
 import type { AgentView, LabView, Need, RerunLine, Wait } from '../api/types.ts';
 import { counted, leftLine, memberLine, members, ownName } from './agents.ts';
 import { dayClock, duration, minutesBetween } from './format.ts';
+import { LIMIT_NAMES, halted } from './limits.ts';
 import { minutesLeft } from './time.ts';
 
 /** The statuses in their order: who needs the person comes first. */
@@ -142,7 +143,7 @@ export function needGroups(agents: readonly AgentView[]): readonly NeedGroup[] {
  * works. A member that waits for the person says for how long. An on-call member in no turn says what wakes it.
  */
 export function whereLine(view: AgentView, lab: LabView, now: Date, title: string | null): string {
-  const resting = lab.out_of_time || lab.state === 'closed';
+  const resting = halted(lab) || lab.state === 'closed';
   const wait = lab.waits.find((one) => one.agent === view.agent.id && one.kind === view.need);
   let text: string;
   if (view.left) text = leftLine(view.left).text;
@@ -235,6 +236,15 @@ export function quietBand(lab: LabView, now: Date): Quiet | null {
       next:
         alarms.length > 0 ? 'No alarm rings while the lab is out of time' : 'No turn starts now',
       left: 'None',
+    };
+  }
+  if (lab.limit) {
+    return {
+      title: `The lab reached its ${LIMIT_NAMES[lab.limit]}`,
+      text: `${since} No agent starts a turn until you raise it.`,
+      ...counts,
+      next: alarms.length > 0 ? 'No alarm rings at a limit' : 'No turn starts now',
+      left: lab.ends_at === null ? 'No limit' : duration(minutesLeft(lab, now)),
     };
   }
   const left = lab.ends_at === null ? 'No limit' : duration(minutesLeft(lab, now));

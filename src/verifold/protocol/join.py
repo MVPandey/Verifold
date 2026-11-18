@@ -27,7 +27,7 @@ from verifold.protocol.agents import (
     ValueId,
 )
 from verifold.protocol.deliverables import DeliverableLine
-from verifold.protocol.events import Note, Posted, Question, RequestAnswered, RoundEnd
+from verifold.protocol.events import Limit, Note, Posted, Question, RequestAnswered, RoundEnd
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.moves import LabSetting, Move
 from verifold.protocol.posts import (
@@ -1183,6 +1183,38 @@ class ProfileResult(Record):
     news: News | None = None
 
 
+class BudgetLine(Record):
+    """
+    The lab's budget, what the lab spent, and what is left, from the ends of its turns in the record.
+
+    In tokens, the lab spent the input and the output tokens that the harnesses reported, cached input tokens among
+    them. In dollars, it spent the costs that the harnesses reported: a turn of a harness that reports no cost adds
+    nothing. A turn reports what it spent when it ends, and a turn that Verifold cancels reports no tokens.
+    """
+
+    tokens: int | None = None
+    """The budget in tokens. `None` means no budget in tokens."""
+    dollars: float | None = None
+    """The budget in US dollars. `None` means no budget in dollars."""
+    spent_tokens: int = 0
+    spent_dollars: float = 0
+    tokens_left: int | None = None
+    """The tokens that the budget has left, zero once the lab spent it. `None` without a budget in tokens."""
+    dollars_left: float | None = None
+    """The dollars that the budget has left, zero once the lab spent it. `None` without a budget in dollars."""
+
+
+class DiskLine(Record):
+    """The bytes that the lab's files take on disk, as Verifold measured them at the end of the latest turn."""
+
+    folder: int | None = None
+    """Your own folder. `None` until Verifold measured it."""
+    lab: int = 0
+    """The folders of all agents, the clean copies for reruns, and the snapshots together."""
+    limit: int | None = None
+    """The lab's disk limit in bytes. `None` means no limit."""
+
+
 class Brief(Record):
     """
     The lab for one agent, in one read: how the board works, the lab's state and time, who works on what, and the posts.
@@ -1223,6 +1255,12 @@ class Brief(Record):
     """When the lab ends. At that time Verifold stops the agents' turns. `None` means no time limit."""
     minutes_left: float | None = None
     """How many minutes the lab has left. Zero when the lab is out of time, and `None` without a time limit."""
+    budget: BudgetLine = BudgetLine()
+    """The lab's budget in tokens and in dollars, what the lab spent, and what is left."""
+    limit_reached: Limit | None = None
+    """The budget or the disk limit that stops the agents now, or `None`. The person raises it to let them go on."""
+    disk: DiskLine | None = None
+    """What the lab's files take on disk, or `None` until Verifold measured them."""
     in_turn: int = 0
     """
     How many agents are in a turn by the record: the agents with a turn that started and has not ended. The record

@@ -633,6 +633,7 @@ class AgentSession:
         self.loaded = loaded
         self.model = model
         self._client = client
+        self._cost_before: float | None = None
 
     @classmethod
     @asynccontextmanager
@@ -654,12 +655,11 @@ class AgentSession:
 
     async def send(self, text: str) -> TurnResult:
         """Send one message, and return once the harness ends its turn."""
-        cost_before = self._client.cost
+        self._cost_before = self._client.cost
         response = await self._connection.prompt(session_id=self.id, prompt=[acp.text_block(text)])
         usage = response.usage
         cached = (usage.cached_read_tokens or 0) if usage else 0
         written = (usage.cached_write_tokens or 0) if usage else 0
-        cost = self._client.cost
         return TurnResult(
             stop_reason=response.stop_reason,
             usage=Usage(
@@ -667,8 +667,18 @@ class AgentSession:
                 cached_input_tokens=cached,
                 output_tokens=usage.output_tokens if usage else 0,
             ),
-            cost_usd=None if cost is None else cost - (cost_before or 0),
+            cost_usd=self.turn_cost(),
         )
+
+    def turn_cost(self) -> float | None:
+        """
+        Return what the turn that `send` started last has cost so far, by the harness's reports, or `None`.
+
+        A harness reports its cost during a turn too, so a turn that Verifold cancels has the cost up to its last
+        report.
+        """
+        cost = self._client.cost
+        return None if cost is None else cost - (self._cost_before or 0)
 
     async def cancel(self) -> None:
         """Ask the harness to stop its current turn."""

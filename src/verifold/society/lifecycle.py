@@ -7,6 +7,7 @@ from verifold.protocol.events import AlarmSet, Posted
 from verifold.protocol.ids import AgentId
 from verifold.protocol.join import AlarmLine, LabState
 from verifold.society.board import Board
+from verifold.society.budget import LIMIT_NAMES
 from verifold.society.standing import agreed, closing
 
 
@@ -74,8 +75,8 @@ def alarm_line(board: Board, agent_id: AgentId) -> AlarmLine | None:
     alarm = pending_alarm(board, agent_id)
     if alarm is None:
         return None
-    # No alarm rings while the lab is out of time or closed, so the alarm has no time then.
-    resting = board.out_of_time or lab_state(board) == 'closed'
+    # No alarm rings while the lab is out of time, at a limit, or closed, so the alarm has no time then.
+    resting = board.halted is not None or lab_state(board) == 'closed'
     return AlarmLine(minutes=alarm.minutes, quiet=alarm.quiet, rings_at=None if resting else rings_at(board, alarm))
 
 
@@ -114,7 +115,8 @@ def no_alarm_line(board: Board, agent_id: AgentId, now: datetime | None = None) 
     the lab has left, and whether a close stands. It names only what does start a turn in that state:
 
     - While the lab is out of time, Verifold stops the turn that reads this, and the next turn starts when the
-      person gives the lab more time.
+      person gives the lab more time. At its budget or its disk limit, the next turn starts when the person raises
+      that limit.
     - In a closed lab, a post for the agent starts it. The leaving of another agent does not.
     - In any other lab, a post for the agent starts it, and so does the leaving of an agent that it named or
       answered.
@@ -135,6 +137,11 @@ def no_alarm_line(board: Board, agent_id: AgentId, now: datetime | None = None) 
         starts = (
             'The lab is out of time, so Verifold stops this turn. Your next turn starts when the person gives the '
             'lab more time.'
+        )
+    elif board.at_limit is not None:
+        starts = (
+            f'The lab reached its {LIMIT_NAMES[board.at_limit]}, so Verifold stops this turn. Your next turn starts '
+            f'when the person sets a {LIMIT_NAMES[board.at_limit]} that the lab has not reached.'
         )
     else:
         also = '' if state == 'closed' else ' or when an agent that you named or answered leaves'

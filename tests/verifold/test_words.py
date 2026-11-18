@@ -17,11 +17,13 @@ from builders import START, RecordBuilder
 from mcp import Client
 
 from verifold.app import NORMS_CHANGED, NORMS_TEMPLATE
-from verifold.protocol.events import AlarmSet
+from verifold.protocol.events import AlarmSet, BudgetSet, LimitReached, TurnEnded
 from verifold.protocol.posts import Answer, Close, FileEvidence, Message, Result
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.threads import QUESTION_TITLE
+from verifold.protocol.usage import Usage
 from verifold.runner.messages import (
+    AT_LIMIT,
     CLOSED,
     DEPARTURE,
     DOORBELL,
@@ -36,6 +38,7 @@ from verifold.runner.messages import (
     back_message,
     cut_short_message,
     invitation,
+    limit_message,
     more_time_message,
     start_message,
 )
@@ -46,6 +49,7 @@ from verifold.society.board import Board
 from verifold.society.coordinator import no_reply_line
 from verifold.society.deliverables import OFFERS_TITLE
 from verifold.society.lifecycle import no_alarm_line
+from verifold.society.reruns import COPY_MINUTES
 from verifold.store.errors import RecordChanged
 from verifold.store.record_file import RecordFile
 
@@ -145,7 +149,7 @@ def messages() -> dict[str, str]:
         'round closed': ROUND_CLOSED,
         'alarm': alarm_message(alarm),
         'timed alarm': alarm_message(alarm.model_copy(update={'quiet': False})),
-        **{f'late alarm {late}': alarm_message(alarm, late) for late in (IN_TURN, OUT_OF_TIME, CLOSED)},
+        **{f'late alarm {late}': alarm_message(alarm, late) for late in (IN_TURN, OUT_OF_TIME, AT_LIMIT, CLOSED)},
         'cut short': cut_short_message('The harness stopped: max_tokens.'),
         'start': start,
         'start alone': start_message(RecordBuilder().join('ada').board(), ada, NORMS),
@@ -172,6 +176,13 @@ def messages() -> dict[str, str]:
         },
         'invitation': invitation(start, 'http://127.0.0.1:8123/mcp', 'the-token', FOLDER),
         **{f'more time {jobs}': more_time_message(START, jobs) for jobs in AtTimeLimit},
+        **{
+            f'limit {limit} {jobs} {budgeted}': limit_message(limit, _budgeted() if budgeted else board, jobs)
+            for limit in ('tokens', 'dollars', 'disk')
+            for jobs in AtTimeLimit
+            for budgeted in (True, False)
+        },
+        'no alarm, at a limit': no_alarm_line(_budgeted(), 'ada'),
         **{f'norms changed {name}': text.format(path=NORMS) for name, text in NORMS_CHANGED.items()},
         'no alarm': no_alarm_line(board, 'ada', START),
         **{f'no reply {posts}': no_reply_line(_waiting(posts), 'ada') for posts in (1, 2, 3)},
@@ -186,6 +197,18 @@ def messages() -> dict[str, str]:
             closing.time_set(closing.at(len(closing.events) + 1)).ran_out().board(), 'bo'
         ),
     }
+
+
+def _budgeted() -> Board:
+    # A lab that reached its budget in tokens, with a budget in dollars that it has not.
+    record = RecordBuilder().join('ada')
+    seq, at = record._stamp()
+    record.events.append(BudgetSet(seq=seq, at=at, tokens=10, dollars=5))
+    seq, at = record._stamp()
+    record.events.append(TurnEnded(seq=seq, at=at, agent='ada', seconds=1, usage=Usage(input_tokens=20)))
+    seq, at = record._stamp()
+    record.events.append(LimitReached(seq=seq, at=at, limit='tokens'))
+    return record.board()
 
 
 def _waiting(posts: int) -> Board:
@@ -251,6 +274,8 @@ def test_the_check_finds_the_orders_that_the_board_once_gave() -> None:
 
 def test_the_instructions_of_the_board_hold_no_order() -> None:
     assert orders(INSTRUCTIONS) == []
+    # The instructions name the fewest minutes that a clean copy stays.
+    assert f'for {COPY_MINUTES} minutes after its latest take or renewal' in INSTRUCTIONS
 
 
 async def test_no_tool_of_the_board_describes_itself_or_its_result_with_an_order(lab: Lab) -> None:

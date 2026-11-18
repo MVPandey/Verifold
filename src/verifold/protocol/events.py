@@ -27,7 +27,7 @@ from verifold.protocol.ids import PERSON, AgentId, CommitId, DeliverableId, Post
 from verifold.protocol.moves import Note, Question
 from verifold.protocol.posts import Post
 from verifold.protocol.record import Record
-from verifold.protocol.settings import MAX_MINUTES, Settings
+from verifold.protocol.settings import MAX_BUDGET_DOLLARS, MAX_BUDGET_TOKENS, MAX_MINUTES, Settings
 from verifold.protocol.threads import Thread
 from verifold.protocol.usage import Usage
 from verifold.protocol.votes import Badge, BadgeAction, Direction, Why
@@ -357,6 +357,48 @@ class TimeRanOut(EventBase):
     type: Literal['time_ran_out'] = 'time_ran_out'
 
 
+class BudgetSet(EventBase):
+    """
+    The person set the lab's budget, which replaces the earlier one.
+
+    The lab has spent what the harnesses reported at the ends of its turns: in tokens, the input and the output
+    tokens of `turn_ended.usage` together, and in dollars, the `cost_usd` of the turns whose harness reports a
+    cost. When what it spent reaches a budget, the agents stop as at the time limit, until the person sets a budget
+    that the lab has not spent. A record from before budgets holds no such event, and its lab has no budget.
+    """
+
+    type: Literal['budget_set'] = 'budget_set'
+    tokens: int | None = Field(default=None, ge=1, le=MAX_BUDGET_TOKENS)
+    """The budget in tokens. `None` means no budget in tokens."""
+    dollars: float | None = Field(default=None, gt=0, le=MAX_BUDGET_DOLLARS)
+    """The budget in US dollars. `None` means no budget in dollars."""
+
+
+type Limit = Literal['tokens', 'dollars', 'disk']
+"""
+A limit of the lab other than its time. `tokens` and `dollars`: what the lab spent reached its budget. `disk`: the
+lab's files reached its disk limit.
+"""
+
+type Halt = Literal['time'] | Limit
+"""Why the agents of a lab stop: its time ran out, or it reached one of its other limits."""
+
+
+class LimitReached(EventBase):
+    """
+    The lab reached its budget or its disk limit. Verifold cancelled the agents' turns, and they wait.
+
+    The record says so once for each time that the lab reaches a limit. For `tokens` and `dollars` it stands until
+    the person sets the budget again, and for `disk` until the person changes the disk limit. When the lab still
+    has reached the limit then, the record says so again at once.
+    """
+
+    type: Literal['limit_reached'] = 'limit_reached'
+    limit: Limit
+    disk_bytes: int | None = Field(default=None, ge=0)
+    """With `disk`: the bytes of the lab's files that Verifold measured."""
+
+
 class WentQuiet(EventBase):
     """
     A mark from an earlier version of Verifold, which told the agents when the whole lab had gone quiet.
@@ -433,6 +475,9 @@ ERROR_OUT_OF_TIME = 'The lab ran out of time'
 
 ERROR_RAN_PAST = 'The turn ran past'
 """How the error of a turn that Verifold cancelled at the limit for one turn starts."""
+
+ERROR_AT_LIMIT = 'The lab reached its'
+"""How the error of a turn that Verifold cancelled at the lab's budget or disk limit starts."""
 
 
 class TurnEnded(EventBase, TurnSummary):
@@ -605,6 +650,8 @@ type Event = Annotated[
     | RoundClosed
     | TimeSet
     | TimeRanOut
+    | BudgetSet
+    | LimitReached
     | WentQuiet
     | SettingsSet
     | PermissionGranted

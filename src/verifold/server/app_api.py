@@ -22,11 +22,13 @@ from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import (
     AgentView,
     BadgeRequest,
+    BudgetRequest,
     ConversationView,
     CoordinatorSeat,
     DeliverableDecision,
     DeliverableRequest,
     DeliverableView,
+    DiskRequest,
     FolderRequest,
     FolderView,
     Invitation,
@@ -59,7 +61,8 @@ from verifold.protocol.events import Reason, RerunRequested
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import CandidatesView, FileText, PostRequest, PostView, ThreadView
 from verifold.protocol.moves import AddSeat
-from verifold.protocol.usage import Usage
+from verifold.protocol.settings import DiskSettings
+from verifold.protocol.usage import DiskUse, Usage
 from verifold.server.activity import Activity
 from verifold.server.conversation import conversation_view
 from verifold.server.errors import LabExists, NoLab, ServerError, SetupRejected
@@ -67,6 +70,7 @@ from verifold.server.lab import Build, Lab
 from verifold.server.member import Member
 from verifold.server.status import agent_need, all_outcomes, in_turn, profile_edits, thread_needs, waits
 from verifold.society.board import Board
+from verifold.society.budget import budget_line
 from verifold.society.deliverables import deliverable_lines, removed_lines, told_at
 from verifold.society.errors import NotFound, SocietyError
 from verifold.society.identity import post_line, post_view, seat_label
@@ -389,8 +393,28 @@ def _seat_routes(api: FastAPI, host: Host, activity: Activity, authorized: param
         return _view_of(lab, activity)
 
     _coordinator_routes(api, host, authorized)
+    _limit_routes(api, host, activity, authorized)
     _vote_routes(api, host, authorized)
     _deliverable_routes(api, host, activity, authorized)
+
+
+def _limit_routes(api: FastAPI, host: Host, activity: Activity, authorized: params.Depends) -> None:
+    """Add the person's limits of the lab beside its time: the budget and the disk limit."""
+
+    @api.post('/budget', dependencies=[authorized])
+    async def budget(request: BudgetRequest) -> LabView:
+        lab = _lab(host)
+        await lab.set_budget(request.tokens, request.dollars)
+        return _view_of(lab, activity)
+
+    @api.post('/disk', dependencies=[authorized])
+    async def disk(request: DiskRequest) -> LabView:
+        # The limit is the lab's own. The settings files keep what new labs start with.
+        lab = _lab(host)
+        settings = lab.board.settings
+        if settings.disk.limit_gb != request.limit_gb:
+            await lab.set_settings(settings.model_copy(update={'disk': DiskSettings(limit_gb=request.limit_gb)}))
+        return _view_of(lab, activity)
 
 
 def _vote_routes(api: FastAPI, host: Host, authorized: params.Depends) -> None:
@@ -464,10 +488,10 @@ def _authorize(person_token: SecretStr) -> Callable[[Request, str | None], None]
 
 
 def _view_of(lab: Lab, activity: Activity) -> LabView:
-    return _lab_view(lab.board, activity, lab.now())
+    return _lab_view(lab.board, activity, lab.now(), lab.disk)
 
 
-def _lab_view(board: Board, activity: Activity, now: datetime) -> LabView:
+def _lab_view(board: Board, activity: Activity, now: datetime, disk: DiskUse | None = None) -> LabView:
     # `now` dates the leases on the wanted reruns.
     working = lines_of(board)
     done = closing(board)
@@ -503,6 +527,9 @@ def _lab_view(board: Board, activity: Activity, now: datetime) -> LabView:
         reviewer_seats_set=board.settings.reviewers.seats,
         ends_at=board.ends_at,
         out_of_time=board.out_of_time,
+        budget=budget_line(board),
+        limit=board.at_limit,
+        disk=disk,
         settings=board.settings,
         deliverables=tuple(_deliverable_view(board, line) for line in deliverable_lines(board)),
         removed_deliverables=removed_lines(board),

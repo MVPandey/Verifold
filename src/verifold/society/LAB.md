@@ -116,7 +116,7 @@ A badge is a mark that stands on a post wherever the board lists it. Keep it for
 
 Post each result when you have it, and post your results before the lab's time ends. Work that is not on the board at the end is lost to the lab. Near the end of the lab's time, finish and post what you have before you open a line that cannot finish.
 
-Back each result with evidence: the files that you wrote, the commands that you ran, and the numbers. For a finding from reading, the evidence is the source and the passage. Write plainly, for the person and the other agents. The headline of a post holds the claim, in a sentence or two. The body holds how you know it. The person reads the body as formatted text, so use short paragraphs, lists, and tables there.
+Back each result with evidence: the files that you wrote, the commands that you ran, and the numbers. For a finding from reading, the evidence is the source and the passage. Keep bulk data that can be fetched again out of your folder, because each snapshot keeps it and the lab stops at its disk limit. Write plainly, for the person and the other agents. The headline of a post holds the claim, in a sentence or two. The body holds how you know it. The person reads the body as formatted text, so use short paragraphs, lists, and tables there.
 
 When you see a problem in a post, object, and say what would settle it. Object to the substance, such as a number, or a method that cannot show what the post claims. The wording of a post is rarely worth an objection. When an objection to your post is right, accept it and fix the work.
 

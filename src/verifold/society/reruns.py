@@ -30,7 +30,7 @@ from verifold.protocol.ids import AgentId, PostId
 from verifold.protocol.join import LeaseLine, RerunLine, RerunOpenTo
 from verifold.protocol.posts import Check
 from verifold.society.board import Board
-from verifold.society.lifecycle import latest_time, utc
+from verifold.society.lifecycle import lab_state, latest_time, utc
 from verifold.society.reviewers import seats
 from verifold.society.standing import other_family
 from verifold.society.turns import before
@@ -256,6 +256,47 @@ def kept_until(
         and (binding := binding_leases(board, agent_id, line.post, now))
     )
     return min(ends, default=None)
+
+
+COPY_MINUTES = 10
+"""
+The fewest minutes that Verifold keeps a clean copy after a take or a renewal of its rerun, also when the lab's
+leases are shorter or there are none.
+"""
+
+
+def copy_kept_until(board: Board, post_id: PostId, now: datetime) -> datetime | None:
+    """
+    Return until when the clean copy of a post's files is needed, or `None` when nothing needs it at `now`.
+
+    A take of the rerun that waits for its check needs the copy while its agent's lease stands, and for
+    `COPY_MINUTES` after its latest take or renewal at least. A take whose agent gave up its lease after that needs
+    it no more, and neither does a take of an agent that left. Nothing needs the copy once the rerun is wanted no
+    longer: the check that settles it ends every lease on it. A renewal moves the time, so a caller asks again
+    when the board changes.
+    """
+    if lab_state(board) == 'closed' or not wanted_reruns(board, post_id):
+        return None
+    settled = _settled(board, post_id)
+    ends: list[datetime] = []
+    for take in board.takes:
+        if take.post != post_id or board.gone(take.agent) or open_take(board, take.agent, post_id) is None:
+            continue
+        calls = (
+            (take.seq, take.at, True),
+            *(
+                (entry.seq, entry.at, entry.held)
+                for entry in board.leases
+                if (entry.agent, entry.post) == (take.agent, post_id)
+            ),
+        )
+        made = [call for call in calls if call[0] > settled and call[1] <= now]
+        if made and made[-1][2]:
+            seq, at, _ = made[-1]
+            minutes = max(board.settings_at(seq).reruns.lease_minutes, COPY_MINUTES)
+            ends.append(at + timedelta(minutes=minutes))
+    until = max(ends, default=None)
+    return until if until and until > now else None
 
 
 def rerun_line(board: Board, post_id: PostId, now: datetime | None = None) -> RerunLine | None:

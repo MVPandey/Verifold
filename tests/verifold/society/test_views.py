@@ -4,7 +4,7 @@ import pytest
 from builders import RecordBuilder, lab
 from pydantic import TypeAdapter
 
-from verifold.protocol.events import AlarmSet, Posted
+from verifold.protocol.events import AlarmSet, BudgetSet, LimitReached, Posted, TurnEnded
 from verifold.protocol.join import (
     MAX_CANDIDATES,
     MAX_LINE,
@@ -38,6 +38,7 @@ from verifold.protocol.posts import (
     RuledOut,
 )
 from verifold.protocol.threads import QUESTION_TITLE
+from verifold.protocol.usage import DiskUse, Usage
 from verifold.protocol.votes import BADGES, MAX_NOTES, MAX_WHY, BadgeNote, VoteNote
 from verifold.society.attention import news
 from verifold.society.errors import NotFound
@@ -748,6 +749,31 @@ def test_the_largest_brief_without_votes_is_one_tool_result() -> None:
     assert all(agent.plan is not None and agent.plan.by is None for agent in view.agents)
     # A line has its place in the record and no time.
     assert 'at' not in PostLine.model_fields
+
+
+def test_the_largest_brief_with_a_budget_that_the_lab_reached_and_its_disk_use_is_one_tool_result() -> None:
+    plain = _largest().board()
+    record = _largest()
+    seq, at = record._stamp()
+    record.events.append(BudgetSet(seq=seq, at=at, tokens=10**12 - 1, dollars=999_999.99))
+    seq, at = record._stamp()
+    usage = Usage(input_tokens=10**12, output_tokens=10**9)
+    record.events.append(TurnEnded(seq=seq, at=at, agent='a1', seconds=1, usage=usage, cost_usd=999_999.999_999))
+    seq, at = record._stamp()
+    record.events.append(LimitReached(seq=seq, at=at, limit='tokens'))
+    board = record.board()
+    folders = {f'a{number}': 10**15 + number for number in range(20)}
+    disk = DiskUse(at=at, folders=folders, reruns=10**15, snapshots=10**15, total=10**16)
+
+    view = brief(board, 'a0', news(board, 'a0', 0), disk=disk)
+
+    assert view.limit_reached == 'tokens'
+    assert (view.budget.tokens_left, view.budget.dollars_left) == (0, 0)
+    assert view.disk is not None
+    assert (view.disk.folder, view.disk.lab, view.disk.limit) == (10**15, 10**16, 100 * 1024**3)
+    # The budget and the disk add a few numbers, and the folders of the other agents stay out of the brief.
+    assert len(view.model_dump_json()) - len(brief(plain, 'a0', news(plain, 'a0', 0)).model_dump_json()) < 400
+    assert len(view.model_dump_json()) < ONE_TOOL_RESULT
 
 
 def test_the_largest_brief_of_a_coordinator_with_the_persons_longest_posts_that_wait_is_one_tool_result() -> None:

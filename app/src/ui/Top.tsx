@@ -13,6 +13,7 @@ import { WAITS_ID, needGroups, turnLine, waitsLine, whereLine } from '../model/s
 import { clockLine, endLine, moreTime } from '../model/time.ts';
 import { MarksAndRoles, Name, Profiles, Who } from './Picture.tsx';
 import { InvitationText, OpenFolder, ShownProfile, StartAgain } from './Profile.tsx';
+import { LimitsPanel } from './Limits.tsx';
 import { CoordinatorSeat, FactFields, ReviewerSeats, SeatFields } from './SeatForm.tsx';
 import type { Facts } from './SeatForm.tsx';
 
@@ -412,7 +413,7 @@ function InviteAgent(props: {
   );
 }
 
-/** The lab's time: when it ends, more time, and the stop with its confirmation. */
+/** The lab's time: when it ends, more time, and the stop with its confirmation. Its budget and disk limit follow. */
 function TimePanel(props: {
   readonly lab: LabView;
   readonly now: Date;
@@ -478,6 +479,7 @@ function TimePanel(props: {
           {error}
         </p>
       ) : null}
+      <LimitsPanel lab={lab} api={props.api} onChange={props.onChange} />
     </div>
   );
 }

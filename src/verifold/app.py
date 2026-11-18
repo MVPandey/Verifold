@@ -44,9 +44,17 @@ from verifold.protocol.ids import PERSON, AgentId, PostId
 from verifold.protocol.join import FileText, PostRequest
 from verifold.protocol.moves import AddSeat
 from verifold.protocol.record import Record
-from verifold.protocol.settings import AtExit, RerunSettings, SettingsLevel, SetupDefaults, VoteSettings
+from verifold.protocol.settings import (
+    AtExit,
+    DiskSettings,
+    RerunSettings,
+    SettingsLevel,
+    SetupDefaults,
+    VoteSettings,
+)
 from verifold.protocol.usage import Usage
 from verifold.runner.agent_loop import AgentLoop, AgentSetup, LoopSettings, Shared
+from verifold.runner.disk import DiskMeter
 from verifold.runner.errors import NoAgentFolder, NoFileManager
 from verifold.runner.folders import LAB_FOLDER, agent_folder, open_folder, real_folder, tracked_lab_files
 from verifold.runner.git import GitError
@@ -54,7 +62,7 @@ from verifold.runner.jobs import JOB_GRACE, Sweep, keep_jobs, sweep
 from verifold.runner.messages import invitation, start_message
 from verifold.runner.objects import READ_SECONDS, Missing, PinnedCommit, Running, TooLarge, file_bytes
 from verifold.runner.permissions import Refusals
-from verifold.runner.reruns import CleanCopies
+from verifold.runner.reruns import CleanCopies, keep_copies
 from verifold.runner.session import Place, SessionOptions, offer_of
 from verifold.runner.snapshots import pin
 from verifold.server.activity import Activity
@@ -221,6 +229,8 @@ class Host:
         """When the last post told the lab of a change to its norms, and which post it was."""
         self._loops: dict[AgentId, asyncio.Task[None]] = {}
         """The task that supervises each agent that Verifold started."""
+        self._disk: DiskMeter | None = None
+        """Measures the lab's files, once the lab starts or the server resumes it."""
 
     @property
     def lab(self) -> Lab | None:
@@ -561,10 +571,13 @@ class Host:
             settings = settings.model_copy(update={'votes': VoteSettings(reveal_minutes=request.reveal_minutes)})
         if request.lease_minutes is not None:
             settings = settings.model_copy(update={'reruns': RerunSettings(lease_minutes=request.lease_minutes)})
+        if request.disk_gb is not None:
+            settings = settings.model_copy(update={'disk': DiskSettings(limit_gb=request.disk_gb)})
         lab = Lab.create(
             self._record, request.question, auto_mode=request.auto_mode, time_left=time_left, stops=self._stops
         )
         await lab.set_settings(settings)
+        await lab.set_budget(request.budget_tokens, request.budget_dollars)
         for prefix in request.allow:
             await lab.grant(prefix)
         await lab.open_question_thread()
@@ -631,6 +644,10 @@ class Host:
         group.create_task(keep_time(lab))
         group.create_task(keep_rounds(lab))
         group.create_task(keep_jobs(lab, self._project, self._swept))
+        group.create_task(keep_copies(lab, self._copies))
+        self._disk = DiskMeter(self._project, lab)
+        # The lab knows its disk use from the start. Later measures come at the ends of turns.
+        group.create_task(_measured(self._disk))
         self._refusals = Refusals(lab)
         group.create_task(self._refusals.run())
         # A lab that is served again is under way for all of its agents. A new lab is so for none of them.
@@ -705,14 +722,14 @@ class Host:
         # An on-call agent that never worked has no harness and no turn. It starts when the first post for it
         # arrives, or when the person takes its seat off call. Its first message then holds the facts of that
         # moment. After a restart the wait starts again from the agent's join, so a post from before still counts.
-        # No harness starts while the lab is out of time, because no turn can run then.
+        # No harness starts while the lab is out of time or at a limit, because no turn can run then.
         seen = before(lab.board, agent.id).seen
         while True:
             board = lab.board
             if board.gone(agent.id):
                 return
             called = not board.on_call(agent.id) or update(board, agent.id, seen).posts
-            if called and not board.out_of_time:
+            if called and board.halted is None:
                 break
             await lab.wait_for_change(board.seq)
         # The agent can have a new name by now, so its seat and its first message take it from the board.
@@ -984,7 +1001,7 @@ class Host:
         await self._activity.invite(agent.id, 'here' if called else 'invited')
 
     def _shared(self) -> Shared:
-        return Shared(activity=self._activity, refusals=self._refusals)
+        return Shared(activity=self._activity, refusals=self._refusals, disk=self._disk)
 
     async def _seat(self, lab: Lab, agent: Agent, start: str) -> tuple[Member, AgentSetup]:
         folder = await agent_folder(self._project, agent.id)
@@ -1108,6 +1125,12 @@ async def serve(
             finally:
                 server.should_exit = True
                 await _closed(serving)
+
+
+async def _measured(disk: DiskMeter) -> None:
+    # A measure that fails leaves the lab without one until the next turn ends. It must not stop the server.
+    with suppress(OSError):
+        await disk.measure()
 
 
 def _first_change() -> tuple[asyncio.Future[RecordChanged], Stops]:
@@ -1280,7 +1303,13 @@ def _written(value: int | str | SetupDefaults | None) -> JsonValue:
     agents: list[JsonValue] | None = None
     if value.agents is not None:
         agents = [agent.model_dump(mode='json', exclude_defaults=True) for agent in value.agents]
-    written: dict[str, JsonValue] = {'agents': agents, 'auto_mode': value.auto_mode, 'minutes': value.minutes}
+    written: dict[str, JsonValue] = {
+        'agents': agents,
+        'auto_mode': value.auto_mode,
+        'minutes': value.minutes,
+        'budget_tokens': value.budget_tokens,
+        'budget_dollars': value.budget_dollars,
+    }
     return written
 
 

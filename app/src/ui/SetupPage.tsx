@@ -21,6 +21,7 @@ import {
 } from '../model/setup.ts';
 import type { Seat } from '../model/setup.ts';
 import { messageOf } from '../api/client.ts';
+import { BudgetFields, budgetOf, budgetText } from './Limits.tsx';
 import { SeatFields } from './SeatForm.tsx';
 
 interface TimeChoice {
@@ -53,6 +54,10 @@ export function SetupPage(props: {
   const [picks, setPicks] = useState(() => firstSeats(props.setup.harnesses, defaults));
   const [autoMode, setAutoMode] = useState(defaults.auto_mode);
   const [minutes, setMinutes] = useState<number | null>(defaults.minutes);
+  const [budget, setBudget] = useState(() =>
+    budgetText({ tokens: defaults.budget_tokens, dollars: defaults.budget_dollars }),
+  );
+  const chosenBudget = budgetOf(budget);
   const [starting, setStarting] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -75,7 +80,7 @@ export function SetupPage(props: {
   const save = (level: SettingsLevel): void => {
     setSaved(null);
     setError(null);
-    const value = setupChoices(picks, autoMode, minutes);
+    const value = setupChoices(picks, autoMode, minutes, chosenBudget ?? undefined);
     props.api
       .settings()
       .then((view) =>
@@ -104,7 +109,9 @@ export function SetupPage(props: {
     setStarting(true);
     setError(null);
     props.api
-      .start(startRequest(question, picks, autoMode, minutes, deliverables))
+      .start(
+        startRequest(question, picks, autoMode, minutes, deliverables, chosenBudget ?? undefined),
+      )
       .then(props.onStarted, (failure: unknown) => {
         setError(messageOf(failure));
         setStarting(false);
@@ -207,11 +214,26 @@ export function SetupPage(props: {
         </div>
       </section>
 
+      <section className="section">
+        <h3>How much may the agents spend?</h3>
+        <p className="sub">
+          Optional. At a budget the agents stop, as at the time limit, until you raise it. You can
+          change it while the lab runs.
+        </p>
+        <BudgetFields value={budget} onChange={setBudget} />
+      </section>
+
       <div className="startbar">
         <button
           className="btn primary"
           type="button"
-          disabled={starting || total === 0 || !question.trim() || picks.some(needsModel)}
+          disabled={
+            starting ||
+            total === 0 ||
+            !question.trim() ||
+            picks.some(needsModel) ||
+            chosenBudget === null
+          }
           onClick={start}
         >
           {starting ? 'Starting' : `Start lab with ${total} ${total === 1 ? 'agent' : 'agents'}`}

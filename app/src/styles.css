@@ -2604,6 +2604,23 @@ a.file:hover {
 .seats input {
   width: 110px;
 }
+.budget {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.budget input {
+  width: 130px;
+  min-height: 32px;
+  padding: 0 8px;
+}
+.limits {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
 .settings .seats {
   display: flex;
   flex-wrap: wrap;

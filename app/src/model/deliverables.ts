@@ -106,10 +106,11 @@ export function authorLeft(offer: DeliverableOffer, agents: readonly AgentView[]
  * What a form needs from the lab to say what its change does: whether an agent says that the lab is done or the
  * agents closed it, whether it is out of time, and the last post about a change.
  */
-export type LabNow = Pick<LabView, 'state' | 'out_of_time' | 'deliverables_told_at'> & {
-  /** The reruns that are wanted in the lab. An offer has files, so an agent can rerun it as any result. */
-  readonly reruns_wanted?: readonly RerunLine[];
-};
+export type LabNow = Pick<LabView, 'state' | 'out_of_time' | 'deliverables_told_at'> &
+  Partial<Pick<LabView, 'limit'>> & {
+    /** The reruns that are wanted in the lab. An offer has files, so an agent can rerun it as any result. */
+    readonly reruns_wanted?: readonly RerunLine[];
+  };
 
 /** How long after a post about a new sentence or a removal the next such change sends no post, as `TOLD_WINDOW` in the server. */
 const TOLD_WINDOW_MS = 60_000;
@@ -117,18 +118,26 @@ const TOLD_WINDOW_MS = 60_000;
 /** What a hint adds for a post in a lab that is out of time: no turn starts until the lab has time. */
 const LATER = ' The lab is out of time: the agents get the post when the lab has time again.';
 
+/** What a hint adds for a post in a lab at its budget or disk limit: no turn starts until the person raises it. */
+const AT_LIMIT = ' The lab reached a limit: the agents get the post when you raise it.';
+
+function later(lab: LabNow): string {
+  if (lab.out_of_time) return LATER;
+  return lab.limit ? AT_LIMIT : '';
+}
+
 /**
  * Return what a new deliverable does to the lab. It is new work, so it ends a close that one agent posted, and it
  * opens a lab that the agents closed.
  */
 export function addHint(lab: LabNow): string {
-  const later = lab.out_of_time ? LATER : '';
+  const after = later(lab);
   if (lab.state === 'closing') {
-    return `An agent says that the lab is done. Adding this ends that close, and the lab goes on.${later}`;
+    return `An agent says that the lab is done. Adding this ends that close, and the lab goes on.${after}`;
   }
   if (lab.state === 'closed')
-    return `The agents closed the lab. Adding this opens the lab again.${later}`;
-  return `The agents get a post about it.${later}`;
+    return `The agents closed the lab. Adding this opens the lab again.${after}`;
+  return `The agents get a post about it.${after}`;
 }
 
 /**
@@ -147,7 +156,7 @@ export function changeHint(lab: LabNow, now: Date): string {
   if (told !== null && now.getTime() - new Date(told).getTime() < TOLD_WINDOW_MS) {
     return `The agents were told of a change in the last minute, so this one sends no post. ${read}`;
   }
-  return `The agents get a post about the change. The record keeps the earlier sentence.${lab.out_of_time ? LATER : ''}`;
+  return `The agents get a post about the change. The record keeps the earlier sentence.${later(lab)}`;
 }
 
 /**
@@ -155,14 +164,14 @@ export function changeHint(lab: LabNow, now: Date): string {
  * agent posted, and it opens a lab that the agents closed.
  */
 export function askHint(lab: LabNow): string {
-  const later = lab.out_of_time ? LATER : '';
+  const after = later(lab);
   if (lab.state === 'closing') {
-    return `An agent says that the lab is done. Asking for changes ends that close, and the lab goes on.${later}`;
+    return `An agent says that the lab is done. Asking for changes ends that close, and the lab goes on.${after}`;
   }
   if (lab.state === 'closed') {
-    return `The agents closed the lab. Asking for changes opens the lab again.${later}`;
+    return `The agents closed the lab. Asking for changes opens the lab again.${after}`;
   }
-  return `The agent gets it as a reply to its offer.${later}`;
+  return `The agent gets it as a reply to its offer.${after}`;
 }
 
 /** Return the question that the page asks before it removes a deliverable. It names an acceptance that stands. */
