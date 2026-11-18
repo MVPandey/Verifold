@@ -10,6 +10,7 @@ from verifold.society.attention import news, wakes
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import fold
 from verifold.society.identity import post_line
+from verifold.society.overview import overview
 from verifold.society.views import brief, latest_reading, standing_reading
 
 TEXT = 'An answer is a sort that is 12x faster on random input. A verdict that none is fails the question.'
@@ -58,7 +59,7 @@ def test_without_a_coordinator_any_agent_that_works_posts_the_reading_and_neithe
 def test_a_reading_stands_in_a_thread_for_the_whole_lab() -> None:
     where = (
         'A reading is for the whole lab, so it is in a thread for the whole lab: not a side thread, the '
-        'conversation, or a thread of offers.'
+        'conversation, the desk chat, or a thread of offers.'
     )
     side = lab().thread('t-2', 'ada', between=('ada', 'bo'))
     talk = lab().coordinator('ada').thread('t-2', 'person', conversation=True)
@@ -144,3 +145,23 @@ def test_a_reading_builds_nothing_on_the_results_that_it_names() -> None:
 
     assert [entry.id for entry in view.not_built_on] == ['p-1']
     assert all(summary.crossed == 0 for summary in view.threads)
+
+
+def test_the_desk_posts_no_reading_hears_none_and_reads_it_in_its_overview() -> None:
+    record = lab().desk('dee')
+
+    assert refusal(record.copy().post(reading('p-1', 'dee'))) == (
+        "The desk is no part of the lab's work, so the board takes no reading from it. Outside the desk chat, the "
+        'desk posts for the person a `message` or a `round`.'
+    )
+    assert refusal(record.copy().post(reading('p-1', 'ada', 't-9'))).startswith('A reading is for the whole lab')
+    board = record.post(reading('p-1', 'ada', body=DETAIL)).board()
+    posted = board.posts[-1]
+    seen = overview(board, 'dee', posted.at + timedelta(minutes=3))
+    empty = overview(lab().desk('dee').board(), 'dee', START)
+
+    # The desk is no part of the lab's work, so the reading is news for every other agent and not for the desk.
+    assert [agent for agent in ('ada', 'bo', 'cy', 'dee') if wakes(board, agent, posted)] == ['bo', 'cy']
+    assert seen.reading == post_line(board, posted, 'dee')
+    assert seen.reading_minutes_ago == 3
+    assert (empty.reading, empty.reading_minutes_ago) == (None, None)

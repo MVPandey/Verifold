@@ -209,11 +209,6 @@ class PostRequest(Record):
         )
 
 
-def _absent(value: object) -> bool:
-    # A field of a brief that holds nothing leaves its JSON, so that it costs the brief no characters.
-    return value is None
-
-
 class Sparse(Record):
     """
     A record that leaves out each field that holds its default: an empty text, an empty list, `false`, zero, or nothing.
@@ -1352,14 +1347,14 @@ class Brief(Record):
     """The newest report of any agent, in whatever thread it is. The app shows it to the person. `None` when the lab has none."""
     report_minutes_ago: int | None = None
     """How many whole minutes ago that report was posted. `None` when the lab has no report."""
-    reading: PostLine | None = Field(default=None, exclude_if=_absent)
+    reading: PostLine | None = Field(default=None, exclude_if=unset)
     """
     The lab's reading of the question: the newest `reading`, in whatever thread it is. Its line has the headline and
     no body, and `thread` shows the whole post. The app shows it to the person. Left out while the lab has none.
     """
-    reading_minutes_ago: int | None = Field(default=None, exclude_if=_absent)
+    reading_minutes_ago: int | None = Field(default=None, exclude_if=unset)
     """How many whole minutes ago that reading was posted. Left out while the lab has no reading."""
-    no_reading: str | None = Field(default=None, exclude_if=_absent)
+    no_reading: str | None = Field(default=None, exclude_if=unset)
     """
     For a lab without a reading: one line that says so, with the minutes since the lab opened. Left out while the
     lab has a reading. A brief is one tool result, so each of the three fields of the reading leaves the JSON
@@ -1529,6 +1524,10 @@ class Overview(Record):
     report: PostLine | None = None
     """The newest report of any agent."""
     report_minutes_ago: int | None = None
+    reading: PostLine | None = None
+    """The lab's reading of the question: the newest `reading`, which the app pins at the top of the lab's page."""
+    reading_minutes_ago: int | None = None
+    """How many whole minutes ago that reading was posted. `None` while the lab has no reading."""
     candidates: tuple[CandidateLine, ...] = ()
     """The candidate answers that stand, newest last."""
     more_candidates: int = 0

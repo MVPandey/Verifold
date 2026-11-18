@@ -155,7 +155,18 @@ async function readLab(api: Api): Promise<Omit<LabData, 'version'>> {
     api.conversation(),
     api.desk(),
   ]);
-  return { setup, lab, threads, needs, report, reading, candidates, conversation, desk, error: null };
+  return {
+    setup,
+    lab,
+    threads,
+    needs,
+    report,
+    reading,
+    candidates,
+    conversation,
+    desk,
+    error: null,
+  };
 }
 
 /**

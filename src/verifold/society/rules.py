@@ -514,10 +514,11 @@ def _check_for_lab(board: Board, post: Post) -> None:
 def _check_reading(board: Board, reading: Reading) -> None:
     # The lab's reading of the question is for every agent, so it stands in a thread for the whole lab. The agent
     # that holds the coordinator seat posts it, and in a lab where nobody holds the seat, an agent that works does.
-    if board.is_side(reading.thread) or reading.thread == board.conversation or board.holds_offers(reading.thread):
+    talk = (board.conversation, board.desk_chat)
+    if board.is_side(reading.thread) or reading.thread in talk or board.holds_offers(reading.thread):
         raise RejectedEvent(
             'A reading is for the whole lab, so it is in a thread for the whole lab: not a side thread, the '
-            'conversation, or a thread of offers.'
+            'conversation, the desk chat, or a thread of offers.'
         )
     if reading.author == PERSON:
         raise RejectedEvent(

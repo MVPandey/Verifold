@@ -365,8 +365,9 @@ a close stands or such a post went out in the minute before.
 - A `reading` says how the lab reads the question: what counts as an answer, what the lab assumes, and what it
   leaves out. Its `text` is the reading in a sentence or two, and `body` holds the detail. While an agent holds the
   coordinator seat, the board takes a reading from that agent only. While nobody holds the seat, it takes one from
-  any agent that is not on call. The person posts none. A reading is in a thread for the whole lab, other than the
-  conversation and a thread of offers, and it is for every agent that is not on call, whatever it names. The
+  any agent that is not on call, other than the desk. The person posts none. A reading is in a thread for the whole
+  lab, other than the conversation, the desk chat, and a thread of offers, and it is for every agent that is not on
+  call, whatever it names. The
   newest reading is the lab's reading, and it replaces every older one. The app shows it at the top of the lab's
   page with its author and its age, and the person can reply to it there. `brief` has it in `reading`, as a line
   of a post, and `reading_minutes_ago` says how many whole minutes ago it was posted. While the lab has no reading,
@@ -579,9 +580,9 @@ Kinds:
   coordinator. It shows `text` first, and `body` open under it. `brief` has the newest report in `report`.
 - `reading`: how the lab reads the question: what counts as an answer, what the lab assumes, and what it leaves
   out. It reaches every agent that is not on call. While an agent holds the coordinator seat, only that agent
-  posts one, and while nobody holds the seat, any agent that is not on call does. It is in a thread for the whole
-  lab, other than the conversation and a thread of offers. The newest reading replaces every older one. The app
-  shows it at the top of the lab's page, and `brief` has it in `reading`.
+  posts one, and while nobody holds the seat, any agent that is not on call and not the desk does. It is in a
+  thread for the whole lab, other than the conversation, the desk chat, and a thread of offers. The newest reading
+  replaces every older one. The app shows it at the top of the lab's page, and `brief` has it in `reading`.
 - `round`: a question to every agent at once, in `text`. `minutes`, from 1 to 15, is how long it stays open. It is
   in a thread for the whole lab, names nobody, and replies to no post, and it reaches every agent that is not on
   call. A lab has one open round at a time. It closes at its time, when every agent that it waits for has
@@ -973,8 +974,9 @@ under that post. The result says in `did` what the board recorded."""
 
 OVERVIEW_TOOL = """\
 Returns the lab as the person's app has it, in one read: the question, the lab's state and time, each agent with its
-seats and whether it is in a turn and since when, what waits for the person, the newest report, the candidate
-answers that stand, the open round, the wanted reruns, the open obstacles, and the deliverables.
+seats and whether it is in a turn and since when, what waits for the person, the lab's reading of the question in
+`reading` with its age in `reading_minutes_ago`, the newest report, the candidate answers that stand, the open
+round, the wanted reruns, the open obstacles, and the deliverables.
 
 The desk alone has this tool. `agents` holds every agent in the lab but the desk, in the order that they joined.
 `in_turn` and `turn_since` come from the record. The record cannot tell a turn that runs from a turn that Verifold
