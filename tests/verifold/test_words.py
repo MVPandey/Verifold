@@ -18,7 +18,7 @@ from mcp import Client
 
 from verifold.app import NORMS_CHANGED, NORMS_TEMPLATE
 from verifold.protocol.events import AlarmSet
-from verifold.protocol.posts import Answer, Close, FileEvidence, Result
+from verifold.protocol.posts import Answer, Close, FileEvidence, Message, Result
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.runner.messages import (
@@ -42,6 +42,8 @@ from verifold.runner.messages import (
 from verifold.server.join import INSTRUCTIONS, join_server
 from verifold.server.lab import ACCEPTED, CHANGED, REMOVED, STATED, TAKEN_BACK, Lab
 from verifold.server.member import Member
+from verifold.society.board import Board
+from verifold.society.coordinator import no_reply_line
 from verifold.society.deliverables import OFFERS_TITLE
 from verifold.society.lifecycle import no_alarm_line
 from verifold.store.errors import RecordChanged
@@ -172,6 +174,7 @@ def messages() -> dict[str, str]:
         **{f'more time {jobs}': more_time_message(START, jobs) for jobs in AtTimeLimit},
         **{f'norms changed {name}': text.format(path=NORMS) for name, text in NORMS_CHANGED.items()},
         'no alarm': no_alarm_line(board, 'ada', START),
+        **{f'no reply {posts}': no_reply_line(_waiting(posts), 'ada') for posts in (1, 2, 3)},
         'no alarm, a close stands': no_alarm_line(closing.board(), 'bo'),
         'no alarm, a closed lab': no_alarm_line(
             closing.post(
@@ -183,6 +186,14 @@ def messages() -> dict[str, str]:
             closing.time_set(closing.at(len(closing.events) + 1)).ran_out().board(), 'bo'
         ),
     }
+
+
+def _waiting(posts: int) -> Board:
+    # A lab whose coordinator has not replied to the person's last `posts` messages in the conversation.
+    record = RecordBuilder().join('ada').coordinator('ada').thread('t-1', opened_by='person', conversation=True)
+    for number in range(posts):
+        record.post(Message(id=f'p-{number + 1}', thread='t-1', author='person', text='Status update?'))
+    return record.board()
 
 
 def _descriptions(schema: object) -> list[str]:

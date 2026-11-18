@@ -48,6 +48,7 @@ const NO_VIEW: ConversationView = {
   coordinator: null,
   thread: null,
   waits: [],
+  no_reply: [],
   asks: [],
   powers: [],
   deeds: [],
@@ -196,8 +197,8 @@ const COVERS = '(max-width: 1000px)';
 
 /**
  * The conversation: a line that names the newest report, one row for each post, and the box where the person
- * writes to the coordinator. Under the person's newest message, a line says where that message is until an agent
- * replies.
+ * writes to the coordinator. Under the person's newest message, a line says where that message is until the
+ * coordinator replies.
  */
 function Talk(
   props: Shared & {

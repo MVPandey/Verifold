@@ -576,3 +576,24 @@ async def test_a_rerun_of_an_offer_is_asked_for_taken_and_checked_as_for_any_pos
     assert ada.brief('').reruns_wanted == ()
     assert [(item.post, item.standing, item.state) for item in line.offers] == [(offer, 'checked', 'waiting')]
     assert line.state == 'offered'
+
+
+async def test_the_persons_post_that_waits_for_a_reply_ends_one_wait_of_the_coordinator_and_no_later_one(
+    lab: Lab,
+) -> None:
+    await lab.set_coordinator('ada', PERSON)
+    ada = Member(lab, 'ada')
+    said = await lab.post(to_coordinator('Status update?'), PERSON)
+
+    first = await ada.wait(timeout=5)
+    waiting = asyncio.create_task(ada.wait(timeout=5))
+    # The line is no post: it ends no wait.
+    await asyncio.sleep(0.05)
+    assert not waiting.done()
+    await lab.post(PostRequest(kind='message', text='Over to you.', thread='t-1', mentions=('ada',)), 'bo')
+    later = await waiting
+
+    assert [item.post.id for item in first.posts] == [said.post.id]
+    assert [item.post.text for item in later.posts] == ['Over to you.']
+    line = f"The person's post {said.post.id} in the conversation has waited less than a minute for your reply."
+    assert (first.no_reply, later.no_reply, ada.news().no_reply) == (line, line, line)

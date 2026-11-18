@@ -67,8 +67,12 @@ export interface HeardLine {
 
 /**
  * Return the line under the person's newest message in the conversation: whether a turn of the coordinator runs,
- * and whether the coordinator has read the message. It is `null` once an agent posted in the conversation after
- * the message, and while nobody holds the seat.
+ * whether the coordinator has read the message, and, once it has, that no reply came yet. It is `null` once the
+ * message has its reply, and while nobody holds the seat.
+ *
+ * The server says which messages wait for a reply: a message waits until an agent posts in the conversation after
+ * it while that agent holds the coordinator seat. So a reply of the holder before a change of the seat answers the
+ * message too, and a post of another agent does not. The coordinator's board shows it the same messages.
  *
  * "Read" means that a result of the coordinator's board tools carried the whole message to it. When the results
  * carried only a line with a cut body, the line says that the coordinator saw the start of the message. The line
@@ -76,18 +80,17 @@ export interface HeardLine {
  */
 export function heardLine(view: ConversationView, lab: LabView, now: Date): HeardLine | null {
   const holder = coordinatorOf(lab.agents);
-  const posts = view.thread?.posts ?? [];
-  const said = posts.filter((item) => item.post.author === PERSON).at(-1);
-  if (!holder || !said) return null;
-  // A reply of the holder before a change of the seat answers the message too.
-  const replied = posts.some((item) => item.seq > said.seq && item.post.author !== PERSON);
-  return replied ? null : { post: said.post.id, text: heardWords(holder, lab, said, now) };
+  const said = (view.thread?.posts ?? []).filter((item) => item.post.author === PERSON).at(-1);
+  if (!holder || !said || !view.no_reply.includes(said.post.id)) return null;
+  return { post: said.post.id, text: heardWords(holder, lab, said, now) };
 }
 
 function heardWords(holder: AgentView, lab: LabView, said: PostView, now: Date): string {
   const { heard, activity } = holder;
   const name = holder.agent.name;
-  const when = heard !== null && heard.seq >= said.seq ? readWords(heard, said, now) : null;
+  // The line shows only while the message waits for its reply, so a read says that no reply came yet.
+  const when =
+    heard !== null && heard.seq >= said.seq ? `${readWords(heard, said, now)}, no reply yet` : null;
   const fact = (who: string): string => `${who} ${when ?? 'has not read this'}.`;
   if (holder.agent.harness === GUEST) {
     if (activity.state === 'void') {

@@ -20,6 +20,8 @@ from verifold.protocol.join import (
     ThreadSummary,
 )
 from verifold.protocol.posts import (
+    MAX_BODY,
+    MAX_HEADLINE,
     MAX_ROUND_MINUTES,
     Answer,
     Ask,
@@ -746,6 +748,26 @@ def test_the_largest_brief_without_votes_is_one_tool_result() -> None:
     assert all(agent.plan is not None and agent.plan.by is None for agent in view.agents)
     # A line has its place in the record and no time.
     assert 'at' not in PostLine.model_fields
+
+
+def test_the_largest_brief_of_a_coordinator_with_the_persons_longest_posts_that_wait_is_one_tool_result() -> None:
+    plain = _largest().board()
+    record = _largest().coordinator('a0').thread('t-99', opened_by='person', conversation=True)
+    for number in range(3):
+        long = Message(id=f'p-90{number}', thread='t-99', author='person', text='h' * MAX_HEADLINE, body='b' * MAX_BODY)
+        record.post(long)
+    board = record.board()
+
+    view = brief(board, 'a0', news(board, 'a0', 0))
+    waits = view.person_waits
+
+    assert waits is not None
+    assert (waits.line.id, waits.line.body, waits.more) == ('p-900', '', 2)
+    assert len(waits.line.text) < MAX_LINE + 100
+    # The entry adds one line of a post, cut as the brief's other lines are, and no body.
+    assert len(view.model_dump_json()) - len(brief(plain, 'a0', news(plain, 'a0', 0)).model_dump_json()) < 1_000
+    assert len(view.model_dump_json()) < ONE_TOOL_RESULT
+    assert 'b' * 100 not in view.model_dump_json()
 
 
 def test_the_largest_brief_with_every_field_of_a_line_full_and_votes_on_every_post_is_one_tool_result() -> None:

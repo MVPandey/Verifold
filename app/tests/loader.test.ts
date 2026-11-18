@@ -48,6 +48,7 @@ function slowServer(): {
         coordinator: null,
         thread: null,
         waits: [],
+        no_reply: [],
         asks: [],
         powers: [],
         deeds: [],

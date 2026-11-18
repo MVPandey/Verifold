@@ -105,10 +105,15 @@ function view(
   changes: Partial<ConversationView> = {},
 ): ConversationView {
   const thread: ThreadView = { thread: TALK, watching: false, members: [], posts };
+  // As the server says: the person's posts after the last post of the agent that holds the seat wait for a reply.
+  const replied = posts.map((item) => item.post.author).lastIndexOf('agent-1');
   return {
     coordinator: 'agent-1',
     thread,
     waits: posts.filter((item) => item.waits).map((item) => item.post.id),
+    no_reply: posts
+      .filter((item, at) => item.post.author === 'person' && at > replied)
+      .map((item) => item.post.id),
     asks: [COMMAND],
     powers: POWERS,
     deeds: [],
@@ -712,7 +717,10 @@ describe('where the person’s message to the coordinator is', () => {
   it('says whether a turn of the coordinator runs and whether its board tools carried the message', () => {
     const turn = { in_turn: true, activity: working };
     assert.equal(line(turn), 'Keel is in a turn and has not read this yet.');
-    assert.equal(line({ ...turn, heard: read }), 'Keel is in a turn and read this 1 min ago.');
+    assert.equal(
+      line({ ...turn, heard: read }),
+      'Keel is in a turn and read this 1 min ago, no reply yet.',
+    );
     // An earlier post of the person reached the coordinator, and this one did not.
     assert.equal(
       line({ ...turn, heard: { ...read, seq: 12 } }),
@@ -725,7 +733,10 @@ describe('where the person’s message to the coordinator is', () => {
       'Keel is in a turn and has not read this yet.',
     );
     assert.equal(line(), 'Keel is not in a turn. This message wakes it.');
-    assert.equal(line({ heard: read }), 'Keel is not in a turn. It read this 1 min ago.');
+    assert.equal(
+      line({ heard: read }),
+      'Keel is not in a turn. It read this 1 min ago, no reply yet.',
+    );
     // The message's post is the line's place, and a seat's label stands where an agent chose no name.
     const plain = heardLine(talk, LAB, NOW);
     assert.deepEqual(plain, {
@@ -737,9 +748,18 @@ describe('where the person’s message to the coordinator is', () => {
   it('gives the time of the read in plain words, and none when it is not this message’s own', () => {
     const turn = { in_turn: true, activity: working };
     const at = (time: string): string | null => line({ ...turn, heard: { ...read, at: time } });
-    assert.equal(at('2026-11-06T14:29:30Z'), 'Keel is in a turn and read this just now.');
-    assert.equal(at('2026-11-06T14:04:00Z'), 'Keel is in a turn and read this 26 min ago.');
-    assert.equal(at('2026-11-06T13:25:00Z'), 'Keel is in a turn and read this 1 h 5 min ago.');
+    assert.equal(
+      at('2026-11-06T14:29:30Z'),
+      'Keel is in a turn and read this just now, no reply yet.',
+    );
+    assert.equal(
+      at('2026-11-06T14:04:00Z'),
+      'Keel is in a turn and read this 26 min ago, no reply yet.',
+    );
+    assert.equal(
+      at('2026-11-06T13:25:00Z'),
+      'Keel is in a turn and read this 1 h 5 min ago, no reply yet.',
+    );
     assert.deepEqual(
       ['2026-11-06T14:29:30Z', '2026-11-06T14:04:00Z', '2026-11-06T12:30:00Z'].map((time) =>
         ago(time, NOW),
@@ -750,15 +770,15 @@ describe('where the person’s message to the coordinator is', () => {
     // the line knows neither the time nor whether a result held this message whole. A restart keeps no time.
     assert.equal(
       line({ ...turn, heard: { ...read, seq: 31 } }),
-      'Keel is in a turn and has seen this.',
+      'Keel is in a turn and has seen this, no reply yet.',
     );
     assert.equal(
       line({ ...turn, heard: { ...read, at: null } }),
-      'Keel is in a turn and has read this.',
+      'Keel is in a turn and has read this, no reply yet.',
     );
     assert.equal(
       line({ heard: { ...read, at: null } }),
-      'Keel is not in a turn. It has read this.',
+      'Keel is not in a turn. It has read this, no reply yet.',
     );
   });
 
@@ -766,19 +786,19 @@ describe('where the person’s message to the coordinator is', () => {
     const cut = { ...read, whole: false };
     assert.equal(
       line({ in_turn: true, activity: working, heard: cut }),
-      'Keel is in a turn and saw the start of this 1 min ago.',
+      'Keel is in a turn and saw the start of this 1 min ago, no reply yet.',
     );
     assert.equal(
       line({ heard: cut }),
-      'Keel is not in a turn. It saw the start of this 1 min ago.',
+      'Keel is not in a turn. It saw the start of this 1 min ago, no reply yet.',
     );
     assert.equal(
       line({ heard: { ...cut, at: null } }),
-      'Keel is not in a turn. It has seen the start of this.',
+      'Keel is not in a turn. It has seen the start of this, no reply yet.',
     );
     assert.equal(
       line({ ...guest, activity: { state: 'here', detail: '', at: null }, heard: cut }),
-      'Keel runs by itself and saw the start of this 1 min ago.',
+      'Keel runs by itself and saw the start of this 1 min ago, no reply yet.',
     );
   });
 
@@ -805,7 +825,7 @@ describe('where the person’s message to the coordinator is', () => {
     );
     assert.equal(
       line({ heard: read, in_turn: true, activity: working }, { out_of_time: true }),
-      'The lab is out of time, so no turn of Keel starts. Keel read this 1 min ago.',
+      'The lab is out of time, so no turn of Keel starts. Keel read this 1 min ago, no reply yet.',
     );
     assert.equal(
       line({ stopped: true, activity: { state: 'stopped', detail: '', at: null } }),
@@ -846,7 +866,7 @@ describe('where the person’s message to the coordinator is', () => {
     );
     assert.equal(
       line({ ...guest, activity: { state: 'listening', detail: '', at: null }, heard: read }),
-      'Keel runs by itself and read this 1 min ago.',
+      'Keel runs by itself and read this 1 min ago, no reply yet.',
     );
     assert.equal(
       line({ ...guest, activity: { state: 'invited', detail: '', at: null } }),
@@ -862,11 +882,17 @@ describe('where the person’s message to the coordinator is', () => {
     );
   });
 
-  it('has no line once an agent posted after the message, and none without a message or a holder', () => {
+  it('has no line once the message has its reply, and none without a message or a holder', () => {
     const later = (author: string): PostView => ({ ...said('p-3', author, 'Two lines.'), seq: 24 });
     assert.equal(line({}, {}, view([asked, later('agent-1')])), null);
-    // The agent that held the seat before answered the message, so the message needs no line.
-    assert.equal(line({}, {}, view([asked, later('agent-2')])), null);
+    // The server says which messages wait. The agent that held the seat before answered the message, so the
+    // message needs no line.
+    assert.equal(line({}, {}, view([asked, later('agent-2')], { no_reply: [] })), null);
+    // A post of another agent is no reply, so the line stays and says that no reply came yet.
+    assert.equal(
+      line({ heard: read }, {}, view([asked, later('agent-2')])),
+      'Keel is not in a turn. It read this 1 min ago, no reply yet.',
+    );
     // The line stands under the person's newest message.
     const again = { ...said('p-4', 'person', 'Updates?'), seq: 30 };
     assert.equal(heardLine(view([asked, later('agent-1'), again]), LAB, NOW)?.post, 'p-4');

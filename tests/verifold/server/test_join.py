@@ -724,3 +724,44 @@ async def test_a_record_from_before_the_limit_of_200_loads_and_agents_read_its_l
     latest = Brief.model_validate(brief.structured_content).agents[0].latest
     assert latest is not None
     assert (latest.id, latest.text) == ('p-2', f'{long[:300]}… [cut: 899 characters, `thread` shows all of it]')
+
+
+async def test_each_result_of_the_coordinator_says_once_that_the_persons_post_waits_for_its_reply(lab: Lab) -> None:
+    await lab.set_coordinator('ada', PERSON)
+    said = await lab.post(PostRequest(kind='message', text='Status update?', conversation=True), PERSON)
+    line = f"The person's post {said.post.id} in the conversation has waited less than a minute for your reply."
+    ada, bo = Member(lab, 'ada'), Member(lab, 'bo')
+
+    async with Client(join_server(lambda _: ada)) as coordinator, Client(join_server(lambda _: bo)) as other:
+        briefed = await coordinator.call_tool('brief', {})
+        listed = await coordinator.call_tool('threads', {})
+        planned = await coordinator.call_tool('post', {'kind': 'plan', 'text': 'I read the run.', 'thread': 't-1'})
+        waited = await coordinator.call_tool('wait', {'timeout_seconds': 0})
+        theirs = (
+            await other.call_tool('brief', {}),
+            await other.call_tool('threads', {}),
+            await other.call_tool('wait', {'timeout_seconds': 0}),
+        )
+        replied = await coordinator.call_tool(
+            'post', {'kind': 'message', 'text': 'Two lines are alive.', 'conversation': True}
+        )
+        after = await coordinator.call_tool('brief', {})
+
+    results = (briefed, listed, planned, waited, *theirs, replied, after)
+    shown = [result.structured_content for result in results]
+    assert all(content is not None for content in shown)
+    brief_of, threads_of, plan_of, wait_of, *others, reply_of, after_of = [content or {} for content in shown]
+    assert brief_of['person_waits']['line'] == {
+        'id': said.post.id,
+        'thread': said.post.thread,
+        'author': PERSON,
+        'kind': 'message',
+        'text': 'Status update?',
+        'seq': said.seq,
+    }
+    assert brief_of['news']['no_reply'] == ''
+    assert (threads_of['news']['no_reply'], plan_of['news']['no_reply'], wait_of['no_reply']) == (line, line, line)
+    # No result holds the line twice, no other agent gets it, and the reply ends it.
+    assert [str(content).count('for your reply') for content in shown] == [0, 1, 1, 1, 0, 0, 0, 0, 0]
+    assert others[0]['person_waits'] is None
+    assert (reply_of['news']['no_reply'], after_of['person_waits']) == ('', None)

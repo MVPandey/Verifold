@@ -39,7 +39,9 @@ The conversation is the thread where the person and the lab's coordinator talk. 
 the agent that holds the coordinator seat. That agent watches the thread until it says otherwise, and no other agent
 does unless it said so with `watch`. So a post of the coordinator there is for no other agent, unless it names the
 agent, replies to it, or builds on its post. The coordinator can mark a post as one for the person. That mark says
-whose wish the post is and changes nothing about who hears it: the mark for the whole lab does that.
+whose wish the post is and changes nothing about who hears it: the mark for the whole lab does that. While a post of
+the person there waits for the coordinator's reply, as `society.coordinator` says, the news and the update of the
+agent that holds the seat say so in one line. The line wakes nobody.
 
 An agent that left the lab is news for the agents that wrote to it: the ones whose posts name it or reply to it.
 
@@ -67,6 +69,7 @@ from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.join import MAX_ENTRIES, MAX_NEWS, LeftLine, News, ProfileNote, RenameLine, RoundNote, Update
 from verifold.protocol.posts import Ask, Call, Check, Close, Entry, Post, Round
 from verifold.society.board import Board
+from verifold.society.coordinator import no_reply_line
 from verifold.society.identity import post_line, post_view
 from verifold.society.lifecycle import alarm_line, no_alarm_line
 from verifold.society.lines import lines_of
@@ -191,6 +194,7 @@ def update(
         badges_left_out=more_badges,
         alarm=alarm_line(board, agent_id),
         no_alarm=no_alarm_line(board, agent_id, now),
+        no_reply=no_reply_line(board, agent_id, now),
         ends_at=board.ends_at,
     )
 
@@ -232,6 +236,7 @@ def news(
         badges=badges,
         badges_left_out=more_badges,
         alarm=alarm_line(board, agent_id),
+        no_reply=no_reply_line(board, agent_id, now),
     )
 
 
