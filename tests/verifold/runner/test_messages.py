@@ -112,7 +112,7 @@ def test_the_lab_norms_are_plain_text_for_one_read_and_the_doorbell_is_one_line(
     assert '`' not in NORMS_TEMPLATE
     # Each norm has its reason and what it looks like in practice, so the file is longer than a list of rules.
     # An agent still reads it whole at the start of its work.
-    assert len(NORMS_TEMPLATE) < 24_100
+    assert len(NORMS_TEMPLATE) < 25_200
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -414,6 +414,35 @@ def test_the_lab_norms_say_when_the_coordinator_posts_the_reading_reviews_it_and
         'When it sees a line that nobody runs, it posts a call for it.',
     ):
         assert norm in NORMS_TEMPLATE
+
+
+def test_the_lab_norms_say_when_a_thread_gets_a_summary_and_why_the_record_of_findings_stays_current() -> None:
+    chains = NORMS_TEMPLATE.split('## Chain ideas')[1].split('\n## ')[0]
+    answer = NORMS_TEMPLATE.split('## The answer and the person')[1].split('\n## ')[0]
+    # A lab that runs for days has thousands of posts, and a thread of 60 posts costs each reader all of them.
+    for norm in (
+        'A long thread costs every reader all of its posts',
+        'The person wants each thread to say what it has established',
+        (
+            'When a thread grows long, or its line reaches a result or is dropped, a member writes its summary: what '
+            'was tried, what holds, what failed and why, and what is open.'
+        ),
+        'A summary can be wrong, so read it as a claim.',
+        'When it misstates the thread, object to it, and readers get the whole thread again until a new summary stands.',
+    ):
+        assert norm in chains
+    # Twelve agents wrote the record of findings in the last 45 minutes of a lab, when the person asked for it.
+    for norm in (
+        (
+            'When the deliverables hold a record of the findings, the person wants a record that stands without the '
+            "lab's data, kept current for each line of work as the lab goes."
+        ),
+        'A record written in the last minutes loses what only the author of a line still knew',
+        'a later lab starts from what the record holds',
+        "its author updates that line's part of the record and offers it",
+        "The thread's summary is the natural source for that part.",
+    ):
+        assert norm in answer
 
 
 def test_the_message_after_more_time_says_what_happened_to_the_agents_processes() -> None:

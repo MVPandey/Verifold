@@ -13,6 +13,8 @@ import { MAX_RERUNS, wantedLine } from '../model/status.ts';
 import { holdsNew, markUnfolded, readUnfolded } from '../model/seen.ts';
 import {
   act,
+  beforeSummary,
+  earlierLabel,
   foldLabel,
   foldedCount,
   isClaim,
@@ -63,7 +65,8 @@ interface Around {
  * under a top-level post fold behind one row, which opens them in place, and the replies that `rows` keeps in
  * sight stay outside it. A run of two or more agents' plain messages that nobody replied to is one row too, which
  * opens in place. One control above the posts shows every such message and every reply, and folds them again. A
- * side thread and the conversation with the coordinator fold nothing.
+ * side thread and the conversation with the coordinator fold no message and no reply. A thread with a summary
+ * that stands shows the summary first, with its detail open, and the posts before it fold behind one row under it.
  */
 export function Turns(
   props: Around & {
@@ -92,18 +95,51 @@ export function Turns(
   // The person's choice for the replies of each top-level post, by its ID, so it holds when replies come in.
   // Without a choice, only the replies around the post that the page opened on show.
   const [chosen, setChosen] = useState<ReadonlyMap<string, boolean>>(() => new Map());
-  const home = replyRoot(props.view.posts, target ?? null);
+  const { posts, summary = null } = props.view;
+  // The post that the page opened on shows: the replies around it, and the posts before the summary that hold it.
+  const homes = new Set([
+    replyRoot(posts, target ?? null),
+    beforeSummary(posts, summary, target ?? null) ? summary : null,
+  ]);
   const folding = !thread.conversation && props.view.members.length === 0;
   const list = rows(
-    props.view.posts,
+    posts,
     target ?? null,
     folding,
-    (root) => shown || (chosen.get(root) ?? root === home),
+    (root) => shown || (chosen.get(root) ?? homes.has(root)),
+    summary,
   );
-  const every = rows(props.view.posts, target ?? null, folding, () => true);
+  const every = rows(posts, target ?? null, folding, () => true, summary);
   const [folded, trees] = [foldedCount(every), replyFolds(every)];
   const turn = (item: PostView, depth: Depth): ReactElement => (
-    <Turn key={item.post.id} item={item} depth={depth} {...around} />
+    <Turn
+      key={item.post.id}
+      item={item}
+      depth={depth}
+      open={item.post.id === summary}
+      {...around}
+    />
+  );
+  // The row with one button that shows or folds posts: the replies of the top-level post `root`, or the posts
+  // before the summary `root`. The person's choice holds under that ID.
+  const chooser = (
+    root: string,
+    label: string,
+    row: { readonly kind: string; readonly items: readonly PostView[]; readonly open: boolean },
+    className: string,
+  ): ReactElement => (
+    <li key={`${row.kind}-${root}`} className={className}>
+      <button
+        type="button"
+        aria-expanded={row.open}
+        onClick={() => {
+          setChosen((before) => new Map(before).set(root, !row.open));
+        }}
+      >
+        {label}
+      </button>
+      {!row.open && holdsNew(row.items, since) ? <New /> : null}
+    </li>
   );
   const toggle = (items: readonly PostView[], open: boolean): void => {
     setOpened((before) => {
@@ -143,22 +179,13 @@ export function Turns(
         {list.flatMap((row) =>
           row.kind === 'turn'
             ? [turn(row.item, row.depth)]
-            : row.kind === 'replies'
+            : row.kind !== 'fold'
               ? shown
                 ? []
                 : [
-                    <li key={`replies-${row.root}`} className="f-fold f-tree d1">
-                      <button
-                        type="button"
-                        aria-expanded={row.open}
-                        onClick={() => {
-                          setChosen((before) => new Map(before).set(row.root, !row.open));
-                        }}
-                      >
-                        {repliesLabel(row.items)}
-                      </button>
-                      {!row.open && holdsNew(row.items, since) ? <New /> : null}
-                    </li>,
+                    row.kind === 'earlier'
+                      ? chooser(row.summary, earlierLabel(row.items.length), row, 'f-fold f-tree')
+                      : chooser(row.root, repliesLabel(row.items), row, 'f-fold f-tree d1'),
                   ]
               : shown
                 ? row.items.map((item) => turn(item, row.depth))
@@ -201,7 +228,12 @@ export function Turns(
  * list and the profile.
  */
 export function Turn(
-  props: Around & { readonly item: PostView; readonly depth: Depth },
+  props: Around & {
+    readonly item: PostView;
+    readonly depth: Depth;
+    /** Whether the detail shows open, as the thread's summary's does. */
+    readonly open?: boolean;
+  },
 ): ReactElement {
   const { agents, view } = props;
   const { post, standing, at } = props.item;
@@ -316,7 +348,12 @@ export function Turn(
             </div>
           </details>
         ) : (
-          <Detail post={post.id} body={post.body} files={post.evidence} />
+          <Detail
+            post={post.id}
+            body={post.body}
+            files={post.evidence}
+            open={props.open ?? false}
+          />
         )}
         {waits ? <p className="note o-wanted">{waits}</p> : null}
         {canRerun ? <RerunButton postId={post.id} onRerun={props.onRerun} /> : null}

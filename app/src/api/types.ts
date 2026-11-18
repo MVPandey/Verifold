@@ -30,6 +30,7 @@ export type PostKind =
   | 'ruled_out'
   | 'report'
   | 'reading'
+  | 'summary'
   | 'call'
   | 'close'
   | 'request'
@@ -731,6 +732,11 @@ export interface SetupView {
   readonly defaults: SetupDefaults;
   /** The settings file that the saved choices come from, which can be the project's own, or `null`. */
   readonly defaults_from: string | null;
+  /**
+   * The sentence of the record of findings: the deliverable that a new lab starts with while
+   * `defaults.findings_record` holds.
+   */
+  readonly findings_deliverable: string;
 }
 
 /** An agent choice as the server sends it back, with `null` for what it leaves to the harness. */
@@ -759,6 +765,8 @@ export interface SetupDefaults {
   readonly budget_tokens: number | null;
   /** The budget in US dollars. `null` means none. */
   readonly budget_dollars: number | null;
+  /** Whether a new lab starts with the record of findings among its deliverables. */
+  readonly findings_record: boolean;
 }
 
 /** The choices for new labs, as the app saves them. */
@@ -768,6 +776,7 @@ export interface SetupChoices {
   readonly minutes: number | null;
   readonly budget_tokens: number | null;
   readonly budget_dollars: number | null;
+  readonly findings_record: boolean;
 }
 
 export interface AgentChoice {
@@ -932,6 +941,7 @@ export type Post =
         | 'ruled_out'
         | 'report'
         | 'reading'
+        | 'summary'
         | 'call'
         | 'close';
     })
@@ -1190,6 +1200,11 @@ export interface ThreadView {
    * nobody. When the list is empty, such a post is for every agent that is not on call. `null` for any other thread.
    */
   readonly person_reaches?: readonly string[] | null;
+  /**
+   * The thread's summary: its newest summary, while no failed check and no standing objection disputes it and its
+   * author conceded no objection to it. Absent while the thread has none.
+   */
+  readonly summary?: string | null;
   readonly posts: readonly PostView[];
 }
 
@@ -1228,6 +1243,8 @@ export interface ThreadSummary {
   readonly posts: number;
   readonly last_at: string;
   readonly latest: PostLine | null;
+  /** The thread's summary, while it has one that stands, as a line with its headline. Absent otherwise. */
+  readonly summary?: PostLine | null;
   readonly disputed: number;
   readonly checked: number;
   readonly not_checked: number;

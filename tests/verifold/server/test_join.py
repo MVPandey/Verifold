@@ -1,10 +1,11 @@
 import asyncio
+import json
 
 import pytest
 from conftest import agent
 from fakes import FakeCopies
 from mcp import Client
-from mcp.types import TextContent
+from mcp.types import CallToolResult, TextContent
 
 from verifold.protocol.agents import Agent, ModelSpec
 from verifold.protocol.events import MAX_SEAT_NOTES
@@ -23,7 +24,7 @@ from verifold.protocol.join import (
 from verifold.protocol.posts import FileEvidence
 from verifold.server.activity import Activity
 from verifold.server.errors import HasLeft, UnknownAgent
-from verifold.server.join import BRIEF_TOOL, INSTRUCTIONS, Members, join_server, token_digest
+from verifold.server.join import BRIEF_TOOL, INSTRUCTIONS, Members, _compact, join_server, token_digest
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.store.record_file import RecordFile
@@ -434,6 +435,62 @@ async def test_a_challenge_needs_a_body_and_marks_the_result_in_the_thread_and_t
     assert brief.structured_content is not None
     (summary,) = brief.structured_content['threads']
     assert (summary['disputed'], 'challenged' in summary, 'reproduced_only' in summary) == (1, False, False)
+
+
+async def test_a_read_of_a_thread_starts_at_its_summary_and_keeps_the_persons_post_until_the_agent_read_it(
+    lab: Lab,
+) -> None:
+    await lab.post(PostRequest(kind='message', text='Loader fixed.', thread='t-1'), 'bo')
+    await lab.post(PostRequest(kind='message', text='Keep the 2025 data out.', thread='t-1'), PERSON)
+    bo = Member(lab, 'bo')
+    summary = {'kind': 'summary', 'text': 'The filter beats random in 2024 only.', 'thread': 't-1'}
+    async with Client(join_server(lambda _: Member(lab, 'ada'))) as client:
+        posted = await client.call_tool('post', summary)
+    async with Client(join_server(lambda _: bo)) as client:
+        first = await client.call_tool('thread', {'thread': 't-1'})
+        second = await client.call_tool('thread', {'thread': 't-1'})
+        whole = await client.call_tool('thread', {'thread': 't-1', 'whole': True})
+        # A turn that fails loses the results that it got, so the person's post shows once more.
+        bo.rewind(lab.board.seq - 3)
+        again = await client.call_tool('thread', {'thread': 't-1'})
+
+    def ids(result: object) -> list[str]:
+        assert isinstance(result, CallToolResult)
+        assert result.structured_content is not None
+        return [item['post']['id'] for item in result.structured_content['posts']]
+
+    assert posted.structured_content is not None
+    assert posted.structured_content['post']['kind'] == 'summary'
+    assert ids(first) == ['p-3', 'p-4']
+    assert first.structured_content is not None
+    assert first.structured_content['summary'] == 'p-4'
+    assert first.structured_content['earlier'] == (
+        'This view starts at the summary p-4. It leaves out 2 of the 3 posts before it, and `thread` with '
+        '`whole: true` shows every post.'
+    )
+    assert ids(second) == ['p-4']
+    assert ids(whole) == ['p-1', 'p-2', 'p-3', 'p-4']
+    assert whole.structured_content is not None
+    assert 'earlier' not in whole.structured_content
+    assert ids(again) == ['p-3', 'p-4']
+
+
+async def test_a_tool_result_is_compact_json_and_an_error_keeps_its_words(lab: Lab) -> None:
+    async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
+        briefed = await client.call_tool('brief', {})
+        refused = await client.call_tool(
+            'post', {'kind': 'objection', 'text': 'Mine.', 'thread': 't-1', 'reply_to': 'p-9'}
+        )
+
+    (text,) = (part.text for part in briefed.content if isinstance(part, TextContent))
+    # The text holds the same JSON as the structured content, without the spaces of an indent.
+    assert json.loads(text) == briefed.structured_content
+    assert text == json.dumps(briefed.structured_content, ensure_ascii=False, separators=(',', ':'))
+    assert refused.is_error
+    assert 'Post p-9 does not exist.' in str(refused.content)
+    # A block that holds no JSON, and a block of another kind, stay as they are.
+    assert _compact({'type': 'text', 'text': 'Not JSON.'}) == {'type': 'text', 'text': 'Not JSON.'}
+    assert _compact({'type': 'image', 'data': ''}) == {'type': 'image', 'data': ''}
 
 
 async def test_an_agent_reads_that_another_program_changed_the_record_and_that_verifold_stops(

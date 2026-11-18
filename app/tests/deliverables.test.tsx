@@ -37,7 +37,7 @@ import { act, tone } from '../src/model/turns.ts';
 import { DeliverDoor, Deliverables } from '../src/ui/Deliverables.tsx';
 import { LabPage } from '../src/ui/LabPage.tsx';
 import { SetupPage } from '../src/ui/SetupPage.tsx';
-import { DEFAULTS, HARNESSES, agentView, labView, result, summary } from './fixtures.ts';
+import { DEFAULTS, HARNESSES, agentView, labView, result, summary, FINDINGS } from './fixtures.ts';
 
 const NOW = new Date('2026-11-06T14:30:00Z');
 const MAREN = agentView('agent-1', {
@@ -835,6 +835,7 @@ describe('the deliverables on the setup screen', () => {
       question: null,
       defaults: DEFAULTS,
       defaults_from: null,
+      findings_deliverable: FINDINGS,
     };
     const html = renderToStaticMarkup(
       <SetupPage
@@ -847,12 +848,32 @@ describe('the deliverables on the setup screen', () => {
     assert.ok(
       html.includes('<h2 id="setup-deliverables">What do you want to hold at the end?</h2>'),
     );
+    // A new lab starts with the record of findings on the list, as one line that the person can remove.
     assert.ok(
       html.includes(
-        '<textarea class="d-setup" aria-labelledby="setup-deliverables" rows="3"></textarea>',
+        `<textarea class="d-setup" aria-labelledby="setup-deliverables" rows="3">${FINDINGS}</textarea>`,
       ),
     );
     assert.ok(html.indexOf('setup-deliverables') < html.indexOf('<h2>Agents</h2>'));
+    const without = renderToStaticMarkup(
+      <SetupPage
+        api={{} as Api}
+        setup={{ ...setup, defaults: { ...DEFAULTS, findings_record: false } }}
+        onStarted={() => undefined}
+        onRefresh={() => undefined}
+      />,
+    );
+    assert.ok(
+      without.includes(
+        '<textarea class="d-setup" aria-labelledby="setup-deliverables" rows="3"></textarea>',
+      ),
+    );
+    // The lab starts with what the field holds: the record with the person's lines, or without it once removed.
+    const kept = startRequest('Q?', [], true, null, `${FINDINGS}\nA script.`);
+    const removed = startRequest('Q?', [], true, null, 'A script.');
+    assert.deepEqual(kept.deliverables, [FINDINGS, 'A script.']);
+    assert.deepEqual(removed.deliverables, ['A script.']);
+    assert.equal(sentences(`${FINDINGS}\nA script.`).includes(FINDINGS), true);
   });
 
   it('shows the line that opens the panel as one control', () => {

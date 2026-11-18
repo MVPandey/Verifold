@@ -31,7 +31,7 @@ from verifold.protocol.events import (
     WatchSet,
 )
 from verifold.protocol.ids import PERSON, AgentId
-from verifold.protocol.posts import Answer, Check, Close, Objection, Post, Proposal, Reading
+from verifold.protocol.posts import Answer, Check, Close, Objection, Post, Proposal, Reading, Summary
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
 from verifold.society.candidates import check_candidate
@@ -50,6 +50,7 @@ from verifold.society.reruns import (
 from verifold.society.reviewers import free_seats, seats, seats_line
 from verifold.society.rounds import check_unsealed
 from verifold.society.standing import closing
+from verifold.society.summaries import check_summary
 
 
 def check_agent(board: Board, agent: Agent) -> None:
@@ -517,6 +518,8 @@ def _check_for_lab(board: Board, post: Post) -> None:
         _check_close(board, post)
     if isinstance(post, Reading):
         _check_reading(board, post)
+    if isinstance(post, Summary):
+        check_summary(board, post)
     if not post.to_lab:
         return
     if post.author not in (PERSON, board.coordinator):

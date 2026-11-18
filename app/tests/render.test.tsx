@@ -58,6 +58,7 @@ import {
   postView,
   result,
   summary,
+  FINDINGS,
 } from './fixtures.ts';
 
 const HOSTILE =
@@ -188,6 +189,62 @@ describe('agent text', () => {
     assert.ok(html.includes('<p>Second paragraph</p>'));
     assert.ok(html.includes('Not checked'));
     assert.ok(html.includes('9a41d07'));
+  });
+
+  it('shows a thread’s summary first with its detail open, and folds the posts before it in one row', () => {
+    const posts = [
+      result('p-1'),
+      result('p-2', { kind: 'message', author: 'agent-2', text: 'Loader fixed.' }),
+      result('p-3', {
+        kind: 'summary',
+        text: 'Tail filters fail out of sample.',
+        body: 'Tried three.',
+      }),
+      result('p-4', { kind: 'plan', text: 'Test the volume rule.' }),
+    ];
+    const view = (summary: string | null, target: string | null = null): string =>
+      renderToStaticMarkup(
+        <Turns
+          view={{
+            thread: { id: 't-1', title: 'A', opened_by: 'agent-1' },
+            watching: false,
+            members: [],
+            summary,
+            posts: posts.map((post, index) => postView(post, index + 1)),
+          }}
+          agents={[agentView('agent-1'), agentView('agent-2')]}
+          needs={[]}
+          question={null}
+          reruns={[]}
+          seats={0}
+          now={new Date('2026-11-06T14:26:00Z')}
+          onRerun={() => Promise.resolve()}
+          onSend={() => Promise.resolve()}
+          target={target}
+        />,
+      );
+    const folded = view('p-3');
+    // The summary comes first, with its detail open, and the earlier posts are one row under it.
+    assert.ok(folded.indexOf('id="p-3"') < folded.indexOf('2 earlier posts'));
+    assert.ok(folded.includes('summed up the thread'));
+    assert.ok(folded.includes('<details class="f-detail" open="">'));
+    assert.ok(
+      folded.includes(
+        '<li class="f-fold f-tree"><button type="button" aria-expanded="false">2 earlier posts</button></li>',
+      ),
+    );
+    assert.equal(folded.includes('id="p-1"'), false);
+    assert.ok(folded.indexOf('2 earlier posts') < folded.indexOf('id="p-4"'));
+    // The post that the page opened on is never inside the fold.
+    const opened = view('p-3', 'p-1');
+    assert.ok(
+      opened.includes('<button type="button" aria-expanded="true">2 earlier posts</button>'),
+    );
+    assert.ok(opened.includes('id="p-1"'));
+    // A thread whose summary does not stand folds nothing before it.
+    const whole = view(null);
+    assert.ok(whole.includes('id="p-1"'));
+    assert.equal(whole.includes('earlier post'), false);
   });
 
   const words = (body: string, written = false): string =>
@@ -1215,6 +1272,7 @@ describe('a rerun that is wanted', () => {
         question: lab.question,
         defaults: DEFAULTS,
         defaults_from: null,
+        findings_deliverable: FINDINGS,
       },
       lab,
       threads: [
@@ -1281,6 +1339,7 @@ describe('the lab page', () => {
     question: lab.question,
     defaults: DEFAULTS,
     defaults_from: null,
+    findings_deliverable: FINDINGS,
   };
   const now = new Date('2026-11-06T14:26:00Z');
   const data = {
@@ -1832,6 +1891,26 @@ describe('the lab page', () => {
       />,
     );
   };
+
+  it('shows on a closed card the headline of the thread’s summary, and nothing without one', () => {
+    const line = {
+      id: 'p-8',
+      thread: 't-2',
+      author: 'agent-1',
+      kind: 'summary' as const,
+      text: 'Tail filters fail out of sample; the volume rule is open.',
+      reply_to: null,
+      seq: 8,
+      at: '2026-11-06T14:20:00Z',
+      by: null,
+    };
+    const html = mapped([
+      summary({ thread: { id: 't-2', title: 'Tails', opened_by: 'agent-1' }, summary: line }),
+      summary({ thread: { id: 't-3', title: 'Volume', opened_by: 'agent-2' } }),
+    ]);
+    assert.ok(html.includes(`<p class="f-head">${line.text}</p>`));
+    assert.equal(html.split('class="f-head"').length - 1, 1);
+  });
 
   it('says on each card how long ago its line’s newest result came and how many of its obstacles are open', () => {
     const html = mapped([
@@ -3532,6 +3611,7 @@ describe('the setup screen', () => {
           question: null,
           defaults: DEFAULTS,
           defaults_from: '~/code/sort-bench/.verifold/settings.json',
+          findings_deliverable: FINDINGS,
         }}
         onStarted={() => undefined}
         onRefresh={() => undefined}
@@ -3589,8 +3669,10 @@ describe('the setup screen', () => {
             minutes: null,
             budget_tokens: null,
             budget_dollars: null,
+            findings_record: true,
           },
           defaults_from: null,
+          findings_deliverable: FINDINGS,
         }}
         onStarted={() => undefined}
         onRefresh={() => undefined}
@@ -3619,6 +3701,7 @@ describe('the setup screen', () => {
           question: null,
           defaults: { ...DEFAULTS, agents: [{ ...seat, on_call: true }] },
           defaults_from: null,
+          findings_deliverable: FINDINGS,
         }}
         onStarted={() => undefined}
         onRefresh={() => undefined}
@@ -3640,6 +3723,7 @@ describe('the setup screen', () => {
             question: null,
             defaults: DEFAULTS,
             defaults_from: null,
+            findings_deliverable: FINDINGS,
           }}
           onStarted={() => undefined}
           onRefresh={() => undefined}
@@ -3699,6 +3783,7 @@ describe('the settings page', () => {
         minutes: 90,
         budget_tokens: null,
         budget_dollars: null,
+        findings_record: true,
       },
     },
     lab: pause,
@@ -4378,6 +4463,7 @@ describe('a round', () => {
         question: 'Q',
         defaults: DEFAULTS,
         defaults_from: null,
+        findings_deliverable: FINDINGS,
       },
       lab: labView({ agents, round: open }),
       threads: [summary({ thread: { id: 't-2', title: 'Cache', opened_by: 'agent-1' } })],

@@ -145,6 +145,11 @@ class Member:
         Each wanted rerun that a result of this seat told the agent of, with the event that the result reached. A
         seat starts with none, so after a restart an agent can be told of a rerun a second time, and never not.
         """
+        self._read: dict[ThreadId, int] = {}
+        """
+        For each thread that the agent read with `thread`, the board's last event at that read. A seat starts with
+        none, so after a restart every post of the person before a thread's summary stays in sight once more.
+        """
         before = self._heard_before()
         self._heard: tuple[Heard, ...] = (before,) if before else ()
         """Each fact of what the results carried, the newest last, so that a failed turn can go back to an earlier one."""
@@ -384,8 +389,10 @@ class Member:
         """
         self._seen = min(self._seen, seq)
         self._heard = tuple(heard for heard in self._heard if heard.seq <= self._seen)
-        # The reruns that the lost results told of are news again.
+        # The reruns that the lost results told of are news again, and so are the person's posts in a thread that
+        # a lost read showed.
         self._told = tuple((key, at) for key, at in self._told if at <= self._seen)
+        self._read = {thread: at for thread, at in self._read.items() if at <= self._seen}
 
     def threads(self) -> ThreadList:
         """
@@ -396,10 +403,19 @@ class Member:
         every = thread_summaries(self._lab.board, self.agent_id, self._lab.now())
         return ThreadList(threads=work_threads(every), side_threads=side_lines(every, self.agent_id))
 
-    def thread(self, thread_id: ThreadId, votes_of: PostId | None = None) -> ThreadView:
-        """Return a thread and its posts. The post that `votes_of` names has the longer list of its votes."""
+    def thread(self, thread_id: ThreadId, votes_of: PostId | None = None, *, whole: bool = False) -> ThreadView:
+        """
+        Return a thread and its posts. The post that `votes_of` names has the longer list of its votes.
+
+        The view starts at the thread's summary while one stands, and with `whole` it holds every post. The
+        person's posts before the summary that came after the agent's last read of the thread stay in it.
+        """
         now = self._lab.now()
-        view = thread_view(self._lab.board, self.agent_id, thread_id, votes_of, now)
+        board = self._lab.board
+        view = thread_view(
+            board, self.agent_id, thread_id, votes_of, now, fold=not whole, read=self._read.get(thread_id, 0)
+        )
+        self._read = {**self._read, thread_id: board.seq}
         self._hear(now, (), view.posts)
         return view
 

@@ -46,6 +46,12 @@ export const OFFER: Offer = {
   mode: 'default',
 };
 
+/** The sentence of the record of findings, as `FINDINGS_RECORD` in the server's `protocol/deliverables.py`. */
+export const FINDINGS =
+  'A record of the findings that a later lab can replicate the work from: for every line of work, the rule or ' +
+  'method as it was fixed, the data source and how to fetch it again, the numbers, and why the line was kept or ' +
+  'dropped.';
+
 /** Verifold's defaults for new labs: one agent of each harness, auto mode, and no time limit. */
 export const DEFAULTS: SetupDefaults = {
   agents: null,
@@ -53,6 +59,7 @@ export const DEFAULTS: SetupDefaults = {
   minutes: null,
   budget_tokens: null,
   budget_dollars: null,
+  findings_record: true,
 };
 
 export const HARNESSES: readonly HarnessOption[] = [

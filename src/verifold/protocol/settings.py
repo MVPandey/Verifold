@@ -185,6 +185,11 @@ class SetupDefaults(Record):
     """The lab's budget in tokens, input and output together. `None` means no budget in tokens."""
     budget_dollars: float | None = Field(default=None, gt=0, le=MAX_BUDGET_DOLLARS)
     """The lab's budget in US dollars, as the harnesses report their cost. `None` means no budget in dollars."""
+    findings_record: bool = True
+    """
+    Whether a new lab starts with the record of findings among its deliverables. A project's file can leave it out
+    and cannot put it back, and no file changes its sentence.
+    """
 
 
 class SettingsFile(Record):

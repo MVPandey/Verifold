@@ -51,6 +51,17 @@ def settings_of(values: Mapping[SettingsLevel, SettingsValues]) -> SettingsFile:
     return SettingsFile.model_validate(merged)
 
 
+def findings_record(values: Mapping[SettingsLevel, SettingsValues]) -> bool:
+    """
+    Return whether a new lab starts with the record of findings, by the files with `values`.
+
+    A project's file can come from someone else, and a deliverable is the person's own word to the agents. So a
+    project's file can leave the record out, and it cannot put it back where the file for all projects leaves it out.
+    """
+    everywhere = settings_of({SettingsLevel.ALL: values.get(SettingsLevel.ALL, {})}).setup
+    return everywhere.findings_record and settings_of(values).setup.findings_record
+
+
 def read_settings_file(path: Path, level: SettingsLevel) -> tuple[SettingsValues, str]:
     """
     Return what the settings file of `level` holds, as written, and its revision: a hash of its content.

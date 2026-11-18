@@ -362,7 +362,12 @@ class PostView(Record):
 
 
 class ThreadView(Record):
-    """A thread with its posts, oldest first."""
+    """
+    A thread with its posts, oldest first.
+
+    An agent's `thread` starts at the thread's summary, while one stands: the posts before it are left out, other
+    than the ones that stay in sight by rule, and `earlier` says how many it left out and how to read them.
+    """
 
     thread: Thread
     watching: bool
@@ -373,6 +378,16 @@ class ThreadView(Record):
     For the thread of the offers for a deliverable: the agents that a post of the person there reaches when it
     names nobody and replies to no post. They offered files there or said that they watch the thread. When the
     list is empty, such a post is for every agent that is not on call. `None` for any other thread.
+    """
+    summary: PostId | None = Field(default=None, exclude_if=unset)
+    """
+    The thread's summary: its newest `summary`, while no failed check and no standing objection disputes it and
+    its author conceded no objection to it. Left out while the thread has none.
+    """
+    earlier: str | None = Field(default=None, exclude_if=unset)
+    """
+    For a view that starts at the summary: one line with the number of the posts before the summary that the view
+    leaves out, and how to read them. Left out while the view holds every post.
     """
     posts: tuple[PostView, ...]
 
@@ -719,6 +734,11 @@ class ThreadSummary(Record):
     posts: int
     last_at: AwareDatetime
     latest: PostLine | None = None
+    summary: PostLine | None = Field(default=None, exclude_if=unset)
+    """
+    The thread's summary as a line: its newest `summary`, while it stands, with its headline and no body. `thread`
+    starts at it. Left out while the thread has none.
+    """
     disputed: int = 0
     checked: int = 0
     not_checked: int = 0

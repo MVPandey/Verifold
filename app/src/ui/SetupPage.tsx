@@ -15,6 +15,7 @@ import {
   needsModel,
   oneFamily,
   removeSeat,
+  sentences,
   setupChoices,
   startRequest,
   step,
@@ -51,7 +52,10 @@ export function SetupPage(props: {
 }): ReactElement {
   const { defaults } = props.setup;
   const [question, setQuestion] = useState('');
-  const [deliverables, setDeliverables] = useState('');
+  // A new lab starts with the record of findings among its deliverables, unless the saved choices leave it out.
+  const [deliverables, setDeliverables] = useState(
+    defaults.findings_record ? props.setup.findings_deliverable : '',
+  );
   const [picks, setPicks] = useState(() => firstSeats(props.setup.harnesses, defaults));
   const [autoMode, setAutoMode] = useState(defaults.auto_mode);
   const [minutes, setMinutes] = useState<number | null>(defaults.minutes);
@@ -82,7 +86,8 @@ export function SetupPage(props: {
   const save = (level: SettingsLevel): void => {
     setSaved(null);
     setError(null);
-    const value = setupChoices(picks, autoMode, minutes, chosenBudget ?? undefined);
+    const record = sentences(deliverables).includes(props.setup.findings_deliverable);
+    const value = setupChoices(picks, autoMode, minutes, chosenBudget ?? undefined, record);
     props.api
       .settings()
       .then((view) =>
@@ -147,6 +152,9 @@ export function SetupPage(props: {
           Optional. One sentence on each line, such as “A one-page answer” or “A script that runs
           the result again”. The agents read the list, and an agent can offer files for each one.
           You accept an offer or ask for changes, and you can change the list while the lab runs.
+          Unless your saved choices leave it out, the list starts with the record of findings.
+          Remove its line to leave it out of this lab, and save the choices to leave it out of the
+          next labs too.
         </p>
         <textarea
           className="d-setup"

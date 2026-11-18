@@ -16,6 +16,7 @@ const NOUNS = {
   ruled_out: 'ruled-out lead',
   report: 'report',
   reading: 'reading',
+  summary: 'summary',
   call: 'call',
   close: 'close',
   request: 'request',
@@ -62,6 +63,7 @@ export function tone(post: Post): MarkTone {
     case 'message':
     case 'report':
     case 'reading':
+    case 'summary':
       return 'quiet';
   }
 }
@@ -136,6 +138,8 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
       return `reported to you${reply}`;
     case 'reading':
       return `said how the lab reads your question${reply}`;
+    case 'summary':
+      return `summed up the thread${reply}`;
     case 'message':
       return post.reply_to === null ? 'posted a message' : `replied to ${them}`;
   }
@@ -235,9 +239,9 @@ export function isPlainMessage(item: PostView): boolean {
 export type Depth = 0 | 1 | 2;
 
 /**
- * A row of an opened thread: one turn at its depth, a run of plain messages that folds into one row, or the row
- * under a top-level post that folds its replies. `items` of that row are the replies that it folds, and `open`
- * says whether they show.
+ * A row of an opened thread: one turn at its depth, a run of plain messages that folds into one row, the row
+ * under a top-level post that folds its replies, or the row under the thread's summary that folds the posts before
+ * it. `items` of the last two are the posts that they fold, and `open` says whether those show.
  */
 export type Row =
   | { readonly kind: 'turn'; readonly item: PostView; readonly depth: Depth }
@@ -245,6 +249,13 @@ export type Row =
   | {
       readonly kind: 'replies';
       readonly root: string;
+      readonly items: readonly PostView[];
+      readonly open: boolean;
+    }
+  | {
+      readonly kind: 'earlier';
+      /** The summary, whose ID `opened` takes for the posts before it. */
+      readonly summary: string;
       readonly items: readonly PostView[];
       readonly open: boolean;
     };
@@ -291,7 +302,13 @@ export function replyRoot(posts: readonly PostView[], id: string | null): string
 }
 
 /**
- * Return a thread's posts as rows. A reply sits under the post that it answers, and the indent stops at two
+ * Return a thread's posts as rows.
+ *
+ * With `summary`, the ID of the thread's summary that stands, the summary comes first, and the posts before it fold
+ * behind one row after it. `opened` with the summary's ID says whether they show. The posts after the summary come
+ * next. A post of each part sits in its part, so a reply to a post before the summary is a top-level post after it.
+ *
+ * Within each part, a reply sits under the post that it answers, and the indent stops at two
  * levels. A run of two or more agents' plain messages that nobody replied to folds into one row at its depth.
  * One such message alone is a turn: the last message of a chain of replies has no reply yet, and it is the
  * newest word in the thread.
@@ -312,17 +329,69 @@ export function rows(
   target: string | null = null,
   folding = true,
   opened: (root: string) => boolean = () => false,
+  summary: string | null = null,
 ): readonly Row[] {
-  const byId = new Map(posts.map((item) => [item.post.id, item]));
+  const head = posts.find((item) => item.post.id === summary);
+  if (head === undefined) return tree(posts, posts, target, folding, opened);
+  const earlier = posts.filter((item) => item.seq < head.seq);
+  const open = opened(head.post.id);
+  return [
+    { kind: 'turn', item: head, depth: 0 },
+    ...(earlier.length > 0
+      ? [{ kind: 'earlier', summary: head.post.id, items: earlier, open } as const]
+      : []),
+    ...(open ? tree(earlier, posts, target, folding, opened) : []),
+    ...tree(
+      posts.filter((item) => item.seq > head.seq),
+      posts,
+      target,
+      folding,
+      opened,
+    ),
+  ];
+}
+
+/**
+ * Return whether a post comes before the summary that `summary` names, so that the row under the summary folds it.
+ * A thread without that summary folds nothing before it.
+ */
+export function beforeSummary(
+  posts: readonly PostView[],
+  summary: string | null | undefined,
+  id: string | null,
+): boolean {
+  const head = posts.find((item) => item.post.id === summary);
+  const item = posts.find((one) => one.post.id === id);
+  return head !== undefined && item !== undefined && item.seq < head.seq;
+}
+
+/** Return what the row that folds the posts before the summary says, such as "12 earlier posts". */
+export function earlierLabel(count: number): string {
+  return `${count} earlier ${count === 1 ? 'post' : 'posts'}`;
+}
+
+/**
+ * Return the rows of `posts`, a part of the thread's posts `all`, as `rows` says. A post answers a post of the part,
+ * or it is a top-level post. What a post replies to, and whether an objection still stands, come from `all`.
+ */
+function tree(
+  posts: readonly PostView[],
+  all: readonly PostView[],
+  target: string | null,
+  folding: boolean,
+  opened: (root: string) => boolean,
+): readonly Row[] {
+  const byId = new Map(all.map((item) => [item.post.id, item]));
+  const here = new Set(posts.map((item) => item.post.id));
   const replies = new Map<string, PostView[]>();
   const roots: PostView[] = [];
   for (const item of posts) {
     const parent = item.post.reply_to;
-    if (parent !== null && byId.has(parent))
+    if (parent !== null && here.has(parent))
       replies.set(parent, [...(replies.get(parent) ?? []), item]);
     else roots.push(item);
   }
-  const first = posts[0]?.post.id;
+  const first = all[0]?.post.id;
   const folds = (item: PostView): boolean => {
     const { id, reply_to: parent } = item.post;
     const answered = parent === null ? undefined : byId.get(parent);
@@ -344,7 +413,7 @@ export function rows(
       answered?.post.author === PERSON ||
       post.for_person ||
       (post.kind === 'ask' && post.mentions.includes(PERSON)) ||
-      objectionStands(item, posts) ||
+      objectionStands(item, all) ||
       checkFails(item)
     );
   };
@@ -429,6 +498,7 @@ const PLURALS = {
   ask: ['question', 'questions'],
   report: ['report', 'reports'],
   reading: ['reading', 'readings'],
+  summary: ['summary', 'summaries'],
   close: ['close', 'closes'],
   request: ['request', 'requests'],
   offer: ['offer', 'offers'],

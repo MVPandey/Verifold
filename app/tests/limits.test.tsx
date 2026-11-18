@@ -31,7 +31,7 @@ import { startRequest } from '../src/model/setup.ts';
 import { clockLine } from '../src/model/time.ts';
 import { BudgetFields, LimitsPanel, budgetOf } from '../src/ui/Limits.tsx';
 import { SetupPage } from '../src/ui/SetupPage.tsx';
-import { DEFAULTS, HARNESSES, agentView, ask, labView, postView } from './fixtures.ts';
+import { DEFAULTS, HARNESSES, agentView, ask, labView, postView, FINDINGS } from './fixtures.ts';
 
 const NOW = new Date('2026-11-06T14:26:00Z');
 
@@ -184,6 +184,7 @@ describe('the setup of a lab', () => {
           question: null,
           defaults: { ...DEFAULTS, budget_tokens: 2_000_000, budget_dollars: 12.5 },
           defaults_from: null,
+          findings_deliverable: FINDINGS,
         }}
         onStarted={() => undefined}
         onRefresh={() => undefined}
@@ -205,6 +206,7 @@ describe('the setup of a lab', () => {
             question: null,
             defaults: { ...DEFAULTS, agents },
             defaults_from: null,
+            findings_deliverable: FINDINGS,
           }}
           onStarted={() => undefined}
           onRefresh={() => undefined}
