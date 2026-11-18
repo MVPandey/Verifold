@@ -218,13 +218,22 @@ async def test_a_git_that_goes_on_is_killed_and_the_folder_of_the_call_goes_with
     assert not folder.exists()
 
 
+def _runs(process: psutil.Process, word: str) -> bool:
+    # Whether a process runs a command with `word` in it. A child that ended and was not reaped has no command line.
+    with suppress(psutil.Error):
+        return word in process.cmdline()
+    return False
+
+
 async def test_a_worktree_whose_git_another_program_killed_goes_as_after_a_cut(tmp_path: Path, home: Path) -> None:
     project, started = await a_project_whose_checkout_never_ends(tmp_path, home)
     folder, entries = project / '.verifold' / 'agents' / 'ada', project / '.git' / 'worktrees'
     adding = asyncio.create_task(agent_folder(project, 'ada'))
     await until(lambda: bool(process_ids(started)))
-    # The Git that this test's process started is the one that adds the worktree. It is in the checkout.
-    (adds,) = psutil.Process().children()
+    # The Git that this test's process started is the one that adds the worktree. It is in the checkout. The
+    # worker that runs this test can have children of an earlier test that are not gone yet, so the test picks
+    # its own Git by its command line.
+    (adds,) = (child for child in psutil.Process().children() if _runs(child, 'worktree'))
     assert (folder.is_dir(), [entry.name for entry in entries.iterdir()]) == (True, ['ada'])
 
     os.kill(adds.pid, signal.SIGKILL)
