@@ -699,8 +699,8 @@ class ConversationView(Record):
     no_reply: tuple[PostId, ...] = ()
     """
     The person's posts in that thread that wait for the coordinator's reply, oldest first. A post of the person
-    there waits until an agent posts in the thread after it while that agent holds the coordinator seat. The
-    coordinator's `brief` and its news say the same.
+    there, other than an `answer`, waits until an agent posts in the thread after it while that agent holds the
+    coordinator seat. The coordinator's `brief` and its news say the same.
     """
     asks: tuple[PostView, ...] = ()
     """The permission requests that the requests in the conversation name, each with what its harness asks for."""

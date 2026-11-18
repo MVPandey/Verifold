@@ -547,9 +547,9 @@ class PersonWait(Sparse):
     """
     The person's oldest post in the conversation that waits for the coordinator's reply, and how long it has waited.
 
-    A post of the person in the conversation waits for a reply until the agent that holds the coordinator seat
-    posts in the conversation after it. Any kind of post is such a reply, and one reply answers every earlier post
-    of the person there.
+    A post of the person in the conversation, other than an `answer`, waits for a reply until the agent that holds
+    the coordinator seat posts in the conversation after it. Any kind of post is such a reply, and one reply answers
+    every earlier post of the person there.
     """
 
     line: PostLine

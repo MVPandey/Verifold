@@ -112,7 +112,9 @@ function view(
     thread,
     waits: posts.filter((item) => item.waits).map((item) => item.post.id),
     no_reply: posts
-      .filter((item, at) => item.post.author === 'person' && at > replied)
+      .filter(
+        (item, at) => item.post.author === 'person' && item.post.kind !== 'answer' && at > replied,
+      )
       .map((item) => item.post.id),
     asks: [COMMAND],
     powers: POWERS,
@@ -896,6 +898,10 @@ describe('where the person’s message to the coordinator is', () => {
     // The line stands under the person's newest message.
     const again = { ...said('p-4', 'person', 'Updates?'), seq: 30 };
     assert.equal(heardLine(view([asked, later('agent-1'), again]), LAB, NOW)?.post, 'p-4');
+    // An answer of the person is itself a reply and waits for none, so the line stays under the message before it.
+    const yes = { ...said('p-5', 'person', 'Yes.', { kind: 'answer', reply_to: 'p-1' }), seq: 32 };
+    assert.equal(heardLine(view([asked, yes]), LAB, NOW)?.post, 'p-2');
+    assert.equal(line({}, {}, view([later('agent-1'), yes])), null);
     assert.equal(line({}, {}, view([said('p-1', 'agent-1', 'I hold the seat.')])), null);
     assert.equal(line({}, {}, view([], { thread: null })), null);
     assert.equal(heardLine(talk, labView({ agents: [TESSEL] }), NOW), null);

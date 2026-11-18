@@ -303,12 +303,17 @@ def waiting_for_reply(board: Board) -> tuple[Posted, ...]:
     A post of the person there waits until an agent posts in the conversation after it while that agent holds the
     coordinator seat. Any kind of post is such a reply, and one reply answers every earlier post of the person. So
     a reply from an agent that gave the seat up later still counts, and a post of another agent counts for nothing.
-    A lab without a conversation has no such post.
+    An `answer` of the person, such as its yes to a request or its choice on an ask, is itself a reply and asks
+    nothing, so it waits for none. A lab without a conversation has no such post.
     """
     talk = board.conversation
     posts = board.thread_posts(talk) if talk else ()
     replied = next((entry.seq for entry in reversed(posts) if entry.post.author == board.coordinator_at(entry.seq)), 0)
-    return tuple(entry for entry in posts if entry.post.author == PERSON and entry.seq > replied)
+    return tuple(
+        entry
+        for entry in posts
+        if entry.post.author == PERSON and not isinstance(entry.post, Answer) and entry.seq > replied
+    )
 
 
 def no_reply_line(board: Board, agent_id: AgentId, now: datetime | None = None) -> str:

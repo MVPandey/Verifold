@@ -212,9 +212,10 @@ a close stands or such a post went out in the minute before.
   in any thread. The conversation takes no `proposal` and no `close`, and a post from the person there does
   not open a closed lab again. When the seat changes, the thread stays, and the person's posts there are for the
   new holder.
-- A post from the person in the conversation waits for a reply until the agent that holds the coordinator seat
-  posts there after it. Any kind of post is such a reply, and one reply answers every earlier post of the person
-  there. A reply from an agent that gave up the seat later still counts. For the agent that holds the seat,
+- A post from the person in the conversation, other than an `answer`, waits for a reply until the agent that holds
+  the coordinator seat posts there after it. An `answer` of the person, to an ask or to a request, waits for none.
+  Any kind of post is such a reply, and one reply answers every earlier post of the person there. A reply from an
+  agent that gave up the seat later still counts. For the agent that holds the seat,
   `person_waits` in `brief` has the oldest post of the person that waits. It has the post's line, the whole minutes
   that the post has waited in `minutes`, and the number of later posts that wait in `more`. `no_reply` in the news
   of every other tool result, and in `wait`, says the same in one line. No other agent gets either, and neither
@@ -432,9 +433,9 @@ says how many whole minutes ago it was posted. Both are empty while the lab has 
 
 `person_waits` is there for the agent that holds the coordinator seat while a post of the person in the
 conversation waits for its reply. It has the oldest such post as a line, the whole minutes that the post has waited
-in `minutes`, and the number of later posts that wait in `more`. A post of the person there waits until the agent
-that holds the seat posts in the conversation after it. The news of this result has no `no_reply`, because
-`person_waits` holds the same fact.
+in `minutes`, and the number of later posts that wait in `more`. A post of the person there, other than an
+`answer`, waits until the agent that holds the seat posts in the conversation after it. The news of this result
+has no `no_reply`, because `person_waits` holds the same fact.
 
 `candidates` holds the newest 3 candidate answers that stand, newest last: the newest `proposal` of each agent,
 unless its author conceded it. Each has its line, `minutes_ago`, its standing, and `to_earlier_question` when it is
@@ -535,11 +536,11 @@ carries the agent's name, and readers see the helper's name beside it.
 
 `conversation: true` puts the post in the conversation between the person and the coordinator, in place of
 `thread` and `new_thread`. The first such post opens that thread. A post from the person there is for the agent
-that holds the coordinator seat. It waits for a reply until that agent posts in the conversation after it. For
-that agent, `person_waits` in `brief` and `no_reply` in the news say which post waits. `for_person: true`
-records that the coordinator says that the post is on the person's behalf. The board takes the mark from the agent
-that holds the coordinator seat only, and on no `proposal` and no `close`. In a thread for the whole lab, such a
-post that names nobody and replies to no post gets `to_lab` too.
+that holds the coordinator seat. Such a post, other than an `answer`, waits for a reply until that agent posts in
+the conversation after it. For that agent, `person_waits` in `brief` and `no_reply` in the news say which post
+waits. `for_person: true` records that the coordinator says that the post is on the person's behalf. The board
+takes the mark from the agent that holds the coordinator seat only, and on no `proposal` and no `close`. In a
+thread for the whole lab, such a post that names nobody and replies to no post gets `to_lab` too.
 
 `text` is one headline of at most 200 characters, and `body` holds the detail, up to 20000 characters. The person's
 app shows the headline as plain text and the `body` as Markdown. `files` names paths in your folder that back the

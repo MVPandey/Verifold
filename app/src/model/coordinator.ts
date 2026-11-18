@@ -66,13 +66,14 @@ export interface HeardLine {
 }
 
 /**
- * Return the line under the person's newest message in the conversation: whether a turn of the coordinator runs,
- * whether the coordinator has read the message, and, once it has, that no reply came yet. It is `null` once the
- * message has its reply, and while nobody holds the seat.
+ * Return the line under the person's newest message in the conversation that waits for a reply: whether a turn of
+ * the coordinator runs, whether the coordinator has read the message, and, once it has, that no reply came yet. It
+ * is `null` while no message waits, and while nobody holds the seat.
  *
- * The server says which messages wait for a reply: a message waits until an agent posts in the conversation after
- * it while that agent holds the coordinator seat. So a reply of the holder before a change of the seat answers the
- * message too, and a post of another agent does not. The coordinator's board shows it the same messages.
+ * The server says which messages wait for a reply: a post of the person, other than an answer, waits until an
+ * agent posts in the conversation after it while that agent holds the coordinator seat. So a reply of the holder
+ * before a change of the seat answers the message too, and a post of another agent does not. The person's answer
+ * to an ask or a request is itself a reply, so it has no line. The coordinator's board shows it the same messages.
  *
  * "Read" means that a result of the coordinator's board tools carried the whole message to it. When the results
  * carried only a line with a cut body, the line says that the coordinator saw the start of the message. The line
@@ -80,8 +81,9 @@ export interface HeardLine {
  */
 export function heardLine(view: ConversationView, lab: LabView, now: Date): HeardLine | null {
   const holder = coordinatorOf(lab.agents);
-  const said = (view.thread?.posts ?? []).filter((item) => item.post.author === PERSON).at(-1);
-  if (!holder || !said || !view.no_reply.includes(said.post.id)) return null;
+  const newest = view.no_reply.at(-1);
+  const said = (view.thread?.posts ?? []).find((item) => item.post.id === newest);
+  if (!holder || !said) return null;
   return { post: said.post.id, text: heardWords(holder, lab, said, now) };
 }
 

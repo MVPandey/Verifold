@@ -779,6 +779,27 @@ def test_the_oldest_post_that_waits_comes_first_with_a_count_of_the_later_ones_a
     assert waiting(record) == ['p-5']
 
 
+def test_an_answer_of_the_person_in_the_conversation_waits_for_no_reply_and_a_later_message_does() -> None:
+    asked = talk().post(Ask(id='p-1', thread='t-2', author='ada', text='Depth or width first?'))
+    asked.post(Answer(id='p-2', thread='t-2', author='person', text='Depth.', reply_to='p-1'))
+    # The person's yes to a request is an answer too.
+    asked.request('p-3', 'ada', MORE).post(Answer(id='p-4', thread='t-2', author='person', text='Yes.', reply_to='p-3'))
+    board = asked.board()
+
+    assert waiting(asked) == []
+    assert brief(board, 'ada', News(seq=board.seq)).person_waits is None
+    assert news(board, 'ada', 0).no_reply == ''
+    asked.post(STATUS.model_copy(update={'id': 'p-5'}))
+    assert waiting(asked) == ['p-5']
+    # An answer after a message that waits leaves the message waiting, and the brief counts only the message.
+    asked.post(Answer(id='p-6', thread='t-2', author='person', text='Depth, still.', reply_to='p-1'))
+    board = asked.board()
+    held = brief(board, 'ada', News(seq=board.seq)).person_waits
+    assert waiting(asked) == ['p-5']
+    assert held is not None
+    assert (held.line.id, held.more) == ('p-5', 0)
+
+
 def test_the_reply_is_from_the_agent_that_holds_the_seat_when_it_posts_and_a_new_holder_reads_what_waits() -> None:
     reply = Message(id='p-2', thread='t-2', author='ada', text='Two lines are alive.')
 

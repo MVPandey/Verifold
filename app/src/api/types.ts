@@ -987,8 +987,9 @@ export interface ConversationView {
   /** The posts of that thread that wait for the person's answer. */
   readonly waits: readonly string[];
   /**
-   * The person's posts in that thread that wait for the coordinator's reply, oldest first. A post of the person
-   * waits until an agent posts in the thread after it while that agent holds the coordinator seat.
+   * The person's posts in that thread that wait for the coordinator's reply, oldest first. A post of the person,
+   * other than an answer, waits until an agent posts in the thread after it while that agent holds the coordinator
+   * seat.
    */
   readonly no_reply: readonly string[];
   /** The permission requests that the requests in the conversation name. */
