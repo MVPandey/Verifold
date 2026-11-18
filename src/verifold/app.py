@@ -102,6 +102,7 @@ from verifold.store.server_file import running_server, server_file
 from verifold.store.settings_file import (
     SettingsValues,
     change_setting,
+    findings_record,
     load_settings,
     read_settings_file,
     recorded_settings,
@@ -541,7 +542,7 @@ class Host:
         paths = {level: settings_path(level, self._project) for level in SettingsLevel}
         try:
             values = {level: read_settings_file(path, level)[0] for level, path in paths.items()}
-            defaults = settings_of(values).setup
+            defaults = settings_of(values).setup.model_copy(update={'findings_record': findings_record(values)})
         except SettingsInvalid:
             return SetupDefaults(), None
         holder = next((level for level in (SettingsLevel.PROJECT, SettingsLevel.ALL) if 'setup' in values[level]), None)
@@ -1323,6 +1324,7 @@ def _written(value: int | str | SetupDefaults | None) -> JsonValue:
         'minutes': value.minutes,
         'budget_tokens': value.budget_tokens,
         'budget_dollars': value.budget_dollars,
+        'findings_record': value.findings_record,
     }
     return written
 

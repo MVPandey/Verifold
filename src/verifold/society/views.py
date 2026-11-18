@@ -57,7 +57,19 @@ from verifold.protocol.join import (
     ThreadSummary,
     ThreadView,
 )
-from verifold.protocol.posts import Ask, Call, Check, Close, Objection, Plan, Proposal, Reading, Report, Result
+from verifold.protocol.posts import (
+    Ask,
+    Call,
+    Check,
+    Close,
+    Objection,
+    Plan,
+    Proposal,
+    Reading,
+    Report,
+    Result,
+    Summary,
+)
 from verifold.protocol.threads import Thread
 from verifold.protocol.usage import DiskUse
 from verifold.protocol.votes import BADGES, MAX_VOTE_LINES, NEWEST_VOTES
@@ -85,17 +97,21 @@ from verifold.society.reruns import rerun_checks, reruns_wanted
 from verifold.society.reviewers import free_seats, holders, seats
 from verifold.society.rounds import closes_at, entries, for_reader, open_round, waits_for
 from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing, waits_for_person
+from verifold.society.summaries import in_sight, standing_summary
 from verifold.society.tested import rests_on, support
 from verifold.society.turns import before
 from verifold.society.votes import marks
 
 
-def thread_view(
+def thread_view(  # noqa: PLR0913
     board: Board,
     agent_id: AgentId,
     thread_id: ThreadId,
     votes_of: PostId | None = None,
     now: datetime | None = None,
+    *,
+    fold: bool = False,
+    read: int = 0,
 ) -> ThreadView:
     """
     Return a thread and its posts.
@@ -104,6 +120,11 @@ def thread_view(
     so that a long thread with many voters stays one tool result. The post that `votes_of` names has
     `MAX_VOTE_LINES`, and so has every post for the person. A post whose votes are sealed for the agent at `now`
     has no counts and no votes, and an entry that is sealed for it has no content.
+
+    With `fold`, the view starts at the thread's summary while one stands. It leaves out the posts before the
+    summary, other than the ones that stay in sight by `society.summaries.in_sight` and the post that `votes_of`
+    names, and `earlier` says how many it left out. `read` is the event up to which the agent read the thread
+    before, for the person's posts that stay in sight.
 
     Raises:
         NotFound: No thread has this ID, or the thread has no post with the ID in `votes_of`.
@@ -120,16 +141,31 @@ def thread_view(
     def votes(entry: Posted) -> int:
         return MAX_VOTE_LINES if agent_id == PERSON or entry.post.id == votes_of else NEWEST_VOTES
 
+    posts = board.thread_posts(thread_id)
+    summary = standing_summary(board, thread_id)
+    shown, earlier = posts, None
+    if fold and summary:
+        before = tuple(entry for entry in posts if entry.seq < summary.seq)
+        kept = {entry.post.id for entry in in_sight(board, agent_id, before, read)} | {votes_of}
+        shown = tuple(entry for entry in posts if entry.seq >= summary.seq or entry.post.id in kept)
+        left = len(posts) - len(shown)
+        earlier = _earlier(summary, left, len(before)) if left else None
     return ThreadView(
         thread=opened.thread,
         watching=watches_thread(board, agent_id, thread_id),
         members=board.members(thread_id),
         person_reaches=board.offer_listeners(thread_id) if board.holds_offers(thread_id) else None,
-        posts=tuple(
-            post_view(board, entry, agent_id, now, votes=votes(entry))
-            for entry in board.posts
-            if entry.post.thread == thread_id
-        ),
+        summary=summary.post.id if summary else None,
+        earlier=earlier,
+        posts=tuple(post_view(board, entry, agent_id, now, votes=votes(entry)) for entry in shown),
+    )
+
+
+def _earlier(summary: Posted, left: int, before: int) -> str:
+    """Return the line of a view that starts at a summary: how many posts before it the view leaves out, and how to read them."""
+    return (
+        f'This view starts at the summary {summary.post.id}. It leaves out {left} of the {before} posts before it, '
+        'and `thread` with `whole: true` shows every post.'
     )
 
 
@@ -192,10 +228,10 @@ def crossings(board: Board) -> tuple[Crossing, ...]:
     An idea crosses when a post names, in `builds_on`, a post that another agent wrote in another thread. A link
     inside one thread, or between two posts of one agent, is the ordinary course of one line of work. A link to or
     from a post of the person is none either, because every line of work starts from the person's question. Nor is
-    the link of a report or of a reading, because such a post names its sources and builds nothing on them.
+    the link of a report, a reading, or a summary, because such a post names its sources and builds nothing on them.
     """
     by_id = {entry.post.id: entry for entry in board.posts}
-    built = (entry for entry in board.posts if not isinstance(entry.post, Report | Reading | Close))
+    built = (entry for entry in board.posts if not isinstance(entry.post, Report | Reading | Summary | Close))
     pairs = ((by_id.get(source), entry) for entry in built for source in dict.fromkeys(entry.post.builds_on))
     return tuple(
         (source, entry)
@@ -253,7 +289,7 @@ def _summary(  # noqa: PLR0913
     now: datetime,
     blocked: int,
 ) -> ThreadSummary:
-    entries = tuple(entry for entry in board.posts if entry.post.thread == opened.thread.id)
+    entries = board.thread_posts(opened.thread.id)
     results = tuple(standing(board, entry.post.id) for entry in entries if isinstance(entry.post, Result))
     supports = tuple(support(board, entry.post.id) for entry in entries if isinstance(entry.post, Result))
     latest = entries[-1] if entries else None
@@ -262,6 +298,7 @@ def _summary(  # noqa: PLR0913
     line = entries if is_line_of_work(opened.thread) else ()
     result_at, plan_at = line_times(board, opened.thread)
     badges = Counter(badge for entry in line for badge in marks(board, entry.post.id)[2])
+    summary = standing_summary(board, opened.thread.id)
     return ThreadSummary(
         thread=opened.thread,
         watching=watches_thread(board, agent_id, opened.thread.id, lines),
@@ -269,6 +306,7 @@ def _summary(  # noqa: PLR0913
         posts=len(entries),
         last_at=latest.at if latest else opened.at,
         latest=post_line(board, latest, agent_id, now) if latest else None,
+        summary=post_line(board, summary, agent_id, now) if summary else None,
         disputed=results.count('disputed'),
         checked=sum(state in {'checked', 'held_up'} for state in results),
         not_checked=results.count('open'),
@@ -310,15 +348,16 @@ def _built_on(board: Board, entry: Posted) -> bool:
     """
     Return whether work builds on a result already.
 
-    Another agent of the lab builds on it with any post but a report, a reading, a check, or an objection, which name
-    a post and build nothing. The result's own author builds on it with a later result, so only the newest result of
-    an author's chain still waits.
+    Another agent of the lab builds on it with any post but a report, a reading, a summary, a check, or an
+    objection, which name a post and build nothing. The result's own author builds on it with a later result, so
+    only the newest result of an author's chain still waits.
     """
     workers = {joined.agent.id for joined in board.agents if not joined.agent.checks}
     return any(
         isinstance(other.post, Result)
         if other.post.author == entry.post.author
-        else other.post.author in workers and not isinstance(other.post, Report | Reading | Check | Objection | Close)
+        else other.post.author in workers
+        and not isinstance(other.post, Report | Reading | Summary | Check | Objection | Close)
         for other in board.built_on(entry.post.id)
     )
 
@@ -490,9 +529,13 @@ def brief(  # noqa: PLR0913, PLR0915
         return tuple(line(entry, news=True) if (entry := board.post(one.id)) else one for one in lines)
 
     def latest(summary: ThreadSummary) -> ThreadSummary:
-        # The latest line of each thread follows the same rule.
-        entry = board.post(summary.latest.id) if summary.latest else None
-        return summary.model_copy(update={'latest': line(entry)}) if entry else summary
+        # The latest line of each thread and the line of its summary follow the same rule.
+        update = {
+            name: line(entry)
+            for name, kept in (('latest', summary.latest), ('summary', summary.summary))
+            if kept and (entry := board.post(kept.id))
+        }
+        return summary.model_copy(update=update) if update else summary
 
     pages = {len(news.for_you): news}
 
@@ -602,6 +645,7 @@ def brief(  # noqa: PLR0913, PLR0915
             waits.line if waits else None,
             *(post for agent in (your_line, *agents) if agent for post in (agent.plan, agent.latest)),
             *(summary.latest for summary in threads),
+            *(summary.summary for summary in threads),
         )
         # Each candidate has its whole line, so a later list of posts holds its ID alone.
         told = {post.id for post in held if post} | {entry.post.id for entry in whole}

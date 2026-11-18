@@ -20,6 +20,16 @@ MAX_SENTENCE = 300
 MAX_DELIVERABLES = 20
 """The most deliverables that a lab has at one time. A removed one does not count."""
 
+FINDINGS_RECORD = (
+    'A record of the findings that a later lab can replicate the work from: for every line of work, the rule or '
+    'method as it was fixed, the data source and how to fetch it again, the numbers, and why the line was kept or '
+    'dropped.'
+)
+"""
+The deliverable that a new lab starts with unless the person leaves it out: `setup.findings_record` in the
+settings, `--no-findings-record` of `verifold run`, or a removed line in the setup. No settings file holds its text.
+"""
+
 
 def _sentence(text: str) -> str:
     line = one_line(text)

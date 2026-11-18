@@ -22,6 +22,7 @@ from verifold.protocol.posts import (
     Report,
     Result,
     RuledOut,
+    Summary,
 )
 from verifold.society.board import Board
 from verifold.society.lines import lines_of, withdraws
@@ -170,7 +171,7 @@ def all_outcomes(board: Board) -> dict[AgentId, Outcomes]:
             if any(
                 other.post.author != post.author
                 and other.post.author in workers
-                and not isinstance(other.post, Report | Reading | Check | Objection | Close)
+                and not isinstance(other.post, Report | Reading | Summary | Check | Objection | Close)
                 for other in board.built_on(post.id)
             ):
                 lists['built_on'].append(entry)

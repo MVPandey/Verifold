@@ -241,12 +241,14 @@ export function sentences(text: string): readonly string[] {
 /**
  * Return the person's choices on the setup screen as the choices that new labs start with. They hold no power of
  * the coordinator: the person switches a power on for one lab, and no saved choice does it for the next.
+ * `findingsRecord` says whether the setup's deliverables still hold the record of findings.
  */
 export function setupChoices(
   seats: readonly Seat[],
   autoMode: boolean,
   minutes: number | null,
   budget: Budget = NO_BUDGET,
+  findingsRecord = true,
 ): SetupChoices {
   const saved = seats.map((seat) => ({ ...seat, powers: [] }));
   return {
@@ -255,6 +257,7 @@ export function setupChoices(
     minutes,
     budget_tokens: budget.tokens,
     budget_dollars: budget.dollars,
+    findings_record: findingsRecord,
   };
 }
 
@@ -292,7 +295,8 @@ export function defaultsLine(defaults: SetupDefaults, harnesses: readonly Harnes
     defaults.budget_dollars ? money(defaults.budget_dollars) : null,
   ].filter((kind) => kind !== null);
   const budget = kinds.length > 0 ? ` Budget: ${kinds.join(' and ')}.` : '';
-  return `${agents}. ${defaults.auto_mode ? 'Auto mode' : 'No auto mode'}. ${time}.${budget}`;
+  const record = defaults.findings_record ? '' : ' No record of findings.';
+  return `${agents}. ${defaults.auto_mode ? 'Auto mode' : 'No auto mode'}. ${time}.${budget}${record}`;
 }
 
 function agentWords(choice: SavedChoice, harnesses: readonly HarnessOption[]): string {

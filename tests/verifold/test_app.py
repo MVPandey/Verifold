@@ -42,6 +42,7 @@ from verifold.harnesses.catalog import CATALOG as BUILT_IN
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import Agent, AgentChoice, ModelSpec
 from verifold.protocol.app import AgentView, DeskView, LabView, NormsView, StartRequest
+from verifold.protocol.deliverables import FINDINGS_RECORD
 from verifold.protocol.events import (
     AgentJoined,
     AgentNamed,
@@ -143,6 +144,17 @@ async def probed_setup(client: httpx2.AsyncClient) -> dict[str, object]:
         await asyncio.sleep(0.05)
 
 
+VERIFOLDS_DEFAULTS = {
+    'agents': None,
+    'auto_mode': True,
+    'minutes': None,
+    'budget_tokens': None,
+    'budget_dollars': None,
+    'findings_record': True,
+}
+"""Verifold's choices for new labs, as the setup has them without saved choices."""
+
+
 def named(*values: str) -> list[dict[str, str]]:
     return [{'value': value, 'name': value} for value in values]
 
@@ -182,8 +194,9 @@ async def test_the_person_starts_a_lab_from_the_setup_screen(
             }
         ],
         'question': None,
-        'defaults': {'agents': None, 'auto_mode': True, 'minutes': None, 'budget_tokens': None, 'budget_dollars': None},
+        'defaults': VERIFOLDS_DEFAULTS,
         'defaults_from': None,
+        'findings_deliverable': FINDINGS_RECORD,
     }
     assert (no_lab.status_code, started.status_code, again.status_code) == (409, 200, 409)
     # The probe runs in the project folder, which the fake agent takes for its name.
@@ -1558,7 +1571,7 @@ async def test_the_persons_change_applies_to_the_running_lab_but_an_agents_edit_
             'reruns': {'lease_minutes': 10},
             'disk': {'limit_gb': 100},
         },
-        'defaults': {'agents': None, 'auto_mode': True, 'minutes': None, 'budget_tokens': None, 'budget_dollars': None},
+        'defaults': VERIFOLDS_DEFAULTS,
     }
     assert after['all_projects']['values'] == {'jobs': {'at_time_limit': 'stop'}}
     assert after['project']['settings']['jobs'] == {'at_time_limit': 'stop', 'at_exit': 'keep'}
@@ -1705,6 +1718,7 @@ async def test_saved_choices_for_new_labs_fill_the_setup_and_leave_a_running_lab
         'minutes': None,
         'budget_tokens': None,
         'budget_dollars': None,
+        'findings_record': True,
     }
     assert changed['project']['values'] == {'setup': written}
     # The setup names the file that its first choices come from, which here is the project's own.
@@ -1740,13 +1754,22 @@ async def test_saved_choices_change_while_a_lab_runs_without_touching_the_lab(
     assert changed.json()['project']['defaults']['auto_mode'] is False
     assert lab_settings(project) == [(AtTimeLimit.PAUSE, AtExit.STOP)]
     # The lab's pages read no saved choices while the lab runs.
-    assert setup['defaults'] == {
-        'agents': None,
-        'auto_mode': True,
-        'minutes': None,
-        'budget_tokens': None,
-        'budget_dollars': None,
-    }
+    assert setup['defaults'] == VERIFOLDS_DEFAULTS
+
+
+@pytest.mark.parametrize(('mine', 'theirs', 'kept'), [(False, True, False), (True, False, False), (True, True, True)])
+async def test_the_setup_starts_with_the_record_of_findings_unless_a_file_leaves_it_out(
+    project: Path, monkeypatch: pytest.MonkeyPatch, *, mine: bool, theirs: bool, kept: bool
+) -> None:
+    # A project's file can leave the record out, and it cannot put it back where the person's own file leaves it out.
+    monkeypatch.setenv('HOME', str(project.parent))
+    for folder, value in ((project.parent, mine), (project, theirs)):
+        (folder / '.verifold').mkdir(exist_ok=True)
+        (folder / '.verifold' / 'settings.json').write_text(json.dumps({'setup': {'findings_record': value}}))
+    async with serving(project) as client:
+        setup = (await client.get('/setup')).json()
+
+    assert (setup['defaults']['findings_record'], setup['findings_deliverable']) == (kept, FINDINGS_RECORD)
 
 
 async def test_a_broken_settings_file_still_shows_the_setup_with_verifolds_defaults(project: Path) -> None:
@@ -1755,13 +1778,7 @@ async def test_a_broken_settings_file_still_shows_the_setup_with_verifolds_defau
         setup = await client.get('/setup')
 
     assert setup.status_code == 200
-    assert setup.json()['defaults'] == {
-        'agents': None,
-        'auto_mode': True,
-        'minutes': None,
-        'budget_tokens': None,
-        'budget_dollars': None,
-    }
+    assert setup.json()['defaults'] == VERIFOLDS_DEFAULTS
 
 
 async def test_settings_can_change_before_a_lab_starts(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:

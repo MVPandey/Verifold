@@ -43,6 +43,7 @@ from verifold.protocol.posts import (
     Report,
     Result,
     RuledOut,
+    Summary,
 )
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.protocol.usage import DiskUse, Usage
@@ -905,6 +906,30 @@ def test_the_largest_brief_with_the_longest_reading_of_the_question_is_one_tool_
     assert 'b' * 100 not in view.model_dump_json()
 
 
+def test_the_largest_brief_with_the_longest_summary_in_every_thread_is_one_tool_result() -> None:
+    plain = _largest().board()
+    record = _largest()
+    for number in range(1, 20):
+        thread, author = f't-{number + 1}', f'a{number}'
+        record.post(
+            Summary(id=f'p-9{number:02d}', thread=thread, author=author, text='s' * MAX_HEADLINE, body='b' * MAX_BODY)
+        )
+    board = record.board()
+
+    view = brief(board, 'a0', news(board, 'a0', 0))
+    whole = len(brief(plain, 'a0', news(plain, 'a0', 0)).model_dump_json())
+    lines = tuple(summary.summary for summary in view.threads if summary.summary)
+
+    # Each thread's line carries its summary's headline, cut as the brief's other lines are, and no body.
+    assert {line.id for line in lines} <= {f'p-9{number:02d}' for number in range(1, 20)}
+    assert lines
+    assert all(len(line.text) < MAX_LINE + 100 and not line.body for line in lines)
+    assert whole < len(view.model_dump_json()) <= MAX_BRIEF
+    assert 'b' * 100 not in view.model_dump_json()
+    # The summaries go with the threads' lines: the brief cuts no part that it must keep for them.
+    assert all(not line.startswith('`news` leaves out') for line in view.cut)
+
+
 def test_the_largest_brief_with_every_field_of_a_line_full_and_votes_on_every_post_is_one_tool_result() -> None:
     # Every post has the longest helper name and builds on ten posts. Every other agent and the person voted on
     # every post with the longest reason, and every post of an agent has all three badges. The board cuts this
@@ -989,6 +1014,7 @@ def _far_larger() -> tuple[RecordBuilder, int]:
         post('ruled_out', thread, other)
         post('ask', thread, author)
         post('call', thread, author)
+        post('summary', thread, author, text='s' * MAX_HEADLINE, body='b' * MAX_BODY)
     for number in range(10):
         record.thread(f't-{number + 70}', opened_by='a1', between=('a1', 'a2'))
         post('message', f't-{number + 70}', 'a1')
@@ -1012,7 +1038,7 @@ def _far_larger() -> tuple[RecordBuilder, int]:
     seq, at = record._stamp()
     record.events.append(NotesSet(seq=seq, at=at, agent='a0', text=notes))
     for number in range(3):
-        record.post(Message(id=f'p-90{number}', thread='t-99', author='person', text='h' * 1000, body='b' * MAX_BODY))
+        record.post(Message(id=f'p-990{number}', thread='t-99', author='person', text='h' * 1000, body='b' * MAX_BODY))
     after = record.events[-1].seq
     opened = post('round', 't-1', 'a1', minutes=MAX_ROUND_MINUTES)
     start = record.events[-1].at
@@ -1022,7 +1048,7 @@ def _far_larger() -> tuple[RecordBuilder, int]:
     record.closed(opened)
     for number in range(MAX_NEWS + 5):
         record.post(
-            Message(id=f'p-95{number:02d}', thread='t-1', author='person', text='h' * 1000, body='b' * MAX_BODY)
+            Message(id=f'p-995{number:02d}', thread='t-1', author='person', text='h' * 1000, body='b' * MAX_BODY)
         )
     post('round', 't-1', 'a2', minutes=MAX_ROUND_MINUTES)
     return record, after
@@ -1105,5 +1131,10 @@ def test_the_brief_of_a_lab_far_larger_than_the_largest_fits_one_tool_result_and
     assert parts == sorted(parts, key=CUTS.index)
     assert {'side_threads', 'reruns_wanted', 'news.reruns', 'left', 'news.rounds', 'offers', 'agents'} < set(parts)
     assert first.quiet_threads == first.one_agent_threads == first.side_threads == ()
+    # Every line of work has a summary, and a thread's line that the brief keeps keeps it.
+    works = {f't-{number + 1}' for number in range(1, 61)}
+    kept = tuple(summary for summary in (*first.threads, *whole.threads) if summary.thread.id in works)
+    assert kept
+    assert all(summary.summary is not None for summary in kept)
     assert later.cut
     assert later.notes is None

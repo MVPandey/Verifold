@@ -402,6 +402,17 @@ a close stands or such a post went out in the minute before.
   page with its author and its age, and the person can reply to it there. `brief` has it in `reading`, as a line
   of a post, and `reading_minutes_ago` says how many whole minutes ago it was posted. While the lab has no reading,
   `brief` leaves both out, and `no_reading` says so with the minutes since the lab opened.
+- A `summary` says what a thread has established up to it: what was tried, what holds, what failed and why, and
+  what is open. Its `text` is the summary in a sentence or two, and `body` holds the detail. The board takes one
+  in a line of work, and in a side thread from a member of it. Its author posted in the thread before, or holds
+  the coordinator seat. The person and the desk post none. The thread's summary is its newest `summary` while that
+  one stands: no failed check and no standing objection disputes it, and its author conceded no objection to it.
+  A summary is a post as any other, so it takes checks, objections, votes, and badges. While a thread has a
+  summary, `thread` starts at it, and `earlier` says how many posts before it the result leaves out. The posts
+  before it that still ask something stay in the result, as the description of `thread` says, and `thread` with
+  `whole: true` returns every post. A disputed or conceded summary leaves the thread without one until a newer
+  summary stands. `brief` and `threads` have the thread's summary on the thread's line in `summary`, as a line of
+  a post.
 - The person can revise the question: `brief` has the current text in `question` and one line for each of the newest
   revisions in `revisions`, and `to_earlier_question` marks a candidate that is from before the latest revision.
 - The person can state deliverables: what the person wants to hold at the end of the lab, each as one sentence.
@@ -561,8 +572,9 @@ and no such `result` stands, and removed when a `result` that builds on it stand
 author conceded or ruled out, or whose author left the lab, counts for none of these. Each line of work in `threads`
 has the minutes since its newest `result` and its newest `plan`, the number of its open obstacles, and the number
 of its posts that each badge stands on. Each thread counts its results that stand and that a challenge held in
-`challenged`, and the ones that a rerun held and no challenge did in `reproduced_only`. The question's thread and the side threads are not among the quiet threads, and
-`more_quiet_threads` counts the ones that the list leaves out. In the lists, `report`, and `reading`, a line of a post holds
+`challenged`, and the ones that a rerun held and no challenge did in `reproduced_only`. Each thread has its summary
+in `summary` while it has one, and the summary is cut with the thread's line. The question's thread and the side threads are not among the quiet threads, and
+`more_quiet_threads` counts the ones that the list leaves out. In the lists, `report`, `reading`, and the `summary` of a thread, a line of a post holds
 at most 300 characters of its headline and no `body`, also for a post of the person, the votes on the post in `up`
 and `down` unless they are sealed for you, the badges that stand on it in `badges`, and for a `result` how checks
 tested it in `tested`. In `news`, a line of the person's post holds the whole
@@ -632,6 +644,10 @@ Kinds:
   posts one, and while nobody holds the seat, any agent that is not on call and not the desk does. It is in a
   thread for the whole lab, other than the conversation, the desk chat, and a thread of offers. The newest reading
   replaces every older one. The app shows it at the top of the lab's page, and `brief` has it in `reading`.
+- `summary`: what the thread has established up to it: what was tried, what holds, what failed and why, and what
+  is open. It is in a line of work, or in a side thread that you are a member of, and you posted in the thread
+  before or you hold the coordinator seat. The thread's newest summary is its summary while no failed check and no
+  standing objection disputes it. `thread` starts at it, and `brief` and `threads` have it on the thread's line.
 - `round`: a question to every agent at once, in `text`. `minutes`, from 1 to 15, is how long it stays open. It is
   in a thread for the whole lab, names nobody, and replies to no post, and it reaches every agent that is not on
   call. A lab has one open round at a time. It closes at its time, when every agent that it waits for has
@@ -679,10 +695,30 @@ what they are, and `badges` counts the posts that each badge stands on.
 
 Every thread counts its results that stand and that a challenge held in `challenged`, and the ones that a rerun
 held and no challenge did in `reproduced_only`. Each count is left out while it is zero.
+
+`summary` is the thread's summary, as a line with its headline and no body: its newest `summary` while no failed
+check and no standing objection disputes it. `thread` starts at it. It is left out while the thread has none.
 """
 
 THREAD_TOOL = """\
-Returns one thread: every post, oldest first, and where each post stands.
+Returns one thread: its posts, oldest first, and where each post stands.
+
+While the thread has a summary, the result starts at it. The thread's summary is its newest `summary` while no
+failed check and no standing objection disputes it and its author conceded no objection to it, and `summary` names
+it. `posts` then holds the summary, the posts after it, and these posts before it:
+
+- an `objection` or a failed `check` that disputes a post of yours
+- an `ask` that names you or replies to your post, which you have not answered
+- a post of the person, or of the desk for the person, that came after your last read of this thread with
+  `thread`. After a restart of Verifold, the first read keeps every such post.
+- an `ask` that no answer replies to, while its author is in the lab
+- a `call` that still needs an agent
+- an open obstacle, as `brief` says what that is
+- a post whose independent rerun is wanted
+- the post that `votes_of` names
+
+`earlier` says how many posts before the summary the result leaves out. `whole: true` returns every post. A
+thread without a summary returns every post too.
 
 For a side thread, `members` names its members. You can read a side thread that you are not a member of.
 
@@ -1322,10 +1358,12 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
             return member.threads().model_copy(update={'news': member.news()})
 
     @server.tool(description=THREAD_TOOL)
-    async def thread(thread: ThreadId, ctx: Context, votes_of: PostId | None = None) -> ThreadResult:
+    async def thread(
+        thread: ThreadId, ctx: Context, votes_of: PostId | None = None, *, whole: bool = False
+    ) -> ThreadResult:
         """Return one thread for the agent that calls."""
         async with acting(ctx, 'thread') as member:
-            return ThreadResult(**dict(member.thread(thread, votes_of)), news=member.news())
+            return ThreadResult(**dict(member.thread(thread, votes_of, whole=whole)), news=member.news())
 
     @server.tool(description=WATCH_TOOL)
     async def watch(thread: ThreadId, ctx: Context, *, watching: bool = True) -> WatchResult:

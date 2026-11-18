@@ -25,6 +25,7 @@ from verifold.cli import OPEN_SIGNAL, _announce, _open_again, _until_stopped, ma
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import StartRequest
+from verifold.protocol.deliverables import FINDINGS_RECORD
 from verifold.runner.environment import harness_environment
 from verifold.runner.folders import open_folder
 from verifold.runner.jobs import Job, Sweep
@@ -109,8 +110,15 @@ def test_run_starts_a_lab_with_the_given_agents(serves: list[StartRequest | None
                 AgentChoice(harness='codex', effort='low'),
                 AgentChoice(harness='codex', mode='plan'),
             ),
+            deliverables=RECORD,
         )
     ]
+
+
+RECORD = (FINDINGS_RECORD,)
+"""The deliverables of a lab that `verifold run` starts without others: the record of findings."""
+WITH_RECORD = '; 1 deliverable: the record of findings.'
+"""How the line of what `verifold run` started ends for such a lab."""
 
 
 def test_run_takes_the_facts_of_a_seat_after_a_comma_and_a_harness_more_than_once(
@@ -145,7 +153,7 @@ def test_run_takes_the_facts_of_a_seat_after_a_comma_and_a_harness_more_than_onc
     ]
     assert (
         'Started a lab with 1 claude-code (opus, role: driver, coordinator), 1 claude-code (fable, high effort, '
-        'anthropic family, role: direction creator, on call), 1 codex (on call); auto mode; no time limit.'
+        f'anthropic family, role: direction creator, on call), 1 codex (on call); auto mode; no time limit{WITH_RECORD}'
     ) in capsys.readouterr().out
 
 
@@ -322,20 +330,49 @@ def test_run_takes_each_deliverable_as_one_sentence_and_says_how_many(
             'A script.',
         ]
     )
-    main(['run', 'Does it hold?', '--agent', 'codex', '--deliverable', 'A script.'])
-    main(['run', 'Does it hold?', '--agent', 'codex'])
+    main(['run', 'Does it hold?', '--agent', 'codex', '--deliverable', 'A script.', '--no-findings-record'])
+    main(['run', 'Does it hold?', '--agent', 'codex', '--no-findings-record'])
+    main(['run', 'Does it hold?', '--agent', 'codex', '--deliverable', FINDINGS_RECORD])
 
     assert [start.deliverables for start in serves if start] == [
-        ('A one-page answer.', 'A script.'),
+        (FINDINGS_RECORD, 'A one-page answer.', 'A script.'),
         ('A script.',),
         (),
+        RECORD,
     ]
     printed = capsys.readouterr().out
-    assert 'Started a lab with 1 codex; auto mode; no time limit; 2 deliverables.' in printed
-    assert 'Started a lab with 1 codex; auto mode; no time limit; 1 deliverable.' in printed
-    assert 'Started a lab with 1 codex; auto mode; no time limit.' in printed
+    started = 'Started a lab with 1 codex; auto mode; no time limit'
+    assert f'{started}; 3 deliverables, the record of findings among them.' in printed
+    assert f'{started}; 1 deliverable.' in printed
+    assert f'{started}.' in printed
+    assert f'{started}{WITH_RECORD}' in printed
     with pytest.raises(SystemExit, match='holds no text'):
         main(['run', 'Does it hold?', '--agent', 'codex', '--deliverable', ' '])
+
+
+@pytest.mark.parametrize(
+    ('mine', 'theirs', 'kept'),
+    [
+        (None, None, True),
+        (False, None, False),
+        # A project's file can leave the record out, and it cannot put it back where the person's file leaves it out.
+        (None, False, False),
+        (False, True, False),
+        (True, True, True),
+    ],
+)
+def test_the_record_of_findings_follows_the_saved_choices_and_a_projects_file_only_leaves_it_out(
+    project: Path, serves: list[StartRequest | None], *, mine: bool | None, theirs: bool | None, kept: bool
+) -> None:
+    if mine is not None:
+        global_settings(project, {'setup': {'findings_record': mine}})
+    if theirs is not None:
+        project_settings(project, {'setup': {'findings_record': theirs}})
+
+    main(['run', 'Does it hold?', '--agent', 'codex'])
+
+    assert serves[0] is not None
+    assert serves[0].deliverables == (RECORD if kept else ())
 
 
 def test_no_settings_file_states_a_deliverable_for_run(project: Path, serves: list[StartRequest | None]) -> None:
@@ -386,7 +423,9 @@ def test_run_defaults_to_one_agent_of_each_harness_and_ask_me_turns_auto_mode_of
     main(['run', 'Does it hold?', '--ask-me', '--minutes', '90'])
 
     agents = (AgentChoice(harness='claude-code'), AgentChoice(harness='codex'))
-    assert serves == [StartRequest(question='Does it hold?', agents=agents, auto_mode=False, minutes=90)]
+    assert serves == [
+        StartRequest(question='Does it hold?', agents=agents, auto_mode=False, minutes=90, deliverables=RECORD)
+    ]
 
 
 def test_run_fills_in_the_saved_choices_for_new_labs_and_the_command_line_wins(
@@ -401,8 +440,8 @@ def test_run_fills_in_the_saved_choices_for_new_labs_and_the_command_line_wins(
     choice = AgentChoice(harness='codex', count=2, model='mini')
     claude = AgentChoice(harness='claude-code')
     assert serves == [
-        StartRequest(question='Does it hold?', agents=(choice,), auto_mode=False, minutes=45),
-        StartRequest(question='Does it hold?', agents=(claude,), auto_mode=False, minutes=10),
+        StartRequest(question='Does it hold?', agents=(choice,), auto_mode=False, minutes=45, deliverables=RECORD),
+        StartRequest(question='Does it hold?', agents=(claude,), auto_mode=False, minutes=10, deliverables=RECORD),
     ]
 
 
@@ -417,9 +456,11 @@ def test_a_projects_saved_choices_make_run_stricter_but_never_looser(
 
     # The project's agent loses its mode, and the project can't turn auto mode on or drop the time limit.
     choice = AgentChoice(harness='claude-code', count=2, model='opus')
-    assert serves == [StartRequest(question='Does it hold?', agents=(choice,), auto_mode=False, minutes=60)]
+    assert serves == [
+        StartRequest(question='Does it hold?', agents=(choice,), auto_mode=False, minutes=60, deliverables=RECORD)
+    ]
     printed = capsys.readouterr().out
-    assert 'Started a lab with 2 claude-code (opus); no auto mode; a time limit of 60 min.' in printed
+    assert f'Started a lab with 2 claude-code (opus); no auto mode; a time limit of 60 min{WITH_RECORD}' in printed
     assert printed.index('Started a lab') < printed.index('Open the lab')
 
 
@@ -439,8 +480,8 @@ def test_run_takes_a_budget_from_the_command_line_and_a_lower_one_from_a_project
     assert (first.budget_tokens, first.budget_dollars) == (5_000_000, 25.5)
     assert (second.budget_tokens, second.budget_dollars) == (200_000, 3)
     printed = capsys.readouterr().out
-    assert 'no time limit; a budget of 5,000,000 tokens and 25.5 dollars.' in printed
-    assert 'a budget of 200,000 tokens and 3 dollars.' in printed
+    assert f'no time limit; a budget of 5,000,000 tokens and 25.5 dollars{WITH_RECORD}' in printed
+    assert f'a budget of 200,000 tokens and 3 dollars{WITH_RECORD}' in printed
 
 
 @pytest.mark.parametrize(
@@ -572,7 +613,8 @@ def test_in_the_home_folder_run_keeps_the_persons_own_saved_modes(
 
     main(['run', 'Does it hold?'])
 
-    assert serves == [StartRequest(question='Does it hold?', agents=(AgentChoice(harness='codex', mode='plan'),))]
+    choice = AgentChoice(harness='codex', mode='plan')
+    assert serves == [StartRequest(question='Does it hold?', agents=(choice,), deliverables=RECORD)]
 
 
 def test_run_without_saved_agents_starts_at_most_twenty_harnesses(
@@ -601,7 +643,9 @@ def test_run_skips_a_saved_harness_that_this_computer_lacks(
     main(['run', 'Does it hold?'])
 
     # Nothing saved is left, so the lab starts one agent of each harness that this computer has.
-    assert serves == [StartRequest(question='Does it hold?', agents=(AgentChoice(harness='claude-code'),))]
+    assert serves == [
+        StartRequest(question='Does it hold?', agents=(AgentChoice(harness='claude-code'),), deliverables=RECORD)
+    ]
     printed = capsys.readouterr().out
     assert 'Skipped codex from your saved choices for new labs: it is not on this computer.' in printed
     assert 'Skipped gone from your saved choices' in printed

@@ -56,6 +56,8 @@ The lab wants chains because each agent holds a part, and the answer to a hard q
 
 Read the board's overview and the threads near your line with that question, before each new piece of work and before you end your turn. Look for a result to build on, and for a problem that you can help with. What does this result allow that was closed before? Which obstacle in another thread does your work remove? Which two failures have one cause? Vote as you read.
 
+A long thread costs every reader all of its posts, and a lab that runs for days has thousands. The person wants each thread to say what it has established, so that a reader from another line starts there and finds the link it needs. When a thread grows long, or its line reaches a result or is dropped, a member writes its summary: what was tried, what holds, what failed and why, and what is open. The board then starts each read of the thread at that summary. A summary can be wrong, so read it as a claim. When it misstates the thread, object to it, and readers get the whole thread again until a new summary stands.
+
 When you see a chain, post it as a plan when you take it, and as a call when another agent is better placed. In your post's builds-on field, name every post that the chain joins, so that their authors hear of it. A chain that is still only an idea is worth a post too, because another agent may hold the missing link.
 
 Give the other agents the links that you hold. When you know an idea, a method, or a paper that helps another agent, post it in that agent's thread, also when it comes from another field. When you are stuck, post an ask that says what you tried.
@@ -149,6 +151,8 @@ Before the lab closes, the agents choose among the candidates that stand: by wha
 The person follows the lab through its report. A report says in plain words where the lab stands: which lines are alive, which closed and why, what looks promising, and what the lab needs from the person. The coordinator posts one when the picture changes, and about every half hour while the lab works. In a lab with no coordinator, an agent that sees that the report is old posts one. The person should not have to ask where the lab stands.
 
 When the person stated deliverables, offer the files for each one before the lab ends, and say in the offer what is still missing.
+
+When the deliverables hold a record of the findings, the person wants a record that stands without the lab's data, kept current for each line of work as the lab goes. A record written in the last minutes loses what only the author of a line still knew, and a later lab starts from what the record holds. So when a line reaches a result or is dropped, its author updates that line's part of the record and offers it. The thread's summary is the natural source for that part.
 
 Ask the person only about money, scope, access, or time, and about a norm in this file that blocks the goal. Those are the person's to decide. Settle technical questions on the board. The lab exists to answer them, and the person's attention is the scarcest thing in the lab. While you wait for the person's answer, work on something else.
 

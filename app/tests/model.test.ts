@@ -124,8 +124,10 @@ import type { ActContext } from '../src/model/turns.ts';
 import {
   rerunChecks,
   act,
+  beforeSummary,
   doneLine,
   cardStatus,
+  earlierLabel,
   foldLabel,
   foldedCount,
   goneLine,
@@ -969,7 +971,9 @@ describe('turns', () => {
           ? `${row.root} ${row.open ? 'shows' : 'folds'} ${row.items.map((item) => item.post.id).join('+')}`
           : row.kind === 'turn'
             ? `${row.item.post.id}:${row.depth}`
-            : `[${row.items.map((item) => item.post.id).join('+')}]:${row.depth}`,
+            : row.kind === 'fold'
+              ? `[${row.items.map((item) => item.post.id).join('+')}]:${row.depth}`
+              : 'earlier',
       );
     // A later check that holds, from another agent, overrules the objection, so it folds with the rest.
     assert.deepEqual(list(posts), ['p-1:0', 'p-1 folds p-2+p-3+p-4', 'p-5:0']);
@@ -1136,6 +1140,51 @@ describe('turns', () => {
     assert.equal(isPlainMessage({ ...note('p-2'), badges: [] }), true);
     assert.equal(isPlainMessage(postView(result('p-2', { kind: 'plan' }))), false);
     assert.equal(isPlainMessage(postView(result('p-2'))), false);
+  });
+
+  it('shows the summary first and folds the posts before it behind one row', () => {
+    const posts = [
+      postView(result('p-1'), 1),
+      note('p-2', { author: 'agent-2' }),
+      { ...note('p-3', { author: 'agent-3' }), seq: 3 },
+      postView(result('p-4', { kind: 'summary', text: 'Tail filters fail out of sample.' }), 4),
+      postView(result('p-5', { kind: 'plan', reply_to: 'p-1' }), 5),
+      postView(result('p-6', { kind: 'objection', reply_to: 'p-5', author: 'agent-2' }), 6),
+    ].map((item, index) => ({ ...item, seq: index + 1 }));
+    const list = (opened: (root: string) => boolean, summary: string | null = 'p-4') =>
+      rows(posts, null, true, opened, summary).map((row) =>
+        row.kind === 'earlier'
+          ? `${earlierLabel(row.items.length)} ${row.open ? 'show' : 'fold'}`
+          : row.kind === 'turn'
+            ? `${row.item.post.id}:${row.depth}`
+            : row.kind === 'replies'
+              ? `${row.root} ${row.open ? 'shows' : 'folds'}`
+              : `[${row.items.map((item) => item.post.id).join('+')}]:${row.depth}`,
+      );
+    // A reply to a post before the summary is a top-level post after it, and an objection that stands shows.
+    assert.deepEqual(
+      list(() => false),
+      ['p-4:0', '3 earlier posts fold', 'p-5:0', 'p-6:1'],
+    );
+    assert.deepEqual(
+      list((root) => root === 'p-4'),
+      ['p-4:0', '3 earlier posts show', 'p-1:0', '[p-2+p-3]:0', 'p-5:0', 'p-6:1'],
+    );
+    // A thread without a summary that stands has the rows that it had before.
+    assert.deepEqual(
+      list(() => false, null),
+      ['p-1:0', 'p-1 folds', 'p-6:2', '[p-2+p-3]:0', 'p-4:0'],
+    );
+    assert.equal(earlierLabel(1), '1 earlier post');
+    assert.equal(beforeSummary(posts, 'p-4', 'p-2'), true);
+    assert.equal(beforeSummary(posts, 'p-4', 'p-5'), false);
+    assert.equal(beforeSummary(posts, null, 'p-2'), false);
+    assert.equal(tone(posts[3]?.post ?? result('p-0')), 'quiet');
+    assert.equal(
+      act(result('p-4', { kind: 'summary' }), null, { called: (id) => id, author: null }),
+      'summed up the thread',
+    );
+    assert.equal(repliesLabel([posts[3] as PostView]), '1 reply: 1 summary');
   });
 
   it('says on a fold how many messages it holds and who wrote them', () => {
@@ -1636,6 +1685,7 @@ describe('choices for new labs', () => {
     minutes: 45,
     budget_tokens: null,
     budget_dollars: null,
+    findings_record: true,
   };
 
   it('start the setup, with nothing for a harness that this computer lacks', () => {
@@ -1677,6 +1727,7 @@ describe('choices for new labs', () => {
       minutes: null,
       budget_tokens: null,
       budget_dollars: null,
+      findings_record: true,
     };
     assert.deepEqual(firstSeats(both, seats), [
       { ...newSeat('claude-code'), model: 'opus', role: 'driver' },
@@ -1706,7 +1757,10 @@ describe('choices for new labs', () => {
       minutes: 45,
       budget_tokens: null,
       budget_dollars: null,
+      findings_record: true,
     });
+    // The setup's deliverables without the record of findings leave it out of the next labs.
+    assert.equal(setupChoices(picks, false, 45, undefined, false).findings_record, false);
     assert.deepEqual(
       setupChoices(picks, false, 45, { tokens: 5_000_000, dollars: 20 }).budget_dollars,
       20,
@@ -1722,6 +1776,10 @@ describe('choices for new labs', () => {
     assert.equal(
       defaultsLine(DEFAULTS, HARNESSES),
       'One agent of each harness that this computer has. Auto mode. No time limit.',
+    );
+    assert.equal(
+      defaultsLine({ ...DEFAULTS, findings_record: false }, HARNESSES),
+      'One agent of each harness that this computer has. Auto mode. No time limit. No record of findings.',
     );
   });
 

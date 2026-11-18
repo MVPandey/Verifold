@@ -1047,7 +1047,7 @@ function QuietBand(props: { readonly lab: LabView; readonly now: Date }): ReactE
 }
 
 /**
- * One thread on the wall, or an opened side thread. Closed, it shows the title, a status, a mark for new posts, how long ago its line's newest result came and its open obstacles, the pictures of its team, the time of the latest post, the one status of the thread, and the threads that it builds on and that build on it. Open, it takes
+ * One thread on the wall, or an opened side thread. Closed, it shows the title, a status, a mark for new posts, how long ago its line's newest result came and its open obstacles, the headline of the thread's summary, the pictures of its team, the time of the latest post, the one status of the thread, and the threads that it builds on and that build on it. Open, it takes
  * the full width and shows who opened the thread, who a side thread is between, the
  * result that it stands on, and its turns.
  */
@@ -1123,6 +1123,12 @@ function Card(props: {
         {facts.length > 0 ? <p className="f-facts">{facts.join(' · ')}</p> : null}
         {head ? (
           <p className={isLong(head.post.text) ? 'f-head long' : 'f-head'}>{head.post.text}</p>
+        ) : null}
+        {/* A closed card says what the thread established, in its summary's headline. */}
+        {!open && summary.summary ? (
+          <p className={isLong(summary.summary.text) ? 'f-head long' : 'f-head'}>
+            {summary.summary.text}
+          </p>
         ) : null}
         <Faces ids={ids} agents={props.agents} last={open ? null : summary.last_at} team={team} />
         {props.need ? (

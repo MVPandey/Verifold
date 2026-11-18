@@ -17,6 +17,7 @@ from verifold.protocol.agents import (
     one_line,
 )
 from verifold.protocol.deliverables import (
+    FINDINGS_RECORD,
     MAX_DELIVERABLES,
     DeliverableLine,
     OfferLine,
@@ -554,6 +555,8 @@ class SetupView(Record):
     """What the setup starts with: the person's saved choices for new labs, or Verifold's defaults."""
     defaults_from: str | None = None
     """The settings file that the saved choices come from, which can be the project's own, or `None`."""
+    findings_deliverable: Sentence = FINDINGS_RECORD
+    """The sentence of the record of findings, which the setup starts with while `defaults.findings_record` holds."""
 
 
 class StartRequest(Record):

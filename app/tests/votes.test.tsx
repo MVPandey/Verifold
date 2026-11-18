@@ -46,6 +46,7 @@ import {
   postView,
   result,
   summary,
+  FINDINGS,
 } from './fixtures.ts';
 
 const named = (id: string, name: string, changes: Partial<AgentView> = {}): AgentView =>
@@ -457,6 +458,7 @@ describe('the lab page with votes and badges', () => {
       question: lab.question,
       defaults: DEFAULTS,
       defaults_from: null,
+      findings_deliverable: FINDINGS,
     },
     lab,
     threads,

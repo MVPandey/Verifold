@@ -21,6 +21,7 @@ from verifold.app import SERVER_FILE, ServeHooks, ServeOptions, serve, stop_lab
 from verifold.harnesses.catalog import CATALOG, HarnessEntry, available, catalog_with
 from verifold.protocol.agents import MAX_AGENTS, AgentChoice, one_family
 from verifold.protocol.app import StartRequest
+from verifold.protocol.deliverables import FINDINGS_RECORD
 from verifold.protocol.settings import SettingsLevel, SetupDefaults
 from verifold.runner.errors import NoAgentFolder, NoFileManager, RunnerError
 from verifold.runner.folders import LAB_FOLDER, agents_folder, open_folder, real_folder
@@ -28,7 +29,13 @@ from verifold.runner.jobs import Job, Sweep
 from verifold.server.errors import ServerError, SetupRejected
 from verifold.store.errors import SettingsInvalid, StoreError
 from verifold.store.server_file import mark_opens, named_server, running_server
-from verifold.store.settings_file import SettingsValues, read_settings_file, settings_of, settings_path
+from verifold.store.settings_file import (
+    SettingsValues,
+    findings_record,
+    read_settings_file,
+    settings_of,
+    settings_path,
+)
 
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 """Ctrl+C, a plain `kill`, and a closed terminal. Each one stops the lab in the same way."""
@@ -98,9 +105,9 @@ def _start(args: argparse.Namespace) -> tuple[StartRequest, Mapping[str, Harness
 
     `verifold run` starts at once, without showing the saved choices, and a project's file can come from someone else.
     So a project's file can make the lab stricter, not looser: it can turn auto mode off, shorten the time limit,
-    lower the budget and the disk limit, and each of its seats gives only a harness, a count, a model, and an effort.
-    Its modes, roles, families, coordinator, powers, on-call marks, and desk are not used, and neither is its number
-    of reviewer seats, and the command says so.
+    lower the budget and the disk limit, leave the record of findings out, and each of its seats gives only a harness,
+    a count, a model, and an effort. Its modes, roles, families, coordinator, powers, on-call marks, and desk are not
+    used, and neither is its number of reviewer seats, and the command says so.
     Under `--ask-me`, no saved agent gets a mode.
 
     Raises:
@@ -123,6 +130,7 @@ def _start(args: argparse.Namespace) -> tuple[StartRequest, Mapping[str, Harness
     shorter = _lower(everywhere.minutes, here.minutes)
     tokens = _lower(everywhere.budget_tokens, here.budget_tokens)
     dollars = _lower(everywhere.budget_dollars, here.budget_dollars)
+    record = (FINDINGS_RECORD,) if findings_record(values) and not args.no_findings_record else ()
     start = StartRequest(
         question=args.question,
         agents=agents,
@@ -137,8 +145,9 @@ def _start(args: argparse.Namespace) -> tuple[StartRequest, Mapping[str, Harness
         budget_tokens=tokens if args.budget_tokens is None else args.budget_tokens,
         budget_dollars=dollars if args.budget_dollars is None else args.budget_dollars,
         disk_gb=_disk_gb(values, own=own),
-        # A deliverable is the person's own sentence for this lab, as the question is. No settings file holds one.
-        deliverables=tuple(args.deliverable or ()),
+        # A deliverable is the person's own sentence for this lab, as the question is. No settings file holds one:
+        # the files say only whether the lab starts with the record of findings, whose sentence is Verifold's.
+        deliverables=tuple(dict.fromkeys((*record, *(args.deliverable or ())))),
     )
     return start, catalog
 
@@ -276,7 +285,10 @@ def _started(start: StartRequest) -> str:
     time = f'a time limit of {start.minutes} min' if start.minutes else 'no time limit'
     waits = f'. {NOTHING_STARTS}' if all(choice.on_call for choice in start.agents) else ''
     wanted = len(start.deliverables)
-    deliverables = f'; {wanted} {"deliverable" if wanted == 1 else "deliverables"}' if wanted else ''
+    record = ''
+    if FINDINGS_RECORD in start.deliverables:
+        record = ': the record of findings' if wanted == 1 else ', the record of findings among them'
+    deliverables = f'; {wanted} {"deliverable" if wanted == 1 else "deliverables"}{record}' if wanted else ''
     spend = (
         *((f'{start.budget_tokens:,} tokens',) if start.budget_tokens else ()),
         *((f'{start.budget_dollars:g} dollars',) if start.budget_dollars else ()),
@@ -488,6 +500,11 @@ def _parser() -> argparse.ArgumentParser:
         action='append',
         metavar='SENTENCE',
         help='State something that you want to hold at the end of the lab, as one sentence, such as "A script that runs the best strategy again". Give it once for each deliverable. You can add, change, and remove deliverables in the app.',
+    )
+    run.add_argument(
+        '--no-findings-record',
+        action='store_true',
+        help='Leave out the record of findings, the deliverable that a new lab starts with: for every line of work, the method, the data source and how to fetch it again, the numbers, and why the line was kept or dropped. Default: your saved choices for new labs, which start with it.',
     )
     commands.add_parser('open', help="Open this folder's running lab in the browser again, from another terminal.")
     folder = commands.add_parser(

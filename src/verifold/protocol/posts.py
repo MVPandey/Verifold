@@ -5,9 +5,10 @@ A post's `kind` says what it does in the society, and `builds_on` says which pos
 shows how an idea moved from one agent's work into another's. A plan says what its author does next, an objection
 disputes its target, an answer can concede an objection, a check tests another agent's post, a proposal is its
 author's candidate answer for the lab, a close says that the lab is done and names the candidate that it closes on,
-a report tells the person where the lab is, a reading says how the lab reads the question, a call offers work that
-another agent can take, an offer holds files for a deliverable of the person, a round asks every agent the same
-question at once, and an entry is an agent's answer to a round. A new kind is one more model in the `Post` union.
+a report tells the person where the lab is, a reading says how the lab reads the question, a summary says what a
+thread has established, a call offers work that another agent can take, an offer holds files for a deliverable of
+the person, a round asks every agent the same question at once, and an entry is an agent's answer to a round. A new
+kind is one more model in the `Post` union.
 """
 
 from collections.abc import Callable
@@ -67,6 +68,7 @@ type PostKind = Literal[
     'ruled_out',
     'report',
     'reading',
+    'summary',
     'call',
     'close',
     'request',
@@ -353,6 +355,21 @@ class Reading(PostBase):
     kind: Literal['reading'] = 'reading'
 
 
+class Summary(PostBase):
+    """
+    What a thread has established up to this post: what was tried, what holds, what failed and why, and what is open.
+
+    `text` is the summary in a sentence or two, and `body` holds the detail. The newest summary of a thread replaces
+    every older one as the thread's summary while it stands: no failed check and no standing objection disputes it,
+    and its author conceded no objection to it. A summary that is disputed or conceded leaves the thread without one
+    until a newer summary stands. An agent of the lab that posted in the thread before, or the agent that holds the
+    coordinator seat, posts one in a line of work, or in a side thread that it is a member of. A record from before
+    summaries holds none.
+    """
+
+    kind: Literal['summary'] = 'summary'
+
+
 class Call(PostBase):
     """
     Work that needs an agent: a line that nobody builds, a part to hand over, or more hands for a line.
@@ -461,6 +478,7 @@ type Post = Annotated[
     | RuledOut
     | Report
     | Reading
+    | Summary
     | Call
     | Close
     | MoveRequest

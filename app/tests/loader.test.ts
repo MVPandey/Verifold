@@ -6,7 +6,7 @@ import type { Api } from '../src/api/client.ts';
 import type { CandidatesView, LabView } from '../src/api/types.ts';
 import { EMPTY, LOST, createLoader, inOrder, settled } from '../src/ui/loader.ts';
 import type { LabData } from '../src/ui/loader.ts';
-import { DEFAULTS, labView, postView, result } from './fixtures.ts';
+import { DEFAULTS, labView, postView, result, FINDINGS } from './fixtures.ts';
 
 /** A server whose lab view answers only when the test says so, and whose other views answer at once. */
 function slowServer(): {
@@ -34,6 +34,7 @@ function slowServer(): {
         question: 'Q?',
         defaults: DEFAULTS,
         defaults_from: null,
+        findings_deliverable: FINDINGS,
       }),
     lab: () => {
       calls.push('lab');
