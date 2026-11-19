@@ -34,6 +34,23 @@ APPROVAL_OTHER = 'Asks for a permission of its harness'
 HARNESS_QUESTION = 'Its harness asks you a question'
 """Verifold's own words for a request of a harness, so that no text of a harness stands among the waits."""
 
+STEPS: dict[str, str] = {
+    'read': 'Reads files',
+    'edit': 'Edits files',
+    'delete': 'Deletes files',
+    'move': 'Moves files',
+    'search': 'Searches',
+    'execute': 'Runs a command',
+    'think': 'Thinks',
+    'fetch': 'Fetches from the web',
+    'switch_mode': 'Changes its mode',
+}
+"""
+Verifold's own words for each ACP kind of a tool call that a harness starts, which the app shows while the turn
+runs. A harness titles its calls in its own words, such as a name of its own review step, so no title shows. A call
+of another kind has no words, and the app says that the agent works.
+"""
+
 
 def waits(board: Board) -> tuple[Wait, ...]:
     """Return what waits for the person: the approvals first, then the answers, each group oldest first."""

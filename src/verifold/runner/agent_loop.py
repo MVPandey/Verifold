@@ -83,6 +83,7 @@ from verifold.runner.session import (
 from verifold.runner.snapshots import snapshot
 from verifold.server.activity import Activity
 from verifold.server.member import Member
+from verifold.server.status import STEPS
 from verifold.society.attention import update, wakes
 from verifold.society.board import Board
 from verifold.society.budget import LIMIT_NAMES
@@ -672,8 +673,8 @@ class AgentLoop:
             if not self._asking and not self._turn_over.is_set():
                 await self._report('working')
 
-    async def _step(self, title: str) -> None:
-        await self._report('working', title)
+    async def _step(self, kind: str) -> None:
+        await self._report('working', STEPS.get(kind, ''))
 
     async def _report(
         self, state: AgentState, detail: str = '', waits_for: WaitsFor | None = None, retry: Retry | None = None

@@ -202,6 +202,41 @@ describe('the API client', () => {
     await assert.rejects(broken.desk(), ApiError);
   });
 
+  it('reads the settings from a server from before the disk limit, so the settings page loads', async () => {
+    const file = (path: string) => ({
+      path,
+      values: {},
+      revision: 'r-1',
+      settings: { version: 1 },
+      defaults: {},
+    });
+    const view = JSON.stringify({
+      all_projects: file('/all'),
+      project: file('/one'),
+      lab: { version: 1 },
+    });
+    const server = serverThatAnswers(200, view);
+    const api = createApi('secret', server.fetcher);
+    const revisions = { project: 'r-1', all_projects: 'r-1' };
+    const change = { level: 'project', key: 'votes.reveal_minutes', value: 5, revisions } as const;
+
+    for (const read of [await api.settings(), await api.changeSetting(change)]) {
+      // The page reads each level's disk limit, and a server without one has no disk limit.
+      assert.deepEqual(read.all_projects.settings.disk, { limit_gb: 0 });
+      assert.deepEqual(read.project.settings.disk, { limit_gb: 0 });
+      assert.deepEqual(read.lab?.disk, { limit_gb: 0 });
+      assert.equal(read.project.path, '/one');
+    }
+    const before = await createApi(
+      'secret',
+      serverThatAnswers(
+        200,
+        JSON.stringify({ all_projects: file('/all'), project: file('/one'), lab: null }),
+      ).fetcher,
+    ).settings();
+    assert.equal(before.lab, null);
+  });
+
   it('reads the lab’s reading of the question, and none from a server from before the reading route', async () => {
     const server = serverThatAnswers(200, 'null');
     const before = createApi('secret', serverThatAnswers(404, '{"detail": "Not Found"}').fetcher);

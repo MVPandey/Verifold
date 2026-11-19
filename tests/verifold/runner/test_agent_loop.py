@@ -995,7 +995,9 @@ async def test_the_loop_reports_what_the_agent_is_doing(served: ServedBoard, tmp
 
     states = [(state, detail) for _, state, detail in activity.changes]
     assert states[0] == ('working', '')
-    assert ('working', 'verifold.post') in states
+    # The harness's board call has its own title and no kind, so the agent works with no words of the harness.
+    assert ('working', '') in states[1:]
+    assert all('verifold.' not in detail for _, detail in states)
     assert states[-2:] == [('idle', ''), ('stopped', '')]
 
 
