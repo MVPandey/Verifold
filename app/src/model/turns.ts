@@ -302,11 +302,30 @@ export function replyRoot(posts: readonly PostView[], id: string | null): string
 }
 
 /**
+ * Return whether a post waits for the person's answer, as `waits_for_person` in the server's `society/standing.py`
+ * says: an ask that names the person, which no answer of the person replies to and no answer ends, or a request for
+ * a move that waits.
+ */
+export function waitsForPerson(item: PostView, posts: readonly PostView[]): boolean {
+  const { post } = item;
+  if (post.kind === 'request') return item.waits === true;
+  if (post.kind !== 'ask' || !post.mentions.includes(PERSON)) return false;
+  return !posts.some(
+    ({ post: reply }) =>
+      reply.kind === 'answer' &&
+      reply.reply_to === post.id &&
+      (reply.author === PERSON || reply.ends_request === true || reply.for_request != null),
+  );
+}
+
+/**
  * Return a thread's posts as rows.
  *
  * With `summary`, the ID of the thread's summary that stands, the summary comes first, and the posts before it fold
- * behind one row after it. `opened` with the summary's ID says whether they show. The posts after the summary come
- * next. A post of each part sits in its part, so a reply to a post before the summary is a top-level post after it.
+ * behind one row after it. `opened` with the summary's ID says whether they show. A post before it that waits for the
+ * person's answer stays out of the fold, as the board keeps such a post in an agent's view. The posts after the
+ * summary come next. A post of each part sits in its part, so a reply to a post before the summary is a top-level
+ * post after it.
  *
  * Within each part, a reply sits under the post that it answers, and the indent stops at two
  * levels. A run of two or more agents' plain messages that nobody replied to folds into one row at its depth.
@@ -334,13 +353,20 @@ export function rows(
   const head = posts.find((item) => item.post.id === summary);
   if (head === undefined) return tree(posts, posts, target, folding, opened);
   const earlier = posts.filter((item) => item.seq < head.seq);
-  const open = opened(head.post.id);
+  const hidden = earlier.filter((item) => !waitsForPerson(item, posts));
+  const open = hidden.length === 0 || opened(head.post.id);
   return [
     { kind: 'turn', item: head, depth: 0 },
-    ...(earlier.length > 0
-      ? [{ kind: 'earlier', summary: head.post.id, items: earlier, open } as const]
+    ...(hidden.length > 0
+      ? [{ kind: 'earlier', summary: head.post.id, items: hidden, open } as const]
       : []),
-    ...(open ? tree(earlier, posts, target, folding, opened) : []),
+    ...tree(
+      open ? earlier : earlier.filter((item) => waitsForPerson(item, posts)),
+      posts,
+      target,
+      folding,
+      opened,
+    ),
     ...tree(
       posts.filter((item) => item.seq > head.seq),
       posts,

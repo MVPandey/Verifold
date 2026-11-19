@@ -2561,6 +2561,21 @@ describe('the lab page', () => {
     );
   });
 
+  it('starts the column beside the question at the top of the seat, whatever the height of the candidates', () => {
+    const css = readFileSync(new URL('../../src/styles.css', import.meta.url), 'utf8');
+    const wide = css.slice(0, css.indexOf('@media (max-width: 1000px)'));
+    // The seat is two columns, and the column of the waits, the seats, and the steer box sits at the row's top.
+    assert.ok(
+      wide.includes('.f-seat {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) 380px;'),
+    );
+    assert.ok(
+      wide.includes(
+        '.f-steer {\n  display: flex;\n  flex-direction: column;\n  align-self: start;\n}',
+      ),
+    );
+    assert.ok(!/\.f-steer \{[^}]*align-self: end/.test(css));
+  });
+
   it('stacks the candidates on a narrow page and keeps each card within it', () => {
     const css = readFileSync(new URL('../../src/styles.css', import.meta.url), 'utf8');
     // At 390 px, one card of at least 260 px fits a row, and a card is never wider than its row.

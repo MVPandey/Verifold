@@ -276,32 +276,57 @@ def limit_message(limit: Limit, board: Board, jobs: AtTimeLimit) -> str:
     return f'Your last turn stopped when the lab reached its {LIMIT_NAMES[limit]}. {limit_facts(limit, board, jobs)}'
 
 
-def go_on_message(halt: Halt, board: Board, jobs: AtTimeLimit) -> str:
-    """Return the message that resumes an agent whose turn stopped at the lab's time or at another of its limits."""
-    return more_time_message(board.ends_at, jobs) if halt == 'time' else limit_message(halt, board, jobs)
+def go_on_message(halts: tuple[Halt, ...], board: Board, jobs: AtTimeLimit) -> str:
+    """
+    Return the message that resumes an agent whose turn stopped at the lab's time or at another of its limits.
+
+    `halts` holds each halt that the agent waited through, the one that stopped its turn first, and the message
+    names each one.
+    """
+    first, *more = halts
+    stopped = 'ran out of time' if first == 'time' else f'reached its {LIMIT_NAMES[first]}'
+    also = ''.join(f' {_also(halt)}' for halt in more)
+    return f'Your last turn stopped when the lab {stopped}.{also} {go_on_facts(halts, board, jobs)}'
 
 
-def go_on_facts(halt: Halt, board: Board, jobs: AtTimeLimit) -> str:
-    """Return what an agent that waited at the lab's time or at another of its limits gets when the lab goes on."""
-    return time_facts(board.ends_at, jobs) if halt == 'time' else limit_facts(halt, board, jobs)
+def _also(halt: Halt) -> str:
+    return 'The lab also ran out of time.' if halt == 'time' else f'The lab also reached its {LIMIT_NAMES[halt]}.'
+
+
+def go_on_facts(halts: tuple[Halt, ...], board: Board, jobs: AtTimeLimit) -> str:
+    """Return what an agent that waited at the lab's time or at its other limits gets when the lab goes on."""
+    facts = ' '.join(_more_time(board.ends_at) if halt == 'time' else _limit_changed(halt, board) for halt in halts)
+    return f'{facts}{JOBS_AFTER_TIME[jobs]}'
 
 
 def limit_facts(limit: Limit, board: Board, jobs: AtTimeLimit) -> str:
     """Return what an agent that waited at a limit gets: the limit as it is now, and what happened to its processes."""
+    return f'{_limit_changed(limit, board)}{JOBS_AFTER_TIME[jobs]}'
+
+
+def _limit_changed(limit: Limit, board: Board) -> str:
+    # Who changed the limit, and the limit as it is now. The desk sets a budget on the person's word, and only the
+    # person sets the disk limit.
     if limit == 'disk':
         most = board.settings.disk.limit_gb
         now = f' The disk limit is now {most} GB.' if most else ' The lab has no disk limit now.'
-        return f'The person changed the disk limit.{now}{JOBS_AFTER_TIME[jobs]}'
+        return f'The person changed the disk limit.{now}'
     line = budget_line(board)
     left = (
         *((f'{line.tokens_left:,} tokens',) if line.tokens_left is not None else ()),
         *((f'{line.dollars_left:.2f} dollars',) if line.dollars_left is not None else ()),
     )
     budget = f' The budget has {" and ".join(left)} left.' if left else ' The lab has no budget now.'
-    return f'The person changed the budget.{budget}{JOBS_AFTER_TIME[jobs]}'
+    by_desk = board.budget is not None and board.budget.by != PERSON
+    who = 'The desk changed the budget for the person.' if by_desk else 'The person changed the budget.'
+    return f'{who}{budget}'
 
 
 def time_facts(ends_at: datetime | None, jobs: AtTimeLimit) -> str:
     """Return what an agent that waited for more time gets: the lab's new end, and what happened to its processes."""
+    return f'{_more_time(ends_at)}{JOBS_AFTER_TIME[jobs]}'
+
+
+def _more_time(ends_at: datetime | None) -> str:
     until = f' The lab now ends at {_utc(ends_at)}.' if ends_at else ''
-    return f'The person gave the lab more time.{until}{JOBS_AFTER_TIME[jobs]}'
+    return f'The person gave the lab more time.{until}'

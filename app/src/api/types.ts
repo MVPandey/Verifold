@@ -163,7 +163,10 @@ export interface Retry {
 
 export interface AgentActivity {
   readonly state: AgentState;
-  /** The latest step that the harness reported, such as a tool call's title. */
+  /**
+   * Verifold's words for what the agent does: in a turn, the kind of the latest tool call that the harness reported,
+   * such as "Runs a command", or nothing for a call of another kind. While it waits, what it waits for.
+   */
   readonly detail: string;
   readonly at: string | null;
   /** With the state `waiting`: what the agent waits for. */

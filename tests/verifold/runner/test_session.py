@@ -28,6 +28,7 @@ from verifold.runner.session import (
     _values,
     offer_of,
 )
+from verifold.server.status import STEPS
 
 
 def calls(log: Path) -> list[dict[str, object]]:
@@ -384,6 +385,22 @@ def progress(**said: object) -> schema.ToolCallProgress:
     return schema.ToolCallProgress.model_validate(
         {'session_update': 'tool_call_update', 'tool_call_id': 'call-1'} | said
     )
+
+
+async def test_each_step_of_a_harness_reaches_the_runner_by_its_kind_and_never_by_its_title() -> None:
+    kinds: list[str] = []
+
+    async def step(kind: str) -> None:
+        kinds.append(kind)
+
+    client = _Client(SessionHooks(permissions=NO_PERMISSION.permissions, step=step))
+    untitled = schema.ToolCallStart(session_update='tool_call', tool_call_id='call-3', title='')
+    for update in (started('pytest -q', {}), started('Guardian Review', {}, 'other'), untitled):
+        await client.session_update('s', update)
+
+    assert kinds == ['execute', 'other', 'other']
+    # The app shows Verifold's words for a kind, and none for a call of another kind, such as a review of the harness.
+    assert [STEPS.get(kind, '') for kind in kinds] == ['Runs a command', '', '']
 
 
 async def test_a_request_that_names_only_its_call_gets_the_calls_command() -> None:

@@ -20,7 +20,9 @@ import type {
   Power,
   ProfileChange,
   SeatChange,
+  Settings,
   SettingsChange,
+  SettingsFileView,
   SettingsView,
   SetupView,
   StartRequest,
@@ -43,6 +45,28 @@ export const NO_BUDGET: BudgetLine = {
   tokens_left: null,
   dollars_left: null,
 };
+
+/** The disk settings of a server from before the disk limit, which has none, so its labs have no disk limit. */
+const NO_DISK_LIMIT = { limit_gb: 0 } as const;
+
+/** Return settings from any server: a server from before the disk limit sends them without it. */
+function withDisk(settings: Settings): Settings {
+  return { ...settings, disk: settings?.disk ?? NO_DISK_LIMIT };
+}
+
+/** Return the settings view of any server, with the disk settings that `withDisk` gives each part. */
+function settingsView(view: SettingsView): SettingsView {
+  const file = (part: SettingsFileView): SettingsFileView => ({
+    ...part,
+    settings: withDisk(part.settings),
+  });
+  return {
+    ...view,
+    all_projects: file(view.all_projects),
+    project: file(view.project),
+    lab: view.lab ? withDisk(view.lab) : null,
+  };
+}
 
 /** A request that the server refused, with the server's reason. */
 export class ApiError extends Error {
@@ -200,7 +224,7 @@ export function createApi(
         budget: lab.budget ?? NO_BUDGET,
         limit: lab.limit ?? null,
         disk: lab.disk ?? null,
-        settings: { ...lab.settings, disk: lab.settings?.disk ?? { limit_gb: 0 } },
+        settings: withDisk(lab.settings),
         agents: lab.agents.map((view) => ({
           ...view,
           agent: { ...view.agent, given_role: view.agent.given_role ?? '' },
@@ -315,8 +339,8 @@ export function createApi(
         ...(minutes === undefined ? {} : { minutes }),
       }),
     takeMinutesBack: (postId) => request(`/requests/${encodeURIComponent(postId)}/minutes`, {}),
-    settings: () => request('/settings'),
-    changeSetting: (change) => request('/settings', change),
+    settings: () => request<SettingsView>('/settings').then(settingsView),
+    changeSetting: (change) => request<SettingsView>('/settings', change).then(settingsView),
     norms: () => request('/norms'),
     saveNorms: (name, text, revision) => request('/norms', { name, text, revision }),
   };

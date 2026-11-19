@@ -394,12 +394,13 @@ a close stands or such a post went out in the minute before.
   report in `report`, as a line of a post, and `report_minutes_ago` says how many whole minutes ago it was
   posted. Both are empty while the lab has no report.
 - A `reading` says how the lab reads the question: what counts as an answer, what the lab assumes, and what it
-  leaves out. Its `text` is the reading in a sentence or two, and `body` holds the detail. While an agent holds the
-  coordinator seat, the board takes a reading from that agent only. While nobody holds the seat, it takes one from
-  any agent that is not on call, other than the desk. The person posts none. A reading is in a thread for the whole
-  lab, other than the conversation, the desk chat, and a thread of offers, and it is for every agent that is not on
-  call, whatever it names. The
-  newest reading is the lab's reading, and it replaces every older one. The app shows it at the top of the lab's
+  leaves out. Its `text` is the reading in a sentence or two, and `body` holds the detail. While the lab has no
+  reading, the board takes the first one from any agent but the desk, also from an agent on call. After that, while
+  an agent holds the coordinator seat, the board takes a newer reading from that agent only. While nobody holds the
+  seat, it takes one from any agent that is not on call, other than the desk. The person posts none. A reading is
+  in a thread for the whole lab, other than the conversation, the desk chat, and a thread of offers, and it is for
+  every agent that is not on call, whatever it names. The newest reading is the lab's reading, and it replaces
+  every older one. The app shows it at the top of the lab's
   page with its author and its age, and the person can reply to it there. `brief` has it in `reading`, as a line
   of a post, and `reading_minutes_ago` says how many whole minutes ago it was posted. While the lab has no reading,
   `brief` leaves both out, and `no_reading` says so with the minutes since the lab opened.
@@ -475,12 +476,13 @@ a close stands or such a post went out in the minute before.
 - The person can give the lab a budget in tokens and one in dollars, and the lab has a disk limit, which the
   person sets. `budget` in `brief` has each budget, what the lab spent, and what is left. The lab spent the input
   and the output tokens, and the costs, that the harnesses reported at the ends of the turns. A harness that
-  reports no cost adds no dollars. A turn reports what it spent when it ends, and a turn that Verifold cancels
-  reports no tokens. So the lab can spend more than its budget by the turns that run when it reaches it. `disk` in
+  reports no cost adds no dollars. A turn reports what it spent when it ends. A turn that Verifold cancels
+  reports the tokens of its harness's answer to the cancel when that answer comes within 10 seconds, and no tokens
+  otherwise. So the lab can spend more than its budget by the turns that run when it reaches it. `disk` in
   `brief` has the bytes of your own folder, the bytes of the lab's files together, and the disk limit in bytes, as
-  Verifold measured them at the end of the latest turn. The lab's files are the agents' folders, the clean copies
-  for reruns, and the snapshots. When the lab reaches its budget or its disk limit, `limit_reached` in `brief`
-  names it, and the lab stops as at its time limit. All that this text says of a lab that is out of time holds
+  Verifold measured them last, at the end of a turn and about once a minute at most. The lab's files are the
+  agents' folders, the clean copies for reruns, and the snapshots. When the lab reaches its budget or its disk
+  limit, `limit_reached` in `brief` names it, and the lab stops as at its time limit. All that this text says of a lab that is out of time holds
   then too, until the person sets a budget or a disk limit that the lab has not reached.
 - A lab can have a desk: a seat that the person chooses, which answers the person in the desk chat and acts on the
   person's word. `brief` names it in `desk`, and `agents` does not list it. The desk is no part of the lab's work.
@@ -504,9 +506,11 @@ a close stands or such a post went out in the minute before.
 - The desk's post for the person has `for_person` and `on`, and the app shows it as the desk's, for the person. It
   reaches the agents as a post of the person does: with no `mentions` and no `reply_to`, in a thread for the whole
   lab, it is for every agent that is not on call, a line of the news holds its headline and its body, and in the
-  conversation it is for the coordinator and waits for its reply. It does not open a closed lab again. The desk
-  can also open a round, revise the question, state, change, or remove a deliverable, set the lab's time, and end
-  an agent's turn. Verifold cancels such a turn as it cancels a turn at the limit for one turn, and the agent then
+  conversation it is for the coordinator and waits for its reply. It opens a closed lab again as a post of the
+  person does: with no `reply_to`, in a thread for the whole lab other than the conversation, and in a thread of
+  offers only while it is for every agent. So do the desk's round and its posts for a revision of the question
+  and a new deliverable. The desk's `reply` in the desk chat does not. The desk can also open a round, revise the
+  question, state, change, or remove a deliverable, set the lab's time, and end an agent's turn. Verifold cancels such a turn as it cancels a turn at the limit for one turn, and the agent then
   starts one more turn, whose message says why.
 """
 """
@@ -524,7 +528,8 @@ news.
 `state` is open, closing, or closed. `minutes_left` is the time that the lab has left, and it is empty when the lab
 has no time limit. `budget` has the lab's budget in tokens and in dollars, what the lab spent, and what is left.
 `limit_reached` names the budget or the disk limit that stops the agents now. `disk` has the bytes of your folder,
-of the lab's files together, and the disk limit, as Verifold measured them at the end of the latest turn.
+of the lab's files together, and the disk limit, as Verifold measured them last: at the end of a turn, about once a
+minute at most.
 `in_turn` counts the agents with a turn that started and has not ended, by the lab's record. The record cannot tell
 a turn that runs from a turn that Verifold lost when it stopped, so the count can be too high after a restart. An
 agent that joined with an invitation has no turns in the record. `alarms_waiting` counts the agents with an alarm
@@ -641,7 +646,8 @@ Kinds:
 - `close`: its author says that the lab is done: it has its answer, or nothing useful is left to do. It reaches
   every agent. Another agent agrees with an `answer` that has `accepts: true`, or objects. The lab is closed while
   more than half of its agents stand behind the newest close and no objection to it stands. A `ruled_out`
-  from its author that replies to it withdraws it, and a new post from the person opens the lab again.
+  from its author that replies to it withdraws it, and a new post from the person, or from the desk for the
+  person, opens the lab again.
   `candidate` names the candidate answer that it closes on, one that stands. While candidates stand, the board
   takes no close without one. While the lab has no `reading`, the board takes no close. While the lab is closed,
   that candidate is the lab's answer. The close stands only while that candidate stands.
@@ -652,8 +658,9 @@ Kinds:
   agent before the threads, with its author and its age, and names it above the conversation with the
   coordinator. It shows `text` first, and `body` open under it. `brief` has the newest report in `report`.
 - `reading`: how the lab reads the question: what counts as an answer, what the lab assumes, and what it leaves
-  out. It reaches every agent that is not on call. While an agent holds the coordinator seat, only that agent
-  posts one, and while nobody holds the seat, any agent that is not on call and not the desk does. It is in a
+  out. It reaches every agent that is not on call. Any agent but the desk posts the first one, also an agent on
+  call. After that, while an agent holds the coordinator seat, only that agent posts a newer one, and while nobody
+  holds the seat, any agent that is not on call and not the desk does. It is in a
   thread for the whole lab, other than the conversation, the desk chat, and a thread of offers. The newest reading
   replaces every older one. The app shows it at the top of the lab's page, and `brief` has it in `reading`.
 - `summary`: what the thread has established up to it: what was tried, what holds, what failed and why, and what
@@ -1100,9 +1107,10 @@ lost when it stopped, and an invited agent has no turns in the record. `no_reply
 or of the desk for the person, in the conversation that waits for the coordinator's reply, with the whole minutes
 that it has waited. `waits` holds the asks, the permission requests, and the requests for a move that wait for the
 person's answer. Each list holds at most 20 entries, the newest ones, and a field such as `more_waits` counts the
-ones that it leaves out. A line of a post holds at most 300 characters of its headline, and `thread` shows the whole
-post. A line of a `result` has `tested`, and a candidate has `rests_on`, as in `brief`. The result has `news`, the
-desk's small news as the board's instructions say.
+ones that it leaves out. Each deliverable holds its newest 3 offers, with the accepted one among them, and
+`more_offers` counts the others, which `thread` shows in the deliverable's `thread`. A line of a post holds at most
+300 characters of its headline, and `thread` shows the whole post. A line of a `result` has `tested`, and a candidate
+has `rests_on`, as in `brief`. The result has `news`, the desk's small news as the board's instructions say.
 """
 
 READ_FILE_TOOL = """\
@@ -1134,8 +1142,9 @@ thread. `mentions` names agents by their IDs. The post has `for_person` and `on`
 it as the desk's post for the person. It reaches the agents as a post of the person does: with no `mentions` and no
 `reply_to`, in a thread for the whole lab, it is for every agent that is not on call, and a line of the news holds
 its headline and its body. In the conversation, it is for the agent that holds the coordinator seat, and it waits for
-that agent's reply as a post of the person does. It does not open a closed lab again. `text` is one headline of at
-most 200 characters, and `body` holds the detail.
+that agent's reply as a post of the person does. It opens a closed lab again as a post of the person does: with no
+`reply_to`, in a thread for the whole lab other than the conversation, and in a thread of offers only while it is for
+every agent. `text` is one headline of at most 200 characters, and `body` holds the detail.
 """
 
 OPEN_ROUND_TOOL = f"""\
@@ -1145,8 +1154,9 @@ The desk alone has this tool. {ON}
 
 `text` is the question, and `minutes`, from 1 to 15, is how long the round stays open by the lab's clock. `thread`
 names a thread for the whole lab, or `new_thread` with a title opens one. A round names nobody and replies to no post,
-and a lab has one open round at a time. It is for every agent that is not on call. It does not wait for the desk, and
-the desk enters none. The round has `for_person` and `on`, as every post of the desk for the person has.
+and a lab has one open round at a time. It is for every agent that is not on call, and it opens a closed lab again.
+It does not wait for the desk, and the desk enters none. The round has `for_person` and `on`, as every post of the
+desk for the person has.
 """
 
 REVISE_QUESTION_TOOL = f"""\
@@ -1155,8 +1165,8 @@ Revises the lab's question for the person.
 The desk alone has this tool. {ON}
 
 `question` is the new text, and `note` says why, in one line. The board records the revision with the desk in `by`
-and `on`, and a post of the desk for the person in the question's thread tells the lab, as for a revision of the
-person. A text that is the question already records nothing.
+and `on`, and a post of the desk for the person in the question's thread tells the lab and opens a closed lab
+again, as for a revision of the person. A text that is the question already records nothing.
 """
 
 DELIVERABLE_TOOL = f"""\
@@ -1169,7 +1179,7 @@ The desk alone has this tool. {ON}
 `deliverable`, such as `d-1`, and the new sentence in `text`. `remove` takes the ID. The board records the change
 with the desk in `by` and `on`. A post of the desk for the person tells the lab, as for a change of the person: for a
 new deliverable always, and for a new sentence or a removal unless a close stands or such a post went out in the
-minute before. `brief` lists the deliverables. Only the person decides about an offer of files.
+minute before. The post for a new deliverable opens a closed lab again. `brief` lists the deliverables. Only the person decides about an offer of files.
 """
 
 SET_TIME_TOOL = f"""\

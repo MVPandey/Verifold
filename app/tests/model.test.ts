@@ -141,6 +141,7 @@ import {
   standingIn,
   tone,
   unfoldLabel,
+  waitsForPerson,
 } from '../src/model/turns.ts';
 import {
   DEFAULTS,
@@ -1176,6 +1177,41 @@ describe('turns', () => {
       ['p-1:0', 'p-1 folds', 'p-6:2', '[p-2+p-3]:0', 'p-4:0'],
     );
     assert.equal(earlierLabel(1), '1 earlier post');
+    // An ask before the summary that waits for the person stays out of the fold, and it folds once the person answers.
+    const asks = [
+      postView(result('p-1'), 1),
+      postView(result('p-2', { kind: 'ask', mentions: [PERSON], author: 'agent-2' }), 2),
+      note('p-3', { author: 'agent-3' }),
+      postView(result('p-4', { kind: 'summary', text: 'Tail filters fail out of sample.' }), 4),
+    ].map((item, index) => ({ ...item, seq: index + 1 }));
+    const answer = postView(
+      result('p-5', { kind: 'answer', reply_to: 'p-2', author: PERSON, accepts: false } as never),
+      5,
+    );
+    const shape = (list: readonly PostView[], opened: boolean) =>
+      rows(list, null, true, () => opened, 'p-4').map((row) =>
+        row.kind === 'earlier'
+          ? `${earlierLabel(row.items.length)} ${row.open ? 'show' : 'fold'}`
+          : row.kind === 'turn'
+            ? `${row.item.post.id}:${row.depth}`
+            : row.kind,
+      );
+    assert.deepEqual(shape(asks, false), ['p-4:0', '2 earlier posts fold', 'p-2:0']);
+    assert.deepEqual(shape(asks, true), [
+      'p-4:0',
+      '2 earlier posts show',
+      'p-1:0',
+      'p-2:0',
+      'p-3:0',
+    ]);
+    assert.deepEqual(shape([...asks, answer], false), ['p-4:0', '3 earlier posts fold', 'p-5:0']);
+    assert.equal(waitsForPerson(asks[1] as PostView, asks), true);
+    assert.equal(waitsForPerson(asks[1] as PostView, [...asks, answer]), false);
+    // A request for a move waits while the server says so, and an ask to an agent never waits for the person.
+    const request = postView(result('p-6', { kind: 'request' } as never), 6);
+    assert.equal(waitsForPerson({ ...request, waits: true }, asks), true);
+    assert.equal(waitsForPerson({ ...request, waits: false }, asks), false);
+    assert.equal(waitsForPerson(postView(result('p-7', { kind: 'ask' })), asks), false);
     assert.equal(beforeSummary(posts, 'p-4', 'p-2'), true);
     assert.equal(beforeSummary(posts, 'p-4', 'p-5'), false);
     assert.equal(beforeSummary(posts, null, 'p-2'), false);

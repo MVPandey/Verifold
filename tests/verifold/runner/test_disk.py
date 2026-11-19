@@ -70,3 +70,31 @@ async def test_a_measure_above_the_disk_limit_stops_the_lab(lab: Lab, tmp_path: 
     await lab.measured(lab_disk.model_copy(update={'total': 2 * 1024**3}))
 
     assert lab.board.halted == 'disk'
+
+
+async def test_a_turn_that_ends_within_a_minute_of_a_measure_waits_for_the_next_and_a_new_limit_measures_at_once(
+    lab: Lab, tmp_path: Path
+) -> None:
+    agents = tmp_path / '.verifold' / 'agents'
+    for agent in ('ada', 'bo'):
+        (agents / agent).mkdir(parents=True)
+    meter = DiskMeter(tmp_path, lab)
+
+    start = await meter.measure()
+    (agents / 'bo' / 'more.bin').write_bytes(b'm' * 200_000)
+    skipped = await meter.turn_ended('bo')
+    unchanged = lab.disk
+    # Each look at the lab's clock of this test is one second.
+    for _ in range(60):
+        lab.now()
+    later = await meter.turn_ended('ada')
+    (agents / 'ada' / 'more.bin').write_bytes(b'm' * 200_000)
+    # A new disk limit measures at once, also within a minute of the last measure.
+    fresh = await meter.measure()
+
+    assert (skipped, unchanged) == (None, start)
+    assert later is not None
+    # The folder of the turn that ended within the minute counts at the next measure.
+    assert later.folders['bo'] > start.folders['bo']
+    assert fresh.folders['ada'] > later.folders['ada']
+    assert lab.disk == fresh

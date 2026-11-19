@@ -22,6 +22,8 @@ session or a change take a minute.
 `FAKE_ACP_NO_LOAD` makes it say that it loads no sessions, `FAKE_ACP_REFUSE_LOAD` makes it refuse to load one, and
 `FAKE_ACP_CRASH_LOAD` makes it exit when it loads one. `FAKE_ACP_CRASH_ONCE` names a file: the agent exits during a
 turn when the file is not there, and makes it. `FAKE_ACP_TURN_SECONDS` makes each turn take that long.
+`FAKE_ACP_ANSWER_CANCEL` makes a cancel end a slow turn at once, with the turn's tokens and cost, as real adapters
+answer the prompt that they stop. Without it, a slow turn runs on after a cancel and never answers in time.
 """
 
 import asyncio
@@ -29,6 +31,7 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import Literal, override
 
@@ -59,6 +62,7 @@ class FakeAgent(acp.Agent):
         self._session = ''
         self._model = 'default'
         self._cost = 0.0
+        self._cancelled = asyncio.Event()
 
     def _note(self, **entry: object) -> None:
         if path := os.environ.get('FAKE_ACP_LOG'):
@@ -176,6 +180,8 @@ class FakeAgent(acp.Agent):
     @override
     async def cancel(self, session_id: str, **_: object) -> None:
         self._note(event='cancel')
+        if os.environ.get('FAKE_ACP_ANSWER_CANCEL'):
+            self._cancelled.set()
 
     @override
     async def prompt(self, session_id: str, prompt: Prompt, **_: object) -> schema.PromptResponse:
@@ -188,7 +194,11 @@ class FakeAgent(acp.Agent):
             os._exit(3)
         await asyncio.sleep(float(os.environ.get('FAKE_ACP_TURN_SECONDS', '0')))
         if os.environ.get('FAKE_ACP_SLOW'):
-            await asyncio.sleep(60)
+            with suppress(TimeoutError):
+                await asyncio.wait_for(self._cancelled.wait(), 60)
+            if self._cancelled.is_set():
+                self._cancelled.clear()
+                return await self._stopped(session_id)
         # The doorbell can follow other news, such as a restart of Verifold.
         if os.environ.get('FAKE_ACP_DESK') == self._name:
             await self._call('reply', {'text': f'The desk {self._name} read you.'})
@@ -212,6 +222,17 @@ class FakeAgent(acp.Agent):
         return schema.PromptResponse(
             stop_reason='end_turn',
             usage=schema.Usage(total_tokens=18, input_tokens=10, output_tokens=5, cached_read_tokens=3),
+        )
+
+    async def _stopped(self, session_id: str) -> schema.PromptResponse:
+        # The answer to a prompt that a cancel stopped: what the turn used up to the cancel.
+        self._cost += 0.05
+        if self._client:
+            cost = schema.Cost(amount=self._cost, currency='USD')
+            update = schema.UsageUpdate(session_update='usage_update', used=900, size=1_000, cost=cost)
+            await self._client.session_update(session_id=session_id, update=update)
+        return schema.PromptResponse(
+            stop_reason='cancelled', usage=schema.Usage(total_tokens=1_200, input_tokens=700, output_tokens=500)
         )
 
     async def _say_hello(self, session_id: str) -> None:

@@ -117,7 +117,10 @@ class SessionHooks:
 
     permissions: Permissions
     step: Callable[[str], Awaitable[None]] = _ignore
-    """Gets the title of each tool call that the harness starts."""
+    """
+    Gets the ACP kind of each tool call that the harness starts, such as `execute`, or `other` when the harness gives
+    none. A call's title is the harness's own words, so it stays out.
+    """
     questions: Questions = _no_answer
 
 
@@ -213,8 +216,7 @@ class _Client(acp.Client):
             self.cost = update.cost.amount
         if isinstance(update, schema.ToolCallStart):
             self._calls[update.tool_call_id] = _Call().updated(update)
-            if update.title:
-                await self._hooks.step(update.title)
+            await self._hooks.step(update.kind or 'other')
         if isinstance(update, schema.ToolCallProgress):
             # A harness can fill in a call's input after its start.
             call = self._calls.pop(update.tool_call_id, _Call())

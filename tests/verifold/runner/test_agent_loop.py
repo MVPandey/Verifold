@@ -98,8 +98,9 @@ def loop_for(
         token=token,
         start='Start.',
     )
-    # No quiet window by default, so a doorbell rings as soon as a post for the agent arrives.
-    options = {'retry_after': 0.0, 'quiet': 0.0} | settings
+    # No quiet window by default, so a doorbell rings as soon as a post for the agent arrives. A cancelled turn
+    # waits a moment for the harness's answer, which the fake harness gives at once when it gives one.
+    options = {'retry_after': 0.0, 'quiet': 0.0, 'cancel_wait': 0.05} | settings
     return AgentLoop(
         member,
         setup,
@@ -677,6 +678,33 @@ async def test_a_turn_past_its_timeout_is_cancelled(
     cut = 'The turn ran past 0.5 seconds and was cancelled.'
     assert [turn.error for turn in served.lab.board.turns] == [cut, cut]
     assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', cut_short_message(cut)]
+    # The harness never answered the cancelled prompt, so the turns have no tokens, and the loop went on.
+    assert [turn.usage for turn in served.lab.board.turns] == [Usage(), Usage()]
+
+
+async def test_a_cancelled_turn_counts_the_tokens_and_the_cost_of_the_harnesss_answer_to_the_cancel(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_SLOW', '1')
+    monkeypatch.setenv('FAKE_ACP_ANSWER_CANCEL', '1')
+    lab = served.lab
+    await lab.set_budget(5_000, None)
+    # The answer comes at once, so the long wait for it is never spent.
+    running = asyncio.create_task(loop_for(served, tmp_path, turn_timeout=0.3, cancel_wait=60).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 2)
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+    turns = lab.board.turns
+    assert bool(calls(log, 'cancel'))
+    assert [turn.error for turn in turns] == ['The turn ran past 0.3 seconds and was cancelled.'] * 2
+    assert [turn.usage for turn in turns] == [Usage(input_tokens=700, output_tokens=500)] * 2
+    assert [turn.cost_usd for turn in turns] == [pytest.approx(0.05)] * 2
+    # The budget counts the tokens of the cut turns.
+    assert lab.board.spent_tokens == 2_400
 
 
 @pytest.mark.usefixtures('log')
@@ -967,7 +995,9 @@ async def test_the_loop_reports_what_the_agent_is_doing(served: ServedBoard, tmp
 
     states = [(state, detail) for _, state, detail in activity.changes]
     assert states[0] == ('working', '')
-    assert ('working', 'verifold.post') in states
+    # The harness's board call has its own title and no kind, so the agent works with no words of the harness.
+    assert ('working', '') in states[1:]
+    assert all('verifold.' not in detail for _, detail in states)
     assert states[-2:] == [('idle', ''), ('stopped', '')]
 
 
@@ -2095,6 +2125,39 @@ async def test_reaching_the_budget_stops_the_turn_until_the_person_sets_a_new_bu
     assert said == limit_message('tokens', lab.board, lab.board.settings.jobs.at_time_limit)
     assert said.startswith('Your last turn stopped when the lab reached its budget in tokens. The person changed')
     assert 'The budget has 3,900 tokens left.' in said
+
+
+async def test_an_agent_that_waited_through_the_budget_and_the_time_hears_of_both_when_the_lab_goes_on(
+    served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_SLOW', '1')
+    lab = served.lab
+    activity = Recorded()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
+    try:
+        await until(lambda: bool(calls(log, 'prompt')))
+        await lab.set_budget(1_000, None)
+        await lab.end_turn(TurnSummary(agent='ada', seconds=1, usage=Usage(input_tokens=900, output_tokens=200)))
+        await until(lambda: activity.of('bo').state == 'waiting')
+        # The time runs out while the agent waits at the budget, and the person then raises the budget first.
+        await lab.set_time_left(timedelta(0))
+        await lab.run_out_of_time()
+        await lab.set_budget(5_000, None)
+        await lab.set_time_left(timedelta(hours=1))
+        await until(lambda: len(calls(log, 'prompt')) == 2)
+    finally:
+        running.cancel()
+        with suppress(asyncio.CancelledError):
+            await running
+
+    said = str(calls(log, 'prompt')[1]['text'])
+    jobs = lab.board.settings.jobs.at_time_limit
+    assert said == agent_loop.go_on_message(('tokens', 'time'), lab.board, jobs)
+    assert said.startswith(
+        'Your last turn stopped when the lab reached its budget in tokens. The lab also ran out of time. The person '
+        'changed the budget.'
+    )
+    assert 'The person gave the lab more time. The lab now ends at ' in said
 
 
 def failing(error: Exception) -> object:

@@ -8,7 +8,7 @@ reads no offered file and never marks a deliverable as met.
 
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, AwareDatetime, StringConstraints
+from pydantic import AfterValidator, AwareDatetime, Field, StringConstraints
 
 from verifold.protocol.agents import one_line
 from verifold.protocol.ids import AgentId, DeliverableId, PostId, ThreadId
@@ -100,6 +100,11 @@ class DeliverableLine(Record):
     """
     Each agent's newest offer, oldest first, each with its own state. The offer that the person accepted is among
     them also when its agent offered again later.
+    """
+    more_offers: int = Field(default=0, ge=0, exclude_if=lambda count: count == 0)
+    """
+    How many of those offers a view of bounded size leaves out of `offers`. `thread` holds every offer. A view that
+    leaves out none has no such field.
     """
     disputed: tuple[PostId, ...] = ()
     """The other posts of the thread that stand disputed: an earlier offer, or what an agent said there."""

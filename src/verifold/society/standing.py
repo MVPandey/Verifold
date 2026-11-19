@@ -6,6 +6,7 @@ from verifold.protocol.ids import PERSON, AgentId, PostId
 from verifold.protocol.join import Standing
 from verifold.protocol.posts import Answer, Check, Close, Objection, Plan, Proposal, RuledOut
 from verifold.society.board import Board
+from verifold.society.desk import speaks_for_person
 
 
 def standing(board: Board, post_id: PostId) -> Standing:
@@ -177,10 +178,11 @@ def closing(board: Board) -> Posted | None:
     Return the post that says that the lab is done, when one stands: the newest close.
 
     It stands until an objection to it stands, its author concedes one, its author withdraws it with a ruled-out
-    lead that replies to it, the person posts to the lab after it, or the person asks for changes to an offer of
-    files for a deliverable after it. A close that names a candidate also stands only while that candidate stands,
-    so a newer proposal of the candidate's author, or its author's concession, ends the close too. A close from
-    before closes named a candidate names none, and this rule leaves it as it was. An older close does not come back.
+    lead that replies to it, the person or the desk for the person posts to the lab after it, or the person asks
+    for changes to an offer of files for a deliverable after it. A close that names a candidate also stands only
+    while that candidate stands, so a newer proposal of the candidate's author, or its author's concession, ends the
+    close too. A close from before closes named a candidate names none, and this rule leaves it as it was. An older
+    close does not come back.
     """
     entry = next((entry for entry in reversed(board.posts) if isinstance(entry.post, Close)), None)
     if entry is None or standing(board, entry.post.id) in {'disputed', 'conceded'}:
@@ -192,11 +194,12 @@ def closing(board: Board) -> Posted | None:
         isinstance(reply.post, RuledOut) and reply.post.author == entry.post.author
         for reply in board.replies(entry.post.id)
     )
-    # The person's new words to the lab open it again: the agents have something to do. Words in a side thread
-    # reach only its members, words in the conversation reach the coordinator, and words in the desk chat reach
-    # the desk, so they are not words to the lab.
+    # The person's new words to the lab open it again: the agents have something to do. A post of the desk with
+    # `on` is the person's word too, so it opens the lab in the same way. Words in a side thread reach only its
+    # members, words in the conversation reach the coordinator, and words in the desk chat reach the desk, so they
+    # are not words to the lab.
     steered = any(
-        later.post.author == PERSON
+        speaks_for_person(later.post)
         and later.post.reply_to is None
         and later.seq > entry.seq
         and not board.is_side(later.post.thread)

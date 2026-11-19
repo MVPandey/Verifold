@@ -520,8 +520,8 @@ class Host:
         """
         Measure the lab's files now, before a new disk limit, so that the limit counts what they take at this moment.
 
-        Verifold measures at the end of each turn, and no turn of the lab's work ends while the lab stands at its disk
-        limit. So the last measure can be from before the person freed some space.
+        Verifold measures at the end of a turn, about once a minute at most, and no turn of the lab's work ends while
+        the lab stands at its disk limit. So the last measure can be from before the person freed some space.
         """
         if self._disk is not None:
             await _measured(self._disk)

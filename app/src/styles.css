@@ -763,10 +763,14 @@ details[open] > summary .opened {
   position: absolute;
   inset: 0;
 }
+/*
+ * The column beside the question starts at the top of the seat, whatever the height of the candidates, so its
+ * seats and the box that steers the lab stay in sight at the top of the page.
+ */
 .f-steer {
   display: flex;
   flex-direction: column;
-  align-self: end;
+  align-self: start;
 }
 .f-steer-form {
   display: flex;

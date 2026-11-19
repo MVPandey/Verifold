@@ -107,10 +107,15 @@ def check_names_candidate(board: Board, close: Close) -> None:
 
 NO_READING_CLOSE = (
     "The lab has no reading of the question yet, so the board takes no close. A close comes after the lab's "
-    '`reading`: the agent that holds the coordinator seat posts it, or, while nobody holds the seat, any agent '
-    'that is not on call.'
+    '`reading`. While the lab has none, the board takes the first reading from any agent of the lab but the desk, '
+    'also from an agent on call.'
 )
 """Why the board refuses a new close in a lab without a reading."""
+
+
+def has_reading(board: Board) -> bool:
+    """Return whether the lab has a reading of the question: any `reading` on the board."""
+    return any(isinstance(entry.post, Reading) for entry in board.posts)
 
 
 def check_read(board: Board) -> None:
@@ -125,7 +130,7 @@ def check_read(board: Board) -> None:
         RejectedEvent: The lab has no reading.
 
     """
-    if not any(isinstance(entry.post, Reading) for entry in board.posts):
+    if not has_reading(board):
         raise RejectedEvent(NO_READING_CLOSE)
 
 

@@ -276,7 +276,7 @@ const LEASE: NumberField = {
 const DISK: NumberField = {
   key: 'disk.limit_gb',
   title: 'Disk limit',
-  detail: `The most gigabytes that the agents’ folders, the clean copies for reruns, and the snapshots may take together. Verifold measures them at the end of each turn. At the limit the agents stop, as at the time limit, until you raise it. Leave the field empty, and the limit is ${DEFAULT_DISK_GB} GB. With 0, the lab has no disk limit.`,
+  detail: `The most gigabytes that the agents’ folders, the clean copies for reruns, and the snapshots may take together. Verifold measures them at the end of a turn, about once a minute at most. At the limit the agents stop, as at the time limit, until you raise it. Leave the field empty, and the limit is ${DEFAULT_DISK_GB} GB. With 0, the lab has no disk limit.`,
   label: 'Gigabytes',
   max: MAX_DISK_GB,
   empty: `${DEFAULT_DISK_GB} GB`,
