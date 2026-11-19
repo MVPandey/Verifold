@@ -78,6 +78,7 @@ from verifold.runner.session import (
     Question,
     SessionHooks,
     SessionOptions,
+    TurnResult,
 )
 from verifold.runner.snapshots import snapshot
 from verifold.server.activity import Activity
@@ -116,6 +117,11 @@ class LoopSettings(Record):
     """The most seconds that a doorbell waits for the board to go quiet."""
     leave_grace: float = Field(default=5, ge=0)
     """Seconds that an agent that left the lab gets to end its turn by itself, before Verifold cancels the turn."""
+    cancel_wait: float = Field(default=10, ge=0)
+    """
+    Seconds that Verifold waits, after it cancels a turn, for the harness's answer to the prompt, which holds the
+    tokens of the turn. The turn ends in the record when the answer comes or the wait ends.
+    """
 
 
 class AgentSetup(Record):
@@ -146,7 +152,7 @@ class Shared:
     refusals: Refusals | None = None
     """Keeps the asks of the requests that Verifold refuses at once, when the person chose that no agent waits."""
     disk: DiskMeter | None = None
-    """Measures the lab's files at the end of each turn, so that the lab knows its disk use."""
+    """Measures the lab's files at the end of a turn, about once a minute at most, so that the lab knows its disk use."""
 
 
 class AgentLoop:
@@ -264,12 +270,12 @@ class AgentLoop:
                         await self._report('idle')
                         message, rests = f'{message}\n\n{await self._news()}', False
                     while True:
-                        if (halt := await self._while_halted()) and back:
+                        if (halts := await self._while_halted()) and back:
                             # The agent comes back to a lab that was out of time or at a limit, so it gets the lab's
                             # new end or limit. The message says already what a stop of Verifold did to the agent's
                             # processes.
                             jobs = AtTimeLimit.FINISH if jobs_stopped else self._lab.board.settings.jobs.at_time_limit
-                            message = f'{message}\n\n{go_on_facts(halt, self._lab.board, jobs)}'
+                            message = f'{message}\n\n{go_on_facts(halts, self._lab.board, jobs)}'
                         # An agent that left gets no other turn. Leaving this block ends its harness.
                         if self._left():
                             return
@@ -330,9 +336,10 @@ class AgentLoop:
         # Wait for what starts the agent's next turn. Return its message, and whether that turn resumes one that
         # was cut short. `stopped` says that the turn stopped because the lab ran out of time or reached a limit.
         if stopped:
-            await self._while_halted()
+            # The message names each halt that the agent waited through, the one that stopped its turn first.
+            halts = tuple(dict.fromkeys((stopped, *await self._while_halted())))
             current = self._lab.board
-            return go_on_message(stopped, current, current.settings.jobs.at_time_limit), resumed
+            return go_on_message(halts, current, current.settings.jobs.at_time_limit), resumed
         if self._cut_short and (not resumed or self._interrupted):
             # The agent did not choose to stop, so no post may be on its way. It goes on once. A second cut in a
             # row waits for a post, so a turn that always fails does not repeat. A turn that the desk ended goes
@@ -361,18 +368,20 @@ class AgentLoop:
             model_name=model.name if model else None,
         )
         self._in_turn = True
+        # The prompt is a task of its own, so that a cancel of the turn leaves it to take the harness's answer.
+        prompt = asyncio.create_task(session.send(message))
         try:
             async with asyncio.timeout(self._settings.turn_timeout) as limit:
                 stopper = asyncio.create_task(self._stop_when_halted(limit, turn.seq))
                 self._turn_over.clear()
                 try:
-                    result = await session.send(message)
+                    result = await asyncio.shield(prompt)
                 finally:
                     stopper.cancel()
                     # However the turn ends, a request that still waits for the person ends with it.
                     self._turn_over.set()
         except TimeoutError:
-            await session.cancel()
+            usage, cost = await self._cancel(session, prompt)
             if left := self._lab.board.gone(self._setup.agent.id):
                 # The loop ends next, so nothing resumes this turn.
                 remover = f'{left.through}, with a power from the person,' if left.through else 'The person'
@@ -382,7 +391,7 @@ class AgentLoop:
                     else f'The agent left the lab and its turn ran on for {self._settings.leave_grace:g} seconds, '
                     'so Verifold cancelled the turn.'
                 )
-                await self._record(started, Usage(), session.turn_cost(), error)
+                await self._record(started, usage, cost, error)
                 self._cut_short = ''
                 return None
             halt = self._halt()
@@ -397,17 +406,31 @@ class AgentLoop:
                 )
             else:
                 error = f'{ERROR_RAN_PAST} {self._settings.turn_timeout:g} seconds and was cancelled.'
-            await self._record(started, Usage(), session.turn_cost(), error)
+            await self._record(started, usage, cost, error)
             self._cut_short = '' if halt else error
             self._interrupted = bool(cut) and not halt
             if not halt:
                 await self._report('idle')
             return halt
+        finally:
+            # A loop that stops leaves no prompt behind.
+            prompt.cancel()
         stopped = None if result.stop_reason == 'end_turn' else f'The harness stopped: {result.stop_reason}.'
         self._cut_short = stopped or ''
         await self._record(started, result.usage, result.cost_usd, stopped)
         await self._report('idle')
         return None
+
+    async def _cancel(self, session: AgentSession, prompt: asyncio.Task[TurnResult]) -> tuple[Usage, float | None]:
+        # Ask the harness to stop the turn, and return the turn's tokens and cost. The harness's answer to the prompt
+        # holds them, and it comes in `cancel_wait` seconds or it does not count. Without it, the turn has no tokens
+        # and the cost of the harness's last report, and a harness that never answers holds up nothing.
+        await session.cancel()
+        with suppress(Exception):
+            async with asyncio.timeout(self._settings.cancel_wait):
+                result = await prompt
+            return result.usage, result.cost_usd
+        return Usage(), session.turn_cost()
 
     async def _stop_when_halted(self, limit: asyncio.Timeout, started: int) -> None:
         # An agent that leaves the lab stops in the same way. The board refuses it from then on, so its turn can
@@ -448,19 +471,28 @@ class AgentLoop:
         board = self._lab.board
         return None if board.is_desk(self._setup.agent.id) else board.halted
 
-    async def _while_halted(self) -> Halt | None:
-        # Wait while the lab is out of time or at a limit. Return why the lab was, or `None` when it was not.
+    def _halts(self) -> tuple[Halt, ...]:
+        # Each reason why the lab rests this agent now: the time first, as `_halt` has it, and then a limit.
+        board = self._lab.board
+        if self._halt() is None:
+            return ()
+        return (*(('time',) if board.out_of_time else ()), *((board.at_limit,) if board.at_limit else ()))
+
+    async def _while_halted(self) -> tuple[Halt, ...]:
+        # Wait while the lab is out of time or at a limit. Return each halt that the lab had in the wait, the first
+        # first: the ones at its start, and the ones that the record took during it. Return none when the lab was
+        # not halted.
         lab = self._lab
-        halt = self._halt()
+        halt, halts, since = self._halt(), self._halts(), lab.board.seq
         if halt is None or self._left():
-            return None
+            return ()
         if halt == 'time':
             await self._report('waiting', 'The lab is out of time. The person can give it more.', 'time')
         else:
             await self._report('waiting', f'The lab reached its {LIMIT_NAMES[halt]}. The person can raise it.', 'limit')
         while self._halt() is not None and not self._left():
             await lab.wait_for_change(lab.board.seq)
-        return halt
+        return tuple(dict.fromkeys((*halts, *_halted_since(lab.board, since))))
 
     async def _record(self, started: float, usage: Usage, cost_usd: float | None, error: str | None) -> None:
         # Mark the end of the turn before the snapshot, which can take seconds in a large folder.
@@ -485,18 +517,15 @@ class AgentLoop:
         if self._disk:
             # A folder that cannot be read counts as nothing, so a measure fails only when the lab's folder went.
             with suppress(OSError):
-                await self._disk.measure(agent_id)
+                await self._disk.turn_ended(agent_id)
 
-    def _jobs_stopped(self, board: Board) -> Halt | None:
-        # Why the lab stopped the agent's processes after its last turn, when the time limit or another limit did.
-        # The record shows a stop also when the lab went on before this look. A halt rests no desk, so the lab's
-        # going on wakes no desk either.
+    def _jobs_stopped(self, board: Board) -> tuple[Halt, ...]:
+        # Each halt that stopped the agent's processes after its last turn, the first first: the time limit or
+        # another limit. The record shows a stop also when the lab went on before this look. A halt rests no desk,
+        # so the lab's going on wakes no desk either.
         if board.settings.jobs.at_time_limit is not AtTimeLimit.STOP or board.is_desk(self._setup.agent.id):
-            return None
-        times = (entry.seq for entry in board.times if isinstance(entry, TimeRanOut) and entry.seq > self._turn_ended)
-        limits = ((entry.seq, entry.limit) for entry in board.limits if entry.seq > self._turn_ended)
-        stops: tuple[tuple[int, Halt], ...] = (*((seq, 'time') for seq in times), *limits)
-        return max(stops)[1] if stops else None
+            return ()
+        return _halted_since(board, self._turn_ended)
 
     async def _news(self) -> str:
         """
@@ -651,3 +680,11 @@ class AgentLoop:
     ) -> None:
         if self._activity:
             await self._activity.set(self._setup.agent.id, state, detail, waits_for, retry)
+
+
+def _halted_since(board: Board, after: int) -> tuple[Halt, ...]:
+    # The halts that the record took after event `after`, the first first, each once.
+    times = (entry.seq for entry in board.times if isinstance(entry, TimeRanOut) and entry.seq > after)
+    limits = ((entry.seq, entry.limit) for entry in board.limits if entry.seq > after)
+    stops: tuple[tuple[int, Halt], ...] = (*((seq, 'time') for seq in times), *limits)
+    return tuple(dict.fromkeys(halt for _, halt in sorted(stops)))

@@ -476,12 +476,13 @@ a close stands or such a post went out in the minute before.
 - The person can give the lab a budget in tokens and one in dollars, and the lab has a disk limit, which the
   person sets. `budget` in `brief` has each budget, what the lab spent, and what is left. The lab spent the input
   and the output tokens, and the costs, that the harnesses reported at the ends of the turns. A harness that
-  reports no cost adds no dollars. A turn reports what it spent when it ends, and a turn that Verifold cancels
-  reports no tokens. So the lab can spend more than its budget by the turns that run when it reaches it. `disk` in
+  reports no cost adds no dollars. A turn reports what it spent when it ends. A turn that Verifold cancels
+  reports the tokens of its harness's answer to the cancel when that answer comes within 10 seconds, and no tokens
+  otherwise. So the lab can spend more than its budget by the turns that run when it reaches it. `disk` in
   `brief` has the bytes of your own folder, the bytes of the lab's files together, and the disk limit in bytes, as
-  Verifold measured them at the end of the latest turn. The lab's files are the agents' folders, the clean copies
-  for reruns, and the snapshots. When the lab reaches its budget or its disk limit, `limit_reached` in `brief`
-  names it, and the lab stops as at its time limit. All that this text says of a lab that is out of time holds
+  Verifold measured them last, at the end of a turn and about once a minute at most. The lab's files are the
+  agents' folders, the clean copies for reruns, and the snapshots. When the lab reaches its budget or its disk
+  limit, `limit_reached` in `brief` names it, and the lab stops as at its time limit. All that this text says of a lab that is out of time holds
   then too, until the person sets a budget or a disk limit that the lab has not reached.
 - A lab can have a desk: a seat that the person chooses, which answers the person in the desk chat and acts on the
   person's word. `brief` names it in `desk`, and `agents` does not list it. The desk is no part of the lab's work.
@@ -527,7 +528,8 @@ news.
 `state` is open, closing, or closed. `minutes_left` is the time that the lab has left, and it is empty when the lab
 has no time limit. `budget` has the lab's budget in tokens and in dollars, what the lab spent, and what is left.
 `limit_reached` names the budget or the disk limit that stops the agents now. `disk` has the bytes of your folder,
-of the lab's files together, and the disk limit, as Verifold measured them at the end of the latest turn.
+of the lab's files together, and the disk limit, as Verifold measured them last: at the end of a turn, about once a
+minute at most.
 `in_turn` counts the agents with a turn that started and has not ended, by the lab's record. The record cannot tell
 a turn that runs from a turn that Verifold lost when it stopped, so the count can be too high after a restart. An
 agent that joined with an invitation has no turns in the record. `alarms_waiting` counts the agents with an alarm

@@ -893,7 +893,8 @@ class BudgetLine(Record):
 
     In tokens, the lab spent the input and the output tokens that the harnesses reported, cached input tokens among
     them. In dollars, it spent the costs that the harnesses reported: a turn of a harness that reports no cost adds
-    nothing. A turn reports what it spent when it ends, and a turn that Verifold cancels reports no tokens.
+    nothing. A turn reports what it spent when it ends. A turn that Verifold cancels reports the tokens of its
+    harness's answer to the cancel when that answer comes within a few seconds, and no tokens otherwise.
     """
 
     tokens: int | None = None
@@ -1341,7 +1342,7 @@ class ProfileResult(Record):
 
 
 class DiskLine(Record):
-    """The bytes that the lab's files take on disk, as Verifold measured them at the end of the latest turn."""
+    """The bytes that the lab's files take on disk, as Verifold measured them last, at the end of a turn."""
 
     folder: int | None = None
     """Your own folder. `None` until Verifold measured it."""

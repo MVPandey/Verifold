@@ -1,15 +1,18 @@
 """
 What the lab's files take on disk: each agent's folder, the clean copies for reruns, and the snapshots.
 
-Verifold measures at the end of each turn: the folder of the agent whose turn ended, and the two stores that every
-agent's work fills. The other folders keep their last measure. A measure counts the blocks that each file takes,
-counts a file with several names once, and follows no link.
+Verifold measures at the end of a turn: the folder of the agent whose turn ended, and the two stores that every
+agent's work fills. The other folders keep their last measure. A turn that ends less than `MEASURE_EVERY` after the
+last measure adds its agent's folder to the next measure instead, so the stores are walked about once a minute at
+most. A new disk limit measures every folder at once. A measure counts the blocks that each file takes, counts a
+file with several names once, and follows no link.
 """
 
 import asyncio
 import os
 import stat
 from collections.abc import Iterable
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from verifold.protocol.ids import AgentId
@@ -18,6 +21,9 @@ from verifold.runner.folders import LAB_FOLDER, agents_folder
 from verifold.runner.git import OWN_REPOSITORY
 from verifold.runner.reruns import RERUNS
 from verifold.server.lab import Lab
+
+MEASURE_EVERY = timedelta(seconds=60)
+"""How long after a measure the end of a turn measures nothing, by the lab's clock."""
 
 
 class DiskMeter:
@@ -29,15 +35,34 @@ class DiskMeter:
         self._lab = lab
         self._folders: dict[AgentId, int] = {}
         self._lock = asyncio.Lock()
+        self._last: datetime | None = None
+        """When the last measure started, by the lab's clock."""
+        self._due: tuple[AgentId, ...] = ()
+        """The agents whose turns ended since that measure, whose folders the next measure takes too."""
+
+    async def turn_ended(self, agent_id: AgentId) -> DiskUse | None:
+        """
+        Measure at the end of an agent's turn, and return what the lab's files take now.
+
+        Within `MEASURE_EVERY` of the last measure, it measures nothing and returns `None`. The next measure then
+        takes this agent's folder too.
+        """
+        if self._last is not None and self._lab.now() - self._last < MEASURE_EVERY:
+            self._due = (*self._due, agent_id)
+            return None
+        return await self.measure(agent_id)
 
     async def measure(self, agent_id: AgentId | None = None) -> DiskUse:
         """
         Measure one agent's folder, or every agent's folder without `agent_id`, and both stores, and tell the lab.
 
-        Return what the lab's files take now.
+        A measure of one folder also takes the folders of the turns that ended since the last measure. Return what
+        the lab's files take now.
         """
         async with self._lock:
-            agents = (agent_id,) if agent_id else _agents(self._project)
+            self._last = self._lab.now()
+            agents = tuple(dict.fromkeys((*self._due, agent_id))) if agent_id else _agents(self._project)
+            self._due = ()
             folders, reruns, snapshots = await asyncio.to_thread(_measure, self._project, agents)
             self._folders = {**self._folders, **folders}
             total = sum(self._folders.values()) + reruns + snapshots

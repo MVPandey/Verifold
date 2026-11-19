@@ -4,15 +4,20 @@ from pathlib import Path
 from builders import START, RecordBuilder, lab
 
 from verifold.app import NORMS_TEMPLATE
-from verifold.protocol.posts import FileEvidence, Result
+from verifold.protocol.events import BudgetSet, LimitReached, TurnEnded
+from verifold.protocol.posts import FileEvidence, Message, Result
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.threads import QUESTION_TITLE
+from verifold.protocol.usage import Usage
 from verifold.runner.messages import (
     DOORBELL,
     ON_CALL,
     RESTARTED,
     back_message,
+    go_on_facts,
+    go_on_message,
     invitation,
+    limit_message,
     more_time_message,
     start_message,
 )
@@ -103,6 +108,52 @@ def test_a_lab_with_a_time_limit_tells_each_agent_when_it_ends_in_utc() -> None:
     assert more_time_message(ends_at, AtTimeLimit.FINISH).endswith('The lab now ends at 2026-11-06 14:00 UTC.')
     assert more_time_message(None, AtTimeLimit.FINISH) == (
         'Your last turn stopped when the lab ran out of time. The person gave the lab more time.'
+    )
+
+
+def reached(record: RecordBuilder, by: str = 'person', on: str | None = None) -> RecordBuilder:
+    """Add to `record` a budget of 10 tokens that ada's turn reaches, and then a budget of 1,000 tokens from `by`."""
+    for event in (
+        BudgetSet(seq=1, at=START, tokens=10),
+        TurnEnded(seq=1, at=START, agent='ada', seconds=1, usage=Usage(input_tokens=20)),
+        LimitReached(seq=1, at=START, limit='tokens'),
+        BudgetSet(seq=1, at=START, tokens=1_000, by=by, on=on),
+    ):
+        seq, at = record._stamp()
+        record.events.append(event.model_copy(update={'seq': seq, 'at': at}))
+    return record
+
+
+def test_the_message_after_a_halt_names_each_halt_and_who_set_the_budget() -> None:
+    record = RecordBuilder().join('ada')
+    record.time_set(record.at(len(record.events) + 1)).ran_out()
+    board = reached(record).time_set(START + timedelta(hours=2)).board()
+
+    both = go_on_message(('tokens', 'time'), board, AtTimeLimit.PAUSE)
+    first = go_on_message(('time', 'tokens'), board, AtTimeLimit.FINISH)
+
+    assert both == (
+        'Your last turn stopped when the lab reached its budget in tokens. The lab also ran out of time. The person '
+        'changed the budget. The budget has 980 tokens left. The person gave the lab more time. The lab now ends at '
+        '2026-11-06 14:00 UTC. Verifold paused any process that you left running, and it runs again now.'
+    )
+    assert first == (
+        'Your last turn stopped when the lab ran out of time. The lab also reached its budget in tokens. '
+        f'{go_on_facts(("time", "tokens"), board, AtTimeLimit.FINISH)}'
+    )
+    # One halt reads as it did.
+    assert go_on_message(('tokens',), board, AtTimeLimit.FINISH) == limit_message('tokens', board, AtTimeLimit.FINISH)
+    assert go_on_message(('time',), board, AtTimeLimit.STOP) == more_time_message(board.ends_at, AtTimeLimit.STOP)
+
+
+def test_the_message_after_a_budget_that_the_desk_set_says_that_the_desk_set_it_for_the_person() -> None:
+    record = RecordBuilder().join('ada').desk('dee')
+    record.post(Message(id='p-1', thread='t-9', author='person', text='Give the lab 1,000 tokens.'))
+    board = reached(record, 'dee', 'p-1').board()
+
+    assert limit_message('tokens', board, AtTimeLimit.FINISH) == (
+        'Your last turn stopped when the lab reached its budget in tokens. The desk changed the budget for the '
+        'person. The budget has 980 tokens left.'
     )
 
 

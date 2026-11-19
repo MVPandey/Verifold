@@ -38,6 +38,7 @@ from verifold.runner.messages import (
     alarm_message,
     back_message,
     cut_short_message,
+    go_on_message,
     invitation,
     limit_message,
     more_time_message,
@@ -211,6 +212,11 @@ def messages() -> dict[str, str]:
             for budgeted in (True, False)
         },
         'no alarm, at a limit': no_alarm_line(_budgeted(), 'ada'),
+        **{
+            f'go on {" ".join(halts)}': go_on_message(halts, _budgeted(by='dee'), jobs)
+            for halts in (('time', 'tokens'), ('dollars', 'time', 'disk'))
+            for jobs in AtTimeLimit
+        },
         **{f'norms changed {name}': text.format(path=NORMS) for name, text in NORMS_CHANGED.items()},
         'no alarm': no_alarm_line(board, 'ada', START),
         **{f'no reply {posts}': no_reply_line(_waiting(posts), 'ada') for posts in (1, 2, 3)},
@@ -228,11 +234,14 @@ def messages() -> dict[str, str]:
     }
 
 
-def _budgeted() -> Board:
-    # A lab that reached its budget in tokens, with a budget in dollars that it has not.
+def _budgeted(by: str = 'person') -> Board:
+    # A lab that reached its budget in tokens, with a budget in dollars that it has not. With `by`, the desk set the
+    # budget on the person's word.
     record = RecordBuilder().join('ada')
+    if by != 'person':
+        record.desk(by).post(Message(id='p-1', thread='t-9', author='person', text='Set a budget.'))
     seq, at = record._stamp()
-    record.events.append(BudgetSet(seq=seq, at=at, tokens=10, dollars=5))
+    record.events.append(BudgetSet(seq=seq, at=at, tokens=10, dollars=5, by=by, on=None if by == 'person' else 'p-1'))
     seq, at = record._stamp()
     record.events.append(TurnEnded(seq=seq, at=at, agent='ada', seconds=1, usage=Usage(input_tokens=20)))
     seq, at = record._stamp()
