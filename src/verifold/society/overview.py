@@ -22,6 +22,7 @@ from verifold.protocol.join import (
     SeatLine,
 )
 from verifold.protocol.usage import DiskUse
+from verifold.society.allowances import allowance_line
 from verifold.society.board import Board
 from verifold.society.budget import budget_line, disk_limit
 from verifold.society.candidates import closes_on
@@ -62,7 +63,7 @@ def overview(
     working = lines_of(board)
     done = closing(board)
     named = closes_on(board, done) if done else None
-    waits = waiting_posts(board)
+    waits = waiting_posts(board, now)
     reported = newest_report(board)
     reading = standing_reading(board)
     standing_now = candidates(board)
@@ -119,6 +120,12 @@ def overview(
         budget=budget_line(board),
         limit_reached=board.at_limit,
         disk=DiskLine(lab=disk.total, limit=disk_limit(board)) if disk else None,
+        allowances=tuple(
+            line
+            for joined in board.agents
+            if board.acting(joined.agent.id) and (line := allowance_line(board, joined.agent.id, now))
+        ),
+        actions_paused=board.actions_paused is not None,
         news=news,
     )
 

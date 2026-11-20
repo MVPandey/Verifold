@@ -12,6 +12,7 @@ from conftest import agent
 from pydantic import SecretStr
 
 from verifold.protocol.agents import Agent, AgentChoice, ModelSpec, Picture
+from verifold.protocol.allowances import AllowanceTerms
 from verifold.protocol.app import (
     FolderView,
     HarnessOption,
@@ -30,7 +31,7 @@ from verifold.protocol.app import (
 )
 from verifold.protocol.events import Posted, TurnSummary
 from verifold.protocol.ids import PERSON
-from verifold.protocol.join import FileText, PostRequest
+from verifold.protocol.join import ActRequest, FileText, PostRequest
 from verifold.protocol.moves import AddSeat
 from verifold.protocol.posts import Ask, FileEvidence, Objection, PermissionShown, Result
 from verifold.protocol.settings import Settings
@@ -1377,3 +1378,33 @@ async def test_a_turn_through_httpx_never_needs_the_pace_routes_when_nothing_hol
 
     assert view['lab_cap'] is None
     assert {agent['agent']['id']: agent['cap'] for agent in view['agents']} == {'ada': None, 'bo': None}
+
+
+async def test_the_person_confirms_an_allowance_answers_an_action_pauses_actions_and_ends_the_allowance(
+    lab: Lab, client: httpx2.AsyncClient
+) -> None:
+    await lab.set_acting('bo', acting=True)
+    ends = lab.now() + timedelta(hours=1)
+    terms = AllowanceTerms(holder='bo', purpose='Buy', unit='USD', per_action=10, total=20, ends_at=ends)
+    await lab.draft_allowance(terms)
+    started = LabView.model_validate((await client.post('/allowances/a-1/start')).json())
+    bo = Member(lab, 'bo')
+    asked = await bo.act(ActRequest(what='Buy 625', cost=40, undoable=False, rests_on=('p-1',), offer_ends=ends))
+    needs = (await client.get('/needs')).json()
+    decided = LabView.model_validate(
+        (await client.post(f'/actions/{asked.action}/decision', json={'yes': False})).json()
+    )
+    again = await client.post(f'/actions/{asked.action}/decision', json={'yes': True})
+    paused = LabView.model_validate((await client.post('/actions/pause', json={'paused': True})).json())
+    ended = LabView.model_validate((await client.post('/allowances/a-1/end')).json())
+    unknown = await client.post('/allowances/a-9/start')
+
+    assert [(view.allowance, view.state) for view in started.allowances] == [('a-1', 'in_force')]
+    assert [(item['post']['kind'], item['post']['needs'], item['post']['cost']) for item in needs] == [
+        ('action', 'per_action', '40')
+    ]
+    assert decided.allowances[0].actions[0].state == 'no'
+    assert (again.status_code, 'answered the action' in again.json()['detail']) == (400, True)
+    assert paused.actions_paused is not None
+    assert ended.allowances[0].state == 'ended'
+    assert unknown.status_code == 400

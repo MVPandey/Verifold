@@ -3,7 +3,7 @@ import type { ReactElement } from 'react';
 
 import type { Api } from '../api/client.ts';
 import { messageOf } from '../api/client.ts';
-import type { HarnessOption, LabView, Offer, Power } from '../api/types.ts';
+import type { HarnessOption, LabView, Offer, OptionValue, Power } from '../api/types.ts';
 import { MAX_REVIEWER_SEATS, seatsValue } from '../model/settings.ts';
 import { OTHER_MODEL, effortsOf, menuEntries, modeEntries, withModel } from '../model/setup.ts';
 import type { MenuEntry, Seat } from '../model/setup.ts';
@@ -20,6 +20,8 @@ export interface Facts {
   readonly powers?: readonly Power[];
   /** Whether the seat is the lab's desk. Only a seat that Verifold starts can be the desk. */
   readonly desk?: boolean;
+  /** Whether the seat is an acting seat. Only a seat that Verifold starts can be one. */
+  readonly acting?: boolean;
 }
 
 /**
@@ -111,6 +113,16 @@ export function FactFields<T extends Facts>(props: {
           Desk. It answers you in the desk chat and acts on your word. A lab has one.
         </label>
       ) : null}
+      {props.desk ? (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={value.acting ?? false}
+            onChange={(event) => props.onChange({ ...value, acting: event.target.checked })}
+          />
+          Acting. It acts in the world with a key of its own, and only it can hold an allowance.
+        </label>
+      ) : null}
     </>
   );
 }
@@ -160,13 +172,54 @@ function Offered(props: {
         value={pick.effort}
         onChange={(effort) => props.onPick({ ...pick, effort })}
       />
-      <Menu
-        label="Mode"
+      <Modes
         entries={modes}
+        modes={offer.modes}
         value={pick.mode}
         onChange={(mode) => props.onPick({ ...pick, mode })}
       />
     </>
+  );
+}
+
+/**
+ * The harness's modes as a choice of one, each with the harness's own name and its own description, or nothing when
+ * the harness offers none. The descriptions are the harness's text, so they show as text.
+ */
+export function Modes(props: {
+  readonly entries: readonly MenuEntry[];
+  readonly modes: readonly OptionValue[];
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+  /** The heading of the choice. */
+  readonly label?: string;
+}): ReactElement | null {
+  const name = useId();
+  if (props.entries.length === 0) return null;
+  return (
+    <fieldset className="s-modes">
+      <legend>{props.label ?? 'Mode'}</legend>
+      {props.entries.map((entry) => {
+        const description = props.modes.find((mode) => mode.value === entry.value)?.description;
+        return (
+          <label key={entry.value} className="s-mode">
+            <input
+              type="radio"
+              name={name}
+              value={entry.value}
+              checked={props.value === entry.value}
+              onChange={() => {
+                props.onChange(entry.value);
+              }}
+            />
+            <span>
+              <b>{entry.label}</b>
+              {description ? <small>{description}</small> : null}
+            </span>
+          </label>
+        );
+      })}
+    </fieldset>
   );
 }
 

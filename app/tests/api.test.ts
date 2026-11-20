@@ -122,6 +122,28 @@ describe('the API client', () => {
     );
   });
 
+  it('confirms and ends an allowance, pauses every action, answers an action, and changes an acting seat', async () => {
+    const server = serverThatAnswers(200, '{"agents": []}');
+    const api = createApi('secret', server.fetcher);
+
+    await api.startAllowance('a-1');
+    await api.endAllowance('a-1');
+    await api.pauseActions(true);
+    await api.decideAction('p-12', false);
+    await api.changeSeat('agent-1', { acting: true, mode: 'plan' });
+
+    assert.deepEqual(
+      server.calls.map((call) => [call.input, call.init.body]),
+      [
+        ['/api/allowances/a-1/start', '{}'],
+        ['/api/allowances/a-1/end', '{}'],
+        ['/api/actions/pause', '{"paused":true}'],
+        ['/api/actions/p-12/decision', '{"yes":false}'],
+        ['/api/agents/agent-1/seat', '{"acting":true,"mode":"plan"}'],
+      ],
+    );
+  });
+
   it('removes an agent with a DELETE, starts one again, and reads a lab from before agents could leave or stop', async () => {
     const lab = '{"agents": [{"agent": {"id": "agent-1"}}]}';
     const server = serverThatAnswers(200, lab);

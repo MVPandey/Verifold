@@ -142,7 +142,10 @@ class FakeAgent(acp.Agent):
         self._note(event='new_session')
         modes = schema.SessionModeState(
             current_mode_id='ask',
-            available_modes=[schema.SessionMode(id='ask', name='Ask'), schema.SessionMode(id='auto', name='Auto')],
+            available_modes=[
+                schema.SessionMode(id='ask', name='Ask', description='Asks before each change.'),
+                schema.SessionMode(id='auto', name='Auto'),
+            ],
         )
         return schema.NewSessionResponse(session_id=self._session, config_options=self._options(), modes=modes)
 

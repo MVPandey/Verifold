@@ -37,6 +37,8 @@ export interface Seat {
   readonly powers: readonly Power[];
   /** Whether the seat is the lab's desk. A lab has one desk, its seat holds one agent, and it holds no other seat. */
   readonly desk: boolean;
+  /** Whether the seat is an acting seat, which acts in the world with a key of its own. It is not the coordinator's or the desk. */
+  readonly acting: boolean;
 }
 
 /** Return a seat of a harness with the person's own settings and no facts. */
@@ -52,6 +54,7 @@ export function newSeat(harness: string, count = 1): Seat {
     family: '',
     onCall: false,
     coordinator: false,
+    acting: false,
     powers: [],
     desk: false,
   };
@@ -97,6 +100,7 @@ export function firstSeats(
       // A saved choice switches on no power. The person does that for each lab.
       powers: [],
       desk: choice.desk ?? false,
+      acting: choice.acting ?? false,
     }));
   });
 }
@@ -112,11 +116,18 @@ export function withSeat(seats: readonly Seat[], index: number, changed: Seat): 
   const old = seats[index];
   // A seat becomes the desk, or one of its other seats: the one that the person ticked last stays.
   const desked = changed.desk && !old?.desk;
-  const facts = desked
-    ? { ...changed, coordinator: false, onCall: false, powers: [] }
+  const held = desked
+    ? { ...changed, coordinator: false, onCall: false, powers: [], acting: false }
     : changed.desk && (changed.coordinator || changed.onCall)
       ? { ...changed, desk: false }
       : changed;
+  // An acting seat is not the coordinator's and not the desk: the one that the person ticked last stays.
+  const acted = held.acting && !old?.acting;
+  const facts = acted
+    ? { ...held, coordinator: false, desk: false, powers: [] }
+    : held.acting && (held.coordinator || held.desk)
+      ? { ...held, acting: false }
+      : held;
   const seat =
     facts.coordinator || facts.desk
       ? { ...facts, count: Math.min(1, room, Math.max(facts.count, 1)) }
@@ -279,6 +290,7 @@ export function seatChoice(seat: Seat): AgentChoice {
     ...(seat.coordinator ? { coordinator: true } : {}),
     ...(seat.coordinator && seat.powers.length > 0 ? { powers: seat.powers } : {}),
     ...(seat.desk ? { desk: true } : {}),
+    ...(seat.acting ? { acting: true } : {}),
   };
 }
 
@@ -310,6 +322,7 @@ function agentWords(choice: SavedChoice, harnesses: readonly HarnessOption[]): s
     choice.coordinator ? 'coordinator' : null,
     choice.on_call ? 'on call' : null,
     choice.desk ? 'desk' : null,
+    choice.acting ? 'acting' : null,
   ].filter((detail) => detail !== null);
   const agents = `${title}: ${choice.count} ${choice.count === 1 ? 'agent' : 'agents'}`;
   return details.length > 0 ? `${agents} (${details.join(', ')})` : agents;
@@ -373,6 +386,7 @@ export function modelSummary(pick: Seat, offer: Offer | null, family = ''): stri
     pick.coordinator ? 'coordinator' : '',
     pick.onCall ? 'on call' : '',
     pick.desk ? 'desk' : '',
+    pick.acting ? 'acting' : '',
   ].filter(Boolean);
   const model = modelLine(pick, offer);
   return facts.length > 0 ? `${model} · ${facts.join(', ')}` : model;

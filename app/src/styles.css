@@ -4271,3 +4271,230 @@ button.v-count:hover {
     flex-basis: 100%;
   }
 }
+
+/*
+ * Allowances and actions, from the mockup of the acting lab (screens 1 and 2): a request for an action that ends,
+ * the fold of what the person missed, a draft to confirm, the note that the limit is recorded and not enforced, and
+ * an allowance in force with its meter and actions. The cards sit in the column beside the wall, on the page of
+ * what needs the person, and in the desk chat. Buttons there keep the mockup's look over the column's own.
+ */
+.a-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.a-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  padding: 14px 16px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.a-card h3 {
+  font: 600 16px/1.3 var(--head);
+  margin: 0 0 6px;
+}
+.a-draft {
+  border-color: var(--accent);
+}
+.a-need {
+  border-left: 3px solid var(--turn);
+}
+.a-stopped {
+  border-left: 3px solid var(--bad);
+}
+.a-kicker {
+  font: 700 11.5px/1.3 var(--mono);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+.a-facts {
+  margin: 8px 0 12px;
+  padding: 0;
+  list-style: none;
+  color: var(--ink2);
+}
+.a-facts li {
+  padding: 2px 0;
+}
+.a-ends {
+  color: var(--turn);
+  font-weight: 600;
+}
+.a-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+/* The column and the desk's panel style every button in them, so a card sets its own back. */
+.a-card .btn,
+.f-steer .k-panel .a-card .btn {
+  min-height: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--line2);
+  background: var(--card);
+  color: var(--ink);
+  font: 600 14px/1 var(--body);
+  white-space: normal;
+}
+.a-card .btn.primary,
+.f-steer .k-panel .a-card .btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on);
+}
+.a-card .btn.a-pause,
+.f-steer .k-panel .a-card .btn.a-pause {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.a-note {
+  background: var(--raise);
+  border: 1px solid var(--line);
+  padding: 9px 12px;
+  margin: 12px 0 0;
+  font-size: 13.5px;
+  color: var(--ink2);
+}
+.a-used {
+  color: var(--ink2);
+  margin: 0;
+}
+.a-meter {
+  height: 8px;
+  background: var(--raise);
+  border: 1px solid var(--line);
+  margin: 8px 0 4px;
+}
+.a-meter i {
+  display: block;
+  height: 100%;
+  max-width: 100%;
+  background: var(--accent);
+}
+.a-stopped .a-meter i {
+  background: var(--bad);
+}
+.a-stop {
+  color: var(--bad);
+  font-weight: 600;
+  margin: 8px 0;
+}
+.a-list {
+  margin: 10px 0 12px;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+}
+.a-list li {
+  display: flex;
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px solid var(--line);
+}
+.a-list time {
+  flex: 0 0 48px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.a-list li > span:nth-child(2) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.a-amt {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.a-mark {
+  display: inline-block;
+  font: 600 11.5px/1 var(--body);
+  padding: 3px 6px;
+  border: 1px solid var(--line2);
+  color: var(--ink2);
+  white-space: nowrap;
+}
+.a-mark.good {
+  border-color: var(--good);
+  color: var(--good);
+}
+.a-mark.bad {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.a-mark.turn {
+  border-color: var(--turn);
+  color: var(--turn);
+}
+.a-none,
+.a-undo {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 8px 0 0;
+}
+.a-fold {
+  color: var(--muted);
+  font-size: 14px;
+  padding: 4px 2px 0;
+}
+.a-fold summary {
+  cursor: pointer;
+}
+.a-fold summary u {
+  text-decoration-color: var(--line2);
+}
+.a-fold ul {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.a-fold li {
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.a-fold a {
+  color: var(--ink2);
+}
+.k-card {
+  list-style: none;
+  margin: 6px 0 12px;
+}
+.s-modes {
+  border: 0;
+  margin: 0 0 8px;
+  padding: 0;
+  min-width: 0;
+}
+.s-modes legend {
+  font-weight: 600;
+  padding: 0;
+  margin-bottom: 6px;
+}
+.s-mode {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 4px 0;
+  font-weight: 400;
+}
+.s-mode input {
+  margin-top: 4px;
+}
+.s-mode span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.s-mode small {
+  color: var(--muted);
+  font-size: 13px;
+}
+.i-mode {
+  margin: 10px 0;
+}

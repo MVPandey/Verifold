@@ -8,6 +8,7 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from contextlib import suppress
+from decimal import Decimal
 from functools import partial
 from importlib.metadata import version
 from pathlib import Path
@@ -24,7 +25,7 @@ from verifold.app import ServeHooks, ServeOptions, serve
 from verifold.cli import OPEN_SIGNAL, _announce, _open_again, _until_stopped, main
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import AgentChoice
-from verifold.protocol.app import StartRequest
+from verifold.protocol.app import AllowanceRequest, StartRequest
 from verifold.protocol.deliverables import FINDINGS_RECORD
 from verifold.runner.environment import harness_environment
 from verifold.runner.folders import open_folder
@@ -244,6 +245,50 @@ def test_a_projects_file_makes_no_seat_the_desk(
     assert [choice.desk for choice in mine] == [False, True]
     assert [choice.desk for choice in plain] == [False, False]
     assert "Did not use desk from this project's saved choices for new labs" in cloned
+
+
+@pytest.mark.usefixtures('project')
+def test_run_starts_an_allowance_from_the_command_line_for_the_one_acting_seat(
+    serves: list[StartRequest | None], capsys: pytest.CaptureFixture[str]
+) -> None:
+    allowance = 'per=10,total=100,unit=USD,minutes=600,check=5,for=Place orders, at most two a day'
+    main(['run', 'Does it hold?', '--agent', 'codex,acting', '--agent', 'codex', '--allowance', allowance])
+
+    (start,) = (start for start in serves if start)
+    assert [choice.acting for choice in start.agents] == [True, False]
+    assert start.allowance == AllowanceRequest(
+        purpose='Place orders, at most two a day',
+        unit='USD',
+        per_action=Decimal(10),
+        total=Decimal(100),
+        minutes=600,
+        check_above=Decimal(5),
+    )
+    printed = capsys.readouterr().out
+    assert '1 codex (acting)' in printed
+    assert 'an allowance of 10 USD an action and 100 USD in all for 600 min, recorded and not enforced' in printed
+    with pytest.raises(SystemExit, match='for the one acting seat'):
+        main(['run', 'Does it hold?', '--agent', 'codex', '--allowance', allowance])
+    with pytest.raises(SystemExit, match='"cap=5" is not a part of an allowance'):
+        main(['run', 'Does it hold?', '--agent', 'codex,acting', '--allowance', 'cap=5,for=Orders'])
+    with pytest.raises(SystemExit, match='not the coordinator and not the desk'):
+        main(['run', 'Does it hold?', '--agent', 'codex,acting,coordinator'])
+
+
+def test_a_projects_file_makes_no_seat_an_acting_seat_and_holds_no_allowance(
+    serves: list[StartRequest | None], project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seats = [{'harness': 'codex', 'acting': True}]
+    project_settings(project, {'setup': {'agents': seats}})
+    main(['run', 'Does it hold?'])
+    cloned = capsys.readouterr().out
+    project_settings(project, {'allowance': {'per_action': 10}})
+
+    (start,) = (start for start in serves if start)
+    assert ([choice.acting for choice in start.agents], start.allowance) == ([False], None)
+    assert "Did not use acting from this project's saved choices for new labs" in cloned
+    with pytest.raises(SystemExit, match='allowance'):
+        main(['run', 'Does it hold?'])
 
 
 @pytest.mark.usefixtures('project')

@@ -25,6 +25,8 @@ const NOUNS = {
   offer: 'offer',
   round: 'round',
   entry: 'entry',
+  action: 'action',
+  receipt: 'receipt',
 } as const satisfies Record<Post['kind'], string>;
 
 const CLAIMS: ReadonlySet<Post['kind']> = new Set(['result', 'proposal', 'ruled_out', 'hand_back']);
@@ -63,6 +65,10 @@ export function tone(post: Post): MarkTone {
       return 'answer';
     case 'close':
       return 'answer';
+    case 'action':
+      return post.allowed ? 'claim' : 'ask';
+    case 'receipt':
+      return 'claim';
     case 'plan':
     case 'message':
     case 'report':
@@ -150,6 +156,12 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
       return `summed up the thread${reply}`;
     case 'message':
       return post.reply_to === null ? 'posted a message' : `replied to ${them}`;
+    case 'action':
+      return post.allowed
+        ? `declared an action, which its allowance allowed${reply}`
+        : `declared an action, which waits for you${reply}`;
+    case 'receipt':
+      return to ? `reported what ${theirs} did` : 'reported what an action did';
   }
 }
 
@@ -541,6 +553,8 @@ const PLURALS = {
   offer: ['offer', 'offers'],
   round: ['round', 'rounds'],
   entry: ['entry', 'entries'],
+  action: ['action', 'actions'],
+  receipt: ['receipt', 'receipts'],
   message: ['message', 'messages'],
 } as const satisfies Record<Post['kind'], readonly [string, string]>;
 

@@ -1,5 +1,5 @@
 import type { Api } from '../api/client.ts';
-import { PERSON } from '../api/types.ts';
+import { GUEST, PERSON } from '../api/types.ts';
 import type { AgentView, Outcomes, Picture, PostRef, ProfileEdit } from '../api/types.ts';
 
 /** The gray of the picture of an agent that left. */
@@ -174,6 +174,19 @@ export function seatSwitches(view: AgentView): readonly SeatAction[] {
       run: (api) => api.changeSeat(id, { reviewer: !view.reviewer }),
     },
   ];
+}
+
+/**
+ * Return the person's switch for an acting seat, or `null` for a seat that cannot be one: an invited agent, whose
+ * turns Verifold cannot stop, the desk, and the coordinator.
+ */
+export function actingSwitch(view: AgentView): SeatAction | null {
+  if (view.agent.harness === GUEST || view.desk === true || view.coordinator) return null;
+  const id = view.agent.id;
+  return {
+    label: view.acting ? 'Take back the acting mark' : 'Make it an acting seat',
+    run: (api) => api.changeSeat(id, { acting: view.acting !== true }),
+  };
 }
 
 /** The most characters of a role, as the server takes it. */

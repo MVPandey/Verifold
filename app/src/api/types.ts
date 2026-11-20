@@ -38,7 +38,9 @@ export type PostKind =
   | 'request'
   | 'offer'
   | 'round'
-  | 'entry';
+  | 'entry'
+  | 'action'
+  | 'receipt';
 export type Standing = 'open' | 'checked' | 'held_up' | 'disputed' | 'conceded';
 
 /**
@@ -72,7 +74,7 @@ export interface Picture {
 }
 
 /** A seat that an agent holds. */
-export type SeatMark = 'coordinator' | 'reviewer' | 'on_call' | 'desk';
+export type SeatMark = 'coordinator' | 'reviewer' | 'on_call' | 'desk' | 'acting';
 
 /** A post by its ID and its thread, so that the app can link to it. */
 export interface PostRef {
@@ -107,11 +109,85 @@ export interface ProfileEdit {
 export interface Wait {
   readonly kind: 'approval' | 'answer';
   readonly agent: string;
-  /** What waits, in one line. For a request of a harness, the words are Verifold's own. */
+  /** What waits, in one line. For a request of a harness or an action, the words are Verifold's own. */
   readonly what: string;
   readonly since: string;
   readonly post: string;
   readonly thread: string;
+}
+
+/** An ask or an action for the person that stopped waiting before the person answered, so nothing was done for it. */
+export interface Missed extends Wait {
+  /** When it stopped waiting. */
+  readonly ended_at: string;
+}
+
+/**
+ * Where an action stands. `allowed`: its allowance allowed it. `waits`: it waits for the person until its offer
+ * ends. `yes` and `no`: the person answered. `missed`: its offer ended without an answer, so nothing was done.
+ */
+export type ActionState = 'allowed' | 'waits' | 'yes' | 'no' | 'missed';
+
+/**
+ * Why an action waits for the person: its seat holds no allowance in force, its cost is above the bound for one
+ * action, or it would take the allowance past its total.
+ */
+export type ActionNeed = 'none' | 'per_action' | 'total';
+
+/**
+ * What an allowance lets its holder do. Amounts are decimal strings in `unit`, as the server sends them, so the app
+ * shows them as the record holds them.
+ */
+export interface AllowanceTerms {
+  readonly holder: string;
+  readonly purpose: string;
+  readonly unit: string;
+  readonly per_action: string;
+  readonly total: string;
+  readonly ends_at: string;
+  /** The cost above which an action needs a check by another agent first, or `null`. */
+  readonly check_above: string | null;
+}
+
+/** One action of an acting seat: what it does, what it can lose, and where it stands. */
+export interface ActionView {
+  readonly post: string;
+  readonly thread: string;
+  readonly agent: string;
+  readonly at: string;
+  readonly what: string;
+  readonly cost: string;
+  readonly undoable: boolean;
+  readonly offer_ends: string;
+  readonly state: ActionState;
+  readonly needs: ActionNeed | null;
+  /** What it cost by its newest receipt, or `null` until a receipt comes. */
+  readonly real_cost: string | null;
+  readonly receipt: string | null;
+}
+
+/**
+ * Where an allowance stands. `draft`: it waits for the person's confirmation. `in_force`: it allows actions now.
+ * `over`: its end time came. `ended`: the person ended it. `replaced`: the person started a newer one for the seat.
+ */
+export type AllowanceState = 'draft' | 'in_force' | 'over' | 'ended' | 'replaced';
+
+/** An allowance with its terms, where it stands, what it allowed, and its actions, the newest first. */
+export interface AllowanceView {
+  readonly allowance: string;
+  readonly terms: AllowanceTerms;
+  readonly state: AllowanceState;
+  readonly drafted_at: string;
+  /** Who drafted it: `person`, or the desk on the person's word. */
+  readonly by: string;
+  readonly on: string | null;
+  readonly started_at: string | null;
+  readonly ended_at: string | null;
+  /** What the allowance allowed so far, as a decimal string. */
+  readonly drawn: string;
+  /** Whether its actions passed its total, so that the board stopped the holder until the person decides. */
+  readonly stopped: boolean;
+  readonly actions: readonly ActionView[];
 }
 
 /** Who wrote a post, as facts. `null` stands for the person. */
@@ -292,6 +368,10 @@ export interface AgentView {
   readonly coordinator: boolean;
   /** Whether the agent's seat is the lab's desk, which answers the person in the desk chat. Absent from older views. */
   readonly desk?: boolean;
+  /** Whether the agent's seat is an acting seat, which acts in the world with a key of its own. */
+  readonly acting?: boolean;
+  /** The harness mode of the seat now. `null` follows the lab's auto mode choice. */
+  readonly mode?: string | null;
   /** What the agent says that it does now. */
   readonly status: string;
   /** The thread where the agent works now, or `null` when it works in none. */
@@ -538,6 +618,12 @@ export interface LabView {
   readonly obstacles: readonly Obstacle[];
   /** The round that is open, or else the newest round that closed. `null` in a lab without rounds. */
   readonly round: RoundView | null;
+  /** The drafts that wait for the person's confirmation, and every allowance that the person started, newest first. */
+  readonly allowances?: readonly AllowanceView[];
+  /** When the person paused every action, while the pause stands. */
+  readonly actions_paused?: string | null;
+  /** The asks and actions that stopped waiting before the person answered, the newest first. */
+  readonly missed?: readonly Missed[];
 }
 
 /** Why a round closed: its time came, every agent that it waited for entered, or its opener withdrew it. */
@@ -762,6 +848,8 @@ export interface SettingsChange {
 export interface OptionValue {
   readonly value: string;
   readonly name: string;
+  /** What the harness says of the value, in its own words. Absent when it says nothing. */
+  readonly description?: string;
 }
 
 /** A model that a harness offers, and the effort levels that the harness offers with it. */
@@ -824,6 +912,7 @@ export interface SavedChoice {
   readonly on_call?: boolean;
   readonly coordinator?: boolean;
   readonly desk?: boolean;
+  readonly acting?: boolean;
 }
 
 /** What new labs start with unless the person chooses otherwise. */
@@ -870,6 +959,8 @@ export interface AgentChoice {
   readonly powers?: readonly Power[];
   /** Whether the seat is the lab's desk. A lab has one, its seat has one agent, and it holds no other seat. */
   readonly desk?: boolean;
+  /** Whether the seat is an acting seat. It is not the coordinator and not the desk. */
+  readonly acting?: boolean;
 }
 
 /** The person invites an agent that runs by itself, and can state the facts of its seat. */
@@ -887,6 +978,10 @@ export interface SeatChange {
   readonly coordinator?: boolean;
   /** Give the agent a reviewer seat, or take the seat that it holds. */
   readonly reviewer?: boolean;
+  /** Make the seat an acting seat, or take the mark back. */
+  readonly acting?: boolean;
+  /** One of the harness's own modes. The seat's session starts again in it before its next turn. */
+  readonly mode?: string;
 }
 
 /** The person changes an agent's profile: takes back what the agent chose, or gives its seat a role. */
@@ -1044,6 +1139,8 @@ export type Post =
       readonly request?: 'permission' | 'question' | null;
       /** What the harness's request holds. Verifold sets it, and the app shows it in place of the body. */
       readonly shown?: PermissionShown | QuestionShown | null;
+      /** When the ask stops waiting for the person, as its author set it. Absent when it waits until an answer. */
+      readonly ends_at?: string;
     })
   | (PostBase & {
       readonly kind: 'answer';
@@ -1052,6 +1149,28 @@ export type Post =
       readonly ends_request?: boolean;
       /** The coordinator's request that this answer carries out. Verifold sets it, and no agent can. */
       readonly for_request?: string | null;
+      /** Whether the request ended before the person could answer it, with the agent's turn or a restart. */
+      readonly missed?: boolean;
+    })
+  | (PostBase & {
+      /** An action that an acting seat declares before it does it. `text` says what. */
+      readonly kind: 'action';
+      /** The most that the action can lose, with its fees, as a decimal string in its allowance's unit. */
+      readonly cost: string;
+      readonly undoable: boolean;
+      readonly offer_ends: string;
+      /** The allowance that the author held when it declared the action, or `null`. Verifold sets it. */
+      readonly allowance: string | null;
+      /** Whether that allowance allowed the action at once. */
+      readonly allowed: boolean;
+      /** Why the action waits for the person, or `null` for one that its allowance allowed. */
+      readonly needs: ActionNeed | null;
+    })
+  | (PostBase & {
+      /** What an action did, from its author, with the action in `reply_to`. `text` says what happened. */
+      readonly kind: 'receipt';
+      /** What the action cost, with its fees, as a decimal string. */
+      readonly cost: string;
     })
   | (PostBase & {
       /** The coordinator's request to the person for a move. `text` and `body` hold the reason. */
@@ -1248,7 +1367,7 @@ export interface ConversationView {
 
 /** What the desk did on the person's word. */
 export type DeskDeed =
-  'post' | 'round' | 'question' | 'deliverable' | 'time' | 'budget' | 'interrupt';
+  'post' | 'round' | 'question' | 'deliverable' | 'time' | 'budget' | 'interrupt' | 'allowance';
 
 /** One action of the desk, with the person's post in the desk chat that it rests on. */
 export interface DeskAction {
@@ -1268,6 +1387,8 @@ export interface DeskAction {
   /** For a new budget: the budget in tokens and in dollars that the desk set, `null` for a kind without one. */
   readonly tokens?: number | null;
   readonly dollars?: number | null;
+  /** For a draft of an allowance: its ID. The draft allows nothing until the person confirms it. */
+  readonly allowance?: string | null;
 }
 
 /** What the panel for the desk shows: the desk, the desk chat, and what the desk did on the person's word. */

@@ -6,10 +6,16 @@ from functools import reduce
 from typing import assert_never
 
 from verifold.protocol.events import (
+    ActingSet,
+    ActionDecided,
+    ActionsPaused,
     AgentJoined,
     AgentLeft,
     AgentNamed,
     AlarmSet,
+    AllowanceDrafted,
+    AllowanceEnded,
+    AllowanceStarted,
     BadgeSet,
     BudgetSet,
     ClaimLapsed,
@@ -21,6 +27,7 @@ from verifold.protocol.events import (
     LabOpened,
     LimitReached,
     LimitsReported,
+    ModeSet,
     NotesSet,
     OnCallSet,
     PaceSet,
@@ -48,6 +55,16 @@ from verifold.protocol.events import (
     WentQuiet,
 )
 from verifold.protocol.posts import Close, Round
+from verifold.society.allowances import (
+    check_acting,
+    check_action_post,
+    check_decided,
+    check_draft,
+    check_end,
+    check_mode,
+    check_pause,
+    check_start,
+)
 from verifold.society.board import Board
 from verifold.society.budget import check_limit
 from verifold.society.candidates import settled
@@ -134,6 +151,7 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
             check_rounds(board, event)
             check_desk_post(board, event)
             check_task_post(board, event)
+            check_action_post(board, event)
             rounds = (*board.rounds, event) if isinstance(post, Round) else board.rounds
             # A close that names no candidate closes on what stood just before it, also after a later concession.
             unnamed = (
@@ -241,6 +259,37 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
         case DeliverableDecided():
             check_decision(board, event)
             return replace(board, seq=event.seq, decisions=(*board.decisions, event))
+        case _:
+            return _allowances(board, event)
+
+
+def _allowances(  # noqa: PLR0911
+    board: Board,
+    event: ActingSet | ModeSet | AllowanceDrafted | AllowanceStarted | AllowanceEnded | ActionsPaused | ActionDecided,
+) -> Board:
+    # The events of acting seats, their modes, their allowances, and the person's answers to their actions.
+    match event:
+        case ActingSet():
+            check_acting(board, event)
+            return replace(board, seq=event.seq, actings=(*board.actings, event))
+        case ModeSet():
+            check_mode(board, event)
+            return replace(board, seq=event.seq, modes=(*board.modes, event))
+        case AllowanceDrafted():
+            check_draft(board, event)
+            return replace(board, seq=event.seq, drafts=(*board.drafts, event))
+        case AllowanceStarted():
+            check_start(board, event)
+            return replace(board, seq=event.seq, allowance_starts=(*board.allowance_starts, event))
+        case AllowanceEnded():
+            check_end(board, event)
+            return replace(board, seq=event.seq, allowance_ends=(*board.allowance_ends, event))
+        case ActionsPaused():
+            check_pause(board, event)
+            return replace(board, seq=event.seq, pauses=(*board.pauses, event))
+        case ActionDecided():
+            check_decided(board, event)
+            return replace(board, seq=event.seq, action_decisions=(*board.action_decisions, event))
         case _:
             assert_never(event)
 

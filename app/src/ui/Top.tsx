@@ -128,6 +128,7 @@ export function Top(props: {
           </details>
           <ShownProfile
             lab={open.lab}
+            harnesses={open.harnesses}
             threads={open.threads}
             now={open.now}
             api={open.api}

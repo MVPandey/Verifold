@@ -26,6 +26,7 @@ from verifold.protocol.agents import (
     TypedId,
     ValueId,
 )
+from verifold.protocol.allowances import ActionNeed, AllowanceId, Amount, Bound, Purpose, Unit
 from verifold.protocol.deliverables import DeliverableLine
 from verifold.protocol.events import Halt, Limit, Note, Posted, Question, RequestAnswered, RoundEnd
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
@@ -194,6 +195,10 @@ class PostRequest(Record):
     """On a hand-back: what its author doubts about the work."""
     deviations: Part | None = None
     """On a hand-back: where the work left the task's brief, and why."""
+    cost: Amount | None = None
+    """On a receipt: what the action cost, with its fees, in the unit of its allowance. A receipt needs it."""
+    ends_at: AwareDatetime | None = None
+    """On an ask: when it stops waiting for the person. No other kind takes it."""
 
     @model_validator(mode='after')
     def _one_thread(self) -> Self:
@@ -201,6 +206,8 @@ class PostRequest(Record):
             raise ValueError('A request for a move of the person goes through the `request` tool.')
         if self.kind == 'offer':
             raise ValueError('An offer of files for a deliverable goes through the `offer` tool.')
+        if self.kind == 'action':
+            raise ValueError('An action goes through the `act` tool.')
         if self.conversation:
             # The desk's post for the person is the person's side of the conversation, so it takes the mark there.
             if self.thread or self.new_thread or (self.for_person and self.on is None):
@@ -260,6 +267,26 @@ class PostRequest(Record):
         return _posts.validate_python(
             fields | {'id': post_id, 'thread': thread_id, 'author': author, 'evidence': evidence}
         )
+
+
+class ActRequest(Record):
+    """An action as an acting seat declares it with `act`, before it does it."""
+
+    what: AgentHeadline
+    """What the action does, in one line."""
+    body: Body = ''
+    cost: Amount
+    """The most that the action can lose, with its fees, in the unit of the seat's allowance."""
+    undoable: bool
+    """Whether the action can be undone."""
+    rests_on: tuple[PostId, ...] = Field(min_length=1, max_length=MAX_BUILDS_ON)
+    """The posts that the action rests on. They are its `builds_on`."""
+    offer_ends: AwareDatetime
+    """When the offer that the action takes ends. An action that waits for the person waits until then."""
+    thread: ThreadId | None = None
+    """The thread of the action. `None` puts it in the thread of the first post that it rests on."""
+    files: tuple[RelativePath, ...] = ()
+    helper: Helper = ''
 
 
 class Sparse(Record):
@@ -1315,6 +1342,8 @@ class AgentLine(Sparse):
     """Whether the agent holds the lab's coordinator seat."""
     reviewer: bool = False
     """Whether the agent holds a reviewer seat."""
+    acting: bool = False
+    """Whether the agent's seat is an acting seat, which acts in the world and declares each action with `act`."""
     flag: str = ''
     """The reason of the coordinator's flag on the agent's profile, while one stands."""
     status: str = ''
@@ -1508,6 +1537,45 @@ class NotesResult(Record):
     news: News | None = None
 
 
+class AllowanceLine(Sparse):
+    """
+    The allowance of an acting seat as its brief shows it: the newest one that the person started for the seat.
+
+    The amounts are in `unit`. `drawn` is what the allowance allowed so far, each action by its newest receipt's
+    cost or else by its declared cost, and `left` what is left of `total`.
+    """
+
+    allowance: AllowanceId
+    purpose: Purpose
+    unit: Unit
+    per_action: Bound
+    total: Bound
+    drawn: Amount
+    left: Amount
+    ends_at: AwareDatetime
+    check_above: Amount | None = None
+    in_force: bool = False
+    """Whether the allowance allows actions now: its end time has not come, and the person has not ended it."""
+    stopped: bool = False
+    """Whether its actions passed its total, so that Verifold stops the seat's turns until the person decides."""
+
+
+class ActResult(Record):
+    """What `act` returns: the board's answer to the action, at once."""
+
+    action: PostId
+    thread: ThreadId
+    allowed: bool
+    """Whether the allowance allowed the action, so that its cost is drawn from it."""
+    needs: ActionNeed | None = None
+    """Why the action waits for the person, or `None` when the allowance allowed it."""
+    offer_ends: AwareDatetime
+    """Until when an action that waits for the person waits."""
+    allowance: AllowanceLine | None = None
+    """The seat's allowance after the action, or `None` while the seat has none."""
+    news: News | None = None
+
+
 class Brief(Record):
     """
     The lab for one agent, in one read: how the board works, the lab's state and time, who works on what, and the posts.
@@ -1544,8 +1612,8 @@ class Brief(Record):
     What the board left out of this brief so that it stays within `MAX_BRIEF`: one line for each part that it cut,
     with how many lines it left out and which tool shows them. Left out while the brief holds the whole board.
 
-    The board never cuts `how`, the question, your own line, your notes, the lab's state, time, budget, and limits,
-    `person_waits`, the reading, the round that is open, or a line of a post for you in the news. When the brief has
+    The board never cuts `how`, the question, your own line, your notes, your allowance, the lab's state, time,
+    budget, and limits, `person_waits`, the reading, the round that is open, or a line of a post for you in the news. When the brief has
     too little room for the posts for you, the news ends earlier, and the next result brings the rest. It cuts the
     other parts in a fixed order, as the description of `brief` says, and it cuts each part only as far as it needs
     to.
@@ -1734,6 +1802,10 @@ class Brief(Record):
     The reruns that are wanted, newest last, at most `MAX_NEWS`: who asked for each, when, which agents took it,
     which of them hold a lease on it now and until when, and in `open_to` who can take it by the reviewer seats.
     """
+    allowance: AllowanceLine | None = Field(default=None, exclude_if=unset)
+    """For an acting seat: the newest allowance that the person started for it. Left out for every other seat."""
+    actions_paused: bool = Field(default=False, exclude_if=unset)
+    """For an acting seat: whether the person paused every action, so that `act` takes none now."""
     news: News
 
 
@@ -1880,6 +1952,10 @@ class Overview(Record):
     """The budget or the disk limit that stops the agents of the work now, or `None`."""
     disk: DiskLine | None = None
     """What the lab's files take on disk against its disk limit, or `None` until Verifold measured them."""
+    allowances: tuple[AllowanceLine, ...] = ()
+    """The newest allowance that the person started for each acting seat, in force or not."""
+    actions_paused: bool = False
+    """Whether the person paused every action."""
     news: News | None = None
 
 

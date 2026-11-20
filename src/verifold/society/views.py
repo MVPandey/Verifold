@@ -59,6 +59,8 @@ from verifold.protocol.join import (
     ThreadView,
 )
 from verifold.protocol.posts import (
+    Action,
+    Answer,
     Ask,
     Call,
     Check,
@@ -75,6 +77,7 @@ from verifold.protocol.posts import (
 from verifold.protocol.threads import Thread
 from verifold.protocol.usage import DiskUse
 from verifold.protocol.votes import BADGES, MAX_VOTE_LINES, NEWEST_VOTES
+from verifold.society.allowances import action_state, allowance_line
 from verifold.society.attention import left_line, watches_thread
 from verifold.society.board import Board
 from verifold.society.budget import budget_line, disk_limit
@@ -608,6 +611,8 @@ def brief(  # noqa: PLR0913, PLR0915
             taken_up=sum(item.state == 'taken_up' for item in found),
             removed=sum(item.state == 'removed' for item in found),
         ),
+        allowance=allowance_line(board, agent_id, now),
+        actions_paused=board.acting(agent_id) and board.actions_paused is not None,
         news=news,
     )
     if board.is_desk(agent_id):
@@ -881,6 +886,7 @@ def _agent_line(
         on_call=board.on_call(agent.id),
         coordinator=board.coordinator == agent.id,
         reviewer=board.reviewer(agent.id),
+        acting=board.acting(agent.id),
         flag=flag.flag or '' if flag else '',
         status=status,
         thread=working.get(agent.id),
@@ -954,35 +960,73 @@ def _reason(failed: TurnEnded | None) -> str | None:
     return 'Its harness failed to start.' if failed.no_turn else 'Its last turn ended with an error.'
 
 
-def needs_person(board: Board) -> tuple[PostView, ...]:
+def needs_person(board: Board, now: datetime | None = None) -> tuple[PostView, ...]:
     """
-    Return the posts that wait for the person's answer, oldest first.
+    Return the posts that wait for the person's answer at `now`, oldest first.
 
     They are the asks that name the person and have no answer from the person yet, the coordinator's asks in the
-    conversation with the person, and the coordinator's requests for a move that wait.
+    conversation with the person, the coordinator's requests for a move that wait, and the actions that wait for
+    the person until their offers end.
 
     Permission requests are asks too. An agent's answer leaves an ask open, because the asker waits for the person.
     An ask that carried a harness's request is not among them after Verifold ended the request.
-    The ask of an agent that left is not among them: nobody waits for its answer.
+    The ask of an agent that left is not among them: nobody waits for its answer. Neither is an ask whose end time
+    came, which `missed_posts` holds. Without `now`, time counts from the board's newest event.
     """
-    return tuple(post_view(board, entry, PERSON) for entry in waiting_posts(board))
+    return tuple(post_view(board, entry, PERSON) for entry in waiting_posts(board, now))
 
 
-def waiting_posts(board: Board) -> tuple[Posted, ...]:
+def waiting_posts(board: Board, now: datetime | None = None) -> tuple[Posted, ...]:
     """Return the entries of the posts that wait for the person's answer, oldest first, as `needs_person` says."""
-    return tuple(entry for entry in board.posts if _waits_for_person(board, entry))
+    at = now or latest_time(board)
+    return tuple(entry for entry in board.posts if _waits_for_person(board, entry, at))
 
 
-def _waits_for_person(board: Board, entry: Posted) -> bool:
-    post = entry.post
-    if not isinstance(post, Ask):
-        return request_waits(board, entry)
+def missed_posts(board: Board, now: datetime | None = None) -> tuple[Posted, ...]:
+    """
+    Return the entries of the asks and actions for the person that stopped waiting before the person answered.
+
+    They are the asks to the person whose end time came, the asks of a harness that ended with the agent's turn or
+    with a restart of Verifold, and the actions whose offers ended, or whose authors left, without an answer. Nothing
+    was done for any of them. Oldest first. Without `now`, time counts from the board's newest event.
+    """
+    at = now or latest_time(board)
+    return tuple(entry for entry in board.posts if _missed(board, entry, at))
+
+
+def _to_person(board: Board, entry: Posted, ask: Ask) -> bool:
     # In the conversation, the ask of the agent that held the coordinator seat when it asked is to the person, also
     # after the seat changed. Another agent's ask there is to the person only when it names the person, as in any
     # thread.
-    talks = post.thread == board.conversation and post.author == board.coordinator_at(entry.seq)
-    to_person = PERSON in post.mentions or talks
-    return to_person and waits_for_person(board, post.id) and not board.gone(post.author)
+    talks = ask.thread == board.conversation and ask.author == board.coordinator_at(entry.seq)
+    return PERSON in ask.mentions or talks
+
+
+def _waits_for_person(board: Board, entry: Posted, at: datetime) -> bool:
+    post = entry.post
+    if isinstance(post, Action):
+        return action_state(board, entry, at) == 'waits'
+    if not isinstance(post, Ask):
+        return request_waits(board, entry)
+    ended = post.ends_at is not None and post.ends_at <= at
+    return (
+        _to_person(board, entry, post)
+        and not ended
+        and waits_for_person(board, post.id)
+        and not board.gone(post.author)
+    )
+
+
+def _missed(board: Board, entry: Posted, at: datetime) -> bool:
+    post = entry.post
+    if isinstance(post, Action):
+        return action_state(board, entry, at) == 'missed'
+    if not isinstance(post, Ask):
+        return False
+    if post.request is not None:
+        return any(isinstance(reply.post, Answer) and reply.post.missed for reply in board.replies(post.id))
+    ended = post.ends_at is not None and post.ends_at <= at
+    return ended and _to_person(board, entry, post) and waits_for_person(board, post.id)
 
 
 def to_earlier_question(board: Board, proposed: Posted) -> bool:

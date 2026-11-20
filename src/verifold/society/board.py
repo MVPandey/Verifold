@@ -7,9 +7,15 @@ from heapq import merge
 
 from verifold.protocol.agents import GUEST, Picture, Power
 from verifold.protocol.events import (
+    ActingSet,
+    ActionDecided,
+    ActionsPaused,
     AgentJoined,
     AgentLeft,
     AlarmSet,
+    AllowanceDrafted,
+    AllowanceEnded,
+    AllowanceStarted,
     BadgeSet,
     BudgetSet,
     ClaimLapsed,
@@ -22,6 +28,7 @@ from verifold.protocol.events import (
     Limit,
     LimitReached,
     LimitsReported,
+    ModeSet,
     NotesSet,
     OnCallSet,
     PaceSet,
@@ -148,6 +155,19 @@ class Board:
     """Each time that the person stated, changed, or removed a deliverable, oldest first."""
     decisions: tuple[DeliverableDecided, ...] = ()
     """The person's decisions about offers of files for a deliverable, oldest first."""
+    actings: tuple[ActingSet, ...] = ()
+    """Each time that the person made a seat an acting seat or took the mark back, oldest first."""
+    modes: tuple[ModeSet, ...] = ()
+    """Each change of a seat's harness mode in the lab that runs, oldest first."""
+    drafts: tuple[AllowanceDrafted, ...] = ()
+    """Each draft of an allowance, oldest first. `society.allowances` says which one is in force."""
+    allowance_starts: tuple[AllowanceStarted, ...] = ()
+    allowance_ends: tuple[AllowanceEnded, ...] = ()
+    """The person's confirmations of drafts and ends of allowances, oldest first."""
+    pauses: tuple[ActionsPaused, ...] = ()
+    """Each time that the person paused every action or let actions go on, oldest first."""
+    action_decisions: tuple[ActionDecided, ...] = ()
+    """The person's answers to actions that waited for them, oldest first."""
 
     @property
     def question(self) -> str:
@@ -241,6 +261,23 @@ class Board:
         )
         latest = next(switches, None)
         return bool(latest and latest.on_call)
+
+    def acting(self, agent_id: AgentId) -> bool:
+        """Return whether an agent's seat is an acting seat now: the person's last mark of it says so."""
+        latest = next((entry for entry in reversed(self.actings) if entry.agent == agent_id), None)
+        return bool(latest and latest.acting)
+
+    def mode_of(self, agent_id: AgentId) -> str | None:
+        """Return the harness mode of an agent's seat: the person's last change, or the mode that it joined with."""
+        latest = next((entry for entry in reversed(self.modes) if entry.agent == agent_id), None)
+        joined = self.agent(agent_id)
+        return latest.mode if latest else joined.agent.mode if joined else None
+
+    @property
+    def actions_paused(self) -> ActionsPaused | None:
+        """The person's pause of every action while it stands, or `None` while actions may go on."""
+        latest = self.pauses[-1] if self.pauses else None
+        return latest if latest and latest.paused else None
 
     @property
     def coordinator(self) -> AgentId | None:

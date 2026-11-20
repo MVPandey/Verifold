@@ -1,8 +1,9 @@
 """The app protocol: what the person's UI reads from a lab, and what it sends."""
 
-from typing import Annotated, Literal
+from decimal import Decimal
+from typing import Annotated, Literal, Self
 
-from pydantic import AfterValidator, AwareDatetime, Field, JsonValue, StringConstraints
+from pydantic import AfterValidator, AwareDatetime, Field, JsonValue, StringConstraints, model_validator
 
 from verifold.protocol.agents import (
     Agent,
@@ -13,8 +14,19 @@ from verifold.protocol.agents import (
     Power,
     Role,
     SeatFacts,
+    TypedId,
     ValueId,
     one_line,
+)
+from verifold.protocol.allowances import (
+    ActionNeed,
+    ActionState,
+    AllowanceId,
+    AllowanceTerms,
+    Amount,
+    Bound,
+    Purpose,
+    Unit,
 )
 from verifold.protocol.deliverables import (
     FINDINGS_RECORD,
@@ -165,6 +177,18 @@ class Wait(Record):
     thread: ThreadId
 
 
+class Missed(Wait):
+    """
+    An ask or an action for the person that stopped waiting before the person answered, so nothing was done for it.
+
+    An ask's end time came, a request of a harness ended with the agent's turn or with a restart of Verifold, or an
+    action's offer ended.
+    """
+
+    ended_at: AwareDatetime
+    """When it stopped waiting."""
+
+
 class PostRef(Record):
     """A post by its ID and its thread, so that the app can link to it."""
 
@@ -244,6 +268,10 @@ class AgentView(Record):
     """Whether the agent holds the lab's coordinator seat."""
     desk: bool = False
     """Whether the agent's seat is the lab's desk, which answers the person in the desk chat and acts on the person's word."""
+    acting: bool = False
+    """Whether the agent's seat is an acting seat, which acts in the world with a key of its own."""
+    mode: str | None = None
+    """The harness mode of the agent's seat now. `None` follows the lab's auto mode choice."""
     status: str = ''
     """What the agent says that it does now."""
     thread: ThreadId | None = None
@@ -367,6 +395,56 @@ class RoundView(Record):
     """
 
 
+class ActionView(Record):
+    """One action of an acting seat as the person's app shows it: what it does, what it can lose, and where it stands."""
+
+    post: PostId
+    thread: ThreadId
+    agent: AgentId
+    at: AwareDatetime
+    what: str
+    """The action's headline, in its author's words."""
+    cost: Amount
+    """The most that the action can lose, with its fees, as its author declared it."""
+    undoable: bool
+    offer_ends: AwareDatetime
+    state: ActionState
+    needs: ActionNeed | None = None
+    """Why the action waited for the person. `None` for an action that its allowance allowed."""
+    real_cost: Amount | None = None
+    """What the action cost by its newest receipt. `None` until a receipt comes."""
+    receipt: PostId | None = None
+
+
+type AllowanceState = Literal['draft', 'in_force', 'over', 'ended', 'replaced']
+"""
+Where an allowance stands. `draft`: it waits for the person's confirmation. `in_force`: it allows actions now.
+`over`: its end time came. `ended`: the person ended it. `replaced`: the person started a newer one for the same seat.
+"""
+
+
+class AllowanceView(Record):
+    """An allowance as the person's app shows it: its terms, where it stands, what it allowed, and its actions."""
+
+    allowance: AllowanceId
+    terms: AllowanceTerms
+    state: AllowanceState
+    drafted_at: AwareDatetime
+    by: AgentId
+    """Who drafted it: the person, or the desk on the person's word."""
+    on: PostId | None = None
+    """The person's post in the desk chat that the desk's draft rests on."""
+    started_at: AwareDatetime | None = None
+    ended_at: AwareDatetime | None = None
+    """When the person ended it."""
+    drawn: Amount = Decimal(0)
+    """What the allowance allowed so far, each action by its newest receipt or else by its declared cost."""
+    stopped: bool = False
+    """Whether its actions passed its total, so that Verifold stops the holder's turns until the person decides."""
+    actions: tuple[ActionView, ...] = ()
+    """The holder's actions while the allowance stood, the newest first: those that it allowed and those that waited."""
+
+
 class LabView(Record):
     """The lab at a glance."""
 
@@ -434,6 +512,12 @@ class LabView(Record):
     When a post of the person last told the lab of a new sentence or a removal. For a minute after it, and while
     a close stands, such a change sends no post, and the agents read it in `brief`.
     """
+    allowances: tuple[AllowanceView, ...] = ()
+    """The drafts that wait for the person's confirmation, and every allowance that the person started, newest first."""
+    actions_paused: AwareDatetime | None = None
+    """When the person paused every action, while the pause stands. `None` while actions may go on."""
+    missed: tuple[Missed, ...] = ()
+    """The asks and actions for the person that stopped waiting before the person answered, the newest first."""
 
 
 class InviteRequest(SeatFacts):
@@ -457,6 +541,40 @@ class SeatChange(Record):
     """Give the agent the lab's coordinator seat, or take the seat from the agent that holds it."""
     reviewer: bool | None = None
     """Give the agent a reviewer seat, or take the seat that it holds."""
+    acting: bool | None = None
+    """Make the seat an acting seat, or take the mark back."""
+    mode: TypedId | None = None
+    """One of the harness's own modes for the seat. Its session starts again in that mode before its next turn."""
+
+
+class ActionsPause(Record):
+    """The person pauses every action of the lab, or lets actions go on."""
+
+    paused: bool
+
+
+class ActionAnswer(Record):
+    """The person's answer to an action that waits for them, before its offer ends."""
+
+    yes: bool
+
+
+class AllowanceRequest(Record):
+    """An allowance that `verifold run` starts, for the one acting seat of the lab, from the person's command line."""
+
+    purpose: Purpose
+    unit: Unit
+    per_action: Bound
+    total: Bound
+    minutes: int = Field(ge=1, le=MAX_MINUTES)
+    """How long the allowance stands, from the start of the lab."""
+    check_above: Amount | None = None
+
+    @model_validator(mode='after')
+    def _bounds(self) -> Self:
+        if self.per_action > self.total:
+            raise ValueError('An allowance allows no more for one action than in total.')
+        return self
 
 
 class ProfileChange(Record):
@@ -540,6 +658,8 @@ class OptionValue(Record):
 
     value: ValueId
     name: str
+    description: str = Field(default='', exclude_if=lambda text: not text)
+    """What the harness says of the value, in its own words, such as what a mode lets the agent do. Often empty."""
 
 
 class ModelValue(OptionValue):
@@ -627,6 +747,14 @@ class StartRequest(Record):
     """
     deliverables: tuple[Sentence, ...] = Field(default=(), max_length=MAX_DELIVERABLES)
     """What the person wants to hold at the end of the lab, each as one sentence. They can add more while it runs."""
+    allowance: AllowanceRequest | None = None
+    """An allowance for the lab's one acting seat, from the person's command line. No settings file holds one."""
+
+    @model_validator(mode='after')
+    def _one_holder(self) -> Self:
+        if self.allowance and sum(choice.count for choice in self.agents if choice.acting) != 1:
+            raise ValueError('An allowance at the start is for the one acting seat of the lab. Mark one seat acting.')
+        return self
 
 
 class SettingsFileView(Record):
@@ -861,10 +989,10 @@ class TimeRequest(Record):
     minutes: int = Field(ge=0, le=MAX_MINUTES)
 
 
-type DeskDeed = Literal['post', 'round', 'question', 'deliverable', 'time', 'budget', 'interrupt']
+type DeskDeed = Literal['post', 'round', 'question', 'deliverable', 'time', 'budget', 'interrupt', 'allowance']
 """
 What the desk did on the person's word: a post for the person, a round, a revision of the question, a change of a
-deliverable, a new end of the lab, a new budget, or the end of an agent's turn.
+deliverable, a new end of the lab, a new budget, the end of an agent's turn, or a draft of an allowance.
 """
 
 
@@ -894,6 +1022,8 @@ class DeskAction(Record):
     tokens: int | None = None
     dollars: float | None = None
     """For a new budget: the budget in tokens and in dollars that the desk set. `None` for a kind without one."""
+    allowance: AllowanceId | None = None
+    """For a draft of an allowance: its ID. The draft allows nothing until the person confirms it."""
 
 
 class DeskView(Record):

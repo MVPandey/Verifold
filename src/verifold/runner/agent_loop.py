@@ -49,6 +49,7 @@ from verifold.runner.messages import (
     DOORBELL,
     HARNESS_FAILED,
     IN_TURN,
+    MODE_CHANGED,
     OUT_OF_TIME,
     RERUN_WANTED,
     RESTARTED,
@@ -59,6 +60,7 @@ from verifold.runner.messages import (
     cut_short_message,
     go_on_facts,
     go_on_message,
+    stop_lifted,
 )
 from verifold.runner.permissions import (
     Refusals,
@@ -237,6 +239,8 @@ class AgentLoop:
         """Whether the desk ended the agent's last turn, so that the agent goes on also after a cut in a row."""
         self._heard_person = False
         """Whether a post of the person for the agent rang its last doorbell. A pause lets that post through."""
+        self._stopped = False
+        """Whether the board's stop at an allowance's total held the agent's next turn, so its message says why."""
         kept = next((entry for entry in reversed(board.seat_limits) if entry.agent == setup.agent.id), None)
         self._kept: SeatLimits | None = kept.limits if kept else None
         """The seat's usage limits as the record keeps them last."""
@@ -257,6 +261,8 @@ class AgentLoop:
         was = self._before
         resume = was.session
         message, failures, resumed = setup.start, 0, False
+        # The message that a restart of the harness in a new mode carries on to the agent's next turn.
+        pending = ''
         # What the agent's next message says first, while the agent comes back from a restart or a stop.
         back = STARTED_AGAIN if was.stopped else RESTARTED if was.worked else None
         worked, rests = back is not None, self._rests
@@ -277,24 +283,25 @@ class AgentLoop:
                             setup.start,
                             setup.folder,
                             kept=loaded,
-                            cut_off=bool(back) and was.cut_off,
+                            cut_off=bool(back) and was.cut_off and not pending,
                             jobs_stopped=jobs_stopped,
                         )
+                        message, pending = (f'{message}\n\n{pending}' if pending else message), ''
                     if rests:
                         # The agent ended its last turn itself, so the restart starts no turn. What wakes the agent
                         # next carries the news of the restart. A harness that loads a session can report old steps.
                         await self._report('idle')
                         message, rests = f'{message}\n\n{await self._news()}', False
                     while True:
-                        if (halts := await self._until_free()) and back:
-                            # The agent comes back to a lab that was out of time or at a limit, so it gets the lab's
-                            # new end or limit. The message says already what a stop of Verifold did to the agent's
-                            # processes.
-                            jobs = AtTimeLimit.FINISH if jobs_stopped else self._lab.board.settings.jobs.at_time_limit
-                            message = f'{message}\n\n{go_on_facts(halts, self._lab.board, jobs)}'
+                        message = await self._when_free(message, back=back is not None, jobs_stopped=jobs_stopped)
                         # An agent that left gets no other turn. Leaving this block ends its harness.
                         if self._left():
                             return
+                        if mode := self._new_mode():
+                            # The person changed the seat's mode, so the session starts again in it before this
+                            # turn. Leaving this block ends the harness, and the next one loads the conversation.
+                            setup, back, pending, worked = self._setup, MODE_CHANGED.format(mode=mode), message, True
+                            break
                         # From here the agent has a conversation, which a harness that fails can lose.
                         worked = True
                         stopped = await self._send(session, message)
@@ -482,6 +489,30 @@ class AgentLoop:
     def _left(self) -> bool:
         return self._lab.board.gone(self._setup.agent.id) is not None
 
+    def _new_mode(self) -> str | None:
+        # The mode that the person set for the seat in the lab that runs, when the session runs in another one. The
+        # seat's setup takes it, so the next session opens in it.
+        agent_id, setup = self._setup.agent.id, self._setup
+        mode = next((entry.mode for entry in reversed(self._lab.board.modes) if entry.agent == agent_id), None)
+        if mode is None or mode == setup.options.mode:
+            return None
+        options = setup.options.model_copy(update={'mode': mode})
+        self._setup = setup.model_copy(update={'options': options})
+        return mode
+
+    async def _when_free(self, message: str, *, back: bool, jobs_stopped: bool) -> str:
+        # Wait until nothing holds the agent's next turn, and return its message with what changed meanwhile. An
+        # agent that comes back to a lab that was out of time or at a limit gets the lab's new end or limit. The
+        # message says already what a stop of Verifold did to the agent's processes. An acting seat that the
+        # board's stop held gets what the person did.
+        if (halts := await self._until_free()) and back:
+            jobs = AtTimeLimit.FINISH if jobs_stopped else self._lab.board.settings.jobs.at_time_limit
+            message = f'{message}\n\n{go_on_facts(halts, self._lab.board, jobs)}'
+        if self._stopped:
+            self._stopped = False
+            message = f'{stop_lifted(self._lab.board, self._setup.agent.id, self._lab.now())}\n\n{message}'
+        return message
+
     async def _limits_heard(self, limits: SeatLimits) -> None:
         # During a turn, the record keeps the limits at once when a window passed a threshold or the status changed.
         if crossed(self._kept, limits):
@@ -523,6 +554,8 @@ class AgentLoop:
             held = hold(lab.board, agent_id, now)
             if held is None or (held.kind == 'paused' and (self._heard_person or self._person_wrote())):
                 return
+            # The board's own stop at an allowance's total holds also the person's post, until the person lifts it.
+            self._stopped = self._stopped or held.kind == 'allowance'
             if held != shown:
                 shown = held
                 await self._report('waiting', _held_words(held), 'pace')
@@ -753,6 +786,11 @@ class AgentLoop:
 def _held_words(held: Hold) -> str:
     # What holds the agent's next turn, in Verifold's words for the person. The app adds the times.
     who = 'you' if held.by == PERSON else 'the coordinator'
+    if held.kind == 'allowance':
+        return (
+            'Its actions passed the total of its allowance, so the board stopped it. It goes on when you end that '
+            'allowance or start another one.'
+        )
     if held.kind == 'paused':
         return f'Paused by {who}. A post of yours for it still starts its turn.'
     if held.kind == 'seat':

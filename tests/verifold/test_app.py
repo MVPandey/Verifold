@@ -186,7 +186,10 @@ async def test_the_person_starts_a_lab_from_the_setup_screen(
                         {'value': 'small-model', 'name': 'small-model', 'efforts': []},
                     ],
                     'efforts': named('default', 'low', 'high'),
-                    'modes': [{'value': 'ask', 'name': 'Ask'}, {'value': 'auto', 'name': 'Auto'}],
+                    'modes': [
+                        {'value': 'ask', 'name': 'Ask', 'description': 'Asks before each change.'},
+                        {'value': 'auto', 'name': 'Auto'},
+                    ],
                     'model': 'default',
                     'effort': 'default',
                     'mode': 'ask',
@@ -2409,3 +2412,41 @@ async def test_the_desk_starts_at_the_persons_first_post_while_the_lab_is_out_of
     # Only the person's message to the desk started a turn while the lab was out of time.
     assert turns_of(project, 'agent-1') == 1
     assert len(prompts_of(log, 'agent-2')) == 1
+
+
+async def test_a_lab_starts_with_the_persons_allowance_for_its_acting_seat_and_the_person_changes_a_seats_mode(
+    project: Path, log: Path
+) -> None:
+    allowance = {'purpose': 'Place orders', 'unit': 'USD', 'per_action': '10', 'total': '100', 'minutes': 60}
+    seats = [{'harness': 'fake', 'acting': True}, {'harness': 'fake'}]
+    async with serving(project, options=FAST) as client:
+        await probed_setup(client)
+        begun = await client.post('/labs', json={'question': 'Does it hold?', 'agents': seats, 'allowance': allowance})
+        await until(lambda: turns_of(project, 'agent-2') == 1, timeout=60)
+        before = LabView.model_validate((await client.get('/lab')).json())
+        # The lab runs in auto mode, so the seat's session runs in the harness's auto mode until the person changes it.
+        changed = await client.post('/agents/agent-2/seat', json={'mode': 'ask', 'acting': True})
+        await client.post(
+            '/posts', json={'kind': 'message', 'text': 'Go on.', 'thread': 't-1', 'mentions': ['agent-2']}
+        )
+        await until(lambda: turns_of(project, 'agent-2') == 2, timeout=60)
+        refused = await client.post('/agents/agent-2/seat', json={'coordinator': True})
+
+    assert begun.status_code == 200
+    (view,) = before.allowances
+    assert (view.allowance, view.state, view.by, view.terms.holder) == ('a-1', 'in_force', 'person', 'agent-1')
+    assert [(agent.acting, agent.mode) for agent in before.agents] == [(True, None), (False, None)]
+    after = LabView.model_validate(changed.json())
+    assert [(agent.acting, agent.mode) for agent in after.agents] == [(True, None), (True, 'ask')]
+    modes = [call['mode'] for call in calls(log) if call['event'] == 'mode' and call['agent'] == 'agent-2']
+    assert modes == ['auto', 'ask']
+    assert prompts_of(log, 'agent-2')[-1].startswith('The person changed the mode of your seat to ask')
+    assert (refused.status_code, 'an acting seat takes no coordinator seat' in refused.json()['detail']) == (400, True)
+
+
+async def test_an_invited_agent_takes_no_acting_seat(project: Path) -> None:
+    async with serving(project, ON_CALL, {'fake': FAKE_HARNESS}) as client:
+        refused = await client.post('/invitations', json={'acting': True})
+
+    assert refused.status_code == 400
+    assert 'cannot stop its turns at the limit of an allowance' in refused.json()['detail']

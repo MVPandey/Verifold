@@ -6,6 +6,10 @@ as the budget counts them. A turn reports what it spent when it ends, so a limit
 no turn that runs. A pause stops no turn that runs either: the seat finishes it, and no post but the person's starts
 another. The desk is the person's, so it takes no pause and no limit, and its turns count toward the lab's limit.
 
+The board has one stop of its own: when the actions that an allowance allowed cost more than its total, the
+allowance's holder holds as a paused seat does, and a post of the person starts no turn of it either. Only the
+person lifts that stop, with the end of that allowance or the start of another one for the seat.
+
 The person and the coordinator each have their own pause and their own limit for each seat and for the lab. A move
 of the person replaces both of the same kind. The coordinator's own move only lowers what the person granted.
 """
@@ -21,14 +25,18 @@ from verifold.protocol.join import CapLine, PauseLine
 from verifold.protocol.moves import CapMove, PaceMove, PauseMove, ResumeMove
 from verifold.protocol.posts import MoveRequest
 from verifold.protocol.usage import SeatLimits
+from verifold.society.allowances import stopped
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 
 NEAR_LIMIT = 80
 """The percent of a window above which a seat counts as near its provider's limit."""
 
-type HoldKind = Literal['paused', 'seat', 'lab']
-"""Why a seat's next turn waits: a pause, the seat's own limit of tokens per hour, or the lab's."""
+type HoldKind = Literal['allowance', 'paused', 'seat', 'lab']
+"""
+Why a seat's next turn waits: the board's stop at the total of the seat's allowance, a pause, the seat's own limit of
+tokens per hour, or the lab's.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,10 +150,14 @@ def hold(board: Board, agent_id: AgentId, now: datetime) -> Hold | None:
     """
     Return what keeps a seat's next turn from starting at `now`, or `None` when nothing does.
 
-    A pause comes first, then the seat's own limit of tokens per hour, then the lab's. The desk has none of them.
+    The board's stop at the total of the seat's allowance comes first, then a pause, then the seat's own limit of
+    tokens per hour, then the lab's. The desk has none of them. The stop names the seat itself in `by`, because the
+    board made it and neither the person nor the coordinator did.
     """
     if board.is_desk(agent_id):
         return None
+    if stopped(board, agent_id):
+        return Hold(kind='allowance', by=agent_id, until=None)
     pause = pause_of(board, agent_id, now)
     if pause and isinstance(pause.move, PauseMove):
         return Hold(kind='paused', by=pause.by, until=pause.move.until)

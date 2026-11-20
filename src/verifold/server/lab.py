@@ -8,12 +8,19 @@ from datetime import UTC, datetime, timedelta
 from typing import Final, Self, assert_never
 
 from verifold.protocol.agents import Agent, Picture, Power, one_line
+from verifold.protocol.allowances import AllowanceId, AllowanceTerms
 from verifold.protocol.deliverables import Decision
 from verifold.protocol.events import (
+    ActingSet,
+    ActionDecided,
+    ActionsPaused,
     AgentJoined,
     AgentLeft,
     AgentNamed,
     AlarmSet,
+    AllowanceDrafted,
+    AllowanceEnded,
+    AllowanceStarted,
     BadgeSet,
     BudgetSet,
     ClaimLapsed,
@@ -25,6 +32,7 @@ from verifold.protocol.events import (
     LabOpened,
     LimitReached,
     LimitsReported,
+    ModeSet,
     NotesSet,
     OnCallSet,
     PaceSet,
@@ -52,7 +60,7 @@ from verifold.protocol.events import (
     WatchSet,
 )
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
-from verifold.protocol.join import PostRequest
+from verifold.protocol.join import ActRequest, PostRequest
 from verifold.protocol.moves import (
     AddMove,
     AddSeat,
@@ -69,6 +77,7 @@ from verifold.protocol.moves import (
 )
 from verifold.protocol.posts import (
     MAX_HEADLINE,
+    Action,
     Answer,
     Ask,
     Check,
@@ -86,6 +95,7 @@ from verifold.protocol.usage import DiskUse, SeatLimits
 from verifold.protocol.votes import Badge, BadgeAction, Direction
 from verifold.server.changes import wait_until
 from verifold.server.errors import LabExists, SetupRejected
+from verifold.society.allowances import verdict
 from verifold.society.board import Board
 from verifold.society.budget import reached
 from verifold.society.candidates import check_names_candidate, check_read
@@ -241,11 +251,12 @@ class Lab:
         first: tuple[Build, ...] = (),
         given: tuple[str, AgentId] | None = None,
         desk: bool = False,
+        acting: bool = False,
     ) -> AgentJoined:
         """
         Add an agent to the lab.
 
-        With `on_call`, the person put its seat on call. With `coordinator`, the person made it the lab's
+        With `acting`, the person made its seat an acting seat. With `on_call`, the person put its seat on call. With `coordinator`, the person made it the lab's
         coordinator, and `powers` are the powers that the person switched on for it. With `desk`, the person made
         its seat the lab's desk, and the desk chat opens with it when the lab has none. The record takes all of
         them in the same step as the agent. `first` are events that come before the agent in that step, such as the
@@ -266,6 +277,8 @@ class Lab:
                 builds.append(_open_thread(DESK_TITLE, PERSON, desk=True))
         if on_call:
             builds.append(lambda _, seq, at: OnCallSet(seq=seq, at=at, agent=agent.id, on_call=True))
+        if acting:
+            builds.append(lambda _, seq, at: ActingSet(seq=seq, at=at, agent=agent.id, acting=True))
         if coordinator:
             builds.append(lambda _, seq, at: CoordinatorSet(seq=seq, at=at, agent=agent.id, by=PERSON))
             builds += [_power(power, agent.id) for power in powers]
@@ -312,6 +325,137 @@ class Lab:
         if self._board.agent(agent_id) and self._board.on_call(agent_id) == on_call:
             return
         await self._commit(lambda _, seq, at: OnCallSet(seq=seq, at=at, agent=agent_id, on_call=on_call))
+
+    async def set_acting(self, agent_id: AgentId, *, acting: bool) -> None:
+        """
+        Record that the person made an agent's seat an acting seat, or took the mark back. The same again records nothing.
+
+        Raises:
+            RejectedEvent: The seat cannot be an acting seat, as `society.allowances.check_acting` says.
+
+        """
+        if self._board.agent(agent_id) and self._board.acting(agent_id) == acting:
+            return
+        await self._commit(lambda _, seq, at: ActingSet(seq=seq, at=at, agent=agent_id, acting=acting))
+
+    async def set_mode(self, agent_id: AgentId, mode: str) -> bool:
+        """
+        Record the person's new harness mode for an agent's seat, and return whether the record took a change.
+
+        Raises:
+            RejectedEvent: The agent is not in the lab, left it, or runs by itself.
+
+        """
+        if self._board.agent(agent_id) and self._board.mode_of(agent_id) == mode:
+            return False
+        await self._commit(lambda _, seq, at: ModeSet(seq=seq, at=at, agent=agent_id, mode=mode))
+        return True
+
+    async def draft_allowance(self, terms: AllowanceTerms, on: Said | None = None) -> AllowanceDrafted:
+        """
+        Record a draft of an allowance, and return it. A draft allows nothing until the person confirms it.
+
+        With `on`, the desk drafts it on the person's word.
+
+        Raises:
+            RejectedEvent: The draft breaks a rule of `society.allowances.check_draft`.
+
+        """
+        by, post = (on.by, on.post) if on else (PERSON, None)
+        board = await self._commit(
+            lambda board, seq, at: AllowanceDrafted(
+                seq=seq, at=at, allowance=f'a-{len(board.drafts) + 1}', terms=terms, by=by, on=post
+            )
+        )
+        return board.drafts[-1]
+
+    async def start_allowance(self, allowance_id: AllowanceId) -> None:
+        """
+        Record the person's confirmation of a draft, so that the allowance is in force. Only the person calls it.
+
+        Raises:
+            RejectedEvent: The draft cannot start, as `society.allowances.check_start` says.
+
+        """
+        await self._commit(lambda _, seq, at: AllowanceStarted(seq=seq, at=at, allowance=allowance_id))
+
+    async def end_allowance(self, allowance_id: AllowanceId) -> None:
+        """
+        Record that the person ended an allowance. Only the person calls it.
+
+        Raises:
+            RejectedEvent: The allowance did not start, or the person ended it already.
+
+        """
+        await self._commit(lambda _, seq, at: AllowanceEnded(seq=seq, at=at, allowance=allowance_id))
+
+    async def pause_actions(self, *, paused: bool) -> None:
+        """Record that the person paused every action, or let actions go on. The same answer again records nothing."""
+        if (self._board.actions_paused is not None) != paused:
+            await self._commit(lambda _, seq, at: ActionsPaused(seq=seq, at=at, paused=paused))
+
+    async def act(self, author: AgentId, request: ActRequest, evidence: tuple[FileEvidence, ...] = ()) -> Posted:
+        """
+        Record an action that an acting seat declares, with the board's answer to it, and return the post.
+
+        The answer comes from the board at the step of the post, so two actions at the same moment draw from one
+        allowance in turn. Without `thread`, the action is in the thread of the first post that it rests on.
+
+        Raises:
+            RejectedEvent: The board takes no such action, as `society.allowances.check_action_post` says, or a post
+                that it rests on does not exist.
+
+        """
+
+        def build(board: Board, seq: int, at: datetime) -> Posted:
+            first = board.post(request.rests_on[0])
+            if first is None:
+                raise RejectedEvent(f'Post {request.rests_on[0]} does not exist, so no action rests on it.')
+            answer = verdict(board, author, request.cost, at)
+            action = Action(
+                id=f'p-{len(board.posts) + 1}',
+                thread=request.thread or first.post.thread,
+                author=author,
+                helper=request.helper,
+                text=request.what,
+                body=request.body,
+                builds_on=request.rests_on,
+                evidence=evidence,
+                cost=request.cost,
+                undoable=request.undoable,
+                offer_ends=request.offer_ends,
+                allowance=answer.allowance,
+                allowed=answer.allowed,
+                needs=answer.needs,
+            )
+            return Posted(seq=seq, at=at, post=action)
+
+        board = await self._commit(build)
+        return board.posts[-1]
+
+    async def decide_action(self, action_id: PostId, *, yes: bool) -> ActionDecided:
+        """
+        Record the person's answer to an action that waits for them, with the person's reply to it, and return it.
+
+        The reply is a post of the person that replies to the action, so its author hears the answer.
+
+        Raises:
+            RejectedEvent: The action waits for no answer, or its offer ended, as `check_decided` says.
+
+        """
+        entry = self._board.post(action_id)
+        if entry is None or not isinstance(entry.post, Action):
+            raise RejectedEvent(f'Post {action_id} is no action.')
+        said = PostRequest(
+            kind='message', text=ACTION_YES if yes else ACTION_NO, thread=entry.post.thread, reply_to=action_id
+        )
+        board = await self._commit(
+            _add_post(said, PERSON, ()),
+            lambda board, seq, at: ActionDecided(
+                seq=seq, at=at, action=action_id, yes=yes, post=board.posts[-1].post.id
+            ),
+        )
+        return board.action_decisions[-1]
 
     async def set_coordinator(self, agent_id: AgentId | None, by: AgentId, *, free: bool = False) -> AgentId | None:
         """
@@ -371,7 +515,7 @@ class Lab:
 
         """
         # A thread that opens with an ask of the runner is the agent's thread for that kind of request.
-        carries = mark.type if mark and mark != 'ends_request' else None
+        carries = mark.type if mark and mark not in ('ends_request', 'missed') else None
         opens: tuple[Build, ...] = ()
         if request.new_thread:
             opens = (_open_thread(request.new_thread, author, request.between, carries, for_person=request.for_person),)
@@ -1181,6 +1325,10 @@ YES: Final = 'Yes'
 NO: Final = 'Not now'
 """The person's answer to a request for a move, as the conversation shows it."""
 
+ACTION_YES: Final = 'The person said yes to this action.'
+ACTION_NO: Final = 'The person said no to this action.'
+"""The person's reply to an action that waited for them, which its author hears."""
+
 
 STATED: Final = 'The person stated a deliverable, {id}: '
 """How the post that tells the lab of a new deliverable starts. The person's sentence follows it."""
@@ -1546,8 +1694,8 @@ def _add_post(  # noqa: PLR0913
         still = take if request.reply_to and open_take(board, author, request.reply_to) else None
         post = request.to_post(f'p-{len(board.posts) + 1}', thread_id, author, evidence, question_seen, take=still)
         # No field of a request holds a mark, so no agent and no person's post can carry one.
-        if isinstance(post, Answer) and mark == 'ends_request':
-            post = post.model_copy(update={'ends_request': True})
+        if isinstance(post, Answer) and mark in ('ends_request', 'missed'):
+            post = post.model_copy(update={'ends_request': True, 'missed': mark == 'missed'})
         elif isinstance(post, Ask) and isinstance(mark, PermissionShown | QuestionShown):
             post = post.model_copy(update={'request': mark.type, 'shown': mark})
         # The coordinator's post for the person is for the whole lab where such a post can stand, so that it
