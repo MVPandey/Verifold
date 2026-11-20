@@ -17,6 +17,7 @@ import type {
   ThreadSummary,
 } from '../api/types.ts';
 import { authorName, called, members } from '../model/agents.ts';
+import { actionIds } from '../model/allowances.ts';
 import { coordinatorOf } from '../model/coordinator.ts';
 import type { Tab } from '../model/coordinator.ts';
 import { crossedLine, crossLines } from '../model/crossings.ts';
@@ -52,6 +53,7 @@ import { browserStore, useThread } from './hooks.ts';
 import type { PageProps, ThreadRead } from './hooks.ts';
 import { Detail, Words } from './Markdown.tsx';
 import { CoordinatorSeat, OpenedForYou } from './Coordinator.tsx';
+import { ActionNeeds, Allowances } from './Allowances.tsx';
 import { DeskSeat } from './Desk.tsx';
 import { DeliverDoor, Deliverables } from './Deliverables.tsx';
 import { ChipView, Composer, Exact, Files, New } from './parts.tsx';
@@ -266,7 +268,15 @@ export function Wall(
           ) : null}
         </div>
         <div className="f-steer">
-          <Waits lab={lab} now={props.now} />
+          <ActionNeeds api={api} needs={needs} lab={lab} now={props.now} reload={data.reload} />
+          <Waits lab={lab} now={props.now} skip={actionIds(needs)} />
+          <Allowances
+            api={api}
+            lab={lab}
+            now={props.now}
+            reload={data.reload}
+            {...(deskOf(lab.agents) ? { onChange: () => setPanel('desk') } : {})}
+          />
           {done && lab.close ? (
             <a
               className="f-done"
@@ -973,8 +983,18 @@ function Under(props: {
  * What waits for the person: the approvals first, then the answers, each with who asks, what, and how long it has
  * waited. A row goes to the Needs you page, where the person answers.
  */
-function Waits(props: { readonly lab: LabView; readonly now: Date }): ReactElement | null {
-  const groups = waitGroups(props.lab, props.now);
+function Waits(props: {
+  readonly lab: LabView;
+  readonly now: Date;
+  /** The posts whose waits show as cards of their own, and not as rows here. */
+  readonly skip: ReadonlySet<string>;
+}): ReactElement | null {
+  const groups = waitGroups(props.lab, props.now)
+    .map((group) => ({
+      ...group,
+      rows: group.rows.filter((row) => !props.skip.has(row.wait.post)),
+    }))
+    .filter((group) => group.rows.length > 0);
   const proposed = proposalRows(props.lab, props.now);
   if (groups.length === 0 && proposed.length === 0) return null;
   return (

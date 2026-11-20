@@ -8,6 +8,7 @@ import type {
   Agent,
   AgentView,
   FolderView,
+  HarnessOption,
   Invitation,
   LabView,
   ThreadSummary,
@@ -17,6 +18,7 @@ import { wrapFocus } from '../model/focus.ts';
 import { dayClock } from '../model/format.ts';
 import {
   ROLE_LIMIT,
+  actingSwitch,
   editLine,
   giveRole,
   outcomeLines,
@@ -30,7 +32,9 @@ import type { SeatAction } from '../model/identity.ts';
 import { seatLines } from '../model/pace.ts';
 import { href } from '../model/route.ts';
 import { whereLine } from '../model/status.ts';
+import { modeEntries } from '../model/setup.ts';
 import { Detail } from './Markdown.tsx';
+import { Modes } from './SeatForm.tsx';
 import { SeatPaceControls } from './Pace.tsx';
 import { Mark, MarksAndRoles, Picture, Profiles } from './Picture.tsx';
 
@@ -51,6 +55,8 @@ export function ProfileSheet(props: {
   readonly onInvitation: (invitation: Invitation | null) => void;
   readonly onChange: () => void;
   readonly onClose: () => void;
+  /** What each harness offers, so that the person can change the mode of a seat. */
+  readonly harnesses?: readonly HarnessOption[];
 }): ReactElement {
   const { view, lab, api, onChange, onClose } = props;
   const { agent } = view;
@@ -232,6 +238,12 @@ export function ProfileSheet(props: {
             <Acts api={api} actions={takeBacks(view)} onChange={onChange} />
             <RoleField api={api} view={view} onChange={onChange} />
             <SeatControls api={api} view={view} onChange={onChange} />
+            <ModeChange
+              api={api}
+              view={view}
+              option={props.harnesses?.find((harness) => harness.name === agent.harness) ?? null}
+              onChange={onChange}
+            />
             <SeatPaceControls api={api} view={view} now={props.now} onChange={onChange} />
             {view.stopped ? <StartAgain api={api} agent={agent.id} onChange={onChange} /> : null}
             {agent.harness === GUEST ? (
@@ -403,8 +415,51 @@ export function SeatControls(props: {
       {view.coordinator && notCome(view) ? (
         <p className="f-where">Holds the coordinator seat and has not come yet.</p>
       ) : null}
-      <Acts api={props.api} actions={seatSwitches(view)} onChange={props.onChange} />
+      <Acts
+        api={props.api}
+        actions={[...seatSwitches(view), actingSwitch(view)].filter((action) => action !== null)}
+        onChange={props.onChange}
+      />
     </>
+  );
+}
+
+/**
+ * The person's choice of a new harness mode for a seat in the lab that runs, with each mode's own description. The
+ * seat's session starts again in it before the seat's next turn. A harness that told Verifold no modes shows none.
+ */
+export function ModeChange(props: {
+  readonly api: Api;
+  readonly view: AgentView;
+  readonly option: HarnessOption | null;
+  readonly onChange: () => void;
+}): ReactElement | null {
+  const now = props.view.mode ?? '';
+  const [mode, setMode] = useState(now);
+  const offer = props.option?.offer ?? null;
+  if (offer === null || offer.modes.length === 0) return null;
+  // A seat in a running lab takes one of the harness's own modes. The lab's auto mode answer is no mode to choose.
+  const entries = modeEntries(offer, now).filter((entry) => entry.value !== '');
+  const change: SeatAction = {
+    label: 'Change the mode',
+    run: (api) => api.changeSeat(props.view.agent.id, { mode }),
+  };
+  return (
+    <div className="i-mode">
+      <Modes
+        label="Mode of its harness"
+        entries={entries}
+        modes={offer.modes}
+        value={mode}
+        onChange={setMode}
+      />
+      <p className="i-prov">Its session starts again in the new mode before its next turn.</p>
+      <Acts
+        api={props.api}
+        actions={mode && mode !== now ? [change] : []}
+        onChange={props.onChange}
+      />
+    </div>
   );
 }
 

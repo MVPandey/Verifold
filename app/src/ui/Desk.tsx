@@ -10,6 +10,7 @@ import { NO_DESK, actionLine, actionsOn, deskOf } from '../model/desk.ts';
 import { clock } from '../model/format.ts';
 import { split } from '../model/posts.ts';
 import { href } from '../model/route.ts';
+import { AllowanceCard } from './Allowances.tsx';
 import { Write } from './Coordinator.tsx';
 import type { PageProps } from './hooks.ts';
 import { Words } from './Markdown.tsx';
@@ -104,21 +105,45 @@ export function DeskPanel(props: {
         {(view.thread?.posts ?? []).map((item) => (
           <Fragment key={item.post.id}>
             <DeskSay item={item} agents={lab.agents} />
-            {actionsOn(view, item.post.id).map((action, index) => (
-              <li key={`${item.post.id}-${String(index)}`} className="k-heard">
-                <span>
-                  {actionLine(action, lab.agents)}
-                  {action.post && action.thread ? (
-                    <>
-                      {' · '}
-                      <a href={href({ page: 'thread', id: action.thread, post: action.post })}>
-                        See it
-                      </a>
-                    </>
+            {actionsOn(view, item.post.id).map((action, index) => {
+              const drafted = (lab.allowances ?? []).find(
+                (allowance) => allowance.allowance === action.allowance,
+              );
+              return (
+                <Fragment key={`${item.post.id}-${String(index)}`}>
+                  <li className="k-heard">
+                    <span>
+                      {actionLine(action, lab.agents)}
+                      {action.post && action.thread ? (
+                        <>
+                          {' · '}
+                          <a href={href({ page: 'thread', id: action.thread, post: action.post })}>
+                            See it
+                          </a>
+                        </>
+                      ) : null}
+                    </span>
+                  </li>
+                  {drafted ? (
+                    <li className="k-card">
+                      <AllowanceCard
+                        api={props.api}
+                        view={drafted}
+                        lab={lab}
+                        now={props.now}
+                        reload={props.reload}
+                        onChange={() => {
+                          // A newer draft replaces this one, so the person tells the desk what to change.
+                          document
+                            .querySelector<HTMLTextAreaElement>('.k-panel .k-write textarea')
+                            ?.focus();
+                        }}
+                      />
+                    </li>
                   ) : null}
-                </span>
-              </li>
-            ))}
+                </Fragment>
+              );
+            })}
           </Fragment>
         ))}
       </ol>

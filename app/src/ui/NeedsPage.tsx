@@ -4,11 +4,13 @@ import type { ReactElement } from 'react';
 import type { AgentView, PostView } from '../api/types.ts';
 import { author, ownName } from '../model/agents.ts';
 import { duration, minutesBetween } from '../model/format.ts';
+import { askEnds, isAction, stoppedAllowances } from '../model/allowances.ts';
 import { orderNeeds, pauses } from '../model/needs.ts';
 import { choiceGroups, harnessRequest, personAnswer } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import { messageOf } from '../api/client.ts';
 import type { PageProps } from './hooks.ts';
+import { ActionRequest, AllowanceCard, MissedFold } from './Allowances.tsx';
 import { RequestNeed } from './Coordinator.tsx';
 import { Words } from './Markdown.tsx';
 import { HarnessAsk } from './parts.tsx';
@@ -17,16 +19,38 @@ import { Name, Who } from './Picture.tsx';
 /** Everything that waits for the person's answer. Requests that pause an agent come first. */
 export function NeedsPage({ api, data, now }: PageProps): ReactElement {
   const ordered = orderNeeds(data.needs, data.lab);
+  // An allowance whose actions passed its total stopped its holder, and only the person lets it go on.
+  const stopped = stoppedAllowances(data.lab);
+  const count = ordered.length + stopped.length;
   return (
     <div className="narrow">
       <h1>Needs you</h1>
       <p className="sub">
-        {ordered.length === 0
+        {count === 0
           ? 'Nothing waits for you now.'
-          : `${ordered.length} waiting. Requests that pause an agent come first.`}
+          : `${count} waiting. Requests that pause an agent come first.`}
       </p>
+      {stopped.map((view) => (
+        <AllowanceCard
+          key={view.allowance}
+          api={api}
+          view={view}
+          lab={data.lab}
+          now={now}
+          reload={data.reload}
+        />
+      ))}
       {ordered.map((item) =>
-        item.post.kind === 'request' ? (
+        isAction(item) ? (
+          <ActionRequest
+            key={item.post.id}
+            api={api}
+            item={item}
+            lab={data.lab}
+            now={now}
+            reload={data.reload}
+          />
+        ) : item.post.kind === 'request' ? (
           <RequestNeed key={item.post.id} api={api} data={data} now={now} item={item} />
         ) : (
           <NeedCard
@@ -43,6 +67,7 @@ export function NeedsPage({ api, data, now }: PageProps): ReactElement {
           />
         ),
       )}
+      <MissedFold lab={data.lab} now={now} />
     </div>
   );
 }
@@ -94,6 +119,7 @@ function NeedCard(props: {
         <p className="nq">
           {permission ? post.text.replace(/^Permission needed:\s*/, '') : post.text}
         </p>
+        {askEnds(post, props.now) ? <p className="a-ends">{askEnds(post, props.now)}</p> : null}
         {shown ? (
           <HarnessAsk shown={shown} name={name} />
         ) : post.body ? (

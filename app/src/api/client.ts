@@ -137,8 +137,19 @@ export interface Api {
   ): Promise<LabView>;
   /** Add the agents of one seat to the lab that runs. */
   addAgents(choice: AgentChoice): Promise<LabView>;
-  /** Put an agent's seat on call or take it off, and give or take the coordinator seat or a reviewer seat. */
+  /**
+   * Change an agent's seat: on call, the coordinator seat, a reviewer seat, the mark of an acting seat, and the
+   * harness mode, which its session takes before its next turn.
+   */
   changeSeat(agentId: string, change: SeatChange): Promise<LabView>;
+  /** Confirm a draft of an allowance with the person's own press, so that it allows actions from now on. */
+  startAllowance(id: string): Promise<LabView>;
+  /** End an allowance. An action that was done stays done. */
+  endAllowance(id: string): Promise<LabView>;
+  /** Pause every action of the lab, or let actions go on. */
+  pauseActions(paused: boolean): Promise<LabView>;
+  /** Answer an action that waits for the person, before its offer ends. */
+  decideAction(postId: string, yes: boolean): Promise<LabView>;
   /** Take back the name, the about line, or the picture that an agent chose, or give its seat a role. */
   changeProfile(agentId: string, change: ProfileChange): Promise<LabView>;
   /** Set how many reviewer seats the lab has. `null` follows the size of the lab again. */
@@ -307,6 +318,11 @@ export function createApi(
     badge: (change) => request('/badges', change),
     setTime: (minutes) => request('/time', { minutes }),
     setBudget: (budget) => request('/budget', budget),
+    startAllowance: (id) => request(`/allowances/${encodeURIComponent(id)}/start`, {}),
+    endAllowance: (id) => request(`/allowances/${encodeURIComponent(id)}/end`, {}),
+    pauseActions: (paused) => request('/actions/pause', { paused }),
+    decideAction: (postId, yes) =>
+      request(`/actions/${encodeURIComponent(postId)}/decision`, { yes }),
     setDisk: (limitGb) => request('/disk', { limit_gb: limitGb }),
     setPace: (move) => request('/pace', move),
     setCoordinatorShare: (tokensPerHour) =>

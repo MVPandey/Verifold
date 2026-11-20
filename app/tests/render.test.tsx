@@ -3643,7 +3643,8 @@ describe('the setup screen', () => {
     );
     assert.ok(html.includes('<summary>Opus, High effort (your default)</summary>'));
     assert.ok(html.includes('<option value="" selected="">Opus (your default)</option>'));
-    assert.ok(html.includes('<option value="plan">Plan</option>'));
+    // The modes are a choice of one, each with the harness's own name.
+    assert.ok(html.includes('value="plan"/><span><b>Plan</b></span>'));
     // The model menu ends with the way to type a model that the harness does not list.
     assert.ok(html.includes('Other…</option>'));
     assert.equal(html.includes('Model ID'), false);
