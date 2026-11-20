@@ -10,6 +10,7 @@ from pydantic import Field
 from verifold.protocol.agents import Label
 from verifold.protocol.record import Record
 from verifold.protocol.settings import HarnessSettings
+from verifold.protocol.usage import CommandLimits, LimitSource, MetaLimits
 
 
 class HarnessEntry(Record):
@@ -42,6 +43,11 @@ class HarnessEntry(Record):
     Verifold then knows a call to the lab's own board and allows it. Where the model writes the input, the name
     proves nothing, so the default is off. A harness in the person's settings sets it in the same way.
     """
+    limits: LimitSource | None = None
+    """
+    How the harness reports its provider's usage limits over ACP, as data. `None` means that it reports none, and its
+    seats have no limits. A harness in the person's settings says the same in its entry.
+    """
 
 
 NPX_PROJECT = Path.home() / '.verifold' / 'npx'
@@ -56,6 +62,44 @@ def _adapter(package: str) -> tuple[str, ...]:
     return ('npx', '--prefix', str(NPX_PROJECT), '-y', package)
 
 
+CLAUDE_LIMITS = MetaLimits(
+    key='_claude/rateLimit',
+    windows=('unifiedWindows', ''),
+    name='rateLimitType',
+    used='utilization',
+    scale=1,
+    resets='resetsAt',
+    status='status',
+    statuses={'allowed': 'allowed', 'allowed_warning': 'warning', 'rejected': 'reached'},
+    labels={
+        'five_hour': '5-hour',
+        'seven_day': 'weekly',
+        'seven_day_opus': 'weekly Opus',
+        'seven_day_sonnet': 'weekly Sonnet',
+        'seven_day_overage_included': 'weekly extra usage',
+        'overage': 'extra usage',
+    },
+)
+"""
+The Claude adapter passes each `rate_limit_event` of Claude Code in the `_meta` of a `usage_update`, after the turn's
+first answer. Claude Code sends one when the state of a limit changes: the share of a window is a fraction there.
+"""
+
+CODEX_LIMITS = CommandLimits(
+    command='/status',
+    line=(
+        r'\*\*(?:[^*\n]*? )?(?P<name>\d+[mhd]|Weekly) limit:\*\* (?P<left>\d+(?:\.\d+)?)% left'
+        r'(?: \(resets (?P<time>\d{1,2}:\d{2})(?: on (?P<date>[^)\n]+))?\))?'
+    ),
+    labels={'5h': '5-hour', 'Weekly': 'weekly', '1d': '1-day', '7d': '7-day'},
+)
+"""
+The Codex adapter keeps the limits that Codex reports and passes them on only in its answer to `/status`, which it
+gives by itself without a turn. Each window is one line, such as "codex Weekly limit: 26% left (resets 21:23 on
+Nov 25)", with the time on this computer's clock.
+"""
+
+
 CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
     {
         entry.name: entry
@@ -67,6 +111,7 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
                 command=_adapter('@agentclientprotocol/claude-agent-acp@0.101.0'),
                 family='anthropic',
                 auto_mode='auto',
+                limits=CLAUDE_LIMITS,
             ),
             HarnessEntry(
                 name='codex',
@@ -81,6 +126,7 @@ CATALOG: Mapping[str, HarnessEntry] = MappingProxyType(
                 auto_mode='agent',
                 auto_mode_before='workspace-write',
                 names_mcp_server=True,
+                limits=CODEX_LIMITS,
             ),
         )
     }
@@ -101,6 +147,7 @@ def catalog_with(
             family=entry.family,
             auto_mode=entry.auto_mode,
             names_mcp_server=entry.names_mcp_server,
+            limits=entry.limits,
         )
         for name, entry in harnesses.items()
     }

@@ -95,6 +95,7 @@ from verifold.society.lifecycle import (
 )
 from verifold.society.lines import is_line_of_work, lines_of, question_thread
 from verifold.society.obstacles import obstacles
+from verifold.society.pace import cap_line, cap_of, limits_of, pause_line, seats_near_limit
 from verifold.society.reruns import rerun_checks, reruns_wanted
 from verifold.society.reviewers import free_seats, holders, seats
 from verifold.society.rounds import closes_at, entries, for_reader, open_round, waits_for
@@ -575,6 +576,11 @@ def brief(  # noqa: PLR0913, PLR0915
         budget=budget_line(board),
         limit_reached=board.at_limit,
         disk=DiskLine(folder=disk.folders.get(agent_id), lab=disk.total, limit=disk_limit(board)) if disk else None,
+        your_limits=limits_of(board, agent_id, now),
+        seats_near_limit=seats_near_limit(board, now),
+        your_pause=pause_line(board, agent_id, now),
+        your_cap=None if board.is_desk(agent_id) else cap_line(board, agent_id, now),
+        lab_cap=cap_line(board, None, now),
         in_turn=sum(before(board, agent).cut_off for agent in run),
         alarms_waiting=sum(pending_alarm(board, joined.agent.id) is not None for joined in board.agents),
         coordinator=board.coordinator,
@@ -882,6 +888,9 @@ def _agent_line(
         latest=_own_line(board, posts[-1], seat, reader, now) if posts and posts[-1] is not plan else None,
         claim=claim_line(board, agent.id, now),
         error=_reason(board.failure(agent.id)),
+        paused_by=pause.by if (pause := pause_line(board, agent.id, now)) else None,
+        paused_until=pause.until if pause else None,
+        tokens_per_hour=cap.tokens if (cap := cap_of(board, agent.id)) and not board.is_desk(agent.id) else None,
     )
 
 

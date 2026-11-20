@@ -24,8 +24,10 @@ from verifold.protocol.events import (
     Event,
     LabOpened,
     LimitReached,
+    LimitsReported,
     NotesSet,
     OnCallSet,
+    PaceSet,
     PermissionGranted,
     Posted,
     PowerSet,
@@ -54,10 +56,14 @@ from verifold.protocol.join import PostRequest
 from verifold.protocol.moves import (
     AddMove,
     AddSeat,
+    CapMove,
     Move,
+    PaceMove,
+    PauseMove,
     PermissionMove,
     QuestionMove,
     RemoveMove,
+    ResumeMove,
     SettingMove,
     TimeMove,
 )
@@ -76,7 +82,7 @@ from verifold.protocol.posts import (
 )
 from verifold.protocol.settings import Settings
 from verifold.protocol.threads import CONVERSATION_TITLE, DESK_TITLE, QUESTION_TITLE, Carries, Thread
-from verifold.protocol.usage import DiskUse
+from verifold.protocol.usage import DiskUse, SeatLimits
 from verifold.protocol.votes import Badge, BadgeAction, Direction
 from verifold.server.changes import wait_until
 from verifold.server.errors import LabExists, SetupRejected
@@ -947,6 +953,31 @@ class Lab:
         await self._commit(lambda _, seq, at: BudgetSet(seq=seq, at=at, tokens=tokens, dollars=dollars, by=by, on=post))
         return True
 
+    async def report_limits(self, agent_id: AgentId, limits: SeatLimits) -> LimitsReported:
+        """
+        Record the usage limits of the provider behind an agent's seat, as its harness reported them.
+
+        Raises:
+            RejectedEvent: The agent is not in the lab, or Verifold does not run it.
+
+        """
+        board = await self._commit(lambda _, seq, at: LimitsReported(seq=seq, at=at, agent=agent_id, limits=limits))
+        return board.seat_limits[-1]
+
+    async def set_pace(self, move: PaceMove) -> PaceSet:
+        """
+        Record the person's move of pace: a pause of a seat, its end, or a limit of tokens per hour.
+
+        It replaces the coordinator's move of the same kind for the same seat or the lab.
+
+        Raises:
+            RejectedEvent: The move names no seat that takes it, its pause ends before now, or it resumes a seat
+                that is not paused.
+
+        """
+        board = await self._commit(lambda _, seq, at: PaceSet(seq=seq, at=at, move=move))
+        return board.paces[-1]
+
     async def set_settings(self, settings: Settings) -> None:
         """Record the person's settings for the lab. The lab follows the latest ones."""
         await self._commit(lambda _, seq, at: SettingsSet(seq=seq, at=at, settings=settings))
@@ -1317,7 +1348,9 @@ async def _add(adds: Adds | None, move: AddMove, first: tuple[Build, ...], asked
     await adds(move.seat, first, asked_by)
 
 
-type RecordedMove = TimeMove | PermissionMove | RemoveMove | SettingMove | QuestionMove
+type RecordedMove = (
+    TimeMove | PermissionMove | RemoveMove | SettingMove | QuestionMove | PauseMove | ResumeMove | CapMove
+)
 """A move that the record alone makes. A move that adds an agent is not one, because the host starts the agent."""
 
 
@@ -1343,6 +1376,11 @@ def _effects(board: Board, move: RecordedMove, by: AgentId, minutes: int | None 
                 raise RejectedEvent('The question has this text already.')
             # The note is the coordinator's word. The person's revision carries none of it.
             return _revision(board, move.question, '' if by == PERSON else move.note, by, requested=True)
+        case PauseMove() | ResumeMove() | CapMove():
+            # With the person's yes, the move is the person's. The why stays the coordinator's, in the move.
+            return (
+                lambda board, seq, at: PaceSet(seq=seq, at=at, move=move, by=by, request=board.answers[-1].request),
+            )
         case _:
             assert_never(move)
 

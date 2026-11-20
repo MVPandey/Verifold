@@ -9,10 +9,10 @@ import psutil
 import pytest
 from acp import schema
 from conftest import ServedBoard
-from fakes import FAKE_HARNESS
+from fakes import FAKE_COMMAND, FAKE_HARNESS, FAKE_METER
 
 from verifold.protocol.app import Offer
-from verifold.protocol.usage import Usage
+from verifold.protocol.usage import LimitWindow, SeatLimits, Usage
 from verifold.runner.errors import RunnerError
 from verifold.runner.session import (
     AgentSession,
@@ -593,3 +593,61 @@ async def test_the_requests_own_input_wins_over_the_calls() -> None:
 
     assert (asked.requests[0].title, asked.requests[0].command) == ('make test', 'make test')
     assert isinstance(response.outcome, schema.AllowedOutcome)
+
+
+async def test_a_harness_that_reports_its_limits_in_its_updates_gives_them_to_the_hook(
+    served: ServedBoard, folder: Place, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_LIMITS', '62')
+    _, token = served.seat('bo')
+    heard: list[SeatLimits] = []
+
+    async def keep(limits: SeatLimits) -> None:
+        heard.append(limits)
+
+    hooks = SessionHooks(permissions=no_permission, limits=keep)
+    async with AgentSession.open(
+        FAKE_METER, folder, BoardAccess(url=served.url, token=token), SessionOptions(), hooks
+    ) as session:
+        await session.send('Start.')
+        read = await session.read_limits(served.lab.now(), timeout=5)
+
+    expected = SeatLimits(windows=(LimitWindow(label='5-hour', used_percent=62),))
+    assert heard == [expected]
+    assert read == session.limits == expected
+
+
+async def test_a_harness_that_answers_a_command_with_its_limits_gets_it_only_between_turns_while_it_lists_it(
+    served: ServedBoard, folder: Place, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_LIMITS', '62')
+    _, token = served.seat('bo')
+    board = BoardAccess(url=served.url, token=token)
+
+    async with AgentSession.open(FAKE_COMMAND, folder, board, SessionOptions(), NO_PERMISSION) as session:
+        before = await session.read_limits(served.lab.now(), timeout=5)
+        await session.send('Start.')
+        after = await session.read_limits(served.lab.now(), timeout=5)
+
+    # The harness listed no command before its first turn, so Verifold sent none then.
+    assert before is None
+    assert after is not None
+    assert [(window.label, window.used_percent) for window in after.windows] == [('5-hour', 62)]
+    assert [call['text'] for call in calls(log) if call['event'] == 'prompt'] == ['Start.', '/status']
+    # The command started no work: the agent posted once, in its turn.
+    assert len([entry for entry in served.lab.board.posts if entry.post.author == 'bo']) == 1
+
+
+async def test_a_command_that_the_harness_does_not_answer_in_time_leaves_the_limits_as_they_were(
+    served: ServedBoard, folder: Place, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_LIMITS', '62')
+    monkeypatch.setenv('FAKE_ACP_STATUS_SECONDS', '30')
+    _, token = served.seat('bo')
+    board = BoardAccess(url=served.url, token=token)
+
+    async with AgentSession.open(FAKE_COMMAND, folder, board, SessionOptions(), NO_PERMISSION) as session:
+        await session.send('Start.')
+        read = await session.read_limits(served.lab.now(), timeout=0.05)
+
+    assert read is None

@@ -7,6 +7,7 @@ from pydantic import Field, field_validator
 
 from verifold.protocol.agents import GUEST, AgentChoices, Label
 from verifold.protocol.record import Record
+from verifold.protocol.usage import LimitSource
 
 MAX_MINUTES = 7 * 24 * 60
 """The longest time that the person can give a lab at once: one week."""
@@ -137,6 +138,21 @@ class DiskSettings(Record):
     """
 
 
+DEFAULT_COORDINATOR_TOKENS = 10_000_000
+"""The tokens that the coordinator's seat may spend in one hour while the person sets no other number."""
+
+
+class PaceSettings(Record):
+    """How fast the coordinator's own seat may spend."""
+
+    coordinator_tokens_per_hour: int = Field(default=DEFAULT_COORDINATOR_TOKENS, ge=0, le=MAX_BUDGET_TOKENS)
+    """
+    The most tokens that the turns of the coordinator's seat may spend in one hour of the clock, input and output
+    together. When its turns that ended in this hour reach it, the coordinator's next turn waits for the next hour.
+    Zero means no such limit.
+    """
+
+
 class Settings(Record):
     """
     The person's settings, with Verifold's defaults for anything they leave out.
@@ -153,6 +169,7 @@ class Settings(Record):
     reruns: RerunSettings = RerunSettings()
     tasks: TaskSettings = TaskSettings()
     disk: DiskSettings = DiskSettings()
+    pace: PaceSettings = PaceSettings()
 
 
 class HarnessSettings(Record):
@@ -180,6 +197,8 @@ class HarnessSettings(Record):
     Verifold then knows a call to the lab's own board and allows it without a question. Where the model writes the
     input, the name proves nothing, so the default is off.
     """
+    limits: LimitSource | None = None
+    """How the harness reports its provider's usage limits over ACP. `None` means that it reports none."""
 
 
 class SetupDefaults(Record):
@@ -219,6 +238,7 @@ class SettingsFile(Record):
     reruns: RerunSettings = RerunSettings()
     tasks: TaskSettings = TaskSettings()
     disk: DiskSettings = DiskSettings()
+    pace: PaceSettings = PaceSettings()
     setup: SetupDefaults = SetupDefaults()
     harnesses: dict[Label, HarnessSettings] = Field(default_factory=dict)
 
@@ -243,4 +263,5 @@ class SettingsFile(Record):
             reruns=self.reruns,
             tasks=self.tasks,
             disk=self.disk,
+            pace=self.pace,
         )

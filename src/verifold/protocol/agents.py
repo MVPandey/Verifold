@@ -187,16 +187,17 @@ MAX_AGENTS = 20
 """The most agents that one lab starts."""
 
 
-type Power = Literal['time', 'permissions', 'agents', 'settings', 'question']
+type Power = Literal['time', 'permissions', 'agents', 'settings', 'question', 'pace']
 """
 A kind of move that the person can hand to the lab's coordinator: more time for the lab, the answers to other
-agents' permission requests, one more agent or one fewer, a setting of the lab, or a revision of the question. Each
-one is off until the person switches it on.
+agents' permission requests, one more agent or one fewer, a setting of the lab, a revision of the question, or the
+pace of the lab's seats. Each one is off until the person switches it on.
 
-No power stops the lab, changes a power, or changes how Verifold handles permission requests.
+No power stops the lab, changes a power, or changes how Verifold handles permission requests. The power for pace
+only lowers: it pauses a seat and lowers a limit of tokens per hour, and it lifts only its own pause or limit.
 """
 
-POWERS: tuple[Power, ...] = ('time', 'permissions', 'agents', 'settings', 'question')
+POWERS: tuple[Power, ...] = ('time', 'permissions', 'agents', 'settings', 'question', 'pace')
 
 
 class SeatFacts(Record):

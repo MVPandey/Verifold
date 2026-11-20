@@ -7,6 +7,7 @@ import type { AgentView, HarnessOption, Invitation, LabView, ThreadSummary } fro
 import { earlierReruns, labTotal } from '../model/agents.ts';
 import { href } from '../model/route.ts';
 import type { Route } from '../model/route.ts';
+import { nearLimit, seatLines } from '../model/pace.ts';
 import { modelSummary, needsModel, newSeat, seatChoice } from '../model/setup.ts';
 import { stopLine } from '../model/settings.ts';
 import { WAITS_ID, needGroups, turnLine, waitsLine, whereLine } from '../model/status.ts';
@@ -14,6 +15,7 @@ import { clockLine, endLine, moreTime } from '../model/time.ts';
 import { MarksAndRoles, Name, Profiles, Who } from './Picture.tsx';
 import { InvitationText, OpenFolder, ShownProfile, StartAgain } from './Profile.tsx';
 import { LimitsPanel } from './Limits.tsx';
+import { LabPaceControls } from './Pace.tsx';
 import { CoordinatorSeat, FactFields, ReviewerSeats, SeatFields } from './SeatForm.tsx';
 import type { Facts } from './SeatForm.tsx';
 
@@ -192,6 +194,7 @@ function Members(props: {
                   <MarksAndRoles view={view} />
                   {view.status && !view.left ? <p className="f-status">{view.status}</p> : null}
                   <p className="f-where">{whereLine(view, lab, props.now, title(view))}</p>
+                  <SeatPace view={view} now={props.now} />
                   {view.stopped && !view.left ? (
                     // A press on the button starts the agent, and does not open the profile.
                     <div
@@ -243,6 +246,21 @@ function Members(props: {
         ) : null}
       </div>
     </details>
+  );
+}
+
+/**
+ * The seat's pause, its provider's usage limit, and its limit of tokens per hour, in one line, or nothing while it
+ * has none. A seat near its provider's limit shows the line in the color of a turn that waits.
+ */
+export function SeatPace(props: {
+  readonly view: AgentView;
+  readonly now: Date;
+}): ReactElement | null {
+  const lines = seatLines(props.view, props.now);
+  if (lines.length === 0) return null;
+  return (
+    <p className={`f-pace${nearLimit(props.view.limits) ? ' near' : ''}`}>{lines.join(' · ')}</p>
   );
 }
 
@@ -480,6 +498,7 @@ function TimePanel(props: {
         </p>
       ) : null}
       <LimitsPanel lab={lab} api={props.api} onChange={props.onChange} />
+      <LabPaceControls lab={lab} api={props.api} onChange={props.onChange} />
     </div>
   );
 }

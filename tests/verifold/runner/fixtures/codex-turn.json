@@ -1,0 +1,57 @@
+{
+  "note": "The session updates of one turn of the Codex adapter 2.7.0, captured live, without account details, and its answer to /status after the turn.",
+  "updates": [
+    {
+      "availableCommands": [
+        {
+          "name": "status",
+          "description": "Display session configuration and token usage."
+        },
+        {
+          "name": "compact",
+          "description": "Summarize conversation to avoid hitting the context limit."
+        }
+      ],
+      "sessionUpdate": "available_commands_update"
+    },
+    {
+      "_meta": {
+        "codex": {
+          "threadStatus": {
+            "type": "active",
+            "activeFlags": []
+          }
+        }
+      },
+      "sessionUpdate": "session_info_update"
+    },
+    {
+      "content": {
+        "text": "ok",
+        "type": "text"
+      },
+      "messageId": "msg-1",
+      "sessionUpdate": "agent_message_chunk"
+    },
+    {
+      "used": 21067,
+      "size": 258400,
+      "sessionUpdate": "usage_update"
+    },
+    {
+      "_meta": {
+        "codex": {
+          "threadStatus": {
+            "type": "idle"
+          }
+        }
+      },
+      "sessionUpdate": "session_info_update"
+    },
+    {
+      "title": "ok",
+      "sessionUpdate": "session_info_update"
+    }
+  ],
+  "status": "**Model:** gpt-6-astra[xhigh]  \n**Directory:** /work/lab/agents/agent-1  \n**Approval:** on-request  \n**Sandbox:** workspace-write  \n**Account:** ChatGPT pro  \n**Session:** `session-1`  \n  \n**Token usage:** 21.1K total  (13.9K input + 7.2K cached input, 5 output)  \n**Context window:** 8% used (21.1K used / 258.4K)  \n**codex Weekly limit:** 26% left (resets 21:23 on Nov 25)  \n**codex Credits:** 62500.0000000000"
+}

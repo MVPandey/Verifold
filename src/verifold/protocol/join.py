@@ -29,7 +29,7 @@ from verifold.protocol.agents import (
 from verifold.protocol.deliverables import DeliverableLine
 from verifold.protocol.events import Halt, Limit, Note, Posted, Question, RequestAnswered, RoundEnd
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
-from verifold.protocol.moves import LabSetting, Move
+from verifold.protocol.moves import LabSetting, Move, Why
 from verifold.protocol.posts import (
     MAX_BUILDS_ON,
     MAX_CHOICES,
@@ -47,7 +47,9 @@ from verifold.protocol.posts import (
     fits_a_headline,
 )
 from verifold.protocol.record import Record, unset
+from verifold.protocol.settings import MAX_BUDGET_TOKENS
 from verifold.protocol.threads import Thread, Title
+from verifold.protocol.usage import SeatLimits
 from verifold.protocol.votes import Badge, BadgeLine, BadgeNote, Direction, VoteLine, VoteNote
 
 type LabState = Literal['open', 'closing', 'closed']
@@ -96,7 +98,9 @@ MAX_NEWS = 20
 _posts: TypeAdapter[Post] = TypeAdapter(Post)
 _moves: TypeAdapter[Move] = TypeAdapter(Move)
 
-type MoveKind = Literal['time', 'permission', 'add_agent', 'remove_agent', 'setting', 'question']
+type MoveKind = Literal[
+    'time', 'permission', 'add_agent', 'remove_agent', 'setting', 'question', 'pause', 'resume', 'cap'
+]
 """The kinds of move that the coordinator can ask the person for."""
 
 MAX_AGENT_HEADLINE = 200
@@ -329,6 +333,9 @@ class MoveForm(Record):
     value: str | None = None
     question: Question | None = None
     note: Note | None = None
+    until: AwareDatetime | None = None
+    tokens_per_hour: int | None = Field(default=None, ge=1, le=MAX_BUDGET_TOKENS)
+    why: Why | None = None
 
     def to_move(self) -> Move:
         """
@@ -1236,6 +1243,36 @@ class ClaimResult(Record):
     news: News | None = None
 
 
+class PauseLine(Sparse):
+    """A pause of a seat that stands: who paused it, when, until when, and why."""
+
+    by: AgentId
+    """The person, or the coordinator under the person's power for pace."""
+    since: AwareDatetime
+    until: AwareDatetime | None = None
+    """When the pause ends. `None` while it lasts until somebody resumes the seat."""
+    why: str = ''
+
+
+class CapLine(Sparse):
+    """
+    The limit of tokens for one hour of the clock that holds a seat or the lab, and what this hour spent of it.
+
+    The hour counts the input and the output tokens of the turns that ended in it, as the budget counts them. When
+    they reach the limit, the next turn waits until `hour_ends`.
+    """
+
+    tokens_per_hour: int
+    spent: int = 0
+    """The tokens of the turns that ended in this hour."""
+    hour_ends: AwareDatetime
+    by: AgentId
+    """The person, or the coordinator under the person's power for pace."""
+    why: str = ''
+    share: bool = False
+    """Whether the limit is the person's setting for the coordinator's seat, which holds whoever holds that seat."""
+
+
 MAX_FORMER_NAMES = 2
 """The most former names in an agent's line: the newest ones. An `@` and an older name still reach the agent."""
 
@@ -1297,6 +1334,15 @@ class AgentLine(Sparse):
     Why the agent's latest turn, or the latest start of its harness, failed, as one short sentence of Verifold.
     `None` when it did not fail, and once a later turn of the agent started.
     """
+    paused_by: AgentId | None = None
+    """
+    Who paused the agent's seat, while a pause stands: the person, or the coordinator. Only a post of the person
+    starts a turn of a paused seat.
+    """
+    paused_until: AwareDatetime | None = None
+    """When that pause ends. `None` with `paused_by` while it lasts until somebody resumes the seat."""
+    tokens_per_hour: int | None = None
+    """The lowest limit of tokens per hour that holds the agent's seat, while one does. The lab's limit is apart."""
 
 
 MAX_LEADS = 10
@@ -1529,6 +1575,23 @@ class Brief(Record):
     """The budget or the disk limit that stops the agents now, or `None`. The person raises it to let them go on."""
     disk: DiskLine | None = None
     """What the lab's files take on disk, or `None` until Verifold measured them."""
+    your_limits: SeatLimits | None = Field(default=None, exclude_if=unset)
+    """
+    The usage limits of the provider behind your seat, as your harness reported them last: each window with the
+    percent that your account used and when it starts again, and the provider's status. Left out while your
+    harness reported none. The windows are your account's, so seats of the same account show the same ones.
+    """
+    seats_near_limit: int = Field(default=0, exclude_if=_zero)
+    """How many seats of the lab, yours among them, have a window above 80 percent, or a provider that refuses them."""
+    your_pause: PauseLine | None = Field(default=None, exclude_if=unset)
+    """
+    The pause of your seat while one stands. You finish the turn that runs. Until the pause ends, only a post of
+    the person for you starts your next turn. Left out while your seat is not paused.
+    """
+    your_cap: CapLine | None = Field(default=None, exclude_if=unset)
+    """The lowest limit of tokens per hour that holds your seat, and what you spent of it this hour. Left out while none does."""
+    lab_cap: CapLine | None = Field(default=None, exclude_if=unset)
+    """The lab's limit of tokens per hour, which holds every seat but the desk's, and what the lab spent of it this hour."""
     in_turn: int = 0
     """
     How many agents are in a turn by the record: the agents with a turn that started and has not ended. The record
@@ -1753,6 +1816,8 @@ class SeatLine(Sparse):
     """Whether the agent joined with an invitation and runs by itself. Verifold cannot end its turn."""
     stopped: bool = False
     """Whether Verifold stopped the agent after its harness failed too often in a row."""
+    pause: PauseLine | None = None
+    """The pause of the agent's seat while one stands."""
 
 
 class Overview(Record):

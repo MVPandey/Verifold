@@ -47,6 +47,7 @@ from verifold.protocol.record import Record
 from verifold.protocol.settings import (
     AtExit,
     DiskSettings,
+    PaceSettings,
     RerunSettings,
     SettingsLevel,
     SetupDefaults,
@@ -589,6 +590,9 @@ class Host:
             settings = settings.model_copy(update={'tasks': TaskSettings(lease_minutes=request.task_lease_minutes)})
         if request.disk_gb is not None:
             settings = settings.model_copy(update={'disk': DiskSettings(limit_gb=request.disk_gb)})
+        if request.coordinator_tokens_per_hour is not None:
+            pace = PaceSettings(coordinator_tokens_per_hour=request.coordinator_tokens_per_hour)
+            settings = settings.model_copy(update={'pace': pace})
         lab = Lab.create(
             self._record, request.question, auto_mode=request.auto_mode, time_left=time_left, stops=self._stops
         )

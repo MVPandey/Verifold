@@ -76,6 +76,9 @@ MOVES: dict[str, str] = {
     'remove_agent': 'Asks to remove an agent',
     'setting': 'Asks to change a setting of the lab',
     'question': 'Asks to revise the question',
+    'pause': 'Asks to pause a seat',
+    'resume': 'Asks to resume a seat',
+    'cap': 'Asks to set a limit of tokens per hour',
 }
 """Verifold's own words for each kind of move that the coordinator asks the person for."""
 

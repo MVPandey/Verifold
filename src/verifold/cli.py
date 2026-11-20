@@ -105,7 +105,8 @@ def _start(args: argparse.Namespace) -> tuple[StartRequest, Mapping[str, Harness
 
     `verifold run` starts at once, without showing the saved choices, and a project's file can come from someone else.
     So a project's file can make the lab stricter, not looser: it can turn auto mode off, shorten the time limit,
-    lower the budget and the disk limit, leave the record of findings out, and each of its seats gives only a harness,
+    lower the budget, the disk limit, and the coordinator's tokens per hour, leave the record of findings out, and
+    each of its seats gives only a harness,
     a count, a model, and an effort. Its modes, roles, families, coordinator, powers, on-call marks, and desk are not
     used, and neither is its number of reviewer seats, and the command says so.
     Under `--ask-me`, no saved agent gets a mode.
@@ -148,6 +149,9 @@ def _start(args: argparse.Namespace) -> tuple[StartRequest, Mapping[str, Harness
         budget_tokens=tokens if args.budget_tokens is None else args.budget_tokens,
         budget_dollars=dollars if args.budget_dollars is None else args.budget_dollars,
         disk_gb=_disk_gb(values, own=own),
+        coordinator_tokens_per_hour=_coordinator_share(values, own=own)
+        if args.coordinator_tokens_per_hour is None
+        else args.coordinator_tokens_per_hour,
         # A deliverable is the person's own sentence for this lab, as the question is. No settings file holds one:
         # the files say only whether the lab starts with the record of findings, whose sentence is Verifold's.
         deliverables=tuple(dict.fromkeys((*record, *(args.deliverable or ())))),
@@ -177,6 +181,27 @@ def _disk_gb(values: Mapping[SettingsLevel, SettingsValues], *, own: bool) -> in
     _say(
         "Did not use the disk limit from this project's settings file, because it is higher than yours for all "
         'projects: `verifold run` takes only a lower one from a project.'
+    )
+    return mine
+
+
+def _coordinator_share(values: Mapping[SettingsLevel, SettingsValues], *, own: bool) -> int | None:
+    """
+    Return the tokens per hour of the coordinator's seat that `verifold run` starts with, or `None` for the files'.
+
+    A project's file can lower the number and cannot raise it: zero means no limit, so it counts as the highest. A
+    higher number from a project's file is not used, and the command says so.
+    """
+    project = values[SettingsLevel.PROJECT].get('pace')
+    if own or not (isinstance(project, dict) and 'coordinator_tokens_per_hour' in project):
+        return None
+    mine = settings_of({SettingsLevel.ALL: values[SettingsLevel.ALL]}).pace.coordinator_tokens_per_hour
+    theirs = settings_of(values).pace.coordinator_tokens_per_hour
+    if not mine or (theirs and theirs <= mine):
+        return None
+    _say(
+        "Did not use the coordinator's tokens per hour from this project's settings file, because the number is "
+        'higher than yours for all projects: `verifold run` takes only a lower one from a project.'
     )
     return mine
 
@@ -490,6 +515,12 @@ def _parser() -> argparse.ArgumentParser:
         type=float,
         metavar='DOLLARS',
         help='The most US dollars that the agents may spend, as the harnesses report their cost. A harness that reports no cost adds nothing. Default: your saved budget, or none.',
+    )
+    run.add_argument(
+        '--coordinator-tokens-per-hour',
+        type=int,
+        metavar='TOKENS',
+        help="The most tokens that the coordinator's seat may spend in one hour, input and output together. At that number its next turn waits for the next hour. 0 means no limit. Default: your saved setting, or 10,000,000.",
     )
     run.add_argument(
         '--ask-me',

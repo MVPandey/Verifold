@@ -3,7 +3,7 @@ import type { ReactElement } from 'react';
 import type { Power } from '../api/types.ts';
 import { POWER_WORDS } from '../model/coordinator.ts';
 
-const ORDER: readonly Power[] = ['time', 'permissions', 'agents', 'settings', 'question'];
+const ORDER: readonly Power[] = ['time', 'permissions', 'agents', 'settings', 'question', 'pace'];
 
 /**
  * The powers that the person can switch on for the coordinator's seat when they set the seat up. Each one is off

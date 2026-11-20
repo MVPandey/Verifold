@@ -61,7 +61,7 @@ def record_file(tmp_path: Path) -> Iterator[RecordFile]:
 @pytest.fixture
 async def lab(record_file: RecordFile) -> Lab:
     """A lab with `ada` and `bo`, and thread t-1 that ada opened with post p-1."""
-    ticks = iter(range(1_000))
+    ticks = iter(range(10_000))
     lab = Lab.create(record_file, 'Does it hold?', clock=lambda: START + timedelta(seconds=next(ticks)))
     await lab.join(agent('ada'))
     await lab.join(agent('bo'))

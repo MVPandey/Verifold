@@ -6,6 +6,7 @@ import shlex
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
+from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
 from typing import Literal, NoReturn, Self, override
@@ -20,9 +21,10 @@ from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.app import ModelValue, Offer, OptionValue
 from verifold.protocol.ids import AgentId
 from verifold.protocol.record import Record
-from verifold.protocol.usage import Usage
+from verifold.protocol.usage import CommandLimits, LimitSource, MetaLimits, SeatLimits, Usage
 from verifold.runner.environment import harness_environment
 from verifold.runner.errors import ModelRefused, RunnerError
+from verifold.runner.limits import from_meta, from_text, merged
 from verifold.runner.processes import STOP_GRACE, start, stop
 from verifold.store.errors import RecordChanged
 
@@ -111,6 +113,10 @@ async def _no_answer(_: Question) -> Answers | None:
     return None
 
 
+async def _no_limits(_: SeatLimits) -> None:
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class SessionHooks:
     """What the runner hears from a session: permission requests to decide, and each step that the harness starts."""
@@ -122,6 +128,8 @@ class SessionHooks:
     none. A call's title is the harness's own words, so it stays out.
     """
     questions: Questions = _no_answer
+    limits: Callable[[SeatLimits], Awaitable[None]] = _no_limits
+    """Gets the seat's limits each time that the harness reports them during a turn, as they stand after the report."""
 
 
 class BoardAccess(Record):
@@ -162,18 +170,28 @@ class TurnResult(Record):
 
 class _Client(acp.Client):
     """
-    The client side of the ACP connection. It decides permission requests and questions, and tracks the cost.
+    The client side of the ACP connection: it decides permission requests and questions, and tracks the cost.
 
-    Verifold offers no files, no terminals, and no question that opens a link. The agent learns that from the
+    It also keeps the provider's usage limits that the harness reports. Verifold offers no files, no terminals, and no question that opens a link. The agent learns that from the
     capabilities in `initialize`, and a call to one of them gets an error.
     """
 
-    def __init__(self, hooks: SessionHooks, *, names_mcp_server: bool = False) -> None:
+    def __init__(
+        self, hooks: SessionHooks, *, names_mcp_server: bool = False, limits: LimitSource | None = None
+    ) -> None:
         self._hooks = hooks
         self._names_mcp_server = names_mcp_server
         self.cost: float | None = None
         self._calls: dict[str, _Call] = {}
         """Each tool call that runs now. A permission request can name its call by ID only."""
+        self.source = limits
+        """Where the harness reports its provider's usage limits, by its catalog entry, or `None`."""
+        self.limits: SeatLimits | None = None
+        """The limits as the harness reported them so far in this session, or `None` before a report."""
+        self.commands: frozenset[str] = frozenset()
+        """The names of the commands that the harness lists now, without their slash."""
+        self.said: list[str] | None = None
+        """The text that the harness answers while Verifold reads its limits with a command, and `None` otherwise."""
 
     @override
     async def request_permission(
@@ -214,6 +232,18 @@ class _Client(acp.Client):
     async def session_update(self, session_id: str, update: object, **_: object) -> None:
         if isinstance(update, schema.UsageUpdate) and update.cost:
             self.cost = update.cost.amount
+        if isinstance(update, schema.AvailableCommandsUpdate):
+            self.commands = frozenset(command.name.removeprefix('/') for command in update.available_commands)
+        if self.said is not None and isinstance(update, schema.AgentMessageChunk):
+            if isinstance(update.content, schema.TextContentBlock):
+                self.said.append(update.content.text)
+            return
+        meta = getattr(update, 'field_meta', None)
+        if isinstance(self.source, MetaLimits) and isinstance(meta, dict):
+            reported = from_meta(self.source, meta)
+            if reported:
+                self.limits = merged(self.limits, reported)
+                await self._hooks.limits(self.limits)
         if isinstance(update, schema.ToolCallStart):
             self._calls[update.tool_call_id] = _Call().updated(update)
             await self._hooks.step(update.kind or 'other')
@@ -650,7 +680,7 @@ class AgentSession:
         the harness can load it, and `loaded` says so. When the block ends, Verifold stops the harness's whole
         process group.
         """
-        client = _Client(hooks, names_mcp_server=harness.names_mcp_server)
+        client = _Client(hooks, names_mcp_server=harness.names_mcp_server, limits=harness.limits)
         async with _connected(harness, place, client) as connection:
             session_id, loaded, model = await _begin(connection, harness, place.folder, board, options)
             yield cls(connection, session_id, client, loaded=loaded, model=model)
@@ -685,3 +715,42 @@ class AgentSession:
     async def cancel(self) -> None:
         """Ask the harness to stop its current turn."""
         await self._connection.cancel(session_id=self.id)
+
+    @property
+    def limits(self) -> SeatLimits | None:
+        """The provider's usage limits as the harness reported them last in this session, or `None`."""
+        return self._client.limits
+
+    async def read_limits(self, now: datetime, timeout: float) -> SeatLimits | None:
+        """
+        Ask a harness that answers a command with its limits for them, between two turns, and return the limits.
+
+        Verifold sends the command only while the harness lists it, because a harness that does not know it would
+        hand it to its model as a message. The harness answers it without a turn of its model. An answer that does
+        not come within `timeout` seconds, or that holds no limits, leaves the limits as they were. `now` dates a
+        clock time in the answer. Any other harness reports its limits during its turns, and this returns them.
+        """
+        client = self._client
+        source = client.source
+        if not isinstance(source, CommandLimits) or source.command.removeprefix('/') not in client.commands:
+            return client.limits
+        client.said = []
+        asked = asyncio.create_task(
+            self._connection.prompt(session_id=self.id, prompt=[acp.text_block(source.command)])
+        )
+        try:
+            # A harness that fails on the command reports no limits. Its next message shows whether it still runs.
+            with suppress(Exception):
+                await asyncio.wait_for(asyncio.shield(asked), timeout)
+            if not asked.done():
+                # The next message must not meet this one in the harness, so the command ends before this returns.
+                with suppress(Exception):
+                    await self.cancel()
+                    await asyncio.wait_for(asked, timeout)
+        finally:
+            asked.cancel()
+            text, client.said = ''.join(client.said or ()), None
+        reported = from_text(source, text, now)
+        if reported:
+            client.limits = merged(client.limits, reported)
+        return client.limits

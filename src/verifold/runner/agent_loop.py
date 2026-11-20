@@ -38,9 +38,10 @@ from verifold.protocol.events import (
 from verifold.protocol.ids import PERSON
 from verifold.protocol.record import Record
 from verifold.protocol.settings import AtExit, AtTimeLimit
-from verifold.protocol.usage import Usage
+from verifold.protocol.usage import SeatLimits, Usage
 from verifold.runner.disk import DiskMeter
 from verifold.runner.errors import RunnerError
+from verifold.runner.limits import crossed, material
 from verifold.runner.messages import (
     AT_LIMIT,
     CLOSED,
@@ -88,8 +89,10 @@ from verifold.society.attention import update, wakes
 from verifold.society.board import Board
 from verifold.society.budget import LIMIT_NAMES
 from verifold.society.desk import interrupted, speaks_for_person
+from verifold.society.errors import RejectedEvent
 from verifold.society.grants import agent_waits
 from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
+from verifold.society.pace import Hold, hold
 from verifold.society.reruns import RerunKey, kept_until, told_of
 from verifold.society.turns import before
 
@@ -122,6 +125,11 @@ class LoopSettings(Record):
     """
     Seconds that Verifold waits, after it cancels a turn, for the harness's answer to the prompt, which holds the
     tokens of the turn. The turn ends in the record when the answer comes or the wait ends.
+    """
+    limits_wait: float = Field(default=10, ge=0)
+    """
+    Seconds that Verifold waits at the end of a turn for a harness's answer to the command that reports its
+    provider's usage limits, for a harness whose catalog entry names one.
     """
 
 
@@ -227,6 +235,11 @@ class AgentLoop:
         """Why the agent's last turn ended without the agent's choice, or empty when the agent ended it."""
         self._interrupted = False
         """Whether the desk ended the agent's last turn, so that the agent goes on also after a cut in a row."""
+        self._heard_person = False
+        """Whether a post of the person for the agent rang its last doorbell. A pause lets that post through."""
+        kept = next((entry for entry in reversed(board.seat_limits) if entry.agent == setup.agent.id), None)
+        self._kept: SeatLimits | None = kept.limits if kept else None
+        """The seat's usage limits as the record keeps them last."""
 
     async def run(self) -> None:
         """Run the agent until it fails too often, or until the caller cancels the loop."""
@@ -237,7 +250,9 @@ class AgentLoop:
 
     async def _run(self) -> None:
         setup = self._setup
-        hooks = SessionHooks(permissions=self._permission, step=self._step, questions=self._question)
+        hooks = SessionHooks(
+            permissions=self._permission, step=self._step, questions=self._question, limits=self._limits_heard
+        )
         board = BoardAccess(url=self._settings.mcp_url, token=setup.token)
         was = self._before
         resume = was.session
@@ -271,7 +286,7 @@ class AgentLoop:
                         await self._report('idle')
                         message, rests = f'{message}\n\n{await self._news()}', False
                     while True:
-                        if (halts := await self._while_halted()) and back:
+                        if (halts := await self._until_free()) and back:
                             # The agent comes back to a lab that was out of time or at a limit, so it gets the lab's
                             # new end or limit. The message says already what a stop of Verifold did to the agent's
                             # processes.
@@ -284,6 +299,7 @@ class AgentLoop:
                         worked = True
                         stopped = await self._send(session, message)
                         failures, back = 0, None
+                        await self._limits_at_end(session)
                         message, resumed = await self._following(stopped=stopped, resumed=resumed)
             # Any failure of one harness restarts that harness. It must not stop the lab's other agents.
             except Exception as error:
@@ -351,6 +367,7 @@ class AgentLoop:
 
     async def _send(self, session: AgentSession, message: str) -> Halt | None:
         # Return why the turn stopped when it stopped because the lab ran out of time or reached a limit.
+        self._heard_person = False
         await self._report('working')
         started = time.monotonic()
         self._seen_at_turn = self._member.seen
@@ -465,6 +482,53 @@ class AgentLoop:
     def _left(self) -> bool:
         return self._lab.board.gone(self._setup.agent.id) is not None
 
+    async def _limits_heard(self, limits: SeatLimits) -> None:
+        # During a turn, the record keeps the limits at once when a window passed a threshold or the status changed.
+        if crossed(self._kept, limits):
+            await self._keep(limits)
+
+    async def _limits_at_end(self, session: AgentSession) -> None:
+        # At the end of a turn, the record keeps the limits when they changed by more than the noise of a report. A
+        # harness that answers a command with its limits gets it here, between two turns.
+        if self._left():
+            return
+        limits = await session.read_limits(self._lab.now(), self._settings.limits_wait)
+        if limits is not None and material(self._kept, limits):
+            await self._keep(limits)
+
+    async def _keep(self, limits: SeatLimits) -> None:
+        # An agent that left the lab has no seat whose limits the record keeps.
+        with suppress(RejectedEvent):
+            await self._lab.report_limits(self._setup.agent.id, limits)
+            self._kept = limits
+
+    async def _until_free(self) -> tuple[Halt, ...]:
+        # Wait while the lab is out of time or at a limit, and while a pause or a limit of tokens per hour holds the
+        # agent's next turn. Return each halt that the lab had in the wait, the first first.
+        halts: tuple[Halt, ...] = ()
+        while True:
+            halts = tuple(dict.fromkeys((*halts, *await self._while_halted())))
+            await self._while_paced()
+            if self._halt() is None or self._left():
+                return halts
+
+    async def _while_paced(self) -> None:
+        # Wait while a pause or a limit of tokens per hour holds the agent's next turn. A post of the person for the
+        # agent ends the wait of a pause: a paused seat still hears the person. A limit holds also that post, which
+        # then starts the turn of the next hour. A halt ends the wait, and the halt's own wait comes next.
+        lab, agent_id = self._lab, self._setup.agent.id
+        shown: Hold | None = None
+        while not self._left() and self._halt() is None:
+            now = lab.now()
+            held = hold(lab.board, agent_id, now)
+            if held is None or (held.kind == 'paused' and (self._heard_person or self._person_wrote())):
+                return
+            if held != shown:
+                shown = held
+                await self._report('waiting', _held_words(held), 'pace')
+            left = None if held.until is None else max((held.until - now).total_seconds(), 0)
+            await lab.wait_for_change(lab.board.seq, left)
+
     def _halt(self) -> Halt | None:
         # Why the lab rests this agent now: its time ran out, or it reached a limit. The halt rests no desk, because
         # only a post of the person in the desk chat starts a turn of the desk, and the person can ask the desk where
@@ -545,6 +609,7 @@ class AgentLoop:
         if self._member.seen > self._seen_at_turn:
             self._notified = min(self._notified, self._member.seen)
         settled, held, late = False, '', ''
+        self._heard_person = False
         while True:
             board = self._lab.board
             # No message wakes an agent that left. The loop ends before it sends this one.
@@ -581,6 +646,7 @@ class AgentLoop:
             # A post during a stop waits for the wake after more time, so the doorbell rings then.
             if stopped and board.halted is None:
                 if posts:
+                    self._heard_person = self._person_wrote()
                     self._notified, self._rung = board.seq, self._rung | told_of(board, reruns)
                 message = go_on_message(stopped, board, AtTimeLimit.STOP)
                 return self._ring(f'{message} {DOORBELL}' if posts else message, due, late)
@@ -590,6 +656,7 @@ class AgentLoop:
                     await self._settle()
                     settled = True
                     continue
+                self._heard_person = self._person_wrote()
                 self._notified, self._rung = board.seq, self._rung | told_of(board, reruns)
                 bell = DOORBELL if news.posts else ROUND_CLOSED if rounds else RERUN_WANTED if reruns else DEPARTURE
                 return self._ring(bell, due, late)
@@ -681,6 +748,16 @@ class AgentLoop:
     ) -> None:
         if self._activity:
             await self._activity.set(self._setup.agent.id, state, detail, waits_for, retry)
+
+
+def _held_words(held: Hold) -> str:
+    # What holds the agent's next turn, in Verifold's words for the person. The app adds the times.
+    who = 'you' if held.by == PERSON else 'the coordinator'
+    if held.kind == 'paused':
+        return f'Paused by {who}. A post of yours for it still starts its turn.'
+    if held.kind == 'seat':
+        return f'Reached its limit of {held.tokens:,} tokens this hour, set by {who}. Goes on in the next hour.'
+    return f'The lab reached its limit of {held.tokens:,} tokens this hour, set by {who}. Goes on in the next hour.'
 
 
 def _halted_since(board: Board, after: int) -> tuple[Halt, ...]:

@@ -4,8 +4,9 @@ What the lab's coordinator does for the person, and the rules that keep it to th
 The person and the coordinator talk in one thread of the lab, the conversation. Every agent can read it. The
 coordinator can mark a post or a new thread as one for the person. It can ask the person for a move that only the
 person makes: more time, the answer to another agent's permission request, one more agent or one fewer, a setting
-of the lab, or a revision of the question. The person's yes makes the move. The person can switch on a power for one
-kind of move, and the coordinator's request for such a move then takes effect at once.
+of the lab, a revision of the question, or a move of pace. The person's yes makes the move. The person can switch on
+a power for one kind of move, and the coordinator's request for such a move then takes effect at once. The power for
+pace covers only a move that lowers what the person granted, and any other request of pace waits for the person.
 
 These rules hold for every event, so no tool can go around them. Only the agent that holds the coordinator seat
 marks a post for the person or asks for a move. Only the person answers a request, unless the power for its kind is
@@ -28,13 +29,25 @@ from verifold.protocol.events import (
 )
 from verifold.protocol.ids import PERSON, AgentId
 from verifold.protocol.join import RequestEnd
-from verifold.protocol.moves import Move, PermissionMove, QuestionMove, RemoveMove, SettingMove, TimeMove, power_of
+from verifold.protocol.moves import (
+    CapMove,
+    Move,
+    PauseMove,
+    PermissionMove,
+    QuestionMove,
+    RemoveMove,
+    ResumeMove,
+    SettingMove,
+    TimeMove,
+    power_of,
+)
 from verifold.protocol.posts import Answer, Ask, Close, MoveRequest, PermissionShown, Post, Proposal
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
 from verifold.society.desk import speaks_for_person
 from verifold.society.errors import RejectedEvent
 from verifold.society.lifecycle import latest_time, minutes_text
+from verifold.society.pace import check_pace_target, lowers
 from verifold.society.standing import waits_for_person
 
 _TOLD = 2
@@ -196,7 +209,10 @@ def power_covers(board: Board, move: Move, at: datetime) -> bool:
 
     The person's switch for that kind of move is on. The lab has time: its time did not run out, and the person
     did not stop it. The lab stands at no budget or disk limit. The move does not let the agents' processes run on after the lab stops or Verifold exits.
+    A move of pace lowers what the person granted.
     """
+    if isinstance(move, PauseMove | ResumeMove | CapMove) and lowers(board, move, at):
+        return False
     return power_of(move) in board.powers and not _over(board, at) and not _outlasts_a_stop(move)
 
 
@@ -215,6 +231,9 @@ def _outlasts_a_stop(move: Move) -> bool:
 
 
 def _not_covered(board: Board, move: Move, at: datetime) -> str:
+    pace = isinstance(move, PauseMove | ResumeMove | CapMove)
+    if pace and power_of(move) in board.powers and (refusal := lowers(board, move, at)):
+        return f"{refusal} The power for pace only lowers, so only the person's yes makes this move."
     if power_of(move) in board.powers and _over(board, at):
         return "The lab's time ran out or the person stopped the lab, so only the person makes a move now."
     if power_of(move) in board.powers and _outlasts_a_stop(move):
@@ -439,6 +458,10 @@ def _check_move(board: Board, move: Move, by: AgentId) -> None:
                 raise RejectedEvent(f'{agent} left this lab already.')
             if agent == by:
                 raise RejectedEvent('This move removes another agent. `leave` removes the agent that calls it.')
+        case PauseMove() | ResumeMove() | CapMove():
+            check_pace_target(board, move)
+            if not move.why:
+                raise RejectedEvent('A move of pace says why in one line, in `why`.')
 
 
 def _check_carried(board: Board, answer: Answer) -> None:

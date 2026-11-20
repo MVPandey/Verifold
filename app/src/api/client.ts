@@ -15,6 +15,7 @@ import type {
   LabView,
   NormsName,
   NormsView,
+  PaceMove,
   PostRequest,
   PostView,
   Power,
@@ -112,6 +113,10 @@ export interface Api {
   setBudget(budget: BudgetRequest): Promise<LabView>;
   /** Set the lab's disk limit in gigabytes. Zero means no limit. */
   setDisk(limitGb: number): Promise<LabView>;
+  /** Make a move of pace: pause a seat, resume it, or set a limit of tokens per hour. It replaces the coordinator's. */
+  setPace(move: PaceMove): Promise<LabView>;
+  /** Set the tokens that the coordinator's seat may spend in one hour, in this lab. Zero means no limit. */
+  setCoordinatorShare(tokensPerHour: number): Promise<LabView>;
   /** Revise the lab's question. `note` says why, and it can be empty. */
   reviseQuestion(question: string, note: string): Promise<LabView>;
   /** State one more deliverable: what the person wants to hold at the end of the lab, as one sentence. */
@@ -303,6 +308,9 @@ export function createApi(
     setTime: (minutes) => request('/time', { minutes }),
     setBudget: (budget) => request('/budget', budget),
     setDisk: (limitGb) => request('/disk', { limit_gb: limitGb }),
+    setPace: (move) => request('/pace', move),
+    setCoordinatorShare: (tokensPerHour) =>
+      request('/pace/coordinator', { tokens_per_hour: tokensPerHour }),
     reviseQuestion: (question, note) => request('/question', { question, note }),
     addDeliverable: (text) => request('/deliverables', { text }),
     changeDeliverable: (id, text) => request(`/deliverables/${encodeURIComponent(id)}`, { text }),

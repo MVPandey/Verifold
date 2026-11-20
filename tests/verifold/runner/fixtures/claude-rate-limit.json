@@ -1,0 +1,29 @@
+{
+  "note": "A usage_update as the Claude adapter 0.101.0 sends it for a rate_limit_event of Claude Code, after the turn's first answer. Built from the adapter's handler, the SDK's SDKRateLimitInfo, and the CLI's builder of the event, which adds unifiedWindows. The share in utilization is a fraction.",
+  "update": {
+    "sessionUpdate": "usage_update",
+    "used": 48211,
+    "size": 1000000,
+    "_meta": {
+      "_claude/model": "claude-haiku-5-5",
+      "_claude/rateLimit": {
+        "status": "allowed_warning",
+        "resetsAt": 1795140600,
+        "rateLimitType": "five_hour",
+        "utilization": 0.82,
+        "isUsingOverage": false,
+        "surpassedThreshold": 0.8,
+        "unifiedWindows": {
+          "five_hour": {
+            "utilization": 0.82,
+            "resetsAt": 1795140600
+          },
+          "seven_day": {
+            "utilization": 0.41,
+            "resetsAt": 1795600800
+          }
+        }
+      }
+    }
+  }
+}

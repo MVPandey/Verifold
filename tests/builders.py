@@ -14,6 +14,7 @@ from verifold.protocol.events import (
     AgentLeft,
     AgentNamed,
     BadgeSet,
+    BudgetSet,
     ClaimLapsed,
     CoordinatorSet,
     DeliverableDecided,
@@ -21,7 +22,9 @@ from verifold.protocol.events import (
     DeskSet,
     Event,
     LabOpened,
+    LimitsReported,
     OnCallSet,
+    PaceSet,
     Posted,
     PowerSet,
     ProfileSet,
@@ -43,11 +46,11 @@ from verifold.protocol.events import (
     Voted,
     WatchSet,
 )
-from verifold.protocol.moves import Move
+from verifold.protocol.moves import Move, PaceMove
 from verifold.protocol.posts import Ask, FileEvidence, FileOffer, Message, MoveRequest, PermissionShown, Post
 from verifold.protocol.settings import ReviewerSettings, Settings
 from verifold.protocol.threads import DESK_TITLE, Thread
-from verifold.protocol.usage import Usage
+from verifold.protocol.usage import SeatLimits, Usage
 from verifold.society.board import Board
 from verifold.society.fold import fold
 
@@ -254,6 +257,24 @@ class RecordBuilder:
         self.events.append(RoundClosed(seq=seq, at=at, round=round_id, why=why))
         return self
 
+    def pace(self, move: PaceMove, by: str = 'person', request: str | None = None) -> 'RecordBuilder':
+        """Add a move of pace: the person's, or with `by` and `request`, the move of a request just after its yes."""
+        seq, at = self._stamp()
+        self.events.append(PaceSet(seq=seq, at=at, move=move, by=by, request=request))
+        return self
+
+    def budget(self, tokens: int | None) -> 'RecordBuilder':
+        """Add the person's budget in tokens."""
+        seq, at = self._stamp()
+        self.events.append(BudgetSet(seq=seq, at=at, tokens=tokens))
+        return self
+
+    def limits(self, agent_id: str, limits: SeatLimits) -> 'RecordBuilder':
+        """Add the usage limits that an agent's harness reported."""
+        seq, at = self._stamp()
+        self.events.append(LimitsReported(seq=seq, at=at, agent=agent_id, limits=limits))
+        return self
+
     def turn(
         self,
         agent_id: str,
@@ -262,6 +283,7 @@ class RecordBuilder:
         rerun_failed: bool = False,
         seen: int | None = None,
         stopped: bool = False,
+        tokens: int = 0,
     ) -> 'RecordBuilder':
         seq, at = self._stamp()
         turn = TurnEnded(
@@ -269,7 +291,7 @@ class RecordBuilder:
             at=at,
             agent=agent_id,
             seconds=0,
-            usage=Usage(),
+            usage=Usage(input_tokens=tokens),
             error=error,
             rerun_failed=rerun_failed,
             seen=seen,

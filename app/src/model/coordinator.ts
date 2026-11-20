@@ -12,7 +12,7 @@ import type {
   PowerView,
 } from '../api/types.ts';
 import { authorName, labTotal } from './agents.ts';
-import { ago, clock, dayClock } from './format.ts';
+import { ago, clock, dayClock, tokens } from './format.ts';
 import { halted, haltWords } from './limits.ts';
 import { AT_EXIT, AT_TIME_LIMIT } from './settings.ts';
 
@@ -171,6 +171,11 @@ export const POWER_WORDS: Readonly<
     name: 'Revise the question',
     what: (name) => `${name} rewrites the question. Earlier versions stay readable.`,
   },
+  pace: {
+    name: 'Pause seats and limit tokens per hour',
+    what: (name) =>
+      `${name} pauses a seat, and sets a limit of tokens per hour for a seat or the lab. It only lowers what you set: to resume a seat that you paused, or to raise a limit, ${name} asks you.`,
+  },
 };
 
 /** Return the line under a power that is on: since when, and how often the coordinator used it. */
@@ -209,6 +214,14 @@ export function askLine(move: Move): string {
       return 'Asks you to change a setting of the lab';
     case 'question':
       return 'Asks you to revise the question';
+    case 'pause':
+      return 'Asks you to pause a seat';
+    case 'resume':
+      return 'Asks you to resume a seat';
+    case 'cap':
+      return move.tokens_per_hour
+        ? `Asks you for a limit of ${tokens(move.tokens_per_hour)} tokens per hour`
+        : 'Asks you to take back its limit of tokens per hour';
   }
 }
 
@@ -227,6 +240,12 @@ export function yesLabel(move: Move): string {
       return 'Change it';
     case 'question':
       return 'Revise the question';
+    case 'pause':
+      return 'Pause the seat';
+    case 'resume':
+      return 'Resume the seat';
+    case 'cap':
+      return move.tokens_per_hour ? 'Set the limit' : 'Take the limit back';
   }
 }
 
@@ -247,6 +266,14 @@ export function doneLine(item: PostView): string {
       return 'Changed a setting of the lab';
     case 'question':
       return 'Revised the question';
+    case 'pause':
+      return 'Paused a seat';
+    case 'resume':
+      return 'Resumed a seat';
+    case 'cap':
+      return move.tokens_per_hour
+        ? `Set a limit of ${tokens(move.tokens_per_hour)} tokens per hour`
+        : 'Took back a limit of tokens per hour';
   }
 }
 
@@ -374,7 +401,42 @@ export function details(
         { label: 'The new question', value: move.question, theirs: true },
         ...(move.note ? [{ label: 'The coordinator’s note', value: move.note, theirs: true }] : []),
       ];
+    case 'pause':
+      return [
+        { label: 'The seat to pause', value: name(move.agent), theirs: true },
+        {
+          label: 'Until',
+          value: move.until ? dayClock(move.until, now) : 'You or the coordinator resume it',
+        },
+        { label: 'While it is paused', value: 'It finishes its turn. Only your posts wake it.' },
+        ...why(move.why),
+      ];
+    case 'resume':
+      return [
+        { label: 'The seat to resume', value: name(move.agent), theirs: true },
+        ...why(move.why),
+      ];
+    case 'cap':
+      return [
+        {
+          label: 'For',
+          value: move.agent ? name(move.agent) : 'The whole lab',
+          theirs: Boolean(move.agent),
+        },
+        {
+          label: 'Tokens per hour',
+          value: move.tokens_per_hour
+            ? tokens(move.tokens_per_hour)
+            : 'No limit of the coordinator',
+        },
+        { label: 'At the limit', value: 'The next turn waits for the next hour.' },
+        ...why(move.why),
+      ];
   }
+}
+
+function why(text: string | undefined): readonly Detail[] {
+  return text ? [{ label: 'Why, in the coordinator’s words', value: text, theirs: true }] : [];
 }
 
 /** Return who decided a move, as the log says it under the move. */
@@ -399,6 +461,10 @@ export function powerOf(move: Move): Power {
       return 'settings';
     case 'question':
       return 'question';
+    case 'pause':
+    case 'resume':
+    case 'cap':
+      return 'pace';
   }
 }
 

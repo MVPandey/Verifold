@@ -27,9 +27,11 @@ import {
   takeBacks,
 } from '../model/identity.ts';
 import type { SeatAction } from '../model/identity.ts';
+import { seatLines } from '../model/pace.ts';
 import { href } from '../model/route.ts';
 import { whereLine } from '../model/status.ts';
 import { Detail } from './Markdown.tsx';
+import { SeatPaceControls } from './Pace.tsx';
 import { Mark, MarksAndRoles, Picture, Profiles } from './Picture.tsx';
 
 /**
@@ -149,6 +151,16 @@ export function ProfileSheet(props: {
           ) : null}
           <dt>Cost</dt>
           <dd>{costLine(view)}</dd>
+          {seatLines(view, props.now).length > 0 ? (
+            <>
+              <dt>Pace and limits</dt>
+              <dd>
+                {seatLines(view, props.now).join(' · ')}
+                {view.pause?.why ? <span className="i-why">Why: {view.pause.why}</span> : null}
+                {view.cap?.why ? <span className="i-why">Why: {view.cap.why}</span> : null}
+              </dd>
+            </>
+          ) : null}
         </dl>
         {view.error && !view.left ? <Failure error={view.error} /> : null}
         {view.notes ? (
@@ -220,6 +232,7 @@ export function ProfileSheet(props: {
             <Acts api={api} actions={takeBacks(view)} onChange={onChange} />
             <RoleField api={api} view={view} onChange={onChange} />
             <SeatControls api={api} view={view} onChange={onChange} />
+            <SeatPaceControls api={api} view={view} now={props.now} onChange={onChange} />
             {view.stopped ? <StartAgain api={api} agent={agent.id} onChange={onChange} /> : null}
             {agent.harness === GUEST ? (
               <InviteAgain

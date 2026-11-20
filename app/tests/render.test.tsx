@@ -3767,6 +3767,7 @@ describe('the settings page', () => {
     votes: { reveal_minutes: 10 },
     reruns: { lease_minutes: 10 },
     disk: { limit_gb: 100 },
+    pace: { coordinator_tokens_per_hour: 10_000_000 },
   } as const;
   const view: SettingsView = {
     all_projects: {
