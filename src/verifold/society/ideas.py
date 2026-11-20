@@ -43,6 +43,7 @@ from verifold.protocol.posts import (
     Branch,
     Check,
     Idea,
+    Measure,
     Plan,
     Post,
     Proposal,
@@ -53,6 +54,7 @@ from verifold.protocol.posts import (
 )
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
+from verifold.society.measures import measure_line
 from verifold.society.rounds import check_unsealed
 from verifold.society.standing import standing
 
@@ -207,8 +209,17 @@ def _line(board: Board, held: Held, now: datetime) -> BranchLine:
         ruled_out=states.count('ruled_out'),
         recent_tries=sum(since < entry.at <= now for entry in tries),
         no_idea_hours=None if mine else _hours(now - held.added.at),
+        measure=measure_line(board, measured, now) if (measured := _measure(board, held.branch.id)) else None,
         retired=held.retired is not None,
     )
+
+
+def _measure(board: Board, branch_id: BranchId) -> Posted | None:
+    # The newest measure that names the branch, unless its author conceded an objection to it.
+    named = (
+        entry for entry in reversed(board.posts) if isinstance(entry.post, Measure) and entry.post.branch == branch_id
+    )
+    return next((entry for entry in named if standing(board, entry.post.id) != 'conceded'), None)
 
 
 def without_idea(board: Board) -> tuple[Held, ...]:

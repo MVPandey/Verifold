@@ -8,6 +8,7 @@ import type { Api } from '../src/api/client.ts';
 import type { AgentView, BranchView, IdeaView, MapView, Post } from '../src/api/types.ts';
 import {
   branchCounts,
+  branchMeasure,
   challengedBy,
   emptyMark,
   hasMap,
@@ -207,6 +208,42 @@ describe('the map', () => {
     assert.ok(!html.includes('<img'));
     assert.ok(!html.includes('<script>'));
     assert.ok(html.includes('&lt;b&gt;x&lt;/b&gt;'));
+  });
+
+  it('shows the newest measure of a branch with who reran it', () => {
+    const measure = {
+      post: 'p-40',
+      thread: 't-1',
+      by: 'agent-1',
+      label: 'Account value',
+      value: '382.24',
+      unit: 'USD',
+      as_of: '2026-11-06T14:00:00Z',
+      rerun_by: ['agent-2'],
+    };
+    const rates = branch('b-4', 'Overnight interest rates', { ideas: 1, measure });
+    assert.equal(branchMeasure(rates, agents), 'Account value 382.24 USD, rerun by Ladderwright');
+    const plain = {
+      post: 'p-41',
+      thread: 't-1',
+      by: 'agent-1',
+      label: 'Hit rate',
+      value: '0.42',
+      as_of: measure.as_of,
+    };
+    assert.equal(
+      branchMeasure(branch('b-1', 'Plain', { measure: plain }), agents),
+      'Hit rate 0.42, not rerun',
+    );
+    assert.equal(branchMeasure(MAP.branches[0] ?? rates, agents), null);
+    const html = renderToStaticMarkup(
+      <MapTab map={{ ...MAP, branches: [rates] }} agents={agents} now={now} />,
+    );
+    assert.ok(
+      html.includes(
+        '<span class="m-measure">Account value 382.24 USD, rerun by Ladderwright</span>',
+      ),
+    );
   });
 
   it('says so when the lab’s reading has no branches', () => {

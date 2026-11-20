@@ -1,4 +1,12 @@
-import type { BranchLine, BranchView, IdeaState, IdeaView, MapView } from '../api/types.ts';
+import type {
+  AgentView,
+  BranchLine,
+  BranchView,
+  IdeaState,
+  IdeaView,
+  MapView,
+} from '../api/types.ts';
+import { measureValue, rerunMark } from './dashboard.ts';
 import { duration } from './format.ts';
 
 /** The words of each state of an idea, as the person reads them. */
@@ -110,4 +118,21 @@ export function challengedBy(
     mark: item.outcome,
     tone: item.outcome === 'holds' ? 'fs-ok' : 'fs-count-bad',
   }));
+}
+
+/**
+ * Return the newest measure of a branch as one line, such as "Account value 382.24 USD, not rerun", or `null` for a
+ * branch that no measure names.
+ */
+export function branchMeasure(branch: BranchLine, agents: readonly AgentView[]): string | null {
+  const measure = branch.measure;
+  if (!measure) return null;
+  const whole = {
+    ...measure,
+    unit: measure.unit ?? '',
+    rerun_by: measure.rerun_by ?? [],
+    rerun_failed_by: measure.rerun_failed_by ?? [],
+    standing: measure.standing ?? 'open',
+  };
+  return `${measure.label} ${measureValue(whole)}, ${rerunMark(whole, agents).text}`;
 }

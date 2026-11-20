@@ -344,6 +344,8 @@ class MeasureRequest(Record):
     body: Body = ''
     builds_on: tuple[PostId, ...] = Field(default=(), max_length=MAX_BUILDS_ON)
     helper: Helper = ''
+    branch: BranchId | None = None
+    """The branch of the question that the number is about, when the author names one."""
 
     @property
     def text(self) -> str:
@@ -894,6 +896,29 @@ class Obstacles(Sparse):
     """How many obstacles are `removed`."""
 
 
+class MeasureLine(Sparse):
+    """
+    One measure as a line: its number, the time that it holds for, its author, and who reran it.
+
+    `rerun_by` names the agents whose check of an independent rerun of the measure holds, and `rerun_failed_by` the
+    agents whose such check fails. Both are empty while nobody reran it. The marks say who reran the number and
+    what that rerun found, and never whether the number is good.
+    """
+
+    post: PostId
+    thread: ThreadId
+    by: AgentId
+    label: str
+    value: MeasureValue
+    unit: str = ''
+    as_of: AwareDatetime
+    minutes_ago: int = 0
+    """How many whole minutes before now `as_of` is, by the lab's clock."""
+    rerun_by: tuple[AgentId, ...] = ()
+    rerun_failed_by: tuple[AgentId, ...] = ()
+    standing: Standing = 'open'
+
+
 type IdeaState = Literal['untried', 'being_tried', 'result_in', 'challenged', 'ruled_out']
 """
 Where an idea stands, by the record: the first that applies. The board computes it, and no agent sets it.
@@ -937,6 +962,8 @@ class BranchLine(Sparse):
     """How many plans and results tried an idea of the branch in the last `RECENT_HOURS` hours."""
     no_idea_hours: float | None = None
     """For a branch without an idea: the hours since the reading that added it. `None` while it has an idea."""
+    measure: MeasureLine | None = None
+    """The newest measure that names the branch in `branch` and that its author did not concede, or `None`."""
     retired: bool = False
     """Whether a reading retired the branch. Its ideas stay on it."""
 
@@ -1926,29 +1953,6 @@ class ActResult(Record):
     allowance: AllowanceLine | None = None
     """The seat's allowance after the action, or `None` while the seat has none."""
     news: News | None = None
-
-
-class MeasureLine(Sparse):
-    """
-    One measure as a line: its number, the time that it holds for, its author, and who reran it.
-
-    `rerun_by` names the agents whose check of an independent rerun of the measure holds, and `rerun_failed_by` the
-    agents whose such check fails. Both are empty while nobody reran it. The marks say who reran the number and
-    what that rerun found, and never whether the number is good.
-    """
-
-    post: PostId
-    thread: ThreadId
-    by: AgentId
-    label: str
-    value: MeasureValue
-    unit: str = ''
-    as_of: AwareDatetime
-    minutes_ago: int = 0
-    """How many whole minutes before now `as_of` is, by the lab's clock."""
-    rerun_by: tuple[AgentId, ...] = ()
-    rerun_failed_by: tuple[AgentId, ...] = ()
-    standing: Standing = 'open'
 
 
 class HeadlineNumberLine(Sparse):

@@ -7,6 +7,7 @@ import {
   STATE_TONES,
   STATE_WORDS,
   branchCounts,
+  branchMeasure,
   challengedBy,
   emptyMark,
   parentIdea,
@@ -66,11 +67,13 @@ function BranchRow(props: {
   const { branch } = props;
   const ideas = branch.idea_list ?? [];
   const empty = emptyMark(branch);
+  const measured = branchMeasure(branch, props.agents);
   const head = (
     <>
       <b>{branch.title}</b>
       {branch.retired === true ? <em className="f-st fs-con">retired</em> : null}
       <span className={empty ? 'm-cnt m-empty' : 'm-cnt'}>{empty ?? branchCounts(branch)}</span>
+      {measured ? <span className="m-measure">{measured}</span> : null}
     </>
   );
   if (ideas.length === 0) {

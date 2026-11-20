@@ -4998,6 +4998,12 @@ summary.m-head {
   color: var(--turn);
   font-weight: 600;
 }
+.m-measure {
+  flex: 1 1 100%;
+  color: var(--ink2);
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+}
 .m-ideas {
   margin: 0 0 14px;
   padding: 0;

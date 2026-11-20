@@ -663,6 +663,11 @@ class Measure(PostBase):
     output: RelativePath
     evidence: tuple[FileEvidence, ...] = Field(min_length=2, max_length=2)
     reply_to: None = None
+    branch: BranchId | None = Field(default=None, exclude_if=unset)
+    """
+    The branch of the question that the number is about, when its author names one. The board checks no branch: a
+    measure that names a branch that the lab does not have shows on no branch. `None` in a record from before it.
+    """
 
     @model_validator(mode='after')
     def _pins_its_source(self) -> Self:

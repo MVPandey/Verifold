@@ -1,4 +1,5 @@
 from datetime import timedelta
+from decimal import Decimal
 
 import pytest
 from builders import START, RecordBuilder
@@ -12,7 +13,9 @@ from verifold.protocol.posts import (
     Branch,
     Check,
     Entry,
+    FileEvidence,
     Idea,
+    Measure,
     Objection,
     Plan,
     Proposal,
@@ -390,3 +393,41 @@ def test_a_lab_with_one_working_agent_is_not_held_by_the_rule_on_proposals() -> 
         RecordBuilder().join('ada').join('bo').leave('bo'),
     ):
         check_rests_on(lab.thread('t-1', opened_by='ada').post(found).board(), proposal)
+
+
+def measured(post_id: str, value: str, branch: str | None, author: str = 'bo') -> Measure:
+    source = (FileEvidence(path='v.py', commit='c' * 40), FileEvidence(path='v.out', commit='c' * 40))
+    return Measure(
+        id=post_id,
+        thread='t-1',
+        author=author,
+        text=f'Account value: {value} USD',
+        label='Account value',
+        value=Decimal(value),
+        unit='USD',
+        as_of=START,
+        script='v.py',
+        output='v.out',
+        evidence=source,
+        branch=branch,
+    )
+
+
+def test_a_branch_shows_the_newest_measure_that_names_it_and_its_author_did_not_concede() -> None:
+    record = mapped().post(measured('p-2', '380.10', 'b-1')).post(measured('p-3', '382.24', 'b-1'))
+    # A measure that names no branch, or a branch that the lab does not have, shows on no branch.
+    record.post(measured('p-4', '1', None)).post(measured('p-5', '2', 'b-9'))
+    board = record.board()
+
+    rates, sports = branch_lines(board, START)
+    assert rates.measure is not None
+    assert (rates.measure.post, str(rates.measure.value)) == ('p-3', '382.24')
+    assert sports.measure is None
+    # A measure from before the field names no branch, and its JSON has none.
+    assert '"branch"' not in measured('p-6', '1', None).model_dump_json()
+
+    record.post(Objection(id='p-6', thread='t-1', author='ada', text='Stale price.', reply_to='p-3'))
+    record.post(Answer(id='p-7', thread='t-1', author='bo', text='Right.', reply_to='p-6', accepts=True))
+    later = branch_lines(record.board(), START)[0].measure
+    assert later is not None
+    assert later.post == 'p-2'

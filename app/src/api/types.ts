@@ -1788,8 +1788,17 @@ export interface BranchLine {
   readonly recent_tries?: number;
   /** For a branch without an idea: the hours since the reading that added it. */
   readonly no_idea_hours?: number | null;
+  /** The newest measure that names the branch, as a line that leaves out each field that holds its default. */
+  readonly measure?: BranchMeasure | null;
   readonly retired?: boolean;
 }
+
+/** The newest measure of a branch. A field that holds its default is absent. */
+export type BranchMeasure = Pick<
+  MeasureView,
+  'post' | 'thread' | 'by' | 'label' | 'value' | 'as_of'
+> &
+  Partial<Pick<MeasureView, 'unit' | 'rerun_by' | 'rerun_failed_by' | 'standing'>>;
 
 /** A plan or a result that tries an idea. */
 export interface TryLine {

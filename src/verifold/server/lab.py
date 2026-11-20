@@ -712,6 +712,7 @@ class Lab:
                 as_of=request.as_of or at,
                 script=evidence[0].path,
                 output=evidence[-1].path,
+                branch=request.branch,
             )
             return Posted(seq=seq, at=at, post=measured)
 
