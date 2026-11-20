@@ -658,6 +658,8 @@ class OptionValue(Record):
 
     value: ValueId
     name: str
+    description: str = Field(default='', exclude_if=lambda text: not text)
+    """What the harness says of the value, in its own words, such as what a mode lets the agent do. Often empty."""
 
 
 class ModelValue(OptionValue):

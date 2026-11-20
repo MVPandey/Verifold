@@ -186,7 +186,10 @@ async def test_the_person_starts_a_lab_from_the_setup_screen(
                         {'value': 'small-model', 'name': 'small-model', 'efforts': []},
                     ],
                     'efforts': named('default', 'low', 'high'),
-                    'modes': [{'value': 'ask', 'name': 'Ask'}, {'value': 'auto', 'name': 'Auto'}],
+                    'modes': [
+                        {'value': 'ask', 'name': 'Ask', 'description': 'Asks before each change.'},
+                        {'value': 'auto', 'name': 'Auto'},
+                    ],
                     'model': 'default',
                     'effort': 'default',
                     'mode': 'ask',

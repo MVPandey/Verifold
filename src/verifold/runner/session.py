@@ -503,7 +503,7 @@ async def _offer(connection: ClientSideConnection, opened: schema.NewSessionResp
     return Offer(
         models=tuple(models),
         efforts=efforts,
-        modes=tuple(found for mode in available if (found := _option(mode.id, mode.name))),
+        modes=tuple(found for mode in available if (found := _option(mode.id, mode.name, mode.description or ''))),
         model=model.current_value if model else None,
         effort=effort.current_value if effort else None,
         mode=modes.current_mode_id if modes else None,
@@ -554,10 +554,11 @@ def _values(option: schema.SessionConfigOptionSelect | None) -> tuple[OptionValu
     return tuple(found for value in flat if (found := _option(value.value, value.name)))
 
 
-def _option(value: str, name: str) -> OptionValue | None:
-    # A value that a lab can't record, such as an empty one, is left out of the offer.
+def _option(value: str, name: str, description: str = '') -> OptionValue | None:
+    # A value that a lab can't record, such as an empty one, is left out of the offer. The description is the
+    # harness's own text, which the app shows as text.
     try:
-        return OptionValue(value=value, name=name)
+        return OptionValue(value=value, name=name, description=description)
     except ValidationError:
         return None
 
