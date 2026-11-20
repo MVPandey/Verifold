@@ -96,6 +96,7 @@ from verifold.server.errors import AlarmRejected, MapRejected, ProfileRejected, 
 from verifold.server.member import Change, Member
 from verifold.society.alarms import alarm_line
 from verifold.society.attention import gone_named
+from verifold.society.coordinator import waits_for_answer
 from verifold.society.errors import SocietyError
 from verifold.society.measures import headline_label
 from verifold.society.reruns import wanted_reruns
@@ -272,13 +273,16 @@ a close stands or such a post went out in the minute before.
   of another agent's post and a `rerun` request for another agent's post take a reviewer seat. So does `take_rerun`
   while an agent in a reviewer seat can take that rerun. An `objection` takes no seat, and neither does a `result`
   that reproduces another agent's result. In a lab with zero reviewer seats, none of them takes a seat.
-- The person and the coordinator talk in one thread, the conversation. `brief` names it in `conversation` once it
+- The conversation is the thread between the person and the coordinator. In a lab without a desk, the person
+  writes to the coordinator there. In a lab with a desk, the person writes in the desk chat, and the desk's post
+  for the person carries the person's word to the coordinator there. `brief` names it in `conversation` once it
   exists, and every agent can read it. `post` with `conversation: true` writes there, and the first such post
-  opens the thread. A post from the person there is for the agent that holds the coordinator seat, and that agent
-  watches the thread. A post there is for no other agent, unless it names the agent, replies to it, or builds on
-  its post. An `ask` from the coordinator there waits for the person in the app, under Needs you. An `ask` from
-  another agent there waits for the person when it names `person` in `mentions`, as
-  in any thread. The conversation takes no `proposal` and no `close`, and a post from the person there does
+  opens the thread, in a lab with a desk too. A post from the person there is for the agent that holds the
+  coordinator seat, and that agent watches the thread. A post there is for no other agent, unless it names the
+  agent, replies to it, or builds on its post. An `ask` from the coordinator there waits for the person under Needs
+  you, also in a lab with a desk, where the app shows no conversation and the person answers the ask on the Needs
+  you page. An `ask` from another agent there waits for the person when it names `person` in `mentions`, as in any
+  thread. The conversation takes no `proposal` and no `close`, and a post from the person there does
   not open a closed lab again. When the seat changes, the thread stays, and the person's posts there are for the
   new holder.
 - A post from the person in the conversation, other than an `answer`, waits for a reply until the agent that holds
@@ -294,8 +298,10 @@ a close stands or such a post went out in the minute before.
   a post of the person has `person` as its author. Each line of a post in `brief`, in the news, and in `wait` has
   the mark in `for_person`, and the app shows it on the post and on a thread that such a post opens.
   `for_person` says on whose behalf a post is, and `to_lab` says who hears it. Where a post for the whole lab can
-  stand, the board marks a post for the person with `to_lab` too. The board refuses `for_person` from every
-  other agent, and on a `proposal` and a `close`.
+  stand, the board marks a post for the person with `to_lab` too. The mark does not send a post to the person: an
+  `ask` with the mark and without `person` in `mentions` waits for no answer of the person, and the app lists it
+  nowhere for the person. The board refuses `for_person` from every other agent, and on a `proposal` and a
+  `close`.
 - Six kinds of move are the person's alone: more time for the lab, the answer to another agent's permission
   request, one more agent or one fewer, a setting of the lab, a revision of the question, and the pace of the
   lab's seats. The coordinator asks for one with `request`, and the person answers with yes or no. A yes makes the
@@ -338,9 +344,13 @@ a close stands or such a post went out in the minute before.
   two words is written with its one space, as in `@Mar En`.
 - `builds_on` names the posts, in any thread, that a post builds on. Their authors hear about it, and each post
   shows which posts build on it.
-- An `ask` with `person` in `mentions` reaches the person. The app lists it for the person until they answer it.
-  With `ends_at`, it waits for the person until that time, and the app then lists it among the asks that the person
-  missed.
+- An `ask` with `person` in `mentions` reaches the person, from the coordinator and from any other agent, in any
+  thread, and in a lab with a desk or without one. The app lists it for the person under Needs you until they
+  answer it there. With `ends_at`, it waits for the person until that time, and the app then lists it among the
+  asks that the person missed. A post of an agent that replies to it, its author's included, does not end the
+  wait, unless it is the answer that carries out the coordinator's request about a permission. The coordinator's
+  `ask` in the conversation waits for the person too, as the entry on the conversation says, and no other `ask`
+  does. `waits_for_person` in the result of `post` says whether the post waits for the person.
 - An acting seat acts in the world with a key of its own, and `acting` on its line in `brief` says so. The person
   makes a seat one, and only the person starts an allowance for it: for what, a bound for one action, a bound in total, an end
   time, and a unit. `act` declares an action before it is done, as a post of the kind `action`, and the board answers
@@ -803,7 +813,8 @@ Kinds:
 - `result`: a finding that others can check.
 - `ask`: a question. It stays open until an answer replies. `choices` offers answers to pick from. With no
   `mentions` and no `reply_to`, in a thread for the whole lab, it reaches every agent. With `person` in
-  `mentions`, it reaches the person.
+  `mentions`, it reaches the person in any thread, with a desk or without one, and waits under Needs you until
+  the person answers it. An `ask` of the coordinator in the conversation waits for the person too.
 - `answer`: a reply to an ask, an objection, or a close. With `accepts: true`, it concedes an objection to its
   author's post, or agrees with a close.
 - `objection`: a problem in another agent's post.
@@ -885,7 +896,11 @@ that holds the coordinator seat. Such a post, other than an `answer`, waits for 
 the conversation after it. For that agent, `person_waits` in `brief` and `no_reply` in the news say which post
 waits. `for_person: true` records that the coordinator says that the post is on the person's behalf. The board
 takes the mark from the agent that holds the coordinator seat only, and on no `proposal` and no `close`. In a
-thread for the whole lab, such a post that names nobody and replies to no post gets `to_lab` too.
+thread for the whole lab, such a post that names nobody and replies to no post gets `to_lab` too. The mark does not
+send a post to the person: a question for the person is an `ask` with `person` in `mentions`.
+
+`waits_for_person` in the result says whether the post waits for the person's answer, so that the person's app lists
+it under Needs you.
 
 `ends_at` on an `ask` is when it stops waiting for the person, as a time with its zone. An `action` goes through
 `act`, and a `measure`, a `dashboard`, and a `headline_number` go through the tools of those names.
@@ -1344,7 +1359,8 @@ takes it from the agent that holds the coordinator seat, and refuses every other
   A move of pace has one line of why in `why`, which the record keeps with the move.
 
 The request waits for the person, who answers it with yes or no in the app. A yes makes the move, and the record
-says that the move came from this request. The person's answer is a post that replies to the request, so it is a
+says that the move came from this request. `waits_for_person` in the result says whether it waits for the person
+now. The person's answer is a post that replies to the request, so it is a
 post for you. Without an answer, nothing changes. A request ends without an answer when the coordinator seat
 changes after it, also when its author holds the seat again later.
 
@@ -1844,7 +1860,12 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
                 retires=retires,
             )
             posted = await member.post(request)
-            return PostResult(**dict(posted), news=member.news(), left=gone_named(member.lab.board, posted.post))
+            return PostResult(
+                **dict(posted),
+                waits_for_person=_waits(member, posted.post.id),
+                news=member.news(),
+                left=gone_named(member.lab.board, posted.post),
+            )
 
     @server.tool(description=THREADS_TOOL)
     async def threads(ctx: Context) -> ThreadList:
@@ -2374,7 +2395,7 @@ def _request_tool(server: MCPServer, acting: Acting) -> None:
                 fresh=fresh,
             )
             posted = await member.request(form.to_move(), text, body)
-            return PostResult(**dict(posted), news=member.news())
+            return PostResult(**dict(posted), waits_for_person=_waits(member, posted.post.id), news=member.news())
 
 
 def _profile_tool(server: MCPServer, acting: Acting) -> None:
@@ -2425,6 +2446,12 @@ def _picture(shape: Shape | None, color: Color | None, symbol: Symbol | None) ->
     if shape is None or color is None or symbol is None:
         raise ProfileRejected('A picture is one shape, one color, and one symbol. The call gives all three or none.')
     return Picture(shape=shape, color=color, symbol=symbol)
+
+
+def _waits(member: Member, post_id: PostId) -> bool:
+    # Whether the post that the call recorded waits for the person's answer now, as the person's app lists it.
+    entry = member.lab.board.post(post_id)
+    return entry is not None and waits_for_answer(member.lab.board, entry, member.lab.now())
 
 
 def _thread_of_reply(member: Member, reply_to: PostId) -> ThreadId | None:

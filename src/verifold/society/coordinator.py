@@ -392,6 +392,15 @@ def waiting_posts(board: Board, now: datetime | None = None) -> tuple[Posted, ..
     return tuple(entry for entry in board.posts if _waits_for_person(board, entry, at))
 
 
+def waits_for_answer(board: Board, entry: Posted, now: datetime | None = None) -> bool:
+    """
+    Return whether a post waits for the person's answer at `now`, so that the person's app lists it under Needs you.
+
+    It does when `waiting_posts` holds it. Without `now`, time counts from the board's newest event.
+    """
+    return _waits_for_person(board, entry, now or latest_time(board))
+
+
 def missed_posts(board: Board, now: datetime | None = None) -> tuple[Posted, ...]:
     """
     Return the entries of the asks and actions for the person that stopped waiting before the person answered.

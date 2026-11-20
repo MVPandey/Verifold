@@ -1362,6 +1362,11 @@ class MapResult(MapView):
 class PostResult(PostView):
     """What the `post` tool returns: the post as it stands, and the agent's news."""
 
+    waits_for_person: bool = False
+    """
+    Whether the post waits for the person's answer, so that the person's app lists it under Needs you: an `ask` with
+    `person` in `mentions`, an `ask` of the coordinator in the conversation, or a request for a move that waits.
+    """
     news: News | None = None
     left: tuple[LeftLine, ...] = ()
     """The agents that the post names in `mentions` or answers with `reply_to`, and that left the lab before it."""
