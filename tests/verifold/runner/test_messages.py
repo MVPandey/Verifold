@@ -211,7 +211,6 @@ def test_the_map_section_says_why_the_lab_fixes_a_test_first_and_how_ideas_hang_
         'A branch with no idea is a gap in the lab',
         'You can try your own idea.',
         'A new test is a new idea.',
-        'another agent challenges it on dates, data, or cases that its author did not use',
         'It stays sealed and unsigned until the round closes',
     ):
         assert norm in ideas
@@ -417,7 +416,10 @@ def test_the_lab_norms_tell_reproducing_a_result_from_challenging_it_and_name_a_
             'use, and say in the challenge what you changed and what came out.'
         ),
         'A challenge that fails is among the most useful posts in a lab.',
-        'Before a candidate goes to a close, the results that it rests on should have been challenged.',
+        # The section on ideas asked for the same challenge once, at another moment. It is said here once.
+        'A result that only its author tested is not yet evidence for an answer',
+        'another agent challenges it on dates, data, or cases that its author did not use',
+        'In a lab with two or more agents at work, the board takes no proposal before then.',
     ):
         assert norm in evidence
     # The review of the reading is in the section on the coordinator, so the section on rounds points to it.
@@ -462,7 +464,7 @@ def test_the_lab_norms_say_when_the_coordinator_posts_the_reading_reviews_it_and
         # for two hours before the person saw it. Another closed at minute 30 on a plan that could not reach the goal.
         (
             'The coordinator says how the lab reads the question: what counts as an answer, what the lab assumes, and '
-            'what it leaves out. It posts this as a reading in the first minutes, before it assigns work, and again '
+            'what it leaves out. It posts this as a reading in the first minutes, before it hands out work, and again '
             'whenever the person corrects the lab.'
         ),
         'Every agent then works toward the same idea of an answer.',

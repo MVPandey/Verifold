@@ -163,14 +163,24 @@ describe('the words of an allowance', () => {
     assert.equal(minus('25', '0.000001'), '24.999999');
   });
 
-  it('says what the holder may do, its bounds, what it used, and its meter', () => {
+  it('says whose the allowance is and what it is for, its bounds, what it used, and its meter', () => {
     const view = allowance({ terms: { ...allowance().terms, check_above: '5' } });
 
-    assert.equal(allowanceHeading(view.terms, agents), 'Rowan may place orders on the exchange');
     assert.equal(
-      allowanceHeading({ ...view.terms, purpose: 'USDC transfers to the pool' }, agents),
-      'Rowan may USDC transfers to the pool',
+      allowanceHeading(view.terms, agents),
+      'Allowance for Rowan: Place orders on the exchange',
     );
+    // The person's words stand as written after the colon, whatever kind of phrase they are.
+    for (const purpose of [
+      'USDC transfers to the pool',
+      'paper orders tomorrow',
+      'Buy only. Never sell.',
+    ]) {
+      assert.equal(
+        allowanceHeading({ ...view.terms, purpose }, agents),
+        `Allowance for Rowan: ${purpose}`,
+      );
+    }
     assert.deepEqual(draftFacts(view.terms, now), [
       'Up to $10 an action',
       'Up to $100 in all',
@@ -271,7 +281,7 @@ describe('the words of an allowance', () => {
     };
     assert.equal(
       actionLine(drafted, agents),
-      'Drafted the allowance a-1 for you. It starts when you confirm it',
+      'Drafted the allowance a-1 for you. It starts when you confirm it.',
     );
   });
 });
@@ -360,7 +370,7 @@ describe('the cards of an allowance', () => {
     );
 
     assert.ok(html.includes('<p class="a-kicker">Allowance · not started</p>'));
-    assert.ok(html.includes('<h3>Rowan may place orders on the exchange</h3>'));
+    assert.ok(html.includes('<h3>Allowance for Rowan: Place orders on the exchange</h3>'));
     assert.ok(html.includes('<li>Up to $10 an action</li><li>Up to $100 in all</li>'));
     assert.ok(html.includes('Confirm allowance</button>'));
     assert.ok(html.includes('Change</button>'));
@@ -439,7 +449,9 @@ describe('the cards of an allowance', () => {
       />,
     );
 
-    assert.ok(html.includes('<section class="a-card a-stopped"'));
+    assert.ok(html.includes('<details class="a-card a-live a-stopped"'));
+    // A stopped allowance needs the person, so it shows opened.
+    assert.ok(/<details class="a-card a-live a-stopped"[^>]* open=""/.test(html));
     assert.ok(html.includes('Allowance · stopped at its total'));
     assert.ok(
       html.includes(
@@ -460,7 +472,8 @@ describe('the cards of an allowance', () => {
     );
 
     assert.ok(html.includes('<details class="a-fold">'));
-    assert.ok(html.includes('<u>Missed while you were away · 2</u>'));
+    // The fold is one line until the person opens it.
+    assert.ok(html.includes('<summary><u>Missed while you were away · 2</u></summary>'));
     assert.ok(html.includes('Their time ended before you answered. Nothing was done.'));
     assert.ok(html.includes('href="#/thread/t-2/p-5"'));
     assert.equal(renderToStaticMarkup(<MissedFold lab={labView()} now={now} />), '');
@@ -528,6 +541,46 @@ describe('the pages that show allowances and actions', () => {
     assert.ok(html.includes('Missed while you were away · 1'));
   });
 
+  it('folds the allowance in force to one line with its meter, and the status line holds the one pause', () => {
+    const page = renderToStaticMarkup(
+      <LabPage api={{} as Api} data={data(lab, [action()])} now={now} open={null} post={null} />,
+    );
+    const card = page.slice(page.indexOf('<details class="a-card a-live"'));
+    const folded = card.slice(0, card.indexOf('</summary>'));
+
+    // The allowance in force is one closed line: whose it is and what for, what it used, and its meter.
+    assert.ok(
+      card.startsWith(
+        '<details class="a-card a-live" aria-label="Allowance: Allowance for Rowan: ',
+      ),
+    );
+    assert.ok(folded.includes('<b>Allowance for Rowan: Place orders on the exchange</b>'));
+    assert.ok(folded.includes('role="meter"'));
+    assert.equal(folded.includes('Recorded, not enforced'), false);
+    // Opened, it has the note that the limit is recorded, and no second press that pauses every action.
+    assert.ok(card.includes('Recorded, not enforced.'));
+    assert.equal(page.split('Pause all actions</button>').length - 1, 1);
+    assert.ok(page.indexOf('Pause all actions</button>') < page.indexOf('<div class="f-steer">'));
+  });
+
+  it('shows a draft of the desk once, in the chat beside the wall, and not in the rail', () => {
+    const drafted = allowance({ allowance: 'a-2', state: 'draft' });
+    const page = renderToStaticMarkup(
+      <LabPage
+        api={{} as Api}
+        data={data(labView({ ...lab, allowances: [drafted] }), [])}
+        now={now}
+        open={null}
+        post={null}
+      />,
+    );
+
+    assert.equal(page.split('Confirm allowance</button>').length - 1, 1);
+    const chat = page.slice(page.indexOf('<section class="c-chat"'));
+    assert.ok(chat.includes('Confirm allowance</button>'));
+    assert.ok(chat.includes('Recorded, not enforced.'));
+  });
+
   it('shows the desk’s draft in the desk chat under the person’s message that it rests on', () => {
     const message = result('p-7', {
       thread: 't-9',
@@ -572,7 +625,7 @@ describe('the pages that show allowances and actions', () => {
       />,
     );
 
-    assert.ok(html.includes('Drafted the allowance a-1 for you. It starts when you confirm it'));
+    assert.ok(html.includes('Drafted the allowance a-1 for you. It starts when you confirm it.'));
     assert.ok(html.includes('<li class="k-card">'));
     assert.ok(html.includes('Confirm allowance</button>'));
     assert.ok(html.includes('Recorded, not enforced.'));

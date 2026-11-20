@@ -427,6 +427,13 @@ async def until(condition: Callable[[], bool], timeout: float = 20) -> None:
             await asyncio.sleep(0.02)
 
 
+HTTP_WAIT = 60
+"""
+Seconds that a test's client waits for an answer of a server that runs in the test. The server answers after the work
+of the request, such as Git commands for the folders of a new lab, so a test on a busy machine waits as long as for
+an event with `until`, and not httpx's default of 5 seconds.
+"""
+
 SLEEP = 'import time; time.sleep(60)'
 """A Python script for a process that just runs."""
 

@@ -145,6 +145,10 @@ describe('the coordinator’s moves in words', () => {
     assert.ok(
       html.indexOf('Added a seat with a fresh view') < html.indexOf('Opened a 15-minute round'),
     );
+    // Each move is one line, and its words and its why open under it.
+    assert.equal(html.split('<li><details><summary>').length - 1, 3);
+    const line = html.slice(html.indexOf('<summary>'), html.indexOf('</summary>'));
+    assert.equal(line.includes('Why:'), false);
     assert.ok(html.includes('<p class="m-theirs">What can settle by 9:16 a.m.?</p>'));
     assert.ok(html.includes('Why: <span class="m-text">You set an 8-hour target.</span>'));
     assert.ok(html.includes('See all 4 moves</button>'));

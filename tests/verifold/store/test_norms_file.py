@@ -106,3 +106,13 @@ def test_a_file_from_an_older_default_shows_the_lines_that_the_current_default_h
     assert missing_lines('WRITING.md', '') == tuple(
         line for line in DEFAULTS['WRITING.md'].splitlines() if line.strip()
     )
+
+
+def test_the_default_norms_assign_no_work_and_say_the_challenge_before_a_proposal_once_where_evidence_is() -> None:
+    norms = DEFAULTS['LAB.md']
+    evidence = norms.split('## Evidence', 1)[1].split('\n## ', 1)[0]
+
+    # Nobody assigns work: an invitation asks, and the board gives a task to nobody.
+    assert 'assigns work' not in norms
+    assert norms.count('the board takes no proposal before then') == 1
+    assert 'the board takes no proposal before then' in evidence

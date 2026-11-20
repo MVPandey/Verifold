@@ -16,9 +16,10 @@ import { ago, dayClock } from './format.ts';
 export const FRAME_PATH = '/frame';
 
 /**
- * The sandbox of the frame. Scripts run, and nothing else: no origin of the app, so no storage and no token of it,
- * no form, no window, no move of the page that holds the frame, and no download. The frame's page carries the same
- * sandbox in its own policy.
+ * The sandbox of the frame. Its page's own script runs, and nothing else: no origin of the app, so no storage and no
+ * token of it, no form, no window, no move of the page that holds the frame, and no download. The frame's page
+ * carries the same sandbox in its own policy, runs only Verifold's own script, and shows the agents' page in a frame
+ * whose sandbox allows nothing, so no script of the agents' page runs.
  */
 export const FRAME_SANDBOX = 'allow-scripts';
 

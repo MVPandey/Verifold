@@ -22,7 +22,10 @@ import {
   shownAllowances,
   stoppedLine,
   usedLine,
+  usedShort,
 } from '../model/allowances.ts';
+import { inForce } from '../model/dashboard.ts';
+import { deskOf } from '../model/desk.ts';
 import type { ActionPost } from '../model/allowances.ts';
 import { clock } from '../model/format.ts';
 import { href } from '../model/route.ts';
@@ -71,7 +74,8 @@ export function RecordedNote(props: { readonly name: string }): ReactElement {
 
 /**
  * One allowance. A draft shows its terms and the person's press that starts it. An allowance that the person started
- * shows what it allowed, its meter and actions, and the presses that pause every action and end it.
+ * is one line with its meter, which opens to what it allowed, its actions, and the presses that end it and, while the
+ * status line has none, pause every action.
  */
 export function AllowanceCard(props: {
   readonly api: Api;
@@ -81,6 +85,8 @@ export function AllowanceCard(props: {
   readonly reload: () => void;
   /** Lets the person tell the desk what to change in a draft. Without it, the draft has no such control. */
   readonly onChange?: () => void;
+  /** Whether an allowance that the person started shows opened. Without it, only a stopped one does. */
+  readonly open?: boolean;
 }): ReactElement {
   const { api, view, lab, now } = props;
   const press = usePress();
@@ -123,24 +129,32 @@ export function AllowanceCard(props: {
   }
   const live = view.state === 'in_force' || view.stopped;
   const paused = lab.actions_paused ?? null;
+  // The status line has the press that pauses every action while an allowance is in force. Otherwise it is here.
+  const pause = live && inForce(lab).length === 0;
   return (
-    <section
-      className={`a-card${view.stopped ? ' a-stopped' : ''}`}
+    <details
+      className={`a-card a-live${view.stopped ? ' a-stopped' : ''}`}
       aria-label={`Allowance: ${heading}`}
+      open={props.open ?? view.stopped}
     >
+      <summary>
+        <span className="a-line">
+          <b>{heading}</b>
+          <span className="a-used">{usedShort(view)}</span>
+        </span>
+        <span
+          className="a-meter"
+          role="meter"
+          aria-label="Used of the allowance"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(meterPercent(view))}
+        >
+          <i style={{ width: `${String(meterPercent(view))}%` }} />
+        </span>
+      </summary>
       <p className="a-kicker">{allowanceKicker(view)}</p>
-      <h3>{heading}</h3>
       <p className="a-used">{usedLine(view, now)}</p>
-      <div
-        className="a-meter"
-        role="meter"
-        aria-label="Used of the allowance"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(meterPercent(view))}
-      >
-        <i style={{ width: `${String(meterPercent(view))}%` }} />
-      </div>
       {view.stopped ? <p className="a-stop">{stoppedLine(name)}</p> : null}
       {view.actions.length > 0 ? (
         <ul className="a-list">
@@ -166,16 +180,18 @@ export function AllowanceCard(props: {
       {live ? (
         <>
           <div className="a-row">
-            <button
-              type="button"
-              className={paused === null ? 'btn a-pause' : 'btn'}
-              disabled={press.busy}
-              onClick={() => {
-                done(() => api.pauseActions(paused === null));
-              }}
-            >
-              {paused === null ? 'Pause all actions' : 'Let actions go on'}
-            </button>
+            {pause ? (
+              <button
+                type="button"
+                className={paused === null ? 'btn a-pause' : 'btn'}
+                disabled={press.busy}
+                onClick={() => {
+                  done(() => api.pauseActions(paused === null));
+                }}
+              >
+                {paused === null ? 'Pause all actions' : 'Let actions go on'}
+              </button>
+            ) : null}
             <button
               type="button"
               className="btn"
@@ -195,11 +211,14 @@ export function AllowanceCard(props: {
       ) : null}
       <Refusal error={press.error} />
       <RecordedNote name={name} />
-    </section>
+    </details>
   );
 }
 
-/** The allowances that the lab page shows beside the wall: the drafts that wait, and each one in force or stopped. */
+/**
+ * The allowances that the lab page shows beside the wall: each one in force or stopped, and the drafts that wait in
+ * a lab without a desk. With a desk, a draft shows in the desk's chat, under the person's words that it rests on.
+ */
 export function Allowances(props: {
   readonly api: Api;
   readonly lab: LabView;
@@ -207,7 +226,8 @@ export function Allowances(props: {
   readonly reload: () => void;
   readonly onChange?: () => void;
 }): ReactElement | null {
-  const shown = shownAllowances(props.lab);
+  const desk = deskOf(props.lab.agents) !== null;
+  const shown = shownAllowances(props.lab).filter((view) => !(desk && view.state === 'draft'));
   if (shown.length === 0) return null;
   return (
     <div className="a-stack">
@@ -288,8 +308,9 @@ export function MissedFold(props: {
   return (
     <details className="a-fold">
       <summary>
-        <u>{missedHeading(missed)}</u> <span>{NOTHING_DONE}</span>
+        <u>{missedHeading(missed)}</u>
       </summary>
+      <p className="a-fold-note">{NOTHING_DONE}</p>
       <ul>
         {missed.map((item) => (
           <li key={item.post}>

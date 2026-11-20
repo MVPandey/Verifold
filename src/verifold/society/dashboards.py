@@ -3,9 +3,9 @@ The lab's dashboard: one page of HTML that an agent makes, so that the person se
 
 Each version is a post of its own, so another agent can check it or object to it. The first version opens the
 dashboard's thread, and every later version goes there. The newest version that its author did not concede stands.
-The page holds its styles and scripts inline and loads nothing from another server: the board refuses a page that
-names another server where the page would load something, and the person's app shows the page in a frame whose
-policy allows no request at all.
+The page holds its styles inline and loads nothing from another server: the board refuses a page that names another
+server where the page would load something, and the person's app shows the page in a frame whose policy allows no
+request at all and runs none of the page's scripts.
 """
 
 import re
@@ -134,8 +134,8 @@ def outside_reference(html: str) -> tuple[str, str] | None:
 
     It reads the attributes with which an element loads or sends something, the `href` of the elements that load
     with it, a refresh in a `meta`, and the addresses in the page's styles. A place in the page and an address of
-    `data:` or `blob:` load nothing. A plain link to another page is no load. The scan does not run the page's
-    scripts, so the policy of the app's frame refuses what a script asks for.
+    `data:` or `blob:` load nothing. A plain link to another page is no load. The app's frame runs no script of the
+    page, so no script asks for anything.
     """
     scan = _Scan()
     scan.feed(html)

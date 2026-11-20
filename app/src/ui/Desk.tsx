@@ -7,6 +7,7 @@ import type { AgentView, DeskView, LabView, PostView } from '../api/types.ts';
 import { authorName, memberLine } from '../model/agents.ts';
 import { wakes } from '../model/coordinator.ts';
 import { CHAT_BOX, NO_DESK, actionLine, actionsOn, deskOf } from '../model/desk.ts';
+import { shownAllowances } from '../model/allowances.ts';
 import { clock } from '../model/format.ts';
 import { split } from '../model/posts.ts';
 import { href } from '../model/route.ts';
@@ -73,6 +74,25 @@ export function DeskSeat(
           passes your word on to the lab.
         </p>
       )}
+      {/* A draft of the desk shows once: here, or in the whole chat while that is open. */}
+      {open
+        ? null
+        : shownAllowances(data.lab)
+            .filter((draft) => draft.state === 'draft')
+            .map((draft) => (
+              <AllowanceCard
+                key={draft.allowance}
+                api={api}
+                view={draft}
+                lab={data.lab}
+                now={props.now}
+                reload={data.reload}
+                onChange={() => {
+                  // A newer draft replaces this one, so the person tells the desk what to change.
+                  document.getElementById(CHAT_BOX)?.focus();
+                }}
+              />
+            ))}
       <ChatBox
         api={api}
         view={view}

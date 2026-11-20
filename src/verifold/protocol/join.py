@@ -1857,7 +1857,10 @@ class SteeringFacts(Sparse):
     unowned_tasks: int = 0
     """How many tasks are open: nobody holds them, no hand-back waits, and their authors did not withdraw them."""
     waits_for_person: int = 0
-    """How many posts wait for the person's answer: asks to the person, permission requests, and requests for a move."""
+    """
+    How many posts wait for the person's answer: asks to the person, permission requests, requests for a move, and
+    actions.
+    """
     actions_allowed: int = 0
     """How many actions of the lab an allowance allowed when their seats declared them."""
     actions_asked: int = 0
@@ -2087,7 +2090,7 @@ class Brief(Record):
     """The coordinator's newest moves, the newest first, at most `MAX_MOVES`. `steering` lists more."""
     fresh: bool = Field(default=False, exclude_if=unset)
     """
-    Whether your seat started with a fresh view and you have posted no plan yet. The brief then leaves out the
+    Whether your seat started with a fresh view and you have posted no plan and no idea yet. The brief then leaves out the
     candidate answers, the report, and the dashboard. `thread` still shows every post.
     """
     agents: tuple[AgentLine, ...] = ()

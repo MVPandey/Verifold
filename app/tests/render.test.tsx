@@ -2426,7 +2426,7 @@ describe('the lab page', () => {
 
   it('shows several candidates side by side, each with its author, age, and standing', () => {
     const html = wall('t-2', none, none, { standing: three, gone: [], closes_on: null });
-    const block = html.slice(html.indexOf('class="f-candidates"'), html.indexOf('f-steer'));
+    const block = html.slice(html.indexOf('class="f-candidates"'), html.indexOf('class="d-door'));
 
     assert.equal(block.split('<div class="f-candidate">').length - 1, 3);
     // They come in the order that they were proposed, and the page ranks none.
@@ -2466,7 +2466,7 @@ describe('the lab page', () => {
       {},
       'closed',
     );
-    const block = html.slice(html.indexOf('class="f-answer'), html.indexOf('f-steer'));
+    const block = html.slice(html.indexOf('class="f-answer'), html.indexOf('class="d-door'));
 
     assert.ok(block.includes('aria-expanded="false">The lab’s answer</a>'));
     assert.equal(block.includes('Candidate answers'), false);
@@ -2525,7 +2525,7 @@ describe('the lab page', () => {
       gone: [replaced, conceded],
       closes_on: null,
     });
-    const block = html.slice(html.indexOf('class="f-answer'), html.indexOf('f-steer'));
+    const block = html.slice(html.indexOf('class="f-answer'), html.indexOf('class="d-door'));
 
     assert.equal(block.includes('No agent has proposed an answer yet.'), false);
     assert.ok(
@@ -2545,20 +2545,26 @@ describe('the lab page', () => {
     );
   });
 
-  it('puts what waits for the person and the steer box before the candidates on a narrow page', () => {
+  it('puts the status line, what waits for the person, and the tabs first on a narrow page, and folds the rest', () => {
     const css = readFileSync(new URL('../../src/styles.css', import.meta.url), 'utf8');
     const narrow = css.slice(css.indexOf('@media (max-width: 1000px)'));
-    assert.ok(narrow.includes('.f-seat-main {\n    display: contents;\n  }'));
-    assert.ok(narrow.includes('.f-seat > .f-steer {\n    order: 1;'));
     assert.ok(
-      narrow.includes('.f-seat-main > .f-answer,\n  .f-seat-main > .f-answer ~ * {\n    order: 2;'),
+      narrow.includes('.f-seat-main,\n  .f-seat > .f-steer {\n    display: contents;\n  }'),
     );
-    // The question comes first, and the waits and the steer box are in the box beside the seat's first part.
+    assert.ok(narrow.includes('.f-seat-main > .d-status {\n    order: 2;'));
+    assert.ok(narrow.includes('.f-rail-waits {\n    order: 3;'));
+    assert.ok(narrow.includes('.f-seat-main > .d-tabs {\n    order: 4;'));
+    assert.ok(narrow.includes('.f-rail-rest {\n    order: 9;'));
+    assert.ok(narrow.includes('.f-rail-rest:not(.open) > .f-rail-body {\n    display: none;'));
+    // The question comes first. The main column holds the open tab, and the rail comes after it, waits first.
     const html = wall('t-2', none, none);
     const seat = html.slice(html.indexOf('<section class="f-seat">'));
     assert.ok(
       seat.startsWith('<section class="f-seat"><div class="f-seat-main"><div class="f-question">'),
     );
+    const main = seat.slice(0, seat.indexOf('<div class="f-steer">'));
+    assert.ok(main.includes('class="f-body"'));
+    assert.ok(seat.includes('<div class="f-steer"><div class="f-rail-waits">'));
   });
 
   it('starts the column beside the question at the top of the seat, whatever the height of the candidates', () => {
@@ -4429,6 +4435,12 @@ describe('a round', () => {
       html.includes(`You asked · Closes at ${clock(open.closes_at)}, in 4 min · 1 of 3 entered`),
     );
     assert.ok(html.includes('<p class="f-round-text">Best bet?</p>'));
+    // The entries fold under the question: the line above counts them.
+    assert.ok(
+      html.includes(
+        '<p class="f-round-text">Best bet?</p><details class="f-round-entries"><summary>',
+      ),
+    );
     assert.ok(
       html.includes(
         '<tr><th scope="row">Agent 2</th><td><p>Keep the cache.</p><details class="f-detail">',

@@ -15,6 +15,7 @@ import {
   nearLimit,
   nextTime,
   pauseLine,
+  pauseTold,
   seatLines,
 } from '../src/model/pace.ts';
 import { LabPaceControls, SeatPaceControls } from '../src/ui/Pace.tsx';
@@ -118,6 +119,23 @@ describe('the pace and the usage limits of a seat', () => {
 
     assert.deepEqual(seatLines(view, NOW), [
       `Paused by the coordinator until ${clock(UNTIL)}`,
+      `62% of the 5-hour limit, resets ${clock(RESETS)}`,
+      '3M of its 10M tokens this hour',
+    ]);
+    // A seat whose activity says that a pause holds it names the pause once: the line keeps only its end.
+    const held = {
+      ...view,
+      activity: {
+        state: 'waiting' as const,
+        detail: 'Paused by the coordinator. A post of yours for it still starts its turn.',
+        at: null,
+        waits_for: 'pace' as const,
+      },
+    };
+    assert.equal(pauseTold(held), true);
+    assert.equal(pauseTold(view), false);
+    assert.deepEqual(seatLines(held, NOW, true), [
+      `Until ${clock(UNTIL)}`,
       `62% of the 5-hour limit, resets ${clock(RESETS)}`,
       '3M of its 10M tokens this hour',
     ]);

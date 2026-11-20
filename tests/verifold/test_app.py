@@ -20,7 +20,7 @@ import httpx2
 import psutil
 import pytest
 import uvicorn
-from builders import SLEEP, RecordBuilder, alive, start_orphan, until
+from builders import HTTP_WAIT, SLEEP, RecordBuilder, alive, start_orphan, until
 from fakes import FAKE_HARNESS
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
@@ -128,7 +128,7 @@ async def serving(
         async with asyncio.timeout(20):
             base, _, token = (await ready).partition('/#token=')
         headers = {'Authorization': f'Bearer {token}'}
-        async with httpx2.AsyncClient(base_url=f'{base}/api', headers=headers) as client:
+        async with httpx2.AsyncClient(base_url=f'{base}/api', headers=headers, timeout=HTTP_WAIT) as client:
             yield client
     finally:
         running.cancel()
@@ -510,7 +510,7 @@ async def board_of(url: str, token: str) -> AsyncGenerator[Client]:
     """Connect to the lab's board the way that an invited agent's harness does."""
     headers = {'Authorization': f'Bearer {token}'}
     async with (
-        httpx2.AsyncClient(headers=headers) as http,
+        httpx2.AsyncClient(headers=headers, timeout=HTTP_WAIT) as http,
         Client(streamable_http_client(url, http_client=http)) as board,
     ):
         yield board
@@ -695,7 +695,7 @@ async def test_a_record_that_another_program_replaces_stops_the_server_and_each_
         async with asyncio.timeout(60):
             base, _, token = (await ready).partition('/#token=')
             headers = {'Authorization': f'Bearer {token}'}
-            async with httpx2.AsyncClient(base_url=f'{base}/api', headers=headers) as client:
+            async with httpx2.AsyncClient(base_url=f'{base}/api', headers=headers, timeout=HTTP_WAIT) as client:
                 await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
                 invited = (await client.post('/invitations', json={'name': 'Reader'})).json()
                 url, bearer, _ = invited_parts(invited['text'])

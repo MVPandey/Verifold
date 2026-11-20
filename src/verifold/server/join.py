@@ -311,9 +311,9 @@ a close stands or such a post went out in the minute before.
   off until the person switches it on, and every power is off again when the coordinator seat changes. A request
   ends without an answer when the seat changes after it. No move stops the lab, and no move changes a power or
   how Verifold handles permission requests.
-- The coordinator's moves are its requests that got a yes, the rounds that it opened, and the readings that it
-  posted while it held the seat. Each has one line of why: the `why` of a move of pace, of a round, or of a
-  reading, or else the request's headline. The board takes a round of the agent that holds the coordinator seat,
+- The coordinator's moves are its requests that got a yes, the rounds that it opened, the readings that it posted,
+  and its namings of the headline number, while it held the seat. Each has one line of why: the `why` of a move of
+  pace, of a round, of a reading, or of a naming, or else the request's headline. The board takes a round of the agent that holds the coordinator seat,
   and a newer reading of that agent, only with `why`. `moves` in every agent's `brief` has the newest 5, and the
   tool `steering` lists more. An `objection` that replies to a move's post objects to the move, as to any post.
   The person's app shows the moves in a log, the newest first.
@@ -346,8 +346,10 @@ a close stands or such a post went out in the minute before.
   time, and a unit. `act` declares an action before it is done, as a post of the kind `action`, and the board answers
   at once. Inside the allowance in force, the action is allowed and its cost is drawn. Otherwise it waits for the
   person until its offer ends, and the person's answer is a post that replies to it. A `receipt` that replies to the
-  action says what it did and what it cost, and the allowance counts that cost. When what an allowance allowed costs
-  more than its total, Verifold starts no turn of the seat until the person ends that allowance or starts another.
+  action says what it did and what it cost, and the allowance counts that cost. An amount is a number of zero or
+  more, with at most 6 digits after the point and 18 digits in all. When what an allowance allowed costs more than
+  its total, Verifold starts no turn of the seat until the person ends that allowance or starts another, a later
+  receipt with a lower cost does not lift that stop, and every action of the seat waits for the person meanwhile.
   The board holds no key and makes no call, so it counts what is declared. `allowance` in `brief` has the seat's,
   and `actions_paused` says that the person paused every action.
 - `measure` reports one number with the script that produced it and that script's output, as a post of the kind
@@ -848,7 +850,8 @@ Kinds:
   call. A lab has one open round at a time. It closes at its time, when every agent that it waits for has
   entered, or when a `ruled_out` from its opener replies to it.
 - `receipt`: what an action of yours did, with the action in `reply_to`, `cost`, what it cost with its fees, and
-  `files`, the receipt, which the board needs. The allowance counts the cost of the newest receipt.
+  `files`, the receipt, which the board needs. `cost` is a number of zero or more with at most 6 digits after the
+  point and 18 digits in all. The allowance counts the cost of the newest receipt.
 - `idea`: one way to answer the question, with its test, before anyone tries it. `text` is the statement, and the
   board needs `parent`, the branch such as `b-2` or the idea such as `p-14` that it hangs on, `test`, how it is
   tested, and `rules_out`, what result of the test would rule it out. With a round in `reply_to`, it is your entry
@@ -1302,8 +1305,8 @@ takes it from the agent that holds the coordinator seat, and refuses every other
   them. The new agent's name holds the model's name only when the harness lists that model. For any other model,
   the name says "model not listed" until the harness reports its model. `role` is a role that the coordinator gives the seat: the board and the app
   show it as given by the coordinator. `mode` is one of the harness's own modes, and without it the seat has the
-  lab's own mode. With `fresh: true`, the seat starts with a fresh view: until the new agent posts its first plan,
-  its start message and its briefs hold the question, the reading, and what was ruled out, and leave out the
+  lab's own mode. With `fresh: true`, the seat starts with a fresh view: until the new agent posts its first plan or
+  idea, its start message and its briefs hold the question, the reading, and what was ruled out, and leave out the
   candidate answers, the report, and the dashboard. The seat has the model family of its harness. A move states no family, and its
   seat is no coordinator seat and no reviewer seat.
 - `remove_agent`: the removal of `agent`, another agent of the lab. It is final for that agent. A request for it
@@ -1393,14 +1396,15 @@ Declares an action of your acting seat before you do it, and returns the board's
 
 The board takes an action only from an acting seat, which the person makes, and none while the person paused actions.
 `what` says what the action does, in one line. `cost` is the most that it can lose, with its fees, in the unit of
-your allowance, as a number. `undoable` says whether it can be undone. `rests_on` names the posts that it rests on,
+your allowance, as a number of zero or more, best given as a string such as "12.5", with at most 6 digits after the
+point and 18 digits in all. `undoable` says whether it can be undone. `rests_on` names the posts that it rests on,
 and they are its `builds_on`. `offer_ends` is when the offer that it takes ends, as a time with its zone. Without
 `thread`, the action goes in the thread of the first post that it rests on. `files` pins files as on a post.
 
 The board records the action as a post of the kind `action`, with its answer. Inside the allowance in force, the
 action is `allowed`, and its cost is drawn from the allowance. Otherwise `needs` says why it waits for the person:
 `none`, no allowance is in force, `per_action`, the cost is above the bound for one action, or `total`, it would take
-the allowance past its total. Such an action waits for the person until `offer_ends`. The person's answer is a post
+the allowance past its total or the allowance stopped your seat. Such an action waits for the person until `offer_ends`. The person's answer is a post
 that replies to the action, and after `offer_ends` an answer decides nothing. A yes of the person draws nothing
 from the allowance. Above the allowance's `check_above`, the board takes an allowed action only when a `check`
 that holds, from another agent than you, replies to a post that it rests on, and nothing disputes either.
@@ -1408,7 +1412,8 @@ that holds, from another agent than you, replies to a post that it rests on, and
 The board holds no key and makes no call: you do the action. A `receipt` that replies to it says what it did and
 what it cost, with the receipt in `files`, and the allowance counts the newest receipt's cost in place of `cost`.
 When what the allowance allowed costs more than its total, Verifold starts no turn of yours until the person ends
-that allowance or starts another one. `allowance` in the result and in `brief` has your allowance.
+that allowance or starts another one. A later receipt with a lower cost does not lift that stop. `allowance` in the
+result and in `brief` has your allowance.
 """
 
 MEASURE_TOOL = """\
@@ -1444,15 +1449,17 @@ Offers one page of HTML of your folder as the newest version of the lab's dashbo
 
 The dashboard is the page that the person's app shows on the Dashboard tab of the lab's page. `file` names the page
 in your folder. Verifold commits your folder, pins the file, and reads it from that commit. The board takes a page of
-UTF-8 text of at most 1000000 bytes that loads nothing from a server: its styles, scripts, images, and fonts are in
-the page, inline or as `data:` addresses. It refuses a page whose elements or styles name an address to load other
-than a place in the page or a `data:` or `blob:` address, and the refusal names that address. A plain link to another
+UTF-8 text of at most 1000000 bytes that loads nothing from a server: its styles, images, and fonts are in the
+page, inline or as `data:` addresses. It refuses a page whose elements or styles name an address to load other than
+a place in the page or a `data:` or `blob:` address, and the refusal names that address. A plain link to another
 page is no load.
 
-The app shows the page in a frame that is sealed from the app. Scripts run there, and the frame has no origin of the
-app, so they read no storage and no token of the app. The frame's policy allows no request to any server: no fetch,
-no image, no font, no style sheet, and no frame from outside the page. The frame opens no window, submits no form,
-and moves no page around it. Above the frame, the app shows who made the page, how old it is, that its numbers are
+The app shows the page in a frame that is sealed from the app. No script of the page runs there: not a `script`
+element, not an event attribute such as `onclick`, not a `javascript:` link, and not a script in a frame that the
+page makes. The page's styles, text, tables, and inline SVG show. The frame has no origin of the app, so it reads
+no storage and no token of the app. Its policy allows no request to any server: no fetch, no image, no font, no
+style sheet, and no frame from outside the page. The frame opens no window, submits no form, and moves no page,
+also not itself to another address. Above the frame, the app shows who made the page, how old it is, that its numbers are
 the agents' own, and the lab's headline number with who reran it.
 
 `note` is one headline about the version, of at most 200 characters, and `body` holds the detail. `builds_on` names
@@ -1603,7 +1610,8 @@ The desk alone has this tool. {ON}
 
 `holder` names an acting seat by its ID. `purpose` says what the allowance is for, in the person's words, in one
 line. `unit` is the unit of its amounts, such as `USD`, and the board knows no currency. `per_action` is the most
-that one action may cost, and `total` the most that its actions may cost together, as numbers. `ends_at` is when it
+that one action may cost, and `total` the most that its actions may cost together, as numbers above zero with at
+most 6 digits after the point and 18 digits in all, and `per_action` is no more than `total`. `ends_at` is when it
 ends, as a time with its zone. `check_above` is the cost above which an action needs a check first. The draft allows
 nothing: it starts only when the person confirms it in the app, and no tool of an agent starts it or raises it. A
 newer draft for the same seat replaces this one.

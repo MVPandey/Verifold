@@ -7,11 +7,15 @@ images, so text that agents write can never make the browser fetch a remote imag
 The dashboard is a page that the agents make, and the app shows it in a frame that is sealed from the app. The frame
 loads `FRAME_PAGE` from this server, which holds nothing of the lab, and the app posts the agents' page into it as a
 message. No address of the frame holds the page or the person's token. The frame's own policy makes it a sandbox
-with an origin of its own, so no script there reads the app's storage or calls the app's API, and it allows no
-request to any server, no form, no window, and no move of the page that holds the frame. The app's policy lets a
-frame load only pages of this server, so the frame cannot go to another server either.
+with an origin of its own, so it reads no storage of the app and calls no API of the app, and it allows no request
+to any server, no form, no window, and no move of the page that holds the frame. Its one script is Verifold's own: it
+puts the agents' page into a frame of its own whose sandbox allows nothing, so no script of the agents' page runs,
+in the page or in a frame that the page makes. The app's policy lets a frame load only pages of this server, so the
+frame cannot go to another server either.
 """
 
+import base64
+import hashlib
 from importlib.resources import files
 from pathlib import Path
 
@@ -35,51 +39,60 @@ The app's Content-Security-Policy: everything from this server, and nothing from
 FRAME_PATH = '/frame'
 """Where the frame of the dashboard loads its page."""
 
+FRAME_SCRIPT = """
+addEventListener('message', function show(event) {
+  if (event.source !== parent || typeof event.data !== 'string') return;
+  removeEventListener('message', show);
+  var page = document.createElement('iframe');
+  page.setAttribute('sandbox', '');
+  page.setAttribute('referrerpolicy', 'no-referrer');
+  page.setAttribute('title', 'The agents dashboard');
+  page.srcdoc = event.data;
+  document.body.appendChild(page);
+});
+"""
+"""
+The one script that runs in the frame of the dashboard, Verifold's own. It takes the agents' page once, as the text
+of a message from the app, and shows it in a frame whose sandbox allows nothing: no script, no form, no window, and
+no move of another page. A frame that the agents' page makes has the same sandbox.
+"""
+
 FRAME_POLICY = (
     'sandbox allow-scripts; '
     "default-src 'none'; "
-    "script-src 'unsafe-inline' 'unsafe-eval'; "
+    f"script-src 'sha256-{base64.b64encode(hashlib.sha256(FRAME_SCRIPT.encode()).digest()).decode()}'; "
     "style-src 'unsafe-inline'; "
-    'img-src data: blob:; '
+    'img-src data:; '
     'font-src data:; '
-    'media-src data: blob:; '
+    'media-src data:; '
     "form-action 'none'; "
     "base-uri 'none'; "
     "frame-ancestors 'self'"
 )
 """
-The policy of the frame of the dashboard.
+The policy of the frame of the dashboard, which the agents' page inside it keeps too.
 
-`sandbox allow-scripts` lets the agents' scripts run and gives the frame an origin of its own, with no forms, no
-windows, no move of the page that holds it, and no storage of the app. `default-src 'none'` and the fetch directives
-after it allow no request to any server: a script, a style, an image, a font, or a medium comes from the page itself
-or from a `data:` or `blob:` address. Only a page of this server holds the frame.
+`sandbox allow-scripts` gives the frame an origin of its own, with no forms, no windows, no move of the page that
+holds it, and no storage of the app, and it runs a script that `script-src` names by its hash: only `FRAME_SCRIPT`.
+`default-src 'none'` and the fetch directives after it allow no request to any server: a style, an image, a font, or
+a medium comes from the page itself or from a `data:` address, and no page of any server loads in a frame of it.
+Only a page of this server holds the frame.
 """
 
-FRAME_PAGE = """<!doctype html>
+FRAME_PAGE = f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dashboard</title>
+<style>html, body {{ margin: 0; height: 100%; }} iframe {{ display: block; border: 0; width: 100%; height: 100%; }}</style>
 </head>
 <body>
-<script>
-addEventListener('message', function write(event) {
-  if (event.source !== parent || typeof event.data !== 'string') return;
-  removeEventListener('message', write);
-  document.open();
-  document.write(event.data);
-  document.close();
-});
-</script>
+<script>{FRAME_SCRIPT}</script>
 </body>
 </html>
 """
-"""
-The page of the frame of the dashboard. It takes the agents' page once, as the text of a message from the app, and
-writes it in place of itself. The page and its policy stay the same for every lab.
-"""
+"""The page of the frame of the dashboard. It and its policy stay the same for every lab."""
 
 FRAME_HEADERS = (
     (b'content-security-policy', FRAME_POLICY.encode()),

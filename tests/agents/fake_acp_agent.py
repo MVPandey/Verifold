@@ -93,8 +93,9 @@ class FakeAgent(acp.Agent):
                 session_update='tool_call', tool_call_id=f'call-{tool}', title=f'verifold.{tool}'
             )
             await self._client.session_update(session_id=self._session, update=start)
+        # A board on a busy machine can take longer than httpx's default of 5 seconds, as `HTTP_WAIT` says.
         async with (
-            httpx2.AsyncClient(headers=self._headers) as http,
+            httpx2.AsyncClient(headers=self._headers, timeout=60) as http,
             Client(streamable_http_client(self._url, http_client=http)) as client,
         ):
             result = await client.call_tool(tool, arguments)

@@ -77,9 +77,9 @@ class AddSeat(Record):
     """
     fresh: bool = Field(default=False, exclude_if=unset)
     """
-    Whether the seat starts with a fresh view: until the agent posts its first plan, its start message and its
-    briefs hold the question, the reading, and what was ruled out, and leave out the candidate answers and the
-    report.
+    Whether the seat starts with a fresh view: until the agent posts its first plan or idea, its start message and
+    its briefs hold the question, the reading, and what was ruled out, and leave out the candidate answers, the
+    report, and the dashboard.
     """
 
     def choice(self) -> 'SeatChoice':

@@ -57,16 +57,37 @@ export function labCapLine(cap: CapLine | null): string {
 }
 
 /**
- * Return the lines of a seat's pace and usage limits, in the order that the seat line shows them: its pause, its
- * provider's limit, and its limit of tokens per hour. A seat that left has none.
+ * Return whether a seat's activity says already that a pause holds it, as Verifold's words for a seat that waits
+ * for its pace do. A seat line then names the pause once.
  */
-export function seatLines(view: AgentView, now: Date): readonly string[] {
+export function pauseTold(view: AgentView): boolean {
+  const activity = view.activity;
+  return (
+    view.pause !== null &&
+    view.pause !== undefined &&
+    activity.state === 'waiting' &&
+    activity.waits_for === 'pace' &&
+    activity.detail.startsWith('Paused by')
+  );
+}
+
+/**
+ * Return the lines of a seat's pace and usage limits, in the order that the seat line shows them: its pause, its
+ * provider's limit, and its limit of tokens per hour. A seat that left has none. With `told`, the seat's activity
+ * says already that the pause holds it, so the line gives only the pause's end, when it has one.
+ */
+export function seatLines(view: AgentView, now: Date, told = false): readonly string[] {
   if (view.left) return [];
-  return [
-    view.pause ? pauseLine(view.pause, now) : null,
-    limitsLine(view.limits, now),
-    view.cap ? capLine(view.cap) : null,
-  ].filter((line) => line !== null);
+  const pause = view.pause
+    ? told
+      ? view.pause.until
+        ? `Until ${dayClock(view.pause.until, now)}`
+        : null
+      : pauseLine(view.pause, now)
+    : null;
+  return [pause, limitsLine(view.limits, now), view.cap ? capLine(view.cap) : null].filter(
+    (line) => line !== null,
+  );
 }
 
 /**

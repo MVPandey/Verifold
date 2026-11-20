@@ -200,8 +200,9 @@ async def test_a_check_and_a_rerun_request_take_a_reviewer_seat_and_an_objection
     await lab.join(agent('cy'))
     check = PostRequest(kind='check', text='Holds.', reply_to='p-1', thread='t-1', outcome='holds', method='code_read')
     fact = (
-        "another agent's post takes a reviewer seat. The lab has 1: held by nobody; 1 is free. An objection needs "
-        'no seat, and an author can ask for an independent rerun of its own post.'
+        "another agent's post takes a reviewer seat. The lab has 1: held by nobody; 1 is free. `profile` with "
+        '`reviewer: true` takes a free seat, and the person can give one. An objection needs no seat, and an author '
+        'can ask for an independent rerun of its own post.'
     )
 
     with pytest.raises(RejectedEvent, match=f'A check on {fact}'):
