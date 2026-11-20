@@ -5,8 +5,8 @@ The steering facts are counts, shares, rates, and ages that the record holds, co
 ranks an agent, a line of work, or an idea. Each fact is one field of `SteeringFacts` and one function here.
 
 A move of the coordinator is a post of its own that changed the lab: a request for a move that got a yes, from the
-person or from the coordinator under a power or a grant, a round that it opened, or a reading that it posted. The
-log needs no record of its own: each move is a post, so an agent objects to a move as to any post, with an
+person or from the coordinator under a power or a grant, a round that it opened, a reading that it posted, or its
+naming of the lab's headline number. The log needs no record of its own: each move is a post, so an agent objects to a move as to any post, with an
 `objection` that replies to it, and the coordinator hears it as a reply.
 """
 
@@ -17,7 +17,7 @@ from verifold.protocol.events import Posted
 from verifold.protocol.ids import PERSON, AgentId
 from verifold.protocol.join import MoveLine, SpareSeats, SteeringFacts, SteerKind
 from verifold.protocol.moves import AddMove, CapMove, PauseMove, RemoveMove, ResumeMove
-from verifold.protocol.posts import Action, MoveRequest, Reading, Result, Round
+from verifold.protocol.posts import Action, HeadlineNumber, MoveRequest, Reading, Result, Round
 from verifold.society.allowances import action_state
 from verifold.society.board import Board
 from verifold.society.budget import budget_line
@@ -56,7 +56,8 @@ def moves(board: Board) -> tuple[Steer, ...]:
     posted = tuple(
         Steer(entry=entry, at=entry.at, by=entry.post.author, kind=entry.post.kind, why=entry.post.why or '')
         for entry in board.posts
-        if isinstance(entry.post, Round | Reading) and entry.post.author == board.coordinator_at(entry.seq)
+        if isinstance(entry.post, Round | Reading | HeadlineNumber)
+        and entry.post.author == board.coordinator_at(entry.seq)
     )
     return tuple(sorted((*requested, *posted), key=lambda move: (move.at, move.entry.seq), reverse=True))
 

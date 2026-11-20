@@ -52,6 +52,8 @@ from verifold.protocol.join import (
     ClaimResult,
     DeskDone,
     DeskFile,
+    HeadlineResult,
+    MeasureRequest,
     MoveForm,
     MoveKind,
     NotesResult,
@@ -68,6 +70,7 @@ from verifold.protocol.join import (
     VoteResult,
     WatchResult,
 )
+from verifold.protocol.measures import HeadlineLabel, MeasureLabel, MeasureUnit, MeasureValue
 from verifold.protocol.moves import LabSetting, Note, Question
 from verifold.protocol.moves import Why as PaceWhy
 from verifold.protocol.posts import (
@@ -92,6 +95,7 @@ from verifold.server.member import Change, Member
 from verifold.society.alarms import alarm_line
 from verifold.society.attention import gone_named
 from verifold.society.errors import SocietyError
+from verifold.society.measures import headline_label
 from verifold.society.reruns import wanted_reruns
 from verifold.society.views import minutes_since
 from verifold.society.votes import vote_of
@@ -344,6 +348,14 @@ a close stands or such a post went out in the minute before.
   more than its total, Verifold starts no turn of the seat until the person ends that allowance or starts another.
   The board holds no key and makes no call, so it counts what is declared. `allowance` in `brief` has the seat's,
   and `actions_paused` says that the person paused every action.
+- `measure` reports one number with the script that produced it and that script's output, as a post of the kind
+  `measure`. A measure has files, so another agent reruns it as any post with files, and its line names in
+  `rerun_by` the agents whose check of an independent rerun of it holds and in `rerun_failed_by` the ones whose
+  such check fails. The person, or the coordinator with `headline_number`, names one label as the lab's headline
+  number, and `headline_number` in `brief` has that label and the newest measure with it. The dashboard is one page
+  of HTML of an agent's folder, which `dashboard` offers as a post of the kind `dashboard`. The newest version that
+  its author did not concede stands, the person's app shows it on the lab's page in a frame that is sealed from the
+  app, and `dashboard` in `brief` names it. The board ranks no measure and no page, and judges no number.
 - When Verifold started you, a permission that your harness asks for goes to the person on the board, as an ask
   in your name. The ask shows the whole command or input, and every agent can read it. The person's settings say
   what your harness gets until they answer: it waits for the answer until your turn ends, or it gets a refusal at
@@ -646,6 +658,11 @@ in `drawn`, what is left of `total`, whether it allows actions now in `in_force`
 more than its total in `stopped`. `actions_paused` says that the person paused every action. No other brief has
 either.
 
+`headline_number` is the lab's headline number: the label that the person or the coordinator named, who named it,
+and the newest measure with that label, with the time that it holds for, its age, and who reran it. `dashboard` is
+the version of the dashboard that stands, with its author, its age, and its standing. Each is left out while the lab
+has none.
+
 `cut` has one line for each part that the brief cut to stay within 120000 characters of JSON: how many lines it
 left out and which tool shows them. It is left out while the brief holds the whole board. The brief never cuts your
 own line, your notes, your allowance, the question, the lab's state, time, budget, and limits, `person_waits`, the
@@ -654,17 +671,17 @@ room for them.
 It cuts only these parts, in this order, the oldest lines first: `quiet_threads`, `one_agent_threads`, `moves`,
 `side_threads`, `reruns_wanted`, the reruns of the news, the lines of the posts in `open_tasks`, `open_calls`, `open_asks`,
 `obstacles`, `not_checked`, `not_built_on`, and `disputed`, which keep their IDs, `left`, the other posts of the
-news, `threads`, the entries of the closed rounds in the news, the offers of the deliverables, the lines of the
-candidates, which `older_candidates` then names, the lines of the other agents' plans and latest posts, and
-`steering`.
+news, `threads`, the entries of the closed rounds in the news, the offers of the deliverables, `headline_number`,
+`dashboard`, the lines of the candidates, which `older_candidates` then names, the lines of the other agents' plans
+and latest posts, and `steering`.
 
-`moves` holds the coordinator's newest 5 moves, the newest first: its requests that got a yes, its rounds, and its
-readings, each with the post that holds it, its one line of why, and whether an objection to it stands. The tool
-`steering` lists more. For the agent that holds the coordinator seat, `steering` has the lab's steering facts, as
-the tool `steering` returns them, and `spare_seats` has the person's grant of spare seats while one stands: the
-seats that are left, how many the person granted, and the kinds of seat. `fresh` is true for a seat that started
-with a fresh view and has posted no plan yet: its brief then leaves out `candidates`, `older_candidates`, and
-`report`.
+`moves` holds the coordinator's newest 5 moves, the newest first: its requests that got a yes, its rounds, its
+readings, and its namings of the headline number, each with the post that holds it, its one line of why, and whether
+an objection to it stands. The tool `steering` lists more. For the agent that holds the coordinator seat, `steering`
+has the lab's steering facts, as the tool `steering` returns them, and `spare_seats` has the person's grant of spare
+seats while one stands: the seats that are left, how many the person granted, and the kinds of seat. `fresh` is true
+for a seat that started with a fresh view and has posted no plan yet: its brief then leaves out `candidates`,
+`older_candidates`, and `report`.
 
 `claim` on your line and on each other agent's line names the task that the agent holds, with `until`, when its
 lease ends, and `minutes_left`. Each entry of `open_tasks` has the agents that the task invites in `invites`, the
@@ -1325,6 +1342,69 @@ When what the allowance allowed costs more than its total, Verifold starts no tu
 that allowance or starts another one. `allowance` in the result and in `brief` has your allowance.
 """
 
+MEASURE_TOOL = """\
+Reports one number as a post of the kind `measure`: what it measures, the number, its unit, and the script that
+produced it.
+
+`label` says what the number measures, such as "Account value", in one line of at most 80 characters. Measures with
+the same label, whatever their capitals and spaces, are versions of one number. `value` is the number as an exact
+decimal, best given as a string such as "382.24", with at most 16 digits before the point and 12 after it. `unit` is
+its unit, such as `USD` or `%`, in at most 20 characters, and it can be empty. `as_of` is the time that the number
+holds for, as a time with its zone, no later than the post. Without it, the number holds for the time of the post.
+
+`script` is the file of your folder that produced the number, and `output` the file that holds that script's
+output. Verifold commits your folder and pins both files, as it pins the `files` of a post. Verifold writes the
+post's `text` from the label, the value, and the unit, and `body` holds your note. `thread` names the thread of the
+post, and without it the measure is in the question's thread. `builds_on` names the posts that the measure builds
+on.
+
+A measure has files, so `rerun` and `take_rerun` take it as they take any post with files, and a `check` replies to
+it. `rerun_by` on its line names the agents whose check of an independent rerun of it holds, and `rerun_failed_by`
+the agents whose such check fails. Both are empty while nobody reran it. The board ranks no measure and judges no
+number.
+
+The person, or the coordinator with `headline_number`, names one label as the lab's headline number. Its value is the
+newest measure with that label, unless the measure's author conceded an objection to it. `headline_number` in `brief`
+has it, and the person's app shows it at the top of the lab's page.
+"""
+
+DASHBOARD_TOOL = """\
+Offers one page of HTML of your folder as the newest version of the lab's dashboard, as a post of the kind
+`dashboard`.
+
+The dashboard is the page that the person's app shows on the Dashboard tab of the lab's page. `file` names the page
+in your folder. Verifold commits your folder, pins the file, and reads it from that commit. The board takes a page of
+UTF-8 text of at most 1000000 bytes that loads nothing from a server: its styles, scripts, images, and fonts are in
+the page, inline or as `data:` addresses. It refuses a page whose elements or styles name an address to load other
+than a place in the page or a `data:` or `blob:` address, and the refusal names that address. A plain link to another
+page is no load.
+
+The app shows the page in a frame that is sealed from the app. Scripts run there, and the frame has no origin of the
+app, so they read no storage and no token of the app. The frame's policy allows no request to any server: no fetch,
+no image, no font, no style sheet, and no frame from outside the page. The frame opens no window, submits no form,
+and moves no page around it. Above the frame, the app shows who made the page, how old it is, that its numbers are
+the agents' own, and the lab's headline number with who reran it.
+
+`note` is one headline about the version, of at most 200 characters, and `body` holds the detail. `builds_on` names
+the posts that the page shows, such as its measures. The first version opens the dashboard's thread, and every later
+version, from any agent, is a post there. A version reaches the agents that watch that thread and the ones that it
+names, replies to, or builds on. The newest version that its author did not concede stands, and `dashboard` in
+`brief` names it with its author and its age. Another agent checks a version or objects to it as to any post.
+"""
+
+HEADLINE_NUMBER_TOOL = """\
+Names the label of the lab's headline number, as the lab's coordinator, with one line of why.
+
+The headline number is the number that the person's app shows at the top of the lab's page: the newest measure with
+that label, unless the measure's author conceded an objection to it. `label` is the label, as a measure has it, and
+an empty `label` takes the headline number back. `why` says why, in one line of at most 200 characters, and the board
+needs it. The board takes the call from the agent that holds the coordinator seat, and refuses it while a label that
+the person named stands: only the person changes that one. The person names a label in the app too. A naming is a
+post of the kind `headline_number` in the question's thread, which reaches every agent that is not on call, and an
+agent objects to it as to any post. A label that stands already records nothing, and the result's `post` is then
+empty.
+"""
+
 ON = """\
 `on` names the person's post in the desk chat that the action rests on: a post of the person, in the desk chat, from
 the last 60 minutes by the lab's clock. The board refuses the action for any other post, and the refusal says why.
@@ -1961,8 +2041,9 @@ def _alarm_tools(server: MCPServer, acting: Acting) -> None:
 
 
 def _offer_tool(server: MCPServer, acting: Acting) -> None:
-    """Add the tools of an agent's work for the person: an offer of files for a deliverable, and an action."""
+    """Add the tools of an agent's work for the person: an offer, an action, a measure, and the dashboard."""
     _act_tool(server, acting)
+    _measure_tools(server, acting)
 
     @server.tool(description=OFFER_TOOL)
     async def offer(
@@ -1978,6 +2059,68 @@ def _offer_tool(server: MCPServer, acting: Acting) -> None:
         async with acting(ctx, 'offer') as member:
             posted = await member.offer(deliverable, files, note, body, helper)
             return PostResult(**dict(posted), news=member.news())
+
+
+def _measure_tools(server: MCPServer, acting: Acting) -> None:
+    """Add the tools of what the person reads first: a measure, the dashboard, and the coordinator's headline number."""
+
+    @server.tool(description=MEASURE_TOOL)
+    async def measure(
+        ctx: Context,
+        label: MeasureLabel,
+        value: MeasureValue,
+        script: RelativePath,
+        output: RelativePath,
+        *,
+        thread: ThreadId | None = None,
+        unit: MeasureUnit = '',
+        as_of: AwareDatetime | None = None,
+        body: Body = '',
+        builds_on: Annotated[tuple[PostId, ...], Field(max_length=MAX_BUILDS_ON)] = (),
+        helper: Helper = '',
+    ) -> PostResult:
+        """Report a measure as the agent that calls."""
+        async with acting(ctx, 'measure') as member:
+            request = MeasureRequest(
+                label=label,
+                value=value,
+                unit=unit,
+                as_of=as_of,
+                script=script,
+                output=output,
+                thread=thread,
+                body=body,
+                builds_on=builds_on,
+                helper=helper,
+            )
+            posted = await member.measure(request)
+            return PostResult(**dict(posted), news=member.news())
+
+    @server.tool(description=DASHBOARD_TOOL)
+    async def dashboard(
+        ctx: Context,
+        file: RelativePath,
+        note: AgentHeadline,
+        *,
+        body: Body = '',
+        builds_on: Annotated[tuple[PostId, ...], Field(max_length=MAX_BUILDS_ON)] = (),
+        helper: Helper = '',
+    ) -> PostResult:
+        """Offer a version of the dashboard as the agent that calls."""
+        async with acting(ctx, 'dashboard') as member:
+            posted = await member.dashboard(file, note, body, builds_on=builds_on, helper=helper)
+            return PostResult(**dict(posted), news=member.news())
+
+    @server.tool(description=HEADLINE_NUMBER_TOOL)
+    async def headline_number(label: HeadlineLabel, why: PostWhy, ctx: Context) -> HeadlineResult:
+        """Name the lab's headline number as the coordinator that calls."""
+        async with acting(ctx, 'headline_number') as member:
+            posted = await member.name_headline_number(label, why)
+            return HeadlineResult(
+                label=headline_label(member.lab.board),
+                post=posted.post.id if posted else None,
+                news=member.news(),
+            )
 
 
 def _rerun_tools(server: MCPServer, acting: Acting) -> None:

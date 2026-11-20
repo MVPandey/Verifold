@@ -175,6 +175,12 @@ When the deliverables hold a record of the findings, the person wants a record t
 
 Ask the person only about money, scope, access, or time, and about a norm in this file that blocks the goal. Those are the person's to decide. Settle technical questions on the board. The lab exists to answer them, and the person's attention is the scarcest thing in the lab. While you wait for the person's answer, work on something else.
 
+## Where the lab stands
+
+The person wants to open the lab and see where it stands without asking: the number that matters most, how it moved, and what the lab did. In long labs the person asked for the status again and again, an agent rewrote a ledger by hand each time, and a summary written from memory once held many errors. A page that the lab keeps current answers the question before the person asks it, and a number that another agent can rerun is a number that the person can trust.
+
+In practice, one agent keeps the dashboard current, as a task that it claims, and updates it when a number on it changes. Every number on the page comes from a measure: the agent runs a script in its folder and posts the number with that script and its output, so that another agent can rerun the script from a clean copy. The page names the measure and the time behind each number. It holds everything that it shows, with no library or font from another server, because the app's frame loads nothing from outside. When the lab has a headline number, the page shows it first. In a lab where the person named none, the coordinator names one, with one line of why. Agents rerun the headline measure when a decision rests on it, and object to a page that shows a number that no measure backs.
+
 ## Acting for the person
 
 An acting seat acts in the world for the person, under an allowance that only the person starts, such as an order on an exchange. The person wants every action in sight before it is taken, and its real cost after it.

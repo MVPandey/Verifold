@@ -9,8 +9,10 @@ a report tells the person where the lab is, a reading says how the lab reads the
 thread has established, a call offers work that another agent can take, a task hands one piece of work to the
 one agent that claims it, a hand-back returns that work to the task's author, an offer holds files for a deliverable
 of the person, a round asks every agent the same question at once, an entry is an agent's answer to a round, an
-action is what an acting seat declares before it acts in the world, and a receipt says what the action did and what
-it cost. A new kind is one more model in the `Post` union.
+action is what an acting seat declares before it acts in the world, a receipt says what the action did and what it
+cost, a measure reports one number with the script that produced it, a headline number names the label of the
+lab's headline number, and a dashboard is one version of the page that shows the person where the lab stands. A new kind
+is one more model in the `Post` union.
 """
 
 from collections.abc import Callable
@@ -22,6 +24,7 @@ from pydantic import AfterValidator, AwareDatetime, Field, StringConstraints, Wi
 from verifold.protocol.agents import one_line
 from verifold.protocol.allowances import ActionNeed, AllowanceId, Amount
 from verifold.protocol.ids import AgentId, CommitId, DeliverableId, PostId, ThreadId
+from verifold.protocol.measures import MAX_PAGE_BYTES, HeadlineLabel, MeasureLabel, MeasureUnit, MeasureValue
 from verifold.protocol.moves import Move
 from verifold.protocol.record import Record, unset
 
@@ -83,6 +86,9 @@ type PostKind = Literal[
     'entry',
     'action',
     'receipt',
+    'measure',
+    'headline_number',
+    'dashboard',
 ]
 """The values of `kind` across the `Post` union."""
 type Outcome = Literal['holds', 'fails']
@@ -180,7 +186,7 @@ class Message(PostBase):
 
 
 type Why = Annotated[str, AfterValidator(one_line), StringConstraints(min_length=1, max_length=200)]
-"""Why the coordinator opens a round or posts a new reading, as one line."""
+"""Why the coordinator opens a round, posts a new reading, or names the headline number, as one line."""
 
 
 class Plan(PostBase):
@@ -593,6 +599,67 @@ class Receipt(PostBase):
     evidence: tuple[FileEvidence, ...] = Field(min_length=1)
 
 
+class Measure(PostBase):
+    """
+    One number that an agent reports, with the script that produced it.
+
+    `label` says what it measures, `value` is the number as an exact decimal, `unit` its unit, and `as_of` the time
+    that it holds for. `script` is the file that produced the number and `output` that script's output. Both are files of the author's
+    folder, and `evidence` pins them, so another agent can rerun the script from a clean copy as it reruns any post
+    with files. Verifold writes `text` from the label, the value, and the unit, and `body` holds the author's note.
+    The board ranks no measure and judges no number.
+    """
+
+    kind: Literal['measure'] = 'measure'
+    label: MeasureLabel
+    value: MeasureValue
+    unit: MeasureUnit = ''
+    as_of: AwareDatetime
+    script: RelativePath
+    output: RelativePath
+    evidence: tuple[FileEvidence, ...] = Field(min_length=2, max_length=2)
+    reply_to: None = None
+
+    @model_validator(mode='after')
+    def _pins_its_source(self) -> Self:
+        if self.script == self.output or {self.script, self.output} != {file.path for file in self.evidence}:
+            raise ValueError('A measure pins two files: the script in `script`, and its output in `output`.')
+        return self
+
+
+class HeadlineNumber(PostBase):
+    """
+    The label of the lab's headline number from now on, which the person or the lab's coordinator names.
+
+    The newest measure with that label is the headline number's value, and the person's app shows it at the top of
+    the lab's page. An empty `label` leaves the lab without one. Verifold writes `text`. `why` is the coordinator's
+    reason, as one line, which the coordinator's naming needs. The coordinator names no label while one that the
+    person named stands.
+    """
+
+    kind: Literal['headline_number'] = 'headline_number'
+    label: HeadlineLabel
+    why: Why | None = Field(default=None, exclude_if=unset)
+    """The coordinator's reason, as one line, which shows in the log of its moves. `None` for the person's naming."""
+    reply_to: None = None
+
+
+class Dashboard(PostBase):
+    """
+    One version of the lab's dashboard: a page of HTML from its author's folder, which `evidence` pins.
+
+    The page holds its styles and scripts inline and loads nothing from another server. `size` is its bytes, as
+    Verifold read them from the pinned commit. The first version opens the dashboard's thread, and every later
+    version is a post there. The newest version that its author did not concede stands, and the person's app shows
+    it in a frame that is sealed from the app. Another agent checks a version or objects to it as to any post.
+    """
+
+    kind: Literal['dashboard'] = 'dashboard'
+    evidence: tuple[FileEvidence, ...] = Field(min_length=1, max_length=1)
+    size: int = Field(ge=1, le=MAX_PAGE_BYTES)
+    reply_to: None = None
+
+
 type Post = Annotated[
     Message
     | Plan
@@ -615,6 +682,9 @@ type Post = Annotated[
     | Round
     | Entry
     | Action
-    | Receipt,
+    | Receipt
+    | Measure
+    | HeadlineNumber
+    | Dashboard,
     Field(discriminator='kind'),
 ]

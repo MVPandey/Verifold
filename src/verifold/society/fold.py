@@ -70,6 +70,7 @@ from verifold.society.board import Board
 from verifold.society.budget import check_limit
 from verifold.society.candidates import settled
 from verifold.society.coordinator import check_answered, check_made, check_power
+from verifold.society.dashboards import check_dashboard_post
 from verifold.society.deliverables import (
     check_decision,
     check_deliverable,
@@ -79,6 +80,7 @@ from verifold.society.deliverables import (
 )
 from verifold.society.desk import check_desk_move, check_desk_post, check_desk_set, check_interrupt
 from verifold.society.errors import RejectedEvent
+from verifold.society.measures import check_measure_post
 from verifold.society.pace import check_limits, check_pace
 from verifold.society.rounds import check_close, check_rounds
 from verifold.society.rules import (
@@ -153,6 +155,8 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
             check_desk_post(board, event)
             check_task_post(board, event)
             check_action_post(board, event)
+            check_measure_post(board, event)
+            check_dashboard_post(board, event)
             rounds = (*board.rounds, event) if isinstance(post, Round) else board.rounds
             # A close that names no candidate closes on what stood just before it, also after a later concession.
             unnamed = (

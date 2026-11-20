@@ -57,6 +57,7 @@ from verifold.protocol.join import (
     ThreadSummary,
     ThreadView,
 )
+from verifold.protocol.measures import HeadlineLabel, MeasureValue
 from verifold.protocol.moves import SeatGrant
 from verifold.protocol.posts import MAX_HEADLINE, Body
 from verifold.protocol.record import Record
@@ -448,6 +449,70 @@ class AllowanceView(Record):
     """The holder's actions while the allowance stood, the newest first: those that it allowed and those that waited."""
 
 
+class MeasureView(Record):
+    """
+    One measure as the person's app shows it: its number, the time that it holds for, its author, and who reran it.
+
+    `rerun_by` names the agents whose check of an independent rerun of the measure holds, and `rerun_failed_by` the
+    agents whose such check fails. The marks say who reran the number and what that rerun found. They never say
+    whether the number is good.
+    """
+
+    post: PostId
+    thread: ThreadId
+    by: AgentId
+    label: str
+    value: MeasureValue
+    unit: str = ''
+    as_of: AwareDatetime
+    rerun_by: tuple[AgentId, ...] = ()
+    rerun_failed_by: tuple[AgentId, ...] = ()
+    standing: Standing = 'open'
+
+
+class HeadlineView(Record):
+    """The lab's headline number: its label, who named it and when and why, and the newest measure with that label."""
+
+    label: str
+    post: PostId
+    """The post that named the label."""
+    named_by: AgentId
+    """The person, or the agent that held the coordinator seat."""
+    named_at: AwareDatetime
+    why: str = ''
+    """The coordinator's one line of why. Empty for the person's naming."""
+    measure: MeasureView | None = None
+    """The newest measure with the label that its author did not concede. `None` while no measure has the label."""
+
+
+class DashboardMeta(Record):
+    """The version of the lab's dashboard that stands: its post, its author, when it came, its size, and its standing."""
+
+    post: PostId
+    thread: ThreadId
+    path: str
+    """The page's path in its author's folder, which the post pins."""
+    by: AgentId
+    at: AwareDatetime
+    size: int
+    standing: Standing = 'open'
+    versions: int = 1
+    """How many versions of the dashboard the lab has, this one among them."""
+
+
+class DashboardPage(Record):
+    """The version of the dashboard that stands, with the text of its page, which the app shows in a sealed frame."""
+
+    meta: DashboardMeta
+    html: str
+
+
+class HeadlineRequest(Record):
+    """The person names the label of the lab's headline number. An empty label leaves the lab without one."""
+
+    label: HeadlineLabel
+
+
 class LabView(Record):
     """The lab at a glance."""
 
@@ -521,6 +586,12 @@ class LabView(Record):
     """When the person paused every action, while the pause stands. `None` while actions may go on."""
     missed: tuple[Missed, ...] = ()
     """The asks and actions for the person that stopped waiting before the person answered, the newest first."""
+    headline_number: HeadlineView | None = None
+    """The lab's headline number, or `None` while nobody named one."""
+    dashboard: DashboardMeta | None = None
+    """The version of the dashboard that stands, or `None` while the lab has none."""
+    measure_labels: tuple[str, ...] = ()
+    """The labels that the lab's measures have, each once, in the order that they came, for the person's choice."""
 
 
 class InviteRequest(SeatFacts):
@@ -914,8 +985,9 @@ class MoveView(Record):
     """
     One move of the coordinator as the person's app shows it, in the log of its moves.
 
-    The post holds the move: the coordinator's request that got a yes, its round, or its reading. An agent objects
-    to the move with an objection that replies to that post, and the post's standing says when one stands.
+    The post holds the move: the coordinator's request that got a yes, its round, its reading, or its naming of the
+    headline number. An agent objects to the move with an objection that replies to that post, and the post's
+    standing says when one stands.
     """
 
     post: PostView
@@ -954,7 +1026,10 @@ class ConversationView(Record):
     deeds: tuple[Deed, ...] = ()
     """The moves that came from the coordinator's requests, newest first."""
     moves: tuple[MoveView, ...] = ()
-    """The log of the coordinator's moves, newest first: its requests that got a yes, its rounds, and its readings."""
+    """
+    The log of the coordinator's moves, newest first: its requests that got a yes, its rounds, its readings, and its
+    namings of the headline number.
+    """
     grant: SpareSeats | None = None
     """The person's grant of spare seats while one stands, with the seats that it has left. `None` without one."""
 
