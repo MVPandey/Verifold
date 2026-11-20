@@ -1065,16 +1065,20 @@ export type PaceMove =
     };
 
 /**
- * The seat of the one agent that a move adds. It holds nothing else: no model family, no mode, no coordinator
- * mark, no power, and no reviewer seat.
+ * The seat of the one agent that a move adds. It holds nothing else: no model family, no coordinator mark, no
+ * power, and no reviewer seat.
  */
 export interface AddSeat {
   readonly harness: string;
   readonly model: string | null;
   readonly effort: string | null;
+  /** One of the harness's own modes. Absent for the lab's own mode. */
+  readonly mode?: string | null;
   readonly on_call: boolean;
   /** A role that the coordinator gives the seat, or an empty string. It is the coordinator's word. */
   readonly role: string;
+  /** Whether the seat starts with a fresh view: no candidate and no report until its first plan. */
+  readonly fresh?: boolean;
 }
 
 /** The answer to a coordinator's request for a move: the person's yes or no, or the yes of a power that is on. */
@@ -1115,6 +1119,10 @@ interface PostBase {
   readonly for_person?: boolean;
   /** For the desk's post for the person: the person's post in the desk chat that it rests on. Absent otherwise. */
   readonly on?: string;
+  /** For the person's message in the desk chat: the thread that the person had open. Absent otherwise. */
+  readonly about?: string;
+  /** For the coordinator's round or reading: its one line of why. Absent otherwise. */
+  readonly why?: string;
 }
 
 export type Post =
@@ -1363,6 +1371,62 @@ export interface ConversationView {
   readonly powers: readonly PowerView[];
   /** The moves that came from the coordinator's requests, newest first. */
   readonly deeds: readonly Deed[];
+  /** The log of the coordinator's moves, newest first. An older server sends none. */
+  readonly moves?: readonly MoveView[];
+  /** The person's grant of spare seats while one stands. An older server sends none. */
+  readonly grant?: SpareSeats | null;
+}
+
+/** The kinds of the coordinator's moves: a move from its request, a round that it opened, or a reading. */
+export type SteerKind =
+  | 'time'
+  | 'permission'
+  | 'add_agent'
+  | 'remove_agent'
+  | 'setting'
+  | 'question'
+  | 'pause'
+  | 'resume'
+  | 'cap'
+  | 'round'
+  | 'reading';
+
+/** One move of the coordinator, in the log of its moves. */
+export interface MoveView {
+  /** The post that holds the move: the request that got a yes, the round, or the reading. */
+  readonly post: PostView;
+  readonly kind: SteerKind;
+  /** When the move took effect. */
+  readonly at: string;
+  /** The agent that held the coordinator seat. */
+  readonly by: string;
+  /** The coordinator's one line of why. */
+  readonly why: string;
+  /** The seat that the move names, or `null`. */
+  readonly agent: string | null;
+  /** For a move from a request: who said yes, the person or the coordinator. */
+  readonly yes_by: string | null;
+}
+
+/** One kind of seat that the person's grant lets the coordinator add. `null` is the harness's default. */
+export interface SeatChoice {
+  readonly harness: string;
+  readonly model: string | null;
+  readonly effort: string | null;
+  readonly mode: string | null;
+}
+
+/** The person's grant of spare seats as the person sends it. Zero seats take the grant back. */
+export interface SeatGrant {
+  readonly seats: number;
+  readonly choices: readonly SeatChoice[];
+}
+
+/** The grant of spare seats that stands: the seats left, how many the person granted, and the kinds. */
+export interface SpareSeats {
+  readonly left: number;
+  readonly of: number;
+  readonly kinds: readonly SeatChoice[];
 }
 
 /** What the desk did on the person's word. */
@@ -1548,6 +1612,8 @@ export interface PostRequest {
   readonly conversation?: boolean;
   /** On a round: how many minutes it stays open, from 1 to 15. */
   readonly minutes?: number;
+  /** On a message in the desk chat: the thread that the person has open, which the message is about. */
+  readonly about?: string;
 }
 
 /** The person's own author ID on the board. */

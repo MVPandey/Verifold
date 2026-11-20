@@ -10,6 +10,7 @@ import type {
   ConversationView,
   LabView,
   Move,
+  MoveView,
   Post,
   PostView,
   PowerView,
@@ -123,6 +124,24 @@ function view(
   };
 }
 
+function move(
+  item: PostView,
+  kind: MoveView['kind'],
+  why: string,
+  yes: string,
+  agent: string | null = null,
+): MoveView {
+  return {
+    post: item,
+    kind,
+    at: item.decision?.at ?? item.at,
+    by: 'agent-1',
+    why,
+    agent,
+    yes_by: yes,
+  };
+}
+
 function panel(conversation: ConversationView, tab: 'talk' | 'powers' | 'log'): string {
   return renderToStaticMarkup(
     <Panel
@@ -227,6 +246,7 @@ describe('the coordinator’s moves in words', () => {
       { label: 'Role, given by the coordinator', value: 'maker side', theirs: true },
       { label: 'Model family', value: 'openai' },
       { label: 'Mode', value: 'As the lab’s other agents' },
+      { label: 'View', value: 'The whole lab' },
     ]);
     // A model that the harness lists has no such line.
     const listed: Move = {
@@ -235,7 +255,7 @@ describe('the coordinator’s moves in words', () => {
     };
     assert.deepEqual(
       details(listed, AROUND).map((detail) => detail.label),
-      ['Harness', 'Model', 'Effort', 'On call', 'Role', 'Model family', 'Mode'],
+      ['Harness', 'Model', 'Effort', 'On call', 'Role', 'Model family', 'Mode', 'View'],
     );
     const plain: Move = {
       type: 'add_agent',
@@ -249,8 +269,38 @@ describe('the coordinator’s moves in words', () => {
       { label: 'Role', value: 'None' },
       { label: 'Model family', value: 'The family of its harness' },
       { label: 'Mode', value: 'As the lab’s other agents' },
+      { label: 'View', value: 'The whole lab' },
       { label: 'The agent that joined', value: 'Agent 2', theirs: true },
     ]);
+    // A seat of a grant can have a mode of the harness, and a seat can start with a fresh view.
+    const fresh: Move = {
+      type: 'add_agent',
+      seat: {
+        harness: 'codex',
+        model: null,
+        effort: null,
+        mode: 'plan',
+        on_call: false,
+        role: '',
+        fresh: true,
+      },
+    };
+    const freshDetails = details(fresh, AROUND);
+    assert.deepEqual(
+      freshDetails.find((detail) => detail.label === 'Mode'),
+      {
+        label: 'Mode',
+        value: 'plan',
+        theirs: true,
+      },
+    );
+    assert.deepEqual(
+      freshDetails.find((detail) => detail.label === 'View'),
+      {
+        label: 'View',
+        value: 'Fresh. No candidate answer and no report until its first plan.',
+      },
+    );
   });
 
   it('says what more time means: the new end of the lab, and what the lab has cost so far', () => {
@@ -324,7 +374,7 @@ describe('the coordinator’s moves in words', () => {
     );
     assert.equal(
       done(add, 'agent-1'),
-      'Added an agent. The coordinator did it with the power “Add or remove agents”.',
+      'Added an agent. The coordinator did it with the power “Add agents”.',
     );
     assert.equal(done(remove, 'person'), 'Removed an agent. You said yes.');
     assert.equal(done(setting, 'person'), 'Changed a setting of the lab. You said yes.');
@@ -375,10 +425,16 @@ describe('the coordinator’s moves in words', () => {
   it('names the tabs with what waits, the powers, and the holder of the seat', () => {
     assert.deepEqual(
       tabs('Maren', 2).map(([, label]) => label),
-      ['Conversation (2 wait for you)', 'What Maren may do', 'Done for you'],
+      ['Conversation (2 wait for you)', 'Moves', 'What Maren may do'],
     );
     assert.equal(tabs('Maren', 1)[0]?.[1], 'Conversation (1 waits for you)');
     assert.equal(tabs('Maren', 0)[0]?.[1], 'Conversation');
+    // With a desk, the desk chat is the one chat, so the panel has no conversation.
+    assert.deepEqual(
+      tabs('Maren', 2, true).map(([key]) => key),
+      ['log', 'powers'],
+    );
+    assert.equal(talkLabel('Maren', 2, true), 'Maren’s moves and powers');
     assert.equal(talkLabel('Maren', 0), 'Talk to Maren');
     assert.equal(talkLabel('Maren', 1), 'Talk to Maren (1 waits for you)');
     assert.equal(talkLabel('Maren', 3), 'Talk to Maren (3 wait for you)');
@@ -600,11 +656,7 @@ describe('the panel for the coordinator', () => {
     ];
     const html = panel(view([power, no, ended, yes, closed], { deeds }), 'talk');
 
-    assert.ok(
-      html.includes(
-        'Added an agent. The coordinator did it with the power “Add or remove agents”.',
-      ),
-    );
+    assert.ok(html.includes('Added an agent. The coordinator did it with the power “Add agents”.'));
     assert.ok(html.includes('<dt>The agent that joined</dt><dd class="theirs">Agent 2</dd>'));
     assert.ok(html.includes('<button type="button">Remove it</button>'));
     assert.ok(html.includes('You said: not now.'));
@@ -652,7 +704,11 @@ describe('the panel for the coordinator', () => {
 
     assert.equal(html.split('role="switch"').length - 1, 5);
     assert.equal(html.split('aria-checked="false"').length - 1, 4);
-    assert.ok(html.includes('aria-checked="true" aria-label="Add or remove agents"'));
+    assert.ok(html.includes('aria-checked="true" aria-label="Add agents"'));
+    // Under the powers, the person grants spare seats. None is granted yet.
+    assert.ok(html.includes('<h3 id='));
+    assert.ok(html.includes('Agent 1 adds no agent by itself. Each add waits for your yes.'));
+    assert.ok(html.includes('Add at least one kind of seat.'));
     assert.ok(html.includes('Used 1 time.'));
     assert.ok(html.includes('Agent 1 asks you before each of these.'));
     assert.ok(
@@ -680,19 +736,22 @@ describe('the panel for the coordinator', () => {
       { request: added, agent: 'agent-2', undo: 'remove_agent' as const },
       { request: given, agent: null, undo: 'take_minutes' as const },
     ];
-    const html = panel(view([], { deeds }), 'log');
+    const moves = [
+      move(added, 'add_agent', 'Every line looks alike.', 'agent-1', 'agent-2'),
+      move(given, 'time', 'The tail run needs it.', 'person'),
+    ];
+    const html = panel(view([], { deeds, moves }), 'log');
 
-    assert.ok(html.indexOf('Added an agent') < html.indexOf('Gave the lab 30 more minutes'));
     assert.ok(
-      html.includes(
-        '<span class="k-by">The coordinator did it with the power “Add or remove agents”.</span>',
-      ),
+      html.indexOf('Added a seat') < html.indexOf('Gave the lab 30 more minutes, with your yes'),
     );
+    assert.ok(html.includes('Added a seat · <b class="m-name">Agent 2</b>'));
+    assert.ok(html.includes('See it in its thread</a>'));
+    assert.ok(html.includes('Why: <span class="m-text">Every line looks alike.</span>'));
     assert.ok(html.includes('<dt>The agent that joined</dt><dd class="theirs">Agent 2</dd>'));
-    assert.ok(html.includes('<span class="k-by">You said yes.</span>'));
     assert.ok(html.includes('<button type="button">Remove it</button>'));
     assert.ok(html.includes('<button type="button">Take the minutes back</button>'));
-    assert.ok(panel(view([]), 'log').includes('Nothing was done for you yet.'));
+    assert.ok(panel(view([]), 'log').includes('No move yet.'));
   });
 });
 
@@ -1008,7 +1067,10 @@ describe('text of an agent in the panel', () => {
       .replace(/<div class="k-reason">[\s\S]*?<\/div>/g, '')
       .replace(/<pre>[\s\S]*?<\/pre>/g, '')
       .replace(/<p class="k-who"><b>[\s\S]*?<\/b>/g, '')
-      .replace(/<span class="k-for">[\s\S]*?<\/span>/g, '');
+      .replace(/<span class="k-for">[\s\S]*?<\/span>/g, '')
+      .replace(/<b class="m-name">[\s\S]*?<\/b>/g, '')
+      .replace(/<span class="m-text">[\s\S]*?<\/span>/g, '')
+      .replace(/<p class="m-theirs">[\s\S]*?<\/p>/g, '');
 
   it('stands only in boxes and names on the rendered page, also with control and direction characters', () => {
     const posts = moves.flatMap((move, index) => {
@@ -1026,8 +1088,22 @@ describe('text of an agent in the panel', () => {
     const deeds = posts
       .filter((item) => item.decision)
       .map((item) => ({ request: item, agent: 'agent-2', undo: 'remove_agent' as const }));
+    const moved = posts
+      .filter((item) => item.decision)
+      .map((item) =>
+        move(
+          item,
+          item.post.kind === 'request' ? item.post.move.type : 'time',
+          EVIL,
+          'agent-1',
+          'agent-2',
+        ),
+      );
     // A row of the conversation that is no request is its author's own post, under the author's name.
-    const conversation = view([said('p-1', 'agent-2', 'A note.'), ...posts], { deeds });
+    const conversation = view([said('p-1', 'agent-2', 'A note.'), ...posts], {
+      deeds,
+      moves: moved,
+    });
     for (const tab of ['talk', 'log'] as const) {
       const html = renderToStaticMarkup(
         <Panel
@@ -1114,7 +1190,7 @@ describe('the coordinator in the seat', () => {
     assert.ok(closed.includes('>Agent 1</button><span class="i-seat coord">Coordinator</span>'));
     assert.ok(closed.includes('aria-expanded="false">Talk to Agent 1 (1 waits for you)</button>'));
     assert.equal(closed.includes('k-panel'), false);
-    assert.ok(open.includes('aria-expanded="true">Close the conversation</button>'));
+    assert.ok(open.includes('aria-expanded="true">Close the panel</button>'));
     assert.ok(open.includes('<aside class="k-panel"'));
     assert.ok(none.includes('<b>No agent holds the coordinator seat.</b>'));
     assert.ok(

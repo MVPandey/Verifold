@@ -36,13 +36,14 @@ import {
   yesLabel,
 } from '../model/coordinator.ts';
 import type { Around, Detail, Tab } from '../model/coordinator.ts';
-import { byDesk } from '../model/desk.ts';
+import { byDesk, deskOf } from '../model/desk.ts';
 import { clock } from '../model/format.ts';
 import { personAnswer, split } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 import type { PageProps } from './hooks.ts';
 import { halted } from '../model/limits.ts';
 import { Words } from './Markdown.tsx';
+import { MovesList, SpareSeatsForm } from './Moves.tsx';
 import { Exact, HarnessAsk } from './parts.tsx';
 import { Name, Who } from './Picture.tsx';
 
@@ -54,6 +55,8 @@ const NO_VIEW: ConversationView = {
   asks: [],
   powers: [],
   deeds: [],
+  moves: [],
+  grant: null,
 };
 
 /** What every part of the panel needs: the API, the lab's agents, and the way to read the lab again. */
@@ -88,6 +91,8 @@ export function CoordinatorSeat(
   }
   const view = data.conversation ?? NO_VIEW;
   const name = holder.agent.name;
+  // With a desk, the desk chat is the one place where the person writes, and the panel opens on the moves.
+  const desk = deskOf(data.lab.agents) !== null;
   return (
     <div className="k-door">
       <p className="k-door-head">
@@ -100,10 +105,10 @@ export function CoordinatorSeat(
         className="k-open"
         aria-expanded={open}
         onClick={() => {
-          setTab(open ? null : 'talk');
+          setTab(open ? null : desk ? 'log' : 'talk');
         }}
       >
-        {open ? 'Close the conversation' : talkLabel(name, view.waits.length)}
+        {open ? 'Close the panel' : talkLabel(name, view.waits.length, desk)}
       </button>
       {tab === null ? null : (
         <Panel
@@ -114,7 +119,8 @@ export function CoordinatorSeat(
           harnesses={data.setup?.harnesses ?? []}
           report={data.report}
           now={props.now}
-          tab={tab}
+          tab={desk && tab === 'talk' ? 'log' : tab}
+          desk={desk}
           onTab={setTab}
           reload={data.reload}
         />
@@ -134,10 +140,13 @@ export function Panel(props: {
   readonly report?: PostView | null;
   readonly now: Date;
   readonly tab: Tab;
+  /** Whether the lab has a desk, so that the panel offers no conversation. */
+  readonly desk?: boolean;
   readonly onTab: (tab: Tab | null) => void;
   readonly reload: () => void;
 }): ReactElement {
   const { view, holder, tab, lab } = props;
+  const desk = props.desk ?? false;
   const name = holder.agent.name;
   // Out of time, at a limit, or closed, no agent works, and the line under the name says so.
   const resting = halted(lab) || lab.state === 'closed';
@@ -172,7 +181,7 @@ export function Panel(props: {
         </button>
       </header>
       <nav aria-label="The panel for the coordinator">
-        {tabs(name, view.waits.length).map(([key, label]) => (
+        {tabs(name, view.waits.length, desk).map(([key, label]) => (
           <button
             key={key}
             type="button"
@@ -185,11 +194,11 @@ export function Panel(props: {
           </button>
         ))}
       </nav>
-      {tab === 'talk' ? (
+      {tab === 'talk' && !desk ? (
         <Talk {...shared} holder={holder} report={props.report ?? null} onTab={props.onTab} />
       ) : null}
       {tab === 'powers' ? <Powers {...shared} name={name} /> : null}
-      {tab === 'log' ? <Log {...shared} /> : null}
+      {tab === 'log' || (tab === 'talk' && desk) ? <Log {...shared} /> : null}
     </aside>
   );
 }
@@ -595,6 +604,8 @@ export function Write(props: {
   readonly placeholder: string;
   readonly hint: string;
   readonly button?: string;
+  /** The ID of the text area, so that another part of the page can lead to it. */
+  readonly id?: string;
   readonly onSend: (text: string) => Promise<void>;
 }): ReactElement {
   const [text, setText] = useState('');
@@ -619,6 +630,7 @@ export function Write(props: {
   return (
     <form className="k-write" onSubmit={send}>
       <textarea
+        id={props.id}
         rows={2}
         aria-label={props.placeholder}
         placeholder={props.placeholder}
@@ -668,7 +680,7 @@ function Powers(props: Shared & { readonly name: string }): ReactElement {
       <p className="k-lede">
         {name} asks you before each of these. Switch one on, and {name} does it without asking while
         the lab has time. After the lab’s time ran out, or after you stopped the lab, {name} asks
-        you again. Each use shows under “Done for you”.
+        you again. Each use shows under “Moves”.
       </p>
       <ul>
         {props.view.powers.map((power) => {
@@ -700,36 +712,52 @@ function Powers(props: Shared & { readonly name: string }): ReactElement {
         })}
       </ul>
       {error ? <Refused text={error} /> : null}
+      <SpareSeatsForm
+        api={props.api}
+        view={props.view}
+        harnesses={props.harnesses}
+        name={name}
+        reload={props.reload}
+      />
       <p className="k-foot">Stopping the lab stays with you. No switch gives it away.</p>
     </div>
   );
 }
 
-/** What was done for the person: each move that came from a request, newest first, with the way back when there is one. */
+/**
+ * The log of the coordinator's moves, newest first: each with its one line of why, and the way back from a move of
+ * a request when the person has one. A move that an agent objects to says so.
+ */
 function Log(props: Shared): ReactElement {
-  const { deeds } = props.view;
-  if (deeds.length === 0) {
-    return <p className="k-log k-none">Nothing was done for you yet.</p>;
+  const moves = props.view.moves ?? [];
+  if (moves.length === 0) {
+    return (
+      <p className="k-log k-none">
+        No move yet. Each move of the coordinator shows here with its one line of why.
+      </p>
+    );
   }
   return (
-    <ol className="k-log">
-      {deeds.map((deed) => {
-        const at = deed.request.decision?.at ?? deed.request.at;
-        return (
-          <li key={deed.request.post.id}>
-            <time dateTime={at}>{clock(at)}</time>
-            <div>
-              <p>{doneLine(deed.request)}</p>
-              <span className="k-by">{decidedLine(deed.request)}</span>
-              {deed.request.post.kind === 'request' ? (
-                <Fields details={details(deed.request.post.move, props, deed.agent)} />
+    <div className="k-log">
+      <MovesList
+        moves={moves}
+        agents={props.lab.agents}
+        extra={(move) => {
+          const deed = deedOf(props.view, move.post.post.id);
+          return (
+            <>
+              {move.post.post.kind === 'request' ? (
+                <details className="m-details">
+                  <summary>Every field of the move</summary>
+                  <Fields details={details(move.post.post.move, props, deed?.agent ?? null)} />
+                </details>
               ) : null}
-              <Undo {...props} deed={deed} />
-            </div>
-          </li>
-        );
-      })}
-    </ol>
+              {deed ? <Undo {...props} deed={deed} /> : null}
+            </>
+          );
+        }}
+      />
+    </div>
   );
 }
 

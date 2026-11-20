@@ -31,7 +31,7 @@ import type { Depth } from '../model/turns.ts';
 import { hasBreakthrough } from '../model/votes.ts';
 import { messageOf } from '../api/client.ts';
 import { ForYou } from './Coordinator.tsx';
-import { byDesk } from '../model/desk.ts';
+import { CHAT_BOX, byDesk } from '../model/desk.ts';
 import { browserStore } from './hooks.ts';
 import { Detail } from './Markdown.tsx';
 import { ChipView, Composer, HarnessAsk, Mark, New } from './parts.tsx';
@@ -71,7 +71,11 @@ interface Around {
  */
 export function Turns(
   props: Around & {
-    readonly onSend: (text: string) => Promise<void>;
+    /**
+     * Post the person's message in this thread. Without it, the lab has a desk, and the thread leads to the chat
+     * with the lab, whose message names this thread.
+     */
+    readonly onSend?: ((text: string) => Promise<void>) | undefined;
     /** The post that the page opened on. It is never inside a fold. */
     readonly target?: string | null;
     /** When the lab opened. With it, the browser keeps for each thread whether the person shows every message. */
@@ -205,21 +209,49 @@ export function Turns(
                   ],
         )}
       </ol>
-      <Composer
-        variant="reply"
-        label="Message to everyone in this thread"
-        placeholder="Say something in this thread"
-        button="Post"
-        hint={
-          props.view.members.length > 0
-            ? sideReplyHint(props.done ?? false)
-            : props.view.person_reaches
-              ? offersReplyHint(props.view.person_reaches, props.agents, props.state ?? 'open')
-              : 'Agents that watch this thread get your reply. When nobody watches it, every agent does.'
-        }
-        onSend={onSend}
-      />
+      {onSend ? (
+        <Composer
+          variant="reply"
+          label="Message to everyone in this thread"
+          placeholder="Say something in this thread"
+          button="Post"
+          hint={
+            props.view.members.length > 0
+              ? sideReplyHint(props.done ?? false)
+              : props.view.person_reaches
+                ? offersReplyHint(props.view.person_reaches, props.agents, props.state ?? 'open')
+                : 'Agents that watch this thread get your reply. When nobody watches it, every agent does.'
+          }
+          onSend={onSend}
+        />
+      ) : (
+        <ChatLead />
+      )}
     </>
+  );
+}
+
+/**
+ * The way from a thread to the chat with the lab, in a lab with a desk. The chat is the one place where the person
+ * writes, and a message from a thread's page names that thread.
+ */
+function ChatLead(): ReactElement {
+  return (
+    <p className="c-lead in-thread">
+      You write to the lab in the chat. A message from this page names this thread, and the desk
+      says where it passed it on.{' '}
+      <button
+        type="button"
+        className="linkbtn"
+        onClick={() => {
+          const box = document.getElementById(CHAT_BOX);
+          box?.scrollIntoView({ block: 'center' });
+          box?.focus();
+        }}
+      >
+        Write about this thread
+      </button>
+    </p>
   );
 }
 

@@ -4498,3 +4498,268 @@ button.v-count:hover {
 .i-mode {
   margin: 10px 0;
 }
+
+/* The one chat of a lab with a desk, beside the question */
+.kicker {
+  margin: 0 0 8px;
+  font: 700 11.5px/1 var(--mono);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.c-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.c-desk {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 0;
+}
+.f-steer .c-desk button {
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+}
+.f-steer .c-desk .i-name {
+  font: 700 16px var(--head);
+}
+.c-bubbles {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.c-bubble {
+  max-width: 88%;
+  padding: 9px 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.c-bubble.me {
+  align-self: flex-end;
+  background: var(--raise);
+}
+.c-who {
+  margin: 0 0 5px;
+  font: 700 11px/1 var(--mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.c-text {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.45;
+}
+.c-did,
+.c-none,
+.c-lead {
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.c-none,
+.c-lead {
+  margin: 0;
+}
+.c-lead {
+  margin-top: 12px;
+}
+.c-about {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--ink2);
+  overflow-wrap: anywhere;
+}
+.c-about span {
+  color: var(--muted);
+}
+.c-chat .k-write {
+  padding: 0;
+  border-top: 0;
+}
+.f-steer .c-chat button.linkbtn,
+.f-steer .m-card button.linkbtn,
+.f-steer .g-grant button.linkbtn,
+.c-lead button.linkbtn {
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--accent-ink);
+  font: 600 13.5px var(--body);
+  cursor: pointer;
+}
+.k-about {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* The coordinator's moves: beside the chat, and as the log in the panel for the coordinator */
+.m-card {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+}
+.m-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.m-list li,
+.k-log .m-list li {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: 10px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+  font-size: 14px;
+}
+.m-list li:first-child {
+  border-top: 0;
+}
+.m-list time {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.m-list p,
+.k-log .m-list p {
+  margin: 0 0 3px;
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.m-what {
+  font-weight: 600;
+}
+.m-theirs {
+  padding: 4px 8px;
+  background: var(--bg);
+  border: 1px solid var(--line2);
+  unicode-bidi: isolate;
+}
+.m-why {
+  color: var(--muted);
+}
+.m-text,
+.m-name {
+  unicode-bidi: isolate;
+  color: var(--ink2);
+}
+.m-name {
+  font-weight: 500;
+}
+.m-mark {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--bad);
+  color: var(--bad);
+  font: 600 11.5px var(--body);
+  white-space: nowrap;
+}
+.m-list a {
+  font-size: 13px;
+}
+.m-none {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.m-card button.linkbtn {
+  margin-top: 8px;
+}
+
+/* The person's grant of spare seats, under the powers of the coordinator */
+.g-grant {
+  margin: 20px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.g-grant h3 {
+  margin: 0;
+  font: 600 16.5px var(--head);
+}
+.g-line {
+  margin: 6px 0 0;
+  font-size: 14.5px;
+  line-height: 1.45;
+  color: var(--ink2);
+}
+.g-lede,
+.g-none {
+  margin: 6px 0 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.g-pick {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  margin: 10px 0 0;
+  font-size: 13.5px;
+}
+.g-pick select,
+.g-pick input {
+  min-width: 0;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--line2);
+  color: var(--ink);
+  font: 14px var(--body);
+}
+.g-kinds {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.g-kinds li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  justify-content: space-between;
+  padding: 7px 0;
+  border-top: 1px solid var(--line);
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+.c-about button.linkbtn,
+.c-lead button.linkbtn {
+  min-height: 0;
+  line-height: inherit;
+}
+.c-lead.in-thread {
+  max-width: 860px;
+  margin-top: 14px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--line);
+}
+.f-steer .g-pick label {
+  margin: 0;
+  font: 600 13.5px var(--body);
+}
+.m-details {
+  margin-top: 4px;
+  font-size: 13px;
+}
+.m-details summary {
+  color: var(--muted);
+  cursor: pointer;
+}

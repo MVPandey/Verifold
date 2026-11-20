@@ -21,6 +21,7 @@ import type {
   Power,
   ProfileChange,
   SeatChange,
+  SeatGrant,
   Settings,
   SettingsChange,
   SettingsFileView,
@@ -176,6 +177,8 @@ export interface Api {
   answerRequest(postId: string, yes: boolean, minutes?: number): Promise<ConversationView>;
   /** Take back the minutes that a request for more time gave the lab. */
   takeMinutesBack(postId: string): Promise<ConversationView>;
+  /** Grant the coordinator spare seats, which replaces the earlier grant. Zero seats take it back. */
+  grantSeats(grant: SeatGrant): Promise<ConversationView>;
   settings(): Promise<SettingsView>;
   changeSetting(change: SettingsChange): Promise<SettingsView>;
   /** The lab's norms files, or before a lab starts the defaults that the new lab gets. */
@@ -364,6 +367,7 @@ export function createApi(
         ...(minutes === undefined ? {} : { minutes }),
       }),
     takeMinutesBack: (postId) => request(`/requests/${encodeURIComponent(postId)}/minutes`, {}),
+    grantSeats: (grant) => request('/grant', grant),
     settings: () => request<SettingsView>('/settings').then(settingsView),
     changeSetting: (change) => request<SettingsView>('/settings', change).then(settingsView),
     norms: () => request('/norms'),
