@@ -6,7 +6,16 @@ import pytest
 from builders import RecordBuilder, lab
 from pydantic import TypeAdapter
 
-from verifold.protocol.events import MAX_SEAT_NOTES, AlarmSet, BudgetSet, LimitReached, NotesSet, Posted, TurnEnded
+from verifold.protocol.events import (
+    MAX_SEAT_NOTES,
+    AgentJoined,
+    AlarmSet,
+    BudgetSet,
+    LimitReached,
+    NotesSet,
+    Posted,
+    TurnEnded,
+)
 from verifold.protocol.join import (
     MAX_BRIEF,
     MAX_CANDIDATES,
@@ -27,17 +36,21 @@ from verifold.protocol.join import (
 from verifold.protocol.measures import MAX_LABEL, MAX_PAGE_BYTES
 from verifold.protocol.posts import (
     MAX_BODY,
+    MAX_BRANCH_TITLE,
+    MAX_BRANCHES,
     MAX_HEADLINE,
     MAX_PART,
     MAX_ROUND_MINUTES,
     Answer,
     Ask,
+    Branch,
     Call,
     Check,
     CheckMethod,
     Dashboard,
     FileEvidence,
     HeadlineNumber,
+    Idea,
     Measure,
     Message,
     Objection,
@@ -1244,3 +1257,61 @@ def test_the_largest_brief_with_the_headline_number_and_the_dashboard_is_one_too
     assert whole.headline_number is not None
     assert whole.headline_number.measure is not None
     assert (whole.headline_number.named_by, whole.dashboard and whole.dashboard.by) == ('a2', 'a3')
+
+
+def test_a_seat_with_a_fresh_view_reads_the_branches_and_its_first_idea_ends_the_fresh_view() -> None:
+    split = (Branch(id='b-1', title='Radix sorts'), Branch(id='b-2', title='Merges of runs'))
+    record = lab().post(Reading(id='p-1', thread='t-1', author='ada', text='An answer is a sort.', branches=split))
+    record.post(Proposal(id='p-2', thread='t-1', author='ada', text='Use the radix sort.'))
+    record.join('dee', fresh=True)
+    board = record.board()
+
+    fresh = brief(board, 'dee', News(seq=0))
+    assert fresh.fresh
+    assert [(line.id, line.title) for line in fresh.branches] == [('b-1', 'Radix sorts'), ('b-2', 'Merges of runs')]
+    assert fresh.candidates == ()
+
+    idea = Idea(
+        id='p-3',
+        thread='t-1',
+        author='dee',
+        text='Merge the runs that the data holds already.',
+        parent='b-2',
+        test='Time it on the 2025 data.',
+        rules_out='No gain over the radix sort.',
+    )
+    after = brief(record.post(idea).board(), 'dee', News(seq=0))
+    assert (after.fresh, [line.line.id for line in after.candidates]) == (False, ['p-2'])
+    assert [(line.id, line.ideas, line.untried) for line in after.branches] == [('b-1', 0, 0), ('b-2', 1, 1)]
+
+
+def _branched(*, fresh: bool = False) -> RecordBuilder:
+    # The largest lab with the most branches in force, each with the longest title. With `fresh`, the reader's seat
+    # started with a fresh view.
+    record = _largest()
+    if fresh:
+        joined = record.events[1]
+        assert isinstance(joined, AgentJoined)
+        record.events[1] = joined.model_copy(update={'agent': joined.agent.model_copy(update={'fresh': True})})
+    posts = sum(isinstance(event, Posted) for event in record.events)
+    split = tuple(
+        Branch(id=f'b-{number}', title=f'{number:02d} {"t" * (MAX_BRANCH_TITLE - 3)}')
+        for number in range(1, MAX_BRANCHES + 1)
+    )
+    return record.post(Reading(id=f'p-{posts + 1}', thread='t-1', author='a1', text='x' * 1000, branches=split))
+
+
+def test_the_largest_brief_with_the_most_branches_is_one_tool_result_and_a_fresh_seat_keeps_every_branch() -> None:
+    board = _branched().board()
+    view = brief(board, 'a0', news(board, 'a0', 0))
+
+    assert len(view.model_dump_json()) < ONE_TOOL_RESULT
+    # The branches come after the lines of the agents in the order of the cuts, and before the steering facts.
+    assert CUTS.index('agents') < CUTS.index('branches') < CUTS.index('steering')
+    assert len(view.branches) == MAX_BRANCHES or any(line.startswith('`branches` leaves out') for line in view.cut)
+
+    fresh = _branched(fresh=True).board()
+    seen = brief(fresh, 'a0', news(fresh, 'a0', 0))
+    assert seen.fresh
+    assert len(seen.branches) == MAX_BRANCHES
+    assert len(seen.model_dump_json()) < ONE_TOOL_RESULT

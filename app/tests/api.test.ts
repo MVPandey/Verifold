@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { ApiError, NO_BUDGET, NO_CANDIDATES, NO_DESK, createApi } from '../src/api/client.ts';
+import {
+  ApiError,
+  NO_BUDGET,
+  NO_CANDIDATES,
+  NO_DESK,
+  NO_MAP,
+  createApi,
+} from '../src/api/client.ts';
 import { parseChange } from '../src/api/events.ts';
 import { takeToken } from '../src/api/token.ts';
 
@@ -209,6 +216,22 @@ describe('the API client', () => {
     assert.deepEqual(await none.candidates(), NO_CANDIDATES);
     assert.deepEqual(await before.candidates(), NO_CANDIDATES);
     await assert.rejects(broken.candidates(), ApiError);
+  });
+
+  it('reads the map, and an empty one from a server from before the map', async () => {
+    const shown = createApi(
+      'secret',
+      serverThatAnswers(
+        200,
+        '{"branches": [{"id": "b-1", "title": "Rates", "added_by": "p-2"}], "sealed": 0, "left_out": 0}',
+      ).fetcher,
+    );
+    const before = createApi('secret', serverThatAnswers(404, '{"detail": "Not Found"}').fetcher);
+    const broken = createApi('secret', serverThatAnswers(500, 'Internal Server Error').fetcher);
+
+    assert.deepEqual((await shown.map()).branches[0]?.title, 'Rates');
+    assert.deepEqual(await before.map(), NO_MAP);
+    await assert.rejects(broken.map(), ApiError);
   });
 
   it('reads a lab and a desk from a server from before budgets, disk limits, and the desk', async () => {

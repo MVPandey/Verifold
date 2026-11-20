@@ -17,8 +17,8 @@ import { href } from '../model/route.ts';
 import { Refusal, usePress } from './Allowances.tsx';
 import { useDashboard } from './hooks.ts';
 
-/** The tabs of the lab page: the wall of threads, and the agents' dashboard. */
-export type LabTab = 'wall' | 'dashboard';
+/** The tabs of the lab page: the wall of threads, the agents' dashboard, and the map of the question. */
+export type LabTab = 'wall' | 'dashboard' | 'map';
 
 /**
  * The status line of the lab page: the headline number with its age and the board's mark, the actions of each
@@ -81,12 +81,26 @@ function MarkView(props: { readonly mark: Mark; readonly plain?: boolean }): Rea
   );
 }
 
-/** The tabs of the lab page, as links, so that each tab has its own address. */
-export function LabTabs(props: { readonly tab: LabTab }): ReactElement {
+/**
+ * The tabs of the lab page, in a fixed order: Wall, Dashboard, and Map. The Dashboard tab shows while the lab has a
+ * part of a dashboard, and the Map tab while the lab's reading has branches, as `dashboard` and `map` say, and each
+ * shows while it is the open tab. A lab that has neither has no tabs.
+ */
+export function LabTabs(props: {
+  readonly tab: LabTab;
+  readonly dashboard?: boolean;
+  readonly map?: boolean;
+}): ReactElement | null {
+  const shown = (tab: LabTab, offered: boolean | undefined): boolean =>
+    offered === true || props.tab === tab;
   const tabs: readonly (readonly [LabTab, string, string])[] = [
     ['wall', 'Wall', href({ page: 'lab' })],
-    ['dashboard', 'Dashboard', href({ page: 'dashboard' })],
+    ...(shown('dashboard', props.dashboard)
+      ? ([['dashboard', 'Dashboard', href({ page: 'dashboard' })]] as const)
+      : []),
+    ...(shown('map', props.map) ? ([['map', 'Map', href({ page: 'map' })]] as const) : []),
   ];
+  if (tabs.length === 1) return null;
   return (
     <nav className="d-tabs" aria-label="The lab">
       {tabs.map(([tab, label, link]) => (

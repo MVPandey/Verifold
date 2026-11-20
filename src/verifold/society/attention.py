@@ -1,8 +1,8 @@
 """
 Who hears what.
 
-A post is for an agent when it names the agent, replies to one of the agent's posts, builds on one of them, or
-lands in a thread that the agent watches. A post names an agent in `mentions`, or in its text with the agent's ID,
+A post is for an agent when it names the agent, replies to one of the agent's posts, builds on one of them, tries
+or rules out one of its ideas, or lands in a thread that the agent watches. A post names an agent in `mentions`, or in its text with the agent's ID,
 the full label of its seat, or the name that it chose after an at sign, such as "@Tessel". A chosen name without
 the sign names nobody, because it can be a common word. An agent watches the
 threads that it opens and the thread where it works now, which is the thread of its latest plan or result, until it
@@ -22,7 +22,7 @@ An on-call agent hears less. No post for every agent is for it, and neither are 
 A plain mention is not for it either: a plan, a message, a result, or another post that addresses nobody can name
 it, in `mentions` or in its text, and does not wake it. It watches a thread only when it said so with `watch`, or
 as a member of a side thread. So a post is for it when the post is an ask, a call, or a task that names it, replies to its
-post, builds on its post, is the check of a rerun that it asked for, is the person's post that names it, or lands
+post, builds on its post, tries or rules out its idea, is the check of a rerun that it asked for, is the person's post that names it, or lands
 in such a thread. A close is for it once it has posted, because from then on it counts among the agents that
 decide whether the lab is done.
 
@@ -58,7 +58,8 @@ it. So an agent learns of the rest when it reads the board, and not before.
 A vote and a badge are no posts, and they wake nobody. The author of a post reads the votes and the badges on it in
 its next news. Every other agent sees no vote on a young post until it votes on it, as `society.votes` says.
 
-A round is for every agent that is not on call, as a call that names nobody is. An entry of a round wakes nobody,
+A round is for every agent that is not on call, as a call that names nobody is. An entry of a round, an idea that
+replies to it among them, wakes nobody,
 whatever it names, replies to, or builds on, because no other agent may read it while the round is open. The close
 of a round is news for each agent that the round was for, for each agent that entered, and for its opener, with
 the lines of the entries, which count in the news's lines of other posts. It wakes them as a post for them does,
@@ -90,12 +91,12 @@ from verifold.protocol.posts import (
     Check,
     Close,
     Dashboard,
-    Entry,
     HeadlineNumber,
     Post,
     Reading,
     Round,
     Task,
+    idea_of,
 )
 from verifold.society.alarms import alarm_line
 from verifold.society.board import Board
@@ -106,7 +107,7 @@ from verifold.society.identity import post_line, post_view
 from verifold.society.lifecycle import lab_state, latest_time, minutes_left, no_alarm_line
 from verifold.society.lines import lines_of
 from verifold.society.reruns import RerunKey, reruns_for
-from verifold.society.rounds import entries, for_reader
+from verifold.society.rounds import entries, for_reader, is_entry
 from verifold.society.votes import badge_notes, vote_notes
 
 type Names = tuple[tuple[AgentId, str], ...]
@@ -152,7 +153,7 @@ def wakes(
     """
     post = entry.post
     reader = board.agent(agent_id)
-    no_one = (reader and reader.agent.checks) or board.gone(agent_id) or isinstance(post, Entry)
+    no_one = (reader and reader.agent.checks) or board.gone(agent_id) or is_entry(post)
     excluded = post.author == agent_id or bool(no_one)
     # A lab without a desk has no desk chat, so its posts cost no look for one.
     in_chat = bool(board.desks) and post.thread == board.desk_chat
@@ -520,8 +521,9 @@ def _to_listeners(board: Board, agent_id: AgentId, entry: Posted, *, on_call: bo
 
 def _tied(board: Board, agent_id: AgentId, post: Post) -> bool:
     # A post is tied to an agent's own work as a reply to the agent's post, as a post that builds on the agent's
-    # post, or as the check that the agent asked for.
-    sources = (post.reply_to, *post.builds_on) if post.reply_to else post.builds_on
+    # post, as a post that tries or rules out the agent's idea, or as the check that the agent asked for.
+    named = idea_of(post)
+    sources = (*((post.reply_to,) if post.reply_to else ()), *post.builds_on, *((named,) if named else ()))
     if agent_id in {entry.post.author for entry in map(board.post, sources) if entry}:
         return True
     return isinstance(post, Check) and any(

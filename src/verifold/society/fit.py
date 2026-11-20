@@ -36,6 +36,7 @@ type Part = Literal[
     'dashboard',
     'candidates',
     'agents',
+    'branches',
     'steering',
     'news.for_you',
 ]
@@ -64,6 +65,7 @@ CUTS: tuple[Part, ...] = (
     'dashboard',
     'candidates',
     'agents',
+    'branches',
     'steering',
     'news.for_you',
 )
@@ -76,9 +78,10 @@ keeps its ID and loses its line, because `thread` shows each post. The lists of 
 order in the brief, so a post that an earlier list holds keeps its line there while a later list holds its ID. The
 other posts of the news, the threads, the entries of closed rounds, and the offers of the deliverables come after
 them, and then the lines of the headline number and of the dashboard. The candidates lose their lines but stay by
-their IDs, and the other agents lose the lines of their plans and latest posts but stay. Then the coordinator's
-steering facts go, which the tool `steering` returns. Last, the news ends earlier: the next result brings the posts
-for the agent that it holds no
+their IDs, and the other agents lose the lines of their plans and latest posts but stay. Then the branches of the
+question go, the last ones first, which the tool `map` shows, and the coordinator's steering facts, which the tool
+`steering` returns. A seat with a fresh view keeps its branches. Last, the news ends earlier: the next result brings
+the posts for the agent that it holds no
 longer, so none is lost.
 """
 
@@ -157,6 +160,7 @@ CUT_LINES: Mapping[Part, str] = {
     'dashboard': "`dashboard` is left out. `thread` shows each version in the dashboard's thread.",
     'candidates': '`candidates` leaves out {lines}, and `older_candidates` names them. `thread` shows each proposal.',
     'agents': '`agents` leaves out the plans and latest posts of {named}. `thread` shows them.',
+    'branches': '`branches` leaves out {lines}, the last ones in their order. The tool `map` shows every branch.',
     'steering': '`steering` is left out of this brief. The tool `steering` shows the steering facts.',
     'news.for_you': (
         '`news` leaves out {lines} of posts for you, and `more` counts them. The news of the next result has them.'

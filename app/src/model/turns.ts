@@ -30,6 +30,7 @@ const NOUNS = {
   measure: 'measure',
   headline_number: 'headline number',
   dashboard: 'dashboard',
+  idea: 'idea',
 } as const satisfies Record<Post['kind'], string>;
 
 const CLAIMS: ReadonlySet<Post['kind']> = new Set(['result', 'proposal', 'ruled_out', 'hand_back']);
@@ -65,6 +66,7 @@ export function tone(post: Post): MarkTone {
     case 'round':
       return 'ask';
     case 'entry':
+    case 'idea':
       return 'answer';
     case 'close':
       return 'answer';
@@ -141,6 +143,8 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
       return 'asked every agent at once';
     case 'entry':
       return to?.author === PERSON ? 'entered your round' : `entered ${theirs}`;
+    case 'idea':
+      return post.reply_to === null ? 'posted an idea' : `posted an idea in ${theirs}`;
     case 'answer':
       // The answer that carries out a coordinator's request: the person said yes to it, or a power decided it.
       if (post.for_request) {
@@ -571,6 +575,7 @@ const PLURALS = {
   measure: ['measure', 'measures'],
   headline_number: ['naming of the headline number', 'namings of the headline number'],
   dashboard: ['version of the dashboard', 'versions of the dashboard'],
+  idea: ['idea', 'ideas'],
   message: ['message', 'messages'],
 } as const satisfies Record<Post['kind'], readonly [string, string]>;
 

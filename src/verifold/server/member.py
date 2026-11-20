@@ -32,6 +32,7 @@ from verifold.protocol.join import (
     DeskFile,
     FileText,
     ManifestLine,
+    MapView,
     MeasureRequest,
     News,
     Overview,
@@ -68,10 +69,12 @@ from verifold.society.dashboards import outside_reference
 from verifold.society.deliverables import live
 from verifold.society.desk import check_on, speaks_for_person
 from verifold.society.errors import RejectedEvent
+from verifold.society.ideas import branch_lines, map_view
 from verifold.society.identity import post_view
 from verifold.society.lifecycle import utc
 from verifold.society.overview import overview
 from verifold.society.reruns import RerunKey, kept_until, lease_of, open_take, told_of
+from verifold.society.rounds import for_reader
 from verifold.society.steering import move_line, moves, steering_facts
 from verifold.society.tasks import held_by
 from verifold.society.views import brief, profile_result, side_lines, thread_summaries, thread_view, work_threads
@@ -467,14 +470,21 @@ class Member:
         return made
 
     def steering(self) -> SteeringResult:
-        """Return the lab's steering facts and the coordinator's moves, the newest first, as the agent reads them."""
-        board, now = self._lab.board, self._lab.now()
+        """Return the steering facts, the branches with their counts, and the newest moves, as the agent reads them."""
+        now = self._lab.now()
+        board = for_reader(self._lab.board, self.agent_id, now)
         made = moves(board)
         return SteeringResult(
             facts=steering_facts(board, now),
+            branches=branch_lines(board, now),
             moves=tuple(move_line(board, move, now) for move in made[:MAX_NEWS]),
             more_moves=max(len(made) - MAX_NEWS, 0),
         )
+
+    def map(self) -> MapView:
+        """Return the map as the agent reads it: the branches of the question with their counts and the newest ideas."""
+        now = self._lab.now()
+        return map_view(for_reader(self._lab.board, self.agent_id, now), now)
 
     def _unseen(self) -> News:
         now = self._lab.now()

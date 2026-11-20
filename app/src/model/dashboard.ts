@@ -209,3 +209,15 @@ export function size(bytes: number): string {
   if (bytes < 1_000_000) return `${String(Math.round(bytes / 1_000))} KB`;
   return `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
+
+/**
+ * Return whether the lab has a part of a dashboard: a version of the dashboard, a headline number, or a measure
+ * whose label the person can name as the headline number. The lab page offers its Dashboard tab only then.
+ */
+export function hasDashboard(lab: LabView): boolean {
+  return (
+    (lab.dashboard ?? null) !== null ||
+    (lab.headline_number ?? null) !== null ||
+    (lab.measure_labels?.length ?? 0) > 0
+  );
+}

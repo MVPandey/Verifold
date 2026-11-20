@@ -29,13 +29,15 @@ from verifold.protocol.agents import (
 from verifold.protocol.allowances import ActionNeed, AllowanceId, Amount, Bound, Purpose, Unit
 from verifold.protocol.deliverables import DeliverableLine
 from verifold.protocol.events import AlarmCondition, Halt, Limit, Note, Posted, Question, RequestAnswered, RoundEnd
-from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, BranchId, Parent, PostId, ThreadId
 from verifold.protocol.measures import MeasureLabel, MeasureUnit, MeasureValue
 from verifold.protocol.moves import LabSetting, Move, SeatChoice, Why
 from verifold.protocol.posts import (
+    MAX_BRANCHES,
     MAX_BUILDS_ON,
     MAX_CHOICES,
     Body,
+    BranchTitle,
     CheckMethod,
     Choice,
     FileEvidence,
@@ -133,8 +135,8 @@ longer headline before it pins a file or writes an event.
 """
 
 
-_PARTS = ('output', 'bounds', 'findings', 'concerns', 'deviations')
-"""The fields of a request that hold the parts of a task's brief or of a hand-back."""
+_PARTS = ('output', 'bounds', 'findings', 'concerns', 'deviations', 'test', 'rules_out')
+"""The fields of a request that hold the parts of a task's brief, of a hand-back, or of an idea."""
 
 
 class PostRequest(Record):
@@ -206,6 +208,18 @@ class PostRequest(Record):
     """On a round or a reading of the coordinator: why it opens the round or posts the reading, as one line."""
     about: ThreadId | None = None
     """On a message of the person in the desk chat: the thread that the person had open, which the message is about."""
+    parent: Parent | None = None
+    """On an idea: the branch, such as `b-2`, or the idea, such as `p-14`, that it hangs on. An idea needs it."""
+    test: Part | None = None
+    """On an idea: how it is tested. An idea needs it, and no other kind takes it."""
+    rules_out: Part | None = None
+    """On an idea: what result of the test would rule it out. An idea needs it."""
+    idea: PostId | None = None
+    """On a plan or a result: the idea that it tries. On a ruled-out lead: the idea that it rules out."""
+    branches: tuple[BranchTitle, ...] = Field(default=(), max_length=MAX_BRANCHES)
+    """On a reading: the titles of the branches that it adds to the question's split, in their order."""
+    retires: tuple[BranchId, ...] = Field(default=(), max_length=MAX_BRANCHES)
+    """On a reading: the branches in force that it retires."""
 
     @model_validator(mode='after')
     def _one_thread(self) -> Self:
@@ -239,6 +253,15 @@ class PostRequest(Record):
             )
         return self
 
+    @model_validator(mode='after')
+    def _an_idea_has_its_parts(self) -> Self:
+        if self.kind == 'idea' and not (self.parent and self.test and self.rules_out):
+            raise ValueError(
+                'An idea needs its four parts: the statement in `text`, `parent`, the branch or the idea that it hangs '
+                'on, `test`, how it is tested, and `rules_out`, what result of the test would rule it out.'
+            )
+        return self
+
     def to_post(  # noqa: PLR0913
         self,
         post_id: PostId,
@@ -248,12 +271,15 @@ class PostRequest(Record):
         question_seen: int | None = None,
         *,
         take: int | None = None,
+        first_branch: int = 1,
     ) -> Post:
         """
         Return the post that this request describes, with the evidence that Verifold pinned for its files.
 
         `question_seen` is how many revisions of the question the author had been shown. Only a proposal keeps it.
         `take` is the event with which the author took the rerun that a check answers. Only a check keeps it.
+        `first_branch` is the number of the first branch that a reading adds: the branches of a lab are numbered in
+        the order that they come.
 
         Raises:
             pydantic.ValidationError: The kind does not accept a field of the request, or misses one that it needs.
@@ -268,7 +294,12 @@ class PostRequest(Record):
         # An empty part of a brief or of a hand-back means the same as leaving it out, so a kind that takes none of
         # them takes an empty one. A task then misses the part that it needs.
         unused |= {name for name in _PARTS if not getattr(self, name)}
+        unused |= {name for name in ('branches', 'retires') if not getattr(self, name)}
         fields = self.model_dump(exclude=unused, exclude_none=True)
+        if self.branches:
+            fields['branches'] = tuple(
+                {'id': f'b-{first_branch + index}', 'title': title} for index, title in enumerate(self.branches)
+            )
         if self.kind == 'proposal' and question_seen is not None:
             fields['question_seen'] = question_seen
         if self.kind == 'check' and take is not None:
@@ -313,6 +344,8 @@ class MeasureRequest(Record):
     body: Body = ''
     builds_on: tuple[PostId, ...] = Field(default=(), max_length=MAX_BUILDS_ON)
     helper: Helper = ''
+    branch: BranchId | None = None
+    """The branch of the question that the number is about, when the author names one."""
 
     @property
     def text(self) -> str:
@@ -863,6 +896,164 @@ class Obstacles(Sparse):
     """How many obstacles are `removed`."""
 
 
+class MeasureLine(Sparse):
+    """
+    One measure as a line: its number, the time that it holds for, its author, and who reran it.
+
+    `rerun_by` names the agents whose check of an independent rerun of the measure holds, and `rerun_failed_by` the
+    agents whose such check fails. Both are empty while nobody reran it. The marks say who reran the number and
+    what that rerun found, and never whether the number is good.
+    """
+
+    post: PostId
+    thread: ThreadId
+    by: AgentId
+    label: str
+    value: MeasureValue
+    unit: str = ''
+    as_of: AwareDatetime
+    minutes_ago: int = 0
+    """How many whole minutes before now `as_of` is, by the lab's clock."""
+    rerun_by: tuple[AgentId, ...] = ()
+    rerun_failed_by: tuple[AgentId, ...] = ()
+    standing: Standing = 'open'
+
+
+type IdeaState = Literal['untried', 'being_tried', 'result_in', 'challenged', 'ruled_out']
+"""
+Where an idea stands, by the record: the first that applies. The board computes it, and no agent sets it.
+
+- `ruled_out`: a `ruled_out` with the idea in `idea` stands: no failed check and no standing objection disputes it,
+  and its author conceded no objection to it.
+- `challenged`: a result that tries the idea has a check with the method `challenge`, which holds or fails.
+- `result_in`: a result tries the idea.
+- `being_tried`: a plan tries the idea.
+- `untried`: no plan and no result tries it.
+
+A plan or a result tries an idea when it has the idea in `idea`, and it counts for none of these when its author
+conceded an objection to it.
+"""
+
+RECENT_HOURS = 3
+"""The window of `recent_tries`: the last hours by the lab's clock."""
+
+
+class BranchLine(Sparse):
+    """
+    One branch of the question, with counts of the record about it. The counts rank nothing.
+
+    A branch's ideas are the ideas that hang on it, directly or through other ideas. A field that is not there is
+    zero, false, or nothing, as `Sparse` says.
+    """
+
+    id: BranchId
+    title: BranchTitle
+    ideas: int = 0
+    """How many ideas hang on the branch."""
+    untried: int = 0
+    """How many of them are `untried`, as `IdeaState` says."""
+    being_tried: int = 0
+    """How many of them are `being_tried`."""
+    results: int = 0
+    """How many results try an idea of the branch."""
+    ruled_out: int = 0
+    """How many of its ideas are `ruled_out`."""
+    recent_tries: int = 0
+    """How many plans and results tried an idea of the branch in the last `RECENT_HOURS` hours."""
+    no_idea_hours: float | None = None
+    """For a branch without an idea: the hours since the reading that added it. `None` while it has an idea."""
+    measure: MeasureLine | None = None
+    """The newest measure that names the branch in `branch` and that its author did not concede, or `None`."""
+    retired: bool = False
+    """Whether a reading retired the branch. Its ideas stay on it."""
+
+
+class TryLine(Sparse):
+    """A plan or a result that tries an idea: the post, its kind, its author, its headline, and where it stands."""
+
+    post: PostId
+    thread: ThreadId
+    kind: Literal['plan', 'result']
+    author: AgentId
+    text: str
+    at: AwareDatetime
+    standing: Standing = 'open'
+
+
+class ChallengeLine(Sparse):
+    """A check with the method `challenge` of a result that tries an idea: the check, its author, and its outcome."""
+
+    post: PostId
+    thread: ThreadId
+    result: PostId
+    """The result that the check tests."""
+    author: AgentId
+    text: str
+    outcome: Outcome
+
+
+class IdeaView(Sparse):
+    """
+    An idea on the map: its post, what it hangs on, its test, what rules it out, its tries, and where it stands.
+
+    An idea of an open round that another agent wrote is sealed for you: it has `sealed`, `unsigned` as its author,
+    "Sealed until the round closes." as its text, and nothing else of its content, and it hangs on no branch.
+    """
+
+    id: PostId
+    thread: ThreadId
+    author: AgentId
+    at: AwareDatetime
+    text: str
+    parent: Parent | None = None
+    """The branch or the idea that it hangs on."""
+    branch: BranchId | None = None
+    """The branch that it hangs on, directly or through its parent ideas."""
+    state: IdeaState = 'untried'
+    test: str = ''
+    rules_out: str = ''
+    tries: tuple[TryLine, ...] = ()
+    """The plans and results that try it, oldest first."""
+    challenges: tuple[ChallengeLine, ...] = ()
+    """The challenges of the results that try it, oldest first."""
+    ruled_out_by: tuple[PostId, ...] = ()
+    """The `ruled_out` posts that rule it out and stand."""
+    sealed: bool = False
+
+
+class BranchView(BranchLine):
+    """A branch on the map: its counts, the reading that added it and the one that retired it, and its ideas."""
+
+    added_by: PostId
+    """The reading that added the branch."""
+    retired_by: PostId | None = None
+    """The reading that retired the branch, or `None` while it is in force."""
+    idea_list: tuple[IdeaView, ...] = ()
+    """The ideas that hang on the branch, in the order that they were posted."""
+
+
+MAX_MAP_IDEAS = 60
+"""
+The most ideas that the map of an agent holds, the newest. Each one's text, test, and rules-out text hold at most
+`MAX_LINE` characters there, and `thread` shows the whole idea. The person's app shows every idea whole.
+"""
+
+
+class MapView(Record):
+    """
+    The map of the lab: the branches of the question, each with its counts and its ideas.
+
+    The branches in force come first, in the order that readings added them, and the retired ones after them in the
+    same order. The board picks nothing and ranks nothing: no order here is a ranking.
+    """
+
+    branches: tuple[BranchView, ...] = ()
+    sealed: int = 0
+    """How many ideas of the open round are sealed for the reader. They hang on no branch until the round closes."""
+    left_out: int = 0
+    """How many older ideas the map leaves out of the branches' lists. The counts of each branch hold them."""
+
+
 MAX_LINKS = 3
 """The most links to other threads that a thread's summary names on each side."""
 
@@ -1149,6 +1340,12 @@ class News(Record):
     For the desk alone: the lab as a whole, whether it is closed, whether its agents stop and why, its time, and its
     budget. Left out for every other agent, whose `brief` has these facts.
     """
+
+
+class MapResult(MapView):
+    """What the `map` tool returns: the map, and your news."""
+
+    news: News | None = None
 
 
 class PostResult(PostView):
@@ -1667,6 +1864,15 @@ class SteeringFacts(Sparse):
     """How many actions of the lab became requests to the person, because no allowance allowed them."""
     actions_refused: int = 0
     """How many of those the person refused, or let pass until their offers ended."""
+    new_ideas: int = 0
+    """How many ideas agents posted in the last hour."""
+    branches_without_idea: int = 0
+    """How many branches of the question in force have no idea."""
+    no_idea_hours: float | None = None
+    """
+    The hours that the branch in force without an idea has had none, for the one that has gone longest, since the
+    reading that added it. `None` while every branch in force has an idea, and in a lab without branches.
+    """
 
 
 class SpareSeats(Record):
@@ -1681,9 +1887,11 @@ class SpareSeats(Record):
 
 
 class SteeringResult(Record):
-    """What the `steering` tool returns: the steering facts, the coordinator's newest moves, and your news."""
+    """What the `steering` tool returns: the steering facts, the branches with their counts, the moves, and your news."""
 
     facts: SteeringFacts
+    branches: tuple[BranchLine, ...] = ()
+    """The branches of the question in force, in the order that readings added them, each with its counts."""
     moves: tuple[MoveLine, ...] = ()
     """The coordinator's moves, the newest first, at most `MAX_NEWS`."""
     more_moves: int = 0
@@ -1745,29 +1953,6 @@ class ActResult(Record):
     allowance: AllowanceLine | None = None
     """The seat's allowance after the action, or `None` while the seat has none."""
     news: News | None = None
-
-
-class MeasureLine(Sparse):
-    """
-    One measure as a line: its number, the time that it holds for, its author, and who reran it.
-
-    `rerun_by` names the agents whose check of an independent rerun of the measure holds, and `rerun_failed_by` the
-    agents whose such check fails. Both are empty while nobody reran it. The marks say who reran the number and
-    what that rerun found, and never whether the number is good.
-    """
-
-    post: PostId
-    thread: ThreadId
-    by: AgentId
-    label: str
-    value: MeasureValue
-    unit: str = ''
-    as_of: AwareDatetime
-    minutes_ago: int = 0
-    """How many whole minutes before now `as_of` is, by the lab's clock."""
-    rerun_by: tuple[AgentId, ...] = ()
-    rerun_failed_by: tuple[AgentId, ...] = ()
-    standing: Standing = 'open'
 
 
 class HeadlineNumberLine(Sparse):
@@ -1997,6 +2182,13 @@ class Brief(Record):
     """
     round: RoundLine | None = None
     """The round that is open now, or `None` while no round is open."""
+    branches: tuple[BranchLine, ...] = Field(default=(), exclude_if=_empty)
+    """
+    The branches of the question in force, in the order that readings added them, each with its counts. Left out
+    while the lab has none. The tool `map` shows each branch with its ideas.
+    """
+    retired_branches: int = Field(default=0, exclude_if=_zero)
+    """How many branches readings retired. The tool `map` shows them with their ideas."""
     threads: tuple[ThreadSummary, ...] = ()
     """The threads that are not side threads, the most recently active first, at most `MAX_NEWS`."""
     more_threads: int = 0

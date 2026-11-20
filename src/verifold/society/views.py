@@ -66,6 +66,7 @@ from verifold.protocol.posts import (
     Call,
     Check,
     Close,
+    Idea,
     Objection,
     Plan,
     Proposal,
@@ -89,6 +90,7 @@ from verifold.society.dashboards import dashboard_line
 from verifold.society.deliverables import deliverable_lines
 from verifold.society.errors import NotFound
 from verifold.society.fit import CUTS, Keep, Part, cut_line, fit
+from verifold.society.ideas import branch_lines, branches
 from verifold.society.identity import post_line, post_view, seat_label
 from verifold.society.lifecycle import (
     lab_state,
@@ -389,7 +391,8 @@ def brief(  # noqa: PLR0913, PLR0915
     It holds the agent's own line and notes, the lab's state and the time that it has left, how many agents are in
     a turn and how many have an alarm that waits, the other agents with their latest plans, the candidate answers
     that stand with the one that a close closes on, the newest report with its age, and the lab's reading of the
-    question with its age, or a line that says that the lab has none. For the agent that holds the coordinator
+    question with its age, or a line that says that the lab has none, and the branches of the question in force with
+    their counts. For the agent that holds the coordinator
     seat, it holds the person's oldest post in the conversation that waits for its reply, with its age and the
     number of later ones that wait too. Then come the threads: the newest ones, one line for each side
     thread, the threads where one agent works alone, and the threads that got no post for a long while. Then come
@@ -410,6 +413,8 @@ def brief(  # noqa: PLR0913, PLR0915
     no I/O and so knows no live activity. For the same reason, `disk` is what Verifold measured of the lab's files
     last, or `None`.
     """
+    # The round counts who entered from the whole board, because a sealed idea shows no author.
+    entered = round_line(board, agent_id, now or latest_time(board))
     board = for_reader(board, agent_id, now)
     now = now or latest_time(board)
     # An invited agent that has not posted may never come, so no agent reads it as a peer to ask or wait for. An
@@ -497,8 +502,9 @@ def brief(  # noqa: PLR0913, PLR0915
     found = obstacles(board)
     blocking = tuple(item.entry for item in reversed(found) if item.state == 'open')
     you = board.agent(agent_id)
-    # A seat that started with a fresh view reads no candidate and no report until its first plan.
+    # A seat that started with a fresh view reads no candidate and no report until its first plan or idea.
     fresh = bool(you and you.agent.fresh and not _planned(board, agent_id))
+    split = branch_lines(board, now)
     standing_candidates = () if fresh else candidates(board)
     older, shown = standing_candidates[:-MAX_CANDIDATES], standing_candidates[-MAX_CANDIDATES:]
     reported = None if fresh else newest_report(board)
@@ -618,7 +624,7 @@ def brief(  # noqa: PLR0913, PLR0915
         reading=reading_line,
         reading_minutes_ago=minutes_since(reading.at, now) if reading else None,
         no_reading=None if reading else _no_reading(board, now),
-        round=round_line(board, agent_id, now),
+        round=entered,
         obstacles=Obstacles(
             more_open=max(len(blocking) - MAX_OBSTACLES, 0),
             taken_up=sum(item.state == 'taken_up' for item in found),
@@ -777,6 +783,8 @@ def brief(  # noqa: PLR0913, PLR0915
                     )
                 }
             ),
+            'branches': kept('branches', split, last=False),
+            'retired_branches': sum(held.retired is not None for held in branches(board)),
             'reruns_wanted': kept('reruns_wanted', wanted, name=_rerun),
             'moves': kept('moves', steers, last=False),
             'steering': facts if kept('steering', (facts,) if facts else ()) else None,
@@ -809,6 +817,8 @@ def brief(  # noqa: PLR0913, PLR0915
         'candidates': len(shown),
         'agents': len(recent),
         'moves': len(steers),
+        # A seat with a fresh view reads the branches whole in its first briefs.
+        **({} if fresh else {'branches': len(split)}),
         'steering': 1 if facts else 0,
         **({'news.for_you': len(news.for_you)} if page else {}),
     }
@@ -867,8 +877,8 @@ def _left(line: LeftLine) -> str:
 
 
 def _planned(board: Board, agent_id: AgentId) -> bool:
-    # Whether an agent has posted a plan.
-    return any(isinstance(entry.post, Plan) and entry.post.author == agent_id for entry in board.posts)
+    # Whether an agent has posted a plan or an idea.
+    return any(isinstance(entry.post, Plan | Idea) and entry.post.author == agent_id for entry in board.posts)
 
 
 def _person_waits(board: Board, agent_id: AgentId, now: datetime) -> PersonWait | None:

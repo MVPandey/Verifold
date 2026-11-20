@@ -111,6 +111,7 @@ from verifold.society.dashboards import DASHBOARD_TITLE, dashboard_thread
 from verifold.society.deliverables import accepted, check_decidable, live, offers_title, told_at
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
+from verifold.society.ideas import check_rests_on, next_branch
 from verifold.society.labels import awaits_model, is_numbered, label, plain
 from verifold.society.lifecycle import utc
 from verifold.society.lines import question_thread
@@ -711,6 +712,7 @@ class Lab:
                 as_of=request.as_of or at,
                 script=evidence[0].path,
                 output=evidence[-1].path,
+                branch=request.branch,
             )
             return Posted(seq=seq, at=at, post=measured)
 
@@ -1853,7 +1855,15 @@ def _add_post(  # noqa: PLR0913
         # No field of a request holds a take either, so only the seat that pinned the files can give one. A take
         # has one check: when another check of the same take came first, this one is a check like any other.
         still = take if request.reply_to and open_take(board, author, request.reply_to) else None
-        post = request.to_post(f'p-{len(board.posts) + 1}', thread_id, author, evidence, question_seen, take=still)
+        post = request.to_post(
+            f'p-{len(board.posts) + 1}',
+            thread_id,
+            author,
+            evidence,
+            question_seen,
+            take=still,
+            first_branch=next_branch(board),
+        )
         # No field of a request holds a mark, so no agent and no person's post can carry one.
         if isinstance(post, Answer) and mark in ('ends_request', 'missed'):
             post = post.model_copy(update={'ends_request': True, 'missed': mark == 'missed'})
@@ -1871,6 +1881,8 @@ def _add_post(  # noqa: PLR0913
             check_read(board)
         # An older record holds rounds and readings of a coordinator without a why, so this rule is here too.
         check_why(board, post)
+        # An older record holds proposals that rest on results that nobody challenged, so this rule is here too.
+        check_rests_on(board, post)
         # An older record holds checks from before the reviewer seats, so this rule is here and not in the record's
         # rules.
         # The one check of a rerun that its author took needs no seat of its own: the take was open to the author.

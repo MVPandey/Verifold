@@ -1,10 +1,11 @@
-import { NO_CANDIDATES, messageOf } from '../api/client.ts';
+import { NO_CANDIDATES, NO_MAP, messageOf } from '../api/client.ts';
 import type { Api } from '../api/client.ts';
 import type {
   CandidatesView,
   ConversationView,
   DeskView,
   LabView,
+  MapView,
   PostView,
   SetupView,
   ThreadSummary,
@@ -26,6 +27,8 @@ export interface LabData {
   readonly conversation?: ConversationView | null;
   /** The desk chat and what the desk did for the person. `null` before a lab starts. */
   readonly desk?: DeskView | null;
+  /** The map: the branches of the question with their counts and their ideas. Absent before a lab starts. */
+  readonly map?: MapView;
   /** Rises with each full load, so a page that reads more of the lab can read it again. */
   readonly version: number;
   readonly error: string | null;
@@ -41,6 +44,7 @@ export const EMPTY: LabData = {
   candidates: NO_CANDIDATES,
   conversation: null,
   desk: null,
+  map: NO_MAP,
   version: 0,
   error: null,
 };
@@ -145,16 +149,18 @@ export function createLoader(api: Api, apply: Apply): Loader {
 async function readLab(api: Api): Promise<Omit<LabData, 'version'>> {
   const setup = await api.setup();
   if (setup.question === null) return { ...EMPTY, setup };
-  const [lab, threads, needs, report, reading, candidates, conversation, desk] = await Promise.all([
-    api.lab(),
-    api.threads(),
-    api.needs(),
-    api.report(),
-    api.reading(),
-    api.candidates(),
-    api.conversation(),
-    api.desk(),
-  ]);
+  const [lab, threads, needs, report, reading, candidates, conversation, desk, map] =
+    await Promise.all([
+      api.lab(),
+      api.threads(),
+      api.needs(),
+      api.report(),
+      api.reading(),
+      api.candidates(),
+      api.conversation(),
+      api.desk(),
+      api.map(),
+    ]);
   return {
     setup,
     lab,
@@ -165,6 +171,7 @@ async function readLab(api: Api): Promise<Omit<LabData, 'version'>> {
     candidates,
     conversation,
     desk,
+    map,
     error: null,
   };
 }

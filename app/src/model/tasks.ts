@@ -60,10 +60,16 @@ export function workOf(item: PostView, posts: readonly PostView[]): OnIt | null 
 }
 
 /**
- * Return the labeled parts of a piece of work that an agent handed out, or of the work that came back, each as
- * plain text. A part of the work that came back with nothing in it is left out.
+ * Return the labeled parts of a piece of work that an agent handed out, of the work that came back, or of an idea,
+ * each as plain text. A part of the work that came back with nothing in it is left out.
  */
 export function partsOf(post: Post): readonly (readonly [string, string])[] {
+  if (post.kind === 'idea') {
+    return [
+      ['The test', post.test],
+      ['Rules it out', post.rules_out],
+    ];
+  }
   if (post.kind === 'task') {
     return [
       ['Wanted', post.output],

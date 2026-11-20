@@ -43,7 +43,8 @@ export type PostKind =
   | 'receipt'
   | 'measure'
   | 'headline_number'
-  | 'dashboard';
+  | 'dashboard'
+  | 'idea';
 export type Standing = 'open' | 'checked' | 'held_up' | 'disputed' | 'conceded';
 
 /**
@@ -1183,6 +1184,18 @@ interface PostBase {
   readonly about?: string;
   /** For the coordinator's round, reading, or naming of the headline number: its one line of why. Absent otherwise. */
   readonly why?: string;
+  /** For a plan or a result: the idea that it tries. For a ruled-out lead: the idea that it rules out. */
+  readonly idea?: string;
+  /** For a reading: the branches of the question that it adds. Absent otherwise. */
+  readonly branches?: readonly Branch[];
+  /** For a reading: the branches in force that it retires. Absent otherwise. */
+  readonly retires?: readonly string[];
+}
+
+/** A branch of the question, which a reading adds: its ID, such as `b-2`, and its short title. */
+export interface Branch {
+  readonly id: string;
+  readonly title: string;
 }
 
 export type Post =
@@ -1283,6 +1296,16 @@ export type Post =
   | (PostBase & {
       /** An agent's answer to a round, which `reply_to` names. */
       readonly kind: 'entry';
+    })
+  | (PostBase & {
+      /** One way to answer the question, stated with its test before anyone tries it. `text` is the statement. */
+      readonly kind: 'idea';
+      /** The branch, such as `b-2`, or the idea, such as `p-14`, that it hangs on. */
+      readonly parent: string | null;
+      /** How the idea is tested. */
+      readonly test: string;
+      /** What result of the test would rule it out. */
+      readonly rules_out: string;
     })
   | (PostBase & {
       /** One piece of work for one agent. `text` is its objective. */
@@ -1747,4 +1770,87 @@ export interface NormsView {
   readonly told: string | null;
   /** After a save that put no post on the board: why. */
   readonly no_post: NoPost | null;
+}
+
+/** Where an idea stands, by the record. The board computes it, and no agent sets it. */
+export type IdeaState = 'untried' | 'being_tried' | 'result_in' | 'challenged' | 'ruled_out';
+
+/** One branch of the question with counts of the record. A count of zero, and a false mark, are absent. */
+export interface BranchLine {
+  readonly id: string;
+  readonly title: string;
+  readonly ideas?: number;
+  readonly untried?: number;
+  readonly being_tried?: number;
+  readonly results?: number;
+  readonly ruled_out?: number;
+  /** The plans and results that tried its ideas in the last 3 hours. */
+  readonly recent_tries?: number;
+  /** For a branch without an idea: the hours since the reading that added it. */
+  readonly no_idea_hours?: number | null;
+  /** The newest measure that names the branch, as a line that leaves out each field that holds its default. */
+  readonly measure?: BranchMeasure | null;
+  readonly retired?: boolean;
+}
+
+/** The newest measure of a branch. A field that holds its default is absent. */
+export type BranchMeasure = Pick<
+  MeasureView,
+  'post' | 'thread' | 'by' | 'label' | 'value' | 'as_of'
+> &
+  Partial<Pick<MeasureView, 'unit' | 'rerun_by' | 'rerun_failed_by' | 'standing'>>;
+
+/** A plan or a result that tries an idea. */
+export interface TryLine {
+  readonly post: string;
+  readonly thread: string;
+  readonly kind: 'plan' | 'result';
+  readonly author: string;
+  readonly text: string;
+  readonly at: string;
+  readonly standing?: Standing;
+}
+
+/** A check with the method `challenge` of a result that tries an idea. */
+export interface ChallengeLine {
+  readonly post: string;
+  readonly thread: string;
+  /** The result that the check tests. */
+  readonly result: string;
+  readonly author: string;
+  readonly text: string;
+  readonly outcome: 'holds' | 'fails';
+}
+
+/** An idea on the map, with its test, what rules it out, its tries, and where it stands. */
+export interface IdeaView {
+  readonly id: string;
+  readonly thread: string;
+  readonly author: string;
+  readonly at: string;
+  readonly text: string;
+  readonly parent?: string | null;
+  readonly branch?: string | null;
+  readonly state?: IdeaState;
+  readonly test?: string;
+  readonly rules_out?: string;
+  readonly tries?: readonly TryLine[];
+  readonly challenges?: readonly ChallengeLine[];
+  readonly ruled_out_by?: readonly string[];
+  readonly sealed?: boolean;
+}
+
+/** A branch on the map: its counts, the readings that added and retired it, and its ideas in the order posted. */
+export interface BranchView extends BranchLine {
+  readonly added_by: string;
+  readonly retired_by?: string | null;
+  readonly idea_list?: readonly IdeaView[];
+}
+
+/** The map of the lab: the branches in force in the readings' order, then the retired ones. */
+export interface MapView {
+  readonly branches: readonly BranchView[];
+  /** How many ideas of the open round are sealed for the agents. The person's map shows them whole. */
+  readonly sealed: number;
+  readonly left_out: number;
 }

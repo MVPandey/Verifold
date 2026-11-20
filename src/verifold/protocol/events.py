@@ -324,7 +324,13 @@ MAX_ALARM_MINUTES = 24 * 60
 """The longest time that an agent can set an alarm for: one day."""
 
 type ConditionKind = Literal[
-    'reading_hours', 'budget_percent', 'limit_percent', 'request_minutes', 'task_minutes', 'action_hours'
+    'reading_hours',
+    'budget_percent',
+    'limit_percent',
+    'request_minutes',
+    'task_minutes',
+    'action_hours',
+    'branch_hours',
 ]
 """
 A condition of the record on which an alarm rings, with the unit of its threshold in its name.
@@ -338,6 +344,8 @@ A condition of the record on which an alarm rings, with the unit of its threshol
 - `task_minutes`: an open task has had no owner for the threshold's minutes.
 - `action_hours`: while an allowance is in force, its seat has declared no action for the threshold's hours, since
   its last action or since the allowance started.
+- `branch_hours`: a branch of the question in force has had no idea for the threshold's hours, since the reading
+  that added it.
 """
 
 CONDITION_BOUNDS: dict[ConditionKind, tuple[float, float]] = {
@@ -347,6 +355,7 @@ CONDITION_BOUNDS: dict[ConditionKind, tuple[float, float]] = {
     'request_minutes': (1, MAX_ALARM_MINUTES),
     'task_minutes': (1, MAX_ALARM_MINUTES),
     'action_hours': (0.1, 7 * 24),
+    'branch_hours': (0.1, 7 * 24),
 }
 """The lowest and the highest threshold of each condition."""
 

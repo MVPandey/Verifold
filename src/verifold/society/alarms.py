@@ -19,6 +19,7 @@ from verifold.protocol.posts import HandBack, Reading, RuledOut
 from verifold.society.allowances import actions, draft, in_force
 from verifold.society.board import Board
 from verifold.society.coordinator import waiting_posts
+from verifold.society.ideas import without_idea
 from verifold.society.lifecycle import lab_state, latest_time, pending_alarm
 from verifold.society.pace import limits_of
 from verifold.society.tasks import open_tasks
@@ -89,6 +90,12 @@ def _action(board: Board, hours: float, now: datetime) -> datetime | None:
     return since + timedelta(hours=hours) if since else None
 
 
+def _branch(board: Board, hours: float, _: datetime) -> datetime | None:
+    # The branch in force without an idea that came first has had none for `hours`, since the reading that added it.
+    since = min((held.added.at for held in without_idea(board)), default=None)
+    return since + timedelta(hours=hours) if since else None
+
+
 def _unowned_since(board: Board, task_id: PostId, posted: datetime) -> datetime:
     # When the task last had an owner: the end of the last claim's lease by its time, the holder's hand-back or
     # ruled-out lead that gave the task up, or the holder's leave. A task that nobody claimed has had none since it
@@ -113,6 +120,7 @@ DUE: dict[ConditionKind, Due] = {
     'request_minutes': _request,
     'task_minutes': _task,
     'action_hours': _action,
+    'branch_hours': _branch,
 }
 """When the record meets each kind of condition."""
 
@@ -123,6 +131,7 @@ WORDS: dict[ConditionKind, str] = {
     'request_minutes': "a post has waited {threshold:g} minutes for the person's answer",
     'task_minutes': 'an open task has had no owner for {threshold:g} minutes',
     'action_hours': 'an allowance in force has had no action for {threshold:g} hours',
+    'branch_hours': 'a branch of the question has had no idea for {threshold:g} hours',
 }
 """What the record met, for each kind of condition, as the message of the alarm says it."""
 

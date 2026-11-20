@@ -2,7 +2,9 @@
 What the lab's coordinator steers by: the steering facts, and the log of its own moves.
 
 The steering facts are counts, shares, rates, and ages that the record holds, computed for one moment. None of them
-ranks an agent, a line of work, or an idea. Each fact is one field of `SteeringFacts` and one function here.
+ranks an agent, a line of work, or an idea. Each fact is one field of `SteeringFacts` and one function here, or in
+`society.ideas` for the facts of the map. The caller passes the board as its reader sees it, so an idea that is
+sealed for the reader counts on no branch.
 
 A move of the coordinator is a post of its own that changed the lab: a request for a move that got a yes, from the
 person or from the coordinator under a power or a grant, a round that it opened, a reading that it posted, or its
@@ -22,6 +24,7 @@ from verifold.society.allowances import action_state
 from verifold.society.board import Board
 from verifold.society.budget import budget_line
 from verifold.society.coordinator import joined_by, waiting_posts
+from verifold.society.ideas import new_ideas, without_idea
 from verifold.society.lines import is_line_of_work
 from verifold.society.pace import seats_near_limit
 from verifold.society.spare import seats_left, standing_grant
@@ -102,6 +105,7 @@ def steering_facts(board: Board, now: datetime) -> SteeringFacts:
     tokens, dollars = _spent(board, since, now)
     reading = next((entry for entry in reversed(board.posts) if isinstance(entry.post, Reading)), None)
     rounds = board.rounds[-1] if board.rounds else None
+    empty = without_idea(board)
     return SteeringFacts(
         lines=len(lines),
         new_lines=sum(since < at <= now for at in lines.values()),
@@ -117,6 +121,9 @@ def steering_facts(board: Board, now: datetime) -> SteeringFacts:
         unowned_tasks=len(open_tasks(board, now)),
         waits_for_person=len(waiting_posts(board, now)),
         **_actions(board, now),
+        new_ideas=new_ideas(board, since, now),
+        branches_without_idea=len(empty),
+        no_idea_hours=_hours(now - min(held.added.at for held in empty)) if empty else None,
     )
 
 

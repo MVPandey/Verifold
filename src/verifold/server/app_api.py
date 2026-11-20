@@ -67,7 +67,7 @@ from verifold.protocol.app import (
 from verifold.protocol.deliverables import Decision, DeliverableLine, OfferLine
 from verifold.protocol.events import Reason, RerunRequested
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
-from verifold.protocol.join import CandidatesView, FileText, PostRequest, PostView, ThreadView, line_text
+from verifold.protocol.join import CandidatesView, FileText, MapView, PostRequest, PostView, ThreadView, line_text
 from verifold.protocol.moves import AddSeat, PaceMove, SeatGrant
 from verifold.protocol.settings import DiskSettings, PaceSettings
 from verifold.protocol.usage import DiskUse, Usage
@@ -85,6 +85,7 @@ from verifold.society.board import Board
 from verifold.society.budget import budget_line
 from verifold.society.deliverables import deliverable_lines, removed_lines, told_at
 from verifold.society.errors import NotFound, SocietyError
+from verifold.society.ideas import map_view
 from verifold.society.identity import post_line, post_view, seat_label
 from verifold.society.lifecycle import close_count, lab_state
 from verifold.society.lines import lines_of
@@ -333,7 +334,7 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
 
 
 def _pinned_routes(api: FastAPI, host: Host, authorized: params.Depends) -> None:
-    """Add the posts that the lab page pins for the person: the lab's reading, its newest report, and its candidates."""
+    """Add what the lab page pins for the person: the lab's reading, its newest report, its candidates, and its map."""
 
     @api.get('/reading', dependencies=[authorized])
     async def reading() -> PostView | None:
@@ -346,6 +347,12 @@ def _pinned_routes(api: FastAPI, host: Host, authorized: params.Depends) -> None
     @api.get('/candidates', dependencies=[authorized])
     async def candidates() -> CandidatesView:
         return candidates_view(_lab(host).board)
+
+    @api.get('/map', dependencies=[authorized])
+    async def idea_map() -> MapView:
+        # The person sees every idea whole, also one that is sealed for the agents in an open round.
+        lab = _lab(host)
+        return map_view(lab.board, lab.now(), whole=True)
 
 
 def _dashboard_routes(api: FastAPI, host: Host, activity: Activity, authorized: params.Depends) -> None:

@@ -23,6 +23,8 @@ import type { Tab } from '../model/coordinator.ts';
 import { crossedLine, crossLines } from '../model/crossings.ts';
 import { deliverLine, isDocked } from '../model/deliverables.ts';
 import { deskOf } from '../model/desk.ts';
+import { hasDashboard } from '../model/dashboard.ts';
+import { hasMap } from '../model/map.ts';
 import type { Docked } from '../model/deliverables.ts';
 import { ago, clock, dayClock, duration, minutesBetween } from '../model/format.ts';
 import { builderLine, lineFacts, obstacleGroups } from '../model/obstacles.ts';
@@ -41,7 +43,7 @@ import { hasNew, markSeen, readSeen } from '../model/seen.ts';
 import { NEED_WORDS, WAITS_ID, quietBand, waitGroups, wantedLine } from '../model/status.ts';
 import { betweenLine, isSide, sideHeading, sideLines } from '../model/side.ts';
 import { cardTasks, onItLine } from '../model/tasks.ts';
-import { messageOf } from '../api/client.ts';
+import { NO_MAP, messageOf } from '../api/client.ts';
 import { cardStatus, doneLine, goneLine, headClaim, questionThread } from '../model/turns.ts';
 import {
   breakthroughUnder,
@@ -59,6 +61,7 @@ import type { LabTab } from './Dashboard.tsx';
 import { DeskSeat } from './Desk.tsx';
 import { MovesCard } from './Moves.tsx';
 import { DeliverDoor, Deliverables } from './Deliverables.tsx';
+import { MapTab } from './Map.tsx';
 import { ChipView, Composer, Exact, Files, New } from './parts.tsx';
 import { Who } from './Picture.tsx';
 import { RoundOpener, RoundPanel } from './Rounds.tsx';
@@ -74,7 +77,7 @@ interface Place {
   readonly post: string | null;
   /** The panel that is docked beside the wall when the page opens. Without it, none is. */
   readonly panel?: Tab | 'deliver' | undefined;
-  /** The tab of the lab page that shows: the wall, or the agents' dashboard. Without it, the wall. */
+  /** The tab of the lab page that shows: the wall, the agents' dashboard, or the map. Without it, the wall. */
   readonly tab?: LabTab | undefined;
 }
 
@@ -332,9 +335,14 @@ export function Wall(
         </div>
       </section>
 
-      <LabTabs tab={tab} />
+      {/* A lab with no part of a dashboard and no branches has no tabs, and its page looks as it did before them. */}
+      <LabTabs tab={tab} dashboard={hasDashboard(lab)} map={hasMap(data.map)} />
       {tab === 'dashboard' ? (
         <DashboardTab api={api} lab={lab} now={props.now} reload={data.reload} />
+      ) : tab === 'map' ? (
+        <div className="f-body">
+          <MapTab map={data.map ?? NO_MAP} agents={lab.agents} now={props.now} />
+        </div>
       ) : (
         // A function and no component, so the wall's own elements stay in the page's tree.
         wallTab({ ...props, turns, seen })

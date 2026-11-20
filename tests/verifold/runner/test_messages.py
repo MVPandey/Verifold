@@ -5,7 +5,7 @@ from builders import START, RecordBuilder, lab
 
 from verifold.app import NORMS_TEMPLATE
 from verifold.protocol.events import BudgetSet, LimitReached, TurnEnded
-from verifold.protocol.posts import FileEvidence, Message, Reading, Result, RuledOut
+from verifold.protocol.posts import Branch, FileEvidence, Idea, Message, Reading, Result, RuledOut
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.protocol.usage import Usage
@@ -164,7 +164,7 @@ def test_the_lab_norms_are_plain_text_for_one_read_and_the_doorbell_is_one_line(
     assert '`' not in NORMS_TEMPLATE
     # Each norm has its reason and what it looks like in practice, so the file is longer than a list of rules.
     # An agent still reads it whole at the start of its work.
-    assert len(NORMS_TEMPLATE) < 31_000
+    assert len(NORMS_TEMPLATE) < 33_000
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -175,6 +175,7 @@ def test_the_lab_norms_are_sections_that_each_say_what_the_person_wants_and_why(
         'The question is a goal',
         'A group with many directions open',
         'Explore first',
+        'Ideas and the map',
         'What stands in the way becomes the way',
         'Chain ideas',
         'Handing out work',
@@ -196,6 +197,24 @@ def test_the_lab_norms_are_sections_that_each_say_what_the_person_wants_and_why(
         'When a norm gets in the way of the goal, tell the coordinator, or say so in an ask that names the person.',
     ):
         assert how_to_read in NORMS_TEMPLATE
+
+
+def test_the_map_section_says_why_the_lab_fixes_a_test_first_and_how_ideas_hang_on_branches() -> None:
+    ideas = NORMS_TEMPLATE.split('## Ideas and the map', 1)[1].split('\n## ', 1)[0]
+
+    for norm in (
+        # Authors once tested their own ideas on cases picked with hindsight, and every check agreed.
+        "The person wants the lab to look in many directions, and to fix each idea's test",
+        'The board ranks no idea. The agents choose what to try.',
+        'Post an idea before you work on it',
+        'Fix the test and its threshold before you look at the data that it runs on.',
+        'A branch with no idea is a gap in the lab',
+        'You can try your own idea.',
+        'A new test is a new idea.',
+        'another agent challenges it on dates, data, or cases that its author did not use',
+        'It stays sealed and unsigned until the round closes',
+    ):
+        assert norm in ideas
 
 
 def test_the_desk_section_says_what_the_person_wants_from_the_desk_and_what_stays_with_the_person() -> None:
@@ -674,6 +693,31 @@ def test_the_start_message_of_a_seat_with_a_fresh_view_holds_the_reading_and_wha
     assert "Post p-1 holds the lab's reading of the question: An answer is a sort that holds." in text
     assert '1 lead was ruled out:\n- p-2: A heap sort loses on the long tail.' in text
     assert FRESH not in start_message(board, plain.agent, Path('/lab/.verifold/LAB.md'))
+
+
+def test_the_start_message_of_a_seat_with_a_fresh_view_names_the_branches_with_their_ideas() -> None:
+    split = (Branch(id='b-1', title='Radix sorts'), Branch(id='b-2', title='Merges of runs'))
+    record = lab().post(Reading(id='p-1', thread='t-1', author='ada', text='An answer is a sort.', branches=split))
+    idea = Idea(
+        id='p-2',
+        thread='t-1',
+        author='ada',
+        text='Sort the keys by their bytes.',
+        parent='b-1',
+        test='Time it on the 2025 data.',
+        rules_out='No gain over the merge.',
+    )
+    board = record.post(idea).join('dee', fresh=True).board()
+    dee = board.agent('dee')
+    assert dee is not None
+
+    text = start_message(board, dee.agent, Path('/lab/.verifold/LAB.md'))
+    assert (
+        "The lab's reading splits the question into 2 branches, and `map` shows each one with its ideas:\n"
+        '- b-1: Radix sorts (1 idea)\n'
+        '- b-2: Merges of runs (no idea yet)'
+    ) in text
+    assert 'Until you post your first plan or idea' in text
 
 
 def test_the_norms_say_that_an_acting_seat_declares_each_action_before_it_acts_and_posts_its_real_cost_after() -> None:
