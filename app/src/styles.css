@@ -2885,6 +2885,77 @@ a.file:hover {
 .f-card.open .o-wanted {
   order: 5;
 }
+/* The pieces of work that agents handed out in a thread: what each asks for, and who is on it for how long. */
+.f-work {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.f-card.open .f-work {
+  order: 3;
+}
+.f-work li {
+  display: grid;
+  gap: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.f-work-text {
+  font-size: 14px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+/* A closed card is one glance, so a long ask stops after two lines. The opened thread has all of it. */
+.f-card:not(.open) .f-work-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.f-work-on,
+.f-work-more {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.f-work .fw-claimed .f-work-on {
+  color: var(--claim);
+}
+.f-turn .f-work-on {
+  margin: 6px 0 0;
+}
+/* The parts of a piece of work, or of the work that came back, each with its label. */
+.f-parts {
+  margin: 8px 0 0;
+  display: grid;
+  gap: 4px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.f-parts div {
+  display: grid;
+  grid-template-columns: minmax(6em, max-content) minmax(0, 1fr);
+  gap: 10px;
+}
+.f-parts dt {
+  color: var(--muted);
+}
+.f-parts dd {
+  margin: 0;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .f-parts div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+}
 .f-card .f-faces {
   row-gap: 8px;
 }

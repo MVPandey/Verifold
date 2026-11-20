@@ -3961,11 +3961,19 @@ describe('the settings page', () => {
       project.split('<p class="note">Same as all projects. Now: 10 minutes.</p>').length - 1,
       2,
     );
-    // `verifold run` takes neither number from a project's file, as it takes no number of reviewer seats.
+    // The time that an agent holds a piece of work is a whole number of at least one minute, 30 when unset.
+    assert.ok(project.includes('<h3>A piece of work that an agent takes</h3>'));
+    assert.ok(
+      project.includes(
+        'type="number" min="1" max="1440" placeholder="Same as all projects" value=""/>',
+      ),
+    );
+    assert.ok(project.includes('<p class="note">Same as all projects. Now: 30 minutes.</p>'));
+    // `verifold run` takes none of these numbers from a project's file, as it takes no number of reviewer seats.
     assert.equal(
       project.split('<code>verifold run</code> does not take this number from this project’s file.')
         .length - 1,
-      2,
+      3,
     );
 
     const set = {

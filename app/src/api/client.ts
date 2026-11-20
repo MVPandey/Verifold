@@ -268,6 +268,7 @@ export function createApi(
           members: summary.members ?? [],
           last_result_at: summary.last_result_at ?? null,
           open_obstacles: summary.open_obstacles ?? 0,
+          tasks: summary.tasks ?? [],
         })),
       ),
     thread: (id) =>

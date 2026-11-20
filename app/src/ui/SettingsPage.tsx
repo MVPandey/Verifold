@@ -16,6 +16,7 @@ import {
   AT_EXIT,
   AT_TIME_LIMIT,
   DEFAULT_MINUTES,
+  DEFAULT_TASK_MINUTES,
   MAX_BOARD_MINUTES,
   MAX_REVIEWER_SEATS,
   SEATS_FOLLOW,
@@ -195,6 +196,7 @@ export function SettingsForm(props: {
         { field: SEATS, current: file.settings.reviewers.seats },
         { field: REVEAL, current: file.settings.votes.reveal_minutes },
         { field: LEASE, current: file.settings.reruns.lease_minutes },
+        { field: TASK_LEASE, current: file.settings.tasks?.lease_minutes ?? DEFAULT_TASK_MINUTES },
         { field: DISK, current: file.settings.disk.limit_gb },
       ].map(({ field, current }) => (
         <NumberSetting
@@ -224,11 +226,17 @@ export function SettingsForm(props: {
 /** What the page says about one setting that takes a whole number, and the number's limits. */
 interface NumberField {
   readonly key:
-    'reviewers.seats' | 'votes.reveal_minutes' | 'reruns.lease_minutes' | 'disk.limit_gb';
+    | 'reviewers.seats'
+    | 'votes.reveal_minutes'
+    | 'reruns.lease_minutes'
+    | 'tasks.lease_minutes'
+    | 'disk.limit_gb';
   readonly title: string;
   readonly detail: string;
   readonly label: string;
   readonly max: number;
+  /** The smallest number that the setting takes. Zero when absent. */
+  readonly min?: number;
   /** The empty field's placeholder on the page for all projects. */
   readonly empty: string;
   /** The number that a level adds up to, in words. */
@@ -273,6 +281,18 @@ const LEASE: NumberField = {
   run: 'does not take this number from this project’s file.',
 };
 
+const TASK_LEASE: NumberField = {
+  key: 'tasks.lease_minutes',
+  title: 'A piece of work that an agent takes',
+  detail: `For these minutes, the agent that takes a piece of work that another agent handed out holds it, and no other agent can take it. Each post of the holder on that work starts the time again. The time ends early when the holder hands the work back or gives it up, when the agent that handed it out withdraws it, and when the holder leaves the lab. When the time ends, any agent can take the work. A change holds for the takes and posts after it. Leave the field empty, and the time is ${DEFAULT_TASK_MINUTES} minutes.`,
+  label: 'Minutes',
+  max: MAX_BOARD_MINUTES,
+  min: 1,
+  empty: `${DEFAULT_TASK_MINUTES} minutes`,
+  words: (minutes) => minutesWords(minutes ?? DEFAULT_TASK_MINUTES),
+  run: 'does not take this number from this project’s file.',
+};
+
 const DISK: NumberField = {
   key: 'disk.limit_gb',
   title: 'Disk limit',
@@ -306,7 +326,7 @@ function NumberSetting(props: {
   const written = valueAt(props.file.values, field.key);
   const [text, setText] = useState(typeof written === 'number' ? String(written) : '');
   const id = useId();
-  const value = numberValue(text, field.max);
+  const value = numberValue(text, field.max, field.min);
   const same = value === (typeof written === 'number' ? written : null);
   return (
     <section className="section">
@@ -317,7 +337,7 @@ function NumberSetting(props: {
         <input
           id={id}
           type="number"
-          min={0}
+          min={field.min ?? 0}
           max={field.max}
           value={text}
           placeholder={props.project ? 'Same as all projects' : field.empty}
@@ -338,7 +358,9 @@ function NumberSetting(props: {
         </button>
       </div>
       {value === undefined ? (
-        <p className="note">Type a whole number from 0 to {field.max}.</p>
+        <p className="note">
+          Type a whole number from {field.min ?? 0} to {field.max}.
+        </p>
       ) : null}
       <p className="note">
         {props.project && written === undefined ? 'Same as all projects. ' : ''}Now:{' '}

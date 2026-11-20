@@ -12,6 +12,7 @@ import type {
   Post,
   PostView,
   QuestionVersion,
+  TaskCard,
   ThreadLink,
   ThreadSummary,
 } from '../api/types.ts';
@@ -38,6 +39,7 @@ import { href } from '../model/route.ts';
 import { hasNew, markSeen, readSeen } from '../model/seen.ts';
 import { NEED_WORDS, WAITS_ID, quietBand, waitGroups, wantedLine } from '../model/status.ts';
 import { betweenLine, isSide, sideHeading, sideLines } from '../model/side.ts';
+import { cardTasks, onItLine } from '../model/tasks.ts';
 import { messageOf } from '../api/client.ts';
 import { cardStatus, doneLine, goneLine, headClaim, questionThread } from '../model/turns.ts';
 import {
@@ -1130,6 +1132,7 @@ function Card(props: {
             {summary.summary.text}
           </p>
         ) : null}
+        <WorkList tasks={summary.tasks} open={open} agents={props.agents} now={props.now} />
         <Faces ids={ids} agents={props.agents} last={open ? null : summary.last_at} team={team} />
         {props.need ? (
           <div className="o-card-need">
@@ -1153,6 +1156,35 @@ function Card(props: {
       </header>
       {read ? props.turns(read) : null}
     </section>
+  );
+}
+
+/**
+ * The pieces of work of a thread that an agent handed out and that are not done: what each asks for, and who is
+ * on it for how long. A closed card lists a few, and the opened thread lists every one.
+ */
+function WorkList(props: {
+  readonly tasks: readonly TaskCard[];
+  readonly open: boolean;
+  readonly agents: readonly AgentView[];
+  readonly now: Date;
+}): ReactElement | null {
+  const { shown, more } = cardTasks(props.tasks, props.open);
+  if (shown.length === 0) return null;
+  return (
+    <ul className="f-work" aria-label="Pieces of work">
+      {shown.map((work) => (
+        <li key={work.task} className={`fw-${work.state}`}>
+          <span className="f-work-text">{work.text}</span>
+          <span className="f-work-on">{onItLine(work, props.agents, props.now)}</span>
+        </li>
+      ))}
+      {more > 0 ? (
+        <li className="f-work-more">
+          {more === 1 ? '1 more piece of work' : `${more} more pieces of work`}
+        </li>
+      ) : null}
+    </ul>
   );
 }
 

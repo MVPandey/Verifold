@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { ReactElement } from 'react';
 
-import type { AgentView, PostView, RerunLine, ThreadView } from '../api/types.ts';
+import type { AgentView, Post, PostView, RerunLine, ThreadView } from '../api/types.ts';
 import { PERSON } from '../api/types.ts';
 import { author, authorName, called } from '../model/agents.ts';
 import { clock } from '../model/format.ts';
@@ -9,6 +9,7 @@ import { builtOnLabel, isLong, standingChip, testedChips } from '../model/posts.
 import { href } from '../model/route.ts';
 import { offersReplyHint } from '../model/deliverables.ts';
 import { sideReplyHint } from '../model/side.ts';
+import { onItLine, partsOf, workOf } from '../model/tasks.ts';
 import { MAX_RERUNS, wantedLine } from '../model/status.ts';
 import { holdsNew, markUnfolded, readUnfolded } from '../model/seen.ts';
 import {
@@ -247,6 +248,7 @@ export function Turn(
   const { by } = props.item;
   const chip = standingChip(post, standing);
   const claim = isClaim(post);
+  const work = workOf(props.item, view.posts);
   const breakthrough = hasBreakthrough(props.item);
   const ring = useRing(post.id, breakthrough);
   const wanted = props.reruns.filter((line) => line.post === post.id);
@@ -327,6 +329,8 @@ export function Turn(
           .map((other) => other && port('Built on by', other))}
         {onward ? <span className="f-port">{onward}</span> : null}
         <p className={isLong(post.text) ? 'f-say-text long' : 'f-say-text'}>{post.text}</p>
+        <Parts post={post} />
+        {work ? <p className="f-work-on">{onItLine(work, agents, props.now)}</p> : null}
         {post.kind === 'ask' && post.choices.length > 0 ? (
           <p className="choices">Choices: {post.choices.join(' · ')}</p>
         ) : null}
@@ -360,6 +364,22 @@ export function Turn(
         <Votes item={props.item} agents={agents} actions={props.marks} />
       </div>
     </li>
+  );
+}
+
+/** The parts of a piece of work that an agent handed out, or of the work that came back, as plain text. */
+function Parts(props: { readonly post: Post }): ReactElement | null {
+  const parts = partsOf(props.post);
+  if (parts.length === 0) return null;
+  return (
+    <dl className="f-parts">
+      {parts.map(([label, text]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd>{text}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
