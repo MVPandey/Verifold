@@ -11,6 +11,8 @@ from verifold.protocol.events import (
     ActingSet,
     ActionDecided,
     ActionsPaused,
+    AlarmCondition,
+    AlarmSet,
     AllowanceDrafted,
     AllowanceEnded,
     AllowanceStarted,
@@ -18,8 +20,11 @@ from verifold.protocol.events import (
     ModeSet,
 )
 from verifold.protocol.posts import Action, Message, Objection, Result
+from verifold.runner.messages import alarm_message
+from verifold.society.alarms import rings_at
 from verifold.society.allowances import checked
 from verifold.society.errors import RejectedEvent
+from verifold.society.steering import steering_facts
 
 type Make = Callable[[int, datetime], Event]
 
@@ -153,3 +158,41 @@ def test_an_action_says_why_it_waits_or_that_its_allowance_allowed_it_and_rests_
         action(needs=None)
     with pytest.raises(ValidationError, match='names in `builds_on` the posts that it rests on'):
         action(builds_on=())
+
+
+def test_the_steering_facts_count_the_actions_that_an_allowance_allowed_asked_for_and_that_were_refused() -> None:
+    record = acting()
+    add(record, lambda seq, at: AllowanceStarted(seq=seq, at=at, allowance='a-1'))
+    record.post(action(id='p-2', allowance='a-1', allowed=True, needs=None))
+    record.post(action(id='p-3', allowance='a-1', cost=Decimal(9), needs='per_action'))
+    record.post(
+        action(id='p-4', allowance='a-1', cost=Decimal(9), needs='per_action', offer_ends=START + timedelta(minutes=20))
+    )
+    record.post(Message(id='p-5', thread='t-1', author='person', text='No.', reply_to='p-3'))
+    add(record, lambda seq, at: ActionDecided(seq=seq, at=at, action='p-3', yes=False, post='p-5'))
+    board = record.board()
+
+    facts = steering_facts(board, START + timedelta(minutes=30))
+
+    # p-4's offer ended without an answer, so it counts as refused with the person's no to p-3.
+    assert (facts.actions_allowed, facts.actions_asked, facts.actions_refused) == (1, 2, 2)
+
+
+def test_an_alarm_on_an_allowance_with_no_action_rings_after_its_hours_from_the_start_or_the_last_action() -> None:
+    record = acting()
+    seq = len(record.events) + 1
+    condition = AlarmCondition(kind='action_hours', threshold=0.5)
+    alarm = AlarmSet(seq=seq, at=record.at(seq), agent='ada', minutes=0, conditions=(condition,), stays=True)
+    record.events.append(alarm)
+    # A draft is no allowance in force, so the alarm has no time yet.
+    assert rings_at(record.board(), alarm) is None
+
+    add(record, lambda seq, at: AllowanceStarted(seq=seq, at=at, allowance='a-1'))
+    begun = record.board().allowance_starts[-1].at
+    assert rings_at(record.board(), alarm) == begun + timedelta(minutes=30)
+    record.post(action(id='p-2', allowance='a-1', allowed=True, needs=None))
+    acted = record.board().posts[-1].at
+    assert rings_at(record.board(), alarm) == acted + timedelta(minutes=30)
+    # After the allowance's end, no allowance is in force.
+    assert rings_at(record.board(), alarm, TERMS.ends_at + timedelta(minutes=1)) is None
+    assert 'an allowance in force has had no action for 0.5 hours' in alarm_message(alarm, cause=condition)

@@ -978,6 +978,8 @@ unit of its threshold:
 - `request_minutes`: a post has waited that many minutes for the person's answer: an ask to the person, a
   permission request, or a request for a move.
 - `task_minutes`: an open task has had no owner for that many minutes.
+- `action_hours`: while an allowance is in force, its acting seat has declared no action for that many hours, since
+  its last action or since the allowance started.
 
 The alarm rings once: at its time, or when the record meets one of its conditions, whichever comes first, and the
 message that wakes you names the condition that the record met. A condition that the record meets already when you
@@ -1005,8 +1007,10 @@ agent. `tokens_last_hour` and `dollars_last_hour` are what the turns that ended 
 among them, and `budget_hours_left` is the hours until the lab spends its budget at that rate. `seats_near_limit`
 counts the seats above 80 percent of a window of their provider's usage limits. `reading_hours_ago` and
 `round_hours_ago` are the hours since the lab's reading and since the newest round opened. `unowned_tasks` counts
-the open tasks that nobody holds, and `waits_for_person` the posts that wait for the person's answer. A field that is
-not there is zero or empty.
+the open tasks that nobody holds, and `waits_for_person` the posts that wait for the person's answer.
+`actions_allowed` counts the actions of the lab that an allowance allowed, `actions_asked` the ones that became
+requests to the person, and `actions_refused` those that the person refused or let pass until their offers ended. A
+field that is not there is zero or empty.
 
 `moves` holds the coordinator's moves, the newest first, at most 20, and `more_moves` counts the older ones. A move
 is a request of the coordinator that got a yes, a round that the coordinator opened, or a reading that it posted.

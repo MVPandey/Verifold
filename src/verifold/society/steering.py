@@ -17,7 +17,8 @@ from verifold.protocol.events import Posted
 from verifold.protocol.ids import PERSON, AgentId
 from verifold.protocol.join import MoveLine, SpareSeats, SteeringFacts, SteerKind
 from verifold.protocol.moves import AddMove, CapMove, PauseMove, RemoveMove, ResumeMove
-from verifold.protocol.posts import MoveRequest, Reading, Result, Round
+from verifold.protocol.posts import Action, MoveRequest, Reading, Result, Round
+from verifold.society.allowances import action_state
 from verifold.society.board import Board
 from verifold.society.budget import budget_line
 from verifold.society.coordinator import joined_by, waiting_posts
@@ -114,7 +115,19 @@ def steering_facts(board: Board, now: datetime) -> SteeringFacts:
         round_hours_ago=_hours(now - rounds.at) if rounds else None,
         unowned_tasks=len(open_tasks(board, now)),
         waits_for_person=len(waiting_posts(board, now)),
+        **_actions(board, now),
     )
+
+
+def _actions(board: Board, now: datetime) -> dict[str, int]:
+    # The actions of the lab so far, by what the board answered when their seats declared them, and by what became
+    # of the ones that waited for the person.
+    states = [action_state(board, entry, now) for entry in board.posts if isinstance(entry.post, Action)]
+    return {
+        'actions_allowed': states.count('allowed'),
+        'actions_asked': len(states) - states.count('allowed'),
+        'actions_refused': states.count('no') + states.count('missed'),
+    }
 
 
 def spare_seats(board: Board) -> SpareSeats | None:

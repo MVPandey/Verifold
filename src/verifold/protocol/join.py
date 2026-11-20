@@ -1631,6 +1631,12 @@ class SteeringFacts(Sparse):
     """How many tasks are open: nobody holds them, no hand-back waits, and their authors did not withdraw them."""
     waits_for_person: int = 0
     """How many posts wait for the person's answer: asks to the person, permission requests, and requests for a move."""
+    actions_allowed: int = 0
+    """How many actions of the lab an allowance allowed when their seats declared them."""
+    actions_asked: int = 0
+    """How many actions of the lab became requests to the person, because no allowance allowed them."""
+    actions_refused: int = 0
+    """How many of those the person refused, or let pass until their offers ended."""
 
 
 class SpareSeats(Record):

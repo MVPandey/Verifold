@@ -16,6 +16,7 @@ from verifold.protocol.events import AlarmCondition, AlarmSet, ConditionKind
 from verifold.protocol.ids import AgentId, PostId
 from verifold.protocol.join import AlarmLine
 from verifold.protocol.posts import HandBack, Reading, RuledOut
+from verifold.society.allowances import actions, draft, in_force
 from verifold.society.board import Board
 from verifold.society.coordinator import waiting_posts
 from verifold.society.lifecycle import lab_state, latest_time, pending_alarm
@@ -77,6 +78,17 @@ def _task(board: Board, minutes: float, now: datetime) -> datetime | None:
     return since + timedelta(minutes=minutes) if since else None
 
 
+def _action(board: Board, hours: float, now: datetime) -> datetime | None:
+    # An allowance in force whose seat declared no action for `hours`, since its last action or since its start.
+    quiet = (
+        max((started.at, *(entry.at for entry in actions(board, started.allowance))))
+        for started in board.allowance_starts
+        if (held := draft(board, started.allowance)) and in_force(board, held.terms.holder, now) == held
+    )
+    since = min(quiet, default=None)
+    return since + timedelta(hours=hours) if since else None
+
+
 def _unowned_since(board: Board, task_id: PostId, posted: datetime) -> datetime:
     # When the task last had an owner: the end of the last claim's lease by its time, the holder's hand-back or
     # ruled-out lead that gave the task up, or the holder's leave. A task that nobody claimed has had none since it
@@ -100,6 +112,7 @@ DUE: dict[ConditionKind, Due] = {
     'limit_percent': _limit,
     'request_minutes': _request,
     'task_minutes': _task,
+    'action_hours': _action,
 }
 """When the record meets each kind of condition."""
 
@@ -109,6 +122,7 @@ WORDS: dict[ConditionKind, str] = {
     'limit_percent': "a seat is at {threshold:g} percent of a window of its provider's usage limits",
     'request_minutes': "a post has waited {threshold:g} minutes for the person's answer",
     'task_minutes': 'an open task has had no owner for {threshold:g} minutes',
+    'action_hours': 'an allowance in force has had no action for {threshold:g} hours',
 }
 """What the record met, for each kind of condition, as the message of the alarm says it."""
 

@@ -164,7 +164,7 @@ def test_the_lab_norms_are_plain_text_for_one_read_and_the_doorbell_is_one_line(
     assert '`' not in NORMS_TEMPLATE
     # Each norm has its reason and what it looks like in practice, so the file is longer than a list of rules.
     # An agent still reads it whole at the start of its work.
-    assert len(NORMS_TEMPLATE) < 27_500
+    assert len(NORMS_TEMPLATE) < 29_000
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -185,6 +185,7 @@ def test_the_lab_norms_are_sections_that_each_say_what_the_person_wants_and_why(
         'Evidence',
         'Helpers',
         'The answer and the person',
+        'Acting for the person',
         'The desk',
     ]
     for how_to_read in (
@@ -672,3 +673,17 @@ def test_the_start_message_of_a_seat_with_a_fresh_view_holds_the_reading_and_wha
     assert "Post p-1 holds the lab's reading of the question: An answer is a sort that holds." in text
     assert '1 lead was ruled out:\n- p-2: A heap sort loses on the long tail.' in text
     assert FRESH not in start_message(board, plain.agent, Path('/lab/.verifold/LAB.md'))
+
+
+def test_the_norms_say_that_an_acting_seat_declares_each_action_before_it_acts_and_posts_its_real_cost_after() -> None:
+    section = NORMS_TEMPLATE.split('## Acting for the person')[1].split('\n## ')[0]
+
+    for norm in (
+        'The person wants every action in sight before it is taken, and its real cost after it.',
+        # The board stops a seat at the total by what the seat declares, and sees nothing else.
+        'It cannot see what an agent does not declare.',
+        'the acting seat declares each action on the board before it does it',
+        'it posts the receipt with the real cost and the evidence',
+        'the seat asks another agent to check the post that the action rests on before it declares the action',
+    ):
+        assert norm in section
