@@ -1342,6 +1342,8 @@ class AgentLine(Sparse):
     """Whether the agent holds the lab's coordinator seat."""
     reviewer: bool = False
     """Whether the agent holds a reviewer seat."""
+    acting: bool = False
+    """Whether the agent's seat is an acting seat, which acts in the world and declares each action with `act`."""
     flag: str = ''
     """The reason of the coordinator's flag on the agent's profile, while one stands."""
     status: str = ''
@@ -1610,8 +1612,8 @@ class Brief(Record):
     What the board left out of this brief so that it stays within `MAX_BRIEF`: one line for each part that it cut,
     with how many lines it left out and which tool shows them. Left out while the brief holds the whole board.
 
-    The board never cuts `how`, the question, your own line, your notes, the lab's state, time, budget, and limits,
-    `person_waits`, the reading, the round that is open, or a line of a post for you in the news. When the brief has
+    The board never cuts `how`, the question, your own line, your notes, your allowance, the lab's state, time,
+    budget, and limits, `person_waits`, the reading, the round that is open, or a line of a post for you in the news. When the brief has
     too little room for the posts for you, the news ends earlier, and the next result brings the rest. It cuts the
     other parts in a fixed order, as the description of `brief` says, and it cuts each part only as far as it needs
     to.

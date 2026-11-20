@@ -415,3 +415,45 @@ async def test_the_desk_keeps_notes_for_its_seat_and_reads_them_in_its_brief_and
         ('dee', 'The person wants the tail first.'),
     ]
     assert view.agents[2].notes_at == desk_lab.board.notes[-1].at
+
+
+async def test_the_desk_drafts_an_allowance_on_the_persons_word_and_no_tool_starts_one(desk_lab: Lab) -> None:
+    await desk_lab.set_acting('bo', acting=True)
+    on = await said(desk_lab, 'bo may buy up to $10 each, $100 in all, until 9:35 tonight.')
+    draft = {
+        'on': on,
+        'holder': 'bo',
+        'purpose': 'Place orders',
+        'unit': 'USD',
+        'per_action': 10,
+        'total': 100,
+        'ends_at': (START + timedelta(hours=9)).isoformat(),
+    }
+    async with Client(join_server(lambda _: Member(desk_lab, 'dee'))) as desk:
+        drafted = await desk.call_tool('draft_allowance', draft)
+        tools = {tool.name for tool in (await desk.list_tools()).tools}
+        overview = (await desk.call_tool('overview', {})).structured_content
+    async with Client(join_server(lambda _: Member(desk_lab, 'bo'))) as bo:
+        refused = await bo.call_tool('draft_allowance', draft)
+        acted = await bo.call_tool(
+            'act',
+            {
+                'what': 'Buy 50 YES at 7c',
+                'cost': 3.5,
+                'undoable': False,
+                'rests_on': ['p-1'],
+                'offer_ends': (START + timedelta(hours=1)).isoformat(),
+            },
+        )
+
+    assert drafted.structured_content is not None
+    assert 'It allows nothing until the person confirms it in the app.' in drafted.structured_content['did']
+    assert desk_lab.board.allowance_starts == ()
+    assert not {name for name in tools if 'allowance' in name} - {'draft_allowance'}
+    assert overview is not None
+    assert overview['allowances'] == []
+    assert (refused.is_error, "This tool is the desk's" in text_of(refused)) == (True, True)
+    assert acted.structured_content is not None
+    assert (acted.structured_content['allowed'], acted.structured_content['needs']) == (False, 'none')
+    (action,) = desk_actions(desk_lab.board)[-1:]
+    assert (action.kind, action.allowance, action.on) == ('allowance', 'a-1', on)

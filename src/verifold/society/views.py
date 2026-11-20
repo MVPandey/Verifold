@@ -886,6 +886,7 @@ def _agent_line(
         on_call=board.on_call(agent.id),
         coordinator=board.coordinator == agent.id,
         reviewer=board.reviewer(agent.id),
+        acting=board.acting(agent.id),
         flag=flag.flag or '' if flag else '',
         status=status,
         thread=working.get(agent.id),

@@ -13,10 +13,11 @@ from conftest import ServedBoard, agent, serve_board
 from fakes import FAKE_COMMAND, FAKE_HARNESS, FAKE_METER, FakeCopies
 
 from verifold.harnesses.catalog import HarnessEntry
+from verifold.protocol.allowances import AllowanceTerms
 from verifold.protocol.app import AgentState, Retry, WaitsFor
 from verifold.protocol.events import AlarmSet, TurnStarted, TurnSummary
 from verifold.protocol.ids import PERSON
-from verifold.protocol.join import MAX_NEWS, PostRequest
+from verifold.protocol.join import MAX_NEWS, ActRequest, PostRequest
 from verifold.protocol.moves import CapMove, PauseMove
 from verifold.protocol.posts import Ask, FileEvidence, PermissionShown, QuestionShown
 from verifold.protocol.settings import (
@@ -37,6 +38,7 @@ from verifold.runner.messages import (
     DOORBELL,
     HARNESS_FAILED,
     IN_TURN,
+    MODE_CHANGED,
     OUT_OF_TIME,
     RERUN_WANTED,
     RESTARTED,
@@ -54,6 +56,7 @@ from verifold.runner.session import AgentSession, PermissionChoice, PermissionRe
 from verifold.server.activity import Activity
 from verifold.server.lab import Lab, Said
 from verifold.server.member import Member
+from verifold.server.status import missed
 from verifold.society.attention import news
 from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
 from verifold.society.turns import before
@@ -864,6 +867,8 @@ async def test_a_request_that_waits_ends_with_its_turn_and_the_agents_next_reque
         "This request ended with the agent's turn. An answer to it decides nothing."
     ]
     assert (late, 'Permission: cancelled.' in posts_by(served, 'bo')) == ([], True)
+    # The request that ended with its turn is among what the person missed at once.
+    assert [(item.post, item.what) for item in missed(lab.board)] == [(old.id, 'Asks for a permission of its harness')]
 
 
 MAKE = PermissionRequest(
@@ -2400,3 +2405,56 @@ async def test_the_record_keeps_the_limits_that_the_harness_reports(
         'bo',
         [('5-hour', 62)],
     )
+
+
+async def test_the_board_stops_an_acting_seat_whose_actions_passed_its_total_until_the_person_ends_the_allowance(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab, activity = served.lab, Activity()
+    await lab.set_acting('bo', acting=True)
+    terms = AllowanceTerms(
+        holder='bo', purpose='Buy', unit='USD', per_action=10, total=10, ends_at=START + timedelta(days=1)
+    )
+    await lab.start_allowance((await lab.draft_allowance(terms)).allowance)
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        offer = START + timedelta(days=1)
+        done = await lab.act('bo', ActRequest(what='Buy', cost=8, undoable=False, rests_on=('p-1',), offer_ends=offer))
+        receipt = PostRequest(kind='receipt', text='Slipped.', reply_to=done.post.id, thread='t-1', cost=12)
+        await lab.post(receipt, 'bo', (FileEvidence(path='r.json', commit='c' * 40),))
+        await lab.post(PostRequest(kind='message', text='What happened?', thread='t-1', mentions=('bo',)), PERSON)
+        await until(lambda: activity.of('bo').waits_for == 'pace')
+        await asyncio.sleep(0.3)
+        assert len(calls(log, 'prompt')) == 1
+        assert activity.of('bo').detail.startswith('Its actions passed the total of its allowance')
+
+        await lab.end_allowance('a-1')
+        await until(lambda: len(lab.board.turns) == 2)
+    finally:
+        running.cancel()
+
+    second = str(calls(log, 'prompt')[1]['text'])
+    assert second.startswith('Verifold held your turns while the actions of your allowance cost more than its total.')
+    assert 'The person ended your allowance, so you hold none in force.' in second
+
+
+async def test_a_seat_whose_mode_the_person_changed_starts_its_session_again_in_that_mode(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        assert await lab.set_mode('bo', 'auto')
+        assert not await lab.set_mode('bo', 'auto')
+        await lab.post(PostRequest(kind='message', text='Go on.', thread='t-1', mentions=('bo',)), PERSON)
+        await until(lambda: len(lab.board.turns) == 2)
+    finally:
+        running.cancel()
+
+    assert [call['mode'] for call in calls(log, 'mode')] == ['auto']
+    assert len(calls(log, 'load_session')) == 1
+    second = str(calls(log, 'prompt')[1]['text'])
+    assert second.startswith(MODE_CHANGED.format(mode='auto'))
+    assert second.endswith(DOORBELL)

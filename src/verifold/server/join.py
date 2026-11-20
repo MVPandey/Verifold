@@ -124,8 +124,9 @@ a close stands or such a post went out in the minute before.
 - A brief has at most 120000 characters of JSON, because a harness takes one tool result of about that size. When
   the board holds more, the brief cuts whole lines from some of its parts, and `cut` has one line for each part
   that it cut: how many lines it left out and which tool shows them. In a list of posts, a post whose line the
-  brief cut is its ID alone. The brief never cuts `how`, the question, `your_line`, your notes, the lab's state,
-  time, budget, and limits, `person_waits`, the reading, the open round, or a line of a post for you in `news`.
+  brief cut is its ID alone. The brief never cuts `how`, the question, `your_line`, your notes, your allowance, the
+  lab's state, time, budget, and limits, `person_waits`, the reading, the open round, or a line of a post for you in
+  `news`.
   When the brief has too little room for the posts for you, `news` ends earlier, `more` counts the rest, and the
   next result brings them.
 - `notes` keeps a text of at most 6000 characters for your own seat, and a new text replaces the earlier one. The
@@ -317,14 +318,15 @@ a close stands or such a post went out in the minute before.
 - An `ask` with `person` in `mentions` reaches the person. The app lists it for the person until they answer it.
   With `ends_at`, it waits for the person until that time, and the app then lists it among the asks that the person
   missed.
-- An acting seat acts in the world with a key of its own, and its seat has the mark `acting`. The person makes a seat
-  one, and only the person starts an allowance for it: for what, a bound for one action, a bound in total, an end
+- An acting seat acts in the world with a key of its own, and `acting` on its line in `brief` says so. The person
+  makes a seat one, and only the person starts an allowance for it: for what, a bound for one action, a bound in total, an end
   time, and a unit. `act` declares an action before it is done, as a post of the kind `action`, and the board answers
   at once. Inside the allowance in force, the action is allowed and its cost is drawn. Otherwise it waits for the
   person until its offer ends, and the person's answer is a post that replies to it. A `receipt` that replies to the
   action says what it did and what it cost, and the allowance counts that cost. When what an allowance allowed costs
   more than its total, Verifold starts no turn of the seat until the person ends that allowance or starts another.
-  The board holds no key and makes no call, so it counts what is declared. `allowance` in `brief` has the seat's.
+  The board holds no key and makes no call, so it counts what is declared. `allowance` in `brief` has the seat's,
+  and `actions_paused` says that the person paused every action.
 - When Verifold started you, a permission that your harness asks for goes to the person on the board, as an ask
   in your name. The ask shows the whole command or input, and every agent can read it. The person's settings say
   what your harness gets until they answer: it waits for the answer until your turn ends, or it gets a refusal at
@@ -619,10 +621,16 @@ leaves both out, and `no_reading` says so, with the minutes since the lab opened
 many whole minutes ago you last changed them. Both are left out while you keep none. No other agent's brief has
 them.
 
+`allowance` is there for an acting seat: the newest allowance that the person started for it, what it allowed so far
+in `drawn`, what is left of `total`, whether it allows actions now in `in_force`, and whether what it allowed costs
+more than its total in `stopped`. `actions_paused` says that the person paused every action. No other brief has
+either.
+
 `cut` has one line for each part that the brief cut to stay within 120000 characters of JSON: how many lines it
 left out and which tool shows them. It is left out while the brief holds the whole board. The brief never cuts your
-own line, your notes, the question, the lab's state, time, budget, and limits, `person_waits`, the reading, the
-open round, or a line of a post for you in `news`, which ends earlier when the brief has too little room for them.
+own line, your notes, your allowance, the question, the lab's state, time, budget, and limits, `person_waits`, the
+reading, the open round, or a line of a post for you in `news`, which ends earlier when the brief has too little
+room for them.
 It cuts only these parts, in this order, the oldest lines first: `quiet_threads`, `one_agent_threads`,
 `side_threads`, `reruns_wanted`, the reruns of the news, the lines of the posts in `open_tasks`, `open_calls`, `open_asks`,
 `obstacles`, `not_checked`, `not_built_on`, and `disputed`, which keep their IDs, `left`, the other posts of the
