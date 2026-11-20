@@ -108,6 +108,17 @@ class RerunSettings(Record):
     """
 
 
+class TaskSettings(Record):
+    """How long one agent holds a task that it claimed."""
+
+    lease_minutes: int = Field(default=30, ge=1, le=MAX_BOARD_MINUTES)
+    """
+    The minutes of the lease that a claim of a task gives its agent, and that the holder's activity on the task
+    starts again. While the lease stands, the board refuses a claim of the task from another agent, and at its end
+    the task is open again. A lease keeps the minutes that the lab followed when it started or started again.
+    """
+
+
 MAX_DISK_GB = 100_000
 """The largest disk limit that the person can set, in gigabytes."""
 
@@ -140,6 +151,7 @@ class Settings(Record):
     reviewers: ReviewerSettings = ReviewerSettings()
     votes: VoteSettings = VoteSettings()
     reruns: RerunSettings = RerunSettings()
+    tasks: TaskSettings = TaskSettings()
     disk: DiskSettings = DiskSettings()
 
 
@@ -205,6 +217,7 @@ class SettingsFile(Record):
     reviewers: ReviewerSettings = ReviewerSettings()
     votes: VoteSettings = VoteSettings()
     reruns: RerunSettings = RerunSettings()
+    tasks: TaskSettings = TaskSettings()
     disk: DiskSettings = DiskSettings()
     setup: SetupDefaults = SetupDefaults()
     harnesses: dict[Label, HarnessSettings] = Field(default_factory=dict)
@@ -228,5 +241,6 @@ class SettingsFile(Record):
             reviewers=self.reviewers,
             votes=self.votes,
             reruns=self.reruns,
+            tasks=self.tasks,
             disk=self.disk,
         )

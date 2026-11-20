@@ -37,6 +37,7 @@ from verifold.protocol.join import (
     QuestionVersion,
     RerunLine,
     Standing,
+    TaskState,
     ThreadSummary,
     ThreadView,
 )
@@ -287,6 +288,20 @@ class DeliverableView(DeliverableLine):
     offers: tuple[OfferView, ...] = ()
 
 
+class TaskCard(Record):
+    """A task of a thread as the thread's card shows it: what the task asks for, and who is on it now."""
+
+    task: PostId
+    author: AgentId
+    text: str
+    """The task's objective, as a line of a post shows its headline."""
+    state: TaskState
+    agent: AgentId | None = None
+    """The agent on the work: the holder of a task that is `claimed`, or the author of the hand-back that waits."""
+    until: AwareDatetime | None = None
+    """When the holder's lease ends, unless its activity on the task starts it again. `None` without a holder."""
+
+
 class ThreadCard(ThreadSummary):
     """A thread's summary as the person's app shows it on its card, with the times of the line's newest result and plan."""
 
@@ -294,6 +309,8 @@ class ThreadCard(ThreadSummary):
     """When the newest result of the line of work was posted. `None` without one, and for any other thread."""
     last_plan_at: AwareDatetime | None = None
     """When the newest plan of the line of work was posted. `None` without one, and for any other thread."""
+    tasks: tuple[TaskCard, ...] = ()
+    """The thread's tasks that are open, claimed, or handed back, oldest first. A done or withdrawn task is not here."""
 
 
 class ObstacleView(Record):
@@ -581,6 +598,8 @@ class StartRequest(Record):
     """How long a new post hides its votes, in place of `votes.reveal_minutes` of the files. `None` takes the files'."""
     lease_minutes: int | None = Field(default=None, ge=0, le=MAX_BOARD_MINUTES)
     """How long a take holds a rerun, in place of `reruns.lease_minutes` of the files. `None` takes the files'."""
+    task_lease_minutes: int | None = Field(default=None, ge=1, le=MAX_BOARD_MINUTES)
+    """How long a claim holds a task, in place of `tasks.lease_minutes` of the files. `None` takes the files'."""
     budget_tokens: int | None = Field(default=None, ge=1, le=MAX_BUDGET_TOKENS)
     """The lab's budget in tokens. `None` means no budget in tokens."""
     budget_dollars: float | None = Field(default=None, gt=0, le=MAX_BUDGET_DOLLARS)
@@ -620,6 +639,7 @@ type SettingKey = Literal[
     'reviewers.seats',
     'votes.reveal_minutes',
     'reruns.lease_minutes',
+    'tasks.lease_minutes',
     'disk.limit_gb',
     'setup',
 ]

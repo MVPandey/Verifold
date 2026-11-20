@@ -50,6 +50,7 @@ from verifold.protocol.settings import (
     RerunSettings,
     SettingsLevel,
     SetupDefaults,
+    TaskSettings,
     VoteSettings,
 )
 from verifold.protocol.usage import Usage
@@ -71,7 +72,7 @@ from verifold.server.errors import LabExists, NoLab, SetupRejected
 from verifold.server.join import Members, join_server, token_digest
 from verifold.server.lab import Build, Lab, Stops
 from verifold.server.member import Member
-from verifold.server.timekeeper import keep_rounds, keep_time
+from verifold.server.timekeeper import keep_claims, keep_rounds, keep_time
 from verifold.server.web import WEB_FOLDER, web_app
 from verifold.society.attention import update
 from verifold.society.board import Board
@@ -584,6 +585,8 @@ class Host:
             settings = settings.model_copy(update={'votes': VoteSettings(reveal_minutes=request.reveal_minutes)})
         if request.lease_minutes is not None:
             settings = settings.model_copy(update={'reruns': RerunSettings(lease_minutes=request.lease_minutes)})
+        if request.task_lease_minutes is not None:
+            settings = settings.model_copy(update={'tasks': TaskSettings(lease_minutes=request.task_lease_minutes)})
         if request.disk_gb is not None:
             settings = settings.model_copy(update={'disk': DiskSettings(limit_gb=request.disk_gb)})
         lab = Lab.create(
@@ -657,6 +660,7 @@ class Host:
         write_missing_norms(self._project / LAB_FOLDER)
         group.create_task(keep_time(lab))
         group.create_task(keep_rounds(lab))
+        group.create_task(keep_claims(lab))
         group.create_task(keep_jobs(lab, self._project, self._swept))
         group.create_task(keep_copies(lab, self._copies))
         self._disk = DiskMeter(self._project, lab)

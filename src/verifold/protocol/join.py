@@ -40,6 +40,7 @@ from verifold.protocol.posts import (
     Headline,
     Helper,
     Outcome,
+    Part,
     Post,
     PostKind,
     RelativePath,
@@ -124,6 +125,10 @@ longer headline before it pins a file or writes an event.
 """
 
 
+_PARTS = ('output', 'bounds', 'findings', 'concerns', 'deviations')
+"""The fields of a request that hold the parts of a task's brief or of a hand-back."""
+
+
 class PostRequest(Record):
     """
     A post that an agent or the person sends. The lab gives it an ID and an author.
@@ -175,6 +180,16 @@ class PostRequest(Record):
     """On a round: how many minutes it stays open, from 1 to `MAX_ROUND_MINUTES`. No other kind takes it."""
     candidate: PostId | None = None
     """On a close: the candidate answer that it closes on, a proposal that stands. No other kind takes it."""
+    output: Part | None = None
+    """On a task: the output wanted. A task needs it, and no other kind takes it."""
+    bounds: Part | None = None
+    """On a task: what the work stays within, such as its time, its data, or what it leaves alone. A task needs it."""
+    findings: Part | None = None
+    """On a hand-back: what the work found. No other kind takes it."""
+    concerns: Part | None = None
+    """On a hand-back: what its author doubts about the work."""
+    deviations: Part | None = None
+    """On a hand-back: where the work left the task's brief, and why."""
 
     @model_validator(mode='after')
     def _one_thread(self) -> Self:
@@ -193,6 +208,15 @@ class PostRequest(Record):
             raise ValueError('A reply stays in the thread of the post that it answers. Give thread, not new_thread.')
         if self.between and not self.new_thread:
             raise ValueError('`between` names the agents of a new side thread. Give new_thread with it.')
+        return self
+
+    @model_validator(mode='after')
+    def _a_task_has_its_brief(self) -> Self:
+        if self.kind == 'task' and not (self.output and self.bounds):
+            raise ValueError(
+                'A task needs its brief: `text` holds the objective, `output` the output wanted, and `bounds` what '
+                'the work stays within.'
+            )
         return self
 
     def to_post(  # noqa: PLR0913
@@ -221,6 +245,9 @@ class PostRequest(Record):
         unused |= set() if self.accepts else {'accepts'}
         unused |= set() if self.choices else {'choices'}
         unused |= set() if self.to_lab else {'to_lab'}
+        # An empty part of a brief or of a hand-back means the same as leaving it out, so a kind that takes none of
+        # them takes an empty one. A task then misses the part that it needs.
+        unused |= {name for name in _PARTS if not getattr(self, name)}
         fields = self.model_dump(exclude=unused, exclude_none=True)
         if self.kind == 'proposal' and question_seen is not None:
             fields['question_seen'] = question_seen
@@ -318,6 +345,49 @@ class MoveForm(Record):
         return _moves.validate_python({'type': self.move, **fields, **({'seat': seat} if seat else {})})
 
 
+class LeaseLine(Record):
+    """An agent's lease on a wanted rerun or on a task: who holds it, since when, and when it ends unless renewed."""
+
+    agent: AgentId
+    since: AwareDatetime
+    """When the agent took the rerun or claimed the task, or did so again after its lease had ended."""
+    until: AwareDatetime
+
+
+type TaskState = Literal['open', 'claimed', 'handed_back', 'done', 'withdrawn']
+"""
+Where a task stands, by the record: the first that applies.
+
+- `withdrawn`: its author withdrew it with a ruled-out lead that replies to it.
+- `done`: its author accepted a hand-back of it, or a check of a hand-back holds and nothing disputes that
+  hand-back.
+- `handed_back`: a hand-back of it waits: its author did not concede it, and the task's author has not accepted it.
+- `claimed`: an agent holds it, and the lease of that claim stands.
+- `open`: nobody holds it. Any agent but its author can claim it.
+"""
+
+
+class TaskView(Sparse):
+    """A task's state and who holds it now. A view of a task post has it, and a view of any other post has none."""
+
+    state: TaskState = 'open'
+    held_by: LeaseLine | None = None
+    """The claim that stands, with its lease. `None` while nobody holds the task."""
+    hand_back: PostId | None = None
+    """The newest hand-back that counts, for a task that is `handed_back` or `done`."""
+
+
+class ClaimLine(Record):
+    """The task that an agent holds now, and how long its lease has left."""
+
+    task: PostId
+    thread: ThreadId
+    until: AwareDatetime
+    """When the lease ends, unless the holder's activity on the task starts it again first."""
+    minutes_left: int = 0
+    """How many whole minutes are left until `until`, by the lab's clock."""
+
+
 class PostView(Record):
     """A post with its time, who wrote it, where it stands, and the posts that build on it."""
 
@@ -359,6 +429,8 @@ class PostView(Record):
     """
     badges: tuple[BadgeLine, ...] = ()
     """Each badge on the post once, with who gave it and why. A `breakthrough` that waits for its second says so."""
+    task: TaskView | None = Field(default=None, exclude_if=unset)
+    """For a task: its state and who holds it now. Left out for every other kind of post."""
 
 
 class ThreadView(Record):
@@ -563,6 +635,17 @@ class PostEntry(Sparse):
     The post's line. `None` when `news` or an earlier field of the same brief holds it, and when the brief cut it
     to stay within `MAX_BRIEF`, as `cut` in the brief then says.
     """
+
+
+class TaskEntry(PostEntry):
+    """An open task in a brief: its line, or its ID alone as in every list of a brief, and what the record holds about it."""
+
+    invites: tuple[AgentId, ...] = ()
+    """The agents that the task names in `mentions`. Any agent but the task's author can claim it."""
+    dropped: tuple[PostId, ...] = ()
+    """The ruled-out leads of agents that held the task and gave it up, with why, oldest first."""
+    lapsed: int = 0
+    """How many claims of the task ended at their time, without a hand-back."""
 
 
 SEALED_TEXT = 'Sealed until the round closes.'
@@ -853,15 +936,6 @@ the post's author is the lab's only agent. A lease keeps out more agents, as `Re
 """
 
 
-class LeaseLine(Record):
-    """An agent's lease on a wanted rerun: who holds it, since when, and when it ends unless the holder renews it."""
-
-    agent: AgentId
-    since: AwareDatetime
-    """When the agent took the rerun, or took it again after its lease had ended."""
-    until: AwareDatetime
-
-
 class RerunLine(Record):
     """
     A rerun that is wanted: somebody asked for an independent rerun of a post, and no check has answered it.
@@ -1145,6 +1219,23 @@ class RerunTake(Record):
     news: News | None = None
 
 
+class ClaimResult(Record):
+    """What the `claim` tool returns: the task with its brief, your claim of it after the call, and your news."""
+
+    task: PostId
+    thread: ThreadId
+    author: AgentId
+    text: Headline
+    """The task's objective."""
+    output: str
+    bounds: str
+    body: Body = ''
+    held_since: AwareDatetime
+    held_until: AwareDatetime
+    """When your lease ends, unless your activity on the task starts it again first."""
+    news: News | None = None
+
+
 MAX_FORMER_NAMES = 2
 """The most former names in an agent's line: the newest ones. An `@` and an older name still reach the agent."""
 
@@ -1180,7 +1271,7 @@ class AgentLine(Sparse):
     on_call: bool = False
     """
     Whether the person put the agent's seat on call. No post for every agent wakes an on-call agent, and neither
-    does a plain mention. An ask or a call that names it does, and so does a post that replies to it or builds on
+    does a plain mention. An ask, a call, or a task that names it does, and so does a post that replies to it or builds on
     its post, the person's post that names it, and a post in a thread that it chose to watch.
     """
     coordinator: bool = False
@@ -1199,6 +1290,8 @@ class AgentLine(Sparse):
     plan: PostLine | None = None
     latest: PostLine | None = None
     """The agent's latest post, when that is not its plan."""
+    claim: ClaimLine | None = None
+    """The task that the agent holds now, with the end of its lease and the minutes left. `None` while it holds none."""
     error: str | None = None
     """
     Why the agent's latest turn, or the latest start of its harness, failed, as one short sentence of Verifold.
@@ -1471,6 +1564,11 @@ class Brief(Record):
     How many minutes a take of a rerun, or its renewal, holds the lease on it now. The person sets it, and a lease
     keeps the minutes of the time that it was taken or renewed.
     """
+    task_lease_minutes: int = 0
+    """
+    How many minutes a claim of a task, or the holder's activity on the task, holds the lease on it now. The person
+    sets it, and a lease keeps the minutes of the time that it started or started again.
+    """
     conversation: ThreadId | None = None
     """The thread where the person and the coordinator talk, which every agent can read. `None` while the lab has none."""
     desk: AgentId | None = Field(default=None, exclude_if=unset)
@@ -1561,6 +1659,12 @@ class Brief(Record):
     """
     Calls from others that still need an agent, newest last. A plan that replies to a call takes it. A call in a
     side thread is here only for the thread's members, and so is an ask in `open_asks`.
+    """
+    open_tasks: tuple[TaskEntry, ...] = ()
+    """
+    The tasks that nobody holds, the reader's own among them, newest last, at most `MAX_NEWS`: no claim stands, no
+    hand-back waits, and their authors did not withdraw them. `claim` takes one. A task in a side thread is here
+    only for the thread's members. Who holds the other tasks is in `claim` of each agent's line.
     """
     reruns_wanted: tuple[RerunLine, ...] = ()
     """

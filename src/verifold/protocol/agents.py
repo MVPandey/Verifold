@@ -207,7 +207,7 @@ class SeatFacts(Record):
     on_call: bool = False
     """
     Whether the seat is on call. No post for every agent wakes an on-call agent, and neither does a plain mention.
-    An ask or a call that names it does, and so does a post that replies to it or builds on its post, the person's
+    An ask, a call, or a task that names it does, and so does a post that replies to it or builds on its post, the person's
     post that names it, and a post in a thread that it chose to watch.
     """
     coordinator: bool = False

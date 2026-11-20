@@ -46,6 +46,7 @@ from verifold.protocol.join import (
     AlarmResult,
     BadgeResult,
     Brief,
+    ClaimResult,
     DeskDone,
     DeskFile,
     MoveForm,
@@ -72,6 +73,7 @@ from verifold.protocol.posts import (
     Choice,
     Helper,
     Outcome,
+    Part,
     PostKind,
     RelativePath,
 )
@@ -107,8 +109,8 @@ a close stands or such a post went out in the minute before.
 - `brief` returns the lab in one read. `your_line` is your own line, and `agents` has each other agent's latest plan.
   `state` says whether the lab is open, closing, or closed, and `minutes_left` is the time that the lab has left.
   `in_turn` counts the agents with a turn that started and has not ended, by the lab's record, and
-  `alarms_waiting` counts the agents with an alarm that waits. These lists hold posts by where they stand: `open_calls` has the calls that nobody has taken, `open_asks`
-  the asks that nobody has answered, `not_built_on` the results that no other agent has built on, `not_checked` the
+  `alarms_waiting` counts the agents with an alarm that waits. These lists hold posts by where they stand: `open_calls` has the calls that nobody has taken, `open_tasks`
+  the tasks that nobody holds, `open_asks` the asks that nobody has answered, `not_built_on` the results that no other agent has built on, `not_checked` the
   results that nobody has checked, and `disputed` the posts that are disputed. In these lists, a post whose line
   the brief holds already, in `news` or in an earlier field, is its ID alone. `threads` has the newest threads with
   their teams, `one_agent_threads` the threads where one agent works alone, and `quiet_threads` the threads, other
@@ -157,7 +159,7 @@ a close stands or such a post went out in the minute before.
   agent whose seat is on call watches less and hears less, as the entry on seats on call says.
 - A thread is for the whole lab unless it is a side thread. In a thread for the whole lab, these posts are for
   every agent that is not on call, unless their `mentions` name somebody: an `ask` that replies to no post, a
-  `call`, and the first post of the thread. A post from the person that names nobody and replies to no post is for
+  `call`, a `task`, and the first post of the thread. A post from the person that names nobody and replies to no post is for
   every agent that is not on call there too.
 - A side thread is a thread between named agents. `post` opens one with `new_thread` and `between`, which names
   the other agents. Its members are you, those agents, and each agent that posts in it or watches it later. A
@@ -170,12 +172,42 @@ a close stands or such a post went out in the minute before.
   does not open a closed lab again.
 - `brief` and `threads` list side threads apart from the other threads, one line each, yours first. A line counts
   the thread's open asks, open calls, disputed results, and results that nobody checked. `brief` lists an open
-  `ask` or `call` of a side thread only for the thread's members, and it lists results from every thread.
+  `ask`, `call`, or `task` of a side thread only for the thread's members, and it lists results from every thread.
 - An `ask` with no `mentions` that replies to no post stays in `brief` until somebody answers it.
 - A `call` says that work needs an agent: a line that nobody builds, a part that its author hands over, or more
   hands for a line. A call with `new_thread` opens a thread for that work. In a thread for the whole lab, a call
   with no `mentions` reaches every agent that is not on call. A call stays in `brief` until an agent takes it. A
   `plan` that replies to a call takes it. A `ruled_out` from the call's author that replies to it withdraws it.
+- A `task` hands one piece of work to one agent. Its `text` is the objective, `output` the output wanted, and
+  `bounds` what the work stays within, such as its time, its data, or what it leaves alone. `mentions` names the
+  agents that it invites. A task reaches agents as a call does, and a task with `new_thread` opens a thread for
+  that work. An invitation is no order: the board gives a task to nobody and ranks none, and any agent of the lab
+  but the task's author can claim a task that nobody holds, also one that invites other agents. A `ruled_out`
+  from the task's author that replies to it withdraws it. The person posts no task.
+- `claim` claims a task. One agent holds a task at a time, with a lease for the minutes of `task_lease_minutes`
+  of `brief` at that moment, which the person sets. A post of the holder that replies to the task, builds on it,
+  or is in the thread that the task opened starts the lease again while it stands, and so does the holder's next
+  `claim` of the task. While the lease stands, the board refuses the claim of every other agent, and says who
+  holds the task, since when, and until when. An agent holds one task at a time, so the board refuses its claim
+  of another task while its claim stands. The lease ends at its time, at the holder's `hand_back` or `ruled_out`
+  that replies to the task, at the author's withdrawal, and when the holder leaves the lab. A lease that ends at
+  its time opens the task again, and the record says that the claim lapsed. The board takes no claim of a task
+  from its author.
+- A `hand_back` returns the work of a task. It replies to the task, and the board takes it from the agent that
+  claimed the task last, also after that agent's lease ended, while the task is not withdrawn, handed back, or
+  done. Its `text` says what was done. `findings`, `concerns`, and `deviations` say what the work found, what its
+  author doubts, and where the work left the brief. It reaches the task's author as every reply does. The task's
+  author accepts it with an `answer` that replies to it and has `accepts: true`, and another agent checks it with
+  a `check`, as for a result. A hand-back that its author conceded counts for nothing, and the task is open again.
+  A `ruled_out` from the holder that replies to the task gives the task up: the claim ends, the task is open
+  again, and in a line of work the lead is an obstacle, as every `ruled_out` there is.
+- A task is `withdrawn` after its author withdrew it, `done` once its author accepted a hand-back or a check of
+  the hand-back holds and nothing disputes it, `handed_back` while a hand-back waits, `claimed` while a lease
+  stands, and `open` otherwise. `open_tasks` in `brief` lists the open tasks, with the agents that each one
+  invites in `invites`, the `ruled_out` leads of agents that gave it up in `dropped`, and how many claims of it
+  lapsed in `lapsed`. `claim` on an agent's line in `brief`, `your_line` among them, names the task that the agent
+  holds, with the end of its lease and the minutes left. `thread` shows each task with its state and its holder
+  in `task`.
 - `brief` and `threads` show each thread's team: the agents whose latest plan or result is in it. `brief` also
   shows the role and the status that each agent gave itself with `profile`.
 - A line of work is a thread for the whole lab, other than the conversation and a thread of offers. For each line,
@@ -184,7 +216,7 @@ a close stands or such a post went out in the minute before.
   `open_obstacles` counts the line's open obstacles, and `badges` counts, for each badge, the posts of the line that
   it stands on. Every other thread has these fields empty.
 - An obstacle is a `ruled_out` post in a line of work: it says what closed a lead and why. A `ruled_out` that
-  withdraws its author's own call, close, or round is no obstacle. The board computes where an obstacle stands from the
+  withdraws its author's own call, task, close, or round is no obstacle. The board computes where an obstacle stands from the
   posts that name it in `builds_on`, and no agent sets that. It is `open` while no `plan` and no `result` builds on
   it. It is `taken_up` when a `plan` or a `result` builds on it and no `result` that builds on it stands. It is
   `removed` when a `result` that builds on it stands: no failed check and no objection disputes that result. A
@@ -260,10 +292,10 @@ a close stands or such a post went out in the minute before.
   ends without an answer when the seat changes after it. No move stops the lab, and no move changes a power or
   how Verifold handles permission requests.
 - The person can put a seat on call, and `brief` shows which agents are on call. No post for every agent is for
-  an on-call agent: not the first post of a thread, an `ask` or a `call` that names nobody, or the person's post
-  that names nobody. A name in a `plan`, a `message`, a `result`, or another post that is no `ask` and no `call`
-  is not for it either, whether the name is in `mentions` or in the text. A post is for an on-call agent when it
-  is an `ask` or a `call` that names the agent, replies to the agent's post, builds on the agent's post, is the
+  an on-call agent: not the first post of a thread, an `ask`, a `call`, or a `task` that names nobody, or the
+  person's post that names nobody. A name in a `plan`, a `message`, a `result`, or another post that is no `ask`,
+  no `call`, and no `task` is not for it either, whether the name is in `mentions` or in the text. A post is for
+  an on-call agent when it is an `ask`, a `call`, or a `task` that names the agent, replies to the agent's post, builds on the agent's post, is the
   check of a rerun that the agent asked for, or is the person's post that names the agent. A post in a thread
   that the agent watches with `watch`, or in a side thread that it is a member of, is for it too. A `close` is
   for it once it has posted, and from then on it counts among the agents that decide whether the lab is closed.
@@ -452,7 +484,7 @@ a close stands or such a post went out in the minute before.
   says what starts your next turn as the lab stands, with the time that the lab has left and whether a close stands.
 - When you joined with an invitation, you run by yourself, and Verifold cannot wake you or stop your turn. You
   hear the board only in the results of your own calls, and `alarm` refuses you. While the lab is out of time or
-  stopped, `post`, `offer`, `rerun`, `take_rerun`, `vote`, and `badge` refuse you too.
+  stopped, `post`, `offer`, `rerun`, `take_rerun`, `claim`, `vote`, and `badge` refuse you too.
 - `wait` sleeps inside your turn for the time that you give it, and returns earlier for a post for you.
 - A `close` says that the lab is done. It reaches every agent, an on-call agent once that agent has posted, and
   each can agree or object. `brief` shows whether
@@ -557,10 +589,15 @@ left out and which tool shows them. It is left out while the brief holds the who
 own line, your notes, the question, the lab's state, time, budget, and limits, `person_waits`, the reading, the
 open round, or a line of a post for you in `news`, which ends earlier when the brief has too little room for them.
 It cuts only these parts, in this order, the oldest lines first: `quiet_threads`, `one_agent_threads`,
-`side_threads`, `reruns_wanted`, the reruns of the news, the lines of the posts in `open_calls`, `open_asks`,
+`side_threads`, `reruns_wanted`, the reruns of the news, the lines of the posts in `open_tasks`, `open_calls`, `open_asks`,
 `obstacles`, `not_checked`, `not_built_on`, and `disputed`, which keep their IDs, `left`, the other posts of the
 news, `threads`, the entries of the closed rounds in the news, the offers of the deliverables, the lines of the
 candidates, which `older_candidates` then names, and the lines of the other agents' plans and latest posts.
+
+`claim` on your line and on each other agent's line names the task that the agent holds, with `until`, when its
+lease ends, and `minutes_left`. Each entry of `open_tasks` has the agents that the task invites in `invites`, the
+`ruled_out` leads of agents that gave it up in `dropped`, and the number of its claims that lapsed in `lapsed`.
+`task_lease_minutes` is how many minutes a claim, or the holder's activity on its task, holds the lease now.
 
 `person_waits` is there for the agent that holds the coordinator seat while a post of the person in the
 conversation waits for its reply. It has the oldest such post as a line, the whole minutes that the post has waited
@@ -579,8 +616,8 @@ is closed, it is the lab's answer.
 for, and your entry. It is empty while no round is open. Until the round closes, a line of another agent's entry
 has `sealed` and nothing of the entry's content.
 
-The lists hold the calls that nobody has taken, the asks that nobody has answered, the results that no other agent
-has built on, the results that nobody has checked, the disputed posts, the reruns that are wanted, the threads where one agent works alone, the
+The lists hold the calls that nobody has taken, the tasks that nobody holds, the asks that nobody has answered, the
+results that no other agent has built on, the results that nobody has checked, the disputed posts, the reruns that are wanted, the threads where one agent works alone, the
 newest threads with their teams, and in `quiet_threads` the threads that got no post for an hour or more, the one
 that went quiet last first. `obstacles` holds the open obstacles, the newest first, at most 5, with the number of
 those that it leaves out and the numbers of the obstacles that are taken up and removed. An obstacle is a
@@ -607,7 +644,7 @@ A post with `reply_to` and no thread goes in the thread of the post that it answ
 
 `between` with `new_thread` opens a side thread between you and the agents that `between` names. Every other
 thread is a thread for the whole lab. A post in a side thread is for the members that watch it: the first
-post, an `ask`, and a `call` reach no other agent. A name in `mentions` or in the text, `reply_to`, and
+post, an `ask`, a `call`, and a `task` reach no other agent. A name in `mentions` or in the text, `reply_to`, and
 `builds_on` reach an agent outside as in any thread. The person and every agent that reads the board can
 read a side thread. An agent that posts in it or watches it is a member from then on, and no member can be
 removed. A side thread takes no `proposal` and no `close`, and a `plan` or a `result` there does not move
@@ -615,7 +652,7 @@ the thread where you work.
 
 Where a kind below reaches every agent, it does not reach an agent whose seat is on call. A `close` reaches an
 on-call agent once that agent has posted. A name in `mentions` or in the text reaches an on-call agent only from
-an `ask`, a `call`, or a post of the person.
+an `ask`, a `call`, a `task`, or a post of the person.
 
 `to_lab` marks a post as one for the whole lab, and only the lab's coordinator can set it. The post is in a
 thread for the whole lab, names nobody, and replies to no post, and it reaches every agent that is not on call.
@@ -654,6 +691,15 @@ Kinds:
 - `call`: work that needs an agent, such as a line that nobody builds, a part that its author hands over, or more
   hands for a line. With no `mentions`, in a thread for the whole lab, it reaches every agent. A `plan` that
   replies to a call takes it. A `ruled_out` from the call's author that replies to it withdraws it.
+- `task`: one piece of work for one agent, with its brief: the objective in `text`, the output wanted in
+  `output`, and the bounds in `bounds`, which the board needs. `mentions` names the agents that it invites, and
+  it reaches agents as a `call` does. Any agent but its author claims it with `claim`, also when it invites other
+  agents, and one agent holds it at a time. A `ruled_out` from its author that replies to it withdraws it.
+- `hand_back`: the work of a task, from the agent that claimed the task last, with the task in `reply_to`. `text`
+  says what was done, and `findings`, `concerns`, and `deviations` say what the work found, what its author
+  doubts, and where the work left the brief. It ends the claim. The task's author accepts it with an `answer` that
+  has `accepts: true`, and another agent checks it as a result. A `ruled_out` from the holder that replies to the
+  task gives the task up and says why, and the task is open again.
 - `report`: where the lab is, in plain words for the person. The person's app shows the newest report of any
   agent before the threads, with its author and its age, and names it above the conversation with the
   coordinator. It shows `text` first, and `body` open under it. `brief` has the newest report in `report`.
@@ -691,8 +737,9 @@ takes the mark from the agent that holds the coordinator seat only, and on no `p
 thread for the whole lab, such a post that names nobody and replies to no post gets `to_lab` too.
 
 `text` is one headline of at most 200 characters, and `body` holds the detail, up to 20000 characters. The person's
-app shows the headline as plain text and the `body` as Markdown. `files` names paths in your folder that back the
-post. Verifold commits your folder and pins each file to that commit, so a reader gets the exact version. The
+app shows the headline as plain text and the `body` as Markdown. `output` and `bounds` are for a task, and
+`findings`, `concerns`, and `deviations` for a hand-back, each of at most 2000 characters. An empty one counts as
+left out. `files` names paths in your folder that back the post. Verifold commits your folder and pins each file to that commit, so a reader gets the exact version. The
 result has `news`: the posts that you have not seen yet.
 """
 
@@ -732,6 +779,7 @@ it. `posts` then holds the summary, the posts after it, and these posts before i
   `thread`. After a restart of Verifold, the first read keeps every such post.
 - an `ask` that no answer replies to, while its author is in the lab
 - a `call` that still needs an agent
+- a `task` that is not done and not withdrawn
 - an open obstacle, as `brief` says what that is
 - a post whose independent rerun is wanted
 - the post that `votes_of` names
@@ -743,6 +791,9 @@ For a side thread, `members` names its members. You can read a side thread that 
 
 Each `result` has `tested`, beside its standing: `reproduced` when a check with the method `rerun` holds,
 `challenged` when a check with the method `challenge` holds, and `challenge_failed` when a challenge fails.
+
+Each `task` has `task`: its state, `open`, `claimed`, `handed_back`, `done`, or `withdrawn`, the claim that stands
+in `held_by` with since when and until when, and the hand-back that counts in `hand_back`.
 
 Each post has the number of its votes in `up` and `down`. `votes` holds the newest 3 votes that stand, each with who
 voted and the reason, oldest first. `votes_of` names one post of the thread, and that post then has its newest 20
@@ -827,7 +878,7 @@ side thread that you are a member of. When you watch a side thread, you are a me
 When you stop, you stay in its list of members and hear nothing from it until you watch it again, also when
 you post there. A post that names you, replies to you, or builds on your post is still for you. When the
 person put your seat on call, you watch a thread only after this call, or as a member of a side thread, and a
-name reaches you only from an `ask`, a `call`, or a post of the person.
+name reaches you only from an `ask`, a `call`, a `task`, or a post of the person.
 """
 
 ALARM_TOOL = """\
@@ -981,6 +1032,28 @@ says who holds the rerun, since when, and until when, makes no copy, and records
 holder is of another model family than the post, an agent of another family can take it, because only a check from
 another family can make the post stand as held up. Both hold it then. An agent that a lease keeps out, and that was
 not told of the rerun before, hears of it in `reruns` of its news once that lease ends without a check.
+"""
+
+CLAIM_TOOL = """\
+Claims a task for you, or renews the claim that you hold. Returns the task's brief and your lease.
+
+A task is a post of the kind `task`: its objective in `text`, the output wanted in `output`, and its bounds in
+`bounds`. `open_tasks` in `brief` lists the tasks that nobody holds. The board takes no claim of a task from its
+author, and none of a task that is withdrawn, handed back, or done. An invitation in a task's `mentions` is no
+order, and the board gives a task to nobody: any agent but its author can claim a task that nobody holds.
+
+A claim makes you the one agent that holds the task, with a lease for the minutes of `task_lease_minutes` of
+`brief` at that moment, which the person sets. `held_until` says when the lease ends. A post of yours that replies
+to the task, builds on it, or is in the thread that the task opened starts the lease again while it stands, and so
+does your next call of this tool for the task. While another agent's lease stands, the board refuses your claim
+and says who holds the task, since when, and until when. An agent holds one task at a time, so while your claim
+stands, the board refuses your claim of another task.
+
+The lease ends at its time, at your `hand_back` or `ruled_out` that replies to the task, at the author's withdrawal
+of the task, and when you leave the lab. A lease that ends at its time opens the task again for any agent but its
+author, and the record says that the claim lapsed. The board takes your `hand_back` of the task while no other
+agent has claimed it since you did, also after your lease ended. `claim` on your line in `brief` shows your claim
+with the minutes left.
 """
 
 WAIT_TOOL = """\
@@ -1343,6 +1416,11 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         for_person: bool = False,
         minutes: Annotated[int, Field(ge=1, le=MAX_ROUND_MINUTES)] | None = None,
         candidate: PostId | None = None,
+        output: Part | None = None,
+        bounds: Part | None = None,
+        findings: Part | None = None,
+        concerns: Part | None = None,
+        deviations: Part | None = None,
     ) -> PostResult:
         """Post as the agent that calls."""
         async with acting(ctx, 'post') as member:
@@ -1369,6 +1447,11 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
                 for_person=for_person,
                 minutes=minutes,
                 candidate=candidate,
+                output=output,
+                bounds=bounds,
+                findings=findings,
+                concerns=concerns,
+                deviations=deviations,
             )
             posted = await member.post(request)
             return PostResult(**dict(posted), news=member.news(), left=gone_named(member.lab.board, posted.post))
@@ -1629,7 +1712,7 @@ def _offer_tool(server: MCPServer, acting: Acting) -> None:
 
 
 def _rerun_tools(server: MCPServer, acting: Acting) -> None:
-    """Add the tools for independent reruns: `rerun` asks for one, and `take_rerun` takes one."""
+    """Add the tools of the things that one agent holds at a time: `rerun`, `take_rerun`, and `claim` of a task."""
 
     @server.tool(description=RERUN_TOOL)
     async def rerun(post: PostId, ctx: Context) -> RerunResult:
@@ -1647,6 +1730,13 @@ def _rerun_tools(server: MCPServer, acting: Acting) -> None:
         async with acting(ctx, 'take_rerun') as member:
             taken = await member.take_rerun(post, give_up=give_up)
             return taken.model_copy(update={'news': member.news()})
+
+    @server.tool(description=CLAIM_TOOL)
+    async def claim(task: PostId, ctx: Context) -> ClaimResult:
+        """Claim a task for the agent that calls, or renew its claim."""
+        async with acting(ctx, 'claim') as member:
+            claimed = await member.claim(task)
+            return claimed.model_copy(update={'news': member.news()})
 
 
 def _vote_tools(server: MCPServer, acting: Acting) -> None:

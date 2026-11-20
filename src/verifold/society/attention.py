@@ -8,7 +8,7 @@ the sign names nobody, because it can be a common word. An agent watches the
 threads that it opens and the thread where it works now, which is the thread of its latest plan or result, until it
 says otherwise. Nobody watches the question's thread by default, so a post there is for the agents that it names.
 
-Some posts are for every agent: a close, and an ask, a call, or the first post of a thread when it names nobody. An ask names
+Some posts are for every agent: a close, and an ask, a call, a task, or the first post of a thread when it names nobody. An ask names
 nobody when its `mentions` are empty and it replies to no post, so an agent that is stuck reaches every agent that
 may know the missing piece. A check is also for the agent that asked for the rerun. The person's words reach the agents by default: a post from the person that
 names nobody and replies to no post is for every agent. No post is for an agent that left the lab.
@@ -21,7 +21,7 @@ out. That agent hears of it when the lease ends without a check.
 An on-call agent hears less. No post for every agent is for it, and neither are the person's words that name nobody.
 A plain mention is not for it either: a plan, a message, a result, or another post that addresses nobody can name
 it, in `mentions` or in its text, and does not wake it. It watches a thread only when it said so with `watch`, or
-as a member of a side thread. So a post is for it when the post is an ask or a call that names it, replies to its
+as a member of a side thread. So a post is for it when the post is an ask, a call, or a task that names it, replies to its
 post, builds on its post, is the check of a rerun that it asked for, is the person's post that names it, or lands
 in such a thread. A close is for it once it has posted, because from then on it counts among the agents that
 decide whether the lab is done.
@@ -83,7 +83,7 @@ from verifold.protocol.join import (
     RoundNote,
     Update,
 )
-from verifold.protocol.posts import Ask, Call, Check, Close, Entry, Post, Reading, Round
+from verifold.protocol.posts import Ask, Call, Check, Close, Entry, Post, Reading, Round, Task
 from verifold.society.board import Board
 from verifold.society.budget import budget_line
 from verifold.society.coordinator import no_reply_line
@@ -526,21 +526,21 @@ def _named(board: Board, agent_id: AgentId, post: Post) -> bool:
 
 
 def _addresses(post: Post) -> bool:
-    # The posts whose names wake an on-call agent: an ask or a call, which address the agents that they name, and
-    # the person's post, the desk's post for the person among them.
-    return isinstance(post, Ask | Call) or speaks_for_person(post)
+    # The posts whose names wake an on-call agent: an ask, a call, or a task, which address the agents that they
+    # name, and the person's post, the desk's post for the person among them.
+    return isinstance(post, Ask | Call | Task) or speaks_for_person(post)
 
 
 def _for_everyone(board: Board, entry: Posted) -> bool:
-    # Only `mentions` keeps an ask, a call, or the first post of a thread from the other agents. A name in the text adds a
-    # reader and takes none away. An ask that replies to a post is for that post's author. A call that replies to a
-    # post, such as the caller's own result, still asks every agent for hands.
+    # Only `mentions` keeps an ask, a call, a task, or the first post of a thread from the other agents. A name in the
+    # text adds a reader and takes none away. An ask that replies to a post is for that post's author. A call or a
+    # task that replies to a post, such as its author's own result, still asks every agent for hands.
     post = entry.post
     # Whether the lab is done concerns every agent, whatever the post names, and so does a round, which names nobody,
     # and the lab's reading of the question, which says what counts as an answer.
     if isinstance(post, Close | Round | Reading) or post.to_lab:
         return True
-    open_ask = isinstance(post, Call) or (isinstance(post, Ask) and not post.reply_to)
+    open_ask = isinstance(post, Call | Task) or (isinstance(post, Ask) and not post.reply_to)
     return not post.mentions and (open_ask or _opens_thread(board, entry))
 
 

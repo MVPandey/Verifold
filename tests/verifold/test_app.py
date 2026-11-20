@@ -1570,6 +1570,7 @@ async def test_the_persons_change_applies_to_the_running_lab_but_an_agents_edit_
             'reviewers': {'seats': None},
             'votes': {'reveal_minutes': 10},
             'reruns': {'lease_minutes': 10},
+            'tasks': {'lease_minutes': 30},
             'disk': {'limit_gb': 100},
         },
         'defaults': VERIFOLDS_DEFAULTS,

@@ -16,6 +16,7 @@ from verifold.protocol.join import (
     MAX_MANIFEST,
     MAX_NEWS,
     Brief,
+    ClaimResult,
     DeskFile,
     FileText,
     ManifestLine,
@@ -33,7 +34,7 @@ from verifold.protocol.join import (
     holds_whole,
 )
 from verifold.protocol.moves import AddMove, AddSeat, Move
-from verifold.protocol.posts import FileEvidence
+from verifold.protocol.posts import FileEvidence, Task
 from verifold.protocol.votes import Badge, BadgeAction, Direction
 from verifold.server.errors import (
     CannotWake,
@@ -54,6 +55,7 @@ from verifold.society.identity import post_view
 from verifold.society.lifecycle import utc
 from verifold.society.overview import overview
 from verifold.society.reruns import RerunKey, kept_until, lease_of, open_take, told_of
+from verifold.society.tasks import held_by
 from verifold.society.views import brief, profile_result, side_lines, thread_summaries, thread_view, work_threads
 
 type Pin = Callable[[tuple[str, ...]], Awaitable[tuple[FileEvidence, ...]]]
@@ -469,6 +471,33 @@ class Member:
         made = await self._copies(claim)
         return self._copy(self._claim(claim, await self._lab.take_rerun(self.agent_id, post_id, made.digest)), made)
 
+    async def claim(self, task_id: PostId) -> ClaimResult:
+        """
+        Claim a task for the agent, or renew the claim that it holds, and return the task with the claim's lease.
+
+        Raises:
+            RejectedEvent: The agent cannot claim the task, as `society.tasks.check_claim` says.
+            OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
+
+        """
+        self._check_in_time()
+        claimed = await self._lab.claim_task(self.agent_id, task_id)
+        # The record took the claim, so the agent held the task at the claim's moment.
+        task, holder = held_by(self._lab.board, self.agent_id, claimed.at) or (None, None)
+        if task is None or holder is None or not isinstance(task.post, Task):
+            raise RejectedEvent(f'Your claim of task {task_id} ended before this call returned.')
+        return ClaimResult(
+            task=task.post.id,
+            thread=task.post.thread,
+            author=task.post.author,
+            text=task.post.text,
+            output=task.post.output,
+            bounds=task.post.bounds,
+            body=task.post.body,
+            held_since=holder.lease.since,
+            held_until=holder.lease.until,
+        )
+
     @staticmethod
     def _copy(claim: RerunTake, made: MadeCopy) -> RerunTake:
         # The claim with where its clean copy is, and the copy's manifest as far as this call checked it.
@@ -551,13 +580,13 @@ class Member:
         if ended and self._is_guest():
             raise OutOfTime(
                 "The lab's time ran out or the person stopped the lab, so the board takes no post, no rerun "
-                'request, no take of a rerun, no vote, and no badge from you now. The person can give the lab '
-                'more time.'
+                'request, no take of a rerun, no claim, no vote, and no badge from you now. The person can give the '
+                'lab more time.'
             )
         if board.at_limit and self._is_guest():
             raise OutOfTime(
                 f'The lab reached its {LIMIT_NAMES[board.at_limit]}, so the board takes no post, no rerun request, '
-                'no take of a rerun, no vote, and no badge from you now. The person can raise it.'
+                'no take of a rerun, no claim, no vote, and no badge from you now. The person can raise it.'
             )
 
     async def set_alarm(self, minutes: float, *, quiet: bool) -> AlarmSet:

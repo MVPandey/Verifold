@@ -30,6 +30,7 @@ from verifold.protocol.ids import AgentId, PostId
 from verifold.protocol.join import LeaseLine, RerunLine, RerunOpenTo
 from verifold.protocol.posts import Check
 from verifold.society.board import Board
+from verifold.society.leases import Step, span
 from verifold.society.lifecycle import lab_state, latest_time, utc
 from verifold.society.reviewers import seats
 from verifold.society.standing import other_family
@@ -163,18 +164,13 @@ def _lease(board: Board, agent_id: AgentId, post_id: PostId, now: datetime, sett
     renewals = (
         (entry.seq, entry.at, entry.held) for entry in board.leases if (entry.agent, entry.post) == (agent_id, post_id)
     )
-    since: datetime | None = None
-    until = taken.at
-    for seq, at, held in ((taken.seq, taken.at, True), *renewals):
-        if seq <= settled or at > now:
-            continue
-        if not held:
-            since = None
-            continue
-        if since is None or at >= until:
-            since = at
-        until = at + timedelta(minutes=board.settings_at(seq).reruns.lease_minutes)
-    return LeaseLine(agent=agent_id, since=since, until=until) if since and now < until else None
+    steps: tuple[Step, ...] = tuple(
+        (seq, at, 'start' if held else 'end')
+        for seq, at, held in ((taken.seq, taken.at, True), *renewals)
+        if seq > settled
+    )
+    held = span(steps, now, lambda seq: board.settings_at(seq).reruns.lease_minutes)
+    return LeaseLine(agent=agent_id, since=held.since, until=held.until) if held and held.stands(now) else None
 
 
 def leases(board: Board, post_id: PostId, now: datetime) -> tuple[LeaseLine, ...]:

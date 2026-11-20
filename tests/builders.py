@@ -14,6 +14,7 @@ from verifold.protocol.events import (
     AgentLeft,
     AgentNamed,
     BadgeSet,
+    ClaimLapsed,
     CoordinatorSet,
     DeliverableDecided,
     DeliverableSet,
@@ -33,6 +34,7 @@ from verifold.protocol.events import (
     RoundClosed,
     RoundEnd,
     SettingsSet,
+    TaskClaimed,
     ThreadOpened,
     TimeRanOut,
     TimeSet,
@@ -232,6 +234,18 @@ class RecordBuilder:
         """Add an agent's renewal of its lease on the rerun of a post, or with `held` false, its give-up."""
         seq, at = self._stamp()
         self.events.append(RerunLeaseSet(seq=seq, at=at, agent=agent_id, post=post_id, held=held))
+        return self
+
+    def claim(self, agent_id: str, task_id: str) -> 'RecordBuilder':
+        """Add an agent's claim of a task, or the renewal of the claim that it holds."""
+        seq, at = self._stamp()
+        self.events.append(TaskClaimed(seq=seq, at=at, agent=agent_id, task=task_id))
+        return self
+
+    def lapse(self, agent_id: str, task_id: str, until: datetime) -> 'RecordBuilder':
+        """Add Verifold's record that an agent's claim of a task lapsed, its lease having ended at `until`."""
+        seq, at = self._stamp()
+        self.events.append(ClaimLapsed(seq=seq, at=at, agent=agent_id, task=task_id, until=until))
         return self
 
     def closed(self, round_id: str, why: RoundEnd = 'time') -> 'RecordBuilder':

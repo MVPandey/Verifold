@@ -142,6 +142,9 @@ def _start(args: argparse.Namespace) -> tuple[StartRequest, Mapping[str, Harness
             values, 'votes', 'reveal_minutes', 'the minutes that a new post hides its votes', own=own
         ),
         lease_minutes=_own_minutes(values, 'reruns', 'lease_minutes', 'the minutes that a take holds a rerun', own=own),
+        task_lease_minutes=_own_minutes(
+            values, 'tasks', 'lease_minutes', 'the minutes that a claim holds a task', own=own
+        ),
         budget_tokens=tokens if args.budget_tokens is None else args.budget_tokens,
         budget_dollars=dollars if args.budget_dollars is None else args.budget_dollars,
         disk_gb=_disk_gb(values, own=own),
@@ -204,9 +207,9 @@ def _own_minutes(
     Return the minutes of `section.name` that `verifold run` starts with, or `None` for what the files add up to.
 
     `verifold run` does not use the number in a project's file, and says so, as for the reviewer seats. Zero turns
-    the sealed votes or the leases off, and a day lets a vote stay hidden or a first taker hold a rerun for a day,
-    so no number from somebody else's file is the stricter one. The lab then has the person's own number, or the
-    default.
+    the sealed votes or the leases of reruns off, and a day lets a vote stay hidden, a first taker hold a rerun, or
+    a first claimer hold a task for a day, so no number from somebody else's file is the stricter one. The lab then
+    has the person's own number, or the default.
     """
     project = values[SettingsLevel.PROJECT].get(section)
     if own or not (isinstance(project, dict) and name in project):
@@ -215,7 +218,11 @@ def _own_minutes(
         f"Did not use {what} from this project's settings file: `verifold run` takes it only from your settings for all projects."
     )
     mine = settings_of({SettingsLevel.ALL: values[SettingsLevel.ALL]})
-    return mine.votes.reveal_minutes if section == 'votes' else mine.reruns.lease_minutes
+    return {
+        'votes': mine.votes.reveal_minutes,
+        'reruns': mine.reruns.lease_minutes,
+        'tasks': mine.tasks.lease_minutes,
+    }[section]
 
 
 def _saved_agents(

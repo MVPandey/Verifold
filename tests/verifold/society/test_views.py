@@ -26,6 +26,7 @@ from verifold.protocol.join import (
 from verifold.protocol.posts import (
     MAX_BODY,
     MAX_HEADLINE,
+    MAX_PART,
     MAX_ROUND_MINUTES,
     Answer,
     Ask,
@@ -648,7 +649,7 @@ def test_a_brief_names_the_author_of_a_threads_latest_post_only_when_its_list_of
 
 def test_a_brief_orders_its_lists_by_what_they_are_and_not_by_what_to_do_first() -> None:
     fields = list(Brief.model_fields)
-    names = {'open_calls', 'open_asks', 'not_built_on', 'not_checked', 'disputed', 'obstacles'}
+    names = {'open_calls', 'open_asks', 'open_tasks', 'not_built_on', 'not_checked', 'disputed', 'obstacles'}
     lists = [name for name in fields if name in names]
 
     # The lists of posts come in the order of the alphabet, after the threads, so the order ranks nothing.
@@ -1014,6 +1015,7 @@ def _far_larger() -> tuple[RecordBuilder, int]:
         post('ruled_out', thread, other)
         post('ask', thread, author)
         post('call', thread, author)
+        post('task', thread, author, mentions=(other,), output='o' * MAX_PART, bounds='b' * MAX_PART)
         post('summary', thread, author, text='s' * MAX_HEADLINE, body='b' * MAX_BODY)
     for number in range(10):
         record.thread(f't-{number + 70}', opened_by='a1', between=('a1', 'a2'))
@@ -1118,8 +1120,10 @@ def test_the_brief_of_a_lab_far_larger_than_the_largest_fits_one_tool_result_and
     assert {ref.id for ref in first.older_candidates} | {line.line.id for line in first.candidates} == {
         ref.id for ref in whole.older_candidates
     } | {line.line.id for line in whole.candidates}
-    for name in ('disputed', 'not_built_on', 'not_checked', 'open_asks', 'open_calls'):
+    for name in ('disputed', 'not_built_on', 'not_checked', 'open_asks', 'open_calls', 'open_tasks'):
         assert [entry.id for entry in getattr(first, name)] == [entry.id for entry in getattr(whole, name)]
+    assert len(whole.open_tasks) == MAX_NEWS
+    assert {entry.invites for entry in first.open_tasks} == {entry.invites for entry in whole.open_tasks}
     # The brief says what it cut, part by part, in the order of the cuts, and which tool shows it.
     assert whole.cut == ()
     assert first.cut[0] == f'`quiet_threads` leaves out {len(whole.quiet_threads)} lines. `threads` shows every thread.'
