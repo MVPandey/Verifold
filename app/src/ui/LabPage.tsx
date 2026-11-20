@@ -54,6 +54,8 @@ import type { PageProps, ThreadRead } from './hooks.ts';
 import { Detail, Words } from './Markdown.tsx';
 import { CoordinatorSeat, OpenedForYou } from './Coordinator.tsx';
 import { ActionNeeds, Allowances } from './Allowances.tsx';
+import { DashboardTab, LabTabs, StatusBar } from './Dashboard.tsx';
+import type { LabTab } from './Dashboard.tsx';
 import { DeskSeat } from './Desk.tsx';
 import { MovesCard } from './Moves.tsx';
 import { DeliverDoor, Deliverables } from './Deliverables.tsx';
@@ -72,6 +74,8 @@ interface Place {
   readonly post: string | null;
   /** The panel that is docked beside the wall when the page opens. Without it, none is. */
   readonly panel?: Tab | 'deliver' | undefined;
+  /** The tab of the lab page that shows: the wall, or the agents' dashboard. Without it, the wall. */
+  readonly tab?: LabTab | undefined;
 }
 
 /**
@@ -126,7 +130,7 @@ export function LabPage(props: PageProps & Place): ReactElement {
 export function Wall(
   props: PageProps & Place & { readonly questionRead: ThreadRead; readonly cardRead: ThreadRead },
 ): ReactElement {
-  const { api, data, open, questionRead, cardRead } = props;
+  const { api, data, open, questionRead } = props;
   const { lab, threads, needs } = data;
   const seen = readSeen(browserStore, lab.opened_at);
   const question = questionThread(threads);
@@ -187,29 +191,11 @@ export function Wall(
         {read.error ?? 'Loading the thread.'}
       </p>
     );
-  // The thread of the offers for a deliverable is no line of work, so it has no card. The panel for the
-  // deliverables links to it, and it shows as a card while it is open.
-  // The thread of a removed deliverable is a card again once a post comes there, so that work is not out of sight.
-  const surfaced = new Set(
-    lab.removed_deliverables.filter((item) => item.active).map((item) => item.thread),
-  );
-  const cards = threads
-    // The desk chat shows in its own panel, so the wall has no card for it.
-    .filter((summary) => summary !== question && !isSide(summary) && summary.thread.desk !== true)
-    .map((summary) =>
-      surfaced.has(summary.thread.id)
-        ? { ...summary, thread: { ...summary.thread, deliverable: null } }
-        : summary,
-    )
-    .filter((summary) => !summary.thread.deliverable || summary.thread.id === open)
-    .sort((first, second) => number(first) - number(second));
-  const side = threads.filter(isSide);
   const answerOpen = question !== null && open === questionId;
   // A closed lab has the answer that its close names. Until then, the candidates stand side by side.
   const answered = lab.state === 'closed' && data.candidates.closes_on !== null;
-  const crossing = crossedLine(threads);
   const done = doneLine(lab);
-  const missing = open !== null && !threads.some((summary) => summary.thread.id === open);
+  const tab = props.tab ?? 'wall';
 
   return (
     <>
@@ -224,6 +210,7 @@ export function Wall(
               return revised;
             }}
           />
+          <StatusBar api={api} lab={lab} now={props.now} reload={data.reload} />
           {question ? (
             <div className={`f-answer${answerOpen ? ' on' : ''}`}>
               <div className="f-card-title">
@@ -345,6 +332,56 @@ export function Wall(
         </div>
       </section>
 
+      <LabTabs tab={tab} />
+      {tab === 'dashboard' ? (
+        <DashboardTab api={api} lab={lab} now={props.now} reload={data.reload} />
+      ) : (
+        // A function and no component, so the wall's own elements stay in the page's tree.
+        wallTab({ ...props, turns, seen })
+      )}
+    </>
+  );
+}
+
+/**
+ * The Wall tab: the question's thread when it is open, the lab's reading of the question, the newest report, the
+ * band of a quiet lab, the newest round, one card for each thread, the obstacles, and the side threads.
+ */
+function wallTab(
+  props: PageProps &
+    Place & {
+      readonly cardRead: ThreadRead;
+      readonly questionRead: ThreadRead;
+      readonly turns: (read: ThreadRead) => ReactElement;
+      readonly seen: Readonly<Record<string, number>>;
+    },
+): ReactElement {
+  const { api, data, open, cardRead, questionRead, turns, seen } = props;
+  const { lab, threads } = data;
+  const question = questionThread(threads);
+  const answerOpen = question !== null && open === question.thread.id;
+  const desk = deskOf(lab.agents) !== null;
+  // The thread of the offers for a deliverable is no line of work, so it has no card. The panel for the
+  // deliverables links to it, and it shows as a card while it is open.
+  // The thread of a removed deliverable is a card again once a post comes there, so that work is not out of sight.
+  const surfaced = new Set(
+    lab.removed_deliverables.filter((item) => item.active).map((item) => item.thread),
+  );
+  const cards = threads
+    // The desk chat shows in its own panel, so the wall has no card for it.
+    .filter((summary) => summary !== question && !isSide(summary) && summary.thread.desk !== true)
+    .map((summary) =>
+      surfaced.has(summary.thread.id)
+        ? { ...summary, thread: { ...summary.thread, deliverable: null } }
+        : summary,
+    )
+    .filter((summary) => !summary.thread.deliverable || summary.thread.id === open)
+    .sort((first, second) => number(first) - number(second));
+  const side = threads.filter(isSide);
+  const crossing = crossedLine(threads);
+  const missing = open !== null && !threads.some((summary) => summary.thread.id === open);
+  return (
+    <>
       {question && answerOpen ? (
         <section
           id={`card-${question.thread.id}`}

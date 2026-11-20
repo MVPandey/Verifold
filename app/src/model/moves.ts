@@ -32,6 +32,10 @@ export function moveWords(move: MoveView, agents: readonly AgentView[]): MoveWor
   if (post.kind === 'round')
     return plain(`Opened a ${String(post.minutes)}-minute round`, post.text);
   if (post.kind === 'reading') return plain('Posted a new reading', post.text);
+  if (post.kind === 'headline_number')
+    return post.label
+      ? plain('Named the headline number', post.label)
+      : plain('Took back the headline number');
   if (post.kind !== 'request') return plain('Made a move');
   const asked = post.move;
   switch (asked.type) {

@@ -52,7 +52,7 @@ export function App(props: { readonly api: Api; readonly token: string }): React
     );
   }
   const shared = { api: props.api, data: { ...data, lab: data.lab }, now };
-  const onWall = route.page === 'lab' || route.page === 'thread';
+  const onWall = route.page === 'lab' || route.page === 'thread' || route.page === 'dashboard';
   return (
     <Profiles value={profiles}>
       {onWall ? <Manifold /> : null}
@@ -93,6 +93,7 @@ export function App(props: { readonly api: Api; readonly token: string }): React
             {...shared}
             open={route.page === 'thread' ? route.id : null}
             post={route.page === 'thread' ? route.post : null}
+            tab={route.page === 'dashboard' ? 'dashboard' : 'wall'}
           />
         )}
       </main>

@@ -40,7 +40,10 @@ export type PostKind =
   | 'round'
   | 'entry'
   | 'action'
-  | 'receipt';
+  | 'receipt'
+  | 'measure'
+  | 'headline_number'
+  | 'dashboard';
 export type Standing = 'open' | 'checked' | 'held_up' | 'disputed' | 'conceded';
 
 /**
@@ -624,6 +627,63 @@ export interface LabView {
   readonly actions_paused?: string | null;
   /** The asks and actions that stopped waiting before the person answered, the newest first. */
   readonly missed?: readonly Missed[];
+  /** The lab's headline number, or `null` while nobody named one. An older server sends none. */
+  readonly headline_number?: HeadlineView | null;
+  /** The version of the dashboard that stands, or `null` while the lab has none. */
+  readonly dashboard?: DashboardMeta | null;
+  /** The labels that the lab's measures have, each once, in the order that they came. */
+  readonly measure_labels?: readonly string[];
+}
+
+/**
+ * One measure: its number, the time that it holds for, its author, and who reran it. `rerun_by` names the agents
+ * whose check of an independent rerun of it holds, and `rerun_failed_by` the ones whose such check fails. The marks
+ * never say whether the number is good.
+ */
+export interface MeasureView {
+  readonly post: string;
+  readonly thread: string;
+  readonly by: string;
+  readonly label: string;
+  /** The number as an exact decimal string. */
+  readonly value: string;
+  readonly unit: string;
+  readonly as_of: string;
+  readonly rerun_by: readonly string[];
+  readonly rerun_failed_by: readonly string[];
+  readonly standing: Standing;
+}
+
+/** The lab's headline number: its label, who named it, and the newest measure with that label, or `null`. */
+export interface HeadlineView {
+  readonly label: string;
+  /** The post that named the label. */
+  readonly post: string;
+  /** The person, or the agent that held the coordinator seat. */
+  readonly named_by: string;
+  readonly named_at: string;
+  /** The coordinator's one line of why. Empty for the person's naming. */
+  readonly why: string;
+  readonly measure: MeasureView | null;
+}
+
+/** The version of the dashboard that stands: its post, its page's path, its author, when it came, and its size. */
+export interface DashboardMeta {
+  readonly post: string;
+  readonly thread: string;
+  readonly path: string;
+  readonly by: string;
+  readonly at: string;
+  readonly size: number;
+  readonly standing: Standing;
+  /** How many versions of the dashboard the lab has, this one among them. */
+  readonly versions: number;
+}
+
+/** The version of the dashboard that stands, with the text of its page. */
+export interface DashboardPage {
+  readonly meta: DashboardMeta;
+  readonly html: string;
 }
 
 /** Why a round closed: its time came, every agent that it waited for entered, or its opener withdrew it. */
@@ -1121,7 +1181,7 @@ interface PostBase {
   readonly on?: string;
   /** For the person's message in the desk chat: the thread that the person had open. Absent otherwise. */
   readonly about?: string;
-  /** For the coordinator's round or reading: its one line of why. Absent otherwise. */
+  /** For the coordinator's round, reading, or naming of the headline number: its one line of why. Absent otherwise. */
   readonly why?: string;
 }
 
@@ -1179,6 +1239,31 @@ export type Post =
       readonly kind: 'receipt';
       /** What the action cost, with its fees, as a decimal string. */
       readonly cost: string;
+    })
+  | (PostBase & {
+      /**
+       * One number that an agent reports, with the script that produced it and that script's output in
+       * `evidence`. Verifold writes `text` from the label, the value, and the unit.
+       */
+      readonly kind: 'measure';
+      readonly label: string;
+      /** The number as an exact decimal string. */
+      readonly value: string;
+      readonly unit: string;
+      /** The time that the number holds for. */
+      readonly as_of: string;
+      readonly script: string;
+      readonly output: string;
+    })
+  | (PostBase & {
+      /** The label of the lab's headline number from now on. An empty label takes it back. */
+      readonly kind: 'headline_number';
+      readonly label: string;
+    })
+  | (PostBase & {
+      /** One version of the lab's dashboard: the page that `evidence` pins, with its size in bytes. */
+      readonly kind: 'dashboard';
+      readonly size: number;
     })
   | (PostBase & {
       /** The coordinator's request to the person for a move. `text` and `body` hold the reason. */
@@ -1377,7 +1462,7 @@ export interface ConversationView {
   readonly grant?: SpareSeats | null;
 }
 
-/** The kinds of the coordinator's moves: a move from its request, a round that it opened, or a reading. */
+/** The kinds of the coordinator's moves: a move from its request, a round, a reading, or a headline number. */
 export type SteerKind =
   | 'time'
   | 'permission'
@@ -1389,7 +1474,8 @@ export type SteerKind =
   | 'resume'
   | 'cap'
   | 'round'
-  | 'reading';
+  | 'reading'
+  | 'headline_number';
 
 /** One move of the coordinator, in the log of its moves. */
 export interface MoveView {

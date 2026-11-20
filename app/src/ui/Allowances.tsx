@@ -28,7 +28,7 @@ import { clock } from '../model/format.ts';
 import { href } from '../model/route.ts';
 
 /** Runs one press of the person, shows that it runs, and shows why the server refused it. */
-function usePress(): {
+export function usePress(): {
   readonly busy: boolean;
   readonly error: string | null;
   readonly run: (press: () => Promise<unknown>) => void;
@@ -51,7 +51,8 @@ function usePress(): {
   return { busy, error, run };
 }
 
-function Refusal(props: { readonly error: string | null }): ReactElement | null {
+/** Why the server refused the person's press, while it did. */
+export function Refusal(props: { readonly error: string | null }): ReactElement | null {
   return props.error ? (
     <p className="error" role="alert">
       {props.error}

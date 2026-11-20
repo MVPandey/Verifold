@@ -4,7 +4,7 @@ import type { Api } from '../api/client.ts';
 import { watchChanges } from '../api/events.ts';
 import type { Change } from '../api/events.ts';
 import { messageOf } from '../api/client.ts';
-import type { LabView, ThreadView } from '../api/types.ts';
+import type { DashboardPage, LabView, ThreadView } from '../api/types.ts';
 import { parseRoute } from '../model/route.ts';
 import type { Route } from '../model/route.ts';
 import type { SeenStore } from '../model/seen.ts';
@@ -131,12 +131,41 @@ export function useThread(api: Api, id: string | null, version: number): ThreadR
   return read?.id === id ? read : { view: null, error: null };
 }
 
+/** The version of the dashboard that stands, with its page, as the server has it, or the reason that the read failed. */
+export interface DashboardRead {
+  readonly page: DashboardPage | null;
+  readonly error: string | null;
+}
+
+/**
+ * Return the version of the dashboard that stands, and read it again only when another version stands. `null`
+ * reads nothing. So the agents' page keeps its place while the rest of the lab changes.
+ */
+export function useDashboard(api: Api, post: string | null): DashboardRead {
+  const [read, setRead] = useState<(DashboardRead & { readonly post: string }) | null>(null);
+  const wanted = useRef(post);
+  useEffect(() => {
+    wanted.current = post;
+    if (post === null) return;
+    api.dashboard().then(
+      (page) => {
+        if (wanted.current === post) setRead({ post, page, error: null });
+      },
+      (failure: unknown) => {
+        if (wanted.current === post) setRead({ post, page: null, error: messageOf(failure) });
+      },
+    );
+  }, [api, post]);
+  return read?.post === post ? read : { page: null, error: null };
+}
+
 /** Return the page that the URL fragment names, and follow changes to it. */
 export function useRoute(): Route {
   const [route, setRoute] = useState(() => parseRoute(window.location.hash));
   useEffect(() => {
-    // An open thread is part of the lab page, so opening or closing one keeps the page where it is.
-    const place = (page: Route['page']): string => (page === 'thread' ? 'lab' : page);
+    // An open thread and the Dashboard tab are part of the lab page, so opening one keeps the page where it is.
+    const place = (page: Route['page']): string =>
+      page === 'thread' || page === 'dashboard' ? 'lab' : page;
     let last = place(parseRoute(window.location.hash).page);
     const follow = (): void => {
       const next = parseRoute(window.location.hash);

@@ -1,6 +1,8 @@
 /** The pages of the app, as the URL fragment names them. */
 export type Route =
   | { readonly page: 'lab' }
+  /** The lab page with its Dashboard tab: the agents' page in a sealed frame. */
+  | { readonly page: 'dashboard' }
   | { readonly page: 'needs' }
   | { readonly page: 'settings' }
   /** The lab's norms: the two files that the agents read, to read and to edit. */
@@ -16,6 +18,7 @@ export function parseRoute(hash: string): Route {
   if (path === 'needs') return { page: 'needs' };
   if (path === 'settings') return { page: 'settings' };
   if (path === 'norms') return { page: 'norms' };
+  if (path === 'dashboard') return { page: 'dashboard' };
   const [, filePost, filePath] = /^file\/(p-[1-9][0-9]*)\/(.+)$/.exec(path) ?? [];
   if (filePost && filePath) return { page: 'file', post: filePost, path: decode(filePath) };
   const [, id, post] = /^thread\/(t-[1-9][0-9]*)(?:\/(p-[1-9][0-9]*))?$/.exec(path) ?? [];
@@ -33,6 +36,8 @@ export function href(route: Route): string {
       return '#/settings';
     case 'norms':
       return '#/norms';
+    case 'dashboard':
+      return '#/dashboard';
     case 'file':
       return `#/file/${route.post}/${encodeURIComponent(route.path)}`;
     case 'thread':

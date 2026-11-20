@@ -5,6 +5,7 @@ import type {
   BudgetRequest,
   CandidatesView,
   ConversationView,
+  DashboardPage,
   DeskView,
   Direction,
   DeliverableDecision,
@@ -96,6 +97,10 @@ export interface Api {
   reading(): Promise<PostView | null>;
   /** The candidate answers with what each builds on, and the one that a close closes on. */
   candidates(): Promise<CandidatesView>;
+  /** The version of the dashboard that stands, with its page's text, or `null` while the lab has none. */
+  dashboard(): Promise<DashboardPage | null>;
+  /** Name the label of the lab's headline number. An empty label takes it back. */
+  nameHeadline(label: string): Promise<LabView>;
   /** The text of a file that backs a post. */
   file(postId: string, path: string): Promise<FileText>;
   /**
@@ -297,6 +302,8 @@ export function createApi(
         members: view.members ?? [],
       })),
     needs: () => request('/needs'),
+    dashboard: () => request('/dashboard'),
+    nameHeadline: (label) => request('/headline', { label }),
     report: () => request('/report'),
     // A server from before this route has none, and the page must still load.
     reading: () =>
