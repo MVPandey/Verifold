@@ -530,7 +530,7 @@ describe('the lab page with votes and badges', () => {
       ...changes,
     });
     const block = (html: string): string =>
-      html.slice(html.indexOf('Candidate answers'), html.indexOf('f-steer'));
+      html.slice(html.indexOf('Candidate answers'), html.indexOf('class="d-door'));
     const one = (item: CandidateView): Partial<typeof data> => ({
       candidates: { standing: [item], gone: [], closes_on: null },
     });

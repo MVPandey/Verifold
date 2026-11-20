@@ -44,7 +44,7 @@ export function actionLine(action: DeskAction, agents: readonly AgentView[]): st
     case 'interrupt':
       return `Ended the turn of ${action.agent ? authorName(agents, action.agent) : 'an agent'}, so it reads its news now`;
     case 'allowance':
-      return `Drafted the allowance ${action.allowance ?? ''} for you. It starts when you confirm it`;
+      return `Drafted the allowance ${action.allowance ?? ''} for you. It starts when you confirm it.`;
   }
 }
 

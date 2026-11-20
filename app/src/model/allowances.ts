@@ -58,15 +58,11 @@ export function holderName(agents: readonly AgentView[], id: string): string {
 }
 
 /**
- * Return the heading of an allowance: what the holder may do, in the person's words. A purpose that starts with a
- * word in capitals keeps it, and any other starts in lower case after "may".
+ * Return the heading of an allowance: whose it is, and what it is for in the person's words, as they wrote them. The
+ * purpose stands after a colon, so the heading reads right for any purpose: a verb, a noun, or a sentence.
  */
 export function allowanceHeading(terms: AllowanceTerms, agents: readonly AgentView[]): string {
-  const purpose = terms.purpose;
-  const plain = /^[A-Z][a-z]/.test(purpose)
-    ? `${purpose.charAt(0).toLowerCase()}${purpose.slice(1)}`
-    : purpose;
-  return `${holderName(agents, terms.holder)} may ${plain}`;
+  return `Allowance for ${holderName(agents, terms.holder)}: ${terms.purpose}`;
 }
 
 /** Return the facts of a draft, one line each: the bound for one action, the total, the end, and the check. */
@@ -90,6 +86,11 @@ export function usedLine(view: AllowanceView, now: Date): string {
     `up to ${amount(view.terms.per_action, unit)} an action`,
     `until ${dayClock(view.terms.ends_at, now)}`,
   ].join(' · ');
+}
+
+/** Return what an allowance used of its total in a few words, for its folded line, such as "$4.25 of $100". */
+export function usedShort(view: AllowanceView): string {
+  return `${amount(view.drawn, view.terms.unit)} of ${amount(view.terms.total, view.terms.unit)}`;
 }
 
 /** The words of each state of an allowance that is no draft, for its kicker. */

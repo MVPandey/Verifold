@@ -23,9 +23,49 @@ export function MovesList(props: {
   readonly moves: readonly MoveView[];
   readonly agents: readonly AgentView[];
   readonly extra?: (move: MoveView) => ReactNode;
-  /** Whether each move leaves out the link to its post, as beside the chat, where the panel has the links. */
+  /**
+   * Whether each move is one line that opens to its words and its why, with no link to its post, as beside the chat,
+   * where the panel has the links.
+   */
   readonly compact?: boolean;
 }): ReactElement {
+  if (props.compact) {
+    // Beside the chat, each move is one line, and its words and its why open under it.
+    return (
+      <ul className="m-list m-compact">
+        {props.moves.map((move) => {
+          const words = moveWords(move, props.agents);
+          return (
+            <li key={move.post.post.id}>
+              <details>
+                <summary>
+                  <time dateTime={move.at}>{clock(move.at)}</time>
+                  <span className="m-what">
+                    {words.what}
+                    {words.seat ? (
+                      <>
+                        {' · '}
+                        <b className="m-name">{words.seat}</b>
+                      </>
+                    ) : null}
+                    {move.post.standing === 'disputed' ? (
+                      <span className="m-mark">An agent objects</span>
+                    ) : null}
+                  </span>
+                </summary>
+                {words.theirs ? <p className="m-theirs">{words.theirs}</p> : null}
+                {words.why ? (
+                  <p className="m-why">
+                    Why: <span className="m-text">{words.why}</span>
+                  </p>
+                ) : null}
+              </details>
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
   return (
     <ul className="m-list">
       {props.moves.map((move) => {

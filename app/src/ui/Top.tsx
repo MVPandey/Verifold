@@ -7,7 +7,7 @@ import type { AgentView, HarnessOption, Invitation, LabView, ThreadSummary } fro
 import { earlierReruns, labTotal } from '../model/agents.ts';
 import { href } from '../model/route.ts';
 import type { Route } from '../model/route.ts';
-import { nearLimit, seatLines } from '../model/pace.ts';
+import { nearLimit, pauseTold, seatLines } from '../model/pace.ts';
 import { modelSummary, needsModel, newSeat, seatChoice } from '../model/setup.ts';
 import { stopLine } from '../model/settings.ts';
 import { WAITS_ID, needGroups, turnLine, waitsLine, whereLine } from '../model/status.ts';
@@ -263,7 +263,8 @@ export function SeatPace(props: {
   readonly view: AgentView;
   readonly now: Date;
 }): ReactElement | null {
-  const lines = seatLines(props.view, props.now);
+  // The seat's activity line says already that a pause holds it, so this line names the pause no second time.
+  const lines = seatLines(props.view, props.now, pauseTold(props.view));
   if (lines.length === 0) return null;
   return (
     <p className={`f-pace${nearLimit(props.view.limits) ? ' near' : ''}`}>{lines.join(' · ')}</p>

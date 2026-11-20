@@ -200,160 +200,194 @@ export function Wall(
   const done = doneLine(lab);
   const tab = props.tab ?? 'wall';
 
-  return (
+  // On a narrow page the rail's rest folds under the open tab. The link to the chat opens it.
+  const [railOpen, setRailOpen] = useState(false);
+  const openChat = (): void => {
+    setRailOpen(true);
+    requestAnimationFrame(() => {
+      document.getElementById('chat-title')?.scrollIntoView({ block: 'start' });
+    });
+  };
+  const answer = question ? (
+    <div className={`f-answer${answerOpen ? ' on' : ''}`}>
+      <div className="f-card-title">
+        <a
+          className="f-label"
+          href={href(
+            answerOpen ? { page: 'lab' } : { page: 'thread', id: question.thread.id, post: null },
+          )}
+          aria-expanded={answerOpen}
+        >
+          {answered ? 'The lab’s answer' : 'Candidate answers'}
+        </a>
+        {hasNew(question, seen) && !answerOpen ? <New /> : null}
+      </div>
+      <Candidates
+        view={data.candidates}
+        answered={answered}
+        question={question.thread.id}
+        open={answerOpen}
+        threads={threads}
+        agents={lab.agents}
+        now={props.now}
+      />
+      <Faces ids={authors(questionRead.view?.posts ?? [], lab.agents)} agents={lab.agents} />
+    </div>
+  ) : null;
+  const deliver = (
     <>
-      <section className="f-seat">
-        <div className="f-seat-main">
-          <Question
-            lab={lab}
-            now={props.now}
-            onRevise={async (text, note) => {
-              const revised = await api.reviseQuestion(text, note);
-              data.reload();
-              return revised;
-            }}
-          />
-          <StatusBar api={api} lab={lab} now={props.now} reload={data.reload} />
-          {question ? (
-            <div className={`f-answer${answerOpen ? ' on' : ''}`}>
-              <div className="f-card-title">
-                <a
-                  className="f-label"
-                  href={href(
-                    answerOpen
-                      ? { page: 'lab' }
-                      : { page: 'thread', id: question.thread.id, post: null },
-                  )}
-                  aria-expanded={answerOpen}
-                >
-                  {answered ? 'The lab’s answer' : 'Candidate answers'}
-                </a>
-                {hasNew(question, seen) && !answerOpen ? <New /> : null}
-              </div>
-              <Candidates
-                view={data.candidates}
-                answered={answered}
-                question={question.thread.id}
-                open={answerOpen}
-                threads={threads}
-                agents={lab.agents}
-                now={props.now}
-              />
-              <Faces
-                ids={authors(questionRead.view?.posts ?? [], lab.agents)}
-                agents={lab.agents}
-              />
-            </div>
-          ) : null}
-          <DeliverDoor
-            list={lab.deliverables}
-            open={panel === 'deliver'}
-            onToggle={() => {
-              setPanel(panel === 'deliver' ? null : 'deliver');
-            }}
-          />
-          {panel === 'deliver' ? (
-            <Deliverables
-              api={api}
-              list={lab.deliverables}
-              removed={lab.removed_deliverables}
-              lab={lab}
-              agents={lab.agents}
-              now={props.now}
-              reload={data.reload}
-              onClose={() => {
-                setPanel(null);
-              }}
-            />
-          ) : null}
-        </div>
-        <div className="f-steer">
+      <DeliverDoor
+        list={lab.deliverables}
+        open={panel === 'deliver'}
+        onToggle={() => {
+          setPanel(panel === 'deliver' ? null : 'deliver');
+        }}
+      />
+      {panel === 'deliver' ? (
+        <Deliverables
+          api={api}
+          list={lab.deliverables}
+          removed={lab.removed_deliverables}
+          lab={lab}
+          agents={lab.agents}
+          now={props.now}
+          reload={data.reload}
+          onClose={() => {
+            setPanel(null);
+          }}
+        />
+      ) : null}
+    </>
+  );
+
+  return (
+    // The main column holds the question, the status line, the tabs, and the open tab. The rail beside it holds
+    // what waits for the person first, then the chat, the allowance, and the coordinator, so nothing in the rail
+    // moves the tabs down. On a narrow page, what waits comes before the tabs and the rest of the rail folds.
+    <section className="f-seat">
+      <div className="f-seat-main">
+        <Question
+          lab={lab}
+          now={props.now}
+          onRevise={async (text, note) => {
+            const revised = await api.reviseQuestion(text, note);
+            data.reload();
+            return revised;
+          }}
+        />
+        <StatusBar api={api} lab={lab} now={props.now} reload={data.reload} />
+        {/* A lab with no part of a dashboard and no branches has no tabs. */}
+        <LabTabs tab={tab} dashboard={hasDashboard(lab)} map={hasMap(data.map)} />
+        {tab === 'dashboard' ? (
+          <DashboardTab api={api} lab={lab} now={props.now} reload={data.reload} />
+        ) : tab === 'map' ? (
+          <div className="f-body">
+            <MapTab map={data.map ?? NO_MAP} agents={lab.agents} now={props.now} />
+          </div>
+        ) : (
+          // A function and no component, so the wall's own elements stay in the page's tree.
+          wallTab({ ...props, turns, seen, answer, deliver })
+        )}
+      </div>
+      <div className="f-steer">
+        <div className="f-rail-waits">
           <ActionNeeds api={api} needs={needs} lab={lab} now={props.now} reload={data.reload} />
           <Waits lab={lab} now={props.now} skip={actionIds(needs)} />
-          <Allowances
-            api={api}
-            lab={lab}
-            now={props.now}
-            reload={data.reload}
-            {...(deskOf(lab.agents) ? { onChange: () => setPanel('desk') } : {})}
-          />
-          {done && lab.close ? (
-            <a
-              className="f-done"
-              href={href({ page: 'thread', id: lab.close.thread, post: lab.close.id })}
-            >
-              {done}
-              {deliverLine(lab.deliverables) ? <span>{deliverLine(lab.deliverables)}</span> : null}
-            </a>
+          {desk ? (
+            <button type="button" className="linkbtn f-to-chat" onClick={openChat}>
+              Chat with the lab
+            </button>
           ) : null}
-          <DeskSeat
-            {...props}
-            open={panel === 'desk'}
-            onOpen={(open) => {
-              setPanel(open ? 'desk' : null);
+        </div>
+        <div className={`f-rail-rest${railOpen ? ' open' : ''}`}>
+          <button
+            type="button"
+            className="f-rail-fold"
+            aria-expanded={railOpen}
+            onClick={() => {
+              setRailOpen(!railOpen);
             }}
-            subject={subject}
-            onClearSubject={() => {
-              setWholeLab(open);
-            }}
-          />
-          <MovesCard
-            moves={data.conversation?.moves ?? []}
-            agents={lab.agents}
-            seated={coordinatorOf(lab.agents) !== null}
-            onAll={() => {
-              setPanel('log');
-            }}
-          />
-          <CoordinatorSeat
-            {...props}
-            tab={panel === 'deliver' || panel === 'desk' ? null : panel}
-            onTab={setPanel}
-          />
-          {desk ? null : (
-            <Composer
-              variant="steer"
-              label="Steer the lab"
-              placeholder="Change the scope, the priority, or the time. Every agent gets it."
-              button="Send to the lab"
-              hint={
-                lab.waits.length > 0
-                  ? 'Your message opens a new thread.'
-                  : 'Nothing waits for you. Your message opens a new thread.'
-              }
-              onSend={(text) => send(text)}
+          >
+            {desk
+              ? 'The chat, the allowance, and the coordinator'
+              : 'The allowance and the coordinator'}
+          </button>
+          <div className="f-rail-body">
+            {done && lab.close ? (
+              <a
+                className="f-done"
+                href={href({ page: 'thread', id: lab.close.thread, post: lab.close.id })}
+              >
+                {done}
+                {deliverLine(lab.deliverables) ? (
+                  <span>{deliverLine(lab.deliverables)}</span>
+                ) : null}
+              </a>
+            ) : null}
+            <DeskSeat
+              {...props}
+              open={panel === 'desk'}
+              onOpen={(open) => {
+                setPanel(open ? 'desk' : null);
+              }}
+              subject={subject}
+              onClearSubject={() => {
+                setWholeLab(open);
+              }}
             />
-          )}
-          <RoundOpener
-            round={lab.round}
-            now={props.now}
-            onOpen={async (request) => {
-              await api.post(request);
-              data.reload();
-            }}
-          />
+            <Allowances
+              api={api}
+              lab={lab}
+              now={props.now}
+              reload={data.reload}
+              {...(desk ? { onChange: () => setPanel('desk') } : {})}
+            />
+            <MovesCard
+              moves={data.conversation?.moves ?? []}
+              agents={lab.agents}
+              seated={coordinatorOf(lab.agents) !== null}
+              onAll={() => {
+                setPanel('log');
+              }}
+            />
+            <CoordinatorSeat
+              {...props}
+              tab={panel === 'deliver' || panel === 'desk' ? null : panel}
+              onTab={setPanel}
+            />
+            {desk ? null : (
+              <Composer
+                variant="steer"
+                label="Steer the lab"
+                placeholder="Change the scope, the priority, or the time. Every agent gets it."
+                button="Send to the lab"
+                hint={
+                  lab.waits.length > 0
+                    ? 'Your message opens a new thread.'
+                    : 'Nothing waits for you. Your message opens a new thread.'
+                }
+                onSend={(text) => send(text)}
+              />
+            )}
+            <RoundOpener
+              round={lab.round}
+              now={props.now}
+              onOpen={async (request) => {
+                await api.post(request);
+                data.reload();
+              }}
+            />
+          </div>
         </div>
-      </section>
-
-      {/* A lab with no part of a dashboard and no branches has no tabs, and its page looks as it did before them. */}
-      <LabTabs tab={tab} dashboard={hasDashboard(lab)} map={hasMap(data.map)} />
-      {tab === 'dashboard' ? (
-        <DashboardTab api={api} lab={lab} now={props.now} reload={data.reload} />
-      ) : tab === 'map' ? (
-        <div className="f-body">
-          <MapTab map={data.map ?? NO_MAP} agents={lab.agents} now={props.now} />
-        </div>
-      ) : (
-        // A function and no component, so the wall's own elements stay in the page's tree.
-        wallTab({ ...props, turns, seen })
-      )}
-    </>
+      </div>
+    </section>
   );
 }
 
 /**
- * The Wall tab: the question's thread when it is open, the lab's reading of the question, the newest report, the
- * band of a quiet lab, the newest round, one card for each thread, the obstacles, and the side threads.
+ * The Wall tab: the candidate answers and the door to the deliverables, the question's thread when it is open, the
+ * lab's reading of the question, the newest report, the band of a quiet lab, the newest round, one card for each
+ * thread, the obstacles, and the side threads.
  */
 function wallTab(
   props: PageProps &
@@ -362,6 +396,10 @@ function wallTab(
       readonly questionRead: ThreadRead;
       readonly turns: (read: ThreadRead) => ReactElement;
       readonly seen: Readonly<Record<string, number>>;
+      /** The candidate answers, or the lab's answer, at the top of the wall. */
+      readonly answer: ReactElement | null;
+      /** The door to the deliverables, with their panel while it is open. */
+      readonly deliver: ReactElement;
     },
 ): ReactElement {
   const { api, data, open, cardRead, questionRead, turns, seen } = props;
@@ -390,6 +428,8 @@ function wallTab(
   const missing = open !== null && !threads.some((summary) => summary.thread.id === open);
   return (
     <>
+      {props.answer}
+      {props.deliver}
       {question && answerOpen ? (
         <section
           id={`card-${question.thread.id}`}

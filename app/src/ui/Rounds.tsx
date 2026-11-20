@@ -141,35 +141,42 @@ export function RoundPanel(props: {
         <a href={href({ page: 'thread', id: post.thread, post: post.id })}>See it in its thread</a>
       </div>
       <p className="f-round-text">{post.text}</p>
-      <table className="f-round-table">
-        <thead>
-          <tr>
-            <th scope="col">Agent</th>
-            <th scope="col">Entry</th>
-          </tr>
-        </thead>
-        <tbody>
-          {roundRows(view).map((row) => (
-            <tr key={row.agent}>
-              <th scope="row">{authorName(props.agents, row.agent)}</th>
-              <td>
-                {row.entry ? (
-                  <>
-                    <p>{row.entry.post.text}</p>
-                    <Detail
-                      post={row.entry.post.id}
-                      body={row.entry.post.body}
-                      files={row.entry.post.evidence}
-                    />
-                  </>
-                ) : (
-                  <span className="dim">{view.open ? 'Not entered yet' : 'No entry'}</span>
-                )}
-              </td>
+      {/* The entries fold under the question, and the line above counts them. */}
+      <details className="f-round-entries">
+        <summary>
+          <span className="closed">Show the entries</span>
+          <span className="opened">Hide the entries</span>
+        </summary>
+        <table className="f-round-table">
+          <thead>
+            <tr>
+              <th scope="col">Agent</th>
+              <th scope="col">Entry</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {roundRows(view).map((row) => (
+              <tr key={row.agent}>
+                <th scope="row">{authorName(props.agents, row.agent)}</th>
+                <td>
+                  {row.entry ? (
+                    <>
+                      <p>{row.entry.post.text}</p>
+                      <Detail
+                        post={row.entry.post.id}
+                        body={row.entry.post.body}
+                        files={row.entry.post.evidence}
+                      />
+                    </>
+                  ) : (
+                    <span className="dim">{view.open ? 'Not entered yet' : 'No entry'}</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </details>
     </section>
   );
 }

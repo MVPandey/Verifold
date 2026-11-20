@@ -792,13 +792,75 @@ details[open] > summary .opened {
   inset: 0;
 }
 /*
- * The column beside the question starts at the top of the seat, whatever the height of the candidates, so its
- * seats and the box that steers the lab stay in sight at the top of the page.
+ * The rail beside the main column starts at the top of the seat, so what waits for the person stays in sight at the
+ * top of the page. Its height never moves the main column's tabs, which sit under the status line.
  */
 .f-steer {
   display: flex;
   flex-direction: column;
   align-self: start;
+}
+.f-seat-main {
+  min-width: 0;
+}
+/* The wall, the map, and the dashboard sit in the main column, inside the seat's gutters. */
+.f-seat-main .f-body,
+.f-seat-main .d-board,
+.f-seat-main .d-tabs {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+.f-seat-main .f-body,
+.f-seat-main .d-board {
+  padding-bottom: 60px;
+}
+.f-seat-main .f-report,
+.f-seat-main .f-answer-thread {
+  max-width: none;
+  margin: 0 0 22px;
+}
+.f-seat-main > .d-status {
+  margin-bottom: 14px;
+}
+.f-rail-waits,
+.f-rail-rest,
+.f-rail-body {
+  display: flex;
+  flex-direction: column;
+}
+/* The fold of the rail's rest and the link to the chat are for a narrow page only. */
+.f-rail-fold,
+.f-to-chat {
+  display: none;
+}
+.f-steer button.f-rail-fold {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line2);
+  background: var(--card);
+  color: var(--ink);
+  font: 600 14px var(--body);
+  text-align: left;
+  cursor: pointer;
+}
+.f-rail-fold::after {
+  content: ' · Show';
+  color: var(--muted);
+  font-weight: 500;
+}
+.f-rail-rest.open > .f-rail-fold::after {
+  content: ' · Hide';
+}
+.f-rail-rest.open > .f-rail-fold {
+  margin-bottom: 14px;
+}
+.f-steer button.f-to-chat {
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 0;
+  background: none;
+  color: var(--accent-ink);
 }
 .f-steer-form {
   display: flex;
@@ -1690,19 +1752,40 @@ span.error {
     padding-right: 18px;
   }
   /*
-   * On a narrow page, what waits for the person and the box that steers the lab come after the question and
-   * before the candidate answers.
+   * On a narrow page, the question and the status line come first, then what waits for the person, then the tabs
+   * and the open tab. The rest of the rail folds after them, and the link to the chat opens it.
    */
-  .f-seat-main {
+  .f-seat-main,
+  .f-seat > .f-steer {
     display: contents;
   }
-  .f-seat > .f-steer {
-    order: 1;
-    margin-bottom: 22px;
+  .f-seat-main > * {
+    order: 5;
   }
-  .f-seat-main > .f-answer,
-  .f-seat-main > .f-answer ~ * {
+  .f-seat-main > .f-question,
+  .f-seat-main > .f-revise {
+    order: 1;
+  }
+  .f-seat-main > .d-status {
     order: 2;
+  }
+  .f-rail-waits {
+    order: 3;
+    margin-bottom: 14px;
+  }
+  .f-seat-main > .d-tabs {
+    order: 4;
+  }
+  .f-rail-rest {
+    order: 9;
+    margin-top: 22px;
+  }
+  .f-rail-fold,
+  .f-to-chat {
+    display: block;
+  }
+  .f-rail-rest:not(.open) > .f-rail-body {
+    display: none;
   }
   .f-seat h1 {
     font-size: 26px;
@@ -4379,6 +4462,34 @@ button.v-count:hover {
 .a-stopped .a-meter i {
   background: var(--bad);
 }
+/* An allowance that the person started is one line with its meter, which opens to its actions and presses. */
+.a-live > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.a-live > summary::-webkit-details-marker {
+  display: none;
+}
+.a-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.a-line b {
+  font: 600 15px/1.3 var(--head);
+}
+.a-line .a-used {
+  font-size: 13.5px;
+  white-space: nowrap;
+}
+.a-live .a-meter {
+  display: block;
+}
+.a-live[open] > summary {
+  margin-bottom: 10px;
+}
 .a-stop {
   color: var(--bad);
   font-weight: 600;
@@ -4446,6 +4557,9 @@ button.v-count:hover {
 }
 .a-fold summary u {
   text-decoration-color: var(--line2);
+}
+.a-fold-note {
+  margin: 8px 0 0;
 }
 .a-fold ul {
   margin: 8px 0 0;
@@ -4674,6 +4788,30 @@ button.v-count:hover {
 }
 .m-list a {
   font-size: 13px;
+}
+/* Beside the chat, a move is one line, and its words and its why open under it. */
+.m-list.m-compact li {
+  display: block;
+}
+.m-compact summary {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+.m-compact summary::-webkit-details-marker {
+  display: none;
+}
+.m-compact .m-what {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.m-compact details > p {
+  margin-left: 80px;
+}
+.m-compact details[open] > summary {
+  margin-bottom: 4px;
 }
 .m-none {
   margin: 0;
