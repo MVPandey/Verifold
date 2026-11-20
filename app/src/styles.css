@@ -4330,7 +4330,9 @@ button.v-count:hover {
   align-items: center;
   gap: 10px 14px;
 }
-.a-card .btn {
+/* The column and the desk's panel style every button in them, so a card sets its own back. */
+.a-card .btn,
+.f-steer .k-panel .a-card .btn {
   min-height: 0;
   padding: 10px 14px;
   border: 1px solid var(--line2);
@@ -4339,12 +4341,14 @@ button.v-count:hover {
   font: 600 14px/1 var(--body);
   white-space: normal;
 }
-.a-card .btn.primary {
+.a-card .btn.primary,
+.f-steer .k-panel .a-card .btn.primary {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--on);
 }
-.a-card .btn.a-pause {
+.a-card .btn.a-pause,
+.f-steer .k-panel .a-card .btn.a-pause {
   border-color: var(--bad);
   color: var(--bad);
 }

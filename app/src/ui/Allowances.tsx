@@ -167,7 +167,7 @@ export function AllowanceCard(props: {
           <div className="a-row">
             <button
               type="button"
-              className="btn a-pause"
+              className={paused === null ? 'btn a-pause' : 'btn'}
               disabled={press.busy}
               onClick={() => {
                 done(() => api.pauseActions(paused === null));
