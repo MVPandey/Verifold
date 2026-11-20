@@ -1,8 +1,12 @@
+import base64
+import hashlib
+import re
 from pathlib import Path
 
 import httpx2
 
-from verifold.server.web import FRAME_PAGE, FRAME_POLICY, web_app
+from verifold.server.join import DASHBOARD_TOOL
+from verifold.server.web import FRAME_PAGE, FRAME_POLICY, FRAME_SCRIPT, web_app
 
 
 def client_of(folder: Path) -> httpx2.AsyncClient:
@@ -62,15 +66,23 @@ async def test_the_frame_of_the_dashboard_is_a_sandbox_with_an_origin_of_its_own
     # One policy, the frame's own: the app's policy would refuse the agents' inline scripts.
     assert frame.headers.get_list('content-security-policy') == [FRAME_POLICY]
     policy = directives(frame.headers['content-security-policy'])
-    # The sandbox lets scripts run, and nothing else: no origin of the app, so no storage and no token of it, no
-    # form, no window, no move of the page that holds the frame, and no download.
+    # The sandbox gives the frame an origin of its own, so no storage and no token of the app, no form, no window, no
+    # move of the page that holds the frame, and no download. It runs scripts, and its policy names the one script
+    # that may run by its hash: Verifold's own, in the frame's page.
     assert policy['sandbox'] == {'allow-scripts'}
-    # No request to any server: every fetch falls back to none, or takes the page's own text or data in it.
+    scripts = re.findall(r'<script>(.*?)</script>', FRAME_PAGE, flags=re.DOTALL)
+    assert scripts == [FRAME_SCRIPT]
+    digest = base64.b64encode(hashlib.sha256(FRAME_SCRIPT.encode()).digest()).decode()
+    assert policy['script-src'] == {f"'sha256-{digest}'"}
+    # No request to any server: every fetch falls back to none, or takes the page's own styles or data in it.
     assert policy['default-src'] == {"'none'"}
-    allowed = {"'unsafe-inline'", "'unsafe-eval'", 'data:', 'blob:'}
-    for name in FETCHES:
+    allowed = {"'unsafe-inline'", 'data:'}
+    for name in (fetch for fetch in FETCHES if fetch != 'script-src'):
         assert policy.get(name, {"'none'"}) <= allowed | {"'none'"}, name
+    assert policy['style-src'] == {"'unsafe-inline'"}
     assert 'connect-src' not in policy
+    assert 'frame-src' not in policy
+    assert 'child-src' not in policy
     assert policy['form-action'] == {"'none'"}
     assert policy['base-uri'] == {"'none'"}
     assert policy['frame-ancestors'] == {"'self'"}
@@ -78,8 +90,19 @@ async def test_the_frame_of_the_dashboard_is_a_sandbox_with_an_origin_of_its_own
     # The page holds nothing of the lab and is the same for every request: the app posts the agents' page into it.
     assert frame.text == again.text == FRAME_PAGE
     assert 'token' not in FRAME_PAGE
-    assert "addEventListener('message'" in FRAME_PAGE
-    assert 'event.source !== parent' in FRAME_PAGE
+    assert "addEventListener('message'" in FRAME_SCRIPT
+    assert 'event.source !== parent' in FRAME_SCRIPT
+
+
+def test_the_frame_shows_the_agents_page_in_a_frame_whose_sandbox_allows_nothing() -> None:
+    # The agents' page goes into a frame of its own, as the text of `srcdoc`, never into the frame's own page. That
+    # frame's sandbox has no keyword, so no script of the page runs, also in a frame that the page makes, and the
+    # page keeps the policy of the frame, which names only Verifold's own script.
+    assert "page.setAttribute('sandbox', '');" in FRAME_SCRIPT
+    assert 'page.srcdoc = event.data;' in FRAME_SCRIPT
+    assert 'allow-' not in FRAME_SCRIPT
+    assert 'document.write' not in FRAME_SCRIPT
+    assert 'innerHTML' not in FRAME_SCRIPT
 
 
 async def test_a_frame_of_the_app_loads_only_pages_of_its_own_server(tmp_path: Path) -> None:
@@ -93,3 +116,13 @@ async def test_a_frame_of_the_app_loads_only_pages_of_its_own_server(tmp_path: P
     assert policy['frame-src'] == {"'self'"}
     assert policy['frame-ancestors'] == {"'none'"}
     assert policy['connect-src'] == {"'self'"}
+
+
+def test_the_dashboard_tool_says_that_no_script_of_the_page_runs_and_what_shows() -> None:
+    text = ' '.join(DASHBOARD_TOOL.split())
+
+    assert 'No script of the page runs there' in text
+    assert 'not a script in a frame that the page makes' in text
+    assert "The page's styles, text, tables, and inline SVG show." in text
+    assert 'Scripts run' not in text
+    assert 'scripts, images' not in text

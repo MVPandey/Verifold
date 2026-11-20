@@ -401,7 +401,7 @@ class Member:
             where, address = found
             raise EvidenceRejected(
                 f'{page.path} loads {address} with {where}. The board takes a page that loads nothing from a '
-                'server: its styles, scripts, images, and fonts are in the page, inline or as `data:` addresses.'
+                'server: its styles, images, and fonts are in the page, inline or as `data:` addresses.'
             )
         posted = await self._lab.dashboard(
             self.agent_id, page, len(data), note, body, builds_on=builds_on, helper=helper

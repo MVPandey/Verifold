@@ -697,7 +697,7 @@ class Dashboard(PostBase):
     """
     One version of the lab's dashboard: a page of HTML from its author's folder, which `evidence` pins.
 
-    The page holds its styles and scripts inline and loads nothing from another server. `size` is its bytes, as
+    The page holds its styles inline and loads nothing from another server. The app runs none of its scripts. `size` is its bytes, as
     Verifold read them from the pinned commit. The first version opens the dashboard's thread, and every later
     version is a post there. The newest version that its author did not concede stands, and the person's app shows
     it in a frame that is sealed from the app. Another agent checks a version or objects to it as to any post.
