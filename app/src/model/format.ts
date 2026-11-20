@@ -58,10 +58,10 @@ export function article(count: number): 'a' | 'an' {
 }
 
 /**
- * Return a decimal as the person reads it on the lab's page: at most two digits after the point for a value of 1 or
- * more, and four significant digits at most for a value below 1, rounded half away from zero, with no zeros at the
- * end. `119.7695` reads `119.77`, `42.840` reads `42.84`, and `0.123456` reads `0.1235`. A text that is no plain
- * decimal comes back as it is. The record and the thread keep the exact value.
+ * Return a decimal as the person reads it on the lab's page, rounded half away from zero. A value of 1 or more has
+ * exactly two digits after the point, or none when it is whole: `119.7695` reads `119.77`, `46.6` reads `46.60`, and
+ * `60.00` reads `60`. A value below 1 has four significant digits at most, with no zeros at the end: `0.123456` reads
+ * `0.1235`. A text that is no plain decimal comes back as it is. The record and the thread keep the exact value.
  */
 export function readable(value: string): string {
   const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value.trim());
@@ -69,16 +69,18 @@ export function readable(value: string): string {
   const [, sign = '', whole = '0', part = ''] = match;
   const first = part.search(/[1-9]/);
   if (BigInt(whole) === 0n && first < 0) return '0';
-  const keep = BigInt(whole) > 0n ? 2 : first + 4;
+  const cents = BigInt(whole) > 0n;
+  const keep = cents ? 2 : first + 4;
   let digits = BigInt(`${whole}${part}`);
-  let scale = part.length;
-  if (scale > keep) {
-    const divisor = 10n ** BigInt(scale - keep);
+  if (part.length > keep) {
+    const divisor = 10n ** BigInt(part.length - keep);
     const rest = digits % divisor;
     digits = digits / divisor + (rest * 2n >= divisor ? 1n : 0n);
-    scale = keep;
+  } else {
+    digits *= 10n ** BigInt(keep - part.length);
   }
-  const text = digits.toString().padStart(scale + 1, '0');
-  const fraction = text.slice(text.length - scale).replace(/0+$/, '');
-  return `${sign}${text.slice(0, text.length - scale)}${fraction ? `.${fraction}` : ''}`;
+  const text = digits.toString().padStart(keep + 1, '0');
+  const tail = text.slice(text.length - keep);
+  const fraction = cents ? (/^0+$/.test(tail) ? '' : tail) : tail.replace(/0+$/, '');
+  return `${sign}${text.slice(0, text.length - keep)}${fraction ? `.${fraction}` : ''}`;
 }

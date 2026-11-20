@@ -202,14 +202,16 @@ describe('a number for the person', () => {
     );
   });
 
-  it('writes two digits after the point at most from 1 up, four significant digits below 1, and no zeros at the end', () => {
+  it('writes exactly two digits after the point from 1 up, none for a whole amount, and four significant digits below 1', () => {
     assert.deepEqual(
       [
         '42.840',
         '119.7695',
+        '46.60',
+        '46.6',
         '100.00',
+        '100.004',
         '60',
-        '5.5',
         '2.005',
         '0.123456',
         '0.5',
@@ -223,9 +225,11 @@ describe('a number for the person', () => {
       [
         '42.84',
         '119.77',
+        '46.60',
+        '46.60',
+        '100',
         '100',
         '60',
-        '5.5',
         '2.01',
         '0.1235',
         '0.5',

@@ -184,7 +184,7 @@ describe('the status line', () => {
     ]);
   });
 
-  it('writes each amount with two digits after the point at most, and the board’s line does too', () => {
+  it('writes each amount with two digits after the point, or none when it is whole, and the board’s line does too', () => {
     const exact = headline({ measure: measure({ value: '119.7695', unit: 'USD' }) });
     const line = statusLine(
       lab({
