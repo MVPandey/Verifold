@@ -83,6 +83,7 @@ def check_review(board: Board, agent_id: AgentId, post_id: PostId, what: str) ->
     """
     if not may_review(board, agent_id, post_id):
         raise RejectedEvent(
-            f"{what} another agent's post takes a reviewer seat. {seats_line(board)} An objection needs no seat, "
-            'and an author can ask for an independent rerun of its own post.'
+            f"{what} another agent's post takes a reviewer seat. {seats_line(board)} `profile` with `reviewer: true` "
+            'takes a free seat, and the person can give one. An objection needs no seat, and an author can ask for an '
+            'independent rerun of its own post.'
         )
