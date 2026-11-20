@@ -13,7 +13,8 @@ draws nothing from any allowance. Above the allowance's `check_above`, the recor
 that holds, from another agent than the action's author, replies to a post that the action rests on. While the
 person paused actions, the record takes none. The action's newest receipt gives its real cost, and the allowance
 counts that cost in place of the declared one. When what an allowance allowed costs more than its total, the seat
-stops until the person ends that allowance or starts another one for it.
+stops until the person ends that allowance or starts another one for it, and a later receipt with a lower cost does
+not lift the stop. While the stop stands, every action waits for the person.
 
 These rules hold for every event, so a record that loads follows them too. A record from before allowances holds
 none of these events or posts.
@@ -124,13 +125,31 @@ def stopped(board: Board, agent_id: AgentId) -> AllowanceDrafted | None:
     """
     Return the allowance whose actions passed its total and that stops a seat now, or `None`.
 
-    It stops the seat while it is the newest allowance that the person started for the seat and the person has not
-    ended it, also after its end time: only the person lets the seat go on.
+    It stops the seat from the receipt that took what it allowed past its total, while it is the newest allowance
+    that the person started for the seat and the person has not ended it, also after its end time. A later receipt
+    with a lower cost does not lift the stop: only the person lets the seat go on.
     """
     held = newest(board, agent_id)
     if held is None or ended(board, held.allowance):
         return None
-    return held if drawn(board, held.allowance) > held.terms.total else None
+    return held if _passed_total(board, held) else None
+
+
+def _passed_total(board: Board, held: AllowanceDrafted) -> bool:
+    # Whether what the allowance allowed ever cost more than its total, by the newest receipt of each action at
+    # that point of the record. The record takes a receipt only from the action's author.
+    costs: dict[PostId, Decimal] = {}
+    for entry in board.posts:
+        post = entry.post
+        if isinstance(post, Action) and post.allowance == held.allowance and post.allowed:
+            costs[post.id] = post.cost
+        elif isinstance(post, Receipt) and post.reply_to in costs:
+            costs[post.reply_to] = post.cost
+        else:
+            continue
+        if sum(costs.values(), Decimal(0)) > held.terms.total:
+            return True
+    return False
 
 
 def allowance_line(board: Board, agent_id: AgentId, at: datetime) -> AllowanceLine | None:
@@ -162,7 +181,7 @@ def verdict(board: Board, agent_id: AgentId, cost: Decimal, at: datetime) -> Ver
     terms = held.terms
     if cost > terms.per_action:
         return Verdict(allowance=held.allowance, allowed=False, needs='per_action')
-    if drawn(board, held.allowance) + cost > terms.total:
+    if drawn(board, held.allowance) + cost > terms.total or stopped(board, agent_id):
         return Verdict(allowance=held.allowance, allowed=False, needs='total')
     return Verdict(allowance=held.allowance, allowed=True, needs=None)
 

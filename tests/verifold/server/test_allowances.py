@@ -258,6 +258,23 @@ async def test_actions_that_pass_the_total_stop_the_seat_until_the_person_ends_t
     assert allowance_views(acting.board, acting.now())[0].state == 'ended'
 
 
+async def test_a_later_receipt_with_a_lower_cost_does_not_lift_the_stop(acting: Lab) -> None:
+    bo = Member(await started(acting), 'bo')
+    done = await bo.act(action('10'))
+    slipped = PostRequest(kind='receipt', text='Slipped.', reply_to=done.action, thread=done.thread, cost=Decimal(26))
+    await acting.post(slipped, 'bo', RECEIPT)
+    lower = slipped.model_copy(update={'text': 'It cost 1 after all.', 'cost': Decimal(1)})
+    await acting.post(lower, 'bo', RECEIPT)
+
+    line = allowance_line(acting.board, 'bo', acting.now())
+    held = hold(acting.board, 'bo', acting.now())
+    assert line is not None
+    assert held is not None
+    assert (line.drawn, line.stopped, held.kind) == (Decimal(1), True, 'allowance')
+    # Every action of the stopped seat waits for the person, also one that fits what the allowance has left.
+    assert (await bo.act(action('1'))).needs == 'total'
+
+
 async def test_a_new_allowance_for_the_seat_lifts_the_stop_and_counts_from_zero(acting: Lab) -> None:
     bo = Member(await started(acting), 'bo')
     done = await bo.act(action('10'))
