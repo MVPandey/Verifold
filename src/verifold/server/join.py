@@ -828,7 +828,7 @@ takes the mark from the agent that holds the coordinator seat only, and on no `p
 thread for the whole lab, such a post that names nobody and replies to no post gets `to_lab` too.
 
 `ends_at` on an `ask` is when it stops waiting for the person, as a time with its zone. An `action` goes through
-`act`.
+`act`, and a `measure`, a `dashboard`, and a `headline_number` go through the tools of those names.
 
 `why` is one line of at most 200 characters on a `round` or a `reading`: why its author opens the round or posts the
 reading. The board takes a round of the agent that holds the coordinator seat, and a newer reading of that agent, only
