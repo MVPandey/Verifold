@@ -10,7 +10,16 @@ from typing import Literal, Protocol
 from verifold.protocol.agents import GUEST, Picture
 from verifold.protocol.allowances import AllowanceTerms
 from verifold.protocol.app import Heard
-from verifold.protocol.events import AgentLeft, AlarmSet, NotesSet, Posted, RerunRequested, RerunTaken, WatchSet
+from verifold.protocol.events import (
+    AgentLeft,
+    AlarmCondition,
+    AlarmSet,
+    NotesSet,
+    Posted,
+    RerunRequested,
+    RerunTaken,
+    WatchSet,
+)
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
     MAX_DESK_FILE,
@@ -31,6 +40,7 @@ from verifold.protocol.join import (
     ProfileResult,
     RerunLine,
     RerunTake,
+    SteeringResult,
     ThreadList,
     ThreadView,
     Update,
@@ -59,6 +69,7 @@ from verifold.society.identity import post_view
 from verifold.society.lifecycle import utc
 from verifold.society.overview import overview
 from verifold.society.reruns import RerunKey, kept_until, lease_of, open_take, told_of
+from verifold.society.steering import move_line, moves, steering_facts
 from verifold.society.tasks import held_by
 from verifold.society.views import brief, profile_result, side_lines, thread_summaries, thread_view, work_threads
 
@@ -361,6 +372,16 @@ class Member:
         self._saw(made.news, now)
         return made
 
+    def steering(self) -> SteeringResult:
+        """Return the lab's steering facts and the coordinator's moves, the newest first, as the agent reads them."""
+        board, now = self._lab.board, self._lab.now()
+        made = moves(board)
+        return SteeringResult(
+            facts=steering_facts(board, now),
+            moves=tuple(move_line(board, move, now) for move in made[:MAX_NEWS]),
+            more_moves=max(len(made) - MAX_NEWS, 0),
+        )
+
     def _unseen(self) -> News:
         now = self._lab.now()
         unseen = news(self._lab.board, self.agent_id, self._seen, now, told=self.told)
@@ -632,9 +653,11 @@ class Member:
                 'no take of a rerun, no claim, no vote, and no badge from you now. The person can raise it.'
             )
 
-    async def set_alarm(self, minutes: float, *, quiet: bool) -> AlarmSet:
+    async def set_alarm(self, minutes: float, *, quiet: bool, conditions: tuple[AlarmCondition, ...] = ()) -> AlarmSet:
         """
         Ask Verifold to wake the agent when it is in no turn and no post for it wakes it first.
+
+        The alarm rings at its time, or when the record meets one of `conditions`, whichever comes first.
 
         Raises:
             CannotWake: The agent joined with an invitation, so Verifold cannot wake it.
@@ -646,7 +669,7 @@ class Member:
                 'You joined with an invitation, so Verifold cannot wake you and sets no alarm. `wait` returns when '
                 'a post for you arrives.'
             )
-        return await self._lab.set_alarm(self.agent_id, minutes, quiet=quiet)
+        return await self._lab.set_alarm(self.agent_id, minutes, quiet=quiet, conditions=conditions)
 
     async def set_profile(  # noqa: PLR0913
         self,

@@ -204,7 +204,7 @@ async def test_a_seat_can_start_with_powers_and_a_plain_seat_has_none(lab: Lab) 
         AgentChoice(harness='fake', powers=('time',))
 
 
-async def test_a_yes_removes_an_agent_as_the_person_and_a_power_names_the_coordinator(led: Lab) -> None:
+async def test_a_yes_removes_an_agent_as_the_person_and_no_power_removes_one(led: Lab) -> None:
     await led.join(agent('cy'))
     asked = await led.request(RemoveMove(agent='bo'), 'Bo repeats the same run.', '', 'ada')
     await led.answer_request(asked.post.id, yes=True)
@@ -213,19 +213,19 @@ async def test_a_yes_removes_an_agent_as_the_person_and_a_power_names_the_coordi
     assert left is not None
     # The coordinator's words stay in its request, which the removal names. They are no reason of the person.
     assert (left.by, left.through, left.reason, left.request) == ('person', None, '', asked.post.id)
-
-    await led.set_power('agents', on=True)
-    await led.request(RemoveMove(agent='cy'), 'Cy has no line.', '', 'ada')
-
-    gone = led.board.gone('cy')
-    assert isinstance(gone, AgentLeft)
-    assert (gone.by, gone.through, gone.reason) == ('person', 'ada', '')
-    with pytest.raises(HasLeft, match='ada, the coordinator, removed you from this lab with a power'):
-        Member(led, 'cy').check_here()
     with pytest.raises(
         HasLeft, match=f"The person removed you from this lab, with a yes to the coordinator's request {asked.post.id}"
     ):
         Member(led, 'bo').check_here()
+
+    # The coordinator pauses a seat, and only the person removes one: under the power for agents too.
+    await led.set_power('agents', on=True)
+    waiting = await led.request(RemoveMove(agent='cy'), 'Cy has no line.', '', 'ada')
+    assert (led.board.gone('cy'), led.board.answer_to(waiting.post.id)) == (None, None)
+    await led.answer_request(waiting.post.id, yes=True)
+    gone = led.board.gone('cy')
+    assert isinstance(gone, AgentLeft)
+    assert (gone.by, gone.through) == ('person', None)
 
 
 async def test_a_move_changes_a_setting_of_the_lab_and_never_the_permission_settings(led: Lab) -> None:
@@ -512,7 +512,7 @@ async def test_the_coordinator_asks_through_its_tool_and_the_board_refuses_every
         seat = {'move': 'add_agent', 'text': 'One more.', 'harness': 'fake'}
         refused_fields = [
             await client.call_tool('request', seat | extra)
-            for extra in ({'family': 'openai'}, {'mode': 'full-access'}, {'coordinator': True}, {'count': 2})
+            for extra in ({'family': 'openai'}, {'reviewer': True}, {'coordinator': True}, {'count': 2})
         ]
     async with Client(join_server(lambda _: Member(led, 'bo'))) as client:
         other = await client.call_tool('request', {'move': 'time', 'text': 'I want time.', 'minutes': 5})
@@ -580,10 +580,12 @@ async def test_the_person_reads_the_conversation_switches_powers_and_answers_req
         refused = await client.post(f'/requests/{wrong.post.id}', json={'yes': True})
         no = await client.post(f'/requests/{wrong.post.id}', json={'yes': False})
         again = await client.post(f'/requests/{time.post.id}', json={'yes': True})
-        on = (await client.post('/powers', json={'power': 'agents', 'on': True})).json()
-        used = await led.request(RemoveMove(agent='bo'), 'Bo is done.', '', 'ada')
         back = await client.post(f'/requests/{time.post.id}/minutes')
         twice = await client.post(f'/requests/{time.post.id}/minutes')
+        on = (await client.post('/powers', json={'power': 'time', 'on': True})).json()
+        used = await led.request(MORE, 'The tail run needs it.', '', 'ada')
+        await client.post('/powers', json={'power': 'agents', 'on': True})
+        removal = await led.request(RemoveMove(agent='bo'), 'Bo is done.', '', 'ada')
         done = (await client.get('/conversation')).json()
 
     assert (empty['coordinator'], empty['thread'], empty['waits'], empty['deeds']) == ('ada', None, [], [])
@@ -602,13 +604,24 @@ async def test_the_person_reads_the_conversation_switches_powers_and_answers_req
     assert (yes.status_code, added.status_code, no.status_code) == (200, 200, 200)
     assert (refused.status_code, refused.json()['detail']) == (400, 'Unknown harness nope.')
     assert (again.status_code, again.json()['detail']) == (400, f'The request {time.post.id} has its answer already.')
-    assert [(power['power'], power['on']) for power in on['powers'] if power['on']] == [('agents', True)]
+    assert [(power['power'], power['on']) for power in on['powers'] if power['on']] == [('time', True)]
     assert (back.status_code, twice.status_code) == (200, 400)
-    assert done['waits'] == []
+    # A request to remove an agent waits for the person under the power for agents too.
+    assert done['waits'] == [removal.post.id]
     deeds = [(deed['request']['post']['id'], deed['agent'], deed['undo']) for deed in done['deeds']]
-    assert deeds == [(used.post.id, None, None), (seat.post.id, 'dee', 'remove_agent'), (time.post.id, None, None)]
+    assert deeds == [
+        (used.post.id, None, 'take_minutes'),
+        (seat.post.id, 'dee', 'remove_agent'),
+        (time.post.id, None, None),
+    ]
     assert done['deeds'][0]['request']['decision']['by'] == 'ada'
-    power = next(power for power in done['powers'] if power['power'] == 'agents')
+    moves = [(move['post']['post']['id'], move['kind'], move['yes_by']) for move in done['moves']]
+    assert moves == [
+        (used.post.id, 'time', 'ada'),
+        (seat.post.id, 'add_agent', 'person'),
+        (time.post.id, 'time', 'person'),
+    ]
+    power = next(power for power in done['powers'] if power['power'] == 'time')
     assert (power['on'], power['used'], power['since'] is not None) == (True, 1, True)
 
 
@@ -639,3 +652,66 @@ async def test_the_conversation_names_the_permission_requests_that_its_requests_
     assert other.post.id in [item['post']['id'] for item in needs]
     assert view['asks'][0]['post']['shown']['command'] == './gpu train | tail'
     deciding.cancel()
+
+
+async def test_the_person_grants_spare_seats_and_an_add_inside_the_grant_takes_effect_at_once_with_its_why(
+    led: Lab,
+) -> None:
+    host = Host(led)
+    api = app_api(host, Activity(), SecretStr('secret'))  # ty: ignore[invalid-argument-type]
+    headers = {'Authorization': 'Bearer secret'}
+    grant = {'seats': 1, 'choices': [{'harness': 'fake', 'model': 'mini'}]}
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=api), base_url='http://lab', headers=headers
+    ) as client:
+        granted = (await client.post('/grant', json=grant)).json()
+        again = await client.post('/grant', json=grant)
+        seats_before = len(led.board.seat_grants)
+        inside = await led.request(
+            AddMove(seat=AddSeat(harness='fake', model='mini', fresh=True)),
+            'Every line looks alike.',
+            '',
+            'ada',
+            host.add_seat,
+        )
+        outside = await led.request(
+            AddMove(seat=AddSeat(harness='fake', model='mini')), 'One more of the same.', '', 'ada', host.add_seat
+        )
+        after = (await client.get('/conversation')).json()
+        empty = await client.post('/grant', json={'seats': 1, 'choices': []})
+
+    assert granted['grant'] == {
+        'left': 1,
+        'of': 1,
+        'kinds': [{'harness': 'fake', 'model': 'mini', 'effort': None, 'mode': None}],
+    }
+    # The same grant again records nothing, so it does not count its seats again.
+    assert (again.status_code, seats_before) == (200, 1)
+    made = led.board.answer_to(inside.post.id)
+    assert made is not None
+    assert (made.by, led.board.agent('dee') is not None) == ('ada', True)
+    # Past the grant, and with the power for agents off, the request waits for the person.
+    assert led.board.answer_to(outside.post.id) is None
+    assert after['grant']['left'] == 0
+    assert [(move['kind'], move['why'], move['yes_by']) for move in after['moves']] == [
+        ('add_agent', 'Every line looks alike.', 'ada')
+    ]
+    assert after['waits'] == [outside.post.id]
+    assert empty.status_code == 422
+
+
+async def test_a_round_and_a_newer_reading_of_the_coordinator_take_a_why_and_another_agents_round_needs_none(
+    led: Lab,
+) -> None:
+    await led.post(PostRequest(kind='reading', text='Speed is the goal.', thread='t-1'), 'ada')
+    with pytest.raises(RejectedEvent, match='says why in one line'):
+        await led.post(PostRequest(kind='round', text='What now?', thread='t-1', minutes=5), 'ada')
+    with pytest.raises(RejectedEvent, match='says why in one line'):
+        await led.post(PostRequest(kind='reading', text='Speed and memory.', thread='t-1'), 'ada')
+
+    why = 'Four of the last five results are on one line.'
+    opened = await led.post(PostRequest(kind='round', text='What now?', thread='t-1', minutes=5, why=why), 'ada')
+    assert getattr(opened.post, 'why', None) == why
+    # The why of a post that is no round and no reading is refused.
+    with pytest.raises(ValidationError):
+        await led.post(PostRequest(kind='message', text='Hi.', thread='t-1', why=why), 'ada')

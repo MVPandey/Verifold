@@ -42,6 +42,7 @@ from verifold.protocol.events import (
     RerunTaken,
     ReviewerSet,
     RoundClosed,
+    SeatsGranted,
     SettingsSet,
     TaskClaimed,
     ThreadOpened,
@@ -229,6 +230,9 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
         case PaceSet():
             check_pace(board, event)
             return replace(board, seq=event.seq, paces=(*board.paces, event))
+        case SeatsGranted():
+            # Only the person grants seats, and no agent tool records the event, so the grant needs no check here.
+            return replace(board, seq=event.seq, seat_grants=(*board.seat_grants, event))
         case WentQuiet():
             # A mark from an earlier version. It changes nothing on the board.
             return replace(board, seq=event.seq)

@@ -28,9 +28,9 @@ from verifold.protocol.agents import (
 )
 from verifold.protocol.allowances import ActionNeed, AllowanceId, Amount, Bound, Purpose, Unit
 from verifold.protocol.deliverables import DeliverableLine
-from verifold.protocol.events import Halt, Limit, Note, Posted, Question, RequestAnswered, RoundEnd
+from verifold.protocol.events import AlarmCondition, Halt, Limit, Note, Posted, Question, RequestAnswered, RoundEnd
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
-from verifold.protocol.moves import LabSetting, Move, Why
+from verifold.protocol.moves import LabSetting, Move, SeatChoice, Why
 from verifold.protocol.posts import (
     MAX_BUILDS_ON,
     MAX_CHOICES,
@@ -40,6 +40,7 @@ from verifold.protocol.posts import (
     FileEvidence,
     Headline,
     Helper,
+    Message,
     Outcome,
     Part,
     Post,
@@ -47,6 +48,7 @@ from verifold.protocol.posts import (
     RelativePath,
     fits_a_headline,
 )
+from verifold.protocol.posts import Why as PostWhy
 from verifold.protocol.record import Record, unset
 from verifold.protocol.settings import MAX_BUDGET_TOKENS
 from verifold.protocol.threads import Thread, Title
@@ -199,6 +201,10 @@ class PostRequest(Record):
     """On a receipt: what the action cost, with its fees, in the unit of its allowance. A receipt needs it."""
     ends_at: AwareDatetime | None = None
     """On an ask: when it stops waiting for the person. No other kind takes it."""
+    why: PostWhy | None = None
+    """On a round or a reading of the coordinator: why it opens the round or posts the reading, as one line."""
+    about: ThreadId | None = None
+    """On a message of the person in the desk chat: the thread that the person had open, which the message is about."""
 
     @model_validator(mode='after')
     def _one_thread(self) -> Self:
@@ -363,6 +369,8 @@ class MoveForm(Record):
     until: AwareDatetime | None = None
     tokens_per_hour: int | None = Field(default=None, ge=1, le=MAX_BUDGET_TOKENS)
     why: Why | None = None
+    mode: TypedId | None = None
+    fresh: bool | None = None
 
     def to_move(self) -> Move:
         """
@@ -372,7 +380,7 @@ class MoveForm(Record):
             pydantic.ValidationError: The kind does not take a field of the form, or misses one that it needs.
 
         """
-        seat_names = {'harness', 'model', 'effort', 'role', 'on_call'}
+        seat_names = {'harness', 'model', 'effort', 'role', 'on_call', 'mode', 'fresh'}
         given = self.model_dump(exclude={'move'}, exclude_none=True)
         seat = {name: value for name, value in given.items() if name in seat_names}
         fields = {('key' if name == 'setting' else name): value for name, value in given.items() if name not in seat}
@@ -529,6 +537,11 @@ def _none(lines: tuple[str, ...]) -> bool:
     return not lines
 
 
+def _empty(items: tuple[object, ...]) -> bool:
+    """Return whether a list holds nothing. A list that came after its record leaves out its JSON then."""
+    return not items
+
+
 def _cut(text: str, keep: int) -> str:
     # The mark says that the text was cut, how long it is, and where all of it is.
     return f'{text[:keep]}… [cut: {len(text)} characters, `thread` shows all of it]'
@@ -559,7 +572,7 @@ class PostLine(Sparse):
     together.
 
     A line leaves out each field that holds nothing, as `Sparse` says: `by`, `helper`, `body`, `reply_to`,
-    `builds_on`, `for_person`, `on`, `sealed`, `up`, `down`, `badges`, and `tested`. It has `seq` and no time.
+    `builds_on`, `for_person`, `on`, `about`, `sealed`, `up`, `down`, `badges`, and `tested`. It has `seq` and no time.
     """
 
     id: PostId
@@ -594,6 +607,8 @@ class PostLine(Sparse):
     For a post of the desk for the person: the person's post in the desk chat that it rests on. Such a post reaches
     the agents as a post of the person does, and a line of the news holds its body too.
     """
+    about: ThreadId | None = None
+    """For a post of the person in the desk chat: the thread that the person had open in the app when they wrote it."""
     sealed: bool = False
     """
     Whether the post is an entry of a round that is open, which another agent wrote. The line then has
@@ -651,6 +666,7 @@ class PostLine(Sparse):
             builds_on=post.builds_on,
             for_person=post.for_person,
             on=post.on,
+            about=post.about if isinstance(post, Message) else None,
             sealed=sealed,
             up=marks[0],
             down=marks[1],
@@ -923,13 +939,19 @@ class AlarmLine(Record):
     """
 
     minutes: float
+    """The minutes of the alarm's time. Zero for an alarm that rings on its conditions alone."""
     quiet: bool = False
     """Whether the alarm rings when the board got no post for `minutes`. Each new post then moves `rings_at`."""
+    conditions: tuple[AlarmCondition, ...] = Field(default=(), exclude_if=_empty)
+    """The conditions of the record on which the alarm rings too, each with the agent's threshold."""
     rings_at: AwareDatetime | None = None
     """
-    When the alarm rings as the lab stands. A time that passed means that the alarm rings when the agent's turn
-    ends. `None` while the lab is out of time or closed: no alarm rings then, and an alarm whose time passed
-    meanwhile rings when the lab has time again or is open again.
+    When the alarm rings as the lab stands: at its time, or when the record met a condition or meets one at a time
+    that the record sets already, whichever comes first. A time that passed means that the alarm rings when the
+    agent's turn ends. `None` while the lab is out of time or closed: no alarm rings then, and an alarm whose time
+    passed meanwhile rings when the lab has time again or is open again. `None` too for an alarm without a time
+    while no condition is met and none has a time that the record sets yet, such as a budget that is not spent so
+    far.
     """
 
 
@@ -1475,6 +1497,8 @@ class AlarmResult(Record):
 
     rings_at: AwareDatetime | None = None
     quiet: bool = False
+    conditions: tuple[AlarmCondition, ...] = ()
+    """The conditions of the alarm that waits, each with its threshold."""
     news: News | None = None
 
 
@@ -1518,6 +1542,117 @@ class DiskLine(Record):
     """The folders of all agents, the clean copies for reruns, and the snapshots together."""
     limit: int | None = None
     """The lab's disk limit in bytes. `None` means no limit."""
+
+
+type SteerKind = Literal[
+    'time',
+    'permission',
+    'add_agent',
+    'remove_agent',
+    'setting',
+    'question',
+    'pause',
+    'resume',
+    'cap',
+    'round',
+    'reading',
+]
+"""
+The kinds of the coordinator's moves: a move that came from its request, a round that it opened, or a reading that it
+posted.
+"""
+
+MAX_MOVES = 5
+"""The most moves of the coordinator that a brief lists: the newest. `steering` lists more."""
+
+
+class MoveLine(Sparse):
+    """
+    One move of the coordinator as a fact: what kind it is, the post that holds it, and its one line of why.
+
+    The post is the coordinator's request for the move, its round, or its reading. An `objection` that replies to
+    the post objects to the move, as to any post, and the coordinator hears it as a reply.
+    """
+
+    post: PostId
+    kind: SteerKind
+    by: AgentId
+    """The agent that held the coordinator seat and made the move."""
+    minutes_ago: int = 0
+    """How many whole minutes ago the move took effect, by the lab's clock."""
+    why: str = ''
+    """The coordinator's one line of why: the `why` of a move of pace, a round, or a reading, or else the request's headline."""
+    agent: AgentId | None = None
+    """The seat that the move names: the one that it paused, resumed, limited, removed, or added."""
+    yes_by: AgentId | None = None
+    """For a move that came from a request: who said yes, the coordinator under a power or a grant, or `person`."""
+    disputed: bool = False
+    """Whether an objection to the move's post stands."""
+
+
+class SteeringFacts(Sparse):
+    """
+    Counts and shares of the lab, computed from the record, for steering the mix and the pace of the work.
+
+    Each fact is one field here and one function in `society.steering`. A fact is a count, a share, a rate, or an
+    age: none of them ranks an agent, a line of work, or an idea. The window of each rate is the last hour by the
+    lab's clock. A field that is not there is zero or empty, as `Sparse` says.
+    """
+
+    lines: int = 0
+    """How many lines of work the lab has: threads for the whole lab, other than the conversation and a thread of offers."""
+    new_lines: int = 0
+    """How many of those lines opened in the last hour."""
+    results: int = 0
+    """How many results agents posted in the last hour."""
+    busiest_line_share: int | None = None
+    """
+    The percent of the last hour's results that are in the one line of work that holds the most of them. `None`
+    without a result in the last hour.
+    """
+    built_on_others: int = 0
+    """How many of the last hour's results build on a post of another agent, as `builds_on` names it."""
+    tokens_last_hour: int = 0
+    """The input and output tokens of the turns that ended in the last hour, the desk's among them."""
+    dollars_last_hour: float = 0
+    """The costs that the harnesses reported for those turns."""
+    budget_hours_left: float | None = None
+    """
+    The hours until the lab spends its budget at the last hour's rate: of its budget in tokens, or in dollars,
+    whichever comes first. `None` without a budget, and while the last hour spent nothing.
+    """
+    seats_near_limit: int = 0
+    """How many seats have a window above 80 percent of their provider's usage limits, or a provider that refuses them."""
+    reading_hours_ago: float | None = None
+    """How many hours ago the lab's reading was posted. `None` while the lab has none."""
+    round_hours_ago: float | None = None
+    """How many hours ago the newest round opened. `None` while the lab has had none."""
+    unowned_tasks: int = 0
+    """How many tasks are open: nobody holds them, no hand-back waits, and their authors did not withdraw them."""
+    waits_for_person: int = 0
+    """How many posts wait for the person's answer: asks to the person, permission requests, and requests for a move."""
+
+
+class SpareSeats(Record):
+    """The spare seats that the person's grant has left for the coordinator, and the kinds of seat that it names."""
+
+    left: int
+    """How many agents the coordinator may still add by itself under the grant."""
+    of: int
+    """How many seats the person granted."""
+    kinds: tuple[SeatChoice, ...] = ()
+    """The kinds of seat: a harness, and the model, effort, and mode, where `None` is the harness's default."""
+
+
+class SteeringResult(Record):
+    """What the `steering` tool returns: the steering facts, the coordinator's newest moves, and your news."""
+
+    facts: SteeringFacts
+    moves: tuple[MoveLine, ...] = ()
+    """The coordinator's moves, the newest first, at most `MAX_NEWS`."""
+    more_moves: int = 0
+    """How many older moves `moves` leaves out."""
+    news: News | None = None
 
 
 MAX_BRIEF = 120_000
@@ -1669,6 +1804,18 @@ class Brief(Record):
     """
     alarms_waiting: int = 0
     """How many agents of the lab have an alarm that waits, the reader among them."""
+    steering: SteeringFacts | None = Field(default=None, exclude_if=unset)
+    """
+    For the agent that holds the coordinator seat: the steering facts, as the tool `steering` gives them to any
+    agent. Left out for every other agent, and when the brief cut it.
+    """
+    moves: tuple[MoveLine, ...] = Field(default=(), exclude_if=_empty)
+    """The coordinator's newest moves, the newest first, at most `MAX_MOVES`. `steering` lists more."""
+    fresh: bool = Field(default=False, exclude_if=unset)
+    """
+    Whether your seat started with a fresh view and you have posted no plan yet. The brief then leaves out the
+    candidate answers and the report. `thread` still shows every post.
+    """
     agents: tuple[AgentLine, ...] = ()
     """
     The other agents that are in the lab. The board never cuts an agent from the list. It can cut the lines of an
@@ -1719,6 +1866,11 @@ class Brief(Record):
     """
     The kinds of move for which the person switched on a power of the coordinator. A request of the coordinator
     for such a move takes effect at once. Every other request waits for the person's answer.
+    """
+    spare_seats: SpareSeats | None = Field(default=None, exclude_if=unset)
+    """
+    For the agent that holds the coordinator seat: the person's grant of spare seats while one stands. Left out
+    without a grant, and for every other agent.
     """
     left: tuple[LeftLine, ...] = ()
     """The agents that left the lab or that the person removed, oldest first."""

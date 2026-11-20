@@ -16,6 +16,7 @@ from verifold.protocol.join import MAX_BRIEF, Brief
 type Part = Literal[
     'quiet_threads',
     'one_agent_threads',
+    'moves',
     'side_threads',
     'reruns_wanted',
     'news.reruns',
@@ -33,6 +34,7 @@ type Part = Literal[
     'offers',
     'candidates',
     'agents',
+    'steering',
     'news.for_you',
 ]
 """A part of a brief that the board can cut, by its field."""
@@ -40,6 +42,7 @@ type Part = Literal[
 CUTS: tuple[Part, ...] = (
     'quiet_threads',
     'one_agent_threads',
+    'moves',
     'side_threads',
     'reruns_wanted',
     'news.reruns',
@@ -57,17 +60,20 @@ CUTS: tuple[Part, ...] = (
     'offers',
     'candidates',
     'agents',
+    'steering',
     'news.for_you',
 )
 """
 The parts that the board cuts, the first first, each down to its floor before the next.
 
-The lists that point to the threads go first, because `threads` shows every thread. In the lists of posts, a post
+The lists that point to the threads go first, because `threads` shows every thread, and so do the coordinator's
+moves, which `steering` lists. In the lists of posts, a post
 keeps its ID and loses its line, because `thread` shows each post. The lists of posts go in the reverse of their
 order in the brief, so a post that an earlier list holds keeps its line there while a later list holds its ID. The
 other posts of the news, the threads, the entries of closed rounds, and the offers of the deliverables come after
 them. The candidates lose their lines but stay by their IDs, and the other agents lose the lines of their plans and
-latest posts but stay. Last, the news ends earlier: the next result brings the posts for the agent that it holds no
+latest posts but stay. Then the coordinator's steering facts go, which the tool `steering` returns. Last, the news
+ends earlier: the next result brings the posts for the agent that it holds no
 longer, so none is lost.
 """
 
@@ -123,6 +129,7 @@ _BY_ID = '`{part}` leaves out {lines} and holds those posts by ID alone. `thread
 CUT_LINES: Mapping[Part, str] = {
     'quiet_threads': '`quiet_threads` leaves out {lines}. `threads` shows every thread.',
     'one_agent_threads': '`one_agent_threads` leaves out {lines}. `threads` shows every thread.',
+    'moves': "`moves` leaves out {lines} of the coordinator's older moves. `steering` shows them.",
     'side_threads': '`side_threads` leaves out {lines}. `threads` shows every thread.',
     'reruns_wanted': '`reruns_wanted` leaves out {lines} of older reruns, the reruns of {named}. `take_rerun` takes one by its post.',
     'news.reruns': '`reruns` of `news` leaves out {lines} of reruns that you can take. The news of a later result has them.',
@@ -143,6 +150,7 @@ CUT_LINES: Mapping[Part, str] = {
     'offers': "`deliverables` leaves out {lines} of older offers. `thread` shows them in each deliverable's `thread`.",
     'candidates': '`candidates` leaves out {lines}, and `older_candidates` names them. `thread` shows each proposal.',
     'agents': '`agents` leaves out the plans and latest posts of {named}. `thread` shows them.',
+    'steering': '`steering` is left out of this brief. The tool `steering` shows the steering facts.',
     'news.for_you': (
         '`news` leaves out {lines} of posts for you, and `more` counts them. The news of the next result has them.'
     ),

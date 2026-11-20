@@ -11,9 +11,9 @@ from typing import Annotated, Literal, Self, assert_never
 
 from pydantic import AfterValidator, AwareDatetime, Field, StringConstraints, model_validator
 
-from verifold.protocol.agents import Power, Role, TypedId, ValueId, one_line
+from verifold.protocol.agents import MAX_AGENTS, Power, Role, TypedId, ValueId, one_line
 from verifold.protocol.ids import AgentId, PostId
-from verifold.protocol.record import Record
+from verifold.protocol.record import Record, unset
 from verifold.protocol.settings import MAX_BUDGET_TOKENS, MAX_MINUTES, JobSettings
 
 type Question = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4_000)]
@@ -48,25 +48,79 @@ class PermissionMove(Record):
     option: ValueId
 
 
+type HarnessKey = Annotated[TypedId, StringConstraints(max_length=40)]
+"""The key of a harness of this computer, as one printable line."""
+
+
 class AddSeat(Record):
     """
-    The seat of the one agent that a move adds: its harness, its model, its effort, and whether it is on call.
+    The seat of the one agent that a move adds, and how the agent starts.
 
-    The seat holds nothing else. It states no model family, because the family decides whether an independent
-    rerun counts as one by another model. It names no mode of the harness, and it is not the coordinator's seat, has no
-    power, and is no reviewer seat. Those stay with the person.
+    The seat names its harness, its model, its effort, its mode, whether it is on call, and whether it starts with
+    a fresh view. The seat holds nothing else. It states no model family, because the family decides whether an independent
+    rerun counts as one by another model. It is not the coordinator's seat, has no power, and is no reviewer seat.
+    Those stay with the person. A mode of the harness comes only from a choice of the person's grant of spare seats,
+    or with the person's yes.
     """
 
-    harness: Annotated[TypedId, StringConstraints(max_length=40)]
+    harness: HarnessKey
     """The key of a harness of this computer, as one printable line. A request names a harness that this computer has."""
     model: TypedId | None = None
     effort: TypedId | None = None
+    mode: TypedId | None = Field(default=None, exclude_if=unset)
+    """One of the harness's own modes. `None` follows the lab's auto mode choice."""
     on_call: bool = False
     role: Role = ''
     """
     A role that the coordinator gives the seat, as one line. The record keeps it as the coordinator's word, never
     as the person's.
     """
+    fresh: bool = Field(default=False, exclude_if=unset)
+    """
+    Whether the seat starts with a fresh view: until the agent posts its first plan, its start message and its
+    briefs hold the question, the reading, and what was ruled out, and leave out the candidate answers and the
+    report.
+    """
+
+    def choice(self) -> 'SeatChoice':
+        """Return the harness, the model, the effort, and the mode of the seat, as a choice of a grant names them."""
+        return SeatChoice(harness=self.harness, model=self.model, effort=self.effort, mode=self.mode)
+
+
+class SeatChoice(Record):
+    """
+    One kind of seat that the person's grant of spare seats lets the coordinator add.
+
+    It names a harness, and the model, the effort, and the mode that the seat has. `None` is the harness's default,
+    or the lab's auto mode choice for the mode. A seat matches a choice when it names the same four values.
+    """
+
+    harness: HarnessKey
+    model: TypedId | None = None
+    effort: TypedId | None = None
+    mode: TypedId | None = None
+
+
+MAX_SEAT_CHOICES = 10
+"""The most kinds of seat that one grant of spare seats names."""
+
+
+class SeatGrant(Record):
+    """
+    The person's grant of spare seats: how many agents the coordinator may add by itself, and of which kinds.
+
+    Inside the grant, the coordinator's request to add an agent takes effect at once, without the person's yes. A
+    new grant replaces the earlier one and counts its seats again. Zero seats take the grant back.
+    """
+
+    seats: int = Field(ge=0, le=MAX_AGENTS)
+    choices: tuple[SeatChoice, ...] = Field(default=(), max_length=MAX_SEAT_CHOICES)
+
+    @model_validator(mode='after')
+    def _a_grant_names_its_kinds(self) -> Self:
+        if self.seats and not self.choices:
+            raise ValueError('A grant of spare seats names at least one kind of seat: a harness with its model.')
+        return self
 
 
 class AddMove(Record):

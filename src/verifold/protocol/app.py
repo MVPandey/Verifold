@@ -50,11 +50,14 @@ from verifold.protocol.join import (
     PostView,
     QuestionVersion,
     RerunLine,
+    SpareSeats,
     Standing,
+    SteerKind,
     TaskState,
     ThreadSummary,
     ThreadView,
 )
+from verifold.protocol.moves import SeatGrant
 from verifold.protocol.posts import MAX_HEADLINE, Body
 from verifold.protocol.record import Record
 from verifold.protocol.settings import (
@@ -749,6 +752,11 @@ class StartRequest(Record):
     """What the person wants to hold at the end of the lab, each as one sentence. They can add more while it runs."""
     allowance: AllowanceRequest | None = None
     """An allowance for the lab's one acting seat, from the person's command line. No settings file holds one."""
+    spare_seats: SeatGrant | None = None
+    """
+    The spare seats that the person grants the coordinator from the start: how many agents it may add by itself,
+    and of which kinds. `None` grants none. No settings file holds a grant.
+    """
 
     @model_validator(mode='after')
     def _one_holder(self) -> Self:
@@ -902,6 +910,28 @@ class Deed(Record):
     """The way back that the person has now: the removal of that agent, or of the minutes. `None` when there is none."""
 
 
+class MoveView(Record):
+    """
+    One move of the coordinator as the person's app shows it, in the log of its moves.
+
+    The post holds the move: the coordinator's request that got a yes, its round, or its reading. An agent objects
+    to the move with an objection that replies to that post, and the post's standing says when one stands.
+    """
+
+    post: PostView
+    kind: SteerKind
+    at: AwareDatetime
+    """When the move took effect: the yes to the request, or the post of the round or the reading."""
+    by: AgentId
+    """The agent that held the coordinator seat and made the move."""
+    why: str = ''
+    """The coordinator's one line of why."""
+    agent: AgentId | None = None
+    """The seat that the move names: the one that it paused, resumed, limited, removed, or added."""
+    yes_by: AgentId | None = None
+    """For a move that came from a request: who said yes, the person or the coordinator under a power or a grant."""
+
+
 class ConversationView(Record):
     """What the person's panel for the coordinator shows: the conversation, the powers, and what was done for the person."""
 
@@ -923,6 +953,10 @@ class ConversationView(Record):
     """Every power, in a fixed order."""
     deeds: tuple[Deed, ...] = ()
     """The moves that came from the coordinator's requests, newest first."""
+    moves: tuple[MoveView, ...] = ()
+    """The log of the coordinator's moves, newest first: its requests that got a yes, its rounds, and its readings."""
+    grant: SpareSeats | None = None
+    """The person's grant of spare seats while one stands, with the seats that it has left. `None` without one."""
 
 
 class PowerChange(Record):

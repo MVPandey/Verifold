@@ -30,6 +30,7 @@ from verifold.protocol.events import (
 from verifold.protocol.ids import PERSON, AgentId
 from verifold.protocol.join import RequestEnd
 from verifold.protocol.moves import (
+    AddMove,
     CapMove,
     Move,
     PauseMove,
@@ -41,13 +42,26 @@ from verifold.protocol.moves import (
     TimeMove,
     power_of,
 )
-from verifold.protocol.posts import Answer, Ask, Close, MoveRequest, PermissionShown, Post, Proposal
+from verifold.protocol.posts import (
+    Action,
+    Answer,
+    Ask,
+    Close,
+    MoveRequest,
+    PermissionShown,
+    Post,
+    Proposal,
+    Reading,
+    Round,
+)
 from verifold.protocol.threads import Thread
+from verifold.society.allowances import action_state
 from verifold.society.board import Board
 from verifold.society.desk import speaks_for_person
 from verifold.society.errors import RejectedEvent
 from verifold.society.lifecycle import latest_time, minutes_text
 from verifold.society.pace import check_pace_target, lowers
+from verifold.society.spare import outside_grant
 from verifold.society.standing import waits_for_person
 
 _TOLD = 2
@@ -130,6 +144,28 @@ def check_marks(board: Board, post: Post, thread: Thread) -> None:
         _check_carried(board, post)
 
 
+def check_why(board: Board, post: Post) -> None:
+    """
+    Check that a round of the agent that holds the coordinator seat, and a newer reading of that agent, say why.
+
+    The log of the coordinator's moves shows each such post with its one line of why. A record from before the
+    field holds such posts without one, so the board checks this for a new post only, and not as a rule of the
+    record.
+
+    Raises:
+        RejectedEvent: The post is such a round or reading, and it has no `why`.
+
+    """
+    if post.author != board.coordinator or not isinstance(post, Round | Reading) or post.why:
+        return
+    if isinstance(post, Reading) and not any(isinstance(entry.post, Reading) for entry in board.posts):
+        return
+    raise RejectedEvent(
+        f'A {post.kind} of the agent that holds the coordinator seat is one of its moves, so it says why in one line, '
+        'in `why`. The log of the moves shows it to the person and to every agent.'
+    )
+
+
 def check_asks(board: Board, author: AgentId) -> None:
     """
     Check that an agent can ask the person for a move: it holds the coordinator seat.
@@ -209,11 +245,29 @@ def power_covers(board: Board, move: Move, at: datetime) -> bool:
 
     The person's switch for that kind of move is on. The lab has time: its time did not run out, and the person
     did not stop it. The lab stands at no budget or disk limit. The move does not let the agents' processes run on after the lab stops or Verifold exits.
-    A move of pace lowers what the person granted.
+    A move of pace lowers what the person granted. A move that adds an agent is covered by the person's grant of
+    spare seats too, and by the power for agents only in the lab's own mode.
+
+    The record keeps this rule for every request, also for one from before removals waited for the person. A new
+    request follows `covers_now`.
     """
     if isinstance(move, PauseMove | ResumeMove | CapMove) and lowers(board, move, at):
         return False
-    return power_of(move) in board.powers and not _over(board, at) and not _outlasts_a_stop(move)
+    if _over(board, at) or _outlasts_a_stop(move):
+        return False
+    if isinstance(move, AddMove):
+        return outside_grant(board, move.seat) is None or ('agents' in board.powers and move.seat.mode is None)
+    return power_of(move) in board.powers
+
+
+def covers_now(board: Board, move: Move, at: datetime) -> bool:
+    """
+    Return whether a new request of the coordinator takes effect at once, as `power_covers` says.
+
+    A request to remove an agent waits for the person under every power. The coordinator pauses a seat under the
+    power for pace, and only the person removes one.
+    """
+    return not isinstance(move, RemoveMove) and power_covers(board, move, at)
 
 
 def _over(board: Board, at: datetime) -> bool:
@@ -234,13 +288,16 @@ def _not_covered(board: Board, move: Move, at: datetime) -> str:
     pace = isinstance(move, PauseMove | ResumeMove | CapMove)
     if pace and power_of(move) in board.powers and (refusal := lowers(board, move, at)):
         return f"{refusal} The power for pace only lowers, so only the person's yes makes this move."
-    if power_of(move) in board.powers and _over(board, at):
+    if _over(board, at):
         return "The lab's time ran out or the person stopped the lab, so only the person makes a move now."
     if power_of(move) in board.powers and _outlasts_a_stop(move):
         return (
             "This value lets the agents' processes run on after the lab stops or Verifold exits, so only the "
             "person's yes sets it."
         )
+    if isinstance(move, AddMove) and (outside := outside_grant(board, move.seat)):
+        mode = " The power for agents adds a seat in the lab's own mode only." if move.seat.mode else ''
+        return f"{outside}{mode} So only the person's yes adds this agent."
     return (
         'The person answers a request for a move. The coordinator answers its own request only with a yes, and '
         'only while the person switched on the power for that kind of move.'
@@ -319,6 +376,67 @@ def request_waits(board: Board, entry: Posted) -> bool:
     """Return whether a request for a move waits for the person's answer: it has none, and it has not ended."""
     post = entry.post
     return isinstance(post, MoveRequest) and not board.answer_to(post.id) and request_end(board, entry) is None
+
+
+def waiting_posts(board: Board, now: datetime | None = None) -> tuple[Posted, ...]:
+    """
+    Return the entries of the posts that wait for the person's answer, oldest first.
+
+    They are the asks that name the person and have no answer from the person yet, the coordinator's asks in the
+    conversation with the person, the coordinator's requests for a move that wait, and the actions that wait for the
+    person. Permission requests are asks too. An ask whose end time came, an ask that carried a harness's request
+    after Verifold ended the request, and the ask of an agent that left are not among them. Without `now`, time
+    counts from the board's newest event.
+    """
+    at = now or latest_time(board)
+    return tuple(entry for entry in board.posts if _waits_for_person(board, entry, at))
+
+
+def missed_posts(board: Board, now: datetime | None = None) -> tuple[Posted, ...]:
+    """
+    Return the entries of the asks and actions for the person that stopped waiting before the person answered.
+
+    They are the asks to the person whose end time came, the asks of a harness that ended with the agent's turn or
+    with a restart of Verifold, and the actions whose offers ended, or whose authors left, without an answer. Nothing
+    was done for any of them. Oldest first. Without `now`, time counts from the board's newest event.
+    """
+    at = now or latest_time(board)
+    return tuple(entry for entry in board.posts if _missed(board, entry, at))
+
+
+def _to_person(board: Board, entry: Posted, ask: Ask) -> bool:
+    # In the conversation, the ask of the agent that held the coordinator seat when it asked is to the person, also
+    # after the seat changed. Another agent's ask there is to the person only when it names the person, as in any
+    # thread.
+    talks = ask.thread == board.conversation and ask.author == board.coordinator_at(entry.seq)
+    return PERSON in ask.mentions or talks
+
+
+def _waits_for_person(board: Board, entry: Posted, at: datetime) -> bool:
+    post = entry.post
+    if isinstance(post, Action):
+        return action_state(board, entry, at) == 'waits'
+    if not isinstance(post, Ask):
+        return request_waits(board, entry)
+    ended = post.ends_at is not None and post.ends_at <= at
+    return (
+        _to_person(board, entry, post)
+        and not ended
+        and waits_for_person(board, post.id)
+        and not board.gone(post.author)
+    )
+
+
+def _missed(board: Board, entry: Posted, at: datetime) -> bool:
+    post = entry.post
+    if isinstance(post, Action):
+        return action_state(board, entry, at) == 'missed'
+    if not isinstance(post, Ask):
+        return False
+    if post.request is not None:
+        return any(isinstance(reply.post, Answer) and reply.post.missed for reply in board.replies(post.id))
+    ended = post.ends_at is not None and post.ends_at <= at
+    return ended and _to_person(board, entry, post) and waits_for_person(board, post.id)
 
 
 def _ask_waits(board: Board, move: PermissionMove) -> bool:

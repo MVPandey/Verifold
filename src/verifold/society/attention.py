@@ -84,12 +84,13 @@ from verifold.protocol.join import (
     Update,
 )
 from verifold.protocol.posts import Ask, Call, Check, Close, Entry, Post, Reading, Round, Task
+from verifold.society.alarms import alarm_line
 from verifold.society.board import Board
 from verifold.society.budget import budget_line
 from verifold.society.coordinator import no_reply_line
 from verifold.society.desk import speaks_for_person
 from verifold.society.identity import post_line, post_view
-from verifold.society.lifecycle import alarm_line, lab_state, latest_time, minutes_left, no_alarm_line
+from verifold.society.lifecycle import lab_state, latest_time, minutes_left, no_alarm_line
 from verifold.society.lines import lines_of
 from verifold.society.reruns import RerunKey, reruns_for
 from verifold.society.rounds import entries, for_reader

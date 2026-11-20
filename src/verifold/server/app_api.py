@@ -66,7 +66,7 @@ from verifold.protocol.deliverables import Decision, DeliverableLine, OfferLine
 from verifold.protocol.events import Reason, RerunRequested
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import CandidatesView, FileText, PostRequest, PostView, ThreadView, line_text
-from verifold.protocol.moves import AddSeat, PaceMove
+from verifold.protocol.moves import AddSeat, PaceMove, SeatGrant
 from verifold.protocol.settings import DiskSettings, PaceSettings
 from verifold.protocol.usage import DiskUse, Usage
 from verifold.server.actions import allowance_views
@@ -77,12 +77,13 @@ from verifold.server.errors import LabExists, NoLab, ServerError, SetupRejected
 from verifold.server.lab import Build, Lab
 from verifold.server.member import Member
 from verifold.server.status import agent_need, all_outcomes, in_turn, missed, profile_edits, thread_needs, waits
+from verifold.society.alarms import alarm_line
 from verifold.society.board import Board
 from verifold.society.budget import budget_line
 from verifold.society.deliverables import deliverable_lines, removed_lines, told_at
 from verifold.society.errors import NotFound, SocietyError
 from verifold.society.identity import post_line, post_view, seat_label
-from verifold.society.lifecycle import alarm_line, close_count, lab_state
+from verifold.society.lifecycle import close_count, lab_state
 from verifold.society.lines import lines_of
 from verifold.society.obstacles import Obstacle, obstacles
 from verifold.society.pace import cap_line, limits_of, pause_line
@@ -360,6 +361,13 @@ def _coordinator_routes(api: FastAPI, host: Host, authorized: params.Depends) ->
     async def power(change: PowerChange) -> ConversationView:
         lab = _lab(host)
         await lab.set_power(change.power, on=change.on)
+        return conversation_view(lab.board)
+
+    @api.post('/grant', dependencies=[authorized])
+    async def grant(seats: SeatGrant) -> ConversationView:
+        # Only the person grants spare seats: no agent tool and no project's settings file records a grant.
+        lab = _lab(host)
+        await lab.grant_seats(seats)
         return conversation_view(lab.board)
 
     @api.post('/requests/{post_id}', dependencies=[authorized])

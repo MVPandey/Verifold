@@ -27,6 +27,7 @@ from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.agents import AgentChoice
 from verifold.protocol.app import AllowanceRequest, StartRequest
 from verifold.protocol.deliverables import FINDINGS_RECORD
+from verifold.protocol.moves import SeatChoice, SeatGrant
 from verifold.runner.environment import harness_environment
 from verifold.runner.folders import open_folder
 from verifold.runner.jobs import Job, Sweep
@@ -1268,3 +1269,53 @@ def test_folder_says_when_the_project_has_no_lab(tmp_path: Path, monkeypatch: py
 
     with pytest.raises(SystemExit, match='No agent has a folder here yet'):
         main(['folder'])
+
+
+def test_run_grants_spare_seats_from_the_command_line_only(serves: list[StartRequest | None], project: Path) -> None:
+    # A project's file names no grant: the settings have no place for one.
+    project_settings(project, {'setup': {'agents': [{'harness': 'codex'}]}})
+
+    main(
+        [
+            'run',
+            'Does it hold?',
+            '--agent',
+            'codex:mini,coordinator',
+            '--spare-seats',
+            '2',
+            '--spare-seat',
+            'codex:mini',
+            '--spare-seat',
+            'claude-code:opus:high:plan',
+        ]
+    )
+    main(['run', 'Does it hold?', '--agent', 'codex:mini'])
+
+    granted, plain = serves
+    assert granted is not None
+    assert plain is not None
+    assert granted.spare_seats == SeatGrant(
+        seats=2,
+        choices=(
+            SeatChoice(harness='codex', model='mini'),
+            SeatChoice(harness='claude-code', model='opus', effort='high', mode='plan'),
+        ),
+    )
+    assert plain.spare_seats is None
+
+
+@pytest.mark.parametrize(
+    ('flags', 'refusal'),
+    [
+        (['--spare-seats', '2'], 'Give both.'),
+        (['--spare-seat', 'codex'], 'Give both.'),
+        (['--spare-seats', '1', '--spare-seat', 'nope:mini'], 'unknown harness nope'),
+    ],
+)
+@pytest.mark.usefixtures('project')
+def test_run_refuses_a_grant_without_its_number_its_kinds_or_a_known_harness(
+    serves: list[StartRequest | None], flags: list[str], refusal: str
+) -> None:
+    with pytest.raises(SystemExit, match=refusal):
+        main(['run', 'Does it hold?', '--agent', 'codex:mini', *flags])
+    assert serves == []

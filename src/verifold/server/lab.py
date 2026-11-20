@@ -17,6 +17,7 @@ from verifold.protocol.events import (
     AgentJoined,
     AgentLeft,
     AgentNamed,
+    AlarmCondition,
     AlarmSet,
     AllowanceDrafted,
     AllowanceEnded,
@@ -47,6 +48,7 @@ from verifold.protocol.events import (
     RerunTaken,
     ReviewerSet,
     RoundClosed,
+    SeatsGranted,
     SettingsSet,
     TaskClaimed,
     ThreadOpened,
@@ -72,6 +74,7 @@ from verifold.protocol.moves import (
     QuestionMove,
     RemoveMove,
     ResumeMove,
+    SeatGrant,
     SettingMove,
     TimeMove,
 )
@@ -99,7 +102,7 @@ from verifold.society.allowances import verdict
 from verifold.society.board import Board
 from verifold.society.budget import reached
 from verifold.society.candidates import check_names_candidate, check_read
-from verifold.society.coordinator import check_asks, permission_choice, power_covers, time_given
+from verifold.society.coordinator import check_asks, check_why, covers_now, permission_choice, time_given
 from verifold.society.deliverables import accepted, check_decidable, live, offers_title, told_at
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
@@ -691,10 +694,18 @@ class Lab:
         back = _decision(board, deliverable_id, 'taken_back', took.offer) if decision == 'accepted' and took else ()
         await self._commit(*back, *_decision(board, deliverable_id, decision, offer, text))
 
-    async def set_alarm(self, agent_id: AgentId, minutes: float, *, quiet: bool) -> AlarmSet:
-        """Record that an agent wants to be woken. The alarm replaces the agent's last one, and zero minutes cancels it."""
+    async def set_alarm(
+        self, agent_id: AgentId, minutes: float, *, quiet: bool, conditions: tuple[AlarmCondition, ...] = ()
+    ) -> AlarmSet:
+        """
+        Record that an agent wants to be woken, at a time, on conditions of the record, or both.
+
+        The alarm replaces the agent's last one, and zero minutes with no condition cancels it.
+        """
         board = await self._commit(
-            lambda _, seq, at: AlarmSet(seq=seq, at=at, agent=agent_id, minutes=minutes, quiet=quiet, stays=True)
+            lambda _, seq, at: AlarmSet(
+                seq=seq, at=at, agent=agent_id, minutes=minutes, quiet=quiet, conditions=conditions, stays=True
+            )
         )
         return board.alarms[-1]
 
@@ -1154,6 +1165,16 @@ class Lab:
         if (power in self._board.powers) != on:
             await self._commit(_power(power, holder, on=on))
 
+    async def grant_seats(self, grant: SeatGrant) -> None:
+        """
+        Record the person's grant of spare seats, which replaces the earlier one. Zero seats take the grant back.
+
+        The same grant again records nothing, so it does not count its seats again.
+        """
+        standing = self._board.seat_grants[-1].grant if self._board.seat_grants else None
+        if grant != standing:
+            await self._commit(lambda _, seq, at: SeatsGranted(seq=seq, at=at, grant=grant))
+
     async def request(self, move: Move, text: str, body: str, author: AgentId, adds: Adds | None = None) -> Posted:
         """
         Post the coordinator's request for a move in the conversation with the person, and return the post.
@@ -1185,7 +1206,7 @@ class Lab:
             return Posted(seq=seq, at=at, post=request)
 
         builds: tuple[Build, ...] = (*opens, post)
-        if power_covers(board, move, self._clock()):
+        if covers_now(board, move, self._clock()):
             builds = (*builds, _answered(None, author, yes=True))
             if isinstance(move, AddMove):
                 await _add(adds, move, builds, author)
@@ -1708,6 +1729,8 @@ def _add_post(  # noqa: PLR0913
         if isinstance(post, Close) and author != PERSON:
             check_names_candidate(board, post)
             check_read(board)
+        # An older record holds rounds and readings of a coordinator without a why, so this rule is here too.
+        check_why(board, post)
         # An older record holds checks from before the reviewer seats, so this rule is here and not in the record's
         # rules.
         # The one check of a rerun that its author took needs no seat of its own: the take was open to the author.

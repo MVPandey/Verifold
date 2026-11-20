@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import timedelta
 
 import pytest
 from conftest import agent
@@ -127,6 +128,7 @@ async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
         'thread',
         'watch',
         'alarm',
+        'steering',
         'profile',
         'notes',
         'leave',
@@ -645,14 +647,43 @@ async def test_an_agent_sets_and_cancels_its_own_alarm_and_every_result_says_whi
         ('bo', 5, False, True),
         ('bo', 0, False, True),
     ]
+    flat = ' '.join(text.split())
     for fact in (
         'It stays until it rings',
-        'until you cancel it with zero minutes',
+        'until you cancel it with zero minutes and no condition',
         'does not spend it',
-        'it rings\nwhen that turn ends',
-        'Verifold sets no alarm for you',
+        'it rings when that turn ends',
+        'Verifold sets no alarm for you and adds no condition to one',
     ):
-        assert fact in text
+        assert fact in flat
+
+
+async def test_an_agent_sets_an_alarm_on_conditions_of_the_record_and_the_result_says_when_it_rings(lab: Lab) -> None:
+    await lab.set_budget(1_000, None)
+    async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
+        nothing = await client.call_tool('alarm', {})
+        spent = await client.call_tool('alarm', {'conditions': [{'kind': 'budget_percent', 'threshold': 50}]})
+        both = await client.call_tool(
+            'alarm', {'minutes': 30, 'conditions': [{'kind': 'reading_hours', 'threshold': 2}]}
+        )
+        twice = await client.call_tool(
+            'alarm',
+            {'conditions': [{'kind': 'task_minutes', 'threshold': 5}, {'kind': 'task_minutes', 'threshold': 9}]},
+        )
+        wrong = await client.call_tool('alarm', {'conditions': [{'kind': 'budget_percent', 'threshold': 150}]})
+
+    assert nothing.is_error
+    assert 'An alarm needs `minutes`, `conditions`, or both.' in str(nothing.content)
+    on_budget = AlarmResult.model_validate(spent.structured_content)
+    # The lab spent nothing of its budget yet, so the alarm has no time until the record meets its condition.
+    assert (on_budget.rings_at, [condition.kind for condition in on_budget.conditions]) == (None, ['budget_percent'])
+    timed = AlarmResult.model_validate(both.structured_content)
+    # The lab has no reading, so the condition's time is two hours after the lab opened, and the half hour comes first.
+    assert timed.rings_at is not None
+    assert timed.rings_at == lab.board.alarms[-1].at + timedelta(minutes=30)
+    assert (twice.is_error, wrong.is_error) == (True, True)
+    assert 'each kind of condition once' in str(twice.content)
+    assert 'from 1 to 100' in str(wrong.content)
 
 
 async def test_an_alarm_in_a_closed_lab_says_that_it_does_not_ring(lab: Lab) -> None:

@@ -26,7 +26,7 @@ from verifold.society.allowances import allowance_line
 from verifold.society.board import Board
 from verifold.society.budget import budget_line, disk_limit
 from verifold.society.candidates import closes_on
-from verifold.society.coordinator import waiting_for_reply
+from verifold.society.coordinator import waiting_for_reply, waiting_posts
 from verifold.society.deliverables import deliverable_lines
 from verifold.society.identity import post_line, seat_label, seat_marks
 from verifold.society.lifecycle import lab_state, minutes_left
@@ -43,7 +43,6 @@ from verifold.society.views import (
     round_line,
     standing_reading,
     to_earlier_question,
-    waiting_posts,
 )
 
 

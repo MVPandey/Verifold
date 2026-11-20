@@ -28,7 +28,7 @@ from verifold.protocol.events import (
     TimeSet,
     TurnInterrupted,
 )
-from verifold.protocol.ids import PERSON, AgentId, PostId
+from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
 from verifold.protocol.posts import Close, Entry, Message, Post, Proposal, Round
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
@@ -132,13 +132,16 @@ def check_desk_post(board: Board, event: Posted) -> None:
     Raises:
         RejectedEvent: An agent other than the desk posts in the desk chat or names a post in `on`, a post there is
             for the whole lab, or the desk posts a kind that it does not post, or a post for the person that rests
-            on no post of the person in the desk chat from the last `MAX_ON_MINUTES` minutes.
+            on no post of the person in the desk chat from the last `MAX_ON_MINUTES` minutes. A post other than a
+            message of the person in the desk chat names a thread in `about`, or it names no thread of the lab.
 
     """
     post = event.post
     chat = board.desk_chat
     in_chat = chat is not None and post.thread == chat
     desk = board.is_desk(post.author)
+    if isinstance(post, Message) and post.about is not None:
+        _check_about(board, post, post.about, in_chat=in_chat)
     if post.on is not None and not desk:
         raise RejectedEvent("Only the desk's post for the person names in `on` a post of the person.")
     if in_chat and post.author != PERSON and not desk:
@@ -168,6 +171,15 @@ def check_desk_post(board: Board, event: Posted) -> None:
             "person's post in the desk chat that the post rests on."
         )
     check_on(board, post.author, post.on, event.at)
+
+
+def _check_about(board: Board, post: Message, about: ThreadId, *, in_chat: bool) -> None:
+    # A message of the person in the desk chat names in `about` the thread that the person had open, a thread of
+    # the lab other than the desk chat.
+    if post.author != PERSON or not in_chat:
+        raise RejectedEvent('Only a message of the person in the desk chat names in `about` the thread it is about.')
+    if board.thread(about) is None or about == board.desk_chat:
+        raise RejectedEvent(f'Thread {about} is no thread of the lab beside the desk chat.')
 
 
 def check_desk_move(board: Board, event: TimeSet | BudgetSet | DeliverableSet | QuestionRevised) -> None:

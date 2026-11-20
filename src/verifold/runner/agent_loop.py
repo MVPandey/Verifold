@@ -87,13 +87,14 @@ from verifold.runner.snapshots import snapshot
 from verifold.server.activity import Activity
 from verifold.server.member import Member
 from verifold.server.status import STEPS
+from verifold.society.alarms import rang_by, rings_at
 from verifold.society.attention import update, wakes
 from verifold.society.board import Board
 from verifold.society.budget import LIMIT_NAMES
 from verifold.society.desk import interrupted, speaks_for_person
 from verifold.society.errors import RejectedEvent
 from verifold.society.grants import agent_waits
-from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
+from verifold.society.lifecycle import lab_state, pending_alarm
 from verifold.society.pace import Hold, hold
 from verifold.society.reruns import RerunKey, kept_until, told_of
 from verifold.society.turns import before
@@ -665,12 +666,12 @@ class AgentLoop:
             alarm = pending_alarm(board, agent_id)
             left = None
             if alarm:
-                rings, closed = rings_at(board, alarm), lab_state(board) == 'closed'
-                ahead = (rings - now).total_seconds()
+                # An alarm on conditions alone has no time until the record meets one or sets its time.
+                rings, closed = rings_at(board, alarm, now), lab_state(board) == 'closed'
                 if board.halted or closed:
                     held = CLOSED if closed else OUT_OF_TIME if board.halted == 'time' else AT_LIMIT
-                else:
-                    left = ahead
+                elif rings is not None:
+                    left = (rings - now).total_seconds()
                     # An alarm that is due at the first look after the lab had no time or was closed is late for
                     # that reason.
                     held = held if left <= 0 else ''
@@ -711,11 +712,12 @@ class AgentLoop:
 
     def _ring(self, message: str, due: AlarmSet | None, late: str) -> str:
         # Add the alarm that is due to a message that wakes the agent, so that the alarm rings once. The start of
-        # the agent's next turn records that it rang.
+        # the agent's next turn records that it rang. The message names the condition that rang it, if one did.
         if due is None:
             return message
         self._rang = due.seq
-        self._woke = f'{message} {alarm_message(due, late)}'.strip()
+        cause = rang_by(self._lab.board, due, self._lab.now())
+        self._woke = f'{message} {alarm_message(due, late, cause)}'.strip()
         return self._woke
 
     async def _settle(self) -> None:
