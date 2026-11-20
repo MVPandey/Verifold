@@ -15,7 +15,7 @@ from fakes import FAKE_COMMAND, FAKE_HARNESS, FAKE_METER, FakeCopies
 from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.allowances import AllowanceTerms
 from verifold.protocol.app import AgentState, Retry, WaitsFor
-from verifold.protocol.events import AlarmSet, TurnStarted, TurnSummary
+from verifold.protocol.events import AlarmCondition, AlarmSet, TurnStarted, TurnSummary
 from verifold.protocol.ids import PERSON
 from verifold.protocol.join import MAX_NEWS, ActRequest, PostRequest
 from verifold.protocol.moves import CapMove, PauseMove
@@ -57,8 +57,9 @@ from verifold.server.activity import Activity
 from verifold.server.lab import Lab, Said
 from verifold.server.member import Member
 from verifold.server.status import missed
+from verifold.society.alarms import rings_at
 from verifold.society.attention import news
-from verifold.society.lifecycle import lab_state, pending_alarm, rings_at
+from verifold.society.lifecycle import lab_state, pending_alarm
 from verifold.society.turns import before
 from verifold.society.views import needs_person
 from verifold.store.record_file import RecordFile
@@ -417,6 +418,31 @@ async def test_an_alarm_stays_through_a_turn_that_a_post_started_and_rings_once_
     )
 
 
+async def test_an_alarm_on_a_condition_rings_once_when_the_record_meets_it_and_not_before(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab = served.lab
+    await lab.set_budget(1_000, None)
+    running = asyncio.create_task(loop_for(served, tmp_path).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        spent = AlarmCondition(kind='budget_percent', threshold=50)
+        set_ = await lab.set_alarm('bo', 0, quiet=False, conditions=(spent,))
+        # A turn that spends less than the share changes the board, and the alarm does not ring.
+        await lab.end_turn(TurnSummary(agent='ada', seconds=1, usage=Usage(input_tokens=200)))
+        await asyncio.sleep(0.2)
+        assert (len(lab.board.turns), pending_alarm(lab.board, 'bo')) == (2, set_)
+        await lab.end_turn(TurnSummary(agent='ada', seconds=1, usage=Usage(input_tokens=400)))
+        await until(lambda: len(lab.board.turns) == 4)
+        await lab.end_turn(TurnSummary(agent='ada', seconds=1, usage=Usage(input_tokens=10)))
+        await asyncio.sleep(0.3)
+    finally:
+        running.cancel()
+
+    assert [call['text'] for call in calls(log, 'prompt')] == ['Start.', alarm_message(set_, cause=spent)]
+    assert ([start.rang for start in lab.board.starts], pending_alarm(lab.board, 'bo')) == ([None, set_.seq], None)
+
+
 async def test_an_alarm_whose_time_comes_while_its_agent_is_in_a_turn_rings_when_that_turn_ends(
     served: ServedBoard, tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -430,7 +456,9 @@ async def test_an_alarm_whose_time_comes_while_its_agent_is_in_a_turn_rings_when
         await until(lambda: len(lab.board.starts) == 2)
         # The time of the alarm passes while the turn for the post runs.
         pass_time(served, 15)
-        assert (len(lab.board.turns), lab.now() > rings_at(lab.board, set_)) == (1, True)
+        rings = rings_at(lab.board, set_)
+        assert rings is not None
+        assert (len(lab.board.turns), lab.now() > rings) == (1, True)
         await until(lambda: len(lab.board.turns) == 3)
         await asyncio.sleep(0.3)
     finally:

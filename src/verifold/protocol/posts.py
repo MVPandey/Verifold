@@ -19,6 +19,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import AfterValidator, AwareDatetime, Field, StringConstraints, WithJsonSchema, model_validator
 
+from verifold.protocol.agents import one_line
 from verifold.protocol.allowances import ActionNeed, AllowanceId, Amount
 from verifold.protocol.ids import AgentId, CommitId, DeliverableId, PostId, ThreadId
 from verifold.protocol.moves import Move
@@ -171,6 +172,15 @@ class Message(PostBase):
     """Talk that changes no state: an idea, a handoff, a status, or a reply."""
 
     kind: Literal['message'] = 'message'
+    about: ThreadId | None = Field(default=None, exclude_if=unset)
+    """
+    For a post of the person in the desk chat: the thread that the person had open in the app when they wrote it,
+    which the post is about. Only such a post has it. `None` for every other post, and in a record from before it.
+    """
+
+
+type Why = Annotated[str, AfterValidator(one_line), StringConstraints(min_length=1, max_length=200)]
+"""Why the coordinator opens a round or posts a new reading, as one line."""
 
 
 class Plan(PostBase):
@@ -374,6 +384,11 @@ class Reading(PostBase):
     """
 
     kind: Literal['reading'] = 'reading'
+    why: Why | None = Field(default=None, exclude_if=unset)
+    """
+    Why the coordinator posts this reading, as one line. The board takes a newer reading of the coordinator only
+    with it, and it shows in the log of the coordinator's moves. `None` for every other reading.
+    """
 
 
 class Summary(PostBase):
@@ -512,6 +527,11 @@ class Round(PostBase):
     kind: Literal['round'] = 'round'
     minutes: int = Field(ge=1, le=MAX_ROUND_MINUTES)
     reply_to: None = None
+    why: Why | None = Field(default=None, exclude_if=unset)
+    """
+    Why the coordinator opens this round, as one line. The board takes a round of the coordinator only with it, and
+    it shows in the log of the coordinator's moves. `None` for every other round.
+    """
 
 
 class Entry(PostBase):

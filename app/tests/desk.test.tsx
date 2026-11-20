@@ -8,7 +8,7 @@ import type { Api } from '../src/api/client.ts';
 import type { DeskAction, DeskView, Post, PostView, ThreadView } from '../src/api/types.ts';
 import { isDocked } from '../src/model/deliverables.ts';
 import { seatMarks } from '../src/model/identity.ts';
-import { NO_DESK, actionLine, actionsOn, byDesk, deskOf } from '../src/model/desk.ts';
+import { actionLine, actionsOn, byDesk, deskOf } from '../src/model/desk.ts';
 import { newSeat, seatChoice, withSeat } from '../src/model/setup.ts';
 import { ForYou } from '../src/ui/Coordinator.tsx';
 import { DeskPanel, DeskSeat } from '../src/ui/Desk.tsx';
@@ -145,26 +145,49 @@ describe('the desk', () => {
     assert.ok(person > 0 && person < posted && posted < ended && ended < answer);
     assert.ok(html.includes('<a href="#/thread/t-1/p-7">See it</a>'));
     assert.ok(html.includes('Your message wakes Agent 3 at once.'));
-    assert.ok(html.includes('placeholder="Ask Agent 3, or tell it what to do"'));
+    assert.ok(html.includes('placeholder="Say something to the lab"'));
   });
 
-  it('offers the desk chat above the conversation when the lab has a desk, and nothing without one', () => {
+  it('is the one chat with the lab when the lab has a desk, names the open thread, and shows nothing without one', () => {
     const closed = renderToStaticMarkup(
       <DeskSeat
         api={{} as Api}
-        data={pageData(NO_DESK)}
+        data={pageData(desk([said('p-5', 'person', 'Status?')]))}
         now={NOW}
         open={false}
         onOpen={() => undefined}
+        subject={null}
+        onClearSubject={() => undefined}
       />,
     );
     const open = renderToStaticMarkup(
       <DeskSeat
         api={{} as Api}
-        data={pageData(desk([said('p-5', 'person', 'Status?')]))}
+        data={pageData(
+          desk(
+            [
+              said('p-5', 'person', 'Hit the first milestone in 8 hours.'),
+              said('p-6', 'agent-3', 'Sent to the whole lab.'),
+            ],
+            [action('post', { thread: 't-1', post: 'p-7', on: 'p-5' })],
+          ),
+        )}
         now={NOW}
         open
         onOpen={() => undefined}
+        subject={{ id: 't-2', title: 'A long title of a thread about the tail of the cache' }}
+        onClearSubject={() => undefined}
+      />,
+    );
+    const empty = renderToStaticMarkup(
+      <DeskSeat
+        api={{} as Api}
+        data={pageData(desk([]))}
+        now={NOW}
+        open={false}
+        onOpen={() => undefined}
+        subject={null}
+        onClearSubject={() => undefined}
       />,
     );
     const none = renderToStaticMarkup(
@@ -174,13 +197,27 @@ describe('the desk', () => {
         now={NOW}
         open
         onOpen={() => undefined}
+        subject={null}
+        onClearSubject={() => undefined}
       />,
     );
 
-    assert.ok(closed.includes('aria-expanded="false">Talk to Agent 3</button>'));
+    assert.ok(closed.includes('Chat with the lab</h2>'));
+    assert.ok(closed.includes('aria-expanded="false">See the whole chat</button>'));
+    assert.ok(closed.includes('placeholder="Say something to the lab"'));
     assert.equal(closed.includes('k-panel'), false);
-    assert.ok(open.includes('aria-expanded="true">Close the desk chat</button>'));
-    assert.ok(open.includes('Status?'));
+    assert.equal(closed.includes('About this thread'), false);
+    assert.ok(open.includes('aria-expanded="true">Close the whole chat</button>'));
+    // The newest two messages show as bubbles, with what the desk did under the person's message.
+    assert.ok(open.includes('<li class="c-bubble me"><p class="c-who">You</p>'));
+    assert.ok(open.includes('Posted for you in t-1'));
+    assert.ok(open.includes('Sent to the whole lab.'));
+    // On a thread's page, the message names that thread, and the person can write about the whole lab.
+    assert.ok(
+      open.includes('<span>About this thread:</span> <b class="c-title">A long title of a thread'),
+    );
+    assert.ok(open.includes('Write about the whole lab</button>'));
+    assert.ok(empty.includes('Ask where the lab stands, or tell it what you want.'));
     assert.equal(none, '');
     // The page docks one panel at a time, and the desk chat only while the lab has a desk.
     assert.equal(isDocked('desk', true, true), true);

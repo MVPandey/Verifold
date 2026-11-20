@@ -59,6 +59,7 @@ function slowServer(): {
     setPower: () => Promise.reject(new Error('unused')),
     answerRequest: () => Promise.reject(new Error('unused')),
     takeMinutesBack: () => Promise.reject(new Error('unused')),
+    grantSeats: () => Promise.reject(new Error('unused')),
     file: () => Promise.reject(new Error('unused')),
     openFolder: () => Promise.reject(new Error('unused')),
     start: () => Promise.reject(new Error('unused')),

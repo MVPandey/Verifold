@@ -273,7 +273,7 @@ def test_the_norms_say_when_to_open_a_round_and_how_to_enter_it() -> None:
         ),
         (
             'Open a round when the lab needs every view at once. The coordinator opens one at each review of the '
-            "reading, as the section on strategy and the seats says, and when the lab's lines stall. A round that "
+            "reading, as the section on the coordinator says, and when the lab's lines stall. A round that "
             'asks what each agent found and what its best bet is, and a round that asks which line each agent would '
             'drop, and why, are examples. Few agents say in a thread that a line of the lab is not worth its hands, '
             "and the sealed entries show where those doubts agree. Any agent opens a wild round when the lab's lines "
@@ -286,7 +286,7 @@ def test_the_norms_say_when_to_open_a_round_and_how_to_enter_it() -> None:
             'drop. One round is better than three in a row.'
         ),
     ]
-    assert NORMS_TEMPLATE.index('## Chain ideas') < start < NORMS_TEMPLATE.index('## Strategy and the seats')
+    assert NORMS_TEMPLATE.index('## Chain ideas') < start < NORMS_TEMPLATE.index('## The coordinator')
 
 
 def test_a_close_names_its_round_and_why() -> None:

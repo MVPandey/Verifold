@@ -8,10 +8,11 @@ from verifold.protocol.events import AlarmSet
 from verifold.protocol.join import AlarmLine, News
 from verifold.protocol.posts import Answer, Close, FileEvidence, Message, Objection, Result, RuledOut
 from verifold.runner.messages import start_message
+from verifold.society.alarms import alarm_line, rings_at
 from verifold.society.attention import news, update, wakes
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply
-from verifold.society.lifecycle import alarm_line, lab_state, no_alarm_line, pending_alarm, rings_at
+from verifold.society.lifecycle import lab_state, no_alarm_line, pending_alarm
 from verifold.society.lines import lines_of
 from verifold.society.standing import agreed, closing
 from verifold.society.views import brief

@@ -13,15 +13,19 @@ from datetime import datetime
 from pathlib import Path
 
 from verifold.protocol.agents import Agent
-from verifold.protocol.events import AlarmSet, Halt, Limit
+from verifold.protocol.events import AlarmCondition, AlarmSet, Halt, Limit
 from verifold.protocol.ids import PERSON, AgentId
+from verifold.protocol.join import line_text
+from verifold.protocol.posts import Reading
 from verifold.protocol.settings import AtTimeLimit
+from verifold.society.alarms import condition_words
 from verifold.society.allowances import in_force
 from verifold.society.board import Board
 from verifold.society.budget import LIMIT_NAMES, budget_line
 from verifold.society.deliverables import stated
 from verifold.society.lifecycle import utc as _utc
 from verifold.society.lines import question_thread
+from verifold.society.obstacles import obstacles
 
 DOORBELL = 'New posts for you on the lab board.'
 """The message that wakes an agent after it ended its turn. The agent reads the posts with its board tools."""
@@ -43,13 +47,17 @@ CLOSED = 'while the lab was closed'
 """Why an alarm rings after its time, in the cases that Verifold knows."""
 
 
-def alarm_message(alarm: AlarmSet, late: str = '') -> str:
+def alarm_message(alarm: AlarmSet, late: str = '', cause: AlarmCondition | None = None) -> str:
     """
     Return the message that wakes an agent when the alarm that it set rings.
 
     `late` says why the alarm rings after its time, such as `IN_TURN`. It is empty when the alarm rings at its
-    time, and when Verifold does not know why it is late.
+    time, and when Verifold does not know why it is late. `cause` is the condition of the alarm that the record
+    met, and `None` when the alarm's time rang it.
     """
+    if cause is not None:
+        rung = f'The alarm that you set at {_utc(alarm.at)} has rung: {condition_words(cause)}.'
+        return f'{rung} The record met it {late}, so it rings now.' if late else rung
     rung = (
         f'The alarm that you set at {_utc(alarm.at)} has rung: the board got no post for {alarm.minutes:g} minutes.'
         if alarm.quiet
@@ -90,6 +98,15 @@ DESK = (
     'desk chat that it rests on, from the last 60 minutes.'
 )
 """What the start message says to the desk."""
+
+FRESH = (
+    'Your seat starts with a fresh view, as the coordinator asked when it added the seat. Until you post your first '
+    'plan, `brief` leaves out the candidate answers and the report. `thread` shows every post.'
+)
+"""What the start message says to a seat that starts with a fresh view."""
+
+MAX_RULED_OUT = 10
+"""The most leads that were ruled out, the newest, that the start message of a fresh seat names."""
 
 HAS_DESK = (
     "{name} ({id}) holds the lab's desk seat: it answers the person in the desk chat and acts on the person's "
@@ -152,6 +169,8 @@ def start_message(
         lines.append(HAS_DESK.format(name=desk.agent.name, id=desk.agent.id))
     if thread := question_thread(board):
         lines.append(f'Thread {thread} on the board holds this question.')
+    if agent.fresh:
+        lines.extend(_fresh_view(board))
     if board.revisions:
         lines.append(
             f'The question was revised, last at {_utc(board.revisions[-1].at)}. The text above is the '
@@ -168,6 +187,22 @@ def start_message(
     if board.ends_at:
         lines.append(f'The lab ends at {_utc(board.ends_at)}, unless it gets more time.')
     return '\n'.join(lines)
+
+
+def _fresh_view(board: Board) -> list[str]:
+    # The question, the lab's reading, and what was ruled out, for a seat that starts with a fresh view. Each line
+    # of a post is its headline, cut as in a brief.
+    lines = [FRESH]
+    reading = next((entry for entry in reversed(board.posts) if isinstance(entry.post, Reading)), None)
+    if reading:
+        lines.append(f"Post {reading.post.id} holds the lab's reading of the question: {line_text(reading.post.text)}")
+    ruled = tuple(item.entry for item in reversed(obstacles(board)))
+    if ruled:
+        shown = ruled[:MAX_RULED_OUT]
+        count = f'{len(ruled)} {"lead was" if len(ruled) == 1 else "leads were"} ruled out'
+        lines.append(f'{count}. The newest {len(shown)}:' if len(shown) < len(ruled) else f'{count}:')
+        lines.extend(f'- {entry.post.id}: {line_text(entry.post.text)}' for entry in shown)
+    return lines
 
 
 RESTARTED = 'Verifold restarted. You worked in this lab before the restart.'

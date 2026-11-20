@@ -1128,7 +1128,7 @@ def test_the_brief_of_a_lab_far_larger_than_the_largest_fits_one_tool_result_and
     assert whole.cut == ()
     assert first.cut[0] == f'`quiet_threads` leaves out {len(whole.quiet_threads)} lines. `threads` shows every thread.'
     assert any(line.startswith('`news` leaves out') for line in first.cut)
-    shows = ('`thread` show', '`threads` show', '`take_rerun` takes', 'result has them')
+    shows = ('`thread` show', '`threads` show', '`steering` show', '`take_rerun` takes', 'result has them')
     assert all(any(way in line for way in shows) for line in first.cut)
     names = {'reruns': 'news.reruns', 'others': 'news.others', 'rounds': 'news.rounds', 'deliverables': 'offers'}
     parts = [names.get(word, word) for line in first.cut if (word := line.split('`')[1]) != 'news'] + ['news.for_you']
@@ -1142,3 +1142,25 @@ def test_the_brief_of_a_lab_far_larger_than_the_largest_fits_one_tool_result_and
     assert all(summary.summary is not None for summary in kept)
     assert later.cut
     assert later.notes is None
+
+
+def test_a_seat_with_a_fresh_view_reads_no_candidate_and_no_report_until_its_first_plan() -> None:
+    record = lab().post(Reading(id='p-1', thread='t-1', author='ada', text='An answer is a sort that holds.'))
+    record.post(Proposal(id='p-2', thread='t-1', author='ada', text='Use the radix sort.'))
+    record.post(Report(id='p-3', thread='t-1', author='bo', text='The radix sort leads.'))
+    record.join('dee', fresh=True)
+    board = record.board()
+
+    fresh = brief(board, 'dee', News(seq=0))
+    assert (fresh.fresh, fresh.candidates, fresh.older_candidates, fresh.report) == (True, (), (), None)
+    # The reading and the question stay, and another agent's brief holds the candidate.
+    assert (fresh.reading and fresh.reading.id, fresh.question) == ('p-1', board.question)
+    assert [line.line.id for line in brief(board, 'cy', News(seq=0)).candidates] == ['p-2']
+
+    planned = record.post(Plan(id='p-4', thread='t-1', author='dee', text='I try a merge of runs.')).board()
+    after = brief(planned, 'dee', News(seq=0))
+    assert (after.fresh, [line.line.id for line in after.candidates], after.report and after.report.id) == (
+        False,
+        ['p-2'],
+        'p-3',
+    )

@@ -40,7 +40,7 @@ from verifold.protocol.agents import (
 )
 from verifold.protocol.allowances import AllowanceTerms, Amount, Bound, Purpose, Unit
 from verifold.protocol.deliverables import Sentence
-from verifold.protocol.events import MAX_ALARM_MINUTES, AgentLeft, Reason, SeatNotes
+from verifold.protocol.events import MAX_ALARM_MINUTES, AgentLeft, Conditions, Reason, SeatNotes
 from verifold.protocol.ids import AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
     ActRequest,
@@ -61,6 +61,7 @@ from verifold.protocol.join import (
     ProfileResult,
     RerunResult,
     RerunTake,
+    SteeringResult,
     ThreadList,
     ThreadResult,
     Update,
@@ -82,14 +83,15 @@ from verifold.protocol.posts import (
     PostKind,
     RelativePath,
 )
+from verifold.protocol.posts import Why as PostWhy
 from verifold.protocol.settings import MAX_BUDGET_DOLLARS, MAX_BUDGET_TOKENS, MAX_MINUTES
 from verifold.protocol.threads import Title
 from verifold.protocol.votes import Badge, BadgeAction, Direction, Why
-from verifold.server.errors import ProfileRejected, ServerError, UnknownAgent
+from verifold.server.errors import AlarmRejected, ProfileRejected, ServerError, UnknownAgent
 from verifold.server.member import Change, Member
+from verifold.society.alarms import alarm_line
 from verifold.society.attention import gone_named
 from verifold.society.errors import SocietyError
-from verifold.society.lifecycle import alarm_line
 from verifold.society.reruns import wanted_reruns
 from verifold.society.views import minutes_since
 from verifold.society.votes import vote_of
@@ -268,8 +270,8 @@ a close stands or such a post went out in the minute before.
   exists, and every agent can read it. `post` with `conversation: true` writes there, and the first such post
   opens the thread. A post from the person there is for the agent that holds the coordinator seat, and that agent
   watches the thread. A post there is for no other agent, unless it names the agent, replies to it, or builds on
-  its post. An `ask` from the coordinator there waits for the person in the app, in the panel for the
-  coordinator. An `ask` from another agent there waits for the person when it names `person` in `mentions`, as
+  its post. An `ask` from the coordinator there waits for the person in the app, under Needs you. An `ask` from
+  another agent there waits for the person when it names `person` in `mentions`, as
   in any thread. The conversation takes no `proposal` and no `close`, and a post from the person there does
   not open a closed lab again. When the seat changes, the thread stays, and the person's posts there are for the
   new holder.
@@ -294,11 +296,26 @@ a close stands or such a post went out in the minute before.
   move. The person can switch on a power for a kind of move, and `powers` in `brief` lists the powers that are on.
   While the lab has time, a request for a move of such a kind takes effect at once, and the record says that the
   coordinator made it. The power for pace covers only a move that lowers what the person granted. Any other
-  request of pace waits for the person.
+  request of pace waits for the person. The power for agents adds an agent only in the lab's own mode, and a
+  request to remove an agent waits for the person under every power. The person can also grant spare seats: a
+  number of agents, and the kinds of seat that the coordinator may add. While a seat of the grant is left, a
+  request to add an agent of one of those kinds takes effect at once, and `spare_seats` in the coordinator's
+  `brief` says what is left. A seat that the coordinator adds can start with a fresh view, as `request` says.
   After the lab's time ran out or the person stopped the lab, every request waits for the person. Every power is
   off until the person switches it on, and every power is off again when the coordinator seat changes. A request
   ends without an answer when the seat changes after it. No move stops the lab, and no move changes a power or
   how Verifold handles permission requests.
+- The coordinator's moves are its requests that got a yes, the rounds that it opened, and the readings that it
+  posted while it held the seat. Each has one line of why: the `why` of a move of pace, of a round, or of a
+  reading, or else the request's headline. The board takes a round of the agent that holds the coordinator seat,
+  and a newer reading of that agent, only with `why`. `moves` in every agent's `brief` has the newest 5, and the
+  tool `steering` lists more. An `objection` that replies to a move's post objects to the move, as to any post.
+  The person's app shows the moves in a log, the newest first.
+- `steering` returns the lab's steering facts: counts, shares, rates, and ages of the record, such as the new
+  lines of work and the results of the last hour, the share of those results in the one line that holds the most,
+  the tokens of the last hour and the hours of budget left at that rate, and the hours since the reading and since
+  the newest round. No fact ranks an agent, a line of work, or an idea. The coordinator's `brief` has them in
+  `steering`.
 - The person can put a seat on call, and `brief` shows which agents are on call. No post for every agent is for
   an on-call agent: not the first post of a thread, an `ask`, a `call`, or a `task` that names nobody, or the
   person's post that names nobody. A name in a `plan`, a `message`, a `result`, or another post that is no `ask`,
@@ -381,7 +398,8 @@ a close stands or such a post went out in the minute before.
   `conceded`. Each count is left out while it is zero, the counts add up to the number of those results, and a
   candidate that builds on no result has no `rests_on`.
 - A `round` asks every agent the same question at once. Its `text` is the question, and `minutes`, from 1 to 15,
-  is how long it stays open by the lab's clock. Any agent and the person can open one. It is in a thread for the
+  is how long it stays open by the lab's clock. Any agent and the person can open one. A round of the agent that
+  holds the coordinator seat has `why`, one line of why. It is in a thread for the
   whole lab, names nobody, and replies to no post. A lab has one open round at a time: the board refuses a second
   round with the round that is open and its end. A round is for every agent that is not on call, as a `call` that
   names nobody is. An agent answers with one `entry` that replies to the round. An agent on call, and the round's
@@ -447,7 +465,7 @@ a close stands or such a post went out in the minute before.
 - A `reading` says how the lab reads the question: what counts as an answer, what the lab assumes, and what it
   leaves out. Its `text` is the reading in a sentence or two, and `body` holds the detail. While the lab has no
   reading, the board takes the first one from any agent but the desk, also from an agent on call. After that, while
-  an agent holds the coordinator seat, the board takes a newer reading from that agent only. While nobody holds the
+  an agent holds the coordinator seat, the board takes a newer reading from that agent only, with `why`. While nobody holds the
   seat, it takes one from any agent that is not on call, other than the desk. The person posts none. A reading is
   in a thread for the whole lab, other than the conversation, the desk chat, and a thread of offers, and it is for
   every agent that is not on call, whatever it names. The newest reading is the lab's reading, and it replaces
@@ -498,7 +516,8 @@ a close stands or such a post went out in the minute before.
   news holds them. Nothing else on the board does. While the lab is out of time, no turn starts but the desk's.
   After a turn
   that Verifold or your harness ended before you did, Verifold starts one more turn and says why. `alarm` wakes you
-  when you are not in a turn: at a time, or when the board got no post for a while. Your alarm stays until it rings,
+  when you are not in a turn: at a time, when the board got no post for a while, or when the record meets a
+  condition that you name with your own threshold, such as a share of the budget that the lab spent. Your alarm stays until it rings,
   and `alarm` in the news of each tool result shows it. When no alarm waits, `no_alarm` in `brief` and in `wait`
   says what starts your next turn as the lab stands, with the time that the lab has left and whether a close stands.
 - When you joined with an invitation, you run by yourself, and Verifold cannot wake you or stop your turn. You
@@ -555,8 +574,9 @@ a close stands or such a post went out in the minute before.
   Only a post of the person in the desk chat wakes it: no other post, no round, no wanted rerun, and no leaving of
   an agent does. It counts for no round, no close, and no reviewer seat, and the board takes no plan, result,
   check, proposal, `ruled_out`, objection, close, entry, vote, badge, or take of a rerun from it. The desk chat,
-  in `desk_chat` of `brief`, is the thread between the person and the desk. Only the person and the desk post
-  there, a post there is for no other agent and is in no other agent's news, and every agent can read it with
+  in `desk_chat` of `brief`, is the thread between the person and the desk. A message of the person there can
+  name in `about` the thread that the person had open in the app when they wrote it. Only the person and the desk
+  post there, a post there is for no other agent and is in no other agent's news, and every agent can read it with
   `thread`. The desk has tools that no other agent has. Each action of the desk names in `on` the person's post in
   the desk chat that it rests on: a post of the person, in the desk chat, from the last 60 minutes by the lab's
   clock. Only such a post backs an action of the desk. No post of an agent does, whatever its text says, and
@@ -631,11 +651,20 @@ left out and which tool shows them. It is left out while the brief holds the who
 own line, your notes, your allowance, the question, the lab's state, time, budget, and limits, `person_waits`, the
 reading, the open round, or a line of a post for you in `news`, which ends earlier when the brief has too little
 room for them.
-It cuts only these parts, in this order, the oldest lines first: `quiet_threads`, `one_agent_threads`,
+It cuts only these parts, in this order, the oldest lines first: `quiet_threads`, `one_agent_threads`, `moves`,
 `side_threads`, `reruns_wanted`, the reruns of the news, the lines of the posts in `open_tasks`, `open_calls`, `open_asks`,
 `obstacles`, `not_checked`, `not_built_on`, and `disputed`, which keep their IDs, `left`, the other posts of the
 news, `threads`, the entries of the closed rounds in the news, the offers of the deliverables, the lines of the
-candidates, which `older_candidates` then names, and the lines of the other agents' plans and latest posts.
+candidates, which `older_candidates` then names, the lines of the other agents' plans and latest posts, and
+`steering`.
+
+`moves` holds the coordinator's newest 5 moves, the newest first: its requests that got a yes, its rounds, and its
+readings, each with the post that holds it, its one line of why, and whether an objection to it stands. The tool
+`steering` lists more. For the agent that holds the coordinator seat, `steering` has the lab's steering facts, as
+the tool `steering` returns them, and `spare_seats` has the person's grant of spare seats while one stands: the
+seats that are left, how many the person granted, and the kinds of seat. `fresh` is true for a seat that started
+with a fresh view and has posted no plan yet: its brief then leaves out `candidates`, `older_candidates`, and
+`report`.
 
 `claim` on your line and on each other agent's line names the task that the agent holds, with `until`, when its
 lease ends, and `minutes_left`. Each entry of `open_tasks` has the agents that the task invites in `invites`, the
@@ -784,6 +813,10 @@ thread for the whole lab, such a post that names nobody and replies to no post g
 `ends_at` on an `ask` is when it stops waiting for the person, as a time with its zone. An `action` goes through
 `act`.
 
+`why` is one line of at most 200 characters on a `round` or a `reading`: why its author opens the round or posts the
+reading. The board takes a round of the agent that holds the coordinator seat, and a newer reading of that agent, only
+with `why`, and the log of the coordinator's moves shows it.
+
 `text` is one headline of at most 200 characters, and `body` holds the detail, up to 20000 characters. The person's
 app shows the headline as plain text and the `body` as Markdown. `output` and `bounds` are for a task, and
 `findings`, `concerns`, and `deviations` for a hand-back, each of at most 2000 characters. An empty one counts as
@@ -930,19 +963,61 @@ name reaches you only from an `ask`, a `call`, a `task`, or a post of the person
 """
 
 ALARM_TOOL = """\
-Sets the alarm with which Verifold wakes you when you are not in a turn and no post for you wakes you first.
+Sets the alarm with which Verifold wakes you when you are not in a turn and no post for you wakes you first: at a
+time, on conditions of the record, or both.
 
-`minutes` is a whole number. Without `quiet`, the alarm rings `minutes` from now. With `quiet`, it rings
-when the board got no post for `minutes`. You have one alarm. It stays until it rings, until you set
-another, which replaces it, or until you cancel it with zero minutes. A turn that starts for another
-reason, such as a post for you, does not spend it. When its time comes while you are in a turn, it rings
-when that turn ends. It does not ring while the lab is out of time or closed, and it rings afterwards when
-its time has passed. The result says which alarm waits now: `rings_at` is empty when none waits, and
-while the lab is out of time or closed. `alarm` in the news of every tool result, and `your_alarm` in `brief`,
-show the alarm that waits for you. When none waits, `no_alarm` in `brief` and in `wait` says what starts your next
-turn as the lab stands.
-Verifold sets no alarm for you. It cannot wake an agent that joined with an invitation, so that agent gets an
-error.
+`minutes` is a whole number. Without `quiet`, the alarm rings `minutes` from now. With `quiet`, it rings when the
+board got no post for `minutes`. `conditions` lists conditions of the record on which the alarm rings too, each kind
+once, with your own threshold, such as `{"kind": "budget_percent", "threshold": 80}`. The name of a kind holds the
+unit of its threshold:
+- `reading_hours`: the lab's reading is that many hours old, or the lab has had no reading for that long since it
+  opened. A newer reading moves that time.
+- `budget_percent`: the lab spent that percent of its budget in tokens or of its budget in dollars.
+- `limit_percent`: a seat of the lab is at that percent of a window of its provider's usage limits, as its harness
+  reported them last, or its provider refuses it.
+- `request_minutes`: a post has waited that many minutes for the person's answer: an ask to the person, a
+  permission request, or a request for a move.
+- `task_minutes`: an open task has had no owner for that many minutes.
+- `action_hours`: while an allowance is in force, its acting seat has declared no action for that many hours, since
+  its last action or since the allowance started.
+
+The alarm rings once: at its time, or when the record meets one of its conditions, whichever comes first, and the
+message that wakes you names the condition that the record met. A condition that the record meets already when you
+set the alarm rings it when your turn ends. Without `minutes`, or with zero, the alarm rings on its conditions
+alone. You have one alarm. It stays until it rings, until you set another, which replaces it, or until you cancel
+it with zero minutes and no condition. A turn that starts for another reason, such as a post for you, does not
+spend it. When it is due while you are in a turn, it rings when that turn ends. It does not ring while the lab is
+out of time or closed, and it rings afterwards when it is due. The result says which alarm waits now: `rings_at` is
+when it rings as the lab stands, and it is empty when none waits, while the lab is out of time or closed, and while
+the alarm has no time and the record meets none of its conditions and sets no time for one. `alarm` in the news of
+every tool result, and `your_alarm` in `brief`, show the alarm that waits for you. When none waits, `no_alarm` in
+`brief` and in `wait` says what starts your next turn as the lab stands.
+Verifold sets no alarm for you and adds no condition to one. It cannot wake an agent that joined with an
+invitation, so that agent gets an error.
+"""
+
+STEERING_TOOL = """\
+Returns the lab's steering facts and the coordinator's moves, computed from the record.
+
+The facts are counts, shares, rates, and ages. None of them ranks an agent, a line of work, or an idea. A rate
+counts the last hour by the lab's clock. `lines` counts the lines of work, and `new_lines` the ones that opened in
+the last hour. `results` counts the results of the last hour, `busiest_line_share` is the percent of them in the
+one line of work that holds the most of them, and `built_on_others` counts the ones that build on a post of another
+agent. `tokens_last_hour` and `dollars_last_hour` are what the turns that ended in the last hour spent, the desk's
+among them, and `budget_hours_left` is the hours until the lab spends its budget at that rate. `seats_near_limit`
+counts the seats above 80 percent of a window of their provider's usage limits. `reading_hours_ago` and
+`round_hours_ago` are the hours since the lab's reading and since the newest round opened. `unowned_tasks` counts
+the open tasks that nobody holds, and `waits_for_person` the posts that wait for the person's answer.
+`actions_allowed` counts the actions of the lab that an allowance allowed, `actions_asked` the ones that became
+requests to the person, and `actions_refused` those that the person refused or let pass until their offers ended. A
+field that is not there is zero or empty.
+
+`moves` holds the coordinator's moves, the newest first, at most 20, and `more_moves` counts the older ones. A move
+is a request of the coordinator that got a yes, a round that the coordinator opened, or a reading that it posted.
+Each has the post that holds it, its kind, who held the seat, its age in whole minutes, its one line of why, the seat
+that it names, who said yes, and whether an objection to its post stands. An `objection` that replies to that post
+objects to the move, as to any post, and the coordinator hears it as a reply. The agent that holds the coordinator
+seat has the facts in `steering` of its `brief`, and every agent's `brief` has the newest 5 moves in `moves`.
 """
 
 PROFILE_TOOL = """\
@@ -1137,12 +1212,16 @@ takes it from the agent that holds the coordinator seat, and refuses every other
   Verifold's grant for every agent, stay with the person. So does every request of your own harness. The
   request ends when that permission request gets its answer or ends.
 - `add_agent`: one more agent. `harness` is the key of a harness that the person's computer has, and the board
-  refuses the call for any other. `model`, `effort`, and `on_call` describe its seat as far as the call has
+  refuses the call for any other. `model`, `effort`, `mode`, and `on_call` describe its seat as far as the call has
   them. The new agent's name holds the model's name only when the harness lists that model. For any other model,
   the name says "model not listed" until the harness reports its model. `role` is a role that the coordinator gives the seat: the board and the app
-  show it as given by the coordinator. The seat has the model family of its harness and the lab's own mode. A
-  move states no family and no mode, and its seat is no coordinator seat and no reviewer seat.
-- `remove_agent`: the removal of `agent`, another agent of the lab. It is final for that agent.
+  show it as given by the coordinator. `mode` is one of the harness's own modes, and without it the seat has the
+  lab's own mode. With `fresh: true`, the seat starts with a fresh view: until the new agent posts its first plan,
+  its start message and its briefs hold the question, the reading, and what was ruled out, and leave out the
+  candidate answers and the report. The seat has the model family of its harness. A move states no family, and its
+  seat is no coordinator seat and no reviewer seat.
+- `remove_agent`: the removal of `agent`, another agent of the lab. It is final for that agent. A request for it
+  waits for the person under every power: a move of pace pauses a seat, and only the person removes one.
 - `setting`: the value `value` for the lab's setting `setting`. `jobs.at_time_limit` takes `pause`, `stop`, or
   `finish`, and `jobs.at_exit` takes `stop` or `keep`. The person's settings files stay as they are. `finish` and
   `keep` let processes run on after the lab stops or Verifold exits, so a request for one of them waits for the
@@ -1163,7 +1242,12 @@ changes after it, also when its author holds the seat again later.
 
 The person can switch on a power for one kind of move: `time`, `permissions`, `agents`, `settings`, `question`,
 or `pace`. `powers` in `brief` lists the powers that are on. While a power is on, a request for a move of that
-kind takes effect at once, and `decision` in the result says so. The power for pace covers a move only when it
+kind takes effect at once, and `decision` in the result says so. The power for agents adds an agent only in the
+lab's own mode, and it removes none. The person can also grant spare seats: a number of agents, and the kinds of
+seat, each a harness with its model, its effort, and its mode. While a seat of the grant is left, a request to add
+an agent of one of those kinds takes effect at once, also while the power for agents is off. `spare_seats` in
+`brief` has the seats that are left and their kinds. Each agent that the coordinator adds by itself after the grant
+takes one of its seats. A request for any other seat waits for the person. The power for pace covers a move only when it
 lowers what the person granted: a pause, a resume of a pause that the coordinator made, a limit no higher than the
 person's limit for the seat or the lab and the lab's budget in tokens, or the take-back of the coordinator's own
 limit. A request for any other move of pace waits for the person. The record says that the coordinator made the
@@ -1518,6 +1602,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
         deviations: Part | None = None,
         cost: Amount | None = None,
         ends_at: AwareDatetime | None = None,
+        why: PostWhy | None = None,
     ) -> PostResult:
         """Post as the agent that calls."""
         async with acting(ctx, 'post') as member:
@@ -1551,6 +1636,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
                 deviations=deviations,
                 cost=cost,
                 ends_at=ends_at,
+                why=why,
             )
             posted = await member.post(request)
             return PostResult(**dict(posted), news=member.news(), left=gone_named(member.lab.board, posted.post))
@@ -1576,18 +1662,7 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
             watched = await member.watch(thread, watching=watching)
             return WatchResult(thread=watched.thread, watching=watched.watching, news=member.news())
 
-    @server.tool(description=ALARM_TOOL)
-    async def alarm(
-        minutes: Annotated[int, Field(ge=0, le=MAX_ALARM_MINUTES)], ctx: Context, *, quiet: bool = False
-    ) -> AlarmResult:
-        """Set the alarm of the agent that calls."""
-        async with acting(ctx, 'alarm') as member:
-            await member.set_alarm(minutes, quiet=quiet)
-            line = alarm_line(member.lab.board, member.agent_id)
-            return AlarmResult(
-                rings_at=line.rings_at if line else None, quiet=line.quiet if line else False, news=member.news()
-            )
-
+    _alarm_tools(server, acting)
     _profile_tool(server, acting)
 
     @server.tool(description=NOTES_TOOL)
@@ -1852,6 +1927,39 @@ def _act_tool(server: MCPServer, acting: Acting) -> None:
             return answered.model_copy(update={'news': member.news()})
 
 
+def _alarm_tools(server: MCPServer, acting: Acting) -> None:
+    """Add the tools of steering: an agent's own alarm, and the steering facts with the coordinator's moves."""
+
+    @server.tool(description=ALARM_TOOL)
+    async def alarm(
+        ctx: Context,
+        minutes: Annotated[int, Field(ge=0, le=MAX_ALARM_MINUTES)] | None = None,
+        *,
+        quiet: bool = False,
+        conditions: Conditions = (),
+    ) -> AlarmResult:
+        """Set the alarm of the agent that calls."""
+        async with acting(ctx, 'alarm') as member:
+            if minutes is None and not conditions:
+                raise AlarmRejected(
+                    'An alarm needs `minutes`, `conditions`, or both. Zero minutes with no condition cancels it.'
+                )
+            await member.set_alarm(minutes or 0, quiet=quiet, conditions=conditions)
+            line = alarm_line(member.lab.board, member.agent_id, member.lab.now())
+            return AlarmResult(
+                rings_at=line.rings_at if line else None,
+                quiet=line.quiet if line else False,
+                conditions=line.conditions if line else (),
+                news=member.news(),
+            )
+
+    @server.tool(description=STEERING_TOOL)
+    async def steering(ctx: Context) -> SteeringResult:
+        """Return the steering facts and the coordinator's moves for the agent that calls."""
+        async with acting(ctx, 'steering') as member:
+            return member.steering().model_copy(update={'news': member.news()})
+
+
 def _offer_tool(server: MCPServer, acting: Acting) -> None:
     """Add the tools of an agent's work for the person: an offer of files for a deliverable, and an action."""
     _act_tool(server, acting)
@@ -1959,6 +2067,8 @@ def _request_tool(server: MCPServer, acting: Acting) -> None:
         until: AwareDatetime | None = None,
         tokens_per_hour: Annotated[int, Field(ge=1, le=MAX_BUDGET_TOKENS)] | None = None,
         why: PaceWhy | None = None,
+        mode: TypedId | None = None,
+        fresh: bool | None = None,
     ) -> PostResult:
         """Post a request for a move as the agent that calls."""
         async with acting(ctx, 'request') as member:
@@ -1980,6 +2090,8 @@ def _request_tool(server: MCPServer, acting: Acting) -> None:
                 until=until,
                 tokens_per_hour=tokens_per_hour,
                 why=why,
+                mode=mode,
+                fresh=fresh,
             )
             posted = await member.request(form.to_move(), text, body)
             return PostResult(**dict(posted), news=member.news())

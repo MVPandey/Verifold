@@ -601,6 +601,8 @@ class Host:
         await lab.set_budget(request.budget_tokens, request.budget_dollars)
         for prefix in request.allow:
             await lab.grant(prefix)
+        if request.spare_seats:
+            await lab.grant_seats(request.spare_seats)
         await lab.open_question_thread()
         await lab.state_deliverables(request.deliverables)
         self._lab = lab
@@ -634,6 +636,7 @@ class Host:
         first: tuple[Build, ...] = (),
         given: tuple[str, AgentId] | None = None,
         asked: bool = False,
+        fresh: bool = False,
     ) -> Agent:
         # Add one agent of a seat to the record, with its name and the facts that the person gave the seat. `given`
         # is a role that the coordinator gives the seat, which the record keeps as the coordinator's. With `asked`,
@@ -647,6 +650,7 @@ class Host:
             _names(lab.board),
             auto_mode=auto_mode,
             asked=asked,
+            fresh=fresh,
         )
         await lab.join(
             agent,
@@ -824,14 +828,17 @@ class Host:
         """
         Add the one agent of a seat that the coordinator's move describes, and start it.
 
-        The seat gives a harness, a model, an effort, and whether the agent is on call. Everything else is as in a
-        seat that the person adds with no facts: the family of the harness, the lab's auto mode, no coordinator
-        mark, and no power. A role of the seat is recorded as given by `asked_by`, the coordinator that asked.
+        The seat gives a harness, a model, an effort, a mode, whether the agent is on call, and whether it starts
+        with a fresh view. Everything else is as in a seat that the person adds with no facts: the family of the
+        harness, no coordinator mark, and no power. A role of the seat is recorded as given by `asked_by`, the coordinator that asked.
         The record takes `first` in the same step as the agent, before it.
         """
         self.check_seat(seat)
-        choice = AgentChoice(harness=seat.harness, model=seat.model, effort=seat.effort, on_call=seat.on_call)
-        await self.add_agents(choice, first, given=(seat.role, asked_by) if seat.role else None, asked=True)
+        choice = AgentChoice(
+            harness=seat.harness, model=seat.model, effort=seat.effort, mode=seat.mode, on_call=seat.on_call
+        )
+        given = (seat.role, asked_by) if seat.role else None
+        await self.add_agents(choice, first, given=given, asked=True, fresh=seat.fresh)
 
     def check_seat(self, seat: AddSeat) -> None:
         """
@@ -858,6 +865,7 @@ class Host:
         given: tuple[str, AgentId] | None = None,
         *,
         asked: bool = False,
+        fresh: bool = False,
     ) -> None:
         """
         Add agents of one harness to the lab that runs, and start them.
@@ -866,7 +874,8 @@ class Host:
         name holds the model's name only when the harness lists the model.
 
         `first` are events that the record takes in the same step as the first agent, before it: the yes to the
-        coordinator's request that asked for the agent. `given` is a role that the coordinator gives the seat.
+        coordinator's request that asked for the agent. `given` is a role that the coordinator gives the seat. With
+        `fresh`, the seat starts with a fresh view, as the coordinator's move asked.
 
         Raises:
             NoLab: The folder has no lab.
@@ -896,7 +905,14 @@ class Host:
                 except (GitError, OSError) as error:
                     raise SetupRejected(f"Can't make the folder of agent-{number}: {error}") from error
                 agent = await self._join(
-                    lab, number, choice, auto_mode=lab.board.opened.auto_mode, first=first, given=given, asked=asked
+                    lab,
+                    number,
+                    choice,
+                    auto_mode=lab.board.opened.auto_mode,
+                    first=first,
+                    given=given,
+                    asked=asked,
+                    fresh=fresh,
                 )
                 first = ()
                 await self._run_agent(lab, agent, under_way=True)
@@ -1313,6 +1329,7 @@ def _agent(  # noqa: PLR0913
     *,
     auto_mode: bool,
     asked: bool = False,
+    fresh: bool = False,
 ) -> Agent:
     # The agent's record keeps the harness's auto mode of today, so a later change of the catalog leaves this lab
     # as it is. With `asked`, a coordinator's move named the seat. Its model's ID is then an agent's text, so the
@@ -1329,6 +1346,7 @@ def _agent(  # noqa: PLR0913
         mode=choice.mode,
         given_role=choice.role,
         model_listed=listed,
+        fresh=fresh,
     )
 
 

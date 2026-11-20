@@ -5,9 +5,9 @@ A lab's record is its events in order. Each event has a sequence number and a ti
 add up to. Events are never changed or removed.
 """
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import AfterValidator, AwareDatetime, Field, StringConstraints, WithJsonSchema
+from pydantic import AfterValidator, AwareDatetime, Field, StringConstraints, WithJsonSchema, model_validator
 
 from verifold.protocol.agents import (
     About,
@@ -25,7 +25,7 @@ from verifold.protocol.allowances import AllowanceId, AllowanceTerms
 from verifold.protocol.deliverables import Decision, Sentence
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import PERSON, AgentId, CommitId, DeliverableId, PostId, ThreadId
-from verifold.protocol.moves import Note, PaceMove, Question
+from verifold.protocol.moves import Note, PaceMove, Question, SeatGrant
 from verifold.protocol.posts import Post
 from verifold.protocol.record import Record, by_person, unset
 from verifold.protocol.settings import MAX_BUDGET_DOLLARS, MAX_BUDGET_TOKENS, MAX_MINUTES, Settings
@@ -323,21 +323,80 @@ class ReviewerSet(EventBase):
 MAX_ALARM_MINUTES = 24 * 60
 """The longest time that an agent can set an alarm for: one day."""
 
+type ConditionKind = Literal[
+    'reading_hours', 'budget_percent', 'limit_percent', 'request_minutes', 'task_minutes', 'action_hours'
+]
+"""
+A condition of the record on which an alarm rings, with the unit of its threshold in its name.
+
+- `reading_hours`: the lab's reading is the threshold's hours old, or the lab has had no reading for that long since
+  it opened.
+- `budget_percent`: the lab spent the threshold's percent of its budget in tokens or of its budget in dollars.
+- `limit_percent`: a seat of the lab is at the threshold's percent of a window of its provider's usage limits, or
+  its provider refuses it.
+- `request_minutes`: a post that waits for the person's answer has waited the threshold's minutes.
+- `task_minutes`: an open task has had no owner for the threshold's minutes.
+- `action_hours`: while an allowance is in force, its seat has declared no action for the threshold's hours, since
+  its last action or since the allowance started.
+"""
+
+CONDITION_BOUNDS: dict[ConditionKind, tuple[float, float]] = {
+    'reading_hours': (0.1, 7 * 24),
+    'budget_percent': (1, 100),
+    'limit_percent': (1, 100),
+    'request_minutes': (1, MAX_ALARM_MINUTES),
+    'task_minutes': (1, MAX_ALARM_MINUTES),
+    'action_hours': (0.1, 7 * 24),
+}
+"""The lowest and the highest threshold of each condition."""
+
+
+class AlarmCondition(Record):
+    """One condition of an alarm: what the record meets, and the agent's own threshold for it."""
+
+    kind: ConditionKind
+    threshold: float
+
+    @model_validator(mode='after')
+    def _a_threshold_in_bounds(self) -> Self:
+        low, high = CONDITION_BOUNDS[self.kind]
+        if not low <= self.threshold <= high:
+            raise ValueError(
+                f'The threshold of `{self.kind}` is from {low:g} to {high:g}, and {self.threshold:g} is not.'
+            )
+        return self
+
+
+def _one_of_each(conditions: tuple[AlarmCondition, ...]) -> tuple[AlarmCondition, ...]:
+    if len({condition.kind for condition in conditions}) != len(conditions):
+        raise ValueError('An alarm has each kind of condition once.')
+    return conditions
+
+
+type Conditions = Annotated[
+    tuple[AlarmCondition, ...], Field(max_length=len(CONDITION_BOUNDS)), AfterValidator(_one_of_each)
+]
+"""The conditions of one alarm, each kind once."""
+
 
 class AlarmSet(EventBase):
     """
     An agent asked Verifold to wake it when it is not in a turn and no post for it wakes it first.
 
     With `quiet`, the alarm rings when the board got no post for `minutes`. Without, it rings `minutes` after the
-    agent set it. An agent has one alarm: a new one replaces it, and zero minutes cancels it. The alarm stays until
-    it rings. A turn that starts for another reason does not spend it. When its time comes while a turn of the
-    agent runs, it rings when that turn ends.
+    agent set it. With `conditions`, it rings when the record meets one of them, also before its time. With
+    conditions and zero minutes, it rings on the conditions alone. An agent has one alarm: a new one replaces it,
+    and zero minutes with no condition cancels it. The alarm stays until it rings. A turn that starts for another
+    reason does not spend it. When its time comes, or the record meets a condition, while a turn of the agent runs,
+    it rings when that turn ends.
     """
 
     type: Literal['alarm_set'] = 'alarm_set'
     agent: AgentId
     minutes: float = Field(ge=0, le=MAX_ALARM_MINUTES)
     quiet: bool = False
+    conditions: Conditions = Field(default=(), exclude_if=lambda value: not value)
+    """The conditions on which the alarm rings, each with the agent's threshold. A record from before them has none."""
     stays: bool = False
     """
     Whether the alarm stays until it rings. An alarm from before Verifold kept alarms across turns has `False`: it
@@ -623,6 +682,20 @@ class PaceSet(EventBase):
     by: AgentId = Field(default=PERSON, exclude_if=by_person)
     request: PostId | None = Field(default=None, exclude_if=unset)
     """The coordinator's request that the move came from, with its yes just before. `None` for the person's own."""
+
+
+class SeatsGranted(EventBase):
+    """
+    The person granted the coordinator spare seats: how many agents it may add by itself, and of which kinds.
+
+    Inside the grant, the coordinator's request to add an agent of one of its kinds takes effect at once, while the
+    lab has time. Each agent that the coordinator adds by itself after the grant takes one of its seats. A new grant
+    replaces the earlier one, and zero seats take it back. Only the person grants seats: no agent tool, and no
+    project's settings file, records this event.
+    """
+
+    type: Literal['seats_granted'] = 'seats_granted'
+    grant: SeatGrant
 
 
 class WentQuiet(EventBase):
@@ -911,6 +984,7 @@ type Event = Annotated[
     | LimitReached
     | LimitsReported
     | PaceSet
+    | SeatsGranted
     | WentQuiet
     | SettingsSet
     | PermissionGranted

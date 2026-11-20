@@ -27,9 +27,10 @@ from verifold.protocol.posts import (
     Summary,
 )
 from verifold.society.board import Board
+from verifold.society.coordinator import missed_posts
 from verifold.society.lines import lines_of, withdraws
 from verifold.society.standing import is_answered, standing
-from verifold.society.views import missed_posts, needs_person, team
+from verifold.society.views import needs_person, team
 
 APPROVAL_COMMAND = 'Asks to run a command'
 APPROVAL_OTHER = 'Asks for a permission of its harness'

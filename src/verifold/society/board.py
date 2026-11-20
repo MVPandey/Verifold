@@ -42,6 +42,7 @@ from verifold.protocol.events import (
     RerunTaken,
     ReviewerSet,
     RoundClosed,
+    SeatsGranted,
     TaskClaimed,
     ThreadOpened,
     TimeRanOut,
@@ -123,6 +124,8 @@ class Board:
     seat_limits: tuple[LimitsReported, ...] = ()
     """Each report of the usage limits of a seat's provider that the record kept, oldest first."""
     paces: tuple[PaceSet, ...] = ()
+    seat_grants: tuple[SeatsGranted, ...] = ()
+    """The person's grants of spare seats to the coordinator, oldest first. The newest one stands."""
     """Each move of pace, oldest first: the pauses of seats, their ends, and the limits of tokens per hour."""
     spent_tokens: int = 0
     """The input and output tokens of every turn so far, as the harnesses reported them."""

@@ -55,6 +55,7 @@ from verifold.protocol.events import (
     TurnStarted,
     TurnSummary,
 )
+from verifold.protocol.moves import SeatChoice, SeatGrant
 from verifold.protocol.posts import Check, FileEvidence, Result
 from verifold.protocol.settings import AtExit, AtTimeLimit
 from verifold.protocol.usage import Usage
@@ -63,7 +64,7 @@ from verifold.runner.environment import harness_environment
 from verifold.runner.folders import agent_folder
 from verifold.runner.git import GitError, git, own_git
 from verifold.runner.jobs import Sweep, sweep
-from verifold.runner.messages import DOORBELL, RESTARTED, STARTED_AGAIN
+from verifold.runner.messages import DOORBELL, FRESH, RESTARTED, STARTED_AGAIN
 from verifold.runner.messages import ON_CALL as ON_CALL_FACT
 from verifold.runner.session import _Client
 from verifold.server.errors import LabExists, SetupRejected
@@ -2284,6 +2285,39 @@ async def test_an_invited_coordinator_adds_an_agent_under_its_power_and_asks_the
         (None, 'take_minutes'),
         ('agent-3', 'remove_agent'),
     ]
+
+
+async def test_a_coordinators_add_inside_the_grant_of_the_start_takes_effect_with_its_mode_and_a_fresh_view(
+    project: Path, log: Path
+) -> None:
+    grant = SeatGrant(seats=1, choices=(SeatChoice(harness='fake', model='small', mode='plan'),))
+    start = StartRequest(question='Is it faster?', agents=(AgentChoice(harness='fake'),), minutes=60, spare_seats=grant)
+    invite = {'name': 'Lead', 'coordinator': True}
+    seat = {'move': 'add_agent', 'text': 'Every line looks alike.', 'harness': 'fake', 'model': 'small'}
+
+    async with serving(project, start, {'fake': FAKE_HARNESS}) as client:
+        await until(lambda: any(isinstance(event, TurnEnded) for event in record(project)), timeout=60)
+        invited = (await client.post('/invitations', json=invite)).json()
+        url, token, _ = invited_parts(invited['text'])
+        async with board_of(url, token) as board:
+            added = await board.call_tool('request', {**seat, 'mode': 'plan', 'fresh': True})
+            past = await board.call_tool('request', {**seat, 'mode': 'plan'})
+        # The harness logs other calls before the prompt, so the test waits for the prompt itself.
+        await until(
+            lambda: any(call['event'] == 'prompt' and call['agent'] == 'agent-3' for call in calls(log)), timeout=60
+        )
+
+    board_now = fold(record(project))
+    joined = board_now.agent('agent-3')
+    assert joined is not None
+    assert (joined.agent.mode, joined.agent.fresh, joined.agent.model.name) == ('plan', True, 'small')
+    assert added.structured_content is not None
+    assert added.structured_content['decision']['by'] == 'agent-2'
+    # The grant had one seat, so the next request waits for the person.
+    assert past.structured_content is not None
+    assert past.structured_content['waits'] is True
+    first = next(call['text'] for call in calls(log) if call['event'] == 'prompt' and call['agent'] == 'agent-3')
+    assert FRESH in first
 
 
 async def test_a_coordinators_move_adds_a_seat_with_what_the_person_saw_and_nothing_else(

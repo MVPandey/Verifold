@@ -4,6 +4,9 @@ import { clock } from './format.ts';
 
 export { NO_DESK } from '../api/client.ts';
 
+/** The ID of the box where the person writes to the lab, so that a thread's card can lead to it. */
+export const CHAT_BOX = 'chat-box';
+
 /** Return the agent that holds the desk seat and is in the lab, or `null`. */
 export function deskOf(agents: readonly AgentView[]): AgentView | null {
   return agents.find((view) => view.desk === true && view.left === null) ?? null;

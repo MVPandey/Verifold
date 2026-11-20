@@ -18,8 +18,8 @@ from conftest import agent
 from mcp import Client
 
 from verifold.app import NORMS_CHANGED, NORMS_TEMPLATE
-from verifold.protocol.events import AlarmSet, BudgetSet, LimitReached, TurnEnded
-from verifold.protocol.posts import Answer, Close, FileEvidence, Message, Result
+from verifold.protocol.events import CONDITION_BOUNDS, AlarmCondition, AlarmSet, BudgetSet, LimitReached, TurnEnded
+from verifold.protocol.posts import Answer, Close, FileEvidence, Message, Reading, Result, RuledOut
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.protocol.usage import Usage
@@ -221,6 +221,13 @@ def messages() -> dict[str, str]:
         'no alarm': no_alarm_line(board, 'ada', START),
         **{f'no reply {posts}': no_reply_line(_waiting(posts), 'ada') for posts in (1, 2, 3)},
         **{f'cut {part} {count}': cut_line(part, count, ('p-1', 'p-2')[:count]) for part in CUTS for count in (1, 2)},
+        **{
+            f'alarm on {kind}': alarm_message(
+                alarm, IN_TURN, AlarmCondition(kind=kind, threshold=CONDITION_BOUNDS[kind][1])
+            )
+            for kind in CONDITION_BOUNDS
+        },
+        'start of a fresh seat': start_message(_fresh(), ada.model_copy(update={'fresh': True}), NORMS),
         'no alarm, a close stands': no_alarm_line(closing.board(), 'bo'),
         'no alarm, a closed lab': no_alarm_line(
             closing.post(
@@ -232,6 +239,13 @@ def messages() -> dict[str, str]:
             closing.time_set(closing.at(len(closing.events) + 1)).ran_out().board(), 'bo'
         ),
     }
+
+
+def _fresh() -> Board:
+    # A lab with a reading and a lead that was ruled out, which a seat with a fresh view reads at its start.
+    record = RecordBuilder().join('ada').thread('t-1', opened_by='ada')
+    record.post(Reading(id='p-1', thread='t-1', author='ada', text='An answer is a sort that holds.'))
+    return record.post(RuledOut(id='p-2', thread='t-1', author='ada', text='A heap sort loses.')).board()
 
 
 def _budgeted(by: str = 'person') -> Board:
@@ -320,7 +334,7 @@ async def test_no_tool_of_the_board_describes_itself_or_its_result_with_an_order
     async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
         tools = (await client.list_tools()).tools
 
-    assert len(tools) == 18
+    assert len(tools) == 19
     for tool in tools:
         assert tool.description, tool.name
         assert orders(tool.description) == [], tool.name

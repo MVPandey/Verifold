@@ -1,12 +1,13 @@
-"""What the person's panel for the coordinator reads: the conversation, the powers, and what was done for the person."""
+"""What the person's panel for the coordinator reads: the conversation, the powers, the grant, and the moves."""
 
 from verifold.protocol.agents import POWERS
-from verifold.protocol.app import ConversationView, Deed, PowerView
+from verifold.protocol.app import ConversationView, Deed, MoveView, PowerView
 from verifold.protocol.ids import PERSON
 from verifold.protocol.moves import PermissionMove, power_of
 from verifold.protocol.posts import MoveRequest
 from verifold.society.board import Board
 from verifold.society.coordinator import joined_by, undo_of, waiting_for_reply
+from verifold.society.steering import moves, spare_seats
 from verifold.society.views import needs_person, post_view, thread_view
 
 
@@ -29,6 +30,19 @@ def conversation_view(board: Board) -> ConversationView:
         asks=tuple(post_view(board, entry, PERSON) for entry in board.posts if entry.post.id in asked),
         powers=_powers(board),
         deeds=_deeds(board),
+        moves=tuple(
+            MoveView(
+                post=post_view(board, move.entry, PERSON),
+                kind=move.kind,
+                at=move.at,
+                by=move.by,
+                why=move.why,
+                agent=move.agent,
+                yes_by=move.yes_by,
+            )
+            for move in moves(board)
+        ),
+        grant=spare_seats(board),
     )
 
 

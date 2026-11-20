@@ -734,7 +734,7 @@ describe('the deliverables on the lab page', () => {
     assert.equal(talk.split('class="k-panel').length, 2);
     assert.equal(talk.includes('d-panel'), false);
     assert.ok(talk.includes('class="d-door" aria-expanded="false"'));
-    assert.ok(talk.includes('Close the conversation'));
+    assert.ok(talk.includes('Close the panel'));
   });
 
   it('shows no card for the thread of a deliverable’s offers until the person opens it from the panel', () => {

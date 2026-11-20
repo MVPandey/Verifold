@@ -27,6 +27,7 @@ from verifold.protocol.join import (
     MAX_FORMER_NAMES,
     MAX_LEADS,
     MAX_LINKS,
+    MAX_MOVES,
     MAX_NEWS,
     MAX_OBSTACLES,
     QUIET_MINUTES,
@@ -59,8 +60,6 @@ from verifold.protocol.join import (
     ThreadView,
 )
 from verifold.protocol.posts import (
-    Action,
-    Answer,
     Ask,
     Call,
     Check,
@@ -77,18 +76,18 @@ from verifold.protocol.posts import (
 from verifold.protocol.threads import Thread
 from verifold.protocol.usage import DiskUse
 from verifold.protocol.votes import BADGES, MAX_VOTE_LINES, NEWEST_VOTES
-from verifold.society.allowances import action_state, allowance_line
+from verifold.society.alarms import alarm_line
+from verifold.society.allowances import allowance_line
 from verifold.society.attention import left_line, watches_thread
 from verifold.society.board import Board
 from verifold.society.budget import budget_line, disk_limit
 from verifold.society.candidates import candidates, closes_on, gone, own_entry
-from verifold.society.coordinator import request_waits, waiting_for_reply
+from verifold.society.coordinator import waiting_for_reply, waiting_posts
 from verifold.society.deliverables import deliverable_lines
 from verifold.society.errors import NotFound
 from verifold.society.fit import CUTS, Keep, Part, cut_line, fit
 from verifold.society.identity import post_line, post_view, seat_label
 from verifold.society.lifecycle import (
-    alarm_line,
     lab_state,
     latest_time,
     minutes_left,
@@ -102,7 +101,8 @@ from verifold.society.pace import cap_line, cap_of, limits_of, pause_line, seats
 from verifold.society.reruns import rerun_checks, reruns_wanted
 from verifold.society.reviewers import free_seats, holders, seats
 from verifold.society.rounds import closes_at, entries, for_reader, open_round, waits_for
-from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing, waits_for_person
+from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing
+from verifold.society.steering import move_line, moves, spare_seats, steering_facts
 from verifold.society.summaries import in_sight, standing_summary
 from verifold.society.tasks import claim_line, dropped, lapsed, open_tasks
 from verifold.society.tested import rests_on, support
@@ -492,13 +492,15 @@ def brief(  # noqa: PLR0913, PLR0915
     )[-MAX_LEADS:]
     found = obstacles(board)
     blocking = tuple(item.entry for item in reversed(found) if item.state == 'open')
-    standing_candidates = candidates(board)
+    you = board.agent(agent_id)
+    # A seat that started with a fresh view reads no candidate and no report until its first plan.
+    fresh = bool(you and you.agent.fresh and not _planned(board, agent_id))
+    standing_candidates = () if fresh else candidates(board)
     older, shown = standing_candidates[:-MAX_CANDIDATES], standing_candidates[-MAX_CANDIDATES:]
-    reported = newest_report(board)
+    reported = None if fresh else newest_report(board)
     reading = standing_reading(board)
     done = closing(board)
     named = closes_on(board, done) if done else None
-    you = board.agent(agent_id)
     close_line = post_line(board, done, agent_id, now) if done else None
     report_line = post_line(board, reported, agent_id, now) if reported else None
     reading_line = post_line(board, reading, agent_id, now) if reading else None
@@ -515,6 +517,8 @@ def brief(  # noqa: PLR0913, PLR0915
         for entry in open_tasks(board, now)
         if entry.post.thread not in not_mine and entry.post.thread not in (board.conversation, board.desk_chat)
     )[-MAX_NEWS:]
+    steers = tuple(move_line(board, move, now) for move in moves(board)[:MAX_MOVES])
+    leads = agent_id == board.coordinator
     # The agents that posted last keep the lines of their plans and latest posts longest.
     posted_last = {entry.post.author: entry.seq for entry in board.posts}
     recent = tuple(sorted((agent.id for agent in others), key=lambda agent: posted_last.get(agent, 0)))
@@ -586,6 +590,7 @@ def brief(  # noqa: PLR0913, PLR0915
         lab_cap=cap_line(board, None, now),
         in_turn=sum(before(board, agent).cut_off for agent in run),
         alarms_waiting=sum(pending_alarm(board, joined.agent.id) is not None for joined in board.agents),
+        fresh=fresh,
         coordinator=board.coordinator,
         coordinator_open=board.coordinator_open,
         reviewers=holders(board),
@@ -599,6 +604,7 @@ def brief(  # noqa: PLR0913, PLR0915
         desk_chat=board.desk_chat,
         person_waits=waits,
         powers=tuple(power for power in POWERS if power in board.powers),
+        spare_seats=spare_seats(board) if leads else None,
         closes_on=named.post.id if named else None,
         report=report_line,
         report_minutes_ago=minutes_since(reported.at, now) if reported else None,
@@ -628,6 +634,7 @@ def brief(  # noqa: PLR0913, PLR0915
         for entry in shown
     }
     blocked = {entry.post.id: standing(board, entry.post.id) for entry in blocking[:MAX_OBSTACLES]}
+    facts = steering_facts(board, now) if leads else None
 
     def render(keep: Keep) -> Brief:
         cuts: dict[Part, tuple[int, tuple[str, ...]]] = {}
@@ -754,6 +761,8 @@ def brief(  # noqa: PLR0913, PLR0915
                 }
             ),
             'reruns_wanted': kept('reruns_wanted', wanted, name=_rerun),
+            'moves': kept('moves', steers, last=False),
+            'steering': facts if kept('steering', (facts,) if facts else ()) else None,
             'news': news_kept,
         }
         return base.model_copy(
@@ -780,6 +789,8 @@ def brief(  # noqa: PLR0913, PLR0915
         'offers': len(offers),
         'candidates': len(shown),
         'agents': len(recent),
+        'moves': len(steers),
+        'steering': 1 if facts else 0,
         **({'news.for_you': len(news.for_you)} if page else {}),
     }
     return fit(render, full)
@@ -834,6 +845,11 @@ def _rerun(line: RerunLine) -> str:
 
 def _left(line: LeftLine) -> str:
     return line.id
+
+
+def _planned(board: Board, agent_id: AgentId) -> bool:
+    # Whether an agent has posted a plan.
+    return any(isinstance(entry.post, Plan) and entry.post.author == agent_id for entry in board.posts)
 
 
 def _person_waits(board: Board, agent_id: AgentId, now: datetime) -> PersonWait | None:
@@ -974,59 +990,6 @@ def needs_person(board: Board, now: datetime | None = None) -> tuple[PostView, .
     came, which `missed_posts` holds. Without `now`, time counts from the board's newest event.
     """
     return tuple(post_view(board, entry, PERSON) for entry in waiting_posts(board, now))
-
-
-def waiting_posts(board: Board, now: datetime | None = None) -> tuple[Posted, ...]:
-    """Return the entries of the posts that wait for the person's answer, oldest first, as `needs_person` says."""
-    at = now or latest_time(board)
-    return tuple(entry for entry in board.posts if _waits_for_person(board, entry, at))
-
-
-def missed_posts(board: Board, now: datetime | None = None) -> tuple[Posted, ...]:
-    """
-    Return the entries of the asks and actions for the person that stopped waiting before the person answered.
-
-    They are the asks to the person whose end time came, the asks of a harness that ended with the agent's turn or
-    with a restart of Verifold, and the actions whose offers ended, or whose authors left, without an answer. Nothing
-    was done for any of them. Oldest first. Without `now`, time counts from the board's newest event.
-    """
-    at = now or latest_time(board)
-    return tuple(entry for entry in board.posts if _missed(board, entry, at))
-
-
-def _to_person(board: Board, entry: Posted, ask: Ask) -> bool:
-    # In the conversation, the ask of the agent that held the coordinator seat when it asked is to the person, also
-    # after the seat changed. Another agent's ask there is to the person only when it names the person, as in any
-    # thread.
-    talks = ask.thread == board.conversation and ask.author == board.coordinator_at(entry.seq)
-    return PERSON in ask.mentions or talks
-
-
-def _waits_for_person(board: Board, entry: Posted, at: datetime) -> bool:
-    post = entry.post
-    if isinstance(post, Action):
-        return action_state(board, entry, at) == 'waits'
-    if not isinstance(post, Ask):
-        return request_waits(board, entry)
-    ended = post.ends_at is not None and post.ends_at <= at
-    return (
-        _to_person(board, entry, post)
-        and not ended
-        and waits_for_person(board, post.id)
-        and not board.gone(post.author)
-    )
-
-
-def _missed(board: Board, entry: Posted, at: datetime) -> bool:
-    post = entry.post
-    if isinstance(post, Action):
-        return action_state(board, entry, at) == 'missed'
-    if not isinstance(post, Ask):
-        return False
-    if post.request is not None:
-        return any(isinstance(reply.post, Answer) and reply.post.missed for reply in board.replies(post.id))
-    ended = post.ends_at is not None and post.ends_at <= at
-    return ended and _to_person(board, entry, post) and waits_for_person(board, post.id)
 
 
 def to_earlier_question(board: Board, proposed: Posted) -> bool:

@@ -22,6 +22,7 @@ from verifold.harnesses.catalog import CATALOG, HarnessEntry, available, catalog
 from verifold.protocol.agents import MAX_AGENTS, AgentChoice, one_family
 from verifold.protocol.app import AllowanceRequest, StartRequest
 from verifold.protocol.deliverables import FINDINGS_RECORD
+from verifold.protocol.moves import SeatChoice, SeatGrant
 from verifold.protocol.settings import SettingsLevel, SetupDefaults
 from verifold.runner.errors import NoAgentFolder, NoFileManager, RunnerError
 from verifold.runner.folders import LAB_FOLDER, agents_folder, open_folder, real_folder
@@ -157,8 +158,36 @@ def _start(args: argparse.Namespace) -> tuple[StartRequest, Mapping[str, Harness
         deliverables=tuple(dict.fromkeys((*record, *(args.deliverable or ())))),
         # An allowance comes from the person's own command line only. No settings file holds one.
         allowance=_allowance(args.allowance) if args.allowance else None,
+        # A grant of spare seats is the person's own word for this lab, from the command line only.
+        spare_seats=_spare_seats(args.spare_seats, args.spare_seat or (), catalog),
     )
     return start, catalog
+
+
+def _spare_seats(seats: int | None, kinds: Sequence[str], catalog: Mapping[str, HarnessEntry]) -> SeatGrant | None:
+    """
+    Return the grant of spare seats that `--spare-seats` and `--spare-seat` give, or `None` without them.
+
+    Raises:
+        SetupRejected: One flag comes without the other, or a kind names a harness that Verifold does not know.
+
+    """
+    if seats is None and not kinds:
+        return None
+    if seats is None or not kinds:
+        raise SetupRejected(
+            '--spare-seats gives the number of agents that the coordinator may add by itself, and --spare-seat '
+            'names each kind of seat that it may add. Give both.'
+        )
+    choices = []
+    for kind in kinds:
+        harness, _, rest = kind.partition(':')
+        model, _, rest = rest.partition(':')
+        effort, _, mode = rest.partition(':')
+        if harness not in catalog:
+            raise SetupRejected(f'--spare-seat {kind}: unknown harness {harness}. Choose from: {", ".join(catalog)}.')
+        choices.append(SeatChoice(harness=harness, model=model or None, effort=effort or None, mode=mode or None))
+    return SeatGrant(seats=seats, choices=tuple(dict.fromkeys(choices)))
 
 
 def _lower[T: (int, float)](*values: T | None) -> T | None:
@@ -540,6 +569,18 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         metavar='TOKENS',
         help="The most tokens that the coordinator's seat may spend in one hour, input and output together. At that number its next turn waits for the next hour. 0 means no limit. Default: your saved setting, or 10,000,000.",
+    )
+    run.add_argument(
+        '--spare-seats',
+        type=int,
+        metavar='COUNT',
+        help="Let the coordinator add up to COUNT agents by itself, of the kinds that --spare-seat names. Each add says why in one line, and the app lists it among the coordinator's moves. Without it, each add waits for your yes, unless you switch on the coordinator's power for agents.",
+    )
+    run.add_argument(
+        '--spare-seat',
+        action='append',
+        metavar='HARNESS[:MODEL[:EFFORT[:MODE]]]',
+        help="One kind of seat that the coordinator may add under --spare-seats. Give it once for each kind. A value that you leave out is the harness's default.",
     )
     run.add_argument(
         '--ask-me',

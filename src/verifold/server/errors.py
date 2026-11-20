@@ -47,3 +47,7 @@ class ProfileRejected(ServerError):
 
 class DeskOnly(ServerError):
     """An agent that is not the lab's desk called a tool of the desk. The message says so."""
+
+
+class AlarmRejected(ServerError):
+    """A call of `alarm` gives neither minutes nor a condition."""

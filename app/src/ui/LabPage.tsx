@@ -55,6 +55,7 @@ import { Detail, Words } from './Markdown.tsx';
 import { CoordinatorSeat, OpenedForYou } from './Coordinator.tsx';
 import { ActionNeeds, Allowances } from './Allowances.tsx';
 import { DeskSeat } from './Desk.tsx';
+import { MovesCard } from './Moves.tsx';
 import { DeliverDoor, Deliverables } from './Deliverables.tsx';
 import { ChipView, Composer, Exact, Files, New } from './parts.tsx';
 import { Who } from './Picture.tsx';
@@ -147,6 +148,15 @@ export function Wall(
     if (request) await api.post(request);
     data.reload();
   };
+  // With a desk seated, the desk chat is the one place where the person writes. On a thread's page, a message
+  // names that thread, until the person says that it is about the whole lab.
+  const desk = deskOf(lab.agents) !== null;
+  const [wholeLab, setWholeLab] = useState<string | null>(null);
+  const opened = threads.find((summary) => summary.thread.id === open);
+  const subject =
+    opened && !opened.thread.desk && wholeLab !== opened.thread.id
+      ? { id: opened.thread.id, title: opened.thread.title }
+      : null;
   const turns = (read: ThreadRead): ReactElement =>
     read.view ? (
       <Turns
@@ -170,7 +180,7 @@ export function Wall(
             api.vote(postId, direction, reason).then(() => data.reload()),
           onBadge: (change) => api.badge(change).then(() => data.reload()),
         }}
-        onSend={(text) => send(text, read.view?.thread.id)}
+        onSend={desk ? undefined : (text) => send(text, read.view?.thread.id)}
       />
     ) : (
       <p className="f-wait" role="status">
@@ -292,24 +302,38 @@ export function Wall(
             onOpen={(open) => {
               setPanel(open ? 'desk' : null);
             }}
+            subject={subject}
+            onClearSubject={() => {
+              setWholeLab(open);
+            }}
+          />
+          <MovesCard
+            moves={data.conversation?.moves ?? []}
+            agents={lab.agents}
+            seated={coordinatorOf(lab.agents) !== null}
+            onAll={() => {
+              setPanel('log');
+            }}
           />
           <CoordinatorSeat
             {...props}
             tab={panel === 'deliver' || panel === 'desk' ? null : panel}
             onTab={setPanel}
           />
-          <Composer
-            variant="steer"
-            label="Steer the lab"
-            placeholder="Change the scope, the priority, or the time. Every agent gets it."
-            button="Send to the lab"
-            hint={
-              lab.waits.length > 0
-                ? 'Your message opens a new thread.'
-                : 'Nothing waits for you. Your message opens a new thread.'
-            }
-            onSend={(text) => send(text)}
-          />
+          {desk ? null : (
+            <Composer
+              variant="steer"
+              label="Steer the lab"
+              placeholder="Change the scope, the priority, or the time. Every agent gets it."
+              button="Send to the lab"
+              hint={
+                lab.waits.length > 0
+                  ? 'Your message opens a new thread.'
+                  : 'Nothing waits for you. Your message opens a new thread.'
+              }
+              onSend={(text) => send(text)}
+            />
+          )}
           <RoundOpener
             round={lab.round}
             now={props.now}
@@ -336,11 +360,15 @@ export function Wall(
         agents={lab.agents}
         opened={lab.opened_at}
         now={props.now}
-        onReply={async (text, to) => {
-          const request = personReply(text, to);
-          if (request) await api.post(request);
-          data.reload();
-        }}
+        onReply={
+          desk
+            ? undefined
+            : async (text, to) => {
+                const request = personReply(text, to);
+                if (request) await api.post(request);
+                data.reload();
+              }
+        }
       />
       {data.report ? <ReportCard report={data.report} agents={lab.agents} now={props.now} /> : null}
 
@@ -708,9 +736,10 @@ export function ReadingCard(props: {
   /** When the lab opened. */
   readonly opened: string;
   readonly now: Date;
-  /** Post the person's reply to the reading. */
-  readonly onReply: (text: string, to: Post) => Promise<void>;
+  /** Post the person's reply to the reading. Without it, the lab has a desk, and the person writes in its chat. */
+  readonly onReply?: ((text: string, to: Post) => Promise<void>) | undefined;
 }): ReactElement {
+  const { onReply } = props;
   const head = <h2 id="reading-title">How the lab reads your question</h2>;
   if (props.reading === null) {
     return (
@@ -748,16 +777,23 @@ export function ReadingCard(props: {
         open
         label="Detail of the reading"
       />
-      <Composer
-        // A new reading gets an empty box.
-        key={`reply-${post.id}`}
-        variant="reply"
-        label="Reply to the reading"
-        placeholder="Say where the lab reads your question wrong"
-        button="Reply"
-        hint={`Your reply reaches ${author} and the agents that watch its thread.`}
-        onSend={(text) => props.onReply(text, post)}
-      />
+      {onReply ? (
+        <Composer
+          // A new reading gets an empty box.
+          key={`reply-${post.id}`}
+          variant="reply"
+          label="Reply to the reading"
+          placeholder="Say where the lab reads your question wrong"
+          button="Reply"
+          hint={`Your reply reaches ${author} and the agents that watch its thread.`}
+          onSend={(text) => onReply(text, post)}
+        />
+      ) : (
+        <p className="c-lead">
+          To correct the reading, say so in the chat with the lab. The desk passes it on to {author}
+          .
+        </p>
+      )}
     </section>
   );
 }

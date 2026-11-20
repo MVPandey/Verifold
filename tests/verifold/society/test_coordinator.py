@@ -600,14 +600,13 @@ def test_the_record_replays_to_the_same_board() -> None:
     'extra',
     [
         {'family': 'openai'},
-        {'mode': 'full-access'},
         {'coordinator': True},
         {'powers': ['time']},
         {'reviewer': True},
         {'count': 2},
     ],
 )
-def test_a_move_adds_a_seat_that_holds_nothing_but_its_harness_model_effort_on_call_and_a_role(
+def test_a_move_adds_a_seat_that_holds_nothing_but_its_harness_model_effort_mode_on_call_role_and_view(
     extra: dict[str, object],
 ) -> None:
     seat: dict[str, object] = {

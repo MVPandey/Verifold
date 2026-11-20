@@ -36,6 +36,7 @@ from verifold.protocol.events import (
     ReviewerSet,
     RoundClosed,
     RoundEnd,
+    SeatsGranted,
     SettingsSet,
     TaskClaimed,
     ThreadOpened,
@@ -46,7 +47,7 @@ from verifold.protocol.events import (
     Voted,
     WatchSet,
 )
-from verifold.protocol.moves import Move, PaceMove
+from verifold.protocol.moves import Move, PaceMove, SeatGrant
 from verifold.protocol.posts import Ask, FileEvidence, FileOffer, Message, MoveRequest, PermissionShown, Post
 from verifold.protocol.settings import ReviewerSettings, Settings
 from verifold.protocol.threads import DESK_TITLE, Thread
@@ -82,6 +83,8 @@ class RecordBuilder:
         checks: str | None = None,
         harness: str = 'fake',
         name: str | None = None,
+        *,
+        fresh: bool = False,
     ) -> 'RecordBuilder':
         seq, at = self._stamp()
         agent = Agent(
@@ -91,6 +94,7 @@ class RecordBuilder:
             model=ModelSpec(family=family),
             recruited_by=recruited_by,
             checks=checks,
+            fresh=fresh,
         )
         self.events.append(AgentJoined(seq=seq, at=at, agent=agent))
         return self
@@ -261,6 +265,12 @@ class RecordBuilder:
         """Add a move of pace: the person's, or with `by` and `request`, the move of a request just after its yes."""
         seq, at = self._stamp()
         self.events.append(PaceSet(seq=seq, at=at, move=move, by=by, request=request))
+        return self
+
+    def grant(self, grant: SeatGrant) -> 'RecordBuilder':
+        """Add the person's grant of spare seats to the coordinator."""
+        seq, at = self._stamp()
+        self.events.append(SeatsGranted(seq=seq, at=at, grant=grant))
         return self
 
     def budget(self, tokens: int | None) -> 'RecordBuilder':

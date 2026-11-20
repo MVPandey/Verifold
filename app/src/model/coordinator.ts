@@ -16,7 +16,7 @@ import { ago, clock, dayClock, tokens } from './format.ts';
 import { halted, haltWords } from './limits.ts';
 import { AT_EXIT, AT_TIME_LIMIT } from './settings.ts';
 
-/** A tab of the panel for the coordinator. */
+/** A tab of the panel for the coordinator: the conversation, what it may do, and the log of its moves. */
 export type Tab = 'talk' | 'powers' | 'log';
 
 /** What a move's words need from the lab. */
@@ -37,17 +37,24 @@ function waitWords(waits: number): string {
   return `${waits} ${waits === 1 ? 'waits' : 'wait'} for you`;
 }
 
-/** Return the name of each tab, with the number of posts that wait for the person on the first. */
-export function tabs(name: string, waits: number): readonly (readonly [Tab, string])[] {
-  return [
-    ['talk', waits > 0 ? `Conversation (${waitWords(waits)})` : 'Conversation'],
-    ['powers', `What ${name} may do`],
-    ['log', 'Done for you'],
-  ];
+/**
+ * Return the name of each tab, with the number of posts that wait for the person on the conversation. With a desk,
+ * the person writes in the desk chat only, so the panel has no conversation and opens on the moves.
+ */
+export function tabs(
+  name: string,
+  waits: number,
+  desk = false,
+): readonly (readonly [Tab, string])[] {
+  const talk: readonly (readonly [Tab, string])[] = desk
+    ? []
+    : [['talk', waits > 0 ? `Conversation (${waitWords(waits)})` : 'Conversation']];
+  return [...talk, ['log', 'Moves'], ['powers', `What ${name} may do`]];
 }
 
-/** Return the words on the button that opens the conversation. */
-export function talkLabel(name: string, waits: number): string {
+/** Return the words on the button that opens the panel: the conversation, or with a desk the moves. */
+export function talkLabel(name: string, waits: number, desk = false): string {
+  if (desk) return `${name}’s moves and powers`;
   return waits > 0 ? `Talk to ${name} (${waitWords(waits)})` : `Talk to ${name}`;
 }
 
@@ -158,9 +165,9 @@ export const POWER_WORDS: Readonly<
       `${name} allows or refuses, for one time, a command or a tool that another agent asks for.`,
   },
   agents: {
-    name: 'Add or remove agents',
+    name: 'Add agents',
     what: (name) =>
-      `${name} adds an agent, or removes one. For an agent that it adds, ${name} picks the harness, the model, and the effort. The request and the log show them.`,
+      `${name} adds an agent in the lab’s own mode, and picks its harness, model, and effort. To remove an agent, ${name} asks you. The log of moves shows each add.`,
   },
   settings: {
     name: 'Change the lab’s settings',
@@ -369,7 +376,15 @@ export function details(
           ? { label: 'Role, given by the coordinator', value: seat.role, theirs: true }
           : { label: 'Role', value: 'None' },
         { label: 'Model family', value: harness ? harness.family : 'The family of its harness' },
-        { label: 'Mode', value: 'As the lab’s other agents' },
+        seat.mode
+          ? { label: 'Mode', value: seat.mode, theirs: true }
+          : { label: 'Mode', value: 'As the lab’s other agents' },
+        {
+          label: 'View',
+          value: seat.fresh
+            ? 'Fresh. No candidate answer and no report until its first plan.'
+            : 'The whole lab',
+        },
         ...(added ? [{ label: 'The agent that joined', value: name(added), theirs: true }] : []),
       ];
     }
