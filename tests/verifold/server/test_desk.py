@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 import httpx2
 import pytest
-from builders import START
+from builders import HTTP_WAIT, START
 from conftest import agent, serve_board
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
@@ -110,7 +110,7 @@ async def test_each_caller_over_http_gets_the_tools_of_its_own_token(desk_lab: L
         async def tools(token: SecretStr) -> set[str]:
             headers = {'Authorization': f'Bearer {token.get_secret_value()}'}
             async with (
-                httpx2.AsyncClient(headers=headers) as http,
+                httpx2.AsyncClient(headers=headers, timeout=HTTP_WAIT) as http,
                 Client(streamable_http_client(served.url, http_client=http)) as board,
             ):
                 return {tool.name for tool in (await board.list_tools()).tools}

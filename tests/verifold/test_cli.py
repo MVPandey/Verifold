@@ -17,7 +17,7 @@ from typing import override
 import httpx2
 import psutil
 import pytest
-from builders import IGNORES_SIGTERM, SLEEP, alive, lab, until
+from builders import HTTP_WAIT, IGNORES_SIGTERM, SLEEP, alive, lab, until
 from fakes import FAKE_HARNESS
 
 from verifold import DISTRIBUTION
@@ -827,7 +827,9 @@ def test_a_record_that_another_program_replaces_stops_the_lab_with_one_line_and_
         saved = path.with_name('saved')
         saved.write_bytes(seen['written'].splitlines(keepends=True)[0])
         saved.replace(path)
-        async with httpx2.AsyncClient(base_url=f'{base}/api', headers={'Authorization': f'Bearer {token}'}) as app:
+        async with httpx2.AsyncClient(
+            base_url=f'{base}/api', headers={'Authorization': f'Bearer {token}'}, timeout=HTTP_WAIT
+        ) as app:
             failed = await app.post('/posts', json={'kind': 'message', 'text': 'Still there?', 'thread': 't-1'})
         seen['answer'] = failed.content
 
