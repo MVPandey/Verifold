@@ -465,6 +465,34 @@ details[open] > summary .opened {
   font-size: 12.5px;
   color: var(--muted);
 }
+.f-members .f-pace {
+  margin-top: 3px;
+  font-size: 12.5px;
+  line-height: 1.3;
+  color: var(--ink2);
+  overflow-wrap: anywhere;
+}
+.f-members .f-pace.near {
+  color: var(--turn);
+  font-weight: 600;
+}
+.i-why {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.i-pace {
+  margin-top: 10px;
+}
+.i-pace .budget {
+  margin-top: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  .f-members .f-pace.near {
+    color: var(--hl);
+  }
+}
 .f-each {
   margin-top: 6px;
   font-size: 13px;

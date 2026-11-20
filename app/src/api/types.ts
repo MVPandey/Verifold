@@ -149,9 +149,10 @@ export interface Agent {
  * What an agent in the state `waiting` waits for. `person`: its harness waits for the person's answer inside a
  * turn that runs. `time`: the lab is out of time. `limit`: the lab reached its budget or its disk limit.
  * `process`: the agent ended its turn and waits for a process that it left running. `retry`: its harness failed,
- * and Verifold starts it again at the time in `retry`.
+ * and Verifold starts it again at the time in `retry`. `pace`: a pause or a limit of tokens per hour holds its
+ * next turn.
  */
-export type WaitsFor = 'person' | 'time' | 'limit' | 'process' | 'retry';
+export type WaitsFor = 'person' | 'time' | 'limit' | 'process' | 'retry' | 'pace';
 
 /** A harness that failed and that Verifold starts again. */
 export interface Retry {
@@ -315,6 +316,54 @@ export interface AgentView {
   readonly cost_usd: number | null;
   /** Why the agent's latest turn, or the latest start of its harness, failed, or `null`. */
   readonly error: string | null;
+  /**
+   * The usage limits of the provider behind the seat, as its harness reported them last, without a window whose
+   * reset time passed. `null` when its harness reported none.
+   */
+  readonly limits: SeatLimits | null;
+  /** The pause of the seat while one stands. Only a post of the person for it starts its next turn then. */
+  readonly pause: PauseLine | null;
+  /** The lowest limit of tokens per hour that holds the seat, with this hour's tokens. The lab's limit is apart. */
+  readonly cap: CapLine | null;
+}
+
+/** The status of a provider's usage limit: it takes the seat's requests, it warns that a limit is near, or it refuses them. */
+export type LimitStatus = 'allowed' | 'warning' | 'reached';
+
+/** One window of a provider's usage limit: how much of it the seat's account used, and when it starts again. */
+export interface LimitWindow {
+  /** The window in the words that the person reads after "of the", such as "5-hour" or "weekly". */
+  readonly label: string;
+  readonly used_percent: number;
+  readonly resets_at: string | null;
+}
+
+/** The usage limits of the provider behind a seat, as its harness reported them last. */
+export interface SeatLimits {
+  readonly windows: readonly LimitWindow[];
+  readonly status: LimitStatus | null;
+}
+
+/** A pause of a seat that stands. The server leaves out each part that holds nothing. */
+export interface PauseLine {
+  /** `person`, or the coordinator under the person's power for pace. */
+  readonly by: string;
+  readonly since: string;
+  /** When the pause ends. Absent while it lasts until somebody resumes the seat. */
+  readonly until?: string | null;
+  readonly why?: string;
+}
+
+/** The limit of tokens for one hour of the clock that holds a seat or the lab, and what this hour spent of it. */
+export interface CapLine {
+  readonly tokens_per_hour: number;
+  /** The tokens of the turns that ended in this hour. Absent for none. */
+  readonly spent?: number;
+  readonly hour_ends: string;
+  readonly by: string;
+  readonly why?: string;
+  /** Whether the limit is the person's setting for the coordinator's seat. Absent when it is not. */
+  readonly share?: boolean;
 }
 
 /** One version of the lab's question: the text that the lab opened with, or a revision by the person. */
@@ -467,6 +516,8 @@ export interface LabView {
   readonly limit: Limit | null;
   /** What the lab's files take on disk, as Verifold measured them last. `null` before the first measure. */
   readonly disk: DiskUse | null;
+  /** The lab's limit of tokens per hour, with this hour's tokens of every seat, or `null` while none stands. */
+  readonly lab_cap: CapLine | null;
   /** Whether the lab's agents say that it is done. A closed lab is not stopped. */
   readonly state: 'open' | 'closing' | 'closed';
   /** The post that says that the lab is done, while it stands. */
@@ -642,6 +693,11 @@ export interface DiskSettings {
   readonly limit_gb: number;
 }
 
+export interface PaceSettings {
+  /** The most tokens that the coordinator's seat may spend in one hour of the clock. Zero means no limit. */
+  readonly coordinator_tokens_per_hour: number;
+}
+
 export interface Settings {
   readonly version: number;
   readonly jobs: JobSettings;
@@ -652,6 +708,8 @@ export interface Settings {
   /** Absent from a server from before tasks. */
   readonly tasks?: TaskSettings;
   readonly disk: DiskSettings;
+  /** Absent from a server from before pace. */
+  readonly pace?: PaceSettings;
 }
 
 /** Where a setting lives: in one project's file, which wins, or in the file for all projects. */
@@ -686,6 +744,7 @@ export type SettingKey =
   | 'reruns.lease_minutes'
   | 'tasks.lease_minutes'
   | 'disk.limit_gb'
+  | 'pace.coordinator_tokens_per_hour'
   | 'setup';
 
 /**
@@ -874,7 +933,7 @@ export interface Thread {
 }
 
 /** A kind of move that the person can hand to the lab's coordinator. Each one is off until the person switches it on. */
-export type Power = 'time' | 'permissions' | 'agents' | 'settings' | 'question';
+export type Power = 'time' | 'permissions' | 'agents' | 'settings' | 'question' | 'pace';
 
 /** A move that only the person makes, and that the lab's coordinator can ask the person for. */
 export type Move =
@@ -888,7 +947,27 @@ export type Move =
       readonly key: 'jobs.at_time_limit' | 'jobs.at_exit';
       readonly value: string;
     }
-  | { readonly type: 'question'; readonly question: string; readonly note: string };
+  | { readonly type: 'question'; readonly question: string; readonly note: string }
+  | PaceMove;
+
+/**
+ * A move of pace: a pause of a seat until `until`, or with `null` until a resume; the end of a pause; or a limit of
+ * tokens for one hour, for one seat with `agent` or for the whole lab without it. `null` tokens take a limit back.
+ */
+export type PaceMove =
+  | {
+      readonly type: 'pause';
+      readonly agent: string;
+      readonly until?: string | null;
+      readonly why?: string;
+    }
+  | { readonly type: 'resume'; readonly agent: string; readonly why?: string }
+  | {
+      readonly type: 'cap';
+      readonly agent?: string | null;
+      readonly tokens_per_hour?: number | null;
+      readonly why?: string;
+    };
 
 /**
  * The seat of the one agent that a move adds. It holds nothing else: no model family, no mode, no coordinator

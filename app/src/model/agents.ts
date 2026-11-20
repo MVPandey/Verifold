@@ -122,6 +122,12 @@ export function stateLine(activity: AgentActivity, now: Date): StateLine {
       if (activity.waits_for === 'retry' && activity.retry) {
         return { text: retryLine(activity.retry, now), dot: 'stop' };
       }
+      if (activity.waits_for === 'pace') {
+        return {
+          text: activity.detail || 'Its pause or its limit holds its next turn.',
+          dot: 'idle',
+        };
+      }
       if (activity.waits_for === 'process') {
         return {
           text: activity.detail || 'Waits for a process that it left running.',

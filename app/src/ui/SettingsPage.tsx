@@ -10,7 +10,9 @@ import type {
   SettingsLevel,
   SettingsView,
 } from '../api/types.ts';
+import { tokens } from '../model/format.ts';
 import { DEFAULT_DISK_GB, MAX_DISK_GB } from '../model/limits.ts';
+import { DEFAULT_COORDINATOR_TOKENS, MAX_TOKENS_PER_HOUR } from '../model/pace.ts';
 import { defaultsLine } from '../model/setup.ts';
 import {
   AT_EXIT,
@@ -198,6 +200,10 @@ export function SettingsForm(props: {
         { field: LEASE, current: file.settings.reruns.lease_minutes },
         { field: TASK_LEASE, current: file.settings.tasks?.lease_minutes ?? DEFAULT_TASK_MINUTES },
         { field: DISK, current: file.settings.disk.limit_gb },
+        {
+          field: SHARE,
+          current: file.settings.pace?.coordinator_tokens_per_hour ?? DEFAULT_COORDINATOR_TOKENS,
+        },
       ].map(({ field, current }) => (
         <NumberSetting
           // The field starts again from the file after each save.
@@ -230,7 +236,8 @@ interface NumberField {
     | 'votes.reveal_minutes'
     | 'reruns.lease_minutes'
     | 'tasks.lease_minutes'
-    | 'disk.limit_gb';
+    | 'disk.limit_gb'
+    | 'pace.coordinator_tokens_per_hour';
   readonly title: string;
   readonly detail: string;
   readonly label: string;
@@ -305,6 +312,20 @@ const DISK: NumberField = {
     return limit === 0 ? 'no disk limit' : `${limit} GB`;
   },
   run: 'takes only a lower limit from this project’s file.',
+};
+
+const SHARE: NumberField = {
+  key: 'pace.coordinator_tokens_per_hour',
+  title: 'Tokens per hour for the coordinator',
+  detail: `The most tokens that the coordinator’s turns may spend in one hour of the clock, input and output together. At this number, the coordinator’s next turn waits for the next hour. The limit holds whichever agent has the coordinator seat. Leave the field empty, and the limit is ${tokens(DEFAULT_COORDINATOR_TOKENS)} tokens. With 0, the coordinator has no such limit.`,
+  label: 'Tokens',
+  max: MAX_TOKENS_PER_HOUR,
+  empty: `${tokens(DEFAULT_COORDINATOR_TOKENS)} tokens`,
+  words: (count) => {
+    const limit = count ?? DEFAULT_COORDINATOR_TOKENS;
+    return limit === 0 ? 'no limit' : `${tokens(limit)} tokens per hour`;
+  },
+  run: 'takes only a lower number from this project’s file.',
 };
 
 /**

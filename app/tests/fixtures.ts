@@ -129,6 +129,9 @@ export function agentView(id: string, changes: Partial<AgentView> = {}): AgentVi
     usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 },
     cost_usd: null,
     error: null,
+    limits: null,
+    pause: null,
+    cap: null,
     ...changes,
   };
 }
@@ -248,6 +251,7 @@ export function labView(changes: Partial<LabView> = {}): LabView {
     },
     limit: null,
     disk: null,
+    lab_cap: null,
     state: 'open',
     close: null,
     close_agreed: 0,
@@ -260,6 +264,7 @@ export function labView(changes: Partial<LabView> = {}): LabView {
       votes: { reveal_minutes: 10 },
       reruns: { lease_minutes: 10 },
       disk: { limit_gb: 100 },
+      pace: { coordinator_tokens_per_hour: 10_000_000 },
     },
     deliverables: [],
     removed_deliverables: [],
