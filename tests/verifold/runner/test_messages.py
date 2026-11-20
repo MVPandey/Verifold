@@ -5,12 +5,13 @@ from builders import START, RecordBuilder, lab
 
 from verifold.app import NORMS_TEMPLATE
 from verifold.protocol.events import BudgetSet, LimitReached, TurnEnded
-from verifold.protocol.posts import FileEvidence, Message, Result
+from verifold.protocol.posts import FileEvidence, Message, Reading, Result, RuledOut
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.protocol.usage import Usage
 from verifold.runner.messages import (
     DOORBELL,
+    FRESH,
     ON_CALL,
     RESTARTED,
     back_message,
@@ -163,7 +164,7 @@ def test_the_lab_norms_are_plain_text_for_one_read_and_the_doorbell_is_one_line(
     assert '`' not in NORMS_TEMPLATE
     # Each norm has its reason and what it looks like in practice, so the file is longer than a list of rules.
     # An agent still reads it whole at the start of its work.
-    assert len(NORMS_TEMPLATE) < 26_500
+    assert len(NORMS_TEMPLATE) < 27_500
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -178,7 +179,8 @@ def test_the_lab_norms_are_sections_that_each_say_what_the_person_wants_and_why(
         'Chain ideas',
         'Handing out work',
         'Rounds',
-        'Strategy and the seats',
+        'The coordinator',
+        'Other seats',
         'Votes and badges',
         'Evidence',
         'Helpers',
@@ -300,11 +302,8 @@ def test_the_lab_norms_hold_the_goal_the_obstacle_the_seats_and_the_name() -> No
         'Take a seat only when checking is the work you want, and give it back when you would rather build.',
         'Ask for one of your own result when a candidate rests on it.',
         'An agent in a reviewer seat can ask for one of any result.',
-        "When the lab has a coordinator, it owns the lab's strategy",
-        'The coordinator can ask one agent to take the strategy',
-        'It wakes a quiet lab with a post for the whole lab.',
-        'Each agent still chooses its own work, and says why when it chooses differently.',
-        'When no agent holds the coordinator seat and it is open, an agent that wants this work can take it.',
+        'The agents choose the ideas. The coordinator steers the mix and the pace.',
+        'While the seat is free and open, an agent that wants this work can take it.',
         'An agent on call works only when it is asked.',
         'Choose a name, a picture, and an about line of one or two sentences that says the lens you bring',
         'It is a way to work, not a character to play.',
@@ -400,11 +399,8 @@ def test_the_lab_norms_tell_reproducing_a_result_from_challenging_it_and_name_a_
         'Before a candidate goes to a close, the results that it rests on should have been challenged.',
     ):
         assert norm in evidence
-    # The review of the reading is in the section on strategy, so the section on rounds points to it.
-    assert (
-        'The coordinator opens one at each review of the reading, as the section on strategy and the seats says'
-        in rounds
-    )
+    # The review of the reading is in the section on the coordinator, so the section on rounds points to it.
+    assert 'The coordinator opens one at each review of the reading, as the section on the coordinator says' in rounds
     assert 'a round that asks which line each agent would drop, and why, are examples.' in rounds
     assert 'about every hour' not in NORMS_TEMPLATE
 
@@ -412,11 +408,11 @@ def test_the_lab_norms_tell_reproducing_a_result_from_challenging_it_and_name_a_
 def test_the_lab_norms_say_how_the_person_follows_the_lab_how_a_post_reads_and_how_many_reruns_are_enough() -> None:
     for norm in (
         # A real lab's coordinator answered the person after 41 seconds at the median, and once after 12 minutes.
-        "brings the person's steer to the board. When the person writes to it, it answers in a sentence or two before other work, and follows up when it has more.",
+        'When the person or the desk writes to it, it answers in a sentence or two before other work.',
         # The coordinator read "Status update?" 34 seconds after it came and never replied in a turn of 112 minutes.
-        'The board shows it a message of the person that still waits for its reply.',
-        # An agent has one alarm, and in a busy lab an alarm for a quiet board never rings, so no report came of it.
-        'It keeps an alarm of about half an hour, so that it notices when the lab stopped with time left and when its report is old.',
+        'The board shows it a message that still waits for its reply.',
+        # An agent has one alarm, and in a busy lab an alarm for a quiet board never rings, so it sets conditions.
+        'It works in short turns and sleeps on its alarms, because its seat has a limit of tokens per hour.',
         # The person asked five times where the lab stood, and no agent posted a report.
         'the work goes on from the best one.\n\nThe person follows the lab through its report.',
         'A report says in plain words where the lab stands: which lines are alive, which closed and why, what looks promising, and what the lab needs from the person.',
@@ -463,9 +459,8 @@ def test_the_lab_norms_say_when_the_coordinator_posts_the_reading_reviews_it_and
         # Rounds of five minutes got 4 entries of 11 from agents in long turns, and rounds of 15 minutes got 9.
         'When agents are in long turns, the round stays open for 10 to 15 minutes, so that most of them can enter.',
         # A coordinator in one turn of 112 minutes left the person's "Status update?" without a reply for 52 minutes.
-        'The coordinator runs no line of work of its own.',
-        'Its work is to answer the person, to assign, and to review',
-        'When it sees a line that nobody runs, it posts a call for it.',
+        'So the coordinator runs no line of work of its own.',
+        'Work that nobody does goes out as a task with a brief, and a line that nobody runs gets a call.',
     ):
         assert norm in NORMS_TEMPLATE
 
@@ -633,3 +628,47 @@ def test_the_norm_on_handing_out_work_says_what_the_person_wants_and_that_an_inv
         'give it up with a ruled-out lead that says why',
     ):
         assert norm in work
+
+
+def test_the_coordinator_section_says_what_the_person_wants_from_the_seat_why_and_what_it_does_in_practice() -> None:
+    section = NORMS_TEMPLATE.split('## The coordinator')[1].split('\n## ')[0]
+
+    for norm in (
+        # What the person wants from the seat.
+        (
+            'a mix of new directions and deeper work that fits the question and the time left, and a spend that stays '
+            'sensible for what the lab learns.'
+        ),
+        # Why: a coordinator with its own line made no move with its powers, and leaders that set the ideas cost a
+        # group its variety.
+        'A coordinator with a line of its own stops looking',
+        'A coordinator that picks the ideas makes the group think alike',
+        # In practice: it sleeps on its alarms, steers by the facts, and says why in the log of moves.
+        'It sets alarms on the conditions that matter here',
+        'When it wakes, it reads the steering facts in its brief, makes its move, and sleeps again.',
+        'it opens a round for the directions that the lab has not tried, and the agents choose.',
+        "Within the person's grant of spare seats, it adds a seat when the lab lacks a view",
+        'It can pause a seat, and only the person removes one.',
+        'it pauses seats whose work waits or lowers a limit of tokens per hour.',
+        'Each move has one line of why, which the person and every agent read in the log of moves.',
+        'and judges no agent. An agent that thinks a move is wrong objects to it',
+    ):
+        assert norm in section
+    # A spec, not a list of one-line rules: the section's paragraphs give reasons.
+    assert section.count('\n\n') >= 8
+
+
+def test_the_start_message_of_a_seat_with_a_fresh_view_holds_the_reading_and_what_was_ruled_out() -> None:
+    record = lab().post(Reading(id='p-1', thread='t-1', author='ada', text='An answer is a sort that holds.'))
+    record.post(RuledOut(id='p-2', thread='t-1', author='bo', text='A heap sort loses on the long tail.'))
+    record.join('dee', fresh=True).join('eve')
+    board = record.board()
+    fresh, plain = (board.agent(agent_id) for agent_id in ('dee', 'eve'))
+    assert fresh is not None
+    assert plain is not None
+
+    text = start_message(board, fresh.agent, Path('/lab/.verifold/LAB.md'))
+    assert FRESH in text
+    assert "Post p-1 holds the lab's reading of the question: An answer is a sort that holds." in text
+    assert '1 lead was ruled out:\n- p-2: A heap sort loses on the long tail.' in text
+    assert FRESH not in start_message(board, plain.agent, Path('/lab/.verifold/LAB.md'))
