@@ -479,7 +479,8 @@ class Refusals:
         that another program changed ends the server, so that error goes on to it.
         """
         for stale, why in self._stale:
-            await _end(self._lab, stale, why)
+            # A request that still waited when Verifold stopped ended before the person could answer it.
+            await _end(self._lab, stale, why, missed=why is _RESTARTED)
         while True:
             board = self._lab.board
             try:
@@ -748,12 +749,17 @@ async def _ask(
     return (await member.lab.post(request, member.agent_id, mark=shown)).post.id
 
 
-async def _end(lab: Lab, asked: Ask, why: str) -> None:
-    """Record that a request ended, so its ask waits for nobody and says why."""
+async def _end(lab: Lab, asked: Ask, why: str, *, missed: bool = False) -> None:
+    """
+    Record that a request ended, so its ask waits for nobody and says why.
+
+    With `missed`, the request ended before the person could answer it, and the app shows the ask among the ones that
+    the person missed.
+    """
     request = PostRequest(kind='answer', text=why, thread=asked.thread, reply_to=asked.id)
     # The board takes no post from an agent that left. Its asks wait for nobody already.
     with suppress(RejectedEvent):
-        await lab.post(request, asked.author, mark='ends_request')
+        await lab.post(request, asked.author, mark='missed' if missed else 'ends_request')
 
 
 def _thread_title(member: Member, about: str) -> str:
@@ -794,7 +800,7 @@ async def _answer(member: Member, ask_id: PostId, over: asyncio.Event | None) ->
             return waiting.result()
         asked = lab.board.post(ask_id)
         if asked and isinstance(asked.post, Ask):
-            await _end(lab, asked.post, _TURN_ENDED)
+            await _end(lab, asked.post, _TURN_ENDED, missed=True)
         return None
     finally:
         waiting.cancel()

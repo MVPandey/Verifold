@@ -6,12 +6,14 @@ agent. `Need` in the app protocol says what each status means.
 """
 
 from collections.abc import Iterable
+from datetime import datetime
 from typing import Literal
 
-from verifold.protocol.app import NEEDS, AgentActivity, Need, Outcomes, PostRef, ProfileEdit, Wait
+from verifold.protocol.app import NEEDS, AgentActivity, Missed, Need, Outcomes, PostRef, ProfileEdit, Wait
 from verifold.protocol.events import Posted, ProfileSet
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.posts import (
+    Action,
     Answer,
     Ask,
     Check,
@@ -27,12 +29,14 @@ from verifold.protocol.posts import (
 from verifold.society.board import Board
 from verifold.society.lines import lines_of, withdraws
 from verifold.society.standing import is_answered, standing
-from verifold.society.views import needs_person, team
+from verifold.society.views import missed_posts, needs_person, team
 
 APPROVAL_COMMAND = 'Asks to run a command'
 APPROVAL_OTHER = 'Asks for a permission of its harness'
 HARNESS_QUESTION = 'Its harness asks you a question'
 """Verifold's own words for a request of a harness, so that no text of a harness stands among the waits."""
+ACTION = 'Asks you to allow an action'
+"""Verifold's own words for an action that waits for the person."""
 
 STEPS: dict[str, str] = {
     'read': 'Reads files',
@@ -52,21 +56,53 @@ of another kind has no words, and the app says that the agent works.
 """
 
 
-def waits(board: Board) -> tuple[Wait, ...]:
-    """Return what waits for the person: the approvals first, then the answers, each group oldest first."""
+def waits(board: Board, now: datetime | None = None) -> tuple[Wait, ...]:
+    """Return what waits for the person at `now`: the approvals first, then the answers, each group oldest first."""
     found = tuple(
         Wait(
-            kind='approval' if isinstance(view.post, MoveRequest) or view.post.request == 'permission' else 'answer',
+            kind='answer' if isinstance(view.post, Ask) and view.post.request != 'permission' else 'approval',
             agent=view.post.author,
             what=_what(view.post),
             since=view.at,
             post=view.post.id,
             thread=view.post.thread,
         )
-        for view in needs_person(board)
-        if isinstance(view.post, Ask | MoveRequest)
+        for view in needs_person(board, now)
+        if isinstance(view.post, Ask | MoveRequest | Action)
     )
     return tuple(sorted(found, key=lambda wait: wait.kind != 'approval'))
+
+
+def missed(board: Board, now: datetime | None = None) -> tuple[Missed, ...]:
+    """Return the asks and actions for the person that stopped waiting before an answer, the newest first."""
+    found = (
+        Missed(
+            kind='approval' if isinstance(entry.post, Action) or entry.post.request == 'permission' else 'answer',
+            agent=entry.post.author,
+            what=_what(entry.post),
+            since=entry.at,
+            post=entry.post.id,
+            thread=entry.post.thread,
+            ended_at=_ended_at(board, entry),
+        )
+        for entry in missed_posts(board, now)
+        if isinstance(entry.post, Ask | Action)
+    )
+    return tuple(reversed(tuple(found)))
+
+
+def _ended_at(board: Board, entry: Posted) -> datetime:
+    # When the ask or the action stopped waiting: its end time, its offer's end, or Verifold's end of the request.
+    post = entry.post
+    if isinstance(post, Action):
+        left = board.gone(post.author)
+        return min(post.offer_ends, left.at) if left else post.offer_ends
+    ended = next(
+        (reply.at for reply in board.replies(post.id) if isinstance(reply.post, Answer) and reply.post.missed), None
+    )
+    if ended:
+        return ended
+    return post.ends_at if isinstance(post, Ask) and post.ends_at else entry.at
 
 
 MOVES: dict[str, str] = {
@@ -83,9 +119,11 @@ MOVES: dict[str, str] = {
 """Verifold's own words for each kind of move that the coordinator asks the person for."""
 
 
-def _what(ask: Ask | MoveRequest) -> str:
+def _what(ask: Ask | MoveRequest | Action) -> str:
     if isinstance(ask, MoveRequest):
         return MOVES[ask.move.type]
+    if isinstance(ask, Action):
+        return ACTION
     if ask.request == 'permission':
         command = ask.shown is not None and ask.shown.type == 'permission' and ask.shown.command is not None
         return APPROVAL_COMMAND if command else APPROVAL_OTHER

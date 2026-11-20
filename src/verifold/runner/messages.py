@@ -14,8 +14,9 @@ from pathlib import Path
 
 from verifold.protocol.agents import Agent
 from verifold.protocol.events import AlarmSet, Halt, Limit
-from verifold.protocol.ids import PERSON
+from verifold.protocol.ids import PERSON, AgentId
 from verifold.protocol.settings import AtTimeLimit
+from verifold.society.allowances import in_force
 from verifold.society.board import Board
 from verifold.society.budget import LIMIT_NAMES, budget_line
 from verifold.society.deliverables import stated
@@ -84,8 +85,8 @@ DESK = (
     'or its disk limit, or closed, and no other post on the board does. Your turns count toward what the lab '
     "spent. The desk is no part of the lab's work: the board takes no plan, result, check, proposal, close, vote, "
     'or badge from it, and it counts for no round and no close. The tools `overview`, `read_file`, `reply`, `say`, '
-    "`open_round`, `revise_question`, `deliverable`, `set_time`, `set_budget`, and `interrupt` are the desk's "
-    "alone, and their descriptions say what each one does. Each action names in `on` the person's post in the "
+    '`open_round`, `revise_question`, `deliverable`, `set_time`, `set_budget`, `interrupt`, and `draft_allowance` '
+    "are the desk's alone, and their descriptions say what each one does. Each action names in `on` the person's post in the "
     'desk chat that it rests on, from the last 60 minutes.'
 )
 """What the start message says to the desk."""
@@ -177,6 +178,26 @@ STARTED_AGAIN = 'The person started you again. Your harness had failed too often
 
 HARNESS_FAILED = 'Your harness failed, and Verifold started it again.'
 """How that message opens when a harness that failed comes back without its conversation."""
+
+MODE_CHANGED = 'The person changed the mode of your seat to {mode}, so Verifold started your harness again in it.'
+"""How that message opens when the person changed the seat's harness mode in the lab that runs."""
+
+
+def stop_lifted(board: Board, agent_id: AgentId, at: datetime) -> str:
+    """
+    Return what an acting seat gets when the board's stop at the total of its allowance no longer holds it.
+
+    The board held its turns while the actions of its allowance cost more than the total. Only the person lifts the
+    stop: they ended that allowance, or they started another one for the seat.
+    """
+    held = in_force(board, agent_id, at)
+    lifted = (
+        f'The person started the allowance {held.allowance} for you: up to {held.terms.per_action} '
+        f'{held.terms.unit} an action and {held.terms.total} {held.terms.unit} in all, until {_utc(held.terms.ends_at)}.'
+        if held
+        else 'The person ended your allowance, so you hold none in force.'
+    )
+    return f'Verifold held your turns while the actions of your allowance cost more than its total. {lifted}'
 
 
 def back_message(  # noqa: PLR0913

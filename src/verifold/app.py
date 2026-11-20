@@ -19,6 +19,7 @@ from pydantic import Field, JsonValue
 
 from verifold.harnesses.catalog import CATALOG, NPX_PROJECT, HarnessEntry, available, catalog_with
 from verifold.protocol.agents import GUEST, MAX_AGENTS, UNKNOWN_FAMILY, Agent, AgentChoice, ModelSpec
+from verifold.protocol.allowances import AllowanceTerms
 from verifold.protocol.app import (
     NORMS_NAMES,
     NORMS_POST_SECONDS,
@@ -604,8 +605,23 @@ class Host:
         await lab.state_deliverables(request.deliverables)
         self._lab = lab
         chosen = [choice for choice in request.agents for _ in range(choice.count)]
-        for number, choice in enumerate(chosen, start=1):
+        joined = [
             await self._join(lab, number, choice, auto_mode=request.auto_mode)
+            for number, choice in enumerate(chosen, start=1)
+        ]
+        if wanted := request.allowance:
+            # The person's own command line gives the allowance, so the person drafts it and starts it at once.
+            holder = next(agent.id for agent, choice in zip(joined, chosen, strict=True) if choice.acting)
+            terms = AllowanceTerms(
+                holder=holder,
+                purpose=wanted.purpose,
+                unit=wanted.unit,
+                per_action=wanted.per_action,
+                total=wanted.total,
+                ends_at=lab.now() + timedelta(minutes=wanted.minutes),
+                check_above=wanted.check_above,
+            )
+            await lab.start_allowance((await lab.draft_allowance(terms)).allowance)
         await self._launch()
 
     async def _join(  # noqa: PLR0913
@@ -640,6 +656,7 @@ class Host:
             first=first,
             given=given,
             desk=choice.desk,
+            acting=choice.acting,
         )
         return agent
 
@@ -886,9 +903,10 @@ class Host:
 
     async def change_seat(self, agent_id: AgentId, change: SeatChange) -> None:
         """
-        Change an agent's seat as the person says: on call or not, the coordinator seat, and a reviewer seat.
+        Change an agent's seat as the person says: its seats, its mark of an acting seat, and its harness mode.
 
-        An on-call agent that never worked starts when its seat comes off call.
+        The person puts it on call or not, and gives or takes the coordinator seat and a reviewer seat. An on-call agent that never worked starts when its seat comes off call. A seat with a new mode starts its
+        session again in that mode before its next turn.
 
         Raises:
             NoLab: The folder has no lab.
@@ -907,6 +925,10 @@ class Host:
             await lab.set_coordinator(None, PERSON)
         if change.reviewer is not None:
             await lab.set_reviewer(agent_id, PERSON, reviewer=change.reviewer)
+        if change.acting is not None:
+            await lab.set_acting(agent_id, acting=change.acting)
+        if change.mode is not None:
+            await lab.set_mode(agent_id, change.mode)
 
     async def invite(self, request: InviteRequest | None = None) -> Invitation:
         """
@@ -928,6 +950,11 @@ class Host:
             raise SetupRejected(
                 'An invited agent runs by itself, so Verifold cannot start its turn when you write to it. The desk is '
                 'a seat that Verifold starts: add it with the form that adds an agent.'
+            )
+        if request.acting:
+            raise SetupRejected(
+                'An invited agent runs by itself, so Verifold cannot stop its turns at the limit of an allowance. An '
+                'acting seat is a seat that Verifold starts: add it with the form that adds an agent.'
             )
         name = request.name
         # One at a time, with the adds, so that two requests cannot pass the limit or take the same number.
@@ -1059,7 +1086,12 @@ class Host:
             folder=folder,
             log=self._project / LAB_FOLDER / 'logs' / f'{agent.id}.log',
             token=self._members.add(member),
-            options=_options(agent, self._catalog[agent.harness], auto_mode=lab.board.opened.auto_mode),
+            options=_options(
+                agent,
+                self._catalog[agent.harness],
+                auto_mode=lab.board.opened.auto_mode,
+                mode=lab.board.mode_of(agent.id),
+            ),
             start=start,
         )
         return member, setup
@@ -1318,15 +1350,16 @@ def _names(board: Board) -> tuple[str, ...]:
     return tuple(name for _, name in board.names())
 
 
-def _options(agent: Agent, harness: HarnessEntry, *, auto_mode: bool) -> SessionOptions:
+def _options(agent: Agent, harness: HarnessEntry, *, auto_mode: bool, mode: str | None = None) -> SessionOptions:
     """
     Return what Verifold sets in the agent's harness session.
 
-    The person's own mode for the agent wins. In a lab in auto mode, the agent runs in the auto mode that its
-    record holds. A record from before Verifold kept it goes on with the auto mode that Verifold set then.
+    The person's own mode for the agent wins: `mode`, which the person set in the lab that runs, or else the mode
+    that the agent joined with. In a lab in auto mode, the agent runs in the auto mode that its record holds. A record
+    from before Verifold kept it goes on with the auto mode that Verifold set then.
     """
     kept = agent.auto_mode or harness.auto_mode_before
-    mode = agent.mode or (kept if auto_mode else None)
+    mode = mode or agent.mode or (kept if auto_mode else None)
     return SessionOptions(model=agent.model.name, effort=agent.model.effort, mode=mode, auto_mode=auto_mode)
 
 

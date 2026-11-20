@@ -43,6 +43,11 @@ def desk_actions(board: Board) -> tuple[DeskAction, ...]:
             (entry.seq, DeskAction(on=entry.on, at=entry.at, kind='interrupt', agent=entry.agent))
             for entry in board.interrupts
         ),
+        *(
+            (entry.seq, DeskAction(on=on, at=entry.at, kind='allowance', allowance=entry.allowance))
+            for entry in board.drafts
+            if (on := entry.on)
+        ),
     )
     return tuple(action for _, action in sorted(actions, key=lambda pair: pair[0]))
 

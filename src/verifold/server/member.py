@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from verifold.protocol.agents import GUEST, Picture
+from verifold.protocol.allowances import AllowanceTerms
 from verifold.protocol.app import Heard
 from verifold.protocol.events import AgentLeft, AlarmSet, NotesSet, Posted, RerunRequested, RerunTaken, WatchSet
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
@@ -15,6 +16,8 @@ from verifold.protocol.join import (
     MAX_DESK_FILE,
     MAX_MANIFEST,
     MAX_NEWS,
+    ActRequest,
+    ActResult,
     Brief,
     ClaimResult,
     DeskFile,
@@ -34,7 +37,7 @@ from verifold.protocol.join import (
     holds_whole,
 )
 from verifold.protocol.moves import AddMove, AddSeat, Move
-from verifold.protocol.posts import FileEvidence, Task
+from verifold.protocol.posts import Action, FileEvidence, Task
 from verifold.protocol.votes import Badge, BadgeAction, Direction
 from verifold.server.errors import (
     CannotWake,
@@ -46,6 +49,7 @@ from verifold.server.errors import (
     UnknownAgent,
 )
 from verifold.server.lab import Adds, Lab, Said
+from verifold.society.allowances import allowance_line
 from verifold.society.attention import news, update, wakes
 from verifold.society.budget import LIMIT_NAMES
 from verifold.society.deliverables import live
@@ -248,6 +252,45 @@ class Member:
         seen = sum(self._seen >= told.seq for revision in board.revisions if (told := board.post(revision.post)))
         posted = await self._lab.post(request, self.agent_id, evidence, seen, take=taken.seq if taken else None)
         return post_view(self._lab.board, posted, self.agent_id, self._lab.now())
+
+    async def act(self, request: ActRequest) -> ActResult:
+        """
+        Declare an action of the agent's acting seat before the agent does it, and return the board's answer.
+
+        The board answers at once: inside the seat's allowance, the action is allowed and its cost is drawn from it.
+        Otherwise it waits for the person until its offer ends.
+
+        Raises:
+            RejectedEvent: The seat is no acting seat, actions are paused, or the board takes no such action, as
+                `society.allowances.check_action_post` says.
+            EvidenceRejected: The action names files, and this member cannot pin them or they are not in the folder.
+            OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
+
+        """
+        self._check_in_time()
+        if not self._lab.board.acting(self.agent_id):
+            # Refused before the folder gets a commit.
+            raise RejectedEvent(
+                f'{self.agent_id} is not an acting seat. The board takes an action only from a seat that the person '
+                'made an acting seat.'
+            )
+        evidence: tuple[FileEvidence, ...] = ()
+        if request.files:
+            if self._pin is None:
+                raise EvidenceRejected('This lab cannot pin files for you.')
+            evidence = await self._pin(request.files)
+        posted = await self._lab.act(self.agent_id, request, evidence)
+        action = posted.post
+        if not isinstance(action, Action):
+            raise RejectedEvent(f'Post {action.id} is no action.')
+        return ActResult(
+            action=action.id,
+            thread=action.thread,
+            allowed=action.allowed,
+            needs=action.needs,
+            offer_ends=action.offer_ends,
+            allowance=allowance_line(self._lab.board, self.agent_id, posted.at),
+        )
 
     async def offer(
         self, deliverable_id: DeliverableId, files: tuple[str, ...], note: str, body: str = '', helper: str = ''
@@ -906,6 +949,26 @@ class Member:
             return 'The lab has this budget already, so the board recorded nothing.'
         kinds = [*((f'{tokens:,} tokens',) if tokens else ()), *((f'{dollars:g} dollars',) if dollars else ())]
         return f'The board set the budget of the lab to {" and ".join(kinds)}.'
+
+    async def draft_allowance(self, on: PostId, terms: AllowanceTerms) -> str:
+        """
+        Draft an allowance for the person, and return what the board recorded, as one sentence.
+
+        The draft allows nothing. It starts only when the person confirms it in the app, and no tool of an agent can
+        start it.
+
+        Raises:
+            DeskOnly: The agent does not hold the desk seat.
+            RejectedEvent: `on` is no post of the person in the desk chat from the last hour, or the draft breaks a
+                rule of `society.allowances.check_draft`.
+
+        """
+        said = self._said(on)
+        drafted = await self._lab.draft_allowance(terms, on=said)
+        return (
+            f'The board recorded the draft {drafted.allowance} of an allowance for {terms.holder}. It allows nothing '
+            'until the person confirms it in the app.'
+        )
 
     async def interrupt(self, on: PostId, agent_id: AgentId) -> str:
         """

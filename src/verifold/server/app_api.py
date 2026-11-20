@@ -19,7 +19,10 @@ from pydantic import SecretStr, ValidationError
 from sse_starlette import EventSourceResponse
 
 from verifold.protocol.agents import AgentChoice
+from verifold.protocol.allowances import AllowanceId
 from verifold.protocol.app import (
+    ActionAnswer,
+    ActionsPause,
     AgentView,
     BadgeRequest,
     BudgetRequest,
@@ -66,13 +69,14 @@ from verifold.protocol.join import CandidatesView, FileText, PostRequest, PostVi
 from verifold.protocol.moves import AddSeat, PaceMove
 from verifold.protocol.settings import DiskSettings, PaceSettings
 from verifold.protocol.usage import DiskUse, Usage
+from verifold.server.actions import allowance_views
 from verifold.server.activity import Activity
 from verifold.server.conversation import conversation_view
 from verifold.server.desk_chat import desk_view
 from verifold.server.errors import LabExists, NoLab, ServerError, SetupRejected
 from verifold.server.lab import Build, Lab
 from verifold.server.member import Member
-from verifold.server.status import agent_need, all_outcomes, in_turn, profile_edits, thread_needs, waits
+from verifold.server.status import agent_need, all_outcomes, in_turn, missed, profile_edits, thread_needs, waits
 from verifold.society.board import Board
 from verifold.society.budget import budget_line
 from verifold.society.deliverables import deliverable_lines, removed_lines, told_at
@@ -304,7 +308,8 @@ def app_api(host: Host, activity: Activity, person_token: SecretStr) -> FastAPI:
 
     @api.get('/needs', dependencies=[authorized])
     async def needs() -> tuple[PostView, ...]:
-        return needs_person(current().board)
+        running = current()
+        return needs_person(running.board, running.now())
 
     @api.post('/posts', dependencies=[authorized])
     async def post(request: PostRequest) -> PostView:
@@ -419,6 +424,7 @@ def _seat_routes(api: FastAPI, host: Host, activity: Activity, authorized: param
 
     _coordinator_routes(api, host, authorized)
     _limit_routes(api, host, activity, authorized)
+    _allowance_routes(api, host, activity, authorized)
     _vote_routes(api, host, authorized)
     _deliverable_routes(api, host, activity, authorized)
 
@@ -457,6 +463,40 @@ def _limit_routes(api: FastAPI, host: Host, activity: Activity, authorized: para
         if settings.disk.limit_gb != request.limit_gb:
             await host.measure_disk()
             await lab.set_settings(settings.model_copy(update={'disk': DiskSettings(limit_gb=request.limit_gb)}))
+        return _view_of(lab, activity)
+
+
+def _allowance_routes(api: FastAPI, host: Host, activity: Activity, authorized: params.Depends) -> None:
+    """
+    Add the person's own presses on allowances and actions.
+
+    The person confirms a draft, ends an allowance, pauses every action, and answers an action that waits. No tool of
+    an agent reaches any of them.
+    """
+
+    @api.post('/allowances/{allowance_id}/start', dependencies=[authorized])
+    async def start_allowance(allowance_id: AllowanceId) -> LabView:
+        lab = _lab(host)
+        await lab.start_allowance(allowance_id)
+        return _view_of(lab, activity)
+
+    @api.post('/allowances/{allowance_id}/end', dependencies=[authorized])
+    async def end_allowance(allowance_id: AllowanceId) -> LabView:
+        lab = _lab(host)
+        await lab.end_allowance(allowance_id)
+        return _view_of(lab, activity)
+
+    @api.post('/actions/pause', dependencies=[authorized])
+    async def pause_actions(request: ActionsPause) -> LabView:
+        lab = _lab(host)
+        await lab.pause_actions(paused=request.paused)
+        return _view_of(lab, activity)
+
+    @api.post('/actions/{post_id}/decision', dependencies=[authorized])
+    async def decide_action(post_id: PostId, answer: ActionAnswer) -> LabView:
+        # The answer is also the person's reply to the action, so its author hears it.
+        lab = _lab(host)
+        await lab.decide_action(post_id, yes=answer.yes)
         return _view_of(lab, activity)
 
 
@@ -538,7 +578,8 @@ def _lab_view(board: Board, activity: Activity, now: datetime, disk: DiskUse | N
     # `now` dates the leases on the wanted reruns.
     working = lines_of(board)
     done = closing(board)
-    waiting = waits(board)
+    waiting = waits(board, now)
+    allowances = allowance_views(board, now)
     became = all_outcomes(board)
     needs = {
         entry.agent.id: agent_need(board, activity.shown(entry.agent.id), entry.agent.id, waiting)
@@ -558,7 +599,7 @@ def _lab_view(board: Board, activity: Activity, now: datetime, disk: DiskUse | N
         agents=tuple(_agent_view(board, activity, entry.agent.id, around) for entry in board.agents),
         threads=len(board.threads),
         posts=len(board.posts),
-        needs_you=len(waiting),
+        needs_you=len(waiting) + sum(view.stopped for view in allowances),
         waits=waiting,
         thread_needs=thread_needs(board, needs, waiting),
         reruns_wanted=reruns_wanted(board, now),
@@ -578,6 +619,9 @@ def _lab_view(board: Board, activity: Activity, now: datetime, disk: DiskUse | N
         deliverables=tuple(_deliverable_view(board, line) for line in deliverable_lines(board)),
         removed_deliverables=removed_lines(board),
         deliverables_told_at=told_at(board),
+        allowances=allowances,
+        actions_paused=paused.at if (paused := board.actions_paused) else None,
+        missed=missed(board, now),
     )
 
 
@@ -699,6 +743,8 @@ def _agent_view(
         on_call=board.on_call(agent_id),
         coordinator=board.coordinator == agent_id,
         desk=board.is_desk(agent_id),
+        acting=board.acting(agent_id),
+        mode=board.mode_of(agent_id),
         status=status,
         thread=lab.working.get(agent_id),
         activity=activity.shown(agent_id),

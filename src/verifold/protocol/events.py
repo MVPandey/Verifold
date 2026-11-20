@@ -21,6 +21,7 @@ from verifold.protocol.agents import (
     ValueId,
     one_line,
 )
+from verifold.protocol.allowances import AllowanceId, AllowanceTerms
 from verifold.protocol.deliverables import Decision, Sentence
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import PERSON, AgentId, CommitId, DeliverableId, PostId, ThreadId
@@ -136,6 +137,33 @@ class DeskSet(EventBase):
 
     type: Literal['desk_set'] = 'desk_set'
     agent: AgentId
+
+
+class ActingSet(EventBase):
+    """
+    The person made an agent's seat an acting seat, or took the mark back.
+
+    An acting seat acts in the world with a key of its own. Only an acting seat holds an allowance and declares an
+    action with `act`. The coordinator and the desk are never acting seats, and neither is an invited agent, whose
+    turns Verifold cannot stop. No agent tool records this event.
+    """
+
+    type: Literal['acting_set'] = 'acting_set'
+    agent: AgentId
+    acting: bool
+
+
+class ModeSet(EventBase):
+    """
+    The person changed the harness mode of an agent's seat in a lab that runs.
+
+    The seat keeps this mode from now on. When the session of its harness runs in another mode, Verifold starts the
+    session again in this one before the seat's next turn. No agent tool records this event.
+    """
+
+    type: Literal['mode_set'] = 'mode_set'
+    agent: AgentId
+    mode: ValueId
 
 
 class CoordinatorSet(EventBase):
@@ -401,6 +429,75 @@ class ClaimLapsed(EventBase):
     task: PostId
     until: AwareDatetime
     """When the lease ended."""
+
+
+class AllowanceDrafted(EventBase):
+    """
+    A draft of an allowance: what the person lets one acting seat do in the world without a question to them.
+
+    The person drafts one, or the lab's desk does on the person's word, with `on`. A draft allows nothing. It starts
+    only when the person confirms it with `allowance_started`, and no agent tool records that event or any change
+    of an allowance after it. A newer draft for the same seat stands beside the older one, and the person confirms
+    the one that they want.
+    """
+
+    type: Literal['allowance_drafted'] = 'allowance_drafted'
+    allowance: AllowanceId
+    terms: AllowanceTerms
+    by: AgentId = Field(default=PERSON, exclude_if=by_person)
+    """Who drafted it: the person, or the lab's desk on the person's word."""
+    on: PostId | None = Field(default=None, exclude_if=unset)
+    """With `by` the desk: the person's post in the desk chat that the draft rests on."""
+
+
+class AllowanceStarted(EventBase):
+    """
+    The person confirmed a draft of an allowance.
+
+    The allowance is in force until its end, until the person ends it, or until the person starts another one for the
+    same seat. No agent tool records this event.
+    """
+
+    type: Literal['allowance_started'] = 'allowance_started'
+    allowance: AllowanceId
+
+
+class AllowanceEnded(EventBase):
+    """
+    The person ended an allowance.
+
+    It allows nothing more. An action that was done stays done: the board undoes nothing in the world. No agent tool
+    records this event.
+    """
+
+    type: Literal['allowance_ended'] = 'allowance_ended'
+    allowance: AllowanceId
+
+
+class ActionsPaused(EventBase):
+    """
+    The person paused every action of the lab, or let actions go on.
+
+    While actions are paused, the board takes no action from any seat. No agent tool records this event.
+    """
+
+    type: Literal['actions_paused'] = 'actions_paused'
+    paused: bool
+
+
+class ActionDecided(EventBase):
+    """
+    The person's answer to an action that waits for them, before its offer ends.
+
+    `post` is the person's post that replies to the action, which comes just before this event, so the action's
+    author hears the answer. A yes lets the author do the action, and it draws nothing from an allowance. No agent
+    tool records this event.
+    """
+
+    type: Literal['action_decided'] = 'action_decided'
+    action: PostId
+    yes: bool
+    post: PostId
 
 
 type RoundEnd = Literal['time', 'entered', 'opener']
@@ -788,6 +885,8 @@ type Event = Annotated[
     | AgentNamed
     | OnCallSet
     | DeskSet
+    | ActingSet
+    | ModeSet
     | CoordinatorSet
     | AgentLeft
     | ThreadOpened
@@ -820,6 +919,11 @@ type Event = Annotated[
     | Voted
     | BadgeSet
     | DeliverableSet
-    | DeliverableDecided,
+    | DeliverableDecided
+    | AllowanceDrafted
+    | AllowanceStarted
+    | AllowanceEnded
+    | ActionsPaused
+    | ActionDecided,
     Field(discriminator='type'),
 ]

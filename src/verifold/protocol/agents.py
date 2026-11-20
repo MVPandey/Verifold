@@ -110,9 +110,10 @@ class Picture(Record):
     symbol: Symbol
 
 
-type SeatMark = Literal['coordinator', 'reviewer', 'on_call', 'desk']
+type SeatMark = Literal['coordinator', 'reviewer', 'on_call', 'desk', 'acting']
 """
-A seat that an agent holds, as the record has it: the coordinator seat, a reviewer seat, a seat on call, or the desk.
+A seat that an agent holds, as the record has it: the coordinator seat, a reviewer seat, a seat on call, the desk, or
+an acting seat.
 """
 
 
@@ -225,6 +226,11 @@ class SeatFacts(Record):
     Whether the seat is the lab's desk. The desk answers the person in the desk chat and acts on the person's word.
     It is no part of the lab's work. A lab has one desk at most, and the desk holds no other seat.
     """
+    acting: bool = Field(default=False, exclude_if=unset)
+    """
+    Whether the seat acts in the world with a key of its own. Only an acting seat holds an allowance and declares an
+    action. It is not the coordinator and not the desk.
+    """
 
     @model_validator(mode='after')
     def _powers_of_the_coordinator(self) -> Self:
@@ -232,6 +238,8 @@ class SeatFacts(Record):
             raise ValueError('Only the seat of the coordinator has powers.')
         if self.desk and (self.coordinator or self.on_call):
             raise ValueError('The desk holds no other seat: it is not the coordinator and not on call.')
+        if self.acting and (self.coordinator or self.desk):
+            raise ValueError('An acting seat is not the coordinator and not the desk.')
         return self
 
     @field_validator('family')

@@ -8,16 +8,18 @@ author's candidate answer for the lab, a close says that the lab is done and nam
 a report tells the person where the lab is, a reading says how the lab reads the question, a summary says what a
 thread has established, a call offers work that another agent can take, a task hands one piece of work to the
 one agent that claims it, a hand-back returns that work to the task's author, an offer holds files for a deliverable
-of the person, a round asks every agent the same question at once, and an entry is an agent's answer to a round. A
-new kind is one more model in the `Post` union.
+of the person, a round asks every agent the same question at once, an entry is an agent's answer to a round, an
+action is what an acting seat declares before it acts in the world, and a receipt says what the action did and what
+it cost. A new kind is one more model in the `Post` union.
 """
 
 from collections.abc import Callable
 from pathlib import PurePosixPath
 from typing import Annotated, Literal, Self
 
-from pydantic import AfterValidator, Field, StringConstraints, WithJsonSchema, model_validator
+from pydantic import AfterValidator, AwareDatetime, Field, StringConstraints, WithJsonSchema, model_validator
 
+from verifold.protocol.allowances import ActionNeed, AllowanceId, Amount
 from verifold.protocol.ids import AgentId, CommitId, DeliverableId, PostId, ThreadId
 from verifold.protocol.moves import Move
 from verifold.protocol.record import Record, unset
@@ -78,6 +80,8 @@ type PostKind = Literal[
     'offer',
     'round',
     'entry',
+    'action',
+    'receipt',
 ]
 """The values of `kind` across the `Post` union."""
 type Outcome = Literal['holds', 'fails']
@@ -231,8 +235,11 @@ class QuestionShown(Record):
 
 
 type Shown = Annotated[PermissionShown | QuestionShown, Field(discriminator='type')]
-type Mark = Shown | Literal['ends_request']
-"""What Verifold marks on a post of its own: an ask that carries a harness's request, or the answer that ends one."""
+type Mark = Shown | Literal['ends_request', 'missed']
+"""
+What Verifold marks on a post of its own: an ask that carries a harness's request, or the answer that ends one.
+`missed` ends one that ended before the person could answer it.
+"""
 
 
 class Ask(PostBase):
@@ -247,6 +254,11 @@ class Ask(PostBase):
     """
     shown: Shown | None = None
     """What the harness's request holds, which the app shows in place of the body. Verifold sets it with `request`."""
+    ends_at: AwareDatetime | None = Field(default=None, exclude_if=unset)
+    """
+    When the ask stops waiting for the person, as its author set it. From then on the person's app shows it among the
+    asks that the person missed, and nothing waits for its answer. `None` waits until an answer comes.
+    """
 
 
 class Answer(PostBase):
@@ -274,6 +286,12 @@ class Answer(PostBase):
     The coordinator's request that this answer carries out. The answer then decides the permission request that it
     replies to: its author is the person, who said yes to the request, or the coordinator, whose power decided it.
     Verifold sets it, and no agent can.
+    """
+    missed: bool = Field(default=False, exclude_if=unset)
+    """
+    With `ends_request`: whether the request ended before the person could answer it, because the agent's turn ended
+    or Verifold restarted. The person's app then shows the ask among the asks that the person missed. Verifold sets
+    it, and no agent can.
     """
 
 
@@ -509,6 +527,52 @@ class Entry(PostBase):
     reply_to: PostId
 
 
+class Action(PostBase):
+    """
+    An action that an acting seat declares before it does it in the world: `text` says what, in one line.
+
+    `cost` is the most that the action can lose, with its fees, in the unit of the seat's allowance. `undoable` says
+    whether the action can be undone, `builds_on` names the posts that it rests on, and `offer_ends` is when the
+    offer that it takes ends. The board answers at once and records its answer with the post: Verifold sets
+    `allowance`, `allowed`, and `needs`, and no agent can. Inside the allowance, the action is allowed and its cost
+    is drawn from the allowance. Outside it, the action waits for the person until `offer_ends`. The board holds no
+    key and makes no call: the author does the action itself, and its `receipt` says what happened.
+    """
+
+    kind: Literal['action'] = 'action'
+    cost: Amount
+    undoable: bool
+    offer_ends: AwareDatetime
+    allowance: AllowanceId | None = None
+    """The allowance that the author held when it declared the action, or `None` when it held none in force."""
+    allowed: bool = False
+    """Whether that allowance allowed the action at once, so its cost is drawn from it."""
+    needs: ActionNeed | None = None
+    """Why the action waits for the person, or `None` for an action that the allowance allowed."""
+
+    @model_validator(mode='after')
+    def _answered_once(self) -> Self:
+        if self.allowed == (self.needs is not None) or (self.allowed and self.allowance is None):
+            raise ValueError('An action is allowed by its allowance, or it waits for the person and says why.')
+        if not self.builds_on:
+            raise ValueError('An action names in `builds_on` the posts that it rests on.')
+        return self
+
+
+class Receipt(PostBase):
+    """
+    What an action did, from its author: `text` says what happened, and `cost` is what it cost, with its fees.
+
+    It replies to the action, and `evidence` holds the receipt as files. The action's newest receipt gives the cost
+    that the allowance counts in place of the declared one.
+    """
+
+    kind: Literal['receipt'] = 'receipt'
+    reply_to: PostId
+    cost: Amount
+    evidence: tuple[FileEvidence, ...] = Field(min_length=1)
+
+
 type Post = Annotated[
     Message
     | Plan
@@ -529,6 +593,8 @@ type Post = Annotated[
     | MoveRequest
     | FileOffer
     | Round
-    | Entry,
+    | Entry
+    | Action
+    | Receipt,
     Field(discriminator='kind'),
 ]

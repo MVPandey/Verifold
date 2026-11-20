@@ -20,7 +20,7 @@ from verifold import DISTRIBUTION
 from verifold.app import SERVER_FILE, ServeHooks, ServeOptions, serve, stop_lab
 from verifold.harnesses.catalog import CATALOG, HarnessEntry, available, catalog_with
 from verifold.protocol.agents import MAX_AGENTS, AgentChoice, one_family
-from verifold.protocol.app import StartRequest
+from verifold.protocol.app import AllowanceRequest, StartRequest
 from verifold.protocol.deliverables import FINDINGS_RECORD
 from verifold.protocol.settings import SettingsLevel, SetupDefaults
 from verifold.runner.errors import NoAgentFolder, NoFileManager, RunnerError
@@ -155,6 +155,8 @@ def _start(args: argparse.Namespace) -> tuple[StartRequest, Mapping[str, Harness
         # A deliverable is the person's own sentence for this lab, as the question is. No settings file holds one:
         # the files say only whether the lab starts with the record of findings, whose sentence is Verifold's.
         deliverables=tuple(dict.fromkeys((*record, *(args.deliverable or ())))),
+        # An allowance comes from the person's own command line only. No settings file holds one.
+        allowance=_allowance(args.allowance) if args.allowance else None,
     )
     return start, catalog
 
@@ -287,7 +289,16 @@ def _saved_agents(
 
 
 PROJECT_DROPS: Mapping[str, str | bool | tuple[()] | None] = MappingProxyType(
-    {'mode': None, 'role': '', 'family': None, 'coordinator': False, 'on_call': False, 'powers': (), 'desk': False}
+    {
+        'mode': None,
+        'role': '',
+        'family': None,
+        'coordinator': False,
+        'on_call': False,
+        'powers': (),
+        'desk': False,
+        'acting': False,
+    }
 )
 """What `verifold run` sets back in a seat that comes from a project's settings file."""
 
@@ -326,7 +337,14 @@ def _started(start: StartRequest) -> str:
         *((f'{start.budget_dollars:g} dollars',) if start.budget_dollars else ()),
     )
     budget = f'; a budget of {" and ".join(spend)}' if spend else ''
-    return f'{agents}; {"auto mode" if start.auto_mode else "no auto mode"}; {time}{budget}{deliverables}{waits}'
+    given = start.allowance
+    allowance = (
+        f'; an allowance of {given.per_action} {given.unit} an action and {given.total} {given.unit} in all for '
+        f'{given.minutes} min, recorded and not enforced'
+        if given
+        else ''
+    )
+    return f'{agents}; {"auto mode" if start.auto_mode else "no auto mode"}; {time}{budget}{allowance}{deliverables}{waits}'
 
 
 def _agent_words(choice: AgentChoice) -> str:
@@ -342,6 +360,7 @@ def _agent_words(choice: AgentChoice) -> str:
             f'powers: {", ".join(choice.powers)}' if choice.powers else None,
             choice.on_call and 'on call',
             choice.desk and 'desk',
+            choice.acting and 'acting',
         )
         if detail
     ]
@@ -497,7 +516,7 @@ def _parser() -> argparse.ArgumentParser:
         '--agent',
         action='append',
         metavar='HARNESS[:MODEL[:EFFORT[:MODE]]][,FACT...]',
-        help=f'Add an agent: {", ".join(CATALOG)}, or a harness from your settings, with an optional model, effort, and mode. You can name a harness more than once. After a comma come the facts of the seat, each optional: role=TEXT, family=TEXT, coordinator, on-call, desk. The desk answers you in the desk chat and acts on your word, and a lab has one desk at most. Example: claude-code:opus,role=driver,coordinator. Default: your saved choices for new labs, or one agent of each harness that this computer has.',
+        help=f'Add an agent: {", ".join(CATALOG)}, or a harness from your settings, with an optional model, effort, and mode. You can name a harness more than once. After a comma come the facts of the seat, each optional: role=TEXT, family=TEXT, coordinator, on-call, desk, acting. The desk answers you in the desk chat and acts on your word, and a lab has one desk at most. An acting seat acts in the world with a key of its own, and only it holds an allowance. Example: claude-code:opus,role=driver,coordinator. Default: your saved choices for new labs, or one agent of each harness that this computer has.',
     )
     run.add_argument(
         '--minutes',
@@ -544,6 +563,11 @@ def _parser() -> argparse.ArgumentParser:
         action='store_true',
         help='Leave out the record of findings, the deliverable that a new lab starts with: for every line of work, the method, the data source and how to fetch it again, the numbers, and why the line was kept or dropped. Default: your saved choices for new labs, which start with it.',
     )
+    run.add_argument(
+        '--allowance',
+        metavar='per=AMOUNT,total=AMOUNT,unit=UNIT,minutes=N[,check=AMOUNT],for=TEXT',
+        help='Let the one acting seat act in the world without a question to you, up to a bound: per is the most for one action, total the most in all, unit the unit of the amounts, minutes how long it stands, and check the cost above which an action needs a check by another agent first. for= comes last and says what it is for, in your words. The allowance is recorded, not enforced: the agent holds its own key, and the board counts what the agent declares and stops it at the limit. Example: per=10,total=100,unit=USD,minutes=600,for=Place orders on the exchange',
+    )
     commands.add_parser('open', help="Open this folder's running lab in the browser again, from another terminal.")
     folder = commands.add_parser(
         'folder', help="Print the folder where this folder's agents work, and open it in the file manager."
@@ -553,6 +577,24 @@ def _parser() -> argparse.ArgumentParser:
         'stop', help="Stop this folder's lab from another terminal: its server, its agents, and their processes."
     )
     return parser
+
+
+_ALLOWANCE_KEYS = {'per': 'per_action', 'total': 'total', 'unit': 'unit', 'minutes': 'minutes', 'check': 'check_above'}
+
+
+def _allowance(value: str) -> AllowanceRequest:
+    # `for=` comes last and takes the rest of the text, so the person's words can hold commas.
+    rest, found, purpose = value.partition('for=')
+    given: dict[str, str] = {'purpose': purpose.strip()} if found else {}
+    for part in filter(None, (item.strip() for item in rest.split(','))):
+        key, _, text = part.partition('=')
+        if key not in _ALLOWANCE_KEYS or not text.strip():
+            raise SetupRejected(
+                f'--allowance: "{part}" is not a part of an allowance. Give per=, total=, unit=, minutes=, and '
+                'check= with their values, and for= last.'
+            )
+        given[_ALLOWANCE_KEYS[key]] = text.strip()
+    return AllowanceRequest.model_validate(given)
 
 
 def _agent(value: str) -> AgentChoice:
@@ -566,12 +608,12 @@ def _agent(value: str) -> AgentChoice:
         key, _, text = fact.strip().partition('=')
         if key in ('role', 'family') and text.strip():
             given[key] = text.strip()
-        elif key in ('coordinator', 'on-call', 'desk') and not text:
+        elif key in ('coordinator', 'on-call', 'desk', 'acting') and not text:
             given[key.replace('-', '_')] = True
         else:
             raise SetupRejected(
                 f'--agent {value}: "{fact.strip()}" is not a fact of a seat. Give role=TEXT, family=TEXT, coordinator, '
-                'on-call, or desk.'
+                'on-call, desk, or acting.'
             )
     return AgentChoice.model_validate(
         {'harness': harness, 'model': model or None, 'effort': effort or None, 'mode': mode or None} | given

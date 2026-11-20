@@ -119,6 +119,11 @@ def check_coordinator(board: Board, event: CoordinatorSet) -> None:
     if event.agent:
         _check_seat(board, event.agent)
         _check_not_desk(board, event.agent, 'the coordinator seat')
+        if board.acting(event.agent):
+            raise RejectedEvent(
+                f'{event.agent} holds an acting seat, and an acting seat takes no coordinator seat. The person can '
+                'take the acting mark back first.'
+            )
     if event.by == PERSON:
         return
     _check_seat(board, event.by)
