@@ -27,10 +27,13 @@ export const STATE_TONES = {
   ruled_out: 'fs-count-bad',
 } as const satisfies Record<IdeaState, string>;
 
-/** Return whether the lab page offers the Map tab: the lab's readings added a branch. */
+/** Return whether the lab page offers the Map tab: the lab's readings added a branch, or the lab has an idea. */
 export function hasMap(map: MapView | undefined): boolean {
-  return (map?.branches.length ?? 0) > 0;
+  return (map?.branches.length ?? 0) > 0 || (map?.no_branch?.length ?? 0) > 0;
 }
+
+/** The line above the ideas that hang on no branch. */
+export const NO_BRANCH = 'No branch yet';
 
 /**
  * Return the counts of a branch with ideas as one line, such as "6 ideas · 2 being tried · 1 result · 3 ruled
@@ -75,11 +78,8 @@ export function splitBranches(map: MapView): {
 export function parentIdea(map: MapView, idea: IdeaView): IdeaView | null {
   const parent = idea.parent;
   if (!parent?.startsWith('p-')) return null;
-  for (const branch of map.branches) {
-    const found = branch.idea_list?.find((item) => item.id === parent);
-    if (found) return found;
-  }
-  return null;
+  const lists = [...map.branches.map((branch) => branch.idea_list ?? []), map.no_branch ?? []];
+  return lists.flat().find((item) => item.id === parent) ?? null;
 }
 
 /** One line of a card that names who did something to an idea, and leads to the post. */

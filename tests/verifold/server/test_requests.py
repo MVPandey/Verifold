@@ -543,6 +543,7 @@ async def test_the_coordinator_asks_through_its_tool_and_the_board_refuses_every
         True,
         None,
     )
+    assert (said.structured_content['waits_for_person'], request['waits_for_person']) == (False, True)
     assert (brief.structured_content['conversation'], brief.structured_content['powers']) == (talk, [])
     posts = [entry.post for entry in led.board.posts if entry.post.thread == talk]
     assert [type(post) for post in posts] == [Message, *[MoveRequest] * 5]

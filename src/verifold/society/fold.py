@@ -24,6 +24,7 @@ from verifold.protocol.events import (
     DeliverableSet,
     DeskSet,
     Event,
+    IdeaBranched,
     LabOpened,
     LimitReached,
     LimitsReported,
@@ -80,7 +81,7 @@ from verifold.society.deliverables import (
 )
 from verifold.society.desk import check_desk_move, check_desk_post, check_desk_set, check_interrupt
 from verifold.society.errors import RejectedEvent
-from verifold.society.ideas import check_ideas
+from verifold.society.ideas import check_branched, check_ideas
 from verifold.society.measures import check_measure_post
 from verifold.society.pace import check_limits, check_pace
 from verifold.society.rounds import check_close, check_rounds
@@ -216,6 +217,9 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
         case ClaimLapsed():
             check_lapse(board, event)
             return replace(board, seq=event.seq, lapses=(*board.lapses, event))
+        case IdeaBranched():
+            check_branched(board, event)
+            return replace(board, seq=event.seq, idea_branches=(*board.idea_branches, event))
         case TimeSet():
             check_time(event)
             check_made(board, event)

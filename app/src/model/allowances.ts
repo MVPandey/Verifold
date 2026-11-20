@@ -9,7 +9,7 @@ import type {
   PostView,
 } from '../api/types.ts';
 import { authorName } from './agents.ts';
-import { dayClock, duration, minutesBetween } from './format.ts';
+import { dayClock, duration, minutesBetween, readable } from './format.ts';
 
 /** An action post as the server sends it. */
 export type ActionPost = Extract<Post, { kind: 'action' }>;
@@ -78,19 +78,27 @@ export function draftFacts(terms: AllowanceTerms, now: Date): readonly string[] 
   ];
 }
 
+/**
+ * Return an amount in an allowance's unit as the lab's page shows it, with the number `readable`, as `$119.77`. The
+ * record and the thread keep the exact amount.
+ */
+export function shownAmount(value: string, unit: string): string {
+  return amount(readable(value), unit);
+}
+
 /** Return the line under an allowance's heading: what it allowed, its bound for one action, and its end. */
 export function usedLine(view: AllowanceView, now: Date): string {
   const unit = view.terms.unit;
   return [
-    `${amount(view.drawn, unit)} of ${amount(view.terms.total, unit)} used`,
-    `up to ${amount(view.terms.per_action, unit)} an action`,
+    `${shownAmount(view.drawn, unit)} of ${shownAmount(view.terms.total, unit)} used`,
+    `up to ${shownAmount(view.terms.per_action, unit)} an action`,
     `until ${dayClock(view.terms.ends_at, now)}`,
   ].join(' · ');
 }
 
 /** Return what an allowance used of its total in a few words, for its folded line, such as "$4.25 of $100". */
 export function usedShort(view: AllowanceView): string {
-  return `${amount(view.drawn, view.terms.unit)} of ${amount(view.terms.total, view.terms.unit)}`;
+  return `${shownAmount(view.drawn, view.terms.unit)} of ${shownAmount(view.terms.total, view.terms.unit)}`;
 }
 
 /** The words of each state of an allowance that is no draft, for its kicker. */
@@ -135,7 +143,7 @@ export function actionMark(action: ActionView): { readonly text: string; readonl
 
 /** Return the amount of an action in an allowance's list: its real cost when a receipt came, or else its cost. */
 export function actionAmount(action: ActionView, unit: string): string {
-  return amount(action.real_cost ?? action.cost, unit);
+  return shownAmount(action.real_cost ?? action.cost, unit);
 }
 
 /** What a request for an action says: its heading, its lines of facts, and when its offer ends. */

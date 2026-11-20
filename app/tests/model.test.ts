@@ -28,7 +28,16 @@ import {
   stateLine,
   earlierReruns,
 } from '../src/model/agents.ts';
-import { clock, dayClock, duration, minutesBetween, money, tokens } from '../src/model/format.ts';
+import {
+  article,
+  clock,
+  dayClock,
+  duration,
+  minutesBetween,
+  money,
+  readable,
+  tokens,
+} from '../src/model/format.ts';
 import { MAX_CHARS, MAX_LINES, linkHost, plainOnly } from '../src/model/markdown.ts';
 import { orderNeeds, pauses } from '../src/model/needs.ts';
 import { isRevision, revisedLine } from '../src/model/question.ts';
@@ -182,6 +191,58 @@ describe('format', () => {
     );
     assert.equal(minutesBetween('2026-11-06T14:00:00Z', new Date('2026-11-06T14:26:59Z')), 26);
     assert.equal(minutesBetween('2026-11-06T14:00:00Z', new Date('2026-11-06T13:00:00Z')), 0);
+  });
+});
+
+describe('a number for the person', () => {
+  it('puts `an` before a number that English says with a vowel sound first, and `a` before the others', () => {
+    assert.deepEqual(
+      [8, 11, 18, 80, 86, 800, 8_000, 11_000, 18_500, 1, 5, 15, 108, 118, 1_100, 0].map(article),
+      ['an', 'an', 'an', 'an', 'an', 'an', 'an', 'an', 'an', 'a', 'a', 'a', 'a', 'a', 'a', 'a'],
+    );
+  });
+
+  it('writes exactly two digits after the point from 1 up, none for a whole amount, and four significant digits below 1', () => {
+    assert.deepEqual(
+      [
+        '42.840',
+        '119.7695',
+        '46.60',
+        '46.6',
+        '100.00',
+        '100.004',
+        '60',
+        '2.005',
+        '0.123456',
+        '0.5',
+        '0.000012345',
+        '0.99996',
+        '0.000',
+        '-3.14159',
+        '-0.0004567',
+        '1234567.891',
+      ].map(readable),
+      [
+        '42.84',
+        '119.77',
+        '46.60',
+        '46.60',
+        '100',
+        '100',
+        '60',
+        '2.01',
+        '0.1235',
+        '0.5',
+        '0.00001235',
+        '1',
+        '0',
+        '-3.14',
+        '-0.0004567',
+        '1234567.89',
+      ],
+    );
+    // A text that is no plain decimal stays as it is.
+    assert.equal(readable('1E+3'), '1E+3');
   });
 });
 

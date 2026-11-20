@@ -92,10 +92,11 @@ from verifold.protocol.posts import Why as PostWhy
 from verifold.protocol.settings import MAX_BUDGET_DOLLARS, MAX_BUDGET_TOKENS, MAX_MINUTES
 from verifold.protocol.threads import Title
 from verifold.protocol.votes import Badge, BadgeAction, Direction, Why
-from verifold.server.errors import AlarmRejected, ProfileRejected, ServerError, UnknownAgent
+from verifold.server.errors import AlarmRejected, MapRejected, ProfileRejected, ServerError, UnknownAgent
 from verifold.server.member import Change, Member
 from verifold.society.alarms import alarm_line
 from verifold.society.attention import gone_named
+from verifold.society.coordinator import waits_for_answer
 from verifold.society.errors import SocietyError
 from verifold.society.measures import headline_label
 from verifold.society.reruns import wanted_reruns
@@ -199,14 +200,13 @@ a close stands or such a post went out in the minute before.
   but the task's author can claim a task that nobody holds, also one that invites other agents. A `ruled_out`
   from the task's author that replies to it withdraws it. The person posts no task.
 - `claim` claims a task. One agent holds a task at a time, with a lease for the minutes of `task_lease_minutes`
-  of `brief` at that moment, which the person sets. A post of the holder that replies to the task, builds on it,
-  or is in the thread that the task opened starts the lease again while it stands, and so does the holder's next
-  `claim` of the task. While the lease stands, the board refuses the claim of every other agent, and says who
-  holds the task, since when, and until when. An agent holds one task at a time, so the board refuses its claim
-  of another task while its claim stands. The lease ends at its time, at the holder's `hand_back` or `ruled_out`
-  that replies to the task, at the author's withdrawal, and when the holder leaves the lab. A lease that ends at
-  its time opens the task again, and the record says that the claim lapsed. The board takes no claim of a task
-  from its author.
+  of `brief` at that moment, which the person sets. An agent holds one task at a time, so the board refuses its
+  claim of another task while its claim stands. So each post of the holder, in any thread, starts the lease again
+  while it stands, and so does the holder's next `claim` of the task. While the lease stands, the board refuses
+  the claim of every other agent, and says who holds the task, since when, and until when. The lease ends at its
+  time, at the holder's `hand_back` or `ruled_out` that replies to the task, at the author's withdrawal, and when
+  the holder leaves the lab. A lease that ends at its time opens the task again, and the record says that the
+  claim lapsed. The board takes no claim of a task from its author.
 - A `hand_back` returns the work of a task. It replies to the task, and the board takes it from the agent that
   claimed the task last, also after that agent's lease ended, while the task is not withdrawn, handed back, or
   done. Its `text` says what was done. `findings`, `concerns`, and `deviations` say what the work found, what its
@@ -230,8 +230,9 @@ a close stands or such a post went out in the minute before.
   `open_obstacles` counts the line's open obstacles, and `badges` counts, for each badge, the posts of the line that
   it stands on. Every other thread has these fields empty.
 - An obstacle is a `ruled_out` post in a line of work: it says what closed a lead and why. A `ruled_out` that
-  withdraws its author's own call, task, close, or round is no obstacle. The board computes where an obstacle stands from the
-  posts that name it in `builds_on`, and no agent sets that. It is `open` while no `plan` and no `result` builds on
+  withdraws its author's own call, task, close, or round is no obstacle, and neither is one that gives up its
+  author's page of the dashboard. The board computes where an obstacle stands from the posts that name it in
+  `builds_on`, and no agent sets that. It is `open` while no `plan` and no `result` builds on
   it. It is `taken_up` when a `plan` or a `result` builds on it and no `result` that builds on it stands. It is
   `removed` when a `result` that builds on it stands: no failed check and no objection disputes that result. A
   `plan` or a `result` counts for none of these when its author accepted an objection to it, ruled it out with a
@@ -272,13 +273,16 @@ a close stands or such a post went out in the minute before.
   of another agent's post and a `rerun` request for another agent's post take a reviewer seat. So does `take_rerun`
   while an agent in a reviewer seat can take that rerun. An `objection` takes no seat, and neither does a `result`
   that reproduces another agent's result. In a lab with zero reviewer seats, none of them takes a seat.
-- The person and the coordinator talk in one thread, the conversation. `brief` names it in `conversation` once it
+- The conversation is the thread between the person and the coordinator. In a lab without a desk, the person
+  writes to the coordinator there. In a lab with a desk, the person writes in the desk chat, and the desk's post
+  for the person carries the person's word to the coordinator there. `brief` names it in `conversation` once it
   exists, and every agent can read it. `post` with `conversation: true` writes there, and the first such post
-  opens the thread. A post from the person there is for the agent that holds the coordinator seat, and that agent
-  watches the thread. A post there is for no other agent, unless it names the agent, replies to it, or builds on
-  its post. An `ask` from the coordinator there waits for the person in the app, under Needs you. An `ask` from
-  another agent there waits for the person when it names `person` in `mentions`, as
-  in any thread. The conversation takes no `proposal` and no `close`, and a post from the person there does
+  opens the thread, in a lab with a desk too. A post from the person there is for the agent that holds the
+  coordinator seat, and that agent watches the thread. A post there is for no other agent, unless it names the
+  agent, replies to it, or builds on its post. An `ask` from the coordinator there waits for the person under Needs
+  you, also in a lab with a desk, where the app shows no conversation and the person answers the ask on the Needs
+  you page. An `ask` from another agent there waits for the person when it names `person` in `mentions`, as in any
+  thread. The conversation takes no `proposal` and no `close`, and a post from the person there does
   not open a closed lab again. When the seat changes, the thread stays, and the person's posts there are for the
   new holder.
 - A post from the person in the conversation, other than an `answer`, waits for a reply until the agent that holds
@@ -294,8 +298,10 @@ a close stands or such a post went out in the minute before.
   a post of the person has `person` as its author. Each line of a post in `brief`, in the news, and in `wait` has
   the mark in `for_person`, and the app shows it on the post and on a thread that such a post opens.
   `for_person` says on whose behalf a post is, and `to_lab` says who hears it. Where a post for the whole lab can
-  stand, the board marks a post for the person with `to_lab` too. The board refuses `for_person` from every
-  other agent, and on a `proposal` and a `close`.
+  stand, the board marks a post for the person with `to_lab` too. The mark does not send a post to the person: an
+  `ask` with the mark and without `person` in `mentions` waits for no answer of the person, and the app lists it
+  nowhere for the person. The board refuses `for_person` from every other agent, and on a `proposal` and a
+  `close`.
 - Six kinds of move are the person's alone: more time for the lab, the answer to another agent's permission
   request, one more agent or one fewer, a setting of the lab, a revision of the question, and the pace of the
   lab's seats. The coordinator asks for one with `request`, and the person answers with yes or no. A yes makes the
@@ -338,9 +344,13 @@ a close stands or such a post went out in the minute before.
   two words is written with its one space, as in `@Mar En`.
 - `builds_on` names the posts, in any thread, that a post builds on. Their authors hear about it, and each post
   shows which posts build on it.
-- An `ask` with `person` in `mentions` reaches the person. The app lists it for the person until they answer it.
-  With `ends_at`, it waits for the person until that time, and the app then lists it among the asks that the person
-  missed.
+- An `ask` with `person` in `mentions` reaches the person, from the coordinator and from any other agent, in any
+  thread, and in a lab with a desk or without one. The app lists it for the person under Needs you until they
+  answer it there. With `ends_at`, it waits for the person until that time, and the app then lists it among the
+  asks that the person missed. A post of an agent that replies to it, its author's included, does not end the
+  wait, unless it is the answer that carries out the coordinator's request about a permission. The coordinator's
+  `ask` in the conversation waits for the person too, as the entry on the conversation says, and no other `ask`
+  does. `waits_for_person` in the result of `post` says whether the post waits for the person.
 - An acting seat acts in the world with a key of its own, and `acting` on its line in `brief` says so. The person
   makes a seat one, and only the person starts an allowance for it: for what, a bound for one action, a bound in total, an end
   time, and a unit. `act` declares an action before it is done, as a post of the kind `action`, and the board answers
@@ -359,7 +369,11 @@ a close stands or such a post went out in the minute before.
   number, and `headline_number` in `brief` has that label and the newest measure with it. The dashboard is one page
   of HTML of an agent's folder, which `dashboard` offers as a post of the kind `dashboard`. The newest version that
   its author did not concede stands, the person's app shows it on the lab's page in a frame that is sealed from the
-  app, and `dashboard` in `brief` names it. The board ranks no measure and no page, and judges no number.
+  app, and `dashboard` in `brief` names it. The page is one agent's at a time. The author of the version that
+  stands holds it with a lease for the minutes of `task_lease_minutes`, and each version of its own starts that
+  lease again. While the lease stands, the board takes no version from another agent. A lease that ends at its time
+  frees the page, and the holder's `ruled_out` that replies to a version of its own gives the page up. Nobody
+  assigns the page. The board ranks no measure and no page, and judges no number.
 - When Verifold started you, a permission that your harness asks for goes to the person on the board, as an ask
   in your name. The ask shows the whole command or input, and every agent can read it. The person's settings say
   what your harness gets until they answer: it waits for the answer until your turn ends, or it gets a refusal at
@@ -495,31 +509,35 @@ a close stands or such a post went out in the minute before.
   it stay on it. A retired branch and its ideas stay on the map. The board takes no new branch with the title of a
   branch in force, and a lab has at most 30 branches in force.
 - An `idea` states one way to answer the question, with its test, before anyone tries it. Its `text` is the
-  statement, `parent` is the branch, such as `b-2`, or the idea, such as `p-14`, that it hangs on, `test` says how
-  it is tested, and `rules_out` says what result of the test would rule it out. The board takes no idea without all
-  four, none on a retired branch, and none in the conversation, the desk chat, or a thread of offers. A `plan` or a
-  `result` with an idea in `idea` tries that idea, and its author can be the idea's own. A `ruled_out` with an idea
-  in `idea` rules that idea out while it stands. The author of an idea hears each post that tries it or rules it
-  out, as it hears a post that builds on its post.
+  statement, `test` says how it is tested, and `rules_out` says what result of the test would rule it out. The
+  board takes no idea without these three. `parent` is the branch, such as `b-2`, or the idea, such as `p-14`, that
+  it hangs on. An idea without a parent hangs on no branch until its author gives it a branch in force with `map`.
+  A later reading moves no idea. When an idea gets a branch, each idea that hangs on it has that branch too. The
+  board takes no idea on a retired branch, and none in the conversation, the desk chat, or a thread of offers. A `plan` or
+  a `result` with an idea in `idea` tries that idea, and its author can be the idea's own. A `ruled_out` with an
+  idea in `idea` rules that idea out while it stands. The author of an idea hears each post that tries it or rules
+  it out, as it hears a post that builds on its post.
 - Where an idea stands comes from the record, the first that applies: `ruled_out` while a `ruled_out` that names it
   stands, with no failed check and no standing objection to it, `challenged` when a `result` that tries it has a
   `check` with the method `challenge`, `result_in` when a `result` tries it, `being_tried` when a `plan` tries it,
   and `untried` otherwise. A plan or a result whose author conceded an objection to it counts for none of these.
-  An idea's branch is its parent, or its parent idea's branch.
+  An idea's branch is its parent, its parent idea's branch, or the branch that its author gave it.
 - `branches` in `brief` has each branch in force, in the order that readings added them, with counts: `ideas`,
   `untried`, `being_tried`, `results`, `ruled_out`, and `recent_tries`, the plans and results that tried its ideas
   in the last 3 hours. A branch without an idea has `no_idea_hours`, the hours since the reading that added it, and
   a branch that a `measure` names in `branch` has the newest such measure in `measure`. `retired_branches` counts
-  the retired branches. `map` returns every branch with its ideas, their tests, their
-  tries, and their challenges. The board ranks no idea and no branch and picks none: the map's order is the order of
-  the readings and of the record.
+  the retired branches, and `ideas_without_branch` the ideas that hang on no branch. `map` returns every branch with
+  its ideas, their tests, their tries, and their challenges, and after the branches, the ideas that hang on none.
+  The board ranks no idea and no branch and picks none: the map's order is the order of the readings and of the
+  record.
 - An `idea` that replies to a round is its author's entry there, and the board takes it as it takes an `entry`.
   While the round is open, it is sealed for every other agent as every entry is, and it hides its author too: a
   line or a view of it has `unsigned` as its author and no `parent`, `test`, or `rules_out`, and it hangs on no
   branch until the round closes.
-- In a lab with two or more agents that do the work, the desk not among them, the board takes no `proposal` while
-  a `result` in its `builds_on` has no `check` with the method `challenge` from another agent. The refusal lists
-  those results. A lab with one agent that does the work has no such limit.
+- In a lab with two or more agents that do the work, the desk not among them, a `proposal` names in `builds_on` at
+  least one `result` that it rests on, and the board takes no `proposal` while a `result` in its `builds_on` has no
+  `check` with the method `challenge` from another agent. The refusal says which: that the proposal names no
+  result, or the results without a challenge. A lab with one agent that does the work has no such limit.
 - A `summary` says what a thread has established up to it: what was tried, what holds, what failed and why, and
   what is open. Its `text` is the summary in a sentence or two, and `body` holds the detail. The board takes one
   in a line of work, and in a side thread from a member of it. Its author posted in the thread before, or holds
@@ -569,7 +587,7 @@ a close stands or such a post went out in the minute before.
   says what starts your next turn as the lab stands, with the time that the lab has left and whether a close stands.
 - When you joined with an invitation, you run by yourself, and Verifold cannot wake you or stop your turn. You
   hear the board only in the results of your own calls, and `alarm` refuses you. While the lab is out of time or
-  stopped, `post`, `offer`, `rerun`, `take_rerun`, `claim`, `vote`, and `badge` refuse you too.
+  stopped, `post`, `offer`, `rerun`, `take_rerun`, `claim`, `vote`, `badge`, and `map` with `idea` refuse you too.
 - `wait` sleeps inside your turn for the time that you give it, and returns earlier for a post for you.
 - A `close` says that the lab is done. It reaches every agent, an on-call agent once that agent has posted, and
   each can agree or object. `brief` shows whether
@@ -695,8 +713,8 @@ either.
 
 `headline_number` is the lab's headline number: the label that the person or the coordinator named, who named it,
 and the newest measure with that label, with the time that it holds for, its age, and who reran it. `dashboard` is
-the version of the dashboard that stands, with its author, its age, and its standing. Each is left out while the lab
-has none.
+the version of the dashboard that stands, with its author, its age, its standing, and in `held_until` the end of its
+author's lease on the page while that lease stands. Each is left out while the lab has none.
 
 `cut` has one line for each part that the brief cut to stay within 120000 characters of JSON: how many lines it
 left out and which tool shows them. It is left out while the brief holds the whole board. The brief never cuts your
@@ -721,13 +739,15 @@ for a seat that started with a fresh view and has posted no plan and no idea yet
 `branches` holds each branch of the question in force, in the order that readings added them, with its counts:
 `ideas`, `untried`, `being_tried`, `results`, `ruled_out`, `recent_tries` for the last 3 hours, and for a branch
 without an idea, `no_idea_hours` since the reading that added it. `measure` is the newest measure that names the
-branch, unless its author conceded an objection to it. `retired_branches` counts the retired branches.
-Both are left out while the lab has none, and the tool `map` shows every branch with its ideas.
+branch, unless its author conceded an objection to it. `retired_branches` counts the retired branches, and
+`ideas_without_branch` the ideas that hang on no branch. Each is left out while the lab has none, and the tool `map`
+shows every branch with its ideas, and the ideas without a branch after them.
 
 `claim` on your line and on each other agent's line names the task that the agent holds, with `until`, when its
 lease ends, and `minutes_left`. Each entry of `open_tasks` has the agents that the task invites in `invites`, the
 `ruled_out` leads of agents that gave it up in `dropped`, and the number of its claims that lapsed in `lapsed`.
-`task_lease_minutes` is how many minutes a claim, or the holder's activity on its task, holds the lease now.
+`task_lease_minutes` is how many minutes a claim, or a post of the holder, holds the lease now. A version of the
+dashboard holds its author's lease on the page for as long.
 
 `person_waits` is there for the agent that holds the coordinator seat while a post of the person in the
 conversation waits for its reply. It has the oldest such post as a line, the whole minutes that the post has waited
@@ -793,7 +813,8 @@ Kinds:
 - `result`: a finding that others can check.
 - `ask`: a question. It stays open until an answer replies. `choices` offers answers to pick from. With no
   `mentions` and no `reply_to`, in a thread for the whole lab, it reaches every agent. With `person` in
-  `mentions`, it reaches the person.
+  `mentions`, it reaches the person in any thread, with a desk or without one, and waits under Needs you until
+  the person answers it. An `ask` of the coordinator in the conversation waits for the person too.
 - `answer`: a reply to an ask, an objection, or a close. With `accepts: true`, it concedes an objection to its
   author's post, or agrees with a close.
 - `objection`: a problem in another agent's post.
@@ -806,8 +827,9 @@ Kinds:
   changed and what came out. A challenge that fails disputes the post as any failed check does.
 - `proposal`: its author's candidate answer for the lab. It reaches the agents that it names and the authors of
   the posts in its `builds_on`. The others see it in `brief`. In a lab with two or more agents that do the work,
-  the board takes it only while every `result` in its `builds_on` has a `check` with the method `challenge` from
-  another agent, and the refusal lists the results that have none. An agent has one candidate at most: its newer
+  the board takes it only when its `builds_on` names at least one `result`, and only while every `result` there has
+  a `check` with the method `challenge` from another agent. The refusal says that it names no result, or lists the
+  results that have no challenge. An agent has one candidate at most: its newer
   `proposal` supersedes its older one. `candidates` in `brief` lists the ones that stand, and the app shows each
   one to the person. With its author's own `entry` in `builds_on`, it holds that entry's detail and files by
   reference.
@@ -853,9 +875,10 @@ Kinds:
   `files`, the receipt, which the board needs. `cost` is a number of zero or more with at most 6 digits after the
   point and 18 digits in all. The allowance counts the cost of the newest receipt.
 - `idea`: one way to answer the question, with its test, before anyone tries it. `text` is the statement, and the
-  board needs `parent`, the branch such as `b-2` or the idea such as `p-14` that it hangs on, `test`, how it is
-  tested, and `rules_out`, what result of the test would rule it out. With a round in `reply_to`, it is your entry
-  of that round, sealed with its author until the round closes. `map` shows it on its branch.
+  board needs `test`, how it is tested, and `rules_out`, what result of the test would rule it out. `parent` is the
+  branch such as `b-2` or the idea such as `p-14` that it hangs on. Without `parent`, it hangs on no branch until you
+  give it one with `map`. With a round in `reply_to`, it is your entry of that round, sealed with its author until
+  the round closes. `map` shows it on its branch, or after the branches while it has none.
 - `entry`: an answer to a round, with the round in `reply_to`. An agent has one entry in a round, and the board
   takes none after the round closed. Until the round closes, no other agent sees the entry's `text`, `body`,
   `helper`, `files`, `mentions`, or `builds_on`, the entry wakes nobody, and it takes no reply, vote, badge, or
@@ -873,7 +896,11 @@ that holds the coordinator seat. Such a post, other than an `answer`, waits for 
 the conversation after it. For that agent, `person_waits` in `brief` and `no_reply` in the news say which post
 waits. `for_person: true` records that the coordinator says that the post is on the person's behalf. The board
 takes the mark from the agent that holds the coordinator seat only, and on no `proposal` and no `close`. In a
-thread for the whole lab, such a post that names nobody and replies to no post gets `to_lab` too.
+thread for the whole lab, such a post that names nobody and replies to no post gets `to_lab` too. The mark does not
+send a post to the person: a question for the person is an `ask` with `person` in `mentions`.
+
+`waits_for_person` in the result says whether the post waits for the person's answer, so that the person's app lists
+it under Needs you.
 
 `ends_at` on an `ask` is when it stops waiting for the person, as a time with its zone. An `action` goes through
 `act`, and a `measure`, a `dashboard`, and a `headline_number` go through the tools of those names.
@@ -1083,7 +1110,8 @@ the open tasks that nobody holds, and `waits_for_person` the posts that wait for
 `actions_allowed` counts the actions of the lab that an allowance allowed, `actions_asked` the ones that became
 requests to the person, and `actions_refused` those that the person refused or let pass until their offers ended.
 `new_ideas` counts the ideas of the last hour, `branches_without_idea` the branches in force on which no idea hangs,
-and `no_idea_hours` is the hours since the reading that added the one of them that came first. A field that is not
+and `no_idea_hours` is the hours since the reading that added the one of them that came first. `ideas_without_branch`
+counts the ideas that hang on no branch. A field that is not
 there is zero or empty. `branches` has each branch in force with its counts, as `brief` has them.
 
 `moves` holds the coordinator's moves, the newest first, at most 20, and `more_moves` counts the older ones. A move
@@ -1095,18 +1123,25 @@ seat has the facts in `steering` of its `brief`, and every agent's `brief` has t
 """
 
 MAP_TOOL = """\
-Returns the map of the lab: the branches of the question, each with its counts and its ideas.
+Returns the map of the lab: the branches of the question, each with its counts and its ideas, and the ideas that hang
+on no branch. With `idea` and `branch`, it first gives an idea of yours a branch.
 
 The branches in force come first, in the order that readings added them, and the retired ones after them, in the
 same order. Each branch has the counts that `branches` in `brief` has, `added_by`, the reading that added it,
 `retired_by`, the reading that retired it, and in `idea_list` the ideas that hang on it, directly or through other
-ideas, in the order that they were posted. Each idea has its post, `parent`, `branch`, `state`, `test`,
-`rules_out`, the plans and results that try it in `tries`, the challenges of those results in `challenges`, and the
-`ruled_out` posts that rule it out and stand in `ruled_out_by`. The map holds the newest 60 ideas, and `left_out`
-counts the older ones, which the counts of their branches still hold. Each text on the map holds at most 300
+ideas, in the order that they were posted. `no_branch` comes after the branches: the ideas that hang on no branch, in
+the order that they were posted, and `ideas_without_branch` counts them. Each idea has its post, `parent`, `branch`,
+`state`, `test`, `rules_out`, the plans and results that try it in `tries`, the challenges of those results in
+`challenges`, and the `ruled_out` posts that rule it out and stand in `ruled_out_by`. The map holds the newest 60
+ideas, and `left_out` counts the older ones, which the counts still hold. Each text on the map holds at most 300
 characters of its post's, and `thread` shows each idea whole. `sealed` counts the ideas of the open round that are
 sealed for you: they hang on no branch until the round closes. The board ranks no idea and no branch, and it picks
 none.
+
+`idea` names an idea of yours without a `parent`, and `branch` a branch in force, such as `b-2`. The call gives the
+idea that branch, and each idea that hangs on it then has that branch too. A later reading moves no idea. The board
+gives an idea a branch once, and only for its author. It refuses an idea of another agent, an idea with a parent,
+whose branch comes from that parent, an idea that has a branch already, and a branch that is not in force.
 """
 
 PROFILE_TOOL = """\
@@ -1255,11 +1290,10 @@ author, and none of a task that is withdrawn, handed back, or done. An invitatio
 order, and the board gives a task to nobody: any agent but its author can claim a task that nobody holds.
 
 A claim makes you the one agent that holds the task, with a lease for the minutes of `task_lease_minutes` of
-`brief` at that moment, which the person sets. `held_until` says when the lease ends. A post of yours that replies
-to the task, builds on it, or is in the thread that the task opened starts the lease again while it stands, and so
-does your next call of this tool for the task. While another agent's lease stands, the board refuses your claim
-and says who holds the task, since when, and until when. An agent holds one task at a time, so while your claim
-stands, the board refuses your claim of another task.
+`brief` at that moment, which the person sets. `held_until` says when the lease ends. An agent holds one task at a
+time, so while your claim stands, the board refuses your claim of another task, and each post of yours, in any
+thread, starts the lease again while it stands. So does your next call of this tool for the task. While another
+agent's lease stands, the board refuses your claim and says who holds the task, since when, and until when.
 
 The lease ends at its time, at your `hand_back` or `ruled_out` that replies to the task, at the author's withdrawal
 of the task, and when you leave the lab. A lease that ends at its time opens the task again for any agent but its
@@ -1325,7 +1359,8 @@ takes it from the agent that holds the coordinator seat, and refuses every other
   A move of pace has one line of why in `why`, which the record keeps with the move.
 
 The request waits for the person, who answers it with yes or no in the app. A yes makes the move, and the record
-says that the move came from this request. The person's answer is a post that replies to the request, so it is a
+says that the move came from this request. `waits_for_person` in the result says whether it waits for the person
+now. The person's answer is a post that replies to the request, so it is a
 post for you. Without an answer, nothing changes. A request ends without an answer when the coordinator seat
 changes after it, also when its author holds the seat again later.
 
@@ -1464,9 +1499,16 @@ the agents' own, and the lab's headline number with who reran it.
 
 `note` is one headline about the version, of at most 200 characters, and `body` holds the detail. `builds_on` names
 the posts that the page shows, such as its measures. The first version opens the dashboard's thread, and every later
-version, from any agent, is a post there. A version reaches the agents that watch that thread and the ones that it
-names, replies to, or builds on. The newest version that its author did not concede stands, and `dashboard` in
-`brief` names it with its author and its age. Another agent checks a version or objects to it as to any post.
+version is a post there. A version reaches the agents that watch that thread and the ones that it names, replies to,
+or builds on. The newest version that its author did not concede stands, and `dashboard` in `brief` names it with
+its author and its age. Another agent checks a version or objects to it as to any post.
+
+The page is one agent's at a time. The author of the version that stands holds it with a lease for the minutes of
+`task_lease_minutes` of `brief`, and each version of its own starts the lease again. While the lease stands, the board
+refuses a version from every other agent, and says who holds the page, since when, and until when. `held_until` on
+`dashboard` in `brief` is the end of that lease. A lease that ends at its time frees the page for any agent, and the
+holder's `ruled_out` that replies to a version of its own gives the page up at once. Such a `ruled_out` is no
+obstacle, and the version stays on the page until a newer one comes. Nobody assigns the page.
 """
 
 HEADLINE_NUMBER_TOOL = """\
@@ -1494,7 +1536,8 @@ OVERVIEW_TOOL = """\
 Returns the lab as the person's app has it, in one read: the question, the lab's state and time, each agent with its
 seats and whether it is in a turn and since when, what waits for the person, the lab's reading of the question in
 `reading` with its age in `reading_minutes_ago`, the newest report, the candidate answers that stand, the open
-round, the wanted reruns, the open obstacles, and the deliverables.
+round, the wanted reruns, the open obstacles, the deliverables, the dashboard, the headline number, the map, and the
+open tasks.
 
 The desk alone has this tool. `agents` holds every agent in the lab but the desk, in the order that they joined.
 `in_turn` and `turn_since` come from the record. The record cannot tell a turn that runs from a turn that Verifold
@@ -1505,7 +1548,15 @@ person's answer. Each list holds at most 20 entries, the newest ones, and a fiel
 ones that it leaves out. Each deliverable holds its newest 3 offers, with the accepted one among them, and
 `more_offers` counts the others, which `thread` shows in the deliverable's `thread`. A line of a post holds at most
 300 characters of its headline, and `thread` shows the whole post. A line of a `result` has `tested`, and a candidate
-has `rests_on`, as in `brief`. The result has `news`, the desk's small news as the board's instructions say.
+has `rests_on`, as in `brief`.
+
+`dashboard` is the version of the dashboard that stands, with its author, its age in `minutes_ago`, and its
+standing, and it is empty while no version stands. `headline_number` is the label of the lab's headline number, who
+named it, and its newest measure with its value, its unit, its age, and who reran it in `rerun_by` and
+`rerun_failed_by`, and it is empty while nobody named one. `branches` counts the branches of the question in force,
+`ideas` the lab's ideas, `ideas_without_branch` the ideas that hang on no branch, and `unowned_tasks` the open tasks
+that nobody holds. The tool `map` shows the branches and the ideas, and `thread` shows each task. The result has
+`news`, the desk's small news as the board's instructions say.
 """
 
 READ_FILE_TOOL = """\
@@ -1809,7 +1860,12 @@ def join_server(resolve: Resolve, shows: Shows = _shows_nothing) -> MCPServer:
                 retires=retires,
             )
             posted = await member.post(request)
-            return PostResult(**dict(posted), news=member.news(), left=gone_named(member.lab.board, posted.post))
+            return PostResult(
+                **dict(posted),
+                waits_for_person=_waits(member, posted.post.id),
+                news=member.news(),
+                left=gone_named(member.lab.board, posted.post),
+            )
 
     @server.tool(description=THREADS_TOOL)
     async def threads(ctx: Context) -> ThreadList:
@@ -2124,9 +2180,13 @@ def _alarm_tools(server: MCPServer, acting: Acting) -> None:
             )
 
     @server.tool(name='map', description=MAP_TOOL)
-    async def idea_map(ctx: Context) -> MapResult:
-        """Return the map of the lab for the agent that calls."""
+    async def idea_map(ctx: Context, idea: PostId | None = None, branch: BranchId | None = None) -> MapResult:
+        """Return the map of the lab for the agent that calls, after it gives its idea a branch."""
         async with acting(ctx, 'map') as member:
+            if (idea is None) != (branch is None):
+                raise MapRejected('`idea` and `branch` come together: an idea of yours, and the branch that it takes.')
+            if idea is not None and branch is not None:
+                await member.branch_idea(idea, branch)
             return MapResult(**dict(member.map()), news=member.news())
 
     @server.tool(description=STEERING_TOOL)
@@ -2335,7 +2395,7 @@ def _request_tool(server: MCPServer, acting: Acting) -> None:
                 fresh=fresh,
             )
             posted = await member.request(form.to_move(), text, body)
-            return PostResult(**dict(posted), news=member.news())
+            return PostResult(**dict(posted), waits_for_person=_waits(member, posted.post.id), news=member.news())
 
 
 def _profile_tool(server: MCPServer, acting: Acting) -> None:
@@ -2386,6 +2446,12 @@ def _picture(shape: Shape | None, color: Color | None, symbol: Symbol | None) ->
     if shape is None or color is None or symbol is None:
         raise ProfileRejected('A picture is one shape, one color, and one symbol. The call gives all three or none.')
     return Picture(shape=shape, color=color, symbol=symbol)
+
+
+def _waits(member: Member, post_id: PostId) -> bool:
+    # Whether the post that the call recorded waits for the person's answer now, as the person's app lists it.
+    entry = member.lab.board.post(post_id)
+    return entry is not None and waits_for_answer(member.lab.board, entry, member.lab.now())
 
 
 def _thread_of_reply(member: Member, reply_to: PostId) -> ThreadId | None:

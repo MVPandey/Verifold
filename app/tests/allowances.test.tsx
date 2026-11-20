@@ -26,6 +26,7 @@ import {
   shownAllowances,
   stoppedAllowances,
   usedLine,
+  usedShort,
 } from '../src/model/allowances.ts';
 import type { ActionPost } from '../src/model/allowances.ts';
 import { actionLine } from '../src/model/desk.ts';
@@ -188,6 +189,16 @@ describe('the words of an allowance', () => {
       'Above $5, a check by another agent first',
     ]);
     assert.match(usedLine(view, now), /^\$4\.25 of \$100 used · up to \$10 an action · until /);
+    // The card writes two digits after the point, or none for a whole amount. The record keeps the amounts.
+    const exact = allowance({
+      drawn: '42.840',
+      terms: { ...view.terms, unit: 'USD', total: '60.00', per_action: '5.000' },
+    });
+    assert.match(
+      usedLine(exact, now),
+      /^42\.84 USD of 60 USD used · up to 5 USD an action · until /,
+    );
+    assert.equal(usedShort(exact), '42.84 USD of 60 USD');
     assert.equal(meterPercent(view), 4.25);
     assert.equal(meterPercent(allowance({ drawn: '130' })), 100);
   });

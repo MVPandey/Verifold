@@ -95,6 +95,18 @@ describe('the coordinator’s moves in words', () => {
       why: 'You set an 8-hour target.',
     });
     assert.equal(moveWords(MOVES[3] as MoveView, agents).what, 'Posted a new reading');
+    // A number said with a vowel sound first takes `an`.
+    const opened = (minutes: number): string =>
+      moveWords(
+        move(postView(result('p-9', { kind: 'round', minutes, text: 'Which line?' } as never))),
+        agents,
+      ).what;
+    assert.deepEqual([8, 11, 5, 1].map(opened), [
+      'Opened an 8-minute round',
+      'Opened an 11-minute round',
+      'Opened a 5-minute round',
+      'Opened a 1-minute round',
+    ]);
     const cap = postView(
       result('p-8', {
         kind: 'request',

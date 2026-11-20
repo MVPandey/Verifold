@@ -482,7 +482,7 @@ class Task(PostBase):
 
     `text` is the objective, `output` the output wanted, and `bounds` what the work stays within. `mentions` names the agents that the task invites. An invitation is no order: any agent but the author claims
     the task while nobody holds it, and the board gives it to nobody. One agent holds a task at a time, with a lease
-    that its activity on the task renews, and returns it with a hand-back that replies to it. The author withdraws
+    that each of its posts renews, and returns it with a hand-back that replies to it. The author withdraws
     it with a ruled-out lead that replies to it. A record from before tasks holds none.
     """
 
@@ -709,23 +709,31 @@ class Dashboard(PostBase):
     reply_to: None = None
 
 
+IDEA_PARTS = (
+    'An idea needs its three parts: the statement in `text`, `test`, how it is tested, and `rules_out`, what result '
+    'of the test would rule it out. `parent` names the branch or the idea that it hangs on, and an idea without one '
+    'hangs on no branch until its author gives it one.'
+)
+"""What the board says of an idea that misses a part."""
+
+
 class Idea(PostBase):
     """
     An idea: one way to answer the question, stated with its test before anyone tries it.
 
-    `text` is the statement, and `body` holds the detail. `parent` is what the idea hangs on: a branch of the
-    question, or another idea. `test` says how the idea is tested, and `rules_out` says what result of that test
-    would rule the idea out. The record takes no idea without all four. A `plan` or a `result` with the idea in
-    `idea` tries it, and a `ruled_out` with the idea in `idea` rules it out. An idea that replies to a round is its
-    author's entry of that round, sealed as every entry is until the round closes. A record from before ideas holds
-    none.
+    `text` is the statement, and `body` holds the detail. `test` says how the idea is tested, and `rules_out` says
+    what result of that test would rule the idea out. The record takes no idea without these three. `parent` is
+    what the idea hangs on, a branch of the question or another idea, and an idea without one hangs on no branch
+    until its author gives it one. A `plan` or a `result` with the idea in `idea` tries it, and a `ruled_out` with
+    the idea in `idea` rules it out. An idea that replies to a round is its author's entry of that round, sealed as
+    every entry is until the round closes. A record from before ideas holds none.
     """
 
     kind: Literal['idea'] = 'idea'
     parent: Parent | None = None
     """
-    The branch, such as `b-2`, or the idea, such as `p-14`, that the idea hangs on. A view of an idea that is sealed
-    in an open round has none.
+    The branch, such as `b-2`, or the idea, such as `p-14`, that the idea hangs on, or `None`. A view of an idea that
+    is sealed in an open round has none.
     """
     test: Part = ''
     """How the idea is tested, fixed before anyone tries it."""
@@ -733,14 +741,11 @@ class Idea(PostBase):
     """What result of the test would rule the idea out."""
 
     @model_validator(mode='after')
-    def _four_parts(self) -> Self:
+    def _three_parts(self) -> Self:
         # The view of an idea that is sealed in an open round has no author and no parts. The record holds no post of
         # `UNSIGNED`, because no agent joins with it.
-        if self.author != UNSIGNED and (self.parent is None or not self.test or not self.rules_out):
-            raise ValueError(
-                'An idea needs its four parts: the statement in `text`, `parent`, the branch or the idea that it hangs '
-                'on, `test`, how it is tested, and `rules_out`, what result of the test would rule it out.'
-            )
+        if self.author != UNSIGNED and (not self.test or not self.rules_out):
+            raise ValueError(IDEA_PARTS)
         return self
 
 

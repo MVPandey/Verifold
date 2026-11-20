@@ -9,6 +9,7 @@ import httpx2
 import pytest
 from builders import RecordBuilder, until
 from conftest import agent
+from mcp import Client
 from pydantic import SecretStr
 
 from verifold.protocol.agents import Agent, AgentChoice, ModelSpec, Picture
@@ -40,6 +41,7 @@ from verifold.server import status as status_module
 from verifold.server.activity import Activity
 from verifold.server.app_api import _changes, _lab_view, app_api
 from verifold.server.errors import LabExists, NoLab, SetupRejected
+from verifold.server.join import join_server
 from verifold.server.lab import Build, Lab
 from verifold.server.member import Member
 from verifold.society import board as board_module
@@ -558,6 +560,44 @@ async def test_needs_you_lists_open_asks_to_the_person_until_answered(client: ht
     assert [item['post']['text'] for item in open_asks] == ['Rent a GPU?']
     assert (await client.get('/needs')).json() == []
     assert (await client.get('/lab')).json()['needs_you'] == 0
+
+
+async def test_the_coordinators_question_with_a_desk_seated_waits_under_needs_you_when_it_names_the_person(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    # With a desk seated, the desk chat is the person's one chat. A question for the person names the person.
+    await lab.join(agent('dee'), desk=True)
+    await lab.set_coordinator('ada', PERSON)
+    question = {'kind': 'ask', 'text': 'Do you want the allowance extended?', 'thread': 't-1'}
+    correction = {'kind': 'message', 'text': 'Correction: 11 of 17.', 'reply_to': 'p-3', 'for_person': True}
+    async with Client(join_server(lambda _: Member(lab, 'ada'))) as coordinator:
+        marked = await coordinator.call_tool('post', question | {'for_person': True})
+        asked = await coordinator.call_tool('post', question | {'mentions': ['person']})
+        talk = await coordinator.call_tool('post', {'kind': 'ask', 'text': 'Which branch first?', 'conversation': True})
+        corrected = await coordinator.call_tool('post', correction)
+    async with Client(join_server(lambda _: Member(lab, 'bo'))) as other:
+        guessed = await other.call_tool('post', {'kind': 'answer', 'text': 'Surely yes.', 'reply_to': 'p-3'})
+    waiting = (await client.get('/needs')).json()
+    answer = {'kind': 'answer', 'text': 'Yes, to 7 p.m.', 'thread': 't-1', 'reply_to': 'p-3'}
+    answered = await client.post('/posts', json=answer)
+
+    # The mark `for_person` sends the ask to nobody who answers it, and the result says so at once.
+    assert marked.structured_content is not None
+    assert asked.structured_content is not None
+    assert (marked.structured_content['waits_for_person'], asked.structured_content['waits_for_person']) == (
+        False,
+        True,
+    )
+    assert talk.structured_content is not None
+    assert (talk.structured_content['post']['thread'], talk.structured_content['waits_for_person']) == ('t-3', True)
+    # A reply of an agent, the asker's own correction among them, leaves the question waiting for the person.
+    assert not corrected.is_error
+    assert not guessed.is_error
+    assert [item['post']['id'] for item in waiting] == ['p-3', 'p-4']
+    # The person answers it in place, and it waits no more.
+    assert answered.status_code == 200
+    assert [item['post']['id'] for item in (await client.get('/needs')).json()] == ['p-4']
+    assert (await client.get('/lab')).json()['needs_you'] == 1
 
 
 async def test_the_person_asks_for_a_rerun_of_a_post_with_evidence(client: httpx2.AsyncClient, lab: Lab) -> None:
@@ -1431,7 +1471,7 @@ async def test_the_person_reads_the_whole_map_also_an_idea_that_is_sealed_for_th
 
     shown = (await client.get('/map')).json()
 
-    assert empty == {'branches': [], 'sealed': 0, 'left_out': 0}
+    assert empty == {'branches': [], 'no_branch': [], 'ideas_without_branch': 0, 'sealed': 0, 'left_out': 0}
     (card,) = shown['branches'][0]['idea_list']
     assert (card['author'], card['text'], card['test'], shown['sealed']) == (
         'bo',

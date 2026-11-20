@@ -30,6 +30,7 @@ from verifold.protocol.events import (
     DeliverableSet,
     DeskSet,
     Event,
+    IdeaBranched,
     LabOpened,
     LimitReached,
     LimitsReported,
@@ -61,7 +62,7 @@ from verifold.protocol.events import (
     Voted,
     WatchSet,
 )
-from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, BranchId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import ActRequest, MeasureRequest, PostRequest
 from verifold.protocol.measures import same_label
 from verifold.protocol.moves import (
@@ -107,7 +108,7 @@ from verifold.society.board import Board
 from verifold.society.budget import reached
 from verifold.society.candidates import check_names_candidate, check_read
 from verifold.society.coordinator import check_asks, check_why, covers_now, permission_choice, time_given
-from verifold.society.dashboards import DASHBOARD_TITLE, dashboard_thread
+from verifold.society.dashboards import DASHBOARD_TITLE, check_page_held, dashboard_thread
 from verifold.society.deliverables import accepted, check_decidable, live, offers_title, told_at
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
@@ -737,7 +738,7 @@ class Lab:
 
         Raises:
             RejectedEvent: The version breaks a rule of the record, as `society.dashboards.check_dashboard_post`
-                says, or a post that it builds on does not exist.
+                says, another agent's lease on the page stands, or a post that it builds on does not exist.
             pydantic.ValidationError: The note is no headline, the body is too long, or the size is out of bounds.
 
         """
@@ -745,6 +746,8 @@ class Lab:
         first = dashboard_thread(self._board) is None
 
         def build(board: Board, seq: int, at: datetime) -> Posted:
+            # An older record holds versions of several agents at once, so this rule is here and not in the record's.
+            check_page_held(board, author, at)
             version = Dashboard(
                 id=f'p-{len(board.posts) + 1}',
                 thread=dashboard_thread(board) or board.threads[-1].thread.id,
@@ -1142,6 +1145,19 @@ class Lab:
         """
         board = await self._commit(lambda _, seq, at: TaskClaimed(seq=seq, at=at, agent=agent_id, task=task_id))
         return board.claims[-1]
+
+    async def branch_idea(self, agent_id: AgentId, idea_id: PostId, branch_id: BranchId) -> IdeaBranched:
+        """
+        Record that the author of an idea without a parent gives it a branch in force, and return the record's entry.
+
+        Raises:
+            RejectedEvent: The agent cannot give the idea that branch, as `society.ideas.check_branched` says.
+
+        """
+        board = await self._commit(
+            lambda _, seq, at: IdeaBranched(seq=seq, at=at, agent=agent_id, idea=idea_id, branch=branch_id)
+        )
+        return board.idea_branches[-1]
 
     async def lapse_claims(self) -> None:
         """Record the lapse of each claim whose lease ended by now. Nothing else changes."""

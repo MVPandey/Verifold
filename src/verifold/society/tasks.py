@@ -4,18 +4,20 @@ Tasks: one piece of work that an agent hands to the lab, the one agent that hold
 A task is a post of the kind `task`: its objective in `text`, the output wanted, and its bounds. It can name the agents
 that it invites, and an invitation is no order: the board gives a task to nobody and ranks none. Any agent of the lab
 but the task's author claims a task while nobody holds it. A claim gives its agent a lease for the minutes of the
-lab's settings, as `society.leases` says. A post of the holder that replies to the task, builds on it, or is in the
-thread that the task opened starts the lease again while it stands, and so does the holder's claim again. The lease
-ends at its time, at the holder's hand-back or ruled-out lead that replies to the task, at the author's withdrawal,
-and when the holder leaves. While it stands, the record refuses a claim of the task from every other agent, and an
-agent holds one claim at a time. A lease that ends at its time opens the task again, and Verifold records so.
+lab's settings, as `society.leases` says. An agent holds one claim at a time, so each post of the holder starts the
+lease again while it stands, wherever the post is, and so does the holder's claim again. The lease ends at its time,
+at the holder's hand-back or ruled-out lead that replies to the task, at the author's withdrawal, and when the
+holder leaves. While it stands, the record refuses a claim of the task from every other agent. A lease that ends at
+its time opens the task again, and Verifold records so.
 
 The holder returns the work with a hand-back that replies to the task. The task's author accepts it with an answer
 that accepts it, or another agent checks it as it checks a result. A ruled-out lead of the holder that replies to
 the task gives the task up and says why. It is an obstacle of the line as every such lead is, and the task is open
 again.
 
-These rules hold for every event, so a record that loads follows them too. A record from before tasks holds none.
+These rules hold for every event, so a record that loads follows them too. A record from before tasks holds none. A
+record from before the rule that every post of the holder keeps its lease holds lapses of leases that only its posts
+on the task kept, so the record takes a lapse that either rule makes due, and a lapse ends its claim.
 """
 
 from dataclasses import dataclass
@@ -102,14 +104,17 @@ def claimers(board: Board, task_id: PostId) -> tuple[AgentId, ...]:
     return tuple(dict.fromkeys(claim.agent for claim in board.claims if claim.task == task_id))
 
 
-def _steps(board: Board, task: Posted, agent: AgentId) -> tuple[Step, ...]:
-    # The steps of an agent on a task, in the order of the record: its claims start a lease, its activity on the task
-    # keeps it, and its hand-back, its ruled-out lead that replies to the task, and the author's withdrawal end it.
-    task_id, thread = task.post.id, task.post.thread
-    posts = board.thread_posts(thread)
-    opened = bool(posts) and posts[0].post.id == task_id
-    around = (*board.replies(task_id), *board.built_on(task_id), *(posts if opened else ()))
-    mine = {entry.seq: entry for entry in around if entry.post.author == agent and entry.seq > task.seq}
+def _steps(board: Board, task: Posted, agent: AgentId, *, on_task: bool = False) -> tuple[Step, ...]:
+    # The steps of an agent on a task, in the order of the record: its claims start a lease, each of its posts keeps
+    # it, and its hand-back, its ruled-out lead that replies to the task, the author's withdrawal, and a recorded
+    # lapse end it. With `on_task`, only its posts that reply to the task, build on it, or are in the thread that the
+    # task opened keep it, as before every post of the holder did.
+    task_id = task.post.id
+    claimed: tuple[Step, ...] = tuple(
+        (claim.seq, claim.at, 'start') for claim in board.claims if (claim.task, claim.agent) == (task_id, agent)
+    )
+    after = board.posts_of(agent, claimed[0][0]) if claimed else ()
+    mine = {entry.seq: entry for entry in (_on_task(board, task, after) if on_task else after)}
     withdrawn = _withdrawal(board, task)
     ends = {withdrawn.seq: withdrawn} if withdrawn else {}
 
@@ -117,14 +122,26 @@ def _steps(board: Board, task: Posted, agent: AgentId) -> tuple[Step, ...]:
         returned = isinstance(entry.post, HandBack | RuledOut) and entry.post.reply_to == task_id
         return 'end' if returned or entry.seq in ends else 'keep'
 
-    claimed: tuple[Step, ...] = tuple(
-        (claim.seq, claim.at, 'start') for claim in board.claims if (claim.task, claim.agent) == (task_id, agent)
-    )
     posted: tuple[Step, ...] = tuple((entry.seq, entry.at, hold(entry)) for entry in {**mine, **ends}.values())
-    return tuple(sorted((*claimed, *posted)))
+    lapsed: tuple[Step, ...] = tuple(
+        (lapse.seq, lapse.at, 'end') for lapse in board.lapses if (lapse.task, lapse.agent) == (task_id, agent)
+    )
+    return tuple(sorted((*claimed, *posted, *lapsed)))
 
 
-def _holder(board: Board, task: Posted, now: datetime) -> Holder | None:
+def _on_task(board: Board, task: Posted, posts: tuple[Posted, ...]) -> tuple[Posted, ...]:
+    # The posts that reply to the task, build on it, or are in the thread that the task opened.
+    task_id, thread = task.post.id, task.post.thread
+    opening = board.thread_posts(thread)
+    opened = bool(opening) and opening[0].post.id == task_id
+    return tuple(
+        entry
+        for entry in posts
+        if entry.post.reply_to == task_id or task_id in entry.post.builds_on or (opened and entry.post.thread == thread)
+    )
+
+
+def _holder(board: Board, task: Posted, now: datetime, *, on_task: bool = False) -> Holder | None:
     # The agent that claimed the task last by `now`, with the lease of its claim that no step ended, standing or
     # ended at its time. The record refuses a claim while another agent's lease stands, so no other agent can hold
     # the task. The lease of an agent that left ended when it left.
@@ -134,7 +151,8 @@ def _holder(board: Board, task: Posted, now: datetime) -> Holder | None:
     )
     if last is None or board.gone(last.agent):
         return None
-    lease = span(_steps(board, task, last.agent), now, lambda seq: board.settings_at(seq).tasks.lease_minutes)
+    steps = _steps(board, task, last.agent, on_task=on_task)
+    lease = span(steps, now, lambda seq: board.settings_at(seq).tasks.lease_minutes)
     return Holder(agent=last.agent, lease=lease) if lease else None
 
 
@@ -210,23 +228,19 @@ def lapsed(board: Board, task_id: PostId) -> int:
     return sum(lapse.task == task_id for lapse in board.lapses)
 
 
-def lapses_due(board: Board, at: datetime) -> tuple[Lapse, ...]:
+def lapses_due(board: Board, at: datetime, *, on_task: bool = False) -> tuple[Lapse, ...]:
     """
     Return the claims whose leases ended by `at` and that the record has not marked as lapsed, in the order of the tasks.
 
-    A claim that a hand-back, a ruled-out lead of its holder, a withdrawal, or the holder's leave ended did not lapse.
+    A claim that a hand-back, a ruled-out lead of its holder, a withdrawal, or the holder's leave ended did not lapse,
+    and a recorded lapse ends its claim. With `on_task`, only the holder's posts on the task keep a lease, as before
+    every post of the holder did.
     """
     due: list[Lapse] = []
     for task_id in dict.fromkeys(claim.task for claim in board.claims):
         task = board.post(task_id)
-        holder = _holder(board, task, at) if task else None
-        if task is None or holder is None or holder.lease.stands(at):
-            continue
-        marked = any(
-            (lapse.task, lapse.agent) == (task_id, holder.agent) and lapse.seq > holder.lease.started
-            for lapse in board.lapses
-        )
-        if not marked:
+        holder = _holder(board, task, at, on_task=on_task) if task else None
+        if task is not None and holder is not None and not holder.lease.stands(at):
             due.append(Lapse(agent=holder.agent, task=task_id, until=holder.lease.until))
     return tuple(due)
 
@@ -308,7 +322,14 @@ def check_lapse(board: Board, event: ClaimLapsed) -> None:
         RejectedEvent: No such claim has a lease that ended then, or the record marks it as lapsed already.
 
     """
-    due = (lapse for lapse in lapses_due(board, event.at) if (lapse.agent, lapse.task) == (event.agent, event.task))
+    # A record from before every post of the holder kept its lease holds lapses that only its posts on the task
+    # kept, so a lapse that either rule makes due holds.
+    due = (
+        lapse
+        for on_task in (False, True)
+        for lapse in lapses_due(board, event.at, on_task=on_task)
+        if (lapse.agent, lapse.task) == (event.agent, event.task)
+    )
     if all(lapse.until != event.until for lapse in due):
         raise RejectedEvent(
             f'No claim of {event.agent} on task {event.task} has a lease that ended at {utc(event.until)} without '

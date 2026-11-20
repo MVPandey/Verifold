@@ -7,25 +7,28 @@ readings, so the ideas that hang on it stay on it. The branches in force, in the
 the lab's split of the question. A retired branch and its ideas stay in the record and on the map.
 
 An idea is a post that states one way to answer the question with its test and what result of the test would rule
-it out, before anyone tries it. It hangs on a branch, or on another idea and through it on that idea's branch. A plan
-or a result tries an idea when it names the idea in `idea`, and its author may be the idea's own. A `ruled_out` that
-names an idea rules it out while it stands. `IdeaState` in the join protocol says where an idea stands, and the board
-computes it from these posts. An idea that replies to a round is its author's entry there, sealed with its author
-until the round closes, as `society.rounds` says.
+it out, before anyone tries it. It hangs on a branch, or on another idea and through it on that idea's branch. An idea
+without a parent hangs on no branch, and the map lists it apart, until its author gives it a branch in force. A later
+reading moves no idea: an idea's branch comes from its parent or from its author's choice. A plan or a result tries
+an idea when it names the idea in `idea`, and its author may be the idea's own. A `ruled_out` that names an idea
+rules it out while it stands. `IdeaState` in the join protocol says where an idea stands, and the board computes it
+from these posts. An idea that replies to a round is its author's entry there, sealed with its author until the
+round closes, as `society.rounds` says.
 
 The board picks nothing. It ranks no idea and no branch, keeps no score for either, and orders them only as the
 readings and the record do. Every count here is a count of the record.
 
-One limit rests on the map: in a lab with two or more agents that do the work, the board takes no new proposal while
-a result that it builds on has no challenge, a check with the method `challenge`, from another agent. A record from
-before the rule holds such proposals, so the board checks it for a new post only.
+One limit rests on the map: in a lab with two or more agents that do the work, the board takes a new proposal only
+when it builds on at least one result, and only while each result that it builds on has a challenge, a check with
+the method `challenge`, from another agent. A record from before the rule holds other proposals, so the board checks
+it for a new post only.
 """
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from verifold.protocol.events import Posted
-from verifold.protocol.ids import PERSON, AgentId, BranchId, PostId
+from verifold.protocol.events import IdeaBranched, Posted
+from verifold.protocol.ids import PERSON, UNSIGNED, AgentId, BranchId, PostId
 from verifold.protocol.join import (
     MAX_MAP_IDEAS,
     RECENT_HOURS,
@@ -108,10 +111,10 @@ class Ideas:
     states: dict[PostId, IdeaState]
 
 
-_built: list[tuple[tuple[Posted, ...], Ideas]] = []
+_built: list[tuple[tuple[Posted, ...], tuple[IdeaBranched, ...], Ideas]] = []
 """
-The ideas of the boards that were read last, each with the posts of its board. A board never changes, so what it
-holds stays true for as long as it lives.
+The ideas of the boards that were read last, each with the posts and the given branches of its board. A board never
+changes, so what it holds stays true for as long as it lives.
 """
 
 _KEPT = 4
@@ -119,8 +122,8 @@ _KEPT = 4
 
 def ideas_of(board: Board) -> Ideas:
     """Return the ideas of a board, with what the record holds about each, as the module says."""
-    for posts, built in _built:
-        if posts is board.posts:
+    for posts, given, built in _built:
+        if posts is board.posts and given is board.idea_branches:
             return built
     ideas = tuple(entry for entry in board.posts if isinstance(entry.post, Idea))
     named: dict[PostId, list[Posted]] = {}
@@ -144,23 +147,31 @@ def ideas_of(board: Board) -> Ideas:
         )
         for idea, entries in named.items()
     }
-    branch = _branches_of(ideas)
+    given = {event.idea: event.branch for event in board.idea_branches}
+    branch = _branches_of(ideas, given)
     states = {
         entry.post.id: _state(board, tries.get(entry.post.id, ()), rulings.get(entry.post.id, ())) for entry in ideas
     }
     built = Ideas(ideas=ideas, branch=branch, tries=tries, rulings=rulings, states=states)
-    _built.append((board.posts, built))
+    _built.append((board.posts, board.idea_branches, built))
     del _built[:-_KEPT]
     return built
 
 
-def _branches_of(ideas: tuple[Posted, ...]) -> dict[PostId, BranchId | None]:
-    # The branch of each idea: its parent when that is a branch, or else its parent idea's branch. A parent comes
-    # before its child in the record, so one pass in order finds each one. A sealed idea has no parent.
+def _branches_of(ideas: tuple[Posted, ...], given: dict[PostId, BranchId]) -> dict[PostId, BranchId | None]:
+    # The branch of each idea: its parent when that is a branch, its parent idea's branch, or for an idea without a
+    # parent, the branch that its author gave it. A parent comes before its child in the record, so one pass in order
+    # finds each one. A sealed idea hangs on no branch.
     found: dict[PostId, BranchId | None] = {}
     for entry in ideas:
-        parent = entry.post.parent if isinstance(entry.post, Idea) else None
-        found[entry.post.id] = parent if parent and parent.startswith('b-') else found.get(parent) if parent else None
+        post = entry.post
+        parent = post.parent if isinstance(post, Idea) else None
+        if _sealed(post):
+            found[post.id] = None
+        elif parent is None:
+            found[post.id] = given.get(post.id)
+        else:
+            found[post.id] = parent if parent.startswith('b-') else found.get(parent)
     return found
 
 
@@ -229,6 +240,17 @@ def without_idea(board: Board) -> tuple[Held, ...]:
     return tuple(held for held in in_force(board) if held.branch.id not in taken)
 
 
+def without_branch(board: Board) -> tuple[Posted, ...]:
+    """
+    Return the ideas that hang on no branch, oldest first.
+
+    They are the ideas without a parent that their authors gave no branch, and the ideas that hang on such an idea. An
+    idea that is sealed for the board's reader is not among them.
+    """
+    found = ideas_of(board)
+    return tuple(entry for entry in found.ideas if found.branch[entry.post.id] is None and not _sealed(entry.post))
+
+
 def new_ideas(board: Board, since: datetime, now: datetime) -> int:
     """Return how many ideas came after `since` and by `now`."""
     return sum(since < entry.at <= now for entry in ideas_of(board).ideas)
@@ -257,6 +279,8 @@ def map_view(board: Board, now: datetime, *, whole: bool = False) -> MapView:
             )
             for item in ordered
         ),
+        no_branch=tuple(view for view in views.values() if view.branch is None and not view.sealed),
+        ideas_without_branch=len(without_branch(board)),
         sealed=sum(_sealed(entry.post) for entry in found.ideas),
         left_out=len(found.ideas) - len(listed),
     )
@@ -309,8 +333,8 @@ def _idea_view(board: Board, entry: Posted, found: Ideas, *, whole: bool) -> Ide
 
 
 def _sealed(post: Post) -> bool:
-    # A view of an idea that is sealed for its reader has no parent, and the record holds no idea without one.
-    return isinstance(post, Idea) and post.parent is None
+    # A view of an idea that is sealed for its reader has no author, and the record holds no post of `UNSIGNED`.
+    return isinstance(post, Idea) and post.author == UNSIGNED
 
 
 def _hours(span: timedelta) -> float:
@@ -323,9 +347,9 @@ def check_ideas(board: Board, event: Posted) -> None:
 
     Raises:
         RejectedEvent: A reading adds a branch with an ID that the lab had, or with the title of a branch in force,
-            retires a branch that is not in force, or leaves more than `MAX_BRANCHES` in force. An idea hangs on
-            no branch in force and on no idea, or is in a thread for talk. A post names in `idea` a post that is no
-            idea, or an idea that is sealed. The message says which.
+            retires a branch that is not in force, or leaves more than `MAX_BRANCHES` in force. An idea has a parent
+            that is no branch in force and no idea, or is in a thread for talk. A post names in `idea` a post that is
+            no idea, or an idea that is sealed. The message says which.
 
     """
     post = event.post
@@ -374,22 +398,58 @@ def _check_idea(board: Board, idea: Idea, at: datetime) -> None:
         raise RejectedEvent(
             'An idea is for the whole lab, so it is in no conversation, no desk chat, and no thread of offers.'
         )
-    parent = idea.parent or ''
+    parent = idea.parent
+    if parent is None:
+        return
     if parent.startswith('p-'):
         check_unsealed(board, parent, at, 'idea that hangs on it')
         found = board.post(parent)
         if found is None or not isinstance(found.post, Idea):
             raise RejectedEvent(f'Post {parent} is no idea, so no idea hangs on it.')
-        parent = ideas_of(board).branch.get(parent) or ''
-    held = next((item for item in branches(board) if item.branch.id == parent), None)
+        # An idea that hangs on an idea without a branch has none either, until that idea gets one.
+        through = ideas_of(board).branch.get(parent)
+        if through is None:
+            return
+        parent = through
+    _check_in_force(board, parent, 'no new idea hangs on it')
+
+
+def _check_in_force(board: Board, branch_id: BranchId, what: str) -> None:
+    # A branch that a reading added and that no reading retired. `what` says what the board takes not on another.
+    held = next((item for item in branches(board) if item.branch.id == branch_id), None)
     if held is None:
         raise RejectedEvent(
-            f'The lab has no branch {idea.parent}. An idea hangs on a branch that a reading added, or on another idea.'
+            f'The lab has no branch {branch_id}. An idea hangs on a branch that a reading added, on another idea, or '
+            'on no branch until its author gives it one.'
         )
     if held.retired is not None:
+        raise RejectedEvent(f'Branch {held.branch.id} was retired by reading {held.retired.post.id}, so {what}.')
+
+
+def check_branched(board: Board, event: IdeaBranched) -> None:
+    """
+    Check that an agent can give its idea a branch: the idea is its own and has no parent and no branch yet.
+
+    Raises:
+        RejectedEvent: The post is no idea, another agent wrote it, it has a parent, its author gave it a branch
+            already, or the branch is not in force. The message says which.
+
+    """
+    found = board.post(event.idea)
+    if found is None or not isinstance(found.post, Idea):
+        raise RejectedEvent(f'Post {event.idea} is no idea, so it takes no branch.')
+    idea = found.post
+    if idea.author != event.agent:
+        raise RejectedEvent(f'Idea {idea.id} is the idea of {idea.author}. Only its author gives it a branch.')
+    if idea.parent is not None:
         raise RejectedEvent(
-            f'Branch {held.branch.id} was retired by reading {held.retired.post.id}, so no new idea hangs on it.'
+            f'Idea {idea.id} hangs on {idea.parent}, so its branch comes from there. Only an idea without a parent '
+            'takes a branch.'
         )
+    given = next((item for item in board.idea_branches if item.idea == idea.id), None)
+    if given is not None:
+        raise RejectedEvent(f'Idea {idea.id} hangs on branch {given.branch} already, and its branch stays.')
+    _check_in_force(board, event.branch, 'no idea takes it')
 
 
 CHALLENGED_FROM = 2
@@ -417,19 +477,31 @@ def unchallenged(board: Board, proposal: Post) -> tuple[PostId, ...]:
 
 def check_rests_on(board: Board, post: Post) -> None:
     """
-    Check that a new proposal rests only on challenged results, in a lab with two or more agents that do the work.
+    Check that a new proposal rests on at least one result, and only on results that another agent challenged.
 
-    A record from before the rule holds proposals that rest on results without a challenge, so the board checks this
-    for a new post only, and not as a rule of the record. A lab with one agent that does the work has nobody to
-    challenge its results, and the rule does not hold it.
+    The rule holds in a lab with two or more agents that do the work. A lab with one such agent has nobody to
+    challenge its results, and the rule does not hold it. A record from before the rule holds proposals that rest on
+    no result or on results without a challenge, so the board checks this for a new post only, and not as a rule of
+    the record.
 
     Raises:
-        RejectedEvent: The post is a proposal, the lab has two or more agents that do the work, and a result that it
-            builds on has no challenge from another agent. The message lists those results.
+        RejectedEvent: The post is a proposal, the lab has two or more agents that do the work, and it builds on no
+            result, or a result that it builds on has no challenge from another agent. The message says which, and
+            lists those results.
 
     """
     if not isinstance(post, Proposal) or post.author == PERSON or len(working_agents(board)) < CHALLENGED_FROM:
         return
+    # The record's rules refuse a proposal in a side thread, with their own words.
+    if board.is_side(post.thread):
+        return
+    named = (found for post_id in post.builds_on if (found := board.post(post_id)))
+    if not any(isinstance(entry.post, Result) for entry in named):
+        raise RejectedEvent(
+            'In a lab with two or more agents that do the work, a proposal names in `builds_on` at least one result '
+            'that it rests on, and each such result has a check of the method `challenge` from another agent. This '
+            'proposal names no result.'
+        )
     missing = unchallenged(board, post)
     if missing:
         raise RejectedEvent(

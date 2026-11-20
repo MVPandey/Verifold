@@ -16,28 +16,39 @@ from verifold.store.record_file import RecordFile
 async def test_a_close_names_a_candidate_that_stands_while_one_stands(lab: Lab) -> None:
     ada, bo = Member(lab, 'ada'), Member(lab, 'bo')
     done = {'kind': 'close', 'text': 'The lab is done.', 'thread': 't-1'}
+    challenge = {
+        'kind': 'check',
+        'text': 'It beats random on 2024 too.',
+        'body': 'Ran it on the 2024 data.',
+        'reply_to': 'p-1',
+        'outcome': 'holds',
+        'method': 'challenge',
+    }
     async with Client(join_server(lambda _: bo)) as client:
-        await client.call_tool('post', {'kind': 'proposal', 'text': 'Yes, it beats random.', 'thread': 't-1'})
+        await client.call_tool('post', challenge)
+        await client.call_tool(
+            'post', {'kind': 'proposal', 'text': 'Yes, it beats random.', 'thread': 't-1', 'builds_on': ['p-1']}
+        )
     async with Client(join_server(lambda _: ada)) as client:
         await client.call_tool('post', {'kind': 'reading', 'text': 'An answer says yes or no.', 'thread': 't-1'})
         unnamed = await client.call_tool('post', done)
         result = await client.call_tool('post', done | {'candidate': 'p-1'})
         message = await client.call_tool(
-            'post', {'kind': 'message', 'text': 'Hi.', 'thread': 't-1', 'candidate': 'p-2'}
+            'post', {'kind': 'message', 'text': 'Hi.', 'thread': 't-1', 'candidate': 'p-3'}
         )
-        named = await client.call_tool('post', done | {'candidate': 'p-2'})
+        named = await client.call_tool('post', done | {'candidate': 'p-3'})
         brief = Brief.model_validate((await client.call_tool('brief', {})).structured_content)
 
-    assert 'A close names the candidate that it closes on, in `candidate`. The candidates that stand: p-2.' in str(
+    assert 'A close names the candidate that it closes on, in `candidate`. The candidates that stand: p-3.' in str(
         unnamed.content
     )
     assert 'Post p-1 is no candidate answer that stands.' in str(result.content)
     assert message.is_error
     assert 'candidate' in str(message.content)
     assert named.structured_content is not None
-    assert named.structured_content['post']['candidate'] == 'p-2'
-    assert (brief.close and brief.close.id, brief.closes_on) == ('p-4', 'p-2')
-    assert [line.line.id for line in brief.candidates] == ['p-2']
+    assert named.structured_content['post']['candidate'] == 'p-3'
+    assert (brief.close and brief.close.id, brief.closes_on) == ('p-5', 'p-3')
+    assert [line.line.id for line in brief.candidates] == ['p-3']
 
 
 async def test_a_close_names_no_candidate_while_none_stands(lab: Lab) -> None:

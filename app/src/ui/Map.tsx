@@ -4,6 +4,7 @@ import type { AgentView, BranchView, IdeaView, MapView } from '../api/types.ts';
 import { authorName } from '../model/agents.ts';
 import { ago } from '../model/format.ts';
 import {
+  NO_BRANCH,
   STATE_TONES,
   STATE_WORDS,
   branchCounts,
@@ -19,9 +20,9 @@ import { clip } from '../model/posts.ts';
 import { href } from '../model/route.ts';
 
 /**
- * The Map tab: the branches of the question in the reading's order, each folded with its counts, and the retired
- * branches after them. A branch opens to its ideas in the order that they were posted. The board ranks nothing, so
- * the page orders nothing by counts.
+ * The Map tab: the branches of the question in the reading's order, each folded with its counts, the ideas that hang
+ * on no branch under "No branch yet", and the retired branches after them. A branch opens to its ideas in the order
+ * that they were posted. The board ranks nothing, so the page orders nothing by counts.
  */
 export function MapTab(props: {
   readonly map: MapView;
@@ -30,16 +31,36 @@ export function MapTab(props: {
 }): ReactElement {
   const { map } = props;
   const { inForce, retired } = splitBranches(map);
-  if (map.branches.length === 0) {
-    return <p className="empty">The lab’s reading has no branches yet.</p>;
+  const loose = map.no_branch ?? [];
+  if (map.branches.length === 0 && loose.length === 0) {
+    return <p className="empty">The lab has no branch and no idea yet.</p>;
   }
   return (
     <section className="m-map" aria-label="The map of the question">
-      <ul className="m-tree">
-        {inForce.map((branch) => (
-          <BranchRow key={branch.id} branch={branch} {...props} />
-        ))}
-      </ul>
+      {inForce.length > 0 ? (
+        <ul className="m-tree">
+          {inForce.map((branch) => (
+            <BranchRow key={branch.id} branch={branch} {...props} />
+          ))}
+        </ul>
+      ) : null}
+      {loose.length > 0 ? (
+        <ul className="m-tree m-loose" aria-label={NO_BRANCH}>
+          <li className="m-branch">
+            <div className="m-head">
+              <b>{NO_BRANCH}</b>
+              <span className="m-cnt">{ideaCount(map.ideas_without_branch ?? loose.length)}</span>
+            </div>
+            <ol className="m-ideas">
+              {loose.map((idea) => (
+                <li key={idea.id}>
+                  <IdeaCard idea={idea} {...props} />
+                </li>
+              ))}
+            </ol>
+          </li>
+        </ul>
+      ) : null}
       {retired.length > 0 ? (
         <details className="m-retired">
           <summary>
@@ -149,6 +170,10 @@ export function IdeaCard(props: {
       </dl>
     </article>
   );
+}
+
+function ideaCount(count: number): string {
+  return `${String(count)} ${count === 1 ? 'idea' : 'ideas'}`;
 }
 
 function Deeds(props: { readonly lines: readonly DeedLine[] }): ReactElement {

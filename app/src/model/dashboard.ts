@@ -9,8 +9,8 @@ import type {
   Post,
 } from '../api/types.ts';
 import { authorName } from './agents.ts';
-import { amount } from './allowances.ts';
-import { ago, dayClock } from './format.ts';
+import { amount, shownAmount } from './allowances.ts';
+import { ago, dayClock, readable } from './format.ts';
 
 /** Where the dashboard opens: the frame's own page on this server, which holds nothing of the lab. */
 export const FRAME_PATH = '/frame';
@@ -69,6 +69,11 @@ export function measureValue(measure: Pick<MeasureView, 'value' | 'unit'>): stri
   return measure.unit ? amount(measure.value, measure.unit) : measure.value;
 }
 
+/** Return a measure's number with its unit as the status line and the board's line show it, with the number `readable`. */
+export function shownValue(measure: Pick<MeasureView, 'value' | 'unit'>): string {
+  return measure.unit ? shownAmount(measure.value, measure.unit) : readable(measure.value);
+}
+
 /** One part of the status line: its number, and the words under it. */
 export interface Stat {
   readonly key: string;
@@ -89,7 +94,7 @@ export function headlineStat(
   if (!measure) return { key: 'headline', value: 'No measure yet', words: headline.label };
   return {
     key: 'headline',
-    value: measureValue(measure),
+    value: shownValue(measure),
     words: `${measure.label} · ${ago(measure.as_of, now)}`,
     mark: rerunMark(measure, agents),
   };
@@ -101,7 +106,7 @@ export function actionStats(lab: LabView, agents: readonly AgentView[]): readonl
   return live.map((view) => {
     const count = view.actions.length;
     const unit = view.terms.unit;
-    const used = `${amount(view.drawn, unit)} of ${amount(view.terms.total, unit)} allowance used`;
+    const used = `${shownAmount(view.drawn, unit)} of ${shownAmount(view.terms.total, unit)} allowance used`;
     return {
       key: `actions-${view.allowance}`,
       value: `${count} ${count === 1 ? 'action' : 'actions'}`,
@@ -177,7 +182,7 @@ export function headlineMark(
   const measure = headline.measure;
   if (!measure) return { text: `${headline.label}: no measure yet`, tone: 'quiet' };
   const mark = rerunMark(measure, agents);
-  return { text: `${measure.label} ${measureValue(measure)} · ${mark.text}`, tone: mark.tone };
+  return { text: `${measure.label} ${shownValue(measure)} · ${mark.text}`, tone: mark.tone };
 }
 
 /** Return who named the headline number, and why when the coordinator named it. */

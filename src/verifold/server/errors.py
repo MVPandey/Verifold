@@ -51,3 +51,7 @@ class DeskOnly(ServerError):
 
 class AlarmRejected(ServerError):
     """A call of `alarm` gives neither minutes nor a condition."""
+
+
+class MapRejected(ServerError):
+    """A call of `map` gives an idea without a branch, or a branch without an idea."""

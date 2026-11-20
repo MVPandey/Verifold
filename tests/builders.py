@@ -21,6 +21,7 @@ from verifold.protocol.events import (
     DeliverableSet,
     DeskSet,
     Event,
+    IdeaBranched,
     LabOpened,
     LimitsReported,
     OnCallSet,
@@ -253,6 +254,12 @@ class RecordBuilder:
         """Add Verifold's record that an agent's claim of a task lapsed, its lease having ended at `until`."""
         seq, at = self._stamp()
         self.events.append(ClaimLapsed(seq=seq, at=at, agent=agent_id, task=task_id, until=until))
+        return self
+
+    def branched(self, agent_id: str, idea_id: str, branch_id: str) -> 'RecordBuilder':
+        """Add an agent's choice of a branch for its idea without a parent."""
+        seq, at = self._stamp()
+        self.events.append(IdeaBranched(seq=seq, at=at, agent=agent_id, idea=idea_id, branch=branch_id))
         return self
 
     def closed(self, round_id: str, why: RoundEnd = 'time') -> 'RecordBuilder':

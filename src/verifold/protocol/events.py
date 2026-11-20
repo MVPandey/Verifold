@@ -24,7 +24,7 @@ from verifold.protocol.agents import (
 from verifold.protocol.allowances import AllowanceId, AllowanceTerms
 from verifold.protocol.deliverables import Decision, Sentence
 from verifold.protocol.grants import Grant
-from verifold.protocol.ids import PERSON, AgentId, CommitId, DeliverableId, PostId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, BranchId, CommitId, DeliverableId, PostId, ThreadId
 from verifold.protocol.moves import Note, PaceMove, Question, SeatGrant
 from verifold.protocol.posts import Post
 from verifold.protocol.record import Record, by_person, unset
@@ -470,11 +470,10 @@ class TaskClaimed(EventBase):
     An agent claimed a task, or renewed the claim that it holds.
 
     A claim makes the agent the one that holds the task, with a lease for the minutes that the lab's settings held
-    then. A post of the holder that replies to the task, builds on it, or is in the thread that the task opened
-    starts the lease again while it stands, and so does this event again. The lease ends at its time, at the
-    holder's hand-back or ruled-out lead that replies to the task, at the author's withdrawal of the task, and when
-    the holder leaves. While it stands, the record refuses a claim of the task from every other agent. An agent
-    holds one claim at a time, and the author of a task claims it never.
+    then. An agent holds one claim at a time, so each post of the holder starts the lease again while it stands,
+    and so does this event again. The lease ends at its time, at the holder's hand-back or ruled-out lead that
+    replies to the task, at the author's withdrawal of the task, and when the holder leaves. While it stands, the
+    record refuses a claim of the task from every other agent. The author of a task claims it never.
     """
 
     type: Literal['task_claimed'] = 'task_claimed'
@@ -489,7 +488,7 @@ class ClaimLapsed(EventBase):
     Verifold records it once for each claim whose lease ended at `until` with no hand-back, no ruled-out lead of
     the holder, and no withdrawal before it. A claim whose time passed while Verifold was stopped lapses when
     Verifold serves the lab again, and its lease ended for every view at `until` already. No agent tool records
-    this event.
+    this event, and it ends the claim.
     """
 
     type: Literal['claim_lapsed'] = 'claim_lapsed'
@@ -497,6 +496,20 @@ class ClaimLapsed(EventBase):
     task: PostId
     until: AwareDatetime
     """When the lease ended."""
+
+
+class IdeaBranched(EventBase):
+    """
+    The author of an idea without a parent gave it a branch of the question in force.
+
+    The idea hangs on that branch from then on, and so does each idea that hangs on it. A record from before ideas
+    without a parent holds none.
+    """
+
+    type: Literal['idea_branched'] = 'idea_branched'
+    agent: AgentId
+    idea: PostId
+    branch: BranchId
 
 
 class AllowanceDrafted(EventBase):
@@ -986,6 +999,7 @@ type Event = Annotated[
     | RerunLeaseSet
     | TaskClaimed
     | ClaimLapsed
+    | IdeaBranched
     | RoundClosed
     | TimeSet
     | TimeRanOut

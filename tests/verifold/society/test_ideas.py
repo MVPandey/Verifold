@@ -5,7 +5,7 @@ import pytest
 from builders import START, RecordBuilder
 from pydantic import ValidationError
 
-from verifold.protocol.events import AlarmCondition, AlarmSet
+from verifold.protocol.events import AlarmCondition, AlarmSet, IdeaBranched
 from verifold.protocol.ids import UNSIGNED
 from verifold.protocol.join import SEALED_TEXT, News, PostRequest
 from verifold.protocol.posts import (
@@ -16,6 +16,7 @@ from verifold.protocol.posts import (
     FileEvidence,
     Idea,
     Measure,
+    Message,
     Objection,
     Plan,
     Proposal,
@@ -27,6 +28,7 @@ from verifold.protocol.posts import (
 from verifold.society.alarms import condition_words, rang_by, rings_at
 from verifold.society.attention import news, wakes
 from verifold.society.errors import RejectedEvent
+from verifold.society.fold import apply
 from verifold.society.ideas import (
     branch_lines,
     branches,
@@ -36,6 +38,7 @@ from verifold.society.ideas import (
     map_view,
     next_branch,
     unchallenged,
+    without_branch,
     without_idea,
 )
 from verifold.society.rounds import for_reader, round_of
@@ -73,17 +76,16 @@ def mapped() -> RecordBuilder:
     return RecordBuilder().join('ada').join('bo').thread('t-1', opened_by='ada').post(split(RATES, SPORTS))
 
 
-def test_an_idea_needs_its_statement_its_parent_its_test_and_what_rules_it_out() -> None:
+def test_an_idea_needs_its_statement_its_test_and_what_rules_it_out_and_can_wait_for_its_parent() -> None:
     whole = idea('p-2', 'b-1')
     assert (whole.parent, whole.test, whole.rules_out) == (
         'b-1',
         'Count the comparable days with a 4-point fall.',
         'Fewer than 6 of 20 days.',
     )
-    with pytest.raises(ValidationError, match='An idea needs its four parts'):
-        idea('p-2', None)
+    assert idea('p-2', None).parent is None
     for missing in ('test', 'rules_out'):
-        with pytest.raises(ValidationError, match='An idea needs its four parts'):
+        with pytest.raises(ValidationError, match='An idea needs its three parts'):
             idea('p-2', 'b-1', **{missing: ''})
     with pytest.raises(ValidationError):
         idea('p-2', 'b-1', text='')
@@ -96,8 +98,10 @@ def test_an_idea_needs_its_statement_its_parent_its_test_and_what_rules_it_out()
         'rules_out': 'Few.',
     }
     assert PostRequest.model_validate(request).to_post('p-2', 't-1', 'ada').kind == 'idea'
-    for missing in ('parent', 'test', 'rules_out'):
-        with pytest.raises(ValidationError, match='An idea needs its four parts'):
+    alone = PostRequest.model_validate({key: value for key, value in request.items() if key != 'parent'})
+    assert alone.to_post('p-2', 't-1', 'ada').model_dump()['parent'] is None
+    for missing in ('test', 'rules_out'):
+        with pytest.raises(ValidationError, match='An idea needs its three parts'):
             PostRequest.model_validate({key: value for key, value in request.items() if key != missing})
     # No other kind takes the parts of an idea.
     with pytest.raises(ValidationError):
@@ -200,6 +204,69 @@ def test_an_idea_on_an_idea_hangs_on_that_ideas_branch() -> None:
     board = mapped().post(idea('p-2', 'b-1')).post(idea('p-3', 'p-2', author='bo', text='Only on Fridays.')).board()
     assert ideas_of(board).branch == {'p-2': 'b-1', 'p-3': 'b-1'}
     assert branch_lines(board, START)[0].ideas == 2
+
+
+def test_an_idea_without_a_parent_hangs_on_no_branch_until_its_author_gives_it_one_in_force() -> None:
+    # The lab has no reading yet, and its ideas come all the same.
+    record = RecordBuilder().join('ada').join('bo').thread('t-1', opened_by='ada').post(idea('p-1', None))
+    record.post(idea('p-2', 'p-1', author='bo', text='Only on Fridays.'))
+    board = record.board()
+    now = record.at(len(record.events))
+
+    assert ideas_of(board).branch == {'p-1': None, 'p-2': None}
+    assert [entry.post.id for entry in without_branch(board)] == ['p-1', 'p-2']
+    shown = map_view(board, now)
+    assert (shown.branches, [view.id for view in shown.no_branch], shown.ideas_without_branch) == (
+        (),
+        ['p-1', 'p-2'],
+        2,
+    )
+    assert steering_facts(board, now).ideas_without_branch == 2
+    assert brief(board, 'bo', News(seq=board.seq), now=now).ideas_without_branch == 2
+    # A later reading's branches move no idea.
+    record.post(split(RATES, SPORTS, post_id='p-3')).post(split(retires=('b-2',), post_id='p-4'))
+    assert map_view(record.board(), now).ideas_without_branch == 2
+    for agent, target, branch, refusal in (
+        ('bo', 'p-1', 'b-1', 'Idea p-1 is the idea of ada. Only its author gives it a branch.'),
+        ('bo', 'p-2', 'b-1', 'Idea p-2 hangs on p-1, so its branch comes from there.'),
+        ('ada', 'p-3', 'b-1', 'Post p-3 is no idea, so it takes no branch.'),
+        ('ada', 'p-1', 'b-9', 'The lab has no branch b-9.'),
+        ('ada', 'p-1', 'b-2', 'Branch b-2 was retired by reading p-4, so no idea takes it.'),
+    ):
+        with pytest.raises(RejectedEvent, match=refusal):
+            record.copy().branched(agent, target, branch).board()
+
+    before = record.board()
+    assert map_view(before, now).ideas_without_branch == 2
+    seq = before.seq + 1
+    given = apply(before, IdeaBranched(seq=seq, at=record.at(seq), agent='ada', idea='p-1', branch='b-1'))
+
+    # The idea and the one that hangs on it are on the branch now, also on a board with the same posts as before.
+    assert given.posts is before.posts
+    assert ideas_of(given).branch == {'p-1': 'b-1', 'p-2': 'b-1'}
+    shown = map_view(given, now)
+    assert [view.id for view in shown.branches[0].idea_list] == ['p-1', 'p-2']
+    assert (shown.no_branch, shown.ideas_without_branch, steering_facts(given, now).ideas_without_branch) == ((), 0, 0)
+    with pytest.raises(RejectedEvent, match=r'Idea p-1 hangs on branch b-1 already, and its branch stays\.'):
+        record.branched('ada', 'p-1', 'b-1').branched('ada', 'p-1', 'b-1').board()
+
+
+def test_an_idea_without_a_parent_in_an_open_round_is_sealed_with_the_branch_that_its_author_gives_it() -> None:
+    record = RecordBuilder().join('ada').join('bo').join('cy').thread('t-1', opened_by='ada').post(split(RATES))
+    record.post(Round(id='p-2', thread='t-1', author='ada', text='One idea each.', minutes=15))
+    record.post(idea('p-3', None, author='bo', reply_to='p-2'))
+    waiting = record.board()
+    now = record.at(len(record.events))
+    for_cy = map_view(for_reader(waiting, 'cy', now), now)
+    assert (for_cy.no_branch, for_cy.ideas_without_branch, for_cy.sealed) == ((), 0, 1)
+    for_bo = map_view(for_reader(waiting, 'bo', now), now)
+    assert ([view.id for view in for_bo.no_branch], for_bo.ideas_without_branch, for_bo.sealed) == (['p-3'], 1, 0)
+
+    board = record.branched('bo', 'p-3', 'b-1').board()
+
+    # The branch is sealed with the idea: cy's map shows no idea on it until the round closes.
+    assert map_view(for_reader(board, 'cy', now), now).branches[0].ideas == 0
+    assert [view.id for view in map_view(for_reader(board, 'bo', now), now).branches[0].idea_list] == ['p-3']
 
 
 def challenge(post_id: str, result: str, author: str, outcome: str = 'fails') -> Check:
@@ -384,6 +451,17 @@ def test_a_proposal_rests_only_on_challenged_results_in_a_lab_of_two_working_age
     )
 
 
+def test_a_proposal_names_a_result_that_it_rests_on_in_a_lab_of_two_working_agents() -> None:
+    record = mapped().post(Message(id='p-2', thread='t-1', author='bo', text='A note.'))
+    board = record.board()
+    for named in ((), ('p-2',), ('p-1', 'p-9')):
+        proposal = Proposal(id='p-3', thread='t-1', author='ada', text='Buy it.', builds_on=named)
+        with pytest.raises(RejectedEvent, match=r'This proposal names no result\.'):
+            check_rests_on(board, proposal)
+    # A record from before the rule holds proposals that name no result, and it still loads.
+    assert record.post(Proposal(id='p-3', thread='t-1', author='ada', text='Buy it.')).board()
+
+
 def test_a_lab_with_one_working_agent_is_not_held_by_the_rule_on_proposals() -> None:
     found = Result(id='p-1', thread='t-1', author='ada', text='7 of 20.')
     proposal = Proposal(id='p-2', thread='t-1', author='ada', text='Buy it.', builds_on=('p-1',))
@@ -392,7 +470,9 @@ def test_a_lab_with_one_working_agent_is_not_held_by_the_rule_on_proposals() -> 
         RecordBuilder().join('ada').desk('dee'),
         RecordBuilder().join('ada').join('bo').leave('bo'),
     ):
-        check_rests_on(lab.thread('t-1', opened_by='ada').post(found).board(), proposal)
+        board = lab.thread('t-1', opened_by='ada').post(found).board()
+        check_rests_on(board, proposal)
+        check_rests_on(board, proposal.model_copy(update={'builds_on': ()}))
 
 
 def measured(post_id: str, value: str, branch: str | None, author: str = 'bo') -> Measure:

@@ -1,4 +1,4 @@
-/** How the app writes times, durations, money, and token counts. */
+/** How the app writes times, durations, money, token counts, amounts, and the article before a number. */
 
 /** Return the local time of day of an ISO time, as `14:04`. */
 export function clock(iso: string): string {
@@ -45,4 +45,42 @@ export function tokens(count: number): string {
 /** Return an amount in US dollars as `$0.37`. */
 export function money(usd: number): string {
   return `$${usd.toFixed(2)}`;
+}
+
+/**
+ * Return the article that English puts before a whole number: `an` before a number that is said with a vowel sound
+ * first, such as 8, 11, 18, 80 to 89, and 8,000, and `a` before every other.
+ */
+export function article(count: number): 'a' | 'an' {
+  const digits = String(Math.abs(Math.trunc(count)));
+  const lead = digits.slice(0, digits.length % 3 || 3);
+  return lead.startsWith('8') || lead === '11' || lead === '18' ? 'an' : 'a';
+}
+
+/**
+ * Return a decimal as the person reads it on the lab's page, rounded half away from zero. A value of 1 or more has
+ * exactly two digits after the point, or none when it is whole: `119.7695` reads `119.77`, `46.6` reads `46.60`, and
+ * `60.00` reads `60`. A value below 1 has four significant digits at most, with no zeros at the end: `0.123456` reads
+ * `0.1235`. A text that is no plain decimal comes back as it is. The record and the thread keep the exact value.
+ */
+export function readable(value: string): string {
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value.trim());
+  if (!match) return value;
+  const [, sign = '', whole = '0', part = ''] = match;
+  const first = part.search(/[1-9]/);
+  if (BigInt(whole) === 0n && first < 0) return '0';
+  const cents = BigInt(whole) > 0n;
+  const keep = cents ? 2 : first + 4;
+  let digits = BigInt(`${whole}${part}`);
+  if (part.length > keep) {
+    const divisor = 10n ** BigInt(part.length - keep);
+    const rest = digits % divisor;
+    digits = digits / divisor + (rest * 2n >= divisor ? 1n : 0n);
+  } else {
+    digits *= 10n ** BigInt(keep - part.length);
+  }
+  const text = digits.toString().padStart(keep + 1, '0');
+  const tail = text.slice(text.length - keep);
+  const fraction = cents ? (/^0+$/.test(tail) ? '' : tail) : tail.replace(/0+$/, '');
+  return `${sign}${text.slice(0, text.length - keep)}${fraction ? `.${fraction}` : ''}`;
 }

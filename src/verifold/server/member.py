@@ -20,7 +20,7 @@ from verifold.protocol.events import (
     RerunTaken,
     WatchSet,
 )
-from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, BranchId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
     MAX_DESK_FILE,
     MAX_MANIFEST,
@@ -65,7 +65,7 @@ from verifold.society.allowances import allowance_line
 from verifold.society.attention import news, update, wakes
 from verifold.society.board import Board
 from verifold.society.budget import LIMIT_NAMES
-from verifold.society.dashboards import outside_reference
+from verifold.society.dashboards import check_page_held, outside_reference
 from verifold.society.deliverables import live
 from verifold.society.desk import check_on, speaks_for_person
 from verifold.society.errors import RejectedEvent
@@ -383,7 +383,7 @@ class Member:
         Raises:
             EvidenceRejected: This member cannot pin or read files, the file is not in the folder, or the page is
                 too large, is no UTF-8 text, or loads something from a server.
-            RejectedEvent: The version breaks a rule of the record.
+            RejectedEvent: The version breaks a rule of the record, or another agent's lease on the page stands.
             OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
 
         """
@@ -391,6 +391,8 @@ class Member:
         _check_work(self._lab.board, self.agent_id, 'dashboard')
         if self._pin is None or self._pages is None:
             raise EvidenceRejected('This lab cannot pin files for you.')
+        # The step of the post checks the lease again. This check refuses before Verifold commits the folder.
+        check_page_held(self._lab.board, self.agent_id, self._lab.now())
         (page,) = await self._pin((path,))
         data = await self._pages(page)
         try:
@@ -485,6 +487,18 @@ class Member:
         """Return the map as the agent reads it: the branches of the question with their counts and the newest ideas."""
         now = self._lab.now()
         return map_view(for_reader(self._lab.board, self.agent_id, now), now)
+
+    async def branch_idea(self, idea_id: PostId, branch_id: BranchId) -> None:
+        """
+        Give the agent's own idea without a parent a branch in force.
+
+        Raises:
+            RejectedEvent: The agent cannot give the idea that branch, as `society.ideas.check_branched` says.
+            OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
+
+        """
+        self._check_in_time()
+        await self._lab.branch_idea(self.agent_id, idea_id, branch_id)
 
     def _unseen(self) -> News:
         now = self._lab.now()

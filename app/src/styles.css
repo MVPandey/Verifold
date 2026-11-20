@@ -4914,9 +4914,13 @@ button.v-count:hover {
   background: var(--card);
   max-width: 100%;
 }
+/*
+ * The parts share the row, and their words wrap inside them, so the press that pauses every action stays in the row
+ * beside them. The row wraps only on a page too narrow for a part of 130 px each.
+ */
 .d-stat {
-  flex: 0 1 auto;
-  min-width: 150px;
+  flex: 1 1 0;
+  min-width: 130px;
   max-width: 100%;
   padding: 10px 16px;
   border-right: 1px solid var(--line);
@@ -4934,6 +4938,8 @@ button.v-count:hover {
   overflow-wrap: anywhere;
 }
 .d-stat.d-act {
+  flex: 0 0 auto;
+  min-width: 0;
   margin-left: auto;
   border-right: 0;
   display: flex;
@@ -5079,6 +5085,7 @@ button.v-count:hover {
     border-bottom: 1px solid var(--line);
   }
   .d-stat.d-act {
+    flex: 1 1 100%;
     margin-left: 0;
     border-bottom: 0;
   }
@@ -5107,6 +5114,9 @@ button.v-count:hover {
 }
 .m-branch + .m-branch {
   border-top: 1px solid var(--line);
+}
+.m-tree + .m-loose {
+  margin-top: 14px;
 }
 .m-head {
   display: flex;

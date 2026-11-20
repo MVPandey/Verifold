@@ -184,6 +184,38 @@ describe('the status line', () => {
     ]);
   });
 
+  it('writes each amount with two digits after the point, or none when it is whole, and the board’s line does too', () => {
+    const exact = headline({ measure: measure({ value: '119.7695', unit: 'USD' }) });
+    const line = statusLine(
+      lab({
+        headline_number: exact,
+        allowances: [
+          allowance({
+            drawn: '42.840',
+            terms: { ...allowance().terms, unit: 'USD', total: '60.00' },
+          }),
+        ],
+      }),
+      agents,
+      now,
+    );
+    assert.deepEqual(
+      line?.stats.map((stat) => [stat.value, stat.words]),
+      [
+        ['119.77 USD', 'Account value · 2 min ago'],
+        ['0 actions', '42.84 USD of 60 USD allowance used'],
+      ],
+    );
+    assert.equal(headlineMark(exact, agents)?.text, 'Account value 119.77 USD · not rerun');
+    const small = headline({ measure: measure({ value: '0.0123456', unit: '' }) });
+    assert.equal(
+      statusLine(lab({ headline_number: small }), agents, now)?.stats[0]?.value,
+      '0.01235',
+    );
+    // The record keeps the exact number, and the thread shows it.
+    assert.equal(measureValue(measure({ value: '119.7695', unit: 'USD' })), '119.7695 USD');
+  });
+
   it('shows the actions of an allowance in force with how much is used, and the press that pauses every action', () => {
     const live = lab({ allowances: [allowance({ actions: [] })] });
     assert.deepEqual(statusLine(live, agents, now), {
