@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from decimal import Decimal
 from functools import partial
 
 import pytest
@@ -23,6 +24,7 @@ from verifold.protocol.join import (
     ThreadLink,
     ThreadSummary,
 )
+from verifold.protocol.measures import MAX_LABEL, MAX_PAGE_BYTES
 from verifold.protocol.posts import (
     MAX_BODY,
     MAX_HEADLINE,
@@ -33,7 +35,10 @@ from verifold.protocol.posts import (
     Call,
     Check,
     CheckMethod,
+    Dashboard,
     FileEvidence,
+    HeadlineNumber,
+    Measure,
     Message,
     Objection,
     Outcome,
@@ -52,6 +57,7 @@ from verifold.protocol.votes import BADGES, MAX_NOTES, MAX_WHY, BadgeNote, VoteN
 from verifold.server.join import INSTRUCTIONS
 from verifold.society import views
 from verifold.society.attention import news
+from verifold.society.dashboards import DASHBOARD_TITLE
 from verifold.society.errors import NotFound
 from verifold.society.fit import CUTS, fit
 from verifold.society.identity import post_line
@@ -1027,6 +1033,24 @@ def _far_larger() -> tuple[RecordBuilder, int]:
     for number in range(1, 20):
         post('proposal', 't-1', f'a{number}')
     post('reading', 't-1', 'a0', text='r' * MAX_HEADLINE, body='b' * MAX_BODY)
+    # The lab's headline number has the longest label, value, unit, and why, and the dashboard stands.
+    source = (FileEvidence(path='v.py', commit='c' * 40), FileEvidence(path='v.out', commit='c' * 40))
+    label, value = 'L' * MAX_LABEL, '1234567890123456.123456789012'
+    post(
+        'measure',
+        't-1',
+        'a1',
+        label=label,
+        value=value,
+        unit='u' * 20,
+        as_of=record.at(1),
+        script='v.py',
+        output='v.out',
+        evidence=source,
+    )
+    post('headline_number', 't-1', 'a0', label=label, why='w' * 200)
+    record.thread('t-98', opened_by='a3', title=DASHBOARD_TITLE)
+    post('dashboard', 't-98', 'a3', evidence=files, size=MAX_PAGE_BYTES)
     why = 'w' * MAX_WHY
     for entry in tuple(event for event in record.events if isinstance(event, Posted) and event.post.author != 'person'):
         for number, voter in enumerate(f'a{number}' for number in range(10) if f'a{number}' != entry.post.author):
@@ -1040,7 +1064,7 @@ def _far_larger() -> tuple[RecordBuilder, int]:
     seq, at = record._stamp()
     record.events.append(NotesSet(seq=seq, at=at, agent='a0', text=notes))
     for number in range(3):
-        record.post(Message(id=f'p-990{number}', thread='t-99', author='person', text='h' * 1000, body='b' * MAX_BODY))
+        record.post(Message(id=f'p-9990{number}', thread='t-99', author='person', text='h' * 1000, body='b' * MAX_BODY))
     after = record.events[-1].seq
     opened = post('round', 't-1', 'a1', minutes=MAX_ROUND_MINUTES)
     start = record.events[-1].at
@@ -1050,7 +1074,7 @@ def _far_larger() -> tuple[RecordBuilder, int]:
     record.closed(opened)
     for number in range(MAX_NEWS + 5):
         record.post(
-            Message(id=f'p-995{number:02d}', thread='t-1', author='person', text='h' * 1000, body='b' * MAX_BODY)
+            Message(id=f'p-9995{number:02d}', thread='t-1', author='person', text='h' * 1000, body='b' * MAX_BODY)
         )
     post('round', 't-1', 'a2', minutes=MAX_ROUND_MINUTES)
     return record, after
@@ -1134,6 +1158,10 @@ def test_the_brief_of_a_lab_far_larger_than_the_largest_fits_one_tool_result_and
     parts = [names.get(word, word) for line in first.cut if (word := line.split('`')[1]) != 'news'] + ['news.for_you']
     assert parts == sorted(parts, key=CUTS.index)
     assert {'side_threads', 'reruns_wanted', 'news.reruns', 'left', 'news.rounds', 'offers', 'agents'} < set(parts)
+    # The headline number and the dashboard are cut whole, before the candidates and the agents' lines.
+    assert (whole.headline_number is not None, whole.dashboard is not None) == (True, True)
+    assert (first.headline_number, first.dashboard) == (None, None)
+    assert {'headline_number', 'dashboard'} < set(parts)
     assert first.quiet_threads == first.one_agent_threads == first.side_threads == ()
     # Every line of work has a summary, and a thread's line that the brief keeps keeps it.
     works = {f't-{number + 1}' for number in range(1, 61)}
@@ -1148,11 +1176,16 @@ def test_a_seat_with_a_fresh_view_reads_no_candidate_and_no_report_until_its_fir
     record = lab().post(Reading(id='p-1', thread='t-1', author='ada', text='An answer is a sort that holds.'))
     record.post(Proposal(id='p-2', thread='t-1', author='ada', text='Use the radix sort.'))
     record.post(Report(id='p-3', thread='t-1', author='bo', text='The radix sort leads.'))
+    page = (FileEvidence(path='board.html', commit='c' * 40),)
+    record.thread('t-2', opened_by='bo', title=DASHBOARD_TITLE)
+    record.post(Dashboard(id='p-9', thread='t-2', author='bo', text='The race so far.', evidence=page, size=10))
     record.join('dee', fresh=True)
     board = record.board()
 
     fresh = brief(board, 'dee', News(seq=0))
     assert (fresh.fresh, fresh.candidates, fresh.older_candidates, fresh.report) == (True, (), (), None)
+    # The dashboard says where the lab stands, as the report does.
+    assert (fresh.dashboard, brief(board, 'cy', News(seq=0)).dashboard is not None) == (None, True)
     # The reading and the question stay, and another agent's brief holds the candidate.
     assert (fresh.reading and fresh.reading.id, fresh.question) == ('p-1', board.question)
     assert [line.line.id for line in brief(board, 'cy', News(seq=0)).candidates] == ['p-2']
@@ -1164,3 +1197,50 @@ def test_a_seat_with_a_fresh_view_reads_no_candidate_and_no_report_until_its_fir
         ['p-2'],
         'p-3',
     )
+    assert after.dashboard is not None
+
+
+def test_the_largest_brief_with_the_headline_number_and_the_dashboard_is_one_tool_result() -> None:
+    record = _largest()
+    source = (FileEvidence(path='v.py', commit='c' * 40), FileEvidence(path='v.out', commit='c' * 40))
+    label = 'L' * MAX_LABEL
+    measured = Measure(
+        id=f'p-{len(record.events) + 1}',
+        thread='t-1',
+        author='a1',
+        text='x' * 140,
+        label=label,
+        value=Decimal('-1234567890123456.123456789012'),
+        unit='u' * 20,
+        as_of=record.at(1),
+        script='v.py',
+        output='v.out',
+        evidence=source,
+    )
+    record.post(measured).coordinator('a2')
+    record.post(
+        HeadlineNumber(
+            id=f'p-{len(record.events) + 1}', thread='t-1', author='a2', text='x' * 80, label=label, why='w' * 200
+        )
+    )
+    record.thread('t-98', opened_by='a3', title=DASHBOARD_TITLE)
+    page = Dashboard(
+        id=f'p-{len(record.events) + 1}',
+        thread='t-98',
+        author='a3',
+        text='x' * 200,
+        evidence=(FileEvidence(path='d.html', commit='c' * 40),),
+        size=MAX_PAGE_BYTES,
+    )
+    board = record.post(page).board()
+
+    view = brief(board, 'a0', news(board, 'a0', 0))
+
+    assert len(view.model_dump_json()) <= MAX_BRIEF
+    kept = (view.headline_number is not None, view.dashboard is not None)
+    cut = tuple(line.split('`')[1] for line in view.cut)
+    assert all(shown or part in cut for shown, part in zip(kept, ('headline_number', 'dashboard'), strict=True))
+    whole = brief(board, 'a5', News(seq=board.seq))
+    assert whole.headline_number is not None
+    assert whole.headline_number.measure is not None
+    assert (whole.headline_number.named_by, whole.dashboard and whole.dashboard.by) == ('a2', 'a3')

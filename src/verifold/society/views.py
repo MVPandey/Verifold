@@ -37,7 +37,9 @@ from verifold.protocol.join import (
     CandidateRef,
     CandidatesView,
     CandidateView,
+    DashboardLine,
     DiskLine,
+    HeadlineNumberLine,
     LeftLine,
     News,
     ObstacleEntry,
@@ -83,6 +85,7 @@ from verifold.society.board import Board
 from verifold.society.budget import budget_line, disk_limit
 from verifold.society.candidates import candidates, closes_on, gone, own_entry
 from verifold.society.coordinator import waiting_for_reply, waiting_posts
+from verifold.society.dashboards import dashboard_line
 from verifold.society.deliverables import deliverable_lines
 from verifold.society.errors import NotFound
 from verifold.society.fit import CUTS, Keep, Part, cut_line, fit
@@ -96,6 +99,7 @@ from verifold.society.lifecycle import (
     pending_alarm,
 )
 from verifold.society.lines import is_line_of_work, lines_of, question_thread
+from verifold.society.measures import headline_line
 from verifold.society.obstacles import obstacles
 from verifold.society.pace import cap_line, cap_of, limits_of, pause_line, seats_near_limit
 from verifold.society.reruns import rerun_checks, reruns_wanted
@@ -519,6 +523,9 @@ def brief(  # noqa: PLR0913, PLR0915
     )[-MAX_NEWS:]
     steers = tuple(move_line(board, move, now) for move in moves(board)[:MAX_MOVES])
     leads = agent_id == board.coordinator
+    headline = headline_line(board, now)
+    # The dashboard says where the lab stands, as the report does, so a fresh view reads neither.
+    page_line = None if fresh else dashboard_line(board, now)
     # The agents that posted last keep the lines of their plans and latest posts longest.
     posted_last = {entry.post.author: entry.seq for entry in board.posts}
     recent = tuple(sorted((agent.id for agent in others), key=lambda agent: posted_last.get(agent, 0)))
@@ -619,6 +626,8 @@ def brief(  # noqa: PLR0913, PLR0915
         ),
         allowance=allowance_line(board, agent_id, now),
         actions_paused=board.acting(agent_id) and board.actions_paused is not None,
+        headline_number=headline,
+        dashboard=page_line,
         news=news,
     )
     if board.is_desk(agent_id):
@@ -732,7 +741,15 @@ def brief(  # noqa: PLR0913, PLR0915
             if 'offers' in cuts
             else delivered
         )
+        # The headline number and the dashboard are one line each, which the budget cuts whole.
+        whole_lines: dict[Part, HeadlineNumberLine | DashboardLine | None] = {
+            'headline_number': headline,
+            'dashboard': page_line,
+        }
+        left_out = {part for part, fact in whole_lines.items() if fact is not None and keep.get(part, 1) == 0}
+        cuts.update(dict.fromkeys(left_out, (1, ())))
         update = {
+            **{part: None if part in left_out else fact for part, fact in whole_lines.items()},
             'deliverables': offers_kept,
             'agents': agents,
             'left': kept('left', gone_lines, name=_left),
@@ -787,6 +804,8 @@ def brief(  # noqa: PLR0913, PLR0915
         'threads': min(len(summaries), MAX_NEWS),
         'news.rounds': sum(len(note.entries) for note in news.rounds),
         'offers': len(offers),
+        'headline_number': int(headline is not None),
+        'dashboard': int(page_line is not None),
         'candidates': len(shown),
         'agents': len(recent),
         'moves': len(steers),

@@ -43,7 +43,9 @@ from verifold.protocol.app import (
 from verifold.protocol.events import TurnSummary
 from verifold.protocol.ids import PERSON, AgentId, PostId
 from verifold.protocol.join import FileText, PostRequest
+from verifold.protocol.measures import MAX_PAGE_BYTES
 from verifold.protocol.moves import AddSeat
+from verifold.protocol.posts import FileEvidence
 from verifold.protocol.record import Record
 from verifold.protocol.settings import (
     AtExit,
@@ -70,7 +72,7 @@ from verifold.runner.session import Place, SessionOptions, offer_of
 from verifold.runner.snapshots import pin
 from verifold.server.activity import Activity
 from verifold.server.app_api import app_api, new_person_token
-from verifold.server.errors import LabExists, NoLab, SetupRejected
+from verifold.server.errors import EvidenceRejected, LabExists, NoLab, SetupRejected
 from verifold.server.join import Members, join_server, token_digest
 from verifold.server.lab import Build, Lab, Stops
 from verifold.server.member import Member
@@ -364,16 +366,8 @@ class Host:
         file = next((item for item in entry.post.evidence if item.path == path), None) if entry else None
         if entry is None or file is None:
             raise NotFound(f'Post {post_id} names no file {path}.')
-        pinned = PinnedCommit(
-            project=self._project.resolve(),
-            author=entry.post.author,
-            commit=file.commit,
-            seconds=READ_SECONDS,
-            running=self._reads,
-        )
         try:
-            async with self._free_reads:
-                data = await asyncio.to_thread(file_bytes, pinned, file.path, MAX_FILE_BYTES)
+            data = await self._pinned_bytes(entry.post.author, file, MAX_FILE_BYTES)
         except TooLarge as error:
             raise NotFound(f'{path} is larger than {MAX_FILE_BYTES:,} bytes, so the app does not show it.') from error
         except Missing as error:
@@ -384,6 +378,33 @@ class Host:
             return FileText(path=file.path, commit=file.commit, text=data.decode())
         except UnicodeDecodeError as error:
             raise NotFound(f'{path} is not a text file.') from error
+
+    async def page_bytes(self, author: AgentId, page: FileEvidence) -> bytes:
+        """
+        Return the bytes of a page of the dashboard at the commit that pins it, as `file_text` reads a file.
+
+        Raises:
+            EvidenceRejected: The page has more than `MAX_PAGE_BYTES` bytes, or Verifold does not read it.
+
+        """
+        try:
+            return await self._pinned_bytes(author, page, MAX_PAGE_BYTES)
+        except TooLarge as error:
+            raise EvidenceRejected(f'The board takes a page of {MAX_PAGE_BYTES:,} bytes at most. {error}') from error
+        except (Missing, GitError, OSError, ValueError) as error:
+            raise EvidenceRejected(f'Verifold could not read {page.path} at {page.commit[:8]}: {error}') from error
+
+    async def _pinned_bytes(self, author: AgentId, file: FileEvidence, limit: int) -> bytes:
+        # The commit, its folders, and the file as Git objects, each checked against its ID.
+        pinned = PinnedCommit(
+            project=self._project.resolve(),
+            author=author,
+            commit=file.commit,
+            seconds=READ_SECONDS,
+            running=self._reads,
+        )
+        async with self._free_reads:
+            return await asyncio.to_thread(file_bytes, pinned, file.path, limit)
 
     async def open_folder(self, agent_id: AgentId | None = None) -> FolderView:
         """
@@ -1062,6 +1083,7 @@ class Host:
             copies=self._copies,
             adds=self.add_seat,
             seat_ok=self.check_seat,
+            pages=partial(self.page_bytes, agent.id),
         )
         self._members.add_guest(member, digest)
         self._activity.seat(member)
@@ -1093,6 +1115,7 @@ class Host:
             adds=self.add_seat,
             seat_ok=self.check_seat,
             files=self.file_text,
+            pages=partial(self.page_bytes, agent.id),
         )
         self._activity.seat(member)
         setup = AgentSetup(

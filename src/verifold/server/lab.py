@@ -62,7 +62,8 @@ from verifold.protocol.events import (
     WatchSet,
 )
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
-from verifold.protocol.join import ActRequest, PostRequest
+from verifold.protocol.join import ActRequest, MeasureRequest, PostRequest
+from verifold.protocol.measures import same_label
 from verifold.protocol.moves import (
     AddMove,
     AddSeat,
@@ -85,9 +86,12 @@ from verifold.protocol.posts import (
     Ask,
     Check,
     Close,
+    Dashboard,
     FileEvidence,
     FileOffer,
+    HeadlineNumber,
     Mark,
+    Measure,
     MoveRequest,
     PermissionShown,
     QuestionShown,
@@ -103,12 +107,14 @@ from verifold.society.board import Board
 from verifold.society.budget import reached
 from verifold.society.candidates import check_names_candidate, check_read
 from verifold.society.coordinator import check_asks, check_why, covers_now, permission_choice, time_given
+from verifold.society.dashboards import DASHBOARD_TITLE, dashboard_thread
 from verifold.society.deliverables import accepted, check_decidable, live, offers_title, told_at
 from verifold.society.errors import RejectedEvent
 from verifold.society.fold import apply, fold
 from verifold.society.labels import awaits_model, is_numbered, label, plain
 from verifold.society.lifecycle import utc
 from verifold.society.lines import question_thread
+from verifold.society.measures import headline_label, naming
 from verifold.society.names import check_name
 from verifold.society.reruns import lease_refusal, open_take, open_to, wanted_reruns
 from verifold.society.reviewers import check_review, seats_line
@@ -670,6 +676,137 @@ class Lab:
         opens = (_open_thread(title, author, deliverable=deliverable_id),) if first else ()
         board = await self._commit(*opens, post)
         return board.posts[-1]
+
+    async def measure(self, author: AgentId, request: MeasureRequest, evidence: tuple[FileEvidence, ...]) -> Posted:
+        """
+        Post an agent's measure, with its script and that script's output pinned as `evidence`, and return the post.
+
+        `evidence` holds the script first and the output second, at the paths that the snapshot pinned. Without
+        `as_of`, the number holds for the time of the post, and without `thread`, the measure is in the question's
+        thread.
+
+        Raises:
+            RejectedEvent: The measure breaks a rule of the record, as `society.measures.check_measure_post` says,
+                or it names no thread in a lab from before the question had a thread.
+            pydantic.ValidationError: The request does not describe a valid measure.
+
+        """
+        thread = request.thread or question_thread(self._board)
+        if thread is None:
+            raise RejectedEvent('This lab has no thread of the question, so a measure names its thread in `thread`.')
+
+        def build(board: Board, seq: int, at: datetime) -> Posted:
+            measured = Measure(
+                id=f'p-{len(board.posts) + 1}',
+                thread=thread,
+                author=author,
+                helper=request.helper,
+                text=request.text,
+                body=request.body,
+                builds_on=request.builds_on,
+                evidence=evidence,
+                label=request.label,
+                value=request.value,
+                unit=request.unit,
+                as_of=request.as_of or at,
+                script=evidence[0].path,
+                output=evidence[-1].path,
+            )
+            return Posted(seq=seq, at=at, post=measured)
+
+        board = await self._commit(build)
+        return board.posts[-1]
+
+    async def dashboard(  # noqa: PLR0913
+        self,
+        author: AgentId,
+        page: FileEvidence,
+        size: int,
+        note: str,
+        body: str = '',
+        *,
+        builds_on: tuple[PostId, ...] = (),
+        helper: str = '',
+    ) -> Posted:
+        """
+        Post an agent's version of the dashboard, the page that `page` pins with its `size` in bytes, and return it.
+
+        The first version opens the dashboard's thread, and every later version goes there.
+
+        Raises:
+            RejectedEvent: The version breaks a rule of the record, as `society.dashboards.check_dashboard_post`
+                says, or a post that it builds on does not exist.
+            pydantic.ValidationError: The note is no headline, the body is too long, or the size is out of bounds.
+
+        """
+        # No other change comes between this read of the board and the commit, so the first version opens the thread.
+        first = dashboard_thread(self._board) is None
+
+        def build(board: Board, seq: int, at: datetime) -> Posted:
+            version = Dashboard(
+                id=f'p-{len(board.posts) + 1}',
+                thread=dashboard_thread(board) or board.threads[-1].thread.id,
+                author=author,
+                helper=helper,
+                text=note,
+                body=body,
+                builds_on=builds_on,
+                evidence=(page,),
+                size=size,
+            )
+            return Posted(seq=seq, at=at, post=version)
+
+        opens = (_open_thread(DASHBOARD_TITLE, author),) if first else ()
+        board = await self._commit(*opens, build)
+        return board.posts[-1]
+
+    async def name_headline_number(self, label: str, by: AgentId, why: str = '') -> Posted | None:
+        """
+        Record the label of the lab's headline number, and return the post that tells the lab, or `None`.
+
+        `by` is the person, or the agent that holds the coordinator seat, whose `why` the post keeps. An empty label
+        leaves the lab without a headline number. The label that `by` named already records nothing. The post is in
+        the question's thread, and a lab from before the question had a thread gets one thread for these posts.
+
+        Raises:
+            RejectedEvent: The naming breaks a rule of the record, as `society.measures.check_measure_post` says.
+            pydantic.ValidationError: The label or the why is too long.
+
+        """
+        board = self._board
+        named = naming(board)
+        # The person's naming of the coordinator's label makes it the person's, which the coordinator then keeps.
+        if same_label(headline_label(board), label) and (named is None or named.post.author == by):
+            return None
+        who = 'The person' if by == PERSON else 'The coordinator'
+        text = (
+            f'{who} named "{label}" as the lab\'s headline number.'
+            if label
+            else f"{who} took back the lab's headline number."
+        )
+        thread = question_thread(board) or next(
+            (
+                opened.thread.id
+                for opened in board.threads
+                if opened.thread.title == HEADLINE_TITLE and not opened.thread.between
+            ),
+            None,
+        )
+
+        def build(board: Board, seq: int, at: datetime) -> Posted:
+            named = HeadlineNumber(
+                id=f'p-{len(board.posts) + 1}',
+                thread=thread or board.threads[-1].thread.id,
+                author=by,
+                text=text,
+                label=label,
+                why=why or None,
+            )
+            return Posted(seq=seq, at=at, post=named)
+
+        opens = () if thread else (_open_thread(HEADLINE_TITLE, by),)
+        posted = await self._commit(*opens, build)
+        return posted.posts[-1]
 
     async def decide(self, deliverable_id: DeliverableId, decision: Decision, offer: PostId, text: str = '') -> None:
         """
@@ -1373,6 +1510,9 @@ TAKEN_BACK: Final = 'The person took back the acceptance of these files for the 
 
 DELIVERABLES_TITLE: Final = 'Deliverables'
 """The title of the thread that holds the person's deliverables in a lab from before the question had a thread."""
+
+HEADLINE_TITLE: Final = 'The headline number'
+"""The title of the thread that names the headline number in a lab from before the question had a thread."""
 
 TOLD_WINDOW: Final = timedelta(seconds=60)
 """How long after a post about a new sentence or a removal the next such change sends no post."""

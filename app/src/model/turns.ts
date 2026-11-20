@@ -27,6 +27,9 @@ const NOUNS = {
   entry: 'entry',
   action: 'action',
   receipt: 'receipt',
+  measure: 'measure',
+  headline_number: 'headline number',
+  dashboard: 'dashboard',
 } as const satisfies Record<Post['kind'], string>;
 
 const CLAIMS: ReadonlySet<Post['kind']> = new Set(['result', 'proposal', 'ruled_out', 'hand_back']);
@@ -68,7 +71,11 @@ export function tone(post: Post): MarkTone {
     case 'action':
       return post.allowed ? 'claim' : 'ask';
     case 'receipt':
+    case 'measure':
       return 'claim';
+    case 'dashboard':
+      return 'answer';
+    case 'headline_number':
     case 'plan':
     case 'message':
     case 'report':
@@ -162,6 +169,12 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
         : `declared an action, which waits for you${reply}`;
     case 'receipt':
       return to ? `reported what ${theirs} did` : 'reported what an action did';
+    case 'measure':
+      return 'reported a measure';
+    case 'headline_number':
+      return post.label ? 'named the headline number' : 'took back the headline number';
+    case 'dashboard':
+      return 'made a version of the dashboard';
   }
 }
 
@@ -555,6 +568,9 @@ const PLURALS = {
   entry: ['entry', 'entries'],
   action: ['action', 'actions'],
   receipt: ['receipt', 'receipts'],
+  measure: ['measure', 'measures'],
+  headline_number: ['naming of the headline number', 'namings of the headline number'],
+  dashboard: ['version of the dashboard', 'versions of the dashboard'],
   message: ['message', 'messages'],
 } as const satisfies Record<Post['kind'], readonly [string, string]>;
 

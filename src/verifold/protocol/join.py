@@ -30,6 +30,7 @@ from verifold.protocol.allowances import ActionNeed, AllowanceId, Amount, Bound,
 from verifold.protocol.deliverables import DeliverableLine
 from verifold.protocol.events import AlarmCondition, Halt, Limit, Note, Posted, Question, RequestAnswered, RoundEnd
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
+from verifold.protocol.measures import MeasureLabel, MeasureUnit, MeasureValue
 from verifold.protocol.moves import LabSetting, Move, SeatChoice, Why
 from verifold.protocol.posts import (
     MAX_BUILDS_ON,
@@ -214,6 +215,8 @@ class PostRequest(Record):
             raise ValueError('An offer of files for a deliverable goes through the `offer` tool.')
         if self.kind == 'action':
             raise ValueError('An action goes through the `act` tool.')
+        if self.kind in {'measure', 'headline_number', 'dashboard'}:
+            raise ValueError(f'A {self.kind} goes through the `{self.kind}` tool.')
         if self.conversation:
             # The desk's post for the person is the person's side of the conversation, so it takes the mark there.
             if self.thread or self.new_thread or (self.for_person and self.on is None):
@@ -293,6 +296,28 @@ class ActRequest(Record):
     """The thread of the action. `None` puts it in the thread of the first post that it rests on."""
     files: tuple[RelativePath, ...] = ()
     helper: Helper = ''
+
+
+class MeasureRequest(Record):
+    """A measure as an agent reports it with `measure`: its number, its source, and its thread."""
+
+    label: MeasureLabel
+    value: MeasureValue
+    unit: MeasureUnit = ''
+    as_of: AwareDatetime | None = None
+    """The time that the number holds for. `None` takes the time of the post."""
+    script: RelativePath
+    output: RelativePath
+    thread: ThreadId | None = None
+    """The thread of the measure. `None` puts it in the question's thread."""
+    body: Body = ''
+    builds_on: tuple[PostId, ...] = Field(default=(), max_length=MAX_BUILDS_ON)
+    helper: Helper = ''
+
+    @property
+    def text(self) -> str:
+        """The headline that Verifold writes for the measure: its label, its value, and its unit."""
+        return f'{self.label}: {format(self.value, "f")} {self.unit}'.strip()
 
 
 class Sparse(Record):
@@ -1556,10 +1581,11 @@ type SteerKind = Literal[
     'cap',
     'round',
     'reading',
+    'headline_number',
 ]
 """
-The kinds of the coordinator's moves: a move that came from its request, a round that it opened, or a reading that it
-posted.
+The kinds of the coordinator's moves: a move that came from its request, a round that it opened, a reading that it
+posted, or its naming of the lab's headline number.
 """
 
 MAX_MOVES = 5
@@ -1570,8 +1596,9 @@ class MoveLine(Sparse):
     """
     One move of the coordinator as a fact: what kind it is, the post that holds it, and its one line of why.
 
-    The post is the coordinator's request for the move, its round, or its reading. An `objection` that replies to
-    the post objects to the move, as to any post, and the coordinator hears it as a reply.
+    The post is the coordinator's request for the move, its round, its reading, or its naming of the headline number.
+    An `objection` that replies to the post objects to the move, as to any post, and the coordinator hears it as a
+    reply.
     """
 
     post: PostId
@@ -1581,7 +1608,10 @@ class MoveLine(Sparse):
     minutes_ago: int = 0
     """How many whole minutes ago the move took effect, by the lab's clock."""
     why: str = ''
-    """The coordinator's one line of why: the `why` of a move of pace, a round, or a reading, or else the request's headline."""
+    """
+    The coordinator's one line of why: the `why` of a move of pace, a round, a reading, or a naming of the headline
+    number, or else the request's headline.
+    """
     agent: AgentId | None = None
     """The seat that the move names: the one that it paused, resumed, limited, removed, or added."""
     yes_by: AgentId | None = None
@@ -1717,6 +1747,59 @@ class ActResult(Record):
     news: News | None = None
 
 
+class MeasureLine(Sparse):
+    """
+    One measure as a line: its number, the time that it holds for, its author, and who reran it.
+
+    `rerun_by` names the agents whose check of an independent rerun of the measure holds, and `rerun_failed_by` the
+    agents whose such check fails. Both are empty while nobody reran it. The marks say who reran the number and
+    what that rerun found, and never whether the number is good.
+    """
+
+    post: PostId
+    thread: ThreadId
+    by: AgentId
+    label: str
+    value: MeasureValue
+    unit: str = ''
+    as_of: AwareDatetime
+    minutes_ago: int = 0
+    """How many whole minutes before now `as_of` is, by the lab's clock."""
+    rerun_by: tuple[AgentId, ...] = ()
+    rerun_failed_by: tuple[AgentId, ...] = ()
+    standing: Standing = 'open'
+
+
+class HeadlineNumberLine(Sparse):
+    """The lab's headline number: its label, who named it, and the newest measure with that label."""
+
+    label: str
+    named_by: AgentId
+    """The person, or the agent that held the coordinator seat when it named the label."""
+    measure: MeasureLine | None = None
+    """The newest measure with the label that its author did not concede. `None` while no measure has the label."""
+
+
+class DashboardLine(Sparse):
+    """The version of the lab's dashboard that stands: its post, its thread, its author, its age, and its standing."""
+
+    post: PostId
+    thread: ThreadId
+    by: AgentId
+    minutes_ago: int = 0
+    standing: Standing = 'open'
+
+
+class HeadlineResult(Record):
+    """What `headline_number` returns: the label that stands after the call, the post that named it, and the news."""
+
+    label: str
+    """The label of the lab's headline number after the call. Empty while the lab has none."""
+    post: PostId | None = None
+    """The post that this call recorded, or `None` when the label stood already, so the board recorded nothing."""
+    news: News | None = None
+
+
 class Brief(Record):
     """
     The lab for one agent, in one read: how the board works, the lab's state and time, who works on what, and the posts.
@@ -1820,7 +1903,7 @@ class Brief(Record):
     fresh: bool = Field(default=False, exclude_if=unset)
     """
     Whether your seat started with a fresh view and you have posted no plan yet. The brief then leaves out the
-    candidate answers and the report. `thread` still shows every post.
+    candidate answers, the report, and the dashboard. `thread` still shows every post.
     """
     agents: tuple[AgentLine, ...] = ()
     """
@@ -1964,6 +2047,13 @@ class Brief(Record):
     """For an acting seat: the newest allowance that the person started for it. Left out for every other seat."""
     actions_paused: bool = Field(default=False, exclude_if=unset)
     """For an acting seat: whether the person paused every action, so that `act` takes none now."""
+    headline_number: HeadlineNumberLine | None = Field(default=None, exclude_if=unset)
+    """
+    The lab's headline number: the label that the person or the coordinator named, and the newest measure with that
+    label. Left out while the lab has none, and when the brief cut it.
+    """
+    dashboard: DashboardLine | None = Field(default=None, exclude_if=unset)
+    """The version of the lab's dashboard that stands. Left out while the lab has none, and when the brief cut it."""
     news: News
 
 

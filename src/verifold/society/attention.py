@@ -28,7 +28,8 @@ decide whether the lab is done.
 
 The lab's coordinator and the person can mark a post as one for the whole lab. It is then for every agent that is
 not on call, as the person's post that names nobody is. A reading of the question is for every such agent too,
-whatever it names, because it changes what counts as an answer.
+whatever it names, because it changes what counts as an answer, and so is a post that names the lab's headline
+number. A version of the dashboard reaches no agent by itself, also when it opens the dashboard's thread.
 
 A side thread is a thread between named agents. Its members are those agents and every agent that posted in it or
 started to watch it since. A member watches it until it says otherwise, and then it hears nothing from the thread
@@ -83,7 +84,19 @@ from verifold.protocol.join import (
     RoundNote,
     Update,
 )
-from verifold.protocol.posts import Ask, Call, Check, Close, Entry, Post, Reading, Round, Task
+from verifold.protocol.posts import (
+    Ask,
+    Call,
+    Check,
+    Close,
+    Dashboard,
+    Entry,
+    HeadlineNumber,
+    Post,
+    Reading,
+    Round,
+    Task,
+)
 from verifold.society.alarms import alarm_line
 from verifold.society.board import Board
 from verifold.society.budget import budget_line
@@ -539,8 +552,12 @@ def _for_everyone(board: Board, entry: Posted) -> bool:
     post = entry.post
     # Whether the lab is done concerns every agent, whatever the post names, and so does a round, which names nobody,
     # and the lab's reading of the question, which says what counts as an answer.
-    if isinstance(post, Close | Round | Reading) or post.to_lab:
+    if isinstance(post, Close | Round | Reading | HeadlineNumber) or post.to_lab:
         return True
+    # A version of the dashboard is the person's page. It reaches the agents that watch its thread, and the ones that
+    # it names, replies to, or builds on, also when it opens the thread.
+    if isinstance(post, Dashboard):
+        return False
     open_ask = isinstance(post, Call | Task) or (isinstance(post, Ask) and not post.reply_to)
     return not post.mentions and (open_ask or _opens_thread(board, entry))
 

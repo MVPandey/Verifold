@@ -4763,3 +4763,192 @@ button.v-count:hover {
   color: var(--muted);
   cursor: pointer;
 }
+
+/*
+ * The status line, the tabs of the lab page, and the Dashboard tab, from the approved mockup of 2026-11-19: the
+ * board's line in the app's style above the agents' page, which shows in a sealed frame with a dashed edge.
+ */
+.d-status {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0 0 18px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  max-width: 100%;
+}
+.d-stat {
+  flex: 0 1 auto;
+  min-width: 150px;
+  max-width: 100%;
+  padding: 10px 16px;
+  border-right: 1px solid var(--line);
+}
+.d-stat b {
+  display: block;
+  font: 700 20px/1.2 var(--head);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.d-stat small {
+  display: block;
+  color: var(--muted);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.d-stat.d-act {
+  margin-left: auto;
+  border-right: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.d-stat .btn {
+  min-height: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--line2);
+  background: var(--card);
+  color: var(--ink);
+  font: 600 14px/1 var(--body);
+}
+.d-stat .btn.a-pause {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.d-mark {
+  display: inline-block;
+  font: 600 11.5px/1.2 var(--body);
+  padding: 3px 6px;
+  border: 1px solid var(--line2);
+  color: var(--ink2);
+  overflow-wrap: anywhere;
+}
+.d-mark.plain {
+  padding: 0;
+  border: 0;
+  color: inherit;
+  font: inherit;
+}
+.d-mark.good {
+  border-color: var(--good);
+  color: var(--good);
+}
+.d-mark.bad {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.d-tabs,
+.d-board {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 32px;
+}
+.d-tabs {
+  display: flex;
+  gap: 22px;
+  margin-bottom: 16px;
+  /* The rule under the tabs spans the content, inside the page's gutters. */
+  background: linear-gradient(var(--line), var(--line)) bottom / 100% 1px no-repeat;
+  background-origin: content-box;
+  background-clip: content-box;
+}
+.d-tabs a {
+  padding: 8px 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-weight: 600;
+  text-decoration: none;
+}
+.d-tabs a.on {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+.d-board {
+  padding-bottom: 90px;
+}
+.d-byline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  align-items: center;
+  padding: 9px 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  font-size: 13.5px;
+  color: var(--ink2);
+}
+.d-byline > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.d-byline-mark {
+  margin-left: auto;
+}
+.d-frame {
+  display: block;
+  width: 100%;
+  height: 75vh;
+  min-height: 480px;
+  border: 1px dashed var(--line2);
+  /* The agents' page sets its own colors. Until it does, it reads on white, in both themes. */
+  background: #fff;
+}
+.d-empty {
+  padding: 18px 20px;
+  border: 1px dashed var(--line2);
+  color: var(--muted);
+  margin: 0;
+}
+.d-choice {
+  margin-top: 22px;
+  max-width: 68ch;
+}
+.d-choice h3 {
+  font: 600 16px/1.3 var(--head);
+  margin: 0 0 6px;
+}
+.d-choice p {
+  color: var(--ink2);
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+}
+.d-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.d-choice-row input {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--line2);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+}
+@media (max-width: 1000px) {
+  .d-tabs,
+  .d-board {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+}
+@media (max-width: 600px) {
+  .d-stat {
+    flex: 1 1 100%;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .d-stat.d-act {
+    margin-left: 0;
+    border-bottom: 0;
+  }
+  .d-byline-mark {
+    margin-left: 0;
+  }
+  .d-frame {
+    height: 70vh;
+    min-height: 420px;
+  }
+}

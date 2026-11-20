@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol
 
 from verifold.protocol.agents import GUEST, Picture
@@ -32,6 +32,7 @@ from verifold.protocol.join import (
     DeskFile,
     FileText,
     ManifestLine,
+    MeasureRequest,
     News,
     Overview,
     PostLine,
@@ -61,7 +62,9 @@ from verifold.server.errors import (
 from verifold.server.lab import Adds, Lab, Said
 from verifold.society.allowances import allowance_line
 from verifold.society.attention import news, update, wakes
+from verifold.society.board import Board
 from verifold.society.budget import LIMIT_NAMES
+from verifold.society.dashboards import outside_reference
 from verifold.society.deliverables import live
 from verifold.society.desk import check_on, speaks_for_person
 from verifold.society.errors import RejectedEvent
@@ -78,6 +81,13 @@ type Pin = Callable[[tuple[str, ...]], Awaitable[tuple[FileEvidence, ...]]]
 
 type Files = Callable[[PostId, str], Awaitable[FileText]]
 """Reads a file that backs a post, at the commit that the post pins, as the person's app reads it."""
+
+type Pages = Callable[[FileEvidence], Awaitable[bytes]]
+"""
+Reads the bytes of a file of the agent's folder at the commit that pins it, up to `MAX_PAGE_BYTES`.
+
+Raises `EvidenceRejected` when the file has more bytes, or when Verifold cannot read it from the commit.
+"""
 
 type Change = Literal['add', 'change', 'remove']
 """What the desk does to a deliverable on the person's word."""
@@ -139,6 +149,7 @@ class Member:
         adds: Adds | None = None,
         seat_ok: Callable[[AddSeat], None] | None = None,
         files: Files | None = None,
+        pages: Pages | None = None,
     ) -> None:
         """
         Seat an agent that has joined the lab. It has read everything up to now, or up to event `seen` when given.
@@ -150,8 +161,11 @@ class Member:
         while the coordinator's power over agents is on, and the request waits for the person otherwise.
         `seat_ok` refuses a seat whose harness this computer does not have, when the coordinator asks for it.
         `files` reads a file that backs a post for the desk. Without it, the desk reads no file.
+        `pages` reads the page of a version of the dashboard from the commit that pins it. Without it, the agent
+        offers no dashboard.
         """
         self._files = files
+        self._pages = pages
         self._adds = adds
         self._seat_ok = seat_ok
         self._lab = lab
@@ -326,6 +340,86 @@ class Member:
         evidence = await self._pin(tuple(dict.fromkeys(files)))
         posted = await self._lab.offer(self.agent_id, deliverable_id, evidence, note, body, helper=helper)
         return post_view(self._lab.board, posted, self.agent_id, self._lab.now())
+
+    async def measure(self, request: MeasureRequest) -> PostView:
+        """
+        Report a measure of the agent: its number, with its script and that script's output pinned as evidence.
+
+        Raises:
+            EvidenceRejected: This member cannot pin files, a file is not in the folder, or the script and the
+                output are one file.
+            RejectedEvent: The measure breaks a rule of the record.
+            OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
+
+        """
+        self._check_in_time()
+        _check_work(self._lab.board, self.agent_id, 'measure')
+        if PurePosixPath(request.script) == PurePosixPath(request.output):
+            raise EvidenceRejected('`script` and `output` name one file. A measure pins the script and its output.')
+        if self._pin is None:
+            raise EvidenceRejected('This lab cannot pin files for you.')
+        evidence = await self._pin((request.script, request.output))
+        posted = await self._lab.measure(self.agent_id, request, evidence)
+        return post_view(self._lab.board, posted, self.agent_id, self._lab.now())
+
+    async def dashboard(
+        self,
+        path: str,
+        note: str,
+        body: str = '',
+        *,
+        builds_on: tuple[PostId, ...] = (),
+        helper: str = '',
+    ) -> PostView:
+        """
+        Offer a page of the agent's folder as the newest version of the lab's dashboard, and return the post.
+
+        Verifold reads the page from the commit that pins it. The board takes a page of UTF-8 text of at most
+        `MAX_PAGE_BYTES` bytes that loads nothing from a server, as `society.dashboards.outside_reference` reads it.
+
+        Raises:
+            EvidenceRejected: This member cannot pin or read files, the file is not in the folder, or the page is
+                too large, is no UTF-8 text, or loads something from a server.
+            RejectedEvent: The version breaks a rule of the record.
+            OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
+
+        """
+        self._check_in_time()
+        _check_work(self._lab.board, self.agent_id, 'dashboard')
+        if self._pin is None or self._pages is None:
+            raise EvidenceRejected('This lab cannot pin files for you.')
+        (page,) = await self._pin((path,))
+        data = await self._pages(page)
+        try:
+            html = data.decode()
+        except UnicodeDecodeError as error:
+            raise EvidenceRejected(f'{page.path} is no UTF-8 text, so it is no page of the dashboard.') from error
+        if found := outside_reference(html):
+            where, address = found
+            raise EvidenceRejected(
+                f'{page.path} loads {address} with {where}. The board takes a page that loads nothing from a '
+                'server: its styles, scripts, images, and fonts are in the page, inline or as `data:` addresses.'
+            )
+        posted = await self._lab.dashboard(
+            self.agent_id, page, len(data), note, body, builds_on=builds_on, helper=helper
+        )
+        return post_view(self._lab.board, posted, self.agent_id, self._lab.now())
+
+    async def name_headline_number(self, label: str, why: str) -> PostView | None:
+        """
+        Name the label of the lab's headline number as the lab's coordinator, and return the post, or `None`.
+
+        The label that stands already records nothing.
+
+        Raises:
+            RejectedEvent: The agent does not hold the coordinator seat, `why` is empty, or a label that the person
+                named stands.
+            OutOfTime: The agent joined with an invitation, and the lab is out of time or stopped.
+
+        """
+        self._check_in_time()
+        posted = await self._lab.name_headline_number(label, self.agent_id, why)
+        return post_view(self._lab.board, posted, self.agent_id, self._lab.now()) if posted else None
 
     async def request(self, move: Move, text: str, body: str = '') -> PostView:
         """
@@ -1009,3 +1103,9 @@ class Member:
             f'The board recorded the end of the turn of {agent_id}. Verifold cancels that turn, and {agent_id} '
             'starts one more turn.'
         )
+
+
+def _check_work(board: Board, agent_id: AgentId, kind: str) -> None:
+    # The desk is no part of the lab's work, so it is refused before its folder gets a commit.
+    if board.is_desk(agent_id):
+        raise RejectedEvent(f"The desk is no part of the lab's work, so the board takes no {kind} from it.")

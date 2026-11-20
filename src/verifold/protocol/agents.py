@@ -172,7 +172,8 @@ class Agent(Record):
     """
     Whether the seat started with a fresh view, as the coordinator's move asked. Until the agent posts its first
     plan, its start message and its briefs hold the question, the reading, and what was ruled out, and leave out
-    the candidate answers and the report. `False` for every other seat, and in a record from before this field.
+    the candidate answers, the report, and the dashboard. `False` for every other seat, and in a record from before
+    this field.
     """
     checks: PostId | None = None
     """

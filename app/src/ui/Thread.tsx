@@ -10,6 +10,7 @@ import { href } from '../model/route.ts';
 import { offersReplyHint } from '../model/deliverables.ts';
 import { sideReplyHint } from '../model/side.ts';
 import { onItLine, partsOf, workOf } from '../model/tasks.ts';
+import { measureParts } from '../model/dashboard.ts';
 import { MAX_RERUNS, wantedLine } from '../model/status.ts';
 import { holdsNew, markUnfolded, readUnfolded } from '../model/seen.ts';
 import {
@@ -288,7 +289,7 @@ export function Turn(
   // The person can always ask, once: a request of theirs that is still open shows in the line above the button.
   // A post that has the checks of all the reruns that one post gets takes no other request.
   const canRerun =
-    post.kind === 'result' &&
+    (post.kind === 'result' || post.kind === 'measure') &&
     post.evidence.length > 0 &&
     standing !== 'held_up' &&
     post.author !== PERSON &&
@@ -361,7 +362,7 @@ export function Turn(
           .map((other) => other && port('Built on by', other))}
         {onward ? <span className="f-port">{onward}</span> : null}
         <p className={isLong(post.text) ? 'f-say-text long' : 'f-say-text'}>{post.text}</p>
-        <Parts post={post} />
+        <Parts post={post} more={measureParts(post, props.now)} />
         {work ? <p className="f-work-on">{onItLine(work, agents, props.now)}</p> : null}
         {post.kind === 'ask' && post.choices.length > 0 ? (
           <p className="choices">Choices: {post.choices.join(' · ')}</p>
@@ -399,9 +400,15 @@ export function Turn(
   );
 }
 
-/** The parts of a piece of work that an agent handed out, or of the work that came back, as plain text. */
-function Parts(props: { readonly post: Post }): ReactElement | null {
-  const parts = partsOf(props.post);
+/**
+ * The parts of a piece of work that an agent handed out, or of the work that came back, as plain text, and `more`:
+ * the facts of a measure, of a version of the dashboard, or of a naming of the headline number.
+ */
+function Parts(props: {
+  readonly post: Post;
+  readonly more?: readonly (readonly [string, string])[];
+}): ReactElement | null {
+  const parts = [...partsOf(props.post), ...(props.more ?? [])];
   if (parts.length === 0) return null;
   return (
     <dl className="f-parts">

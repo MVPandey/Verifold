@@ -32,6 +32,8 @@ type Part = Literal[
     'threads',
     'news.rounds',
     'offers',
+    'headline_number',
+    'dashboard',
     'candidates',
     'agents',
     'steering',
@@ -58,6 +60,8 @@ CUTS: tuple[Part, ...] = (
     'threads',
     'news.rounds',
     'offers',
+    'headline_number',
+    'dashboard',
     'candidates',
     'agents',
     'steering',
@@ -71,9 +75,10 @@ moves, which `steering` lists. In the lists of posts, a post
 keeps its ID and loses its line, because `thread` shows each post. The lists of posts go in the reverse of their
 order in the brief, so a post that an earlier list holds keeps its line there while a later list holds its ID. The
 other posts of the news, the threads, the entries of closed rounds, and the offers of the deliverables come after
-them. The candidates lose their lines but stay by their IDs, and the other agents lose the lines of their plans and
-latest posts but stay. Then the coordinator's steering facts go, which the tool `steering` returns. Last, the news
-ends earlier: the next result brings the posts for the agent that it holds no
+them, and then the lines of the headline number and of the dashboard. The candidates lose their lines but stay by
+their IDs, and the other agents lose the lines of their plans and latest posts but stay. Then the coordinator's
+steering facts go, which the tool `steering` returns. Last, the news ends earlier: the next result brings the posts
+for the agent that it holds no
 longer, so none is lost.
 """
 
@@ -148,6 +153,8 @@ CUT_LINES: Mapping[Part, str] = {
         'each one whole.'
     ),
     'offers': "`deliverables` leaves out {lines} of older offers. `thread` shows them in each deliverable's `thread`.",
+    'headline_number': '`headline_number` is left out. `thread` shows the measures and the post that named the headline number.',
+    'dashboard': "`dashboard` is left out. `thread` shows each version in the dashboard's thread.",
     'candidates': '`candidates` leaves out {lines}, and `older_candidates` names them. `thread` shows each proposal.',
     'agents': '`agents` leaves out the plans and latest posts of {named}. `thread` shows them.',
     'steering': '`steering` is left out of this brief. The tool `steering` shows the steering facts.',

@@ -75,7 +75,9 @@ export function Top(props: {
           <>
             <a
               href={href({ page: 'lab' })}
-              aria-current={current(route.page === 'lab' || route.page === 'thread')}
+              aria-current={current(
+                route.page === 'lab' || route.page === 'thread' || route.page === 'dashboard',
+              )}
             >
               Lab
             </a>

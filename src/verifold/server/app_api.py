@@ -28,6 +28,7 @@ from verifold.protocol.app import (
     BudgetRequest,
     ConversationView,
     CoordinatorSeat,
+    DashboardPage,
     DeliverableDecision,
     DeliverableRequest,
     DeliverableView,
@@ -35,6 +36,7 @@ from verifold.protocol.app import (
     DiskRequest,
     FolderRequest,
     FolderView,
+    HeadlineRequest,
     Invitation,
     InviteRequest,
     LabView,
@@ -75,6 +77,7 @@ from verifold.server.conversation import conversation_view
 from verifold.server.desk_chat import desk_view
 from verifold.server.errors import LabExists, NoLab, ServerError, SetupRejected
 from verifold.server.lab import Build, Lab
+from verifold.server.measures import dashboard_meta, headline_view, measure_labels
 from verifold.server.member import Member
 from verifold.server.status import agent_need, all_outcomes, in_turn, missed, profile_edits, thread_needs, waits
 from verifold.society.alarms import alarm_line
@@ -345,6 +348,26 @@ def _pinned_routes(api: FastAPI, host: Host, authorized: params.Depends) -> None
         return candidates_view(_lab(host).board)
 
 
+def _dashboard_routes(api: FastAPI, host: Host, activity: Activity, authorized: params.Depends) -> None:
+    """Add what the Dashboard tab reads, the agents' page with the board's facts about it, and the headline number."""
+
+    @api.get('/dashboard', dependencies=[authorized])
+    async def dashboard() -> DashboardPage | None:
+        # The app puts the page's text into a frame that is sealed from the app. No address of the frame holds it.
+        meta = dashboard_meta(_lab(host).board)
+        if meta is None:
+            return None
+        page = await host.file_text(meta.post, meta.path)
+        return DashboardPage(meta=meta, html=page.text)
+
+    @api.post('/headline', dependencies=[authorized])
+    async def headline(request: HeadlineRequest) -> LabView:
+        # The same label again records nothing. The person's naming tells the lab in the question's thread.
+        lab = _lab(host)
+        await lab.name_headline_number(request.label, PERSON)
+        return _view_of(lab, activity)
+
+
 def _coordinator_routes(api: FastAPI, host: Host, authorized: params.Depends) -> None:
     """Add what the person reads and does in the panel for the coordinator: the conversation, powers, and requests."""
 
@@ -431,6 +454,7 @@ def _seat_routes(api: FastAPI, host: Host, activity: Activity, authorized: param
         return _view_of(lab, activity)
 
     _coordinator_routes(api, host, authorized)
+    _dashboard_routes(api, host, activity, authorized)
     _limit_routes(api, host, activity, authorized)
     _allowance_routes(api, host, activity, authorized)
     _vote_routes(api, host, authorized)
@@ -630,6 +654,9 @@ def _lab_view(board: Board, activity: Activity, now: datetime, disk: DiskUse | N
         allowances=allowances,
         actions_paused=paused.at if (paused := board.actions_paused) else None,
         missed=missed(board, now),
+        headline_number=headline_view(board),
+        dashboard=dashboard_meta(board),
+        measure_labels=measure_labels(board),
     )
 
 
