@@ -52,6 +52,7 @@ from verifold.protocol.join import (
     RoundLine,
     RoundNote,
     SideLine,
+    TaskEntry,
     ThreadLine,
     ThreadLink,
     ThreadSummary,
@@ -69,6 +70,7 @@ from verifold.protocol.posts import (
     Report,
     Result,
     Summary,
+    Task,
 )
 from verifold.protocol.threads import Thread
 from verifold.protocol.usage import DiskUse
@@ -98,6 +100,7 @@ from verifold.society.reviewers import free_seats, holders, seats
 from verifold.society.rounds import closes_at, entries, for_reader, open_round, waits_for
 from verifold.society.standing import agreed, closing, is_answered, is_open_call, standing, waits_for_person
 from verifold.society.summaries import in_sight, standing_summary
+from verifold.society.tasks import claim_line, dropped, lapsed, open_tasks
 from verifold.society.tested import rests_on, support
 from verifold.society.turns import before
 from verifold.society.votes import marks
@@ -274,7 +277,7 @@ def team(board: Board, opened: ThreadOpened, lines: dict[AgentId, ThreadId | Non
         if not joined.agent.checks and not board.gone(joined.agent.id) and not board.is_desk(joined.agent.id)
     )
     first = next((entry.post for entry in board.posts if entry.post.thread == thread.id), None)
-    called = isinstance(first, Call) and first.author == thread.opened_by
+    called = isinstance(first, Call | Task) and first.author == thread.opened_by
     opener = () if called or thread.opened_by in lines else (thread.opened_by,)
     return tuple(agent for agent in workers if agent in opener or lines.get(agent) == thread.id)
 
@@ -383,8 +386,9 @@ def brief(  # noqa: PLR0913, PLR0915
     number of later ones that wait too. Then come the threads: the newest ones, one line for each side
     thread, the threads where one agent works alone, and the threads that got no post for a long while. Then come
     the posts by where they stand: the disputed posts, the results that nobody has built on, the results that
-    nobody has checked, the open obstacles with the counts of the others, the asks that nobody has answered, and
-    the calls that need an agent. The order ranks nothing. `how` says how the board works. The desk's brief holds
+    nobody has checked, the open obstacles with the counts of the others, the asks that nobody has answered, the
+    calls that need an agent, and the tasks that nobody holds. Each agent's line has the task that it holds. The
+    order ranks nothing. `how` says how the board works. The desk's brief holds
     the lab's facts and the desk's news, and no list of the lab's work, as `_desk_brief` says.
 
     The brief has `MAX_BRIEF` characters of JSON at most. The board cuts whole lines as `society.fit` says, and
@@ -502,6 +506,11 @@ def brief(  # noqa: PLR0913, PLR0915
     delivered = deliverable_lines(board)
     offers = sorted((offer for line in delivered for offer in line.offers), key=lambda offer: offer.at)
     notes = board.notes_of(agent_id)
+    unheld = tuple(
+        entry
+        for entry in open_tasks(board, now)
+        if entry.post.thread not in not_mine and entry.post.thread not in (board.conversation, board.desk_chat)
+    )[-MAX_NEWS:]
     # The agents that posted last keep the lines of their plans and latest posts longest.
     posted_last = {entry.post.author: entry.seq for entry in board.posts}
     recent = tuple(sorted((agent.id for agent in others), key=lambda agent: posted_last.get(agent, 0)))
@@ -575,6 +584,7 @@ def brief(  # noqa: PLR0913, PLR0915
         reviewer_seats_free=free_seats(board),
         vote_reveal_minutes=board.settings.votes.reveal_minutes,
         rerun_lease_minutes=board.settings.reruns.lease_minutes,
+        task_lease_minutes=board.settings.tasks.lease_minutes,
         conversation=board.conversation,
         desk=board.desk,
         desk_chat=board.desk_chat,
@@ -671,6 +681,16 @@ def brief(  # noqa: PLR0913, PLR0915
             'obstacles': listed('obstacles', blocking[:MAX_OBSTACLES], last=False),
             'open_asks': listed('open_asks', open_asks),
             'open_calls': listed('open_calls', open_calls),
+            'open_tasks': tuple(
+                TaskEntry(
+                    id=entry.id,
+                    line=entry.line,
+                    invites=task.post.mentions,
+                    dropped=dropped(board, task),
+                    lapsed=lapsed(board, task.post.id),
+                )
+                for entry, task in zip(listed('open_tasks', unheld), unheld, strict=True)
+            ),
         }
         side_kept = kept('side_threads', side[:MAX_NEWS], last=False)
         quiet_kept = kept('quiet_threads', quiet[:MAX_LEADS], last=False)
@@ -735,6 +755,7 @@ def brief(  # noqa: PLR0913, PLR0915
         'side_threads': min(len(side), MAX_NEWS),
         'reruns_wanted': len(wanted),
         'news.reruns': len(news.reruns),
+        'open_tasks': len(unheld),
         'open_calls': len(open_calls),
         'open_asks': len(open_asks),
         'obstacles': min(len(blocking), MAX_OBSTACLES),
@@ -859,6 +880,7 @@ def _agent_line(
         thread=working.get(agent.id),
         plan=_own_line(board, plan, seat, reader, now) if plan else None,
         latest=_own_line(board, posts[-1], seat, reader, now) if posts and posts[-1] is not plan else None,
+        claim=claim_line(board, agent.id, now),
         error=_reason(board.failure(agent.id)),
     )
 

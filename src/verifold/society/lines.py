@@ -1,7 +1,7 @@
 """Where each agent works: the thread of its latest plan or result."""
 
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
-from verifold.protocol.posts import Call, Close, Plan, Result, Round, RuledOut
+from verifold.protocol.posts import Call, Close, Plan, Result, Round, RuledOut, Task
 from verifold.protocol.threads import QUESTION_TITLE, Thread
 from verifold.society.board import Board
 
@@ -29,7 +29,7 @@ def lines_of(board: Board) -> dict[AgentId, ThreadId | None]:
     the question's thread, so a plan there moves nobody. Nor does a plan or a result in a side thread, or in the conversation with the person, which is
     talk beside the agents' work: its author keeps its line, its team, and its watch. A ruled-out lead ends the agent's work in its thread, and
     the agent then works nowhere until its next plan or result. A ruled-out lead that withdraws the agent's own
-    call, close, or round ends no work. An agent that left the lab works nowhere.
+    call, task, close, or round ends no work. An agent that left the lab works nowhere.
     """
     question = question_thread(board)
     workers = {
@@ -54,6 +54,7 @@ def lines_of(board: Board) -> dict[AgentId, ThreadId | None]:
 
 
 def withdraws(board: Board, post: RuledOut) -> bool:
-    """Return whether a ruled-out lead withdraws its author's own call, close, or round."""
+    """Return whether a ruled-out lead withdraws its author's own call, task, close, or round."""
     target = board.post(post.reply_to) if post.reply_to else None
-    return bool(target and isinstance(target.post, Call | Close | Round) and target.post.author == post.author)
+    withdrawn = Call | Task | Close | Round
+    return bool(target and isinstance(target.post, withdrawn) and target.post.author == post.author)

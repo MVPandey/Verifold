@@ -18,6 +18,8 @@ const NOUNS = {
   reading: 'reading',
   summary: 'summary',
   call: 'call',
+  task: 'piece of work',
+  hand_back: 'work',
   close: 'close',
   request: 'request',
   offer: 'offer',
@@ -25,12 +27,12 @@ const NOUNS = {
   entry: 'entry',
 } as const satisfies Record<Post['kind'], string>;
 
-const CLAIMS: ReadonlySet<Post['kind']> = new Set(['result', 'proposal', 'ruled_out']);
+const CLAIMS: ReadonlySet<Post['kind']> = new Set(['result', 'proposal', 'ruled_out', 'hand_back']);
 
 /** The title of the thread that a lab opens with, as `QUESTION_TITLE` in the server's `protocol/threads.py`. */
 const QUESTION_TITLE = 'The question';
 
-/** Return whether a post states something that others can check: a result, a proposal, or a ruled-out lead. */
+/** Return whether a post states something that others can check: a result, a proposal, a ruled-out lead, or work that came back. */
 export function isClaim(post: Post): boolean {
   return CLAIMS.has(post.kind);
 }
@@ -46,12 +48,14 @@ export function tone(post: Post): MarkTone {
       return post.accepts ? 'turn' : 'quiet';
     case 'result':
     case 'ruled_out':
+    case 'hand_back':
       return 'claim';
     case 'proposal':
     case 'offer':
       return 'answer';
     case 'ask':
     case 'call':
+    case 'task':
     case 'request':
     case 'round':
       return 'ask';
@@ -104,6 +108,10 @@ export function act(post: Post, to: Post | null, context: ActContext): string {
         : `posted a plan${reply}`;
     case 'call':
       return `called for an agent${reply}`;
+    case 'task':
+      return `handed out a piece of work${reply}`;
+    case 'hand_back':
+      return to ? `handed back ${theirs}` : 'handed back a piece of work';
     case 'close':
       return `said that the lab is done${reply}`;
     case 'ruled_out':
@@ -335,8 +343,8 @@ export function waitsForPerson(item: PostView, posts: readonly PostView[]): bool
  * The replies under each top-level post fold behind one row after it, and `opened` says which top-level posts
  * show theirs. An open row shows every reply in its place, with the runs of messages folded as above. These
  * replies stay in sight outside the row: a post of the person, a reply to a post of the person, a post for the
- * person (an ask that names the person, or a post that the coordinator marked for the person), an objection that
- * stands, a check that fails, and `target`.
+ * person (an ask that names the person, or a post that the coordinator marked for the person), the work that came
+ * back for a piece of work, an objection that stands, a check that fails, and `target`.
  *
  * These never fold: the first post of the thread, a reply to a post of the person, and `target`, the post that
  * the page opened on. A message that has replies is a turn, with its replies under it. Without `folding`, every
@@ -439,6 +447,7 @@ function tree(
       answered?.post.author === PERSON ||
       post.for_person ||
       (post.kind === 'ask' && post.mentions.includes(PERSON)) ||
+      post.kind === 'hand_back' ||
       objectionStands(item, all) ||
       checkFails(item)
     );
@@ -521,6 +530,8 @@ const PLURALS = {
   answer: ['answer', 'answers'],
   plan: ['plan', 'plans'],
   call: ['call', 'calls'],
+  task: ['piece of work', 'pieces of work'],
+  hand_back: ['piece of work handed back', 'pieces of work handed back'],
   ask: ['question', 'questions'],
   report: ['report', 'reports'],
   reading: ['reading', 'readings'],

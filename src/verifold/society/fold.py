@@ -12,6 +12,7 @@ from verifold.protocol.events import (
     AlarmSet,
     BadgeSet,
     BudgetSet,
+    ClaimLapsed,
     CoordinatorSet,
     DeliverableDecided,
     DeliverableSet,
@@ -33,6 +34,7 @@ from verifold.protocol.events import (
     ReviewerSet,
     RoundClosed,
     SettingsSet,
+    TaskClaimed,
     ThreadOpened,
     TimeRanOut,
     TimeSet,
@@ -79,6 +81,7 @@ from verifold.society.rules import (
     check_turn,
     check_watch,
 )
+from verifold.society.tasks import check_claim, check_lapse, check_task_post
 from verifold.society.votes import check_badge, check_vote, with_badge, with_vote
 
 
@@ -127,6 +130,7 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
             check_offer(board, post)
             check_rounds(board, event)
             check_desk_post(board, event)
+            check_task_post(board, event)
             rounds = (*board.rounds, event) if isinstance(post, Round) else board.rounds
             # A close that names no candidate closes on what stood just before it, also after a later concession.
             unnamed = (
@@ -178,6 +182,12 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
         case RerunLeaseSet():
             check_lease(board, event)
             return replace(board, seq=event.seq, leases=(*board.leases, event))
+        case TaskClaimed():
+            check_claim(board, event)
+            return replace(board, seq=event.seq, claims=(*board.claims, event))
+        case ClaimLapsed():
+            check_lapse(board, event)
+            return replace(board, seq=event.seq, lapses=(*board.lapses, event))
         case TimeSet():
             check_time(event)
             check_made(board, event)

@@ -163,7 +163,7 @@ def test_the_lab_norms_are_plain_text_for_one_read_and_the_doorbell_is_one_line(
     assert '`' not in NORMS_TEMPLATE
     # Each norm has its reason and what it looks like in practice, so the file is longer than a list of rules.
     # An agent still reads it whole at the start of its work.
-    assert len(NORMS_TEMPLATE) < 25_400
+    assert len(NORMS_TEMPLATE) < 26_500
     assert DOORBELL == 'New posts for you on the lab board.'
 
 
@@ -176,6 +176,7 @@ def test_the_lab_norms_are_sections_that_each_say_what_the_person_wants_and_why(
         'Explore first',
         'What stands in the way becomes the way',
         'Chain ideas',
+        'Handing out work',
         'Rounds',
         'Strategy and the seats',
         'Votes and badges',
@@ -619,3 +620,16 @@ def test_an_agent_that_starts_after_a_revision_gets_the_current_question() -> No
             '`brief` lists the posts that hold the revisions.'
         ),
     ]
+
+
+def test_the_norm_on_handing_out_work_says_what_the_person_wants_and_that_an_invitation_assigns_nothing() -> None:
+    work = NORMS_TEMPLATE.split('## Handing out work', 1)[1].split('## ', 1)[0]
+
+    for norm in (
+        'The person wants such work to have one owner and a visible end',
+        'An invitation asks and does not assign.',
+        'claim it before you start',
+        'what you did, what you found, what you doubt, and where you left the brief',
+        'give it up with a ruled-out lead that says why',
+    ):
+        assert norm in work

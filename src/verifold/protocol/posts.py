@@ -6,9 +6,10 @@ shows how an idea moved from one agent's work into another's. A plan says what i
 disputes its target, an answer can concede an objection, a check tests another agent's post, a proposal is its
 author's candidate answer for the lab, a close says that the lab is done and names the candidate that it closes on,
 a report tells the person where the lab is, a reading says how the lab reads the question, a summary says what a
-thread has established, a call offers work that another agent can take, an offer holds files for a deliverable of
-the person, a round asks every agent the same question at once, and an entry is an agent's answer to a round. A new
-kind is one more model in the `Post` union.
+thread has established, a call offers work that another agent can take, a task hands one piece of work to the
+one agent that claims it, a hand-back returns that work to the task's author, an offer holds files for a deliverable
+of the person, a round asks every agent the same question at once, and an entry is an agent's answer to a round. A
+new kind is one more model in the `Post` union.
 """
 
 from collections.abc import Callable
@@ -70,6 +71,8 @@ type PostKind = Literal[
     'reading',
     'summary',
     'call',
+    'task',
+    'hand_back',
     'close',
     'request',
     'offer',
@@ -381,6 +384,46 @@ class Call(PostBase):
     kind: Literal['call'] = 'call'
 
 
+MAX_PART = 2_000
+"""The most characters in one part of a task's brief or of a hand-back, such as its bounds or its concerns."""
+
+type Part = Annotated[str, StringConstraints(strip_whitespace=True, max_length=MAX_PART)]
+"""One part of a hand-back, in its author's words. It is empty when the author has nothing to say there."""
+type BriefPart = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_PART)]
+"""One part of a task's brief, in its author's words."""
+
+
+class Task(PostBase):
+    """
+    One piece of work that its author hands to the lab, with a brief of three parts.
+
+    `text` is the objective, `output` the output wanted, and `bounds` what the work stays within. `mentions` names the agents that the task invites. An invitation is no order: any agent but the author claims
+    the task while nobody holds it, and the board gives it to nobody. One agent holds a task at a time, with a lease
+    that its activity on the task renews, and returns it with a hand-back that replies to it. The author withdraws
+    it with a ruled-out lead that replies to it. A record from before tasks holds none.
+    """
+
+    kind: Literal['task'] = 'task'
+    output: BriefPart
+    bounds: BriefPart
+
+
+class HandBack(PostBase):
+    """
+    The work of a task, returned to the task's author by the agent that claimed it. It replies to the task.
+
+    `text` says what was done. `findings`, `concerns`, and `deviations` say what the work found, what its author
+    doubts, and where the work left the brief, and each is empty when there is nothing to say. The task's author
+    accepts it with an answer that replies to it, or another agent checks it as it checks a result.
+    """
+
+    kind: Literal['hand_back'] = 'hand_back'
+    reply_to: PostId
+    findings: Part = ''
+    concerns: Part = ''
+    deviations: Part = ''
+
+
 class Close(PostBase):
     """
     An agent says that the lab is done: it has its answer, or nothing useful is left to do.
@@ -480,6 +523,8 @@ type Post = Annotated[
     | Reading
     | Summary
     | Call
+    | Task
+    | HandBack
     | Close
     | MoveRequest
     | FileOffer

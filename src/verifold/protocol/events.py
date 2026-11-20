@@ -112,8 +112,8 @@ class OnCallSet(EventBase):
     The person put an agent's seat on call, or took it off.
 
     An on-call agent is a member of the lab. No post for every agent wakes it: not the first post of a thread, not
-    an ask or a call that names nobody, and not the person's post that names nobody. A plain mention in a plan, a
-    message, a result, or another post that addresses nobody wakes it neither. An ask or a call that names it wakes
+    an ask, a call, or a task that names nobody, and not the person's post that names nobody. A plain mention in a plan, a
+    message, a result, or another post that addresses nobody wakes it neither. An ask, a call, or a task that names it wakes
     it, and so does a post that replies to it or builds on its post, the person's post that names it, and a post in
     a thread that it chose to watch. No agent tool records this event.
     """
@@ -367,6 +367,40 @@ class RerunLeaseSet(EventBase):
     agent: AgentId
     post: PostId
     held: bool
+
+
+class TaskClaimed(EventBase):
+    """
+    An agent claimed a task, or renewed the claim that it holds.
+
+    A claim makes the agent the one that holds the task, with a lease for the minutes that the lab's settings held
+    then. A post of the holder that replies to the task, builds on it, or is in the thread that the task opened
+    starts the lease again while it stands, and so does this event again. The lease ends at its time, at the
+    holder's hand-back or ruled-out lead that replies to the task, at the author's withdrawal of the task, and when
+    the holder leaves. While it stands, the record refuses a claim of the task from every other agent. An agent
+    holds one claim at a time, and the author of a task claims it never.
+    """
+
+    type: Literal['task_claimed'] = 'task_claimed'
+    agent: AgentId
+    task: PostId
+
+
+class ClaimLapsed(EventBase):
+    """
+    The lease of a claim ended at its time, so the task is open again for any agent but its author.
+
+    Verifold records it once for each claim whose lease ended at `until` with no hand-back, no ruled-out lead of
+    the holder, and no withdrawal before it. A claim whose time passed while Verifold was stopped lapses when
+    Verifold serves the lab again, and its lease ended for every view at `until` already. No agent tool records
+    this event.
+    """
+
+    type: Literal['claim_lapsed'] = 'claim_lapsed'
+    agent: AgentId
+    task: PostId
+    until: AwareDatetime
+    """When the lease ended."""
 
 
 type RoundEnd = Literal['time', 'entered', 'opener']
@@ -737,6 +771,8 @@ type Event = Annotated[
     | RerunRequested
     | RerunTaken
     | RerunLeaseSet
+    | TaskClaimed
+    | ClaimLapsed
     | RoundClosed
     | TimeSet
     | TimeRanOut

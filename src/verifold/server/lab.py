@@ -16,6 +16,7 @@ from verifold.protocol.events import (
     AlarmSet,
     BadgeSet,
     BudgetSet,
+    ClaimLapsed,
     CoordinatorSet,
     DeliverableDecided,
     DeliverableSet,
@@ -37,6 +38,7 @@ from verifold.protocol.events import (
     ReviewerSet,
     RoundClosed,
     SettingsSet,
+    TaskClaimed,
     ThreadOpened,
     TimeRanOut,
     TimeSet,
@@ -93,6 +95,7 @@ from verifold.society.reruns import lease_refusal, open_take, open_to, wanted_re
 from verifold.society.reviewers import check_review, seats_line
 from verifold.society.rounds import close_due
 from verifold.society.standing import closing
+from verifold.society.tasks import lapses_due
 from verifold.society.votes import proposal, revealed, vote_of
 from verifold.store.errors import CorruptRecord, RecordChanged
 from verifold.store.record_file import RecordFile
@@ -140,7 +143,9 @@ class Lab:
     Every change goes through one lock: the lab checks the event against the board, writes it to the record, and then
     wakes the callers that wait for new events. An event that breaks a rule never reaches the record. Each change
     also records the close of a round that is due, before its own events and after them, so a round closes in the
-    step of the entry, the withdrawal, or the change of the lab's agents that ends it. After them, it records that
+    step of the entry, the withdrawal, or the change of the lab's agents that ends it. Before its own events, it
+    records the lapse of each claim of a task whose lease ended, so the record says that the task is open again
+    before another agent claims it. After them, it records that
     the lab reached its budget or its disk limit, in the step of the turn's end, the new budget, the new disk
     limit, or the measure of the disk that reaches it.
     """
@@ -824,6 +829,24 @@ class Lab:
             return str(refused)
         return ''
 
+    async def claim_task(self, agent_id: AgentId, task_id: PostId) -> TaskClaimed:
+        """
+        Record that an agent claims a task, or renews the claim that it holds, and return the claim.
+
+        The lab's lock makes a claim atomic: of two claims of one task at the same time, the record takes the first
+        and refuses the second while the first one's lease stands.
+
+        Raises:
+            RejectedEvent: The agent cannot claim the task, as `society.tasks.check_claim` says.
+
+        """
+        board = await self._commit(lambda _, seq, at: TaskClaimed(seq=seq, at=at, agent=agent_id, task=task_id))
+        return board.claims[-1]
+
+    async def lapse_claims(self) -> None:
+        """Record the lapse of each claim whose lease ended by now. Nothing else changes."""
+        await self._commit()
+
     async def give_up_rerun(self, agent_id: AgentId, post_id: PostId) -> RerunTaken:
         """
         Record that an agent gives up its lease on the rerun of a post, and return its take.
@@ -1079,6 +1102,7 @@ class Lab:
             events: list[Event] = []
             at = self._clock()
             board = _close_rounds(self._board, at, events)
+            board = _lapse_claims(board, at, events)
             for build in builds:
                 event = build(board, board.seq + 1, at)
                 board = apply(board, event)
@@ -1399,6 +1423,16 @@ def _close_rounds(board: Board, at: datetime, events: list[Event]) -> Board:
     # Each close of a round that is due at `at`, added to the events of one step. The record's rules check it again.
     while due := close_due(board, at):
         event = RoundClosed(seq=board.seq + 1, at=at, round=due[0], why=due[1])
+        board = apply(board, event)
+        events.append(event)
+    return board
+
+
+def _lapse_claims(board: Board, at: datetime, events: list[Event]) -> Board:
+    # The record's note of each claim whose lease ended by `at`, added to the events of one step before its own, so
+    # that a claim of another agent in the same step comes after it. The record's rules check each one again.
+    for due in lapses_due(board, at):
+        event = ClaimLapsed(seq=board.seq + 1, at=at, agent=due.agent, task=due.task, until=due.until)
         board = apply(board, event)
         events.append(event)
     return board

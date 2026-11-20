@@ -12,6 +12,7 @@ from verifold.protocol.events import (
     AlarmSet,
     BadgeSet,
     BudgetSet,
+    ClaimLapsed,
     CoordinatorSet,
     DeliverableDecided,
     DeliverableSet,
@@ -32,6 +33,7 @@ from verifold.protocol.events import (
     RerunTaken,
     ReviewerSet,
     RoundClosed,
+    TaskClaimed,
     ThreadOpened,
     TimeRanOut,
     TimeSet,
@@ -100,6 +102,10 @@ class Board:
     """Each time that an agent took the rerun of a post, oldest first."""
     leases: tuple[RerunLeaseSet, ...] = ()
     """Each time that an agent renewed or gave up its lease on a rerun that it took, oldest first."""
+    claims: tuple[TaskClaimed, ...] = ()
+    """Each time that an agent claimed a task or renewed its claim, oldest first. `society.tasks` says who holds what."""
+    lapses: tuple[ClaimLapsed, ...] = ()
+    """Each claim whose lease ended at its time, as Verifold recorded it, oldest first."""
     times: tuple[TimeSet | TimeRanOut, ...] = ()
     budgets: tuple[BudgetSet, ...] = ()
     """Each budget that the person set, oldest first."""

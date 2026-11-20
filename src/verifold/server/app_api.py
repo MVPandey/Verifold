@@ -53,6 +53,7 @@ from verifold.protocol.app import (
     SettingsView,
     SetupView,
     StartRequest,
+    TaskCard,
     ThreadCard,
     TimeRequest,
     VoteRequest,
@@ -60,7 +61,7 @@ from verifold.protocol.app import (
 from verifold.protocol.deliverables import Decision, DeliverableLine, OfferLine
 from verifold.protocol.events import Reason, RerunRequested
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
-from verifold.protocol.join import CandidatesView, FileText, PostRequest, PostView, ThreadView
+from verifold.protocol.join import CandidatesView, FileText, PostRequest, PostView, ThreadView, line_text
 from verifold.protocol.moves import AddSeat
 from verifold.protocol.settings import DiskSettings
 from verifold.protocol.usage import DiskUse, Usage
@@ -83,6 +84,7 @@ from verifold.society.reruns import reruns_wanted
 from verifold.society.reviewers import seats
 from verifold.society.rounds import close_of, closes_at, entries, is_open, waits_for
 from verifold.society.standing import agreed, closing, standing
+from verifold.society.tasks import task_facts, tasks
 from verifold.society.turns import before
 from verifold.society.views import (
     candidates_view,
@@ -560,11 +562,34 @@ def _lab_view(board: Board, activity: Activity, now: datetime, disk: DiskUse | N
 
 
 def _cards(lab: Lab) -> tuple[ThreadCard, ...]:
-    board = lab.board
+    board, now = lab.board, lab.now()
     return tuple(
-        ThreadCard(**dict(summary), last_result_at=result_at, last_plan_at=plan_at)
-        for summary in thread_summaries(board, PERSON, lab.now())
+        ThreadCard(
+            **dict(summary),
+            last_result_at=result_at,
+            last_plan_at=plan_at,
+            tasks=_task_cards(board, summary.thread.id, now),
+        )
+        for summary in thread_summaries(board, PERSON, now)
         for result_at, plan_at in (line_times(board, summary.thread),)
+    )
+
+
+def _task_cards(board: Board, thread_id: ThreadId, now: datetime) -> tuple[TaskCard, ...]:
+    # The tasks of a thread that someone is on, or that wait for someone, with who holds each one. A task that is
+    # done or withdrawn asks nothing of the lab any more.
+    found = ((entry, task_facts(board, entry, now)) for entry in tasks(board) if entry.post.thread == thread_id)
+    return tuple(
+        TaskCard(
+            task=entry.post.id,
+            author=entry.post.author,
+            text=line_text(entry.post.text),
+            state=facts.state,
+            agent=facts.holder.agent if facts.holder else facts.hand_back.post.author if facts.hand_back else None,
+            until=facts.holder.lease.until if facts.holder else None,
+        )
+        for entry, facts in found
+        if facts.state not in {'done', 'withdrawn'}
     )
 
 

@@ -31,7 +31,7 @@ from verifold.protocol.events import (
     WatchSet,
 )
 from verifold.protocol.ids import PERSON, AgentId
-from verifold.protocol.posts import Answer, Check, Close, Objection, Post, Proposal, Reading, Summary
+from verifold.protocol.posts import Answer, Check, Close, HandBack, Objection, Post, Proposal, Reading, Summary
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
 from verifold.society.candidates import check_candidate, has_reading
@@ -637,8 +637,15 @@ def _check_concession(board: Board, answer: Answer, target: Post) -> None:
         if target.author == answer.author:
             raise RejectedEvent(f'Post {target.id} is your own. Another agent agrees with it.')
         return
+    if isinstance(target, HandBack):
+        # The author of the task accepts the work that came back for it.
+        task = board.post(target.reply_to)
+        asker = task.post.author if task else None
+        if asker != answer.author:
+            raise RejectedEvent(f'Only {asker}, who wrote task {target.reply_to}, accepts its hand-back.')
+        return
     objected = board.post(target.reply_to) if isinstance(target, Objection) else None
     if objected is None:
-        raise RejectedEvent('Only an answer to an objection or to a close can accept it.')
+        raise RejectedEvent('Only an answer to an objection, a close, or a hand-back can accept it.')
     if objected.post.author != answer.author:
         raise RejectedEvent(f'Only {objected.post.author}, who wrote {objected.post.id}, can accept this objection.')

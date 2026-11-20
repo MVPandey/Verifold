@@ -13,14 +13,16 @@ they still ask something of the lab or of the reader. `in_sight` says which.
 
 from verifold.protocol.events import Posted
 from verifold.protocol.ids import PERSON, AgentId, ThreadId
-from verifold.protocol.posts import Ask, Call, Check, Objection, Summary
+from verifold.protocol.posts import Ask, Call, Check, Objection, Summary, Task
 from verifold.society.board import Board
 from verifold.society.desk import speaks_for_person
 from verifold.society.errors import RejectedEvent
+from verifold.society.lifecycle import latest_time
 from verifold.society.lines import is_line_of_work
 from verifold.society.obstacles import obstacles
 from verifold.society.reruns import wanted_reruns
 from verifold.society.standing import disputes, is_answered, is_open_call, standing
+from verifold.society.tasks import task_facts
 
 
 def check_summary(board: Board, summary: Summary) -> None:
@@ -83,10 +85,13 @@ def in_sight(board: Board, reader: AgentId, before: tuple[Posted, ...], read: in
     - a post of the person, or of the desk for the person, after `read`
     - an open ask: no answer replies to it, and its author is in the lab
     - an open call: nobody took it, and its caller did not withdraw it
+    - a task that is not done and not withdrawn
     - an open obstacle: a ruled-out lead of a line of work that no plan and no result builds on
     - a post whose independent rerun is wanted
     """
     blocking = {found.entry.post.id for found in obstacles(board) if found.state == 'open'}
+    # Whether a task is done or withdrawn does not change with the clock, so the board's newest post dates it.
+    now = latest_time(board)
 
     def stays(entry: Posted) -> bool:
         post = entry.post
@@ -95,6 +100,7 @@ def in_sight(board: Board, reader: AgentId, before: tuple[Posted, ...], read: in
             or (speaks_for_person(post) and entry.seq > read)
             or (isinstance(post, Ask) and not is_answered(board, post.id) and not board.gone(post.author))
             or (isinstance(post, Call) and is_open_call(board, post.id))
+            or (isinstance(post, Task) and task_facts(board, entry, now).state not in {'done', 'withdrawn'})
             or post.id in blocking
             or bool(wanted_reruns(board, post.id))
         )

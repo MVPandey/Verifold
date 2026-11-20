@@ -13,16 +13,19 @@ export const MAX_BOARD_MINUTES = 24 * 60;
 /** The reveal time of votes and the lease of a rerun while the person sets none, in minutes. */
 export const DEFAULT_MINUTES = 10;
 
+/** How long an agent holds a piece of work that it took while the person sets no time, in minutes. */
+export const DEFAULT_TASK_MINUTES = 30;
+
 /**
  * Return the whole number that a field's text names, `null` for an empty field, which sets no number, or
- * `undefined` for a text that is no whole number from 0 to `max`.
+ * `undefined` for a text that is no whole number from `min` to `max`.
  */
-export function numberValue(text: string, max: number): number | null | undefined {
+export function numberValue(text: string, max: number, min = 0): number | null | undefined {
   const trimmed = text.trim();
   if (trimmed === '') return null;
   if (!/^\d+$/.test(trimmed)) return undefined;
   const value = Number(trimmed);
-  return value <= max ? value : undefined;
+  return value >= min && value <= max ? value : undefined;
 }
 
 /**

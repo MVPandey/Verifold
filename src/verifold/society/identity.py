@@ -18,8 +18,10 @@ from verifold.protocol.votes import NEWEST_VOTES
 from verifold.society.board import Board
 from verifold.society.coordinator import request_end, request_waits
 from verifold.society.labels import is_numbered, plain
+from verifold.society.lifecycle import latest_time
 from verifold.society.rounds import for_reader, sealed, stripped
 from verifold.society.standing import standing
+from verifold.society.tasks import task_view
 from verifold.society.tested import how_tested
 from verifold.society.votes import badge_lines, marks, vote_lines
 from verifold.society.votes import sealed as votes_sealed
@@ -125,7 +127,7 @@ def post_view(
     """
     Return a post with its time, who wrote it, where it stands, the posts that build on it, its votes, and its badges.
 
-    A result also has how checks tested it.
+    A result also has how checks tested it, and a task its state and who holds it at `now`.
 
     While the votes on the post are sealed for `reader` at `now`, it has no counts and no votes. While the post is
     an entry of an open round that another agent wrote, it holds nothing of the entry's content, and no post
@@ -150,4 +152,5 @@ def post_view(
         down=down,
         votes=vote_lines(board, entry.post.id, votes) if shown else (),
         badges=badge_lines(board, entry.post.id),
+        task=task_view(board, entry, now or latest_time(board)),
     )

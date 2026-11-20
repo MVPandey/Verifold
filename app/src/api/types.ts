@@ -32,6 +32,8 @@ export type PostKind =
   | 'reading'
   | 'summary'
   | 'call'
+  | 'task'
+  | 'hand_back'
   | 'close'
   | 'request'
   | 'offer'
@@ -630,6 +632,11 @@ export interface RerunSettings {
   readonly lease_minutes: number;
 }
 
+export interface TaskSettings {
+  /** How many minutes a claim of a task, or the holder's activity on it, holds the lease on it. */
+  readonly lease_minutes: number;
+}
+
 export interface DiskSettings {
   /** The most gigabytes that the lab's files may take before the agents stop. Zero means no limit. */
   readonly limit_gb: number;
@@ -642,6 +649,8 @@ export interface Settings {
   readonly reviewers: ReviewerSettings;
   readonly votes: VoteSettings;
   readonly reruns: RerunSettings;
+  /** Absent from a server from before tasks. */
+  readonly tasks?: TaskSettings;
   readonly disk: DiskSettings;
 }
 
@@ -675,6 +684,7 @@ export type SettingKey =
   | 'reviewers.seats'
   | 'votes.reveal_minutes'
   | 'reruns.lease_minutes'
+  | 'tasks.lease_minutes'
   | 'disk.limit_gb'
   | 'setup';
 
@@ -984,6 +994,24 @@ export type Post =
       readonly kind: 'entry';
     })
   | (PostBase & {
+      /** One piece of work for one agent. `text` is its objective. */
+      readonly kind: 'task';
+      /** The output wanted. */
+      readonly output: string;
+      /** What the work stays within. */
+      readonly bounds: string;
+    })
+  | (PostBase & {
+      /** The work of a task, from the agent that claimed it, which `reply_to` names. `text` says what was done. */
+      readonly kind: 'hand_back';
+      /** What the work found, or an empty string. */
+      readonly findings: string;
+      /** What its author doubts about the work, or an empty string. */
+      readonly concerns: string;
+      /** Where the work left the task's brief, or an empty string. */
+      readonly deviations: string;
+    })
+  | (PostBase & {
       readonly kind: 'check';
       readonly outcome: 'holds' | 'fails';
       /** `challenge`: the author tested the claim on something that the post's author did not use. */
@@ -1063,6 +1091,38 @@ export interface PostView {
   readonly votes?: readonly VoteLine[];
   /** Each badge on the post once, with who gave it. A `breakthrough` that waits for its second says so. */
   readonly badges?: readonly BadgeLine[];
+  /** For a task: its state and who holds it. Absent for every other post. */
+  readonly task?: TaskView | null;
+}
+
+/**
+ * Where a task stands: `open` while nobody holds it, `claimed` while an agent's lease stands, `handed_back` while
+ * the work that came back waits, `done` once its author accepted the work or a check of it holds, and `withdrawn`
+ * once its author withdrew it.
+ */
+export type TaskState = 'open' | 'claimed' | 'handed_back' | 'done' | 'withdrawn';
+
+/** A task's state and the claim that stands, as a view of the task's post has them. */
+export interface TaskView {
+  /** Absent while it is `open`. */
+  readonly state?: TaskState;
+  /** The claim that stands, with when its lease ends. Absent while nobody holds the task. */
+  readonly held_by?: LeaseLine | null;
+  /** The newest work that came back for it and counts. */
+  readonly hand_back?: string | null;
+}
+
+/** A task of a thread as the thread's card shows it: what it asks for, and who is on it now. */
+export interface TaskCard {
+  readonly task: string;
+  readonly author: string;
+  /** The task's objective, as a line shows its headline. */
+  readonly text: string;
+  readonly state: TaskState;
+  /** The agent on the work: the holder of a claimed task, or the agent whose work came back. */
+  readonly agent: string | null;
+  /** When the holder's lease ends, unless its activity on the task starts it again. */
+  readonly until: string | null;
 }
 
 /** One power of the coordinator as the person sees it. */
@@ -1270,6 +1330,8 @@ export interface ThreadSummary {
   readonly last_result_at: string | null;
   /** How many obstacles of a line of work are open: ruled-out posts that no plan and no result builds on. */
   readonly open_obstacles: number;
+  /** The thread's tasks that are open, claimed, or handed back, oldest first. */
+  readonly tasks: readonly TaskCard[];
 }
 
 export interface PostRequest {

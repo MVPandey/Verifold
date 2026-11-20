@@ -240,6 +240,7 @@ async def test_settings_pass_through_and_refusals_say_why(client: httpx2.AsyncCl
         'reviewers': {'seats': None},
         'votes': {'reveal_minutes': 10},
         'reruns': {'lease_minutes': 10},
+        'tasks': {'lease_minutes': 30},
         'disk': {'limit_gb': 100},
     }
     assert view['project']['path'] == '.verifold/settings.json'

@@ -213,6 +213,7 @@ export function summary(changes: Partial<ThreadSummary> = {}): ThreadSummary {
     crossed: 0,
     last_result_at: null,
     open_obstacles: 0,
+    tasks: [],
     ...changes,
   };
 }
