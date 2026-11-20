@@ -114,7 +114,7 @@ from verifold.society.fold import apply, fold
 from verifold.society.labels import awaits_model, is_numbered, label, plain
 from verifold.society.lifecycle import utc
 from verifold.society.lines import question_thread
-from verifold.society.measures import headline_label
+from verifold.society.measures import headline_label, naming
 from verifold.society.names import check_name
 from verifold.society.reruns import lease_refusal, open_take, open_to, wanted_reruns
 from verifold.society.reviewers import check_review, seats_line
@@ -765,7 +765,7 @@ class Lab:
         Record the label of the lab's headline number, and return the post that tells the lab, or `None`.
 
         `by` is the person, or the agent that holds the coordinator seat, whose `why` the post keeps. An empty label
-        leaves the lab without a headline number. The label that stands already records nothing. The post is in
+        leaves the lab without a headline number. The label that `by` named already records nothing. The post is in
         the question's thread, and a lab from before the question had a thread gets one thread for these posts.
 
         Raises:
@@ -774,7 +774,9 @@ class Lab:
 
         """
         board = self._board
-        if same_label(headline_label(board), label):
+        named = naming(board)
+        # The person's naming of the coordinator's label makes it the person's, which the coordinator then keeps.
+        if same_label(headline_label(board), label) and (named is None or named.post.author == by):
             return None
         who = 'The person' if by == PERSON else 'The coordinator'
         text = (

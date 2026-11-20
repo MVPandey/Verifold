@@ -163,6 +163,9 @@ async def test_the_coordinator_names_the_headline_number_with_its_tool_as_a_move
     assert (logged.kind, logged.by, logged.why) == ('headline_number', 'bo', 'The person asked for the account.')
     assert conversation_view(lab.board).moves[0].kind == 'headline_number'
 
+    # The person's naming of the same label makes it the person's.
+    assert await lab.name_headline_number('Account value', PERSON) is not None
+    assert await lab.name_headline_number('account value', PERSON) is None
     await lab.name_headline_number('Cash', PERSON)
     with pytest.raises(RejectedEvent, match='only the person changes it'):
         await Member(lab, 'bo').name_headline_number('Account value', 'Back to the account.')

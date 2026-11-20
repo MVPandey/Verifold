@@ -1401,8 +1401,8 @@ an empty `label` takes the headline number back. `why` says why, in one line of 
 needs it. The board takes the call from the agent that holds the coordinator seat, and refuses it while a label that
 the person named stands: only the person changes that one. The person names a label in the app too. A naming is a
 post of the kind `headline_number` in the question's thread, which reaches every agent that is not on call, and an
-agent objects to it as to any post. A label that stands already records nothing, and the result's `post` is then
-empty.
+agent objects to it as to any post. A label that the coordinator named and that stands records nothing again, and
+the result's `post` is then empty.
 """
 
 ON = """\
