@@ -9,6 +9,7 @@ from mcp import Client
 from mcp.types import CallToolResult, TextContent
 
 from verifold.protocol.agents import Agent, ModelSpec
+from verifold.protocol.allowances import AMOUNT_PLACES, MAX_AMOUNT_DIGITS
 from verifold.protocol.events import MAX_SEAT_NOTES
 from verifold.protocol.ids import PERSON
 from verifold.protocol.join import (
@@ -22,10 +23,22 @@ from verifold.protocol.join import (
     ThreadList,
     Update,
 )
+from verifold.protocol.moves import AddSeat
 from verifold.protocol.posts import FileEvidence
 from verifold.server.activity import Activity
 from verifold.server.errors import HasLeft, UnknownAgent
-from verifold.server.join import BRIEF_TOOL, INSTRUCTIONS, Members, _compact, join_server, token_digest
+from verifold.server.join import (
+    ACT_TOOL,
+    BRIEF_TOOL,
+    DRAFT_ALLOWANCE_TOOL,
+    INSTRUCTIONS,
+    POST_TOOL,
+    REQUEST_TOOL,
+    Members,
+    _compact,
+    join_server,
+    token_digest,
+)
 from verifold.server.lab import Lab
 from verifold.server.member import Member
 from verifold.store.record_file import RecordFile
@@ -959,3 +972,28 @@ def test_the_board_says_how_large_a_brief_is_what_it_never_cuts_and_where_the_no
     assert 'The person reads them in the app, on your profile.' in notes
     # The board hands no notes from one agent to another, and the texts promise no handover.
     assert 'hand' not in notes
+
+
+def test_the_board_states_the_limits_of_an_amount_where_an_agent_gives_one() -> None:
+    limit = f'at most {AMOUNT_PLACES} digits after the point and {MAX_AMOUNT_DIGITS} digits in all'
+    receipt = POST_TOOL.split('- `receipt`:', 1)[1].split('\n- ', 1)[0]
+
+    for text in (ACT_TOOL, DRAFT_ALLOWANCE_TOOL, receipt):
+        assert limit in ' '.join(text.split())
+
+
+def test_every_text_about_a_fresh_view_and_the_moves_says_what_the_board_counts() -> None:
+    # The brief ends a fresh view at the agent's first plan or idea, and the log of moves holds the coordinator's
+    # namings of the headline number.
+    texts = (
+        REQUEST_TOOL,
+        INSTRUCTIONS,
+        AddSeat.model_fields['fresh'].description or '',
+        Agent.model_fields['fresh'].description or '',
+        Brief.model_fields['fresh'].description or '',
+    )
+    for text in (' '.join(text.split()) for text in texts):
+        assert 'first plan,' not in text
+        assert 'no plan yet' not in text
+    moves = ' '.join(INSTRUCTIONS.split()).split("- The coordinator's moves are", 1)[1].split(' - ', 1)[0]
+    assert 'its namings of the headline number' in moves
