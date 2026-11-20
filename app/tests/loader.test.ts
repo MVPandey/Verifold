@@ -45,6 +45,8 @@ function slowServer(): {
     report: () => answer('report', null),
     reading: () => answer('reading', null),
     candidates: () => answer('candidates', NO_CANDIDATES),
+    dashboard: () => answer('dashboard', null),
+    nameHeadline: () => answer('nameHeadline', labView()),
     conversation: () =>
       answer('conversation', {
         coordinator: null,
