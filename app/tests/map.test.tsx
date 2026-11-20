@@ -246,9 +246,45 @@ describe('the map', () => {
     );
   });
 
-  it('says so when the lab’s reading has no branches', () => {
+  it('says so when the lab has no branch and no idea', () => {
     const html = renderToStaticMarkup(<MapTab map={NO_MAP} agents={agents} now={now} />);
-    assert.equal(html, '<p class="empty">The lab’s reading has no branches yet.</p>');
+    assert.equal(html, '<p class="empty">The lab has no branch and no idea yet.</p>');
+  });
+
+  it('lists the ideas on no branch under “No branch yet”, after the branches in force, and offers the tab for them', () => {
+    const loose: IdeaView = {
+      ...UNDER,
+      id: 'p-31',
+      parent: null,
+      branch: null,
+      text: 'Fade a late spike',
+    };
+    const under: IdeaView = {
+      ...UNDER,
+      id: 'p-32',
+      parent: 'p-31',
+      branch: null,
+      text: 'Only near the close',
+    };
+    const alone: MapView = { ...NO_MAP, no_branch: [loose, under], ideas_without_branch: 2 };
+    const html = renderToStaticMarkup(<MapTab map={alone} agents={agents} now={now} />);
+
+    assert.equal(hasMap(alone), true);
+    assert.ok(html.includes('<b>No branch yet</b><span class="m-cnt">2 ideas</span>'));
+    assert.ok(html.indexOf('id="idea-p-31"') < html.indexOf('id="idea-p-32"'));
+    // The idea that hangs on an idea without a branch names it.
+    assert.equal(parentIdea(alone, under)?.id, 'p-31');
+    assert.ok(html.includes('<dt>Under</dt>'));
+    const both = renderToStaticMarkup(
+      <MapTab
+        map={{ ...MAP, no_branch: [loose], ideas_without_branch: 1 }}
+        agents={agents}
+        now={now}
+      />,
+    );
+    assert.ok(both.indexOf('Events with a fixed calendar') < both.indexOf('No branch yet'));
+    assert.ok(both.indexOf('No branch yet') < both.indexOf('Retired branches'));
+    assert.ok(both.includes('<span class="m-cnt">1 idea</span>'));
   });
 
   it('opens on its own route, and a thread shows an idea’s test and what rules it out', () => {

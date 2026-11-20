@@ -1,4 +1,4 @@
-/** How the app writes times, durations, money, and token counts. */
+/** How the app writes times, durations, money, token counts, amounts, and the article before a number. */
 
 /** Return the local time of day of an ISO time, as `14:04`. */
 export function clock(iso: string): string {
@@ -45,4 +45,40 @@ export function tokens(count: number): string {
 /** Return an amount in US dollars as `$0.37`. */
 export function money(usd: number): string {
   return `$${usd.toFixed(2)}`;
+}
+
+/**
+ * Return the article that English puts before a whole number: `an` before a number that is said with a vowel sound
+ * first, such as 8, 11, 18, 80 to 89, and 8,000, and `a` before every other.
+ */
+export function article(count: number): 'a' | 'an' {
+  const digits = String(Math.abs(Math.trunc(count)));
+  const lead = digits.slice(0, digits.length % 3 || 3);
+  return lead.startsWith('8') || lead === '11' || lead === '18' ? 'an' : 'a';
+}
+
+/**
+ * Return a decimal as the person reads it on the lab's page: at most two digits after the point for a value of 1 or
+ * more, and four significant digits at most for a value below 1, rounded half away from zero, with no zeros at the
+ * end. `119.7695` reads `119.77`, `42.840` reads `42.84`, and `0.123456` reads `0.1235`. A text that is no plain
+ * decimal comes back as it is. The record and the thread keep the exact value.
+ */
+export function readable(value: string): string {
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value.trim());
+  if (!match) return value;
+  const [, sign = '', whole = '0', part = ''] = match;
+  const first = part.search(/[1-9]/);
+  if (BigInt(whole) === 0n && first < 0) return '0';
+  const keep = BigInt(whole) > 0n ? 2 : first + 4;
+  let digits = BigInt(`${whole}${part}`);
+  let scale = part.length;
+  if (scale > keep) {
+    const divisor = 10n ** BigInt(scale - keep);
+    const rest = digits % divisor;
+    digits = digits / divisor + (rest * 2n >= divisor ? 1n : 0n);
+    scale = keep;
+  }
+  const text = digits.toString().padStart(scale + 1, '0');
+  const fraction = text.slice(text.length - scale).replace(/0+$/, '');
+  return `${sign}${text.slice(0, text.length - scale)}${fraction ? `.${fraction}` : ''}`;
 }

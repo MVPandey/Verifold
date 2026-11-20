@@ -1,7 +1,7 @@
 import { PERSON } from '../api/types.ts';
 import type { AgentView, HarnessOption, MoveView, SeatChoice, SpareSeats } from '../api/types.ts';
 import { authorName } from './agents.ts';
-import { clock, tokens } from './format.ts';
+import { article, clock, tokens } from './format.ts';
 
 /**
  * One move of the coordinator as the log shows it. `what` is the app's own sentence, which holds no text of an
@@ -30,7 +30,7 @@ export function moveWords(move: MoveView, agents: readonly AgentView[]): MoveWor
     why: move.why,
   });
   if (post.kind === 'round')
-    return plain(`Opened a ${String(post.minutes)}-minute round`, post.text);
+    return plain(`Opened ${article(post.minutes)} ${String(post.minutes)}-minute round`, post.text);
   if (post.kind === 'reading') return plain('Posted a new reading', post.text);
   if (post.kind === 'headline_number')
     return post.label

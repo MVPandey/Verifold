@@ -1300,7 +1300,7 @@ export type Post =
   | (PostBase & {
       /** One way to answer the question, stated with its test before anyone tries it. `text` is the statement. */
       readonly kind: 'idea';
-      /** The branch, such as `b-2`, or the idea, such as `p-14`, that it hangs on. */
+      /** The branch, such as `b-2`, or the idea, such as `p-14`, that it hangs on. `null` for an idea on no branch yet. */
       readonly parent: string | null;
       /** How the idea is tested. */
       readonly test: string;
@@ -1435,7 +1435,7 @@ export interface TaskCard {
   readonly state: TaskState;
   /** The agent on the work: the holder of a claimed task, or the agent whose work came back. */
   readonly agent: string | null;
-  /** When the holder's lease ends, unless its activity on the task starts it again. */
+  /** When the holder's lease ends, unless a post of the holder starts it again. */
   readonly until: string | null;
 }
 
@@ -1847,9 +1847,13 @@ export interface BranchView extends BranchLine {
   readonly idea_list?: readonly IdeaView[];
 }
 
-/** The map of the lab: the branches in force in the readings' order, then the retired ones. */
+/** The map of the lab: the branches in force in the readings' order, then the retired ones, then the ideas on none. */
 export interface MapView {
   readonly branches: readonly BranchView[];
+  /** The ideas that hang on no branch, in the order posted: an idea without a parent, and the ideas on such an idea. */
+  readonly no_branch?: readonly IdeaView[];
+  /** How many ideas hang on no branch. */
+  readonly ideas_without_branch?: number;
   /** How many ideas of the open round are sealed for the agents. The person's map shows them whole. */
   readonly sealed: number;
   readonly left_out: number;
