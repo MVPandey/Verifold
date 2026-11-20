@@ -681,7 +681,7 @@ an objection to it stands. The tool `steering` lists more. For the agent that ho
 has the lab's steering facts, as the tool `steering` returns them, and `spare_seats` has the person's grant of spare
 seats while one stands: the seats that are left, how many the person granted, and the kinds of seat. `fresh` is true
 for a seat that started with a fresh view and has posted no plan yet: its brief then leaves out `candidates`,
-`older_candidates`, and `report`.
+`older_candidates`, `report`, and `dashboard`.
 
 `claim` on your line and on each other agent's line names the task that the agent holds, with `until`, when its
 lease ends, and `minutes_left`. Each entry of `open_tasks` has the agents that the task invites in `invites`, the
@@ -1235,7 +1235,7 @@ takes it from the agent that holds the coordinator seat, and refuses every other
   show it as given by the coordinator. `mode` is one of the harness's own modes, and without it the seat has the
   lab's own mode. With `fresh: true`, the seat starts with a fresh view: until the new agent posts its first plan,
   its start message and its briefs hold the question, the reading, and what was ruled out, and leave out the
-  candidate answers and the report. The seat has the model family of its harness. A move states no family, and its
+  candidate answers, the report, and the dashboard. The seat has the model family of its harness. A move states no family, and its
   seat is no coordinator seat and no reviewer seat.
 - `remove_agent`: the removal of `agent`, another agent of the lab. It is final for that agent. A request for it
   waits for the person under every power: a move of pace pauses a seat, and only the person removes one.

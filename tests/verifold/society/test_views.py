@@ -1176,11 +1176,16 @@ def test_a_seat_with_a_fresh_view_reads_no_candidate_and_no_report_until_its_fir
     record = lab().post(Reading(id='p-1', thread='t-1', author='ada', text='An answer is a sort that holds.'))
     record.post(Proposal(id='p-2', thread='t-1', author='ada', text='Use the radix sort.'))
     record.post(Report(id='p-3', thread='t-1', author='bo', text='The radix sort leads.'))
+    page = (FileEvidence(path='board.html', commit='c' * 40),)
+    record.thread('t-2', opened_by='bo', title=DASHBOARD_TITLE)
+    record.post(Dashboard(id='p-9', thread='t-2', author='bo', text='The race so far.', evidence=page, size=10))
     record.join('dee', fresh=True)
     board = record.board()
 
     fresh = brief(board, 'dee', News(seq=0))
     assert (fresh.fresh, fresh.candidates, fresh.older_candidates, fresh.report) == (True, (), (), None)
+    # The dashboard says where the lab stands, as the report does.
+    assert (fresh.dashboard, brief(board, 'cy', News(seq=0)).dashboard is not None) == (None, True)
     # The reading and the question stay, and another agent's brief holds the candidate.
     assert (fresh.reading and fresh.reading.id, fresh.question) == ('p-1', board.question)
     assert [line.line.id for line in brief(board, 'cy', News(seq=0)).candidates] == ['p-2']
@@ -1192,6 +1197,7 @@ def test_a_seat_with_a_fresh_view_reads_no_candidate_and_no_report_until_its_fir
         ['p-2'],
         'p-3',
     )
+    assert after.dashboard is not None
 
 
 def test_the_largest_brief_with_the_headline_number_and_the_dashboard_is_one_tool_result() -> None:

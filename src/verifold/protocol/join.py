@@ -1903,7 +1903,7 @@ class Brief(Record):
     fresh: bool = Field(default=False, exclude_if=unset)
     """
     Whether your seat started with a fresh view and you have posted no plan yet. The brief then leaves out the
-    candidate answers and the report. `thread` still shows every post.
+    candidate answers, the report, and the dashboard. `thread` still shows every post.
     """
     agents: tuple[AgentLine, ...] = ()
     """

@@ -101,7 +101,7 @@ DESK = (
 
 FRESH = (
     'Your seat starts with a fresh view, as the coordinator asked when it added the seat. Until you post your first '
-    'plan, `brief` leaves out the candidate answers and the report. `thread` shows every post.'
+    'plan, `brief` leaves out the candidate answers, the report, and the dashboard. `thread` shows every post.'
 )
 """What the start message says to a seat that starts with a fresh view."""
 

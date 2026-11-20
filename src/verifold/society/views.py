@@ -524,7 +524,8 @@ def brief(  # noqa: PLR0913, PLR0915
     steers = tuple(move_line(board, move, now) for move in moves(board)[:MAX_MOVES])
     leads = agent_id == board.coordinator
     headline = headline_line(board, now)
-    page_line = dashboard_line(board, now)
+    # The dashboard says where the lab stands, as the report does, so a fresh view reads neither.
+    page_line = None if fresh else dashboard_line(board, now)
     # The agents that posted last keep the lines of their plans and latest posts longest.
     posted_last = {entry.post.author: entry.seq for entry in board.posts}
     recent = tuple(sorted((agent.id for agent in others), key=lambda agent: posted_last.get(agent, 0)))
