@@ -1,18 +1,24 @@
+from datetime import timedelta
+
 import pytest
-from builders import RecordBuilder
+from builders import START, RecordBuilder
 from pydantic import ValidationError
 
 from verifold.protocol.measures import MAX_PAGE_BYTES
-from verifold.protocol.posts import Answer, Dashboard, FileEvidence, Objection
+from verifold.protocol.posts import Answer, Dashboard, FileEvidence, Objection, RuledOut
+from verifold.protocol.settings import Settings, TaskSettings
 from verifold.society.attention import wakes
 from verifold.society.dashboards import (
     DASHBOARD_TITLE,
+    check_page_held,
     dashboard_line,
     dashboard_thread,
     outside_reference,
+    page_holder,
     standing_dashboard,
 )
 from verifold.society.errors import RejectedEvent
+from verifold.society.obstacles import obstacles
 
 PAGE = (FileEvidence(path='dashboard.html', commit='c' * 40),)
 
@@ -51,6 +57,61 @@ def test_every_version_of_the_dashboard_goes_in_the_thread_of_the_first_and_the_
         version('p-3', size=MAX_PAGE_BYTES + 1)
     with pytest.raises(ValidationError):
         version('p-3', evidence=(*PAGE, *PAGE))
+
+
+def test_the_page_is_its_holders_for_the_lease_of_a_task_and_a_new_version_of_its_own_starts_the_lease_again(
+    dashboards: RecordBuilder,
+) -> None:
+    # Ada's version p-1 came at 12:06, and a task's lease is 30 minutes by default.
+    board = dashboards.board()
+    early = START + timedelta(minutes=7)
+
+    with pytest.raises(RejectedEvent) as refused:
+        check_page_held(board, 'bo', early)
+    assert str(refused.value).startswith(
+        'ada holds the dashboard since 2026-11-06 12:06 UTC, until 2026-11-06 12:36 UTC. The board takes no version '
+        'from another agent while that lease stands.'
+    )
+    check_page_held(board, 'ada', early)
+    line = dashboard_line(board, early)
+    assert line is not None
+    assert line.held_until == START + timedelta(minutes=36)
+    # A lapsed lease frees the page, and nobody holds it then.
+    late = START + timedelta(minutes=36)
+    check_page_held(board, 'bo', late)
+    later = dashboard_line(board, late)
+    assert later is not None
+    assert later.held_until is None
+
+    renewed = dashboards.post(version('p-2')).board()
+    holder = page_holder(renewed, late)
+    assert holder is not None
+    assert (holder.agent, holder.lease.until) == ('ada', START + timedelta(minutes=37))
+    with pytest.raises(RejectedEvent, match='until 2026-11-06 12:37 UTC'):
+        check_page_held(renewed, 'bo', late)
+
+
+def test_the_holder_gives_the_page_up_with_a_ruled_out_lead_on_its_own_version_and_the_next_author_holds_it(
+    dashboards: RecordBuilder,
+) -> None:
+    dashboards.settings(Settings(tasks=TaskSettings(lease_minutes=5)))
+    # A ruled-out lead of another agent on the version gives nothing up.
+    dashboards.post(RuledOut(id='p-2', thread='t-2', author='cy', text='Not this one.', reply_to='p-1'))
+    with pytest.raises(RejectedEvent, match='ada holds the dashboard'):
+        check_page_held(dashboards.board(), 'bo', START + timedelta(minutes=9))
+    given_up = dashboards.post(RuledOut(id='p-3', thread='t-2', author='ada', text='Bo has it.', reply_to='p-1'))
+    board = given_up.board()
+
+    assert page_holder(board, START + timedelta(minutes=10)) is None
+    check_page_held(board, 'bo', START + timedelta(minutes=10))
+    # Giving the page up closes no lead, so it is no obstacle of the dashboard's thread.
+    assert [found.entry.post.id for found in obstacles(board)] == ['p-2']
+    taken = given_up.post(version('p-4', author='bo')).board()
+    holder = page_holder(taken, START + timedelta(minutes=11))
+    assert holder is not None
+    assert (holder.agent, holder.lease.until) == ('bo', START + timedelta(minutes=10 + 5))
+    with pytest.raises(RejectedEvent, match='bo holds the dashboard'):
+        check_page_held(taken, 'ada', START + timedelta(minutes=11))
 
 
 def test_a_version_whose_author_conceded_an_objection_stands_no_longer(dashboards: RecordBuilder) -> None:

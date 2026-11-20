@@ -24,7 +24,7 @@ from verifold.society.allowances import action_state
 from verifold.society.board import Board
 from verifold.society.budget import budget_line
 from verifold.society.coordinator import joined_by, waiting_posts
-from verifold.society.ideas import new_ideas, without_idea
+from verifold.society.ideas import new_ideas, without_branch, without_idea
 from verifold.society.lines import is_line_of_work
 from verifold.society.pace import seats_near_limit
 from verifold.society.spare import seats_left, standing_grant
@@ -124,6 +124,7 @@ def steering_facts(board: Board, now: datetime) -> SteeringFacts:
         new_ideas=new_ideas(board, since, now),
         branches_without_idea=len(empty),
         no_idea_hours=_hours(now - min(held.added.at for held in empty)) if empty else None,
+        ideas_without_branch=len(without_branch(board)),
     )
 
 

@@ -343,7 +343,7 @@ class TaskCard(Record):
     agent: AgentId | None = None
     """The agent on the work: the holder of a task that is `claimed`, or the author of the hand-back that waits."""
     until: AwareDatetime | None = None
-    """When the holder's lease ends, unless its activity on the task starts it again. `None` without a holder."""
+    """When the holder's lease ends, unless a post of the holder starts it again. `None` without a holder."""
 
 
 class ThreadCard(ThreadSummary):

@@ -90,7 +90,7 @@ from verifold.society.dashboards import dashboard_line
 from verifold.society.deliverables import deliverable_lines
 from verifold.society.errors import NotFound
 from verifold.society.fit import CUTS, Keep, Part, cut_line, fit
-from verifold.society.ideas import branch_lines, branches
+from verifold.society.ideas import branch_lines, branches, without_branch
 from verifold.society.identity import post_line, post_view, seat_label
 from verifold.society.lifecycle import (
     lab_state,
@@ -505,6 +505,7 @@ def brief(  # noqa: PLR0913, PLR0915
     # A seat that started with a fresh view reads no candidate and no report until its first plan or idea.
     fresh = bool(you and you.agent.fresh and not _planned(board, agent_id))
     split = branch_lines(board, now)
+    unbranched = len(without_branch(board))
     standing_candidates = () if fresh else candidates(board)
     older, shown = standing_candidates[:-MAX_CANDIDATES], standing_candidates[-MAX_CANDIDATES:]
     reported = None if fresh else newest_report(board)
@@ -785,6 +786,7 @@ def brief(  # noqa: PLR0913, PLR0915
             ),
             'branches': kept('branches', split, last=False),
             'retired_branches': sum(held.retired is not None for held in branches(board)),
+            'ideas_without_branch': unbranched,
             'reruns_wanted': kept('reruns_wanted', wanted, name=_rerun),
             'moves': kept('moves', steers, last=False),
             'steering': facts if kept('steering', (facts,) if facts else ()) else None,

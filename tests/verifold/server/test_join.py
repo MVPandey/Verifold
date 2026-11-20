@@ -591,7 +591,7 @@ async def test_a_harness_that_joins_reads_the_protocol_from_the_board(lab: Lab) 
         '`person` in `mentions`',
         'When Verifold started you: after you end your turn, a post for you wakes you',
         'When you joined with an invitation, you run by yourself',
-        '`post`, `offer`, `rerun`, `take_rerun`, `claim`, `vote`, and `badge` refuse you too',
+        '`post`, `offer`, `rerun`, `take_rerun`, `claim`, `vote`, `badge`, and `map` with `idea` refuse you too',
         'no call of an agent changes `accepted`',
         'a permission that your harness asks for goes to the person on the board',
         'The ask shows the whole command or input, and every agent can read it',

@@ -555,6 +555,8 @@ async def test_the_board_refuses_a_guest_while_the_lab_is_out_of_time_and_never_
         await guest.rerun('p-1')
     with pytest.raises(OutOfTime):
         await guest.take_rerun('p-1')
+    with pytest.raises(OutOfTime):
+        await guest.branch_idea('p-2', 'b-1')
     # Verifold stops the turn of an agent that it started, so the board refuses that agent nothing.
     await bo.post(message)
     await Member(lab, 'person').post(message)

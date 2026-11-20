@@ -99,6 +99,8 @@ async def test_the_desk_reports_no_measure_and_offers_no_dashboard_before_its_fo
 async def test_each_version_of_the_dashboard_is_a_post_in_one_thread_and_the_newest_stands(lab: Lab) -> None:
     read: list[FileEvidence] = []
     first = await seat(lab, 'ada', read=read).dashboard('./board.html', 'The account today.')
+    # The page is ada's until its lease ends or ada gives it up.
+    await lab.post(PostRequest(kind='ruled_out', text='Bo keeps it now.', reply_to=first.post.id, thread='t-2'), 'ada')
     second = await seat(lab, 'bo', data=PAGE * 2).dashboard('mine.html', 'With the orders.', builds_on=('p-1',))
 
     page = first.post
@@ -119,6 +121,28 @@ async def test_each_version_of_the_dashboard_is_a_post_in_one_thread_and_the_new
     )
     with pytest.raises(EvidenceRejected, match='cannot pin files'):
         await Member(lab, 'ada', pin=pin).dashboard('board.html', 'No reader.')
+
+
+async def test_another_agents_version_of_the_dashboard_is_refused_while_its_holders_lease_stands(lab: Lab) -> None:
+    pinned: list[tuple[str, ...]] = []
+
+    async def pins(paths: tuple[str, ...]) -> tuple[FileEvidence, ...]:
+        pinned.append(paths)
+        return await pin(paths)
+
+    async def pages(_: FileEvidence) -> bytes:
+        return PAGE
+
+    first = await seat(lab, 'ada').dashboard('board.html', 'The account today.')
+    with pytest.raises(RejectedEvent, match=r'ada holds the dashboard since .*, until .*\. The board takes no version'):
+        await Member(lab, 'bo', pin=pins, pages=pages).dashboard('mine.html', 'Mine.')
+    # The board refuses before Verifold commits bo's folder, and the step of the post refuses too.
+    assert pinned == []
+    with pytest.raises(RejectedEvent, match='ada holds the dashboard'):
+        await lab.dashboard('bo', FileEvidence(path='mine.html', commit='c' * 40), len(PAGE), 'Mine.')
+    again = await seat(lab, 'ada').dashboard('board.html', 'The account, an hour on.')
+
+    assert [post.post.author for post in (first, again)] == ['ada', 'ada']
 
 
 async def test_a_page_that_loads_from_a_server_or_is_no_text_is_refused_with_what_it_needs(lab: Lab) -> None:

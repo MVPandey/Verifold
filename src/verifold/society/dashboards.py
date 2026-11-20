@@ -6,18 +6,27 @@ dashboard's thread, and every later version goes there. The newest version that 
 The page holds its styles inline and loads nothing from another server: the board refuses a page that names another
 server where the page would load something, and the person's app shows the page in a frame whose policy allows no
 request at all and runs none of the page's scripts.
+
+The page is one agent's at a time. The author of the version that stands holds it with a lease for the minutes of a
+task's lease, as `society.leases` says: each version of its own starts the lease again, and its `ruled_out` that
+replies to a version of its own gives the page up. While the lease stands, the board takes no version from another
+agent. Nobody assigns the page, and a lease that ended at its time frees it. A record from before the lease holds
+versions of several agents at once, so the board checks the lease for a new version only.
 """
 
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from html.parser import HTMLParser
 
 from verifold.protocol.events import Posted
-from verifold.protocol.ids import PERSON, ThreadId
+from verifold.protocol.ids import PERSON, AgentId, ThreadId
 from verifold.protocol.join import DashboardLine
-from verifold.protocol.posts import Dashboard
+from verifold.protocol.posts import Dashboard, RuledOut
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
+from verifold.society.leases import Span, Step, span
+from verifold.society.lifecycle import utc
 from verifold.society.standing import standing
 
 DASHBOARD_TITLE = 'Dashboard'
@@ -41,17 +50,81 @@ def standing_dashboard(board: Board) -> Posted | None:
     )
 
 
-def dashboard_line(board: Board, now: datetime) -> DashboardLine | None:
-    """Return the version of the dashboard that stands, with its age at `now`, or `None` while none does."""
+@dataclass(frozen=True, slots=True)
+class PageHolder:
+    """The agent that holds the dashboard's page, with its lease, which stands or ended at its time."""
+
+    agent: AgentId
+    lease: Span
+
+
+def page_holder(board: Board, now: datetime) -> PageHolder | None:
+    """
+    Return the author of the version that stands, with its lease on the page, or `None`.
+
+    The lease comes from the author's steps on the page: each version of its own starts it, and its `ruled_out`
+    that replies to a version of its own ends it. It is `None` when no version stands or when the author gave
+    the page up.
+    """
     entry = standing_dashboard(board)
     if entry is None:
         return None
+    author = entry.post.author
+    thread = entry.post.thread
+    steps: tuple[Step, ...] = tuple(
+        (posted.seq, posted.at, 'start' if isinstance(posted.post, Dashboard) else 'end')
+        for posted in board.thread_posts(thread)
+        if posted.post.author == author and (isinstance(posted.post, Dashboard) or _gives_up(board, posted))
+    )
+    lease = span(steps, now, lambda seq: board.settings_at(seq).tasks.lease_minutes)
+    return PageHolder(agent=author, lease=lease) if lease else None
+
+
+def _gives_up(board: Board, posted: Posted) -> bool:
+    # A `ruled_out` of a version's author that replies to that version.
+    target = board.post(posted.post.reply_to) if posted.post.reply_to else None
+    return (
+        isinstance(posted.post, RuledOut)
+        and target is not None
+        and isinstance(target.post, Dashboard)
+        and target.post.author == posted.post.author
+    )
+
+
+def dashboard_line(board: Board, now: datetime) -> DashboardLine | None:
+    """Return the version of the dashboard that stands, with its age and its author's lease at `now`, or `None`."""
+    entry = standing_dashboard(board)
+    if entry is None:
+        return None
+    holder = page_holder(board, now)
     return DashboardLine(
         post=entry.post.id,
         thread=entry.post.thread,
         by=entry.post.author,
         minutes_ago=max(int((now - entry.at).total_seconds() // 60), 0),
         standing=standing(board, entry.post.id),
+        held_until=holder.lease.until if holder and holder.lease.stands(now) else None,
+    )
+
+
+def check_page_held(board: Board, author: AgentId, at: datetime) -> None:
+    """
+    Check that an agent can post a version of the dashboard at `at`: no other agent's lease on the page stands.
+
+    A record from before the lease holds versions of several agents at once, so the board checks this for a new
+    version only, and not as a rule of the record.
+
+    Raises:
+        RejectedEvent: Another agent holds the page, and the message says who, since when, and until when.
+
+    """
+    holder = page_holder(board, at)
+    if holder is None or holder.agent == author or not holder.lease.stands(at):
+        return
+    raise RejectedEvent(
+        f'{holder.agent} holds the dashboard since {utc(holder.lease.since)}, until {utc(holder.lease.until)}. The '
+        'board takes no version from another agent while that lease stands. Each version of the holder starts the '
+        'lease again, and its `ruled_out` that replies to a version of its own gives the page up.'
     )
 
 

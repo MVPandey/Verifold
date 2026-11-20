@@ -1431,7 +1431,7 @@ async def test_the_person_reads_the_whole_map_also_an_idea_that_is_sealed_for_th
 
     shown = (await client.get('/map')).json()
 
-    assert empty == {'branches': [], 'sealed': 0, 'left_out': 0}
+    assert empty == {'branches': [], 'no_branch': [], 'ideas_without_branch': 0, 'sealed': 0, 'left_out': 0}
     (card,) = shown['branches'][0]['idea_list']
     assert (card['author'], card['text'], card['test'], shown['sealed']) == (
         'bo',

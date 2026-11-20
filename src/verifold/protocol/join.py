@@ -33,6 +33,7 @@ from verifold.protocol.ids import PERSON, AgentId, BranchId, Parent, PostId, Thr
 from verifold.protocol.measures import MeasureLabel, MeasureUnit, MeasureValue
 from verifold.protocol.moves import LabSetting, Move, SeatChoice, Why
 from verifold.protocol.posts import (
+    IDEA_PARTS,
     MAX_BRANCHES,
     MAX_BUILDS_ON,
     MAX_CHOICES,
@@ -209,7 +210,10 @@ class PostRequest(Record):
     about: ThreadId | None = None
     """On a message of the person in the desk chat: the thread that the person had open, which the message is about."""
     parent: Parent | None = None
-    """On an idea: the branch, such as `b-2`, or the idea, such as `p-14`, that it hangs on. An idea needs it."""
+    """
+    On an idea: the branch, such as `b-2`, or the idea, such as `p-14`, that it hangs on. Without it, the idea hangs on
+    no branch until its author gives it one.
+    """
     test: Part | None = None
     """On an idea: how it is tested. An idea needs it, and no other kind takes it."""
     rules_out: Part | None = None
@@ -255,11 +259,8 @@ class PostRequest(Record):
 
     @model_validator(mode='after')
     def _an_idea_has_its_parts(self) -> Self:
-        if self.kind == 'idea' and not (self.parent and self.test and self.rules_out):
-            raise ValueError(
-                'An idea needs its four parts: the statement in `text`, `parent`, the branch or the idea that it hangs '
-                'on, `test`, how it is tested, and `rules_out`, what result of the test would rule it out.'
-            )
+        if self.kind == 'idea' and not (self.test and self.rules_out):
+            raise ValueError(IDEA_PARTS)
         return self
 
     def to_post(  # noqa: PLR0913
@@ -483,7 +484,7 @@ class ClaimLine(Record):
     task: PostId
     thread: ThreadId
     until: AwareDatetime
-    """When the lease ends, unless the holder's activity on the task starts it again first."""
+    """When the lease ends, unless a post of the holder starts it again first."""
     minutes_left: int = 0
     """How many whole minutes are left until `until`, by the lab's clock."""
 
@@ -1006,9 +1007,12 @@ class IdeaView(Sparse):
     at: AwareDatetime
     text: str
     parent: Parent | None = None
-    """The branch or the idea that it hangs on."""
+    """The branch or the idea that it hangs on, or `None` for an idea without a parent."""
     branch: BranchId | None = None
-    """The branch that it hangs on, directly or through its parent ideas."""
+    """
+    The branch that it hangs on, directly, through its parent ideas, or as its author gave it one. `None` while it
+    hangs on no branch.
+    """
     state: IdeaState = 'untried'
     test: str = ''
     rules_out: str = ''
@@ -1048,10 +1052,17 @@ class MapView(Record):
     """
 
     branches: tuple[BranchView, ...] = ()
+    no_branch: tuple[IdeaView, ...] = ()
+    """
+    The ideas that hang on no branch, in the order that they were posted, after the branches: an idea without a
+    parent whose author gave it no branch, and an idea that hangs on such an idea. A sealed idea is not among them.
+    """
+    ideas_without_branch: int = 0
+    """How many ideas hang on no branch, the ones that `left_out` counts among them."""
     sealed: int = 0
     """How many ideas of the open round are sealed for the reader. They hang on no branch until the round closes."""
     left_out: int = 0
-    """How many older ideas the map leaves out of the branches' lists. The counts of each branch hold them."""
+    """How many older ideas the map leaves out of its lists. The counts of each branch hold them."""
 
 
 MAX_LINKS = 3
@@ -1510,7 +1521,7 @@ class ClaimResult(Record):
     body: Body = ''
     held_since: AwareDatetime
     held_until: AwareDatetime
-    """When your lease ends, unless your activity on the task starts it again first."""
+    """When your lease ends, unless a post of yours starts it again first."""
     news: News | None = None
 
 
@@ -1871,6 +1882,8 @@ class SteeringFacts(Sparse):
     """How many ideas agents posted in the last hour."""
     branches_without_idea: int = 0
     """How many branches of the question in force have no idea."""
+    ideas_without_branch: int = 0
+    """How many ideas hang on no branch: ideas without a parent whose authors gave them none, and the ideas on them."""
     no_idea_hours: float | None = None
     """
     The hours that the branch in force without an idea has had none, for the one that has gone longest, since the
@@ -1969,13 +1982,19 @@ class HeadlineNumberLine(Sparse):
 
 
 class DashboardLine(Sparse):
-    """The version of the lab's dashboard that stands: its post, its thread, its author, its age, and its standing."""
+    """
+    The version of the lab's dashboard that stands: its post, its thread, its author, its age, and its standing.
+
+    `held_until` is when the lease of its author on the page ends, while that lease stands. Until then the board takes
+    no version from another agent.
+    """
 
     post: PostId
     thread: ThreadId
     by: AgentId
     minutes_ago: int = 0
     standing: Standing = 'open'
+    held_until: AwareDatetime | None = None
 
 
 class HeadlineResult(Record):
@@ -2121,8 +2140,9 @@ class Brief(Record):
     """
     task_lease_minutes: int = 0
     """
-    How many minutes a claim of a task, or the holder's activity on the task, holds the lease on it now. The person
-    sets it, and a lease keeps the minutes of the time that it started or started again.
+    How many minutes a claim of a task, or a post of its holder, holds the lease on it now, and a version of the
+    dashboard its author's lease on the page. The person sets it, and a lease keeps the minutes of the time that it
+    started or started again.
     """
     conversation: ThreadId | None = None
     """The thread where the person and the coordinator talk, which every agent can read. `None` while the lab has none."""
@@ -2192,6 +2212,8 @@ class Brief(Record):
     """
     retired_branches: int = Field(default=0, exclude_if=_zero)
     """How many branches readings retired. The tool `map` shows them with their ideas."""
+    ideas_without_branch: int = Field(default=0, exclude_if=_zero)
+    """How many ideas hang on no branch. The tool `map` lists them after the branches."""
     threads: tuple[ThreadSummary, ...] = ()
     """The threads that are not side threads, the most recently active first, at most `MAX_NEWS`."""
     more_threads: int = 0
@@ -2399,6 +2421,18 @@ class Overview(Record):
     """The newest allowance that the person started for each acting seat, in force or not."""
     actions_paused: bool = False
     """Whether the person paused every action."""
+    dashboard: DashboardLine | None = None
+    """The version of the dashboard that stands, with its author and its age, or `None` while none stands."""
+    headline_number: HeadlineNumberLine | None = None
+    """The lab's headline number with its newest measure and who reran it, or `None` while nobody named one."""
+    branches: int = 0
+    """How many branches of the question are in force."""
+    ideas: int = 0
+    """How many ideas the lab has, on a branch or not."""
+    ideas_without_branch: int = 0
+    """How many ideas hang on no branch."""
+    unowned_tasks: int = 0
+    """How many tasks are open: nobody holds them, no hand-back waits, and their authors did not withdraw them."""
     news: News | None = None
 
 

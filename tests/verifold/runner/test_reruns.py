@@ -972,10 +972,20 @@ async def test_the_keeper_deletes_every_copy_when_the_lab_closes(tmp_path: Path,
     try:
         await asyncio.sleep(0.05)
         assert home.exists()
-        await lab.post(PostRequest(kind='proposal', text='It holds.', thread='t-1'), 'ada')
+        challenge = PostRequest(
+            kind='check',
+            text='It holds on 2024.',
+            body='Ran it on the 2024 data: 11.2x.',
+            reply_to='p-2',
+            thread='t-1',
+            outcome='holds',
+            method='challenge',
+        )
+        await lab.post(challenge, 'cy')
+        await lab.post(PostRequest(kind='proposal', text='It holds.', thread='t-1', builds_on=('p-2',)), 'ada')
         await lab.post(PostRequest(kind='reading', text='The lab reads the question as asked.', thread='t-1'), 'ada')
-        await lab.post(PostRequest(kind='close', text='Done.', thread='t-1', candidate='p-4'), 'ada')
-        await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-6', accepts=True), 'bo')
+        await lab.post(PostRequest(kind='close', text='Done.', thread='t-1', candidate='p-5'), 'ada')
+        await lab.post(PostRequest(kind='answer', text='Agreed.', thread='t-1', reply_to='p-7', accepts=True), 'bo')
         await until(lambda: not home.exists())
     finally:
         keeping.cancel()

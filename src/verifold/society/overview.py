@@ -27,14 +27,18 @@ from verifold.society.board import Board
 from verifold.society.budget import budget_line, disk_limit
 from verifold.society.candidates import closes_on
 from verifold.society.coordinator import waiting_for_reply, waiting_posts
+from verifold.society.dashboards import dashboard_line
 from verifold.society.deliverables import deliverable_lines
+from verifold.society.ideas import ideas_of, in_force, without_branch
 from verifold.society.identity import post_line, seat_label, seat_marks
 from verifold.society.lifecycle import lab_state, minutes_left
 from verifold.society.lines import lines_of
+from verifold.society.measures import headline_line
 from verifold.society.obstacles import obstacles
 from verifold.society.pace import pause_line
 from verifold.society.reruns import reruns_wanted
 from verifold.society.standing import candidates, closing, standing
+from verifold.society.tasks import open_tasks
 from verifold.society.tested import rests_on
 from verifold.society.turns import before
 from verifold.society.views import (
@@ -57,7 +61,8 @@ def overview(
     wanted reruns, the open obstacles, the deliverables, and the person's post in the conversation that waits for
     the coordinator's reply. Each list holds its newest `MAX_NEWS` entries at most, and counts the others. Each
     deliverable holds its newest `MAX_OVERVIEW_OFFERS` offers, with the accepted one among them, and counts the
-    others. `disk` is what Verifold measured of the lab's files last.
+    others. The dashboard and the headline number are one line each, and the map and the open tasks are counts.
+    `disk` is what Verifold measured of the lab's files last.
     """
     working = lines_of(board)
     done = closing(board)
@@ -125,6 +130,12 @@ def overview(
             if board.acting(joined.agent.id) and (line := allowance_line(board, joined.agent.id, now))
         ),
         actions_paused=board.actions_paused is not None,
+        dashboard=dashboard_line(board, now),
+        headline_number=headline_line(board, now),
+        branches=len(in_force(board)),
+        ideas=len(ideas_of(board).ideas),
+        ideas_without_branch=len(without_branch(board)),
+        unowned_tasks=len(open_tasks(board, now)),
         news=news,
     )
 

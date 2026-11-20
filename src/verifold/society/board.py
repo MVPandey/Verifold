@@ -24,6 +24,7 @@ from verifold.protocol.events import (
     DeliverableSet,
     DeskSet,
     Halt,
+    IdeaBranched,
     LabOpened,
     Limit,
     LimitReached,
@@ -116,6 +117,8 @@ class Board:
     """Each time that an agent claimed a task or renewed its claim, oldest first. `society.tasks` says who holds what."""
     lapses: tuple[ClaimLapsed, ...] = ()
     """Each claim whose lease ended at its time, as Verifold recorded it, oldest first."""
+    idea_branches: tuple[IdeaBranched, ...] = ()
+    """Each branch that the author of an idea without a parent gave it, oldest first."""
     times: tuple[TimeSet | TimeRanOut, ...] = ()
     budgets: tuple[BudgetSet, ...] = ()
     """Each budget that the person set, oldest first."""
@@ -583,10 +586,20 @@ class Board:
         """Return the entries of the posts that build on a post, oldest first."""
         return _index(self.posts).builds.get(post_id, ())
 
+    def posts_of(self, author: AgentId, after: int = 0) -> tuple[Posted, ...]:
+        """Return the entries of an author's posts after event `after`, oldest first."""
+        mine = _index(self.posts).authors.get(author, ())
+        return mine[bisect_right(mine, after, key=lambda entry: entry.seq) :]
+
 
 @dataclass(frozen=True, slots=True)
 class _Index:
-    """The posts of one board by ID, by the post that they reply to, by the posts that they build on, by thread, and the offers by deliverable."""
+    """
+    The posts of one board, indexed for the lookups that views make.
+
+    They are by ID, by the post that they reply to, by the posts that they build on, by thread, and by author, and the
+    offers are by deliverable.
+    """
 
     posts: tuple[Posted, ...]
     ids: dict[PostId, Posted]
@@ -594,6 +607,7 @@ class _Index:
     builds: dict[PostId, tuple[Posted, ...]]
     offers: dict[DeliverableId, tuple[Posted, ...]]
     threads: dict[ThreadId, tuple[Posted, ...]]
+    authors: dict[AgentId, tuple[Posted, ...]]
 
 
 _indexes: list[_Index] = []
@@ -617,8 +631,10 @@ def _index(posts: tuple[Posted, ...]) -> _Index:
     builds: dict[PostId, list[Posted]] = {}
     offers: dict[DeliverableId, list[Posted]] = {}
     threads: dict[ThreadId, list[Posted]] = {}
+    authors: dict[AgentId, list[Posted]] = {}
     for entry in posts:
         threads.setdefault(entry.post.thread, []).append(entry)
+        authors.setdefault(entry.post.author, []).append(entry)
         if isinstance(entry.post, FileOffer):
             offers.setdefault(entry.post.deliverable, []).append(entry)
         if entry.post.reply_to:
@@ -632,6 +648,7 @@ def _index(posts: tuple[Posted, ...]) -> _Index:
         builds={post: tuple(entries) for post, entries in builds.items()},
         offers={deliverable: tuple(entries) for deliverable, entries in offers.items()},
         threads={thread: tuple(entries) for thread, entries in threads.items()},
+        authors={author: tuple(entries) for author, entries in authors.items()},
     )
     _indexes.append(index)
     del _indexes[:-_KEPT_INDEXES]

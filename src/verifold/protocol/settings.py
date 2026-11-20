@@ -114,9 +114,10 @@ class TaskSettings(Record):
 
     lease_minutes: int = Field(default=30, ge=1, le=MAX_BOARD_MINUTES)
     """
-    The minutes of the lease that a claim of a task gives its agent, and that the holder's activity on the task
-    starts again. While the lease stands, the board refuses a claim of the task from another agent, and at its end
-    the task is open again. A lease keeps the minutes that the lab followed when it started or started again.
+    The minutes of the lease that a claim of a task gives its agent, and that each post of the holder starts again.
+    While the lease stands, the board refuses a claim of the task from another agent, and at its end the task is open
+    again. The author of the version of the dashboard that stands holds the page for as long. A lease keeps the
+    minutes that the lab followed when it started or started again.
     """
 
 

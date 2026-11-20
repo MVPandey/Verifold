@@ -89,25 +89,26 @@ def test_a_claim_gives_the_task_to_one_agent_and_the_record_refuses_every_other_
     assert [claim.agent for claim in later.claim('cy', 'p-1').board().claims] == ['bo', 'cy']
 
 
-def test_the_holders_activity_on_the_task_starts_its_lease_again_and_the_record_marks_the_lapse_once(
+def test_each_post_of_the_holder_starts_its_lease_again_and_the_record_marks_the_lapse_once(
     tasked: RecordBuilder,
 ) -> None:
     tasked.claim('bo', 'p-1')
     tasked.post(Plan(id='p-2', thread='t-1', author='bo', text='I take the tail test.', reply_to='p-1'))
     tasked.post(Message(id='p-3', thread='t-1', author='bo', text='Run 1 is in.', builds_on=('p-1',)))
-    # A post of the holder that does not touch the task, and a post of another agent, start nothing.
+    # An agent holds one claim at a time, so a post of the holder in another thread keeps its claim too, as when the
+    # work goes to the thread of a deliverable. A post of another agent starts nothing.
     tasked.thread('t-2', opened_by='bo').post(Result(id='p-4', thread='t-2', author='bo', text='Elsewhere.'))
     tasked.post(Message(id='p-5', thread='t-1', author='cy', text='Any news?', reply_to='p-1'))
-    until = START + timedelta(minutes=9 + LEASE)
+    until = START + timedelta(minutes=11 + LEASE)
 
     assert facts_at(tasked) == ('claimed', 'bo', until)
     assert next_lapse(tasked.board(), until - timedelta(minutes=1)) == until
-    with pytest.raises(RejectedEvent, match='until 2026-11-06 12:14 UTC'):
+    with pytest.raises(RejectedEvent, match='until 2026-11-06 12:16 UTC'):
         tasked.copy().claim('cy', 'p-1').board()
     # The record marks the lapse once, with the end of the lease, and not before that end.
-    with pytest.raises(RejectedEvent, match='No claim of bo on task p-1 has a lease that ended at 2026-11-06 12:14'):
+    with pytest.raises(RejectedEvent, match='No claim of bo on task p-1 has a lease that ended at 2026-11-06 12:16'):
         tasked.copy().lapse('bo', 'p-1', until).board()
-    idle(tasked, 1)
+    idle(tasked, 3)
     assert [(due.agent, due.task, due.until) for due in lapses_due(tasked.board(), until)] == [('bo', 'p-1', until)]
     lapsed = tasked.lapse('bo', 'p-1', until)
     assert (lapses_due(lapsed.board(), until), facts_at(lapsed)) == ((), ('open', None, None))
@@ -116,6 +117,27 @@ def test_the_holders_activity_on_the_task_starts_its_lease_again_and_the_record_
     # A post of the old holder after the end starts no lease of its own, so the task stays open.
     tasked.post(Message(id='p-6', thread='t-1', author='bo', text='Still on it.', reply_to='p-1'))
     assert facts_at(tasked) == ('open', None, None)
+
+
+def test_a_record_from_before_keeps_the_lapse_of_a_lease_that_only_the_holders_posts_on_the_task_kept(
+    tasked: RecordBuilder,
+) -> None:
+    # Before every post of the holder kept its claim, a post elsewhere kept nothing, so Verifold marked the lapse at
+    # the end of the claim's own lease. Such a record still loads, and the lapse ends the claim.
+    tasked.claim('bo', 'p-1').thread('t-2', opened_by='bo')
+    tasked.post(Result(id='p-2', thread='t-2', author='bo', text='The work, in the thread of a deliverable.'))
+    claimed_until = START + timedelta(minutes=7 + LEASE)
+    idle(tasked, 3)
+    assert facts_at(tasked) == ('claimed', 'bo', START + timedelta(minutes=9 + LEASE))
+    tasked.lapse('bo', 'p-1', claimed_until)
+
+    assert facts_at(tasked) == ('open', None, None)
+    assert lapses_due(tasked.board(), START + timedelta(hours=1)) == ()
+    with pytest.raises(RejectedEvent, match='without a mark of its lapse'):
+        tasked.copy().lapse('bo', 'p-1', START + timedelta(minutes=9 + LEASE)).board()
+    # A lapse that no rule makes due stays refused.
+    with pytest.raises(RejectedEvent, match='without a mark of its lapse'):
+        tasked.copy().lapse('bo', 'p-1', START + timedelta(minutes=8 + LEASE)).board()
 
 
 def test_an_agent_holds_one_task_at_a_time_and_its_hand_back_frees_it_for_the_next(tasked: RecordBuilder) -> None:
