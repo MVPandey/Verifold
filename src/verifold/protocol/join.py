@@ -1334,8 +1334,13 @@ class AgentLine(Sparse):
     Why the agent's latest turn, or the latest start of its harness, failed, as one short sentence of Verifold.
     `None` when it did not fail, and once a later turn of the agent started.
     """
-    pause: PauseLine | None = None
-    """The pause of the agent's seat while one stands. Only a post of the person starts a turn of a paused seat."""
+    paused_by: AgentId | None = None
+    """
+    Who paused the agent's seat, while a pause stands: the person, or the coordinator. Only a post of the person
+    starts a turn of a paused seat.
+    """
+    paused_until: AwareDatetime | None = None
+    """When that pause ends. `None` with `paused_by` while it lasts until somebody resumes the seat."""
     tokens_per_hour: int | None = None
     """The lowest limit of tokens per hour that holds the agent's seat, while one does. The lab's limit is apart."""
 

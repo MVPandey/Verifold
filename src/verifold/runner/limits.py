@@ -15,6 +15,9 @@ from pydantic import JsonValue
 from verifold.protocol.agents import one_line
 from verifold.protocol.usage import CommandLimits, LimitWindow, MetaLimits, SeatLimits
 
+MAX_WINDOWS = 8
+"""The most windows that one report of a harness gives a seat."""
+
 THRESHOLDS = (50, 80, 95)
 """The percents of a window that the record keeps at once when a window passes them, also during a turn."""
 
@@ -151,11 +154,12 @@ def _window(label: str, percent: float, resets: datetime | None) -> list[LimitWi
 
 
 def _unique(windows: list[LimitWindow]) -> tuple[LimitWindow, ...]:
-    # One window for each label: the first that the report holds, in the report's order.
+    # One window for each label: the first that the report holds, in the report's order. Each brief carries the
+    # agent's own windows, so a report keeps `MAX_WINDOWS` of them at most.
     first: dict[str, LimitWindow] = {}
     for window in windows:
         first.setdefault(window.label, window)
-    return tuple(first.values())
+    return tuple(first.values())[:MAX_WINDOWS]
 
 
 def _span(minutes: float) -> str:

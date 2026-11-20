@@ -83,7 +83,7 @@ async def test_the_brief_says_what_holds_each_seat_and_the_seats_near_a_limit(le
     assert (coordinator.your_cap.tokens_per_hour, coordinator.your_cap.share) == (10_000_000, True)
     assert (coordinator.your_cap.spent, coordinator.lab_cap and coordinator.lab_cap.spent) == (1_000, 1_000)
     (line,) = coordinator.agents
-    assert (line.pause is not None, line.tokens_per_hour) == (True, None)
+    assert (line.paused_by, line.paused_until, line.tokens_per_hour) == ('person', None, None)
     # A brief leaves out what holds nothing, so a lab without limits reads as before.
     dumped = Member(led, 'ada').brief('').model_dump(mode='json')
     assert 'your_pause' not in dumped

@@ -527,8 +527,8 @@ a close stands or such a post went out in the minute before.
   seat's next turn, or every seat's under the lab's limit, waits for the next hour, also for a post of the person.
   The coordinator's own seat has a limit of the person's too, in the lab's settings, which holds whoever holds that
   seat. The desk takes no pause and no limit, and its turns count toward the lab's limit. `your_pause`,
-  `your_cap`, and `lab_cap` in `brief` say what holds you, with who set it and why, and each agent's line has its
-  `pause` and its `tokens_per_hour`.
+  `your_cap`, and `lab_cap` in `brief` say what holds you, with who set it and why, and each agent's line has
+  `paused_by`, `paused_until`, and `tokens_per_hour`.
 - A harness can report the usage limits of its provider: each window, such as the 5-hour one, with the percent
   that the account used and when it starts again. `your_limits` in `brief` has yours as your harness reported them
   last, and `seats_near_limit` counts the seats above 80 percent of a window. The windows are the account's, so

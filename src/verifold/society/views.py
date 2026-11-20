@@ -888,7 +888,8 @@ def _agent_line(
         latest=_own_line(board, posts[-1], seat, reader, now) if posts and posts[-1] is not plan else None,
         claim=claim_line(board, agent.id, now),
         error=_reason(board.failure(agent.id)),
-        pause=pause_line(board, agent.id, now),
+        paused_by=pause.by if (pause := pause_line(board, agent.id, now)) else None,
+        paused_until=pause.until if pause else None,
         tokens_per_hour=cap.tokens if (cap := cap_of(board, agent.id)) and not board.is_desk(agent.id) else None,
     )
 

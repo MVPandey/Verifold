@@ -10,7 +10,7 @@ from pydantic import JsonValue
 from verifold.harnesses.catalog import CATALOG, CLAUDE_LIMITS, CODEX_LIMITS, catalog_with
 from verifold.protocol.settings import HarnessSettings
 from verifold.protocol.usage import CommandLimits, LimitWindow, MetaLimits, SeatLimits
-from verifold.runner.limits import crossed, from_meta, from_text, material, merged
+from verifold.runner.limits import MAX_WINDOWS, crossed, from_meta, from_text, material, merged
 from verifold.runner.session import SessionHooks, _Client
 
 FIXTURES = Path(__file__).parent / 'fixtures'
@@ -224,3 +224,12 @@ def test_a_window_that_passes_50_80_or_95_percent_is_kept_at_once() -> None:
     assert crossed(limits(96), limits(60, at + timedelta(hours=5)))
     assert crossed(limits(60), limits(60, status='reached'))
     assert not crossed(limits(60, status='reached'), limits(60))
+
+
+def test_a_report_gives_a_seat_eight_windows_at_most() -> None:
+    meta: dict[str, JsonValue] = {'k': {'windows': {f'w{number}': {'used': number} for number in range(12)}}}
+
+    limits = from_meta(MetaLimits(key='k', windows=('windows',), used='used'), meta)
+
+    assert limits is not None
+    assert [window.label for window in limits.windows] == [f'w{number}' for number in range(MAX_WINDOWS)]
