@@ -30,7 +30,7 @@ from verifold.protocol.events import (
     TurnStarted,
     WatchSet,
 )
-from verifold.protocol.ids import PERSON, AgentId
+from verifold.protocol.ids import PERSON, UNSIGNED, AgentId
 from verifold.protocol.posts import Answer, Check, Close, HandBack, Objection, Post, Proposal, Reading, Summary
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
@@ -61,7 +61,7 @@ def check_agent(board: Board, agent: Agent) -> None:
         RejectedEvent: The ID is taken or reserved, or the recruiter is not in the lab.
 
     """
-    if agent.id == PERSON or board.agent(agent.id):
+    if agent.id in (PERSON, UNSIGNED) or board.agent(agent.id):
         raise RejectedEvent(f'The agent ID {agent.id} is taken. Choose another ID.')
     if agent.recruited_by:
         _check_member(board, agent.recruited_by)

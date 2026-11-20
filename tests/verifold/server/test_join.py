@@ -128,6 +128,7 @@ async def test_agents_work_through_the_mcp_tools(lab: Lab) -> None:
         'thread',
         'watch',
         'alarm',
+        'map',
         'steering',
         'profile',
         'notes',

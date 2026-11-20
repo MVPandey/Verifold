@@ -1408,3 +1408,37 @@ async def test_the_person_confirms_an_allowance_answers_an_action_pauses_actions
     assert paused.actions_paused is not None
     assert ended.allowances[0].state == 'ended'
     assert unknown.status_code == 400
+
+
+async def test_the_person_reads_the_whole_map_also_an_idea_that_is_sealed_for_the_agents(
+    client: httpx2.AsyncClient, lab: Lab
+) -> None:
+    empty = (await client.get('/map')).json()
+    # A third agent keeps the round open after bo's entry.
+    await lab.join(agent('cy'))
+    await lab.post(PostRequest(kind='reading', text='Value counts.', thread='t-1', branches=('Rates',)), 'ada')
+    await lab.post(PostRequest(kind='round', text='One idea each.', thread='t-1', minutes=15), 'ada')
+    idea = PostRequest(
+        kind='idea',
+        text='Buy after a fall.',
+        thread='t-1',
+        reply_to='p-3',
+        parent='b-1',
+        test='Count the days.',
+        rules_out='Fewer than 6 of 20.',
+    )
+    await lab.post(idea, 'bo')
+
+    shown = (await client.get('/map')).json()
+
+    assert empty == {'branches': [], 'sealed': 0, 'left_out': 0}
+    (card,) = shown['branches'][0]['idea_list']
+    assert (card['author'], card['text'], card['test'], shown['sealed']) == (
+        'bo',
+        'Buy after a fall.',
+        'Count the days.',
+        0,
+    )
+    # For ada, the idea is bo's sealed entry of the open round, so it hangs on no branch yet.
+    sealed = Member(lab, 'ada').map()
+    assert (sealed.sealed, sealed.branches[0].ideas) == (1, 0)

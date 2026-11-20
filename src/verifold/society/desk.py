@@ -29,7 +29,7 @@ from verifold.protocol.events import (
     TurnInterrupted,
 )
 from verifold.protocol.ids import PERSON, AgentId, PostId, ThreadId
-from verifold.protocol.posts import Close, Entry, Message, Post, Proposal, Round
+from verifold.protocol.posts import Close, Entry, Idea, Message, Post, Proposal, Round
 from verifold.protocol.threads import Thread
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
@@ -149,7 +149,7 @@ def check_desk_post(board: Board, event: Posted) -> None:
             f'Thread {chat} is the desk chat between the person and the desk, so the board takes no post of '
             f'{post.author} there.'
         )
-    if in_chat and (post.to_lab or isinstance(post, Proposal | Close | Round | Entry)):
+    if in_chat and (post.to_lab or isinstance(post, Proposal | Close | Round | Entry | Idea)):
         kind = 'post with `to_lab`' if post.to_lab else post.kind
         raise RejectedEvent(f'Thread {chat} is the desk chat, and a {kind} is for the whole lab.')
     if not desk:

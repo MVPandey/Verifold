@@ -19,7 +19,7 @@ from mcp import Client
 
 from verifold.app import NORMS_CHANGED, NORMS_TEMPLATE
 from verifold.protocol.events import CONDITION_BOUNDS, AlarmCondition, AlarmSet, BudgetSet, LimitReached, TurnEnded
-from verifold.protocol.posts import Answer, Close, FileEvidence, Message, Reading, Result, RuledOut
+from verifold.protocol.posts import Answer, Branch, Close, FileEvidence, Message, Reading, Result, RuledOut
 from verifold.protocol.settings import AtTimeLimit
 from verifold.protocol.threads import QUESTION_TITLE
 from verifold.protocol.usage import Usage
@@ -242,9 +242,11 @@ def messages() -> dict[str, str]:
 
 
 def _fresh() -> Board:
-    # A lab with a reading and a lead that was ruled out, which a seat with a fresh view reads at its start.
+    # A lab with a reading of two branches and a lead that was ruled out, which a seat with a fresh view reads at its
+    # start.
     record = RecordBuilder().join('ada').thread('t-1', opened_by='ada')
-    record.post(Reading(id='p-1', thread='t-1', author='ada', text='An answer is a sort that holds.'))
+    split = (Branch(id='b-1', title='Radix sorts'), Branch(id='b-2', title='Merges'))
+    record.post(Reading(id='p-1', thread='t-1', author='ada', text='An answer is a sort that holds.', branches=split))
     return record.post(RuledOut(id='p-2', thread='t-1', author='ada', text='A heap sort loses.')).board()
 
 
@@ -334,7 +336,7 @@ async def test_no_tool_of_the_board_describes_itself_or_its_result_with_an_order
     async with Client(join_server(lambda _: Member(lab, 'bo'))) as client:
         tools = (await client.list_tools()).tools
 
-    assert len(tools) == 22
+    assert len(tools) == 23
     for tool in tools:
         assert tool.description, tool.name
         assert orders(tool.description) == [], tool.name

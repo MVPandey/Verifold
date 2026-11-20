@@ -23,9 +23,12 @@ from verifold.society.allowances import in_force
 from verifold.society.board import Board
 from verifold.society.budget import LIMIT_NAMES, budget_line
 from verifold.society.deliverables import stated
+from verifold.society.ideas import branch_lines
+from verifold.society.lifecycle import latest_time
 from verifold.society.lifecycle import utc as _utc
 from verifold.society.lines import question_thread
 from verifold.society.obstacles import obstacles
+from verifold.society.rounds import for_reader
 
 DOORBELL = 'New posts for you on the lab board.'
 """The message that wakes an agent after it ended its turn. The agent reads the posts with its board tools."""
@@ -101,7 +104,7 @@ DESK = (
 
 FRESH = (
     'Your seat starts with a fresh view, as the coordinator asked when it added the seat. Until you post your first '
-    'plan, `brief` leaves out the candidate answers, the report, and the dashboard. `thread` shows every post.'
+    'plan or idea, `brief` leaves out the candidate answers, the report, and the dashboard. `thread` shows every post.'
 )
 """What the start message says to a seat that starts with a fresh view."""
 
@@ -170,7 +173,7 @@ def start_message(
     if thread := question_thread(board):
         lines.append(f'Thread {thread} on the board holds this question.')
     if agent.fresh:
-        lines.extend(_fresh_view(board))
+        lines.extend(_fresh_view(board, agent.id))
     if board.revisions:
         lines.append(
             f'The question was revised, last at {_utc(board.revisions[-1].at)}. The text above is the '
@@ -189,13 +192,22 @@ def start_message(
     return '\n'.join(lines)
 
 
-def _fresh_view(board: Board) -> list[str]:
-    # The question, the lab's reading, and what was ruled out, for a seat that starts with a fresh view. Each line
-    # of a post is its headline, cut as in a brief.
+def _ideas(count: int) -> str:
+    return 'no idea yet' if count == 0 else f'{count} {"idea" if count == 1 else "ideas"}'
+
+
+def _fresh_view(board: Board, agent_id: AgentId) -> list[str]:
+    # The question, the lab's reading with its branches, and what was ruled out, for a seat that starts with a fresh
+    # view. Each line of a post is its headline, cut as in a brief.
     lines = [FRESH]
     reading = next((entry for entry in reversed(board.posts) if isinstance(entry.post, Reading)), None)
     if reading:
         lines.append(f"Post {reading.post.id} holds the lab's reading of the question: {line_text(reading.post.text)}")
+    split = branch_lines(for_reader(board, agent_id), latest_time(board))
+    if split:
+        count = f'{len(split)} {"branch" if len(split) == 1 else "branches"}'
+        lines.append(f"The lab's reading splits the question into {count}, and `map` shows each one with its ideas:")
+        lines.extend(f'- {line.id}: {line.title} ({_ideas(line.ideas)})' for line in split)
     ruled = tuple(item.entry for item in reversed(obstacles(board)))
     if ruled:
         shown = ruled[:MAX_RULED_OUT]

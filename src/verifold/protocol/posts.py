@@ -11,8 +11,9 @@ one agent that claims it, a hand-back returns that work to the task's author, an
 of the person, a round asks every agent the same question at once, an entry is an agent's answer to a round, an
 action is what an acting seat declares before it acts in the world, a receipt says what the action did and what it
 cost, a measure reports one number with the script that produced it, a headline number names the label of the
-lab's headline number, and a dashboard is one version of the page that shows the person where the lab stands. A new kind
-is one more model in the `Post` union.
+lab's headline number, a dashboard is one version of the page that shows the person where the lab stands, and an
+idea states a way to answer the question with its test, before anyone tries it. A new kind is one more model in the
+`Post` union.
 """
 
 from collections.abc import Callable
@@ -23,7 +24,7 @@ from pydantic import AfterValidator, AwareDatetime, Field, StringConstraints, Wi
 
 from verifold.protocol.agents import one_line
 from verifold.protocol.allowances import ActionNeed, AllowanceId, Amount
-from verifold.protocol.ids import AgentId, CommitId, DeliverableId, PostId, ThreadId
+from verifold.protocol.ids import UNSIGNED, AgentId, BranchId, CommitId, DeliverableId, Parent, PostId, ThreadId
 from verifold.protocol.measures import MAX_PAGE_BYTES, HeadlineLabel, MeasureLabel, MeasureUnit, MeasureValue
 from verifold.protocol.moves import Move
 from verifold.protocol.record import Record, unset
@@ -89,6 +90,7 @@ type PostKind = Literal[
     'measure',
     'headline_number',
     'dashboard',
+    'idea',
 ]
 """The values of `kind` across the `Post` union."""
 type Outcome = Literal['holds', 'fails']
@@ -193,12 +195,16 @@ class Plan(PostBase):
     """What the author does next. The other agents read it, so that no two agents do the same work."""
 
     kind: Literal['plan'] = 'plan'
+    idea: PostId | None = Field(default=None, exclude_if=unset)
+    """The idea that the plan tries, when it tries one. `None` for every other plan, and in a record from before ideas."""
 
 
 class Result(PostBase):
     """A finding that other agents can object to or check."""
 
     kind: Literal['result'] = 'result'
+    idea: PostId | None = Field(default=None, exclude_if=unset)
+    """The idea that the result tries, when it tries one. `None` for every other result."""
 
 
 class PermissionShown(Record):
@@ -366,6 +372,11 @@ class RuledOut(PostBase):
     """The end of a line of work: what failed, and what others can reuse."""
 
     kind: Literal['ruled_out'] = 'ruled_out'
+    idea: PostId | None = Field(default=None, exclude_if=unset)
+    """
+    The idea that this rules out, when it rules one out. While it stands, the idea is ruled out. `None` for every
+    other ruled-out lead.
+    """
 
 
 class Report(PostBase):
@@ -379,6 +390,31 @@ class Report(PostBase):
     kind: Literal['report'] = 'report'
 
 
+MAX_BRANCH_TITLE = 120
+"""The most characters in the title of a branch of the question."""
+
+MAX_BRANCHES = 30
+"""The most branches of the question that a lab has in force at one time."""
+
+type BranchTitle = Annotated[
+    str, AfterValidator(one_line), StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_BRANCH_TITLE)
+]
+"""The title of a branch of the question, as one short line."""
+
+
+class Branch(Record):
+    """
+    A branch of the question: one part of the question's split, which a reading adds, by its ID and its title.
+
+    Verifold gives each branch its ID when the reading that adds it goes on the board. The branch keeps its ID
+    across later readings, so the ideas that hang on it stay on it, until a reading retires it. A retired branch
+    and its ideas stay in the record and on the map.
+    """
+
+    id: BranchId
+    title: BranchTitle
+
+
 class Reading(PostBase):
     """
     How the lab reads the question: what counts as an answer, what the lab assumes, and what it leaves out.
@@ -387,6 +423,10 @@ class Reading(PostBase):
     reading, and it replaces every older one. The person's app shows it at the top of the lab's page. It is for
     every agent that is not on call. While an agent holds the coordinator seat, only that agent posts one.
     While nobody holds it, any agent of the lab that is not on call does. A record from before readings holds none.
+
+    A reading can also split the question into branches: `branches` adds new ones, and `retires` names the ones in
+    force that end with this reading. Every other branch stays in force as an older reading added it. The branches
+    in force, in the order that readings added them, are the lab's split of the question.
     """
 
     kind: Literal['reading'] = 'reading'
@@ -395,6 +435,10 @@ class Reading(PostBase):
     Why the coordinator posts this reading, as one line. The board takes a newer reading of the coordinator only
     with it, and it shows in the log of the coordinator's moves. `None` for every other reading.
     """
+    branches: tuple[Branch, ...] = Field(default=(), max_length=MAX_BRANCHES, exclude_if=lambda value: not value)
+    """The branches that this reading adds, in its order. A record from before branches has none."""
+    retires: tuple[BranchId, ...] = Field(default=(), max_length=MAX_BRANCHES, exclude_if=lambda value: not value)
+    """The branches in force that this reading retires."""
 
 
 class Summary(PostBase):
@@ -660,6 +704,41 @@ class Dashboard(PostBase):
     reply_to: None = None
 
 
+class Idea(PostBase):
+    """
+    An idea: one way to answer the question, stated with its test before anyone tries it.
+
+    `text` is the statement, and `body` holds the detail. `parent` is what the idea hangs on: a branch of the
+    question, or another idea. `test` says how the idea is tested, and `rules_out` says what result of that test
+    would rule the idea out. The record takes no idea without all four. A `plan` or a `result` with the idea in
+    `idea` tries it, and a `ruled_out` with the idea in `idea` rules it out. An idea that replies to a round is its
+    author's entry of that round, sealed as every entry is until the round closes. A record from before ideas holds
+    none.
+    """
+
+    kind: Literal['idea'] = 'idea'
+    parent: Parent | None = None
+    """
+    The branch, such as `b-2`, or the idea, such as `p-14`, that the idea hangs on. A view of an idea that is sealed
+    in an open round has none.
+    """
+    test: Part = ''
+    """How the idea is tested, fixed before anyone tries it."""
+    rules_out: Part = ''
+    """What result of the test would rule the idea out."""
+
+    @model_validator(mode='after')
+    def _four_parts(self) -> Self:
+        # The view of an idea that is sealed in an open round has no author and no parts. The record holds no post of
+        # `UNSIGNED`, because no agent joins with it.
+        if self.author != UNSIGNED and (self.parent is None or not self.test or not self.rules_out):
+            raise ValueError(
+                'An idea needs its four parts: the statement in `text`, `parent`, the branch or the idea that it hangs '
+                'on, `test`, how it is tested, and `rules_out`, what result of the test would rule it out.'
+            )
+        return self
+
+
 type Post = Annotated[
     Message
     | Plan
@@ -685,6 +764,12 @@ type Post = Annotated[
     | Receipt
     | Measure
     | HeadlineNumber
-    | Dashboard,
+    | Dashboard
+    | Idea,
     Field(discriminator='kind'),
 ]
+
+
+def idea_of(post: Post) -> PostId | None:
+    """Return the idea that a post tries or rules out, or `None` for a post that names none."""
+    return post.idea if isinstance(post, Plan | Result | RuledOut) else None

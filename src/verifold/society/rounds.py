@@ -9,6 +9,9 @@ entry's content, and nothing that the board derives from that content either, su
 builds on. A view shows that the entry exists, who wrote it, and how many agents entered. The person sees every
 entry at once. An entry wakes nobody: the round's close tells of it.
 
+An idea that replies to a round is its author's entry there. A sealed idea hides its author too: until the round
+closes, it shows as an idea of `UNSIGNED`, and it hangs on no branch of the map.
+
 The seal is the board's. The record on disk holds every entry whole, and an agent that can read files outside its
 folder can read them there. The norms ask agents not to.
 
@@ -26,9 +29,9 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 from verifold.protocol.events import Posted, RoundClosed, RoundEnd
-from verifold.protocol.ids import PERSON, AgentId, PostId
+from verifold.protocol.ids import PERSON, UNSIGNED, AgentId, PostId
 from verifold.protocol.join import SEALED_TEXT
-from verifold.protocol.posts import Entry, Round, RuledOut
+from verifold.protocol.posts import Entry, Idea, Post, Round, RuledOut
 from verifold.society.board import Board
 from verifold.society.errors import RejectedEvent
 from verifold.society.lifecycle import latest_time, utc
@@ -62,9 +65,14 @@ def open_round(board: Board, now: datetime | None = None) -> Posted | None:
     return newest if newest and is_open(board, newest, now) else None
 
 
+def is_entry(post: Post) -> bool:
+    """Return whether a post is an entry of a round: an `entry`, or an idea that replies to a round."""
+    return isinstance(post, Entry) or (isinstance(post, Idea) and post.reply_to is not None)
+
+
 def round_of(board: Board, entry: Posted) -> Posted | None:
     """Return the round that an entry answers, or `None` for a post that is no entry."""
-    if not isinstance(entry.post, Entry):
+    if not is_entry(entry.post) or entry.post.reply_to is None:
         return None
     target = board.post(entry.post.reply_to)
     return target if target and isinstance(target.post, Round) else None
@@ -72,7 +80,7 @@ def round_of(board: Board, entry: Posted) -> Posted | None:
 
 def entries(board: Board, round_id: PostId) -> tuple[Posted, ...]:
     """Return the entries of a round, oldest first."""
-    return tuple(entry for entry in board.replies(round_id) if isinstance(entry.post, Entry))
+    return tuple(entry for entry in board.replies(round_id) if is_entry(entry.post))
 
 
 def waits_for(board: Board, opened: Posted, before: int | None = None) -> tuple[AgentId, ...]:
@@ -132,15 +140,19 @@ def close_due(board: Board, at: datetime) -> tuple[PostId, RoundEnd] | None:
 
 def sealed(board: Board, reader: AgentId, entry: Posted, now: datetime | None = None) -> bool:
     """Return whether an entry is sealed for a reader at `now`: another agent wrote it, and its round is open."""
-    if not isinstance(entry.post, Entry) or reader in (PERSON, entry.post.author):
+    if not is_entry(entry.post) or reader in (PERSON, entry.post.author):
         return False
     held = round_of(board, entry)
     return held is not None and is_open(board, held, now)
 
 
 def stripped(entry: Posted) -> Posted:
-    """Return an entry as a sealed view shows it: its ID, its thread, its author, and its round, with `SEALED_TEXT`."""
-    hidden = {
+    """
+    Return an entry as a sealed view shows it: its ID, its thread, its author, and its round, with `SEALED_TEXT`.
+
+    An idea also loses its author, which is `UNSIGNED`, its parent, its test, and what rules it out.
+    """
+    hidden: dict[str, object] = {
         'text': SEALED_TEXT,
         'body': '',
         'helper': '',
@@ -149,6 +161,8 @@ def stripped(entry: Posted) -> Posted:
         'evidence': (),
         'for_person': False,
     }
+    if isinstance(entry.post, Idea):
+        hidden |= {'author': UNSIGNED, 'parent': None, 'test': '', 'rules_out': ''}
     return entry.model_copy(update={'post': entry.post.model_copy(update=hidden)})
 
 
@@ -191,7 +205,7 @@ def check_unsealed(board: Board, post_id: PostId, at: datetime, what: str) -> No
     # Only the newest round can be open, so a record without an open round costs no search of its posts.
     held = open_round(board, at)
     target = board.post(post_id) if held else None
-    if held and target and isinstance(target.post, Entry) and target.post.reply_to == held.post.id:
+    if held and target and is_entry(target.post) and target.post.reply_to == held.post.id:
         raise RejectedEvent(
             f'Post {post_id} is an entry of round {held.post.id}, which is open until {utc(closes_at(held))}. '
             f'Until the round closes, the entry takes no {what}.'
@@ -215,7 +229,7 @@ def check_rounds(board: Board, event: Posted) -> None:
         check_unsealed(board, source, at, 'post that builds on it')
     if isinstance(post, Round):
         _check_round(board, post, at)
-    elif isinstance(post, Entry):
+    elif is_entry(post):
         _check_entry(board, post, at)
 
 
@@ -234,9 +248,13 @@ def _check_round(board: Board, post: Round, at: datetime) -> None:
         )
 
 
-def _check_entry(board: Board, post: Entry, at: datetime) -> None:
-    target = board.post(post.reply_to)
+def _check_entry(board: Board, post: Post, at: datetime) -> None:
+    target = board.post(post.reply_to) if post.reply_to else None
     if target is None or not isinstance(target.post, Round):
+        if isinstance(post, Idea):
+            raise RejectedEvent(
+                f'An idea replies to no post, or to a round as its entry. Post {post.reply_to} is no round.'
+            )
         raise RejectedEvent(f'An entry replies to a round, and post {post.reply_to} is no round.')
     if post.author == PERSON:
         raise RejectedEvent('An entry is the word of an agent. The person sees every entry and enters none.')

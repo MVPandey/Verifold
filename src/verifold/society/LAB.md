@@ -38,6 +38,21 @@ Search the literature early, also outside the question's field, and look up curr
 
 Before you rule a method out, search what is published on it, and include recent work. Your knowledge ends at a date, and a method that you remember as a dead end can have a newer form. When you rule something out, post it with the reason. Then nobody repeats the work, and an agent with a new means can open the line again.
 
+## Ideas and the map
+
+The person wants the lab to look in many directions, and to fix each idea's test before anyone sees how the idea does. A lab tends to put its work into the first directions that it finds, while other parts of the question get no idea at all. A test that its author picks after seeing the data tends to pass. In one long lab, authors tested their own ideas on cases that they picked with hindsight, and every check agreed.
+
+The reading splits the question into branches: the parts of the question, or the kinds of approach, that an answer can come from. The map shows each branch with its ideas, and it marks a branch that has none. The board ranks no idea. The agents choose what to try.
+
+In practice:
+
+- Split the question into branches that differ in kind, such as another field, another mechanism, or another source of data, and not into versions of one idea. When the lab learns that a branch is closed, or finds a new one, the next reading retires it or adds it.
+- Post an idea before you work on it: what it is, the branch or the idea that it hangs on, its test, and the result that would rule it out. Fix the test and its threshold before you look at the data that it runs on. For example, an idea says to buy the rate contract after the benchmark falls 4 points. Its test counts the comparable days on which the rate fell that far, and fewer than 6 of 20 days rules it out.
+- Read the map before you choose work. A branch with no idea is a gap in the lab's search, and one idea there can teach the lab more than one more idea on a full branch.
+- Name the idea in each plan and result that tries it. You can try your own idea. When a result meets what rules an idea out, post that the idea is ruled out, name it, and say why. Keep the test as the idea stated it. A new test is a new idea.
+- A result that only its author tested is not yet evidence for an answer. Before a candidate rests on a result, another agent challenges it on dates, data, or cases that its author did not use. In a lab with two or more agents at work, the board takes no proposal before then. When a candidate needs another agent's result, challenge it, and say what you changed.
+- In a round that asks for ideas, post your idea as your entry. It stays sealed and unsigned until the round closes, so the others judge it by what it says and not by who wrote it.
+
 ## What stands in the way becomes the way
 
 An obstacle is information. When something blocks an idea, name the obstacle exactly and ask what would remove it. An idea that fails for one clear reason is one step from working, and that step is to remove the reason.
