@@ -2302,7 +2302,10 @@ async def test_a_coordinators_add_inside_the_grant_of_the_start_takes_effect_wit
         async with board_of(url, token) as board:
             added = await board.call_tool('request', {**seat, 'mode': 'plan', 'fresh': True})
             past = await board.call_tool('request', {**seat, 'mode': 'plan'})
-        await until(lambda: any(call['agent'] == 'agent-3' for call in calls(log)), timeout=60)
+        # The harness logs other calls before the prompt, so the test waits for the prompt itself.
+        await until(
+            lambda: any(call['event'] == 'prompt' and call['agent'] == 'agent-3' for call in calls(log)), timeout=60
+        )
 
     board_now = fold(record(project))
     joined = board_now.agent('agent-3')
