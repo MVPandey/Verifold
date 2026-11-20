@@ -1572,6 +1572,7 @@ async def test_the_persons_change_applies_to_the_running_lab_but_an_agents_edit_
             'reruns': {'lease_minutes': 10},
             'tasks': {'lease_minutes': 30},
             'disk': {'limit_gb': 100},
+            'pace': {'coordinator_tokens_per_hour': 10_000_000},
         },
         'defaults': VERIFOLDS_DEFAULTS,
     }
@@ -1623,7 +1624,9 @@ async def test_a_start_with_a_budget_and_a_disk_limit_measures_the_lab_and_keeps
     left.mkdir(parents=True)
     old = time.time() - 3_600
     os.utime(left, (old, old))
-    start = ONE_AGENT.model_copy(update={'budget_tokens': 50_000, 'budget_dollars': 2.5, 'disk_gb': 7})
+    start = ONE_AGENT.model_copy(
+        update={'budget_tokens': 50_000, 'budget_dollars': 2.5, 'disk_gb': 7, 'coordinator_tokens_per_hour': 9}
+    )
     async with serving(project, start) as client:
         await until(lambda: not left.exists())
         lab = (await client.get('/lab')).json()
@@ -1636,6 +1639,7 @@ async def test_a_start_with_a_budget_and_a_disk_limit_measures_the_lab_and_keeps
         2.5,
         {'limit_gb': 7},
     )
+    assert lab['settings']['pace'] == {'coordinator_tokens_per_hour': 9}
     assert lab['disk']['total'] >= sum(lab['disk']['folders'].values())
 
 

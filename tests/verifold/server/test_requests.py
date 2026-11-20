@@ -587,7 +587,7 @@ async def test_the_person_reads_the_conversation_switches_powers_and_answers_req
         done = (await client.get('/conversation')).json()
 
     assert (empty['coordinator'], empty['thread'], empty['waits'], empty['deeds']) == ('ada', None, [], [])
-    assert [power['on'] for power in empty['powers']] == [False] * 5
+    assert [power['on'] for power in empty['powers']] == [False] * 6
     assert said.status_code == 200
     # The person's message waits for the coordinator's reply, and the coordinator's request after it is one.
     assert (empty['no_reply'], asked['no_reply'], waiting['no_reply']) == ([], [said.json()['post']['id']], [])

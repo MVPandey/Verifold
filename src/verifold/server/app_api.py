@@ -52,6 +52,7 @@ from verifold.protocol.app import (
     SettingsChange,
     SettingsView,
     SetupView,
+    ShareRequest,
     StartRequest,
     TaskCard,
     ThreadCard,
@@ -62,8 +63,8 @@ from verifold.protocol.deliverables import Decision, DeliverableLine, OfferLine
 from verifold.protocol.events import Reason, RerunRequested
 from verifold.protocol.ids import PERSON, AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import CandidatesView, FileText, PostRequest, PostView, ThreadView, line_text
-from verifold.protocol.moves import AddSeat
-from verifold.protocol.settings import DiskSettings
+from verifold.protocol.moves import AddSeat, PaceMove
+from verifold.protocol.settings import DiskSettings, PaceSettings
 from verifold.protocol.usage import DiskUse, Usage
 from verifold.server.activity import Activity
 from verifold.server.conversation import conversation_view
@@ -80,6 +81,7 @@ from verifold.society.identity import post_line, post_view, seat_label
 from verifold.society.lifecycle import alarm_line, close_count, lab_state
 from verifold.society.lines import lines_of
 from verifold.society.obstacles import Obstacle, obstacles
+from verifold.society.pace import cap_line, limits_of, pause_line
 from verifold.society.reruns import reruns_wanted
 from verifold.society.reviewers import seats
 from verifold.society.rounds import close_of, closes_at, entries, is_open, waits_for
@@ -422,7 +424,24 @@ def _seat_routes(api: FastAPI, host: Host, activity: Activity, authorized: param
 
 
 def _limit_routes(api: FastAPI, host: Host, activity: Activity, authorized: params.Depends) -> None:
-    """Add the person's limits of the lab beside its time: the budget and the disk limit."""
+    """Add the person's limits of the lab beside its time: the budget, the disk limit, and the pace."""
+
+    @api.post('/pace', dependencies=[authorized])
+    async def pace(move: PaceMove) -> LabView:
+        # The person's move replaces the coordinator's of the same kind, so only the person raises.
+        lab = _lab(host)
+        await lab.set_pace(move)
+        return _view_of(lab, activity)
+
+    @api.post('/pace/coordinator', dependencies=[authorized])
+    async def share(request: ShareRequest) -> LabView:
+        # The share is the lab's own setting. The settings files keep what new labs start with.
+        lab = _lab(host)
+        settings = lab.board.settings
+        if settings.pace.coordinator_tokens_per_hour != request.tokens_per_hour:
+            pace = PaceSettings(coordinator_tokens_per_hour=request.tokens_per_hour)
+            await lab.set_settings(settings.model_copy(update={'pace': pace}))
+        return _view_of(lab, activity)
 
     @api.post('/budget', dependencies=[authorized])
     async def budget(request: BudgetRequest) -> LabView:
@@ -525,7 +544,7 @@ def _lab_view(board: Board, activity: Activity, now: datetime, disk: DiskUse | N
         entry.agent.id: agent_need(board, activity.shown(entry.agent.id), entry.agent.id, waiting)
         for entry in board.agents
     }
-    around = _Around(working=working, needs=needs, became=became)
+    around = _Around(working=working, needs=needs, became=became, now=now)
     return LabView(
         state=lab_state(board),
         close=post_line(board, done, PERSON) if done else None,
@@ -554,6 +573,7 @@ def _lab_view(board: Board, activity: Activity, now: datetime, disk: DiskUse | N
         budget=budget_line(board),
         limit=board.at_limit,
         disk=disk,
+        lab_cap=cap_line(board, None, now),
         settings=board.settings,
         deliverables=tuple(_deliverable_view(board, line) for line in deliverable_lines(board)),
         removed_deliverables=removed_lines(board),
@@ -639,6 +659,7 @@ class _Around:
     working: dict[AgentId, ThreadId | None]
     needs: dict[AgentId, Need]
     became: dict[AgentId, Outcomes]
+    now: datetime
 
 
 def _agent_view(
@@ -696,6 +717,9 @@ def _agent_view(
         ),
         cost_usd=sum(costs) if costs else None,
         error=failed.error if (failed := board.failure(agent_id)) else None,
+        limits=limits_of(board, agent_id, lab.now),
+        pause=pause_line(board, agent_id, lab.now),
+        cap=None if board.is_desk(agent_id) else cap_line(board, agent_id, lab.now),
     )
 
 

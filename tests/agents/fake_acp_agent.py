@@ -24,6 +24,10 @@ session or a change take a minute.
 turn when the file is not there, and makes it. `FAKE_ACP_TURN_SECONDS` makes each turn take that long.
 `FAKE_ACP_ANSWER_CANCEL` makes a cancel end a slow turn at once, with the turn's tokens and cost, as real adapters
 answer the prompt that they stop. Without it, a slow turn runs on after a cancel and never answers in time.
+`FAKE_ACP_LIMITS` names the percent of a 5-hour window that the account used. The agent then reports it in the
+`_meta` of its usage update under `fake/limits`, lists its command `/status`, and answers that command by itself, as
+the Codex adapter does: with a line "fake 5h limit: N% left (resets 23:59)" and no turn. `FAKE_ACP_STATUS_SECONDS`
+makes that answer take so long.
 """
 
 import asyncio
@@ -187,6 +191,21 @@ class FakeAgent(acp.Agent):
     async def prompt(self, session_id: str, prompt: Prompt, **_: object) -> schema.PromptResponse:
         text = prompt[0].text if isinstance(prompt[0], schema.TextContentBlock) else ''
         self._note(event='prompt', text=text)
+        used = os.environ.get('FAKE_ACP_LIMITS')
+        if used and self._client:
+            if text == '/status':
+                await asyncio.sleep(float(os.environ.get('FAKE_ACP_STATUS_SECONDS', '0')))
+                line = f'**Model:** default  \n**fake 5h limit:** {100 - float(used):g}% left (resets 23:59)'
+                chunk = schema.AgentMessageChunk(
+                    session_update='agent_message_chunk', content=schema.TextContentBlock(type='text', text=line)
+                )
+                await self._client.session_update(session_id=session_id, update=chunk)
+                return schema.PromptResponse(stop_reason='end_turn')
+            listed = schema.AvailableCommandsUpdate(
+                session_update='available_commands_update',
+                available_commands=[schema.AvailableCommand(name='status', description='Show the status.')],
+            )
+            await self._client.session_update(session_id=session_id, update=listed)
         once = os.environ.get('FAKE_ACP_CRASH_ONCE')
         if os.environ.get('FAKE_ACP_CRASH') or (once and not Path(once).exists()):
             if once:
@@ -217,6 +236,7 @@ class FakeAgent(acp.Agent):
                     used=100,
                     size=1_000,
                     cost=schema.Cost(amount=self._cost, currency='USD'),
+                    field_meta={'fake/limits': {'window': 'five_hour', 'used': float(used)}} if used else None,
                 ),
             )
         return schema.PromptResponse(

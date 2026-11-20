@@ -520,6 +520,48 @@ def test_run_takes_only_a_lower_disk_limit_from_a_projects_file(
 
 
 @pytest.mark.parametrize(
+    ('mine', 'theirs', 'share'),
+    [
+        # A lower number of a project counts, and a higher one or none does not. Zero means no limit.
+        (None, 5_000, None),
+        (None, 50_000_000, 10_000_000),
+        (2_000, 0, 2_000),
+        (0, 20, None),
+        (4_000, None, None),
+    ],
+)
+def test_run_takes_only_a_lower_limit_of_the_coordinator_from_a_projects_file(
+    serves: list[StartRequest | None],
+    project: Path,
+    capsys: pytest.CaptureFixture[str],
+    mine: int | None,
+    theirs: int | None,
+    share: int | None,
+) -> None:
+    global_settings(project, {} if mine is None else {'pace': {'coordinator_tokens_per_hour': mine}})
+    project_settings(project, {} if theirs is None else {'pace': {'coordinator_tokens_per_hour': theirs}})
+
+    main(['run', 'Does it hold?', '--agent', 'codex:mini'])
+
+    (started,) = serves
+    assert started is not None
+    assert started.coordinator_tokens_per_hour == share
+    assert ("Did not use the coordinator's tokens per hour" in capsys.readouterr().out) == (share is not None)
+
+
+def test_run_takes_the_coordinators_limit_from_the_command_line(
+    serves: list[StartRequest | None], project: Path
+) -> None:
+    project_settings(project, {'pace': {'coordinator_tokens_per_hour': 5}})
+
+    main(['run', 'Does it hold?', '--agent', 'codex:mini', '--coordinator-tokens-per-hour', '0'])
+
+    (started,) = serves
+    assert started is not None
+    assert started.coordinator_tokens_per_hour == 0
+
+
+@pytest.mark.parametrize(
     ('mine', 'theirs', 'seats'),
     [
         # A lower number is not the stricter one: zero turns the reviewer seats off. So no number of a project counts.

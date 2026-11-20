@@ -30,8 +30,10 @@ from verifold.protocol.ids import AgentId, DeliverableId, PostId, ThreadId
 from verifold.protocol.join import (
     AlarmLine,
     BudgetLine,
+    CapLine,
     LabState,
     ObstacleState,
+    PauseLine,
     PostLine,
     PostView,
     QuestionVersion,
@@ -54,7 +56,7 @@ from verifold.protocol.settings import (
     SettingsLevel,
     SetupDefaults,
 )
-from verifold.protocol.usage import DiskUse, Usage
+from verifold.protocol.usage import DiskUse, SeatLimits, Usage
 from verifold.protocol.votes import Badge, BadgeAction, Direction, ProposalLine, Why
 
 type AgentState = Literal['starting', 'working', 'waiting', 'idle', 'stopped', 'invited', 'here', 'listening', 'void']
@@ -67,13 +69,14 @@ no digest of its token, so only a new invitation lets it join.
 """
 
 
-type WaitsFor = Literal['person', 'time', 'limit', 'process', 'retry']
+type WaitsFor = Literal['person', 'time', 'limit', 'process', 'retry', 'pace']
 """
 What an agent in the state `waiting` waits for. `person`: its harness waits for the person's answer inside a turn
 that runs. `time`: the lab is out of time, and the agent's turn starts when the person gives it more. `limit`: the
 lab reached its budget or its disk limit, and the agent's turn starts when the person raises it. `process`: the
 agent ended its turn while a process that it started still ran, and its turn starts when the process ends.
-`retry`: its harness failed, and Verifold starts it again at the time in `retry`.
+`retry`: its harness failed, and Verifold starts it again at the time in `retry`. `pace`: a pause of its seat, or a
+limit of tokens per hour of its seat or of the lab, holds its next turn.
 """
 
 
@@ -269,6 +272,15 @@ class AgentView(Record):
     """The cost that the harness reported. `None` when the harness reports tokens only."""
     error: str | None = None
     """Why the agent's latest turn, or the latest start of its harness, failed. `None` when it did not fail."""
+    limits: SeatLimits | None = None
+    """
+    The usage limits of the provider behind the seat, as its harness reported them last, without a window whose
+    reset time passed. `None` when its harness reported none.
+    """
+    pause: PauseLine | None = None
+    """The pause of the seat while one stands. Only a post of the person for it starts its next turn then."""
+    cap: CapLine | None = None
+    """The lowest limit of tokens per hour that holds the seat, with this hour's tokens. The lab's limit is apart."""
 
 
 class OfferView(OfferLine):
@@ -401,6 +413,8 @@ class LabView(Record):
     """The budget or the disk limit that the lab reached. Its agents wait until the person raises it."""
     disk: DiskUse | None = None
     """What the lab's files take on disk, as Verifold measured them last. `None` before the first measure."""
+    lab_cap: CapLine | None = None
+    """The lab's limit of tokens per hour, with this hour's tokens of every seat, or `None` while none stands."""
     state: LabState = 'open'
     """Whether the lab's agents say that it is done. A closed lab is not stopped: the person can go on."""
     close: PostLine | None = None
@@ -606,6 +620,11 @@ class StartRequest(Record):
     """The lab's budget in US dollars. `None` means no budget in dollars."""
     disk_gb: int | None = Field(default=None, ge=0, le=MAX_DISK_GB)
     """The lab's disk limit, in place of `disk.limit_gb` of the files. `None` takes the files'."""
+    coordinator_tokens_per_hour: int | None = Field(default=None, ge=0, le=MAX_BUDGET_TOKENS)
+    """
+    The tokens that the coordinator's seat may spend in one hour, in place of `pace.coordinator_tokens_per_hour`
+    of the files. Zero means no limit, and `None` takes the files'.
+    """
     deliverables: tuple[Sentence, ...] = Field(default=(), max_length=MAX_DELIVERABLES)
     """What the person wants to hold at the end of the lab, each as one sentence. They can add more while it runs."""
 
@@ -641,6 +660,7 @@ type SettingKey = Literal[
     'reruns.lease_minutes',
     'tasks.lease_minutes',
     'disk.limit_gb',
+    'pace.coordinator_tokens_per_hour',
     'setup',
 ]
 """The settings that the app changes. Harness commands are not among them, so the app can't change what a lab runs."""
@@ -827,6 +847,12 @@ class DiskRequest(Record):
     """The person sets the lab's disk limit, in gigabytes. Zero means no limit."""
 
     limit_gb: int = Field(ge=0, le=MAX_DISK_GB)
+
+
+class ShareRequest(Record):
+    """The person sets how many tokens the coordinator's seat may spend in one hour, in the lab. Zero means no limit."""
+
+    tokens_per_hour: int = Field(ge=0, le=MAX_BUDGET_TOKENS)
 
 
 class TimeRequest(Record):

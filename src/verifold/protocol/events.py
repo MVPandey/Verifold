@@ -24,12 +24,12 @@ from verifold.protocol.agents import (
 from verifold.protocol.deliverables import Decision, Sentence
 from verifold.protocol.grants import Grant
 from verifold.protocol.ids import PERSON, AgentId, CommitId, DeliverableId, PostId, ThreadId
-from verifold.protocol.moves import Note, Question
+from verifold.protocol.moves import Note, PaceMove, Question
 from verifold.protocol.posts import Post
 from verifold.protocol.record import Record, by_person, unset
 from verifold.protocol.settings import MAX_BUDGET_DOLLARS, MAX_BUDGET_TOKENS, MAX_MINUTES, Settings
 from verifold.protocol.threads import Thread
-from verifold.protocol.usage import Usage
+from verifold.protocol.usage import SeatLimits, Usage
 from verifold.protocol.votes import Badge, BadgeAction, Direction, Why
 
 
@@ -496,6 +496,38 @@ class LimitReached(EventBase):
     """With `disk`: the bytes of the lab's files that Verifold measured."""
 
 
+class LimitsReported(EventBase):
+    """
+    The usage limits of the provider behind an agent's seat, as its harness reported them.
+
+    Verifold records them when they changed since the record's last report for the seat: at the end of a turn,
+    and at once during a turn when a window passes 50, 80, or 95 percent or the status changes. A harness that
+    reports no limits gives its seat no such event. No agent tool records this event.
+    """
+
+    type: Literal['limits_reported'] = 'limits_reported'
+    agent: AgentId
+    limits: SeatLimits
+
+
+class PaceSet(EventBase):
+    """
+    A move of pace: the pause of a seat, its end, or a limit of tokens for one hour, of a seat or of the lab.
+
+    `by` made it: the person, also with a yes to the coordinator's request, or the coordinator under the person's
+    power for pace. The coordinator's own move only lowers. It pauses another seat than the desk, sets a limit no
+    higher than a limit that the person set and the lab's budget in tokens, and ends only a pause or a limit that
+    the coordinator made. A move of the person replaces the coordinator's of the same kind for the same seat or the
+    lab. The move holds one line of why. No agent tool records this event without a request.
+    """
+
+    type: Literal['pace_set'] = 'pace_set'
+    move: PaceMove
+    by: AgentId = Field(default=PERSON, exclude_if=by_person)
+    request: PostId | None = Field(default=None, exclude_if=unset)
+    """The coordinator's request that the move came from, with its yes just before. `None` for the person's own."""
+
+
 class WentQuiet(EventBase):
     """
     A mark from an earlier version of Verifold, which told the agents when the whole lab had gone quiet.
@@ -778,6 +810,8 @@ type Event = Annotated[
     | TimeRanOut
     | BudgetSet
     | LimitReached
+    | LimitsReported
+    | PaceSet
     | WentQuiet
     | SettingsSet
     | PermissionGranted

@@ -10,12 +10,14 @@ import acp
 import pytest
 from builders import START, until
 from conftest import ServedBoard, agent, serve_board
-from fakes import FAKE_HARNESS, FakeCopies
+from fakes import FAKE_COMMAND, FAKE_HARNESS, FAKE_METER, FakeCopies
 
+from verifold.harnesses.catalog import HarnessEntry
 from verifold.protocol.app import AgentState, Retry, WaitsFor
 from verifold.protocol.events import AlarmSet, TurnStarted, TurnSummary
 from verifold.protocol.ids import PERSON
 from verifold.protocol.join import MAX_NEWS, PostRequest
+from verifold.protocol.moves import CapMove, PauseMove
 from verifold.protocol.posts import Ask, FileEvidence, PermissionShown, QuestionShown
 from verifold.protocol.settings import (
     AtTimeLimit,
@@ -82,6 +84,8 @@ def loop_for(
     tmp_path: Path,
     activity: Activity | None = None,
     refusals: Refusals | None = None,
+    *,
+    harness: HarnessEntry = FAKE_HARNESS,
     **settings: float,
 ) -> AgentLoop:
     member, token = served.seat('bo')
@@ -91,7 +95,7 @@ def loop_for(
     folder.mkdir(parents=True, exist_ok=True)
     setup = AgentSetup(
         agent=joined.agent,
-        harness=FAKE_HARNESS,
+        harness=harness,
         lab=tmp_path,
         folder=folder,
         log=tmp_path / 'bo.log',
@@ -2332,3 +2336,67 @@ async def test_a_turn_of_the_desk_runs_on_when_the_lab_runs_out_of_time(
     assert lab.board.halted == 'time'
     assert [turn.error for turn in lab.board.turns if turn.agent == 'dee'] == [None]
     assert not calls(log, 'cancel')
+
+
+async def test_a_paused_seat_finishes_its_turn_and_only_a_post_of_the_person_starts_its_next(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab, activity = served.lab, Activity()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        await lab.set_pace(PauseMove(agent='bo'))
+        await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+        await until(lambda: activity.of('bo').waits_for == 'pace')
+        await asyncio.sleep(0.3)
+        assert len(calls(log, 'prompt')) == 1
+        assert activity.of('bo').detail.startswith('Paused by you.')
+
+        await lab.post(PostRequest(kind='message', text='Answer ada, please.', thread='t-1', mentions=('bo',)), PERSON)
+        await until(lambda: len(lab.board.turns) == 2)
+    finally:
+        running.cancel()
+
+
+async def test_a_seat_at_its_limit_of_tokens_per_hour_waits_for_the_next_hour_also_for_the_person(
+    served: ServedBoard, tmp_path: Path, log: Path
+) -> None:
+    lab, activity = served.lab, Activity()
+    running = asyncio.create_task(loop_for(served, tmp_path, activity).run())
+    try:
+        await until(lambda: len(lab.board.turns) == 1)
+        await lab.set_pace(CapMove(agent='bo', tokens_per_hour=10))
+        await lab.post(PostRequest(kind='message', text='Go on.', thread='t-1', mentions=('bo',)), PERSON)
+        await until(lambda: activity.of('bo').waits_for == 'pace')
+        await asyncio.sleep(0.3)
+        assert len(calls(log, 'prompt')) == 1
+        assert 'limit of 10 tokens this hour' in activity.of('bo').detail
+
+        pass_time(served, 3_600)
+        await lab.post(SIDE_NOTE, 'ada')
+        await until(lambda: len(lab.board.turns) == 2)
+    finally:
+        running.cancel()
+
+
+@pytest.mark.parametrize('harness', [FAKE_METER, FAKE_COMMAND], ids=['meta', 'command'])
+async def test_the_record_keeps_the_limits_that_the_harness_reports(
+    served: ServedBoard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, harness: HarnessEntry
+) -> None:
+    monkeypatch.setenv('FAKE_ACP_LIMITS', '62')
+    lab = served.lab
+    running = asyncio.create_task(loop_for(served, tmp_path, harness=harness).run())
+    try:
+        await until(lambda: len(lab.board.seat_limits) == 1)
+        await lab.post(PostRequest(kind='ask', text='Which layer?', thread='t-1', mentions=('bo',)), 'ada')
+        await until(lambda: len(lab.board.turns) == 2)
+        await asyncio.sleep(0.2)
+    finally:
+        running.cancel()
+
+    # The same limits again are no change, so the record keeps them once.
+    (kept,) = lab.board.seat_limits
+    assert (kept.agent, [(window.label, window.used_percent) for window in kept.limits.windows]) == (
+        'bo',
+        [('5-hour', 62)],
+    )

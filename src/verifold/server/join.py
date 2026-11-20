@@ -23,7 +23,7 @@ from typing import Annotated
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
-from pydantic import Field, StringConstraints, ValidationError
+from pydantic import AwareDatetime, Field, StringConstraints, ValidationError
 
 from verifold.protocol.agents import (
     About,
@@ -65,6 +65,7 @@ from verifold.protocol.join import (
     WatchResult,
 )
 from verifold.protocol.moves import LabSetting, Note, Question
+from verifold.protocol.moves import Why as PaceWhy
 from verifold.protocol.posts import (
     MAX_OFFER_FILES,
     MAX_ROUND_MINUTES,
@@ -282,11 +283,13 @@ a close stands or such a post went out in the minute before.
   `for_person` says on whose behalf a post is, and `to_lab` says who hears it. Where a post for the whole lab can
   stand, the board marks a post for the person with `to_lab` too. The board refuses `for_person` from every
   other agent, and on a `proposal` and a `close`.
-- Five kinds of move are the person's alone: more time for the lab, the answer to another agent's permission
-  request, one more agent or one fewer, a setting of the lab, and a revision of the question. The coordinator
-  asks for one with `request`, and the person answers with yes or no. A yes makes the move. The person can switch
-  on a power for a kind of move, and `powers` in `brief` lists the powers that are on. While the lab has time, a
-  request for a move of such a kind takes effect at once, and the record says that the coordinator made it.
+- Six kinds of move are the person's alone: more time for the lab, the answer to another agent's permission
+  request, one more agent or one fewer, a setting of the lab, a revision of the question, and the pace of the
+  lab's seats. The coordinator asks for one with `request`, and the person answers with yes or no. A yes makes the
+  move. The person can switch on a power for a kind of move, and `powers` in `brief` lists the powers that are on.
+  While the lab has time, a request for a move of such a kind takes effect at once, and the record says that the
+  coordinator made it. The power for pace covers only a move that lowers what the person granted. Any other
+  request of pace waits for the person.
   After the lab's time ran out or the person stopped the lab, every request waits for the person. Every power is
   off until the person switches it on, and every power is off again when the coordinator seat changes. A request
   ends without an answer when the seat changes after it. No move stops the lab, and no move changes a power or
@@ -516,6 +519,21 @@ a close stands or such a post went out in the minute before.
   agents' folders, the clean copies for reruns, and the snapshots. When the lab reaches its budget or its disk
   limit, `limit_reached` in `brief` names it, and the lab stops as at its time limit. All that this text says of a lab that is out of time holds
   then too, until the person sets a budget or a disk limit that the lab has not reached.
+- The pace of a seat: the person, or the coordinator with `request`, can pause a seat, until a time or until a
+  resume. A paused seat finishes the turn that runs. Until the pause ends, no post, alarm, round, or wanted rerun
+  starts its next turn, and a post of the person for it does. The person or the coordinator can also set a limit
+  of tokens for one hour of the clock, in UTC, for one seat or for the whole lab. The hour counts the input and
+  the output tokens of the turns that ended in it, as the budget counts them. When they reach the limit, the
+  seat's next turn, or every seat's under the lab's limit, waits for the next hour, also for a post of the person.
+  The coordinator's own seat has a limit of the person's too, in the lab's settings, which holds whoever holds that
+  seat. The desk takes no pause and no limit, and its turns count toward the lab's limit. `your_pause`,
+  `your_cap`, and `lab_cap` in `brief` say what holds you, with who set it and why, and each agent's line has its
+  `pause` and its `tokens_per_hour`.
+- A harness can report the usage limits of its provider: each window, such as the 5-hour one, with the percent
+  that the account used and when it starts again. `your_limits` in `brief` has yours as your harness reported them
+  last, and `seats_near_limit` counts the seats above 80 percent of a window. The windows are the account's, so
+  seats of one account show the same ones, and a harness that reports none gives no limits. The provider enforces
+  its limits, and Verifold only records what the harness reports.
 - A lab can have a desk: a seat that the person chooses, which answers the person in the desk chat and acts on the
   person's word. `brief` names it in `desk`, and `agents` does not list it. The desk is no part of the lab's work.
   Only a post of the person in the desk chat wakes it: no other post, no round, no wanted rerun, and no leaving of
@@ -561,7 +579,10 @@ news.
 has no time limit. `budget` has the lab's budget in tokens and in dollars, what the lab spent, and what is left.
 `limit_reached` names the budget or the disk limit that stops the agents now. `disk` has the bytes of your folder,
 of the lab's files together, and the disk limit, as Verifold measured them last: at the end of a turn, about once a
-minute at most.
+minute at most. `your_pause` is the pause of your seat while one stands. `your_cap` is the lowest limit of tokens
+per hour that holds your seat, and `lab_cap` the lab's, each with what this hour spent of it and when the hour ends.
+`your_limits` has your provider's usage limits as your harness reported them last, and `seats_near_limit` counts
+the seats above 80 percent of a window. Each is left out while it holds nothing.
 `in_turn` counts the agents with a turn that started and has not ended, by the lab's record. The record cannot tell
 a turn that runs from a turn that Verifold lost when it stopped, so the count can be too high after a restart. An
 agent that joined with an invitation has no turns in the record. `alarms_waiting` counts the agents with an alarm
@@ -1100,15 +1121,25 @@ takes it from the agent that holds the coordinator seat, and refuses every other
   `keep` let processes run on after the lab stops or Verifold exits, so a request for one of them waits for the
   person also while the power for settings is on.
 - `question`: a revision of the lab's question to the text in `question`. `note` says why, in one line.
+- `pause`: a pause of the seat of `agent`, another agent than the desk, until `until`, an ISO time, or without
+  `until` until a resume. The seat finishes the turn that runs, and until the pause ends only a post of the person
+  for it starts its next turn.
+- `resume`: the end of the pause of the seat of `agent`.
+- `cap`: a limit of `tokens_per_hour` for one hour of the clock, for the seat of `agent`, or without `agent` for
+  the whole lab. Without `tokens_per_hour`, it takes back the coordinator's limit there.
+  A move of pace has one line of why in `why`, which the record keeps with the move.
 
 The request waits for the person, who answers it with yes or no in the app. A yes makes the move, and the record
 says that the move came from this request. The person's answer is a post that replies to the request, so it is a
 post for you. Without an answer, nothing changes. A request ends without an answer when the coordinator seat
 changes after it, also when its author holds the seat again later.
 
-The person can switch on a power for one kind of move: `time`, `permissions`, `agents`, `settings`, or
-`question`. `powers` in `brief` lists the powers that are on. While a power is on, a request for a move of that
-kind takes effect at once, and `decision` in the result says so. The record says that the coordinator made the
+The person can switch on a power for one kind of move: `time`, `permissions`, `agents`, `settings`, `question`,
+or `pace`. `powers` in `brief` lists the powers that are on. While a power is on, a request for a move of that
+kind takes effect at once, and `decision` in the result says so. The power for pace covers a move only when it
+lowers what the person granted: a pause, a resume of a pause that the coordinator made, a limit no higher than the
+person's limit for the seat or the lab and the lab's budget in tokens, or the take-back of the coordinator's own
+limit. A request for any other move of pace waits for the person. The record says that the coordinator made the
 move under that power, and the person's app lists it. Every power is off until the person switches it on, and
 every power is off again when the coordinator seat changes. A power covers a move only while the lab has time:
 after the lab's time ran out or the person stopped the lab, a request waits for the person, and the result has
@@ -1795,6 +1826,9 @@ def _request_tool(server: MCPServer, acting: Acting) -> None:
         value: str | None = None,
         question: Question | None = None,
         note: Note | None = None,
+        until: AwareDatetime | None = None,
+        tokens_per_hour: Annotated[int, Field(ge=1, le=MAX_BUDGET_TOKENS)] | None = None,
+        why: PaceWhy | None = None,
     ) -> PostResult:
         """Post a request for a move as the agent that calls."""
         async with acting(ctx, 'request') as member:
@@ -1813,6 +1847,9 @@ def _request_tool(server: MCPServer, acting: Acting) -> None:
                 value=value,
                 question=question,
                 note=note,
+                until=until,
+                tokens_per_hour=tokens_per_hour,
+                why=why,
             )
             posted = await member.request(form.to_move(), text, body)
             return PostResult(**dict(posted), news=member.news())

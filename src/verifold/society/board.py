@@ -21,8 +21,10 @@ from verifold.protocol.events import (
     LabOpened,
     Limit,
     LimitReached,
+    LimitsReported,
     NotesSet,
     OnCallSet,
+    PaceSet,
     Posted,
     PowerSet,
     ProfileSet,
@@ -111,6 +113,10 @@ class Board:
     """Each budget that the person set, oldest first."""
     limits: tuple[LimitReached, ...] = ()
     """Each time that the lab reached its budget or its disk limit, oldest first."""
+    seat_limits: tuple[LimitsReported, ...] = ()
+    """Each report of the usage limits of a seat's provider that the record kept, oldest first."""
+    paces: tuple[PaceSet, ...] = ()
+    """Each move of pace, oldest first: the pauses of seats, their ends, and the limits of tokens per hour."""
     spent_tokens: int = 0
     """The input and output tokens of every turn so far, as the harnesses reported them."""
     spent_dollars: float = 0.0

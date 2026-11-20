@@ -31,6 +31,7 @@ from verifold.society.identity import post_line, seat_label, seat_marks
 from verifold.society.lifecycle import lab_state, minutes_left
 from verifold.society.lines import lines_of
 from verifold.society.obstacles import obstacles
+from verifold.society.pace import pause_line
 from verifold.society.reruns import reruns_wanted
 from verifold.society.standing import candidates, closing, standing
 from verifold.society.tested import rests_on
@@ -76,7 +77,7 @@ def overview(
         ends_at=board.ends_at,
         minutes_left=minutes_left(board, now),
         agents=tuple(
-            _seat_line(board, joined.agent.id, working)
+            _seat_line(board, joined.agent.id, working, now)
             for joined in board.agents
             if not joined.agent.checks and board.here(joined) and not board.is_desk(joined.agent.id)
         ),
@@ -129,7 +130,7 @@ def _bounded(line: DeliverableLine) -> DeliverableLine:
     return line.model_copy(update={'offers': offers, 'more_offers': len(line.offers) - len(offers)})
 
 
-def _seat_line(board: Board, agent_id: AgentId, working: dict[AgentId, ThreadId | None]) -> SeatLine:
+def _seat_line(board: Board, agent_id: AgentId, working: dict[AgentId, ThreadId | None], now: datetime) -> SeatLine:
     joined = board.agent(agent_id)
     agent = joined.agent if joined else None
     was = before(board, agent_id)
@@ -149,4 +150,5 @@ def _seat_line(board: Board, agent_id: AgentId, working: dict[AgentId, ThreadId 
         turn_ended_at=ended.at if ended and not was.cut_off else None,
         invited=bool(agent and agent.harness == GUEST),
         stopped=was.stopped,
+        pause=pause_line(board, agent_id, now),
     )

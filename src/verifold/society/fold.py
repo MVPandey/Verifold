@@ -20,8 +20,10 @@ from verifold.protocol.events import (
     Event,
     LabOpened,
     LimitReached,
+    LimitsReported,
     NotesSet,
     OnCallSet,
+    PaceSet,
     PermissionGranted,
     Posted,
     PowerSet,
@@ -59,6 +61,7 @@ from verifold.society.deliverables import (
 )
 from verifold.society.desk import check_desk_move, check_desk_post, check_desk_set, check_interrupt
 from verifold.society.errors import RejectedEvent
+from verifold.society.pace import check_limits, check_pace
 from verifold.society.rounds import check_close, check_rounds
 from verifold.society.rules import (
     check_agent,
@@ -202,6 +205,12 @@ def apply(board: Board, event: Event) -> Board:  # noqa: PLR0911, PLR0912, PLR09
         case LimitReached():
             check_limit(board, event)
             return replace(board, seq=event.seq, limits=(*board.limits, event))
+        case LimitsReported():
+            check_limits(board, event)
+            return replace(board, seq=event.seq, seat_limits=(*board.seat_limits, event))
+        case PaceSet():
+            check_pace(board, event)
+            return replace(board, seq=event.seq, paces=(*board.paces, event))
         case WentQuiet():
             # A mark from an earlier version. It changes nothing on the board.
             return replace(board, seq=event.seq)

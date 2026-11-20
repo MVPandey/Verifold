@@ -2,9 +2,10 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from verifold.harnesses.catalog import HarnessEntry
+from verifold.harnesses.catalog import CODEX_LIMITS, HarnessEntry
 from verifold.protocol.events import Posted
 from verifold.protocol.join import ManifestLine
+from verifold.protocol.usage import MetaLimits
 from verifold.server.errors import NoCleanCopy
 from verifold.server.member import MadeCopy
 
@@ -17,6 +18,18 @@ FAKE_HARNESS = HarnessEntry(
     auto_mode='auto',
 )
 """A harness whose ACP agent is `agents/fake_acp_agent.py`."""
+
+FAKE_METER = FAKE_HARNESS.model_copy(
+    update={
+        'limits': MetaLimits(
+            key='fake/limits', name='window', used='used', labels={'five_hour': '5-hour'}, status='', resets=''
+        )
+    }
+)
+"""The fake harness, with an entry that reads the limits that it reports in its usage updates under `FAKE_ACP_LIMITS`."""
+
+FAKE_COMMAND = FAKE_HARNESS.model_copy(update={'limits': CODEX_LIMITS.model_copy(update={'labels': {'5h': '5-hour'}})})
+"""The fake harness, with an entry that asks it for its limits with `/status`, as the Codex entry asks Codex."""
 
 
 @dataclass

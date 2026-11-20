@@ -17,6 +17,7 @@ from verifold.protocol.app import (
     HarnessOption,
     Invitation,
     InviteRequest,
+    LabView,
     NormsChange,
     NormsFile,
     NormsView,
@@ -33,7 +34,7 @@ from verifold.protocol.join import FileText, PostRequest
 from verifold.protocol.moves import AddSeat
 from verifold.protocol.posts import Ask, FileEvidence, Objection, PermissionShown, Result
 from verifold.protocol.settings import Settings
-from verifold.protocol.usage import DiskUse, Usage
+from verifold.protocol.usage import DiskUse, LimitWindow, SeatLimits, Usage
 from verifold.server import status as status_module
 from verifold.server.activity import Activity
 from verifold.server.app_api import _changes, _lab_view, app_api
@@ -242,6 +243,7 @@ async def test_settings_pass_through_and_refusals_say_why(client: httpx2.AsyncCl
         'reruns': {'lease_minutes': 10},
         'tasks': {'lease_minutes': 30},
         'disk': {'limit_gb': 100},
+        'pace': {'coordinator_tokens_per_hour': 10_000_000},
     }
     assert view['project']['path'] == '.verifold/settings.json'
     assert changed.status_code == 200
@@ -1313,3 +1315,65 @@ async def test_the_person_votes_gives_promising_seconds_and_declines_through_the
     assert [view['need'] for view in after['agents']] == [view['need'] for view in waiting['agents']]
     assert after['thread_needs'] == waiting['thread_needs']
     assert [item['post']['id'] for item in thread['posts']] == ['p-1', 'p-2', 'p-3']
+
+
+async def test_the_person_paces_the_lab_from_the_app(lab: Lab, activity: Activity) -> None:
+    led = lab
+    await led.set_coordinator('ada', 'person')
+    async with client_of(Host(led), activity) as client:
+        paused = (await client.post('/pace', json={'type': 'pause', 'agent': 'bo'})).json()
+        capped = (await client.post('/pace', json={'type': 'cap', 'agent': 'ada', 'tokens_per_hour': 2_000})).json()
+        whole = (await client.post('/pace', json={'type': 'cap', 'tokens_per_hour': 9_000})).json()
+        share = (await client.post('/pace/coordinator', json={'tokens_per_hour': 1_000})).json()
+        resumed = (await client.post('/pace', json={'type': 'resume', 'agent': 'bo'})).json()
+        again = await client.post('/pace', json={'type': 'resume', 'agent': 'bo'})
+        refused = await client.post('/pace/coordinator', json={'tokens_per_hour': -1})
+
+    seats = {view['agent']['id']: view for view in paused['agents']}
+    assert (seats['bo']['pause']['by'], seats['bo']['pause'].get('until')) == ('person', None)
+    ada = {view['agent']['id']: view for view in capped['agents']}['ada']
+    assert (ada['cap']['tokens_per_hour'], ada['cap'].get('share', False)) == (2_000, False)
+    assert whole['lab_cap']['tokens_per_hour'] == 9_000
+    after = {view['agent']['id']: view for view in share['agents']}['ada']
+    assert (share['settings']['pace']['coordinator_tokens_per_hour'], after['cap']['share']) == (1_000, True)
+    assert {view['agent']['id']: view for view in resumed['agents']}['bo']['pause'] is None
+    assert (again.status_code, refused.status_code) == (400, 422)
+
+
+async def test_the_lab_view_shows_a_seats_limits_without_a_window_that_started_again(
+    lab: Lab, activity: Activity
+) -> None:
+    led = lab
+    soon = LimitWindow(label='5-hour', used_percent=62, resets_at=led.now() + timedelta(seconds=30))
+    week = LimitWindow(label='weekly', used_percent=12, resets_at=led.now() + timedelta(days=3))
+    await led.report_limits('bo', SeatLimits(windows=(soon, week)))
+    async with client_of(Host(led), activity) as client:
+        first = (await client.get('/lab')).json()
+        for _ in range(40):
+            led.now()
+        later = (await client.get('/lab')).json()
+
+    def labels(view: object) -> list[str]:
+        bo = next(agent for agent in LabView.model_validate(view).agents if agent.agent.id == 'bo')
+        return [window.label for window in bo.limits.windows] if bo.limits else []
+
+    assert (labels(first), labels(later)) == (['5-hour', 'weekly'], ['weekly'])
+
+
+async def test_the_client_refuses_a_move_of_pace_for_the_desk(record_file: RecordFile, activity: Activity) -> None:
+    lab = Lab.create(record_file, 'Does it hold?')
+    await lab.join(agent('dee'), desk=True)
+    async with client_of(Host(lab), activity) as client:
+        refused = await client.post('/pace', json={'type': 'pause', 'agent': 'dee'})
+
+    assert refused.status_code == 400
+    assert "desk's seat" in refused.json()['detail']
+
+
+async def test_a_turn_through_httpx_never_needs_the_pace_routes_when_nothing_holds(
+    client: httpx2.AsyncClient,
+) -> None:
+    view = (await client.get('/lab')).json()
+
+    assert view['lab_cap'] is None
+    assert {agent['agent']['id']: agent['cap'] for agent in view['agents']} == {'ada': None, 'bo': None}

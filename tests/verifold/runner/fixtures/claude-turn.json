@@ -1,0 +1,56 @@
+{
+  "note": "The session updates of one turn of the Claude adapter 0.101.0 with its cheapest model, captured live, without account details. Claude Code sent no rate_limit_event in it.",
+  "updates": [
+    {
+      "availableCommands": [
+        {
+          "name": "compact",
+          "description": "Free up context by summarizing the conversation so far",
+          "input": {
+            "hint": "<optional custom summarization instructions>"
+          }
+        },
+        {
+          "name": "usage",
+          "description": "Show session cost, plan usage, and what's contributing to your limits"
+        }
+      ],
+      "sessionUpdate": "available_commands_update"
+    },
+    {
+      "title": "ok",
+      "sessionUpdate": "session_info_update"
+    },
+    {
+      "used": 30305,
+      "size": 1000000,
+      "_meta": {
+        "_claude/model": "claude-haiku-5-5"
+      },
+      "sessionUpdate": "usage_update"
+    },
+    {
+      "content": {
+        "text": "ok",
+        "type": "text"
+      },
+      "messageId": "msg-1",
+      "sessionUpdate": "agent_message_chunk"
+    },
+    {
+      "used": 30305,
+      "size": 1000000,
+      "cost": {
+        "amount": 0.00375036,
+        "currency": "USD"
+      },
+      "_meta": {
+        "_claude/origin": {
+          "kind": "human"
+        },
+        "_claude/model": "claude-haiku-5-5"
+      },
+      "sessionUpdate": "usage_update"
+    }
+  ]
+}
