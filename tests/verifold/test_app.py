@@ -989,6 +989,83 @@ async def test_the_app_shows_a_pinned_file_as_its_commit_holds_it_and_says_why_i
     assert (project / '.verifold' / 'snapshots.git' / 'config').is_file()
 
 
+async def test_an_agent_reports_a_measure_and_offers_the_dashboard_and_the_app_reads_the_page_and_the_headline(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await asyncio.to_thread(lab_of, project, 1)
+    page = '<!doctype html><title>Account</title><style>b{color:red}</style><b>382.24</b><script>1</script>'
+
+    async with serving(project) as client:
+        invited = (await client.post('/invitations', json={'name': 'Writer'})).json()
+        url, token, folder = invited_parts(invited['text'])
+        (folder / 'value.py').write_text('print(382.24)\n')
+        (folder / 'value.out').write_text('382.24\n')
+        (folder / 'board.html').write_text(page)
+        (folder / 'cdn.html').write_text('<script src="https://cdn.example/chart.js"></script>')
+        (folder / 'bytes.html').write_bytes(b'\xff\xfe')
+        async with board_of(url, token) as board:
+            await board.call_tool('post', {'kind': 'plan', 'text': 'I read the account.', 'new_thread': 'Account'})
+            measured = await board.call_tool(
+                'measure',
+                {
+                    'label': 'Account value',
+                    'value': '382.24',
+                    'unit': '$',
+                    'script': './value.py',
+                    'output': 'value.out',
+                    'thread': 't-1',
+                },
+            )
+            offered = await board.call_tool('dashboard', {'file': 'board.html', 'note': 'The account today.'})
+            outside = await board.call_tool('dashboard', {'file': 'cdn.html', 'note': 'With a chart.'})
+            binary = await board.call_tool('dashboard', {'file': 'bytes.html', 'note': 'Bytes.'})
+            with monkeypatch.context() as smaller:
+                smaller.setattr('verifold.app.MAX_PAGE_BYTES', 10)
+                large = await board.call_tool('dashboard', {'file': 'board.html', 'note': 'Too large.'})
+            # The agent goes on with the file. The app shows the version that the post pins.
+            (folder / 'board.html').write_text('<b>A later draft.</b>')
+            named = await client.post('/headline', json={'label': 'account value'})
+            shown = (await client.get('/dashboard')).json()
+            brief = await board.call_tool('brief', {})
+
+    assert measured.structured_content is not None
+    post = measured.structured_content['post']
+    assert (post['text'], post['script'], post['output'], post['value']) == (
+        'Account value: 382.24 $',
+        'value.py',
+        'value.out',
+        '382.24',
+    )
+    assert offered.structured_content is not None
+    assert offered.structured_content['post']['size'] == len(page)
+    assert outside.is_error
+    assert 'loads https://cdn.example/chart.js with `src` of `<script>`' in str(outside.content)
+    assert binary.is_error
+    assert 'no UTF-8 text' in str(binary.content)
+    assert large.is_error
+    assert 'The board takes a page of 10 bytes at most.' in str(large.content)
+    view = named.json()
+    assert (view['headline_number']['label'], view['headline_number']['named_by']) == ('account value', 'person')
+    assert view['headline_number']['measure']['value'] == '382.24'
+    assert view['measure_labels'] == ['Account value']
+    assert (view['dashboard']['by'], view['dashboard']['path'], view['dashboard']['versions']) == (
+        'agent-2',
+        'board.html',
+        1,
+    )
+    assert (shown['html'], shown['meta']['post']) == (page, offered.structured_content['post']['id'])
+    assert brief.structured_content is not None
+    assert brief.structured_content['headline_number']['measure']['post'] == post['id']
+    assert brief.structured_content['dashboard']['by'] == 'agent-2'
+    # The person's naming tells the lab in the question's thread.
+    told = [
+        event.post for event in record(project) if isinstance(event, Posted) and event.post.kind == 'headline_number'
+    ]
+    assert [(item.author, item.thread, item.text) for item in told] == [
+        ('person', 't-3', 'The person named "account value" as the lab\'s headline number.')
+    ]
+
+
 async def test_the_app_shows_a_file_that_a_post_pinned_before_verifold_kept_the_snapshots_and_one_from_after(
     project: Path,
 ) -> None:

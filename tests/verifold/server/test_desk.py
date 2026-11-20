@@ -95,7 +95,7 @@ async def test_the_desk_lists_its_own_tools_and_every_other_agent_lists_the_tool
         refused = await other.call_tool('set_time', {'on': 'p-1', 'minutes': 0})
 
     assert mine == DESK_TOOLS | DESK_READS
-    assert len(theirs) == 19
+    assert len(theirs) == 22
     assert not theirs & DESK_TOOLS
     assert refused.is_error
     assert "This tool is the desk's" in text_of(refused)
