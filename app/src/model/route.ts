@@ -3,6 +3,8 @@ export type Route =
   | { readonly page: 'lab' }
   /** The lab page with its Dashboard tab: the agents' page in a sealed frame. */
   | { readonly page: 'dashboard' }
+  /** The lab page on its Map tab: the branches of the question and their ideas. */
+  | { readonly page: 'map' }
   | { readonly page: 'needs' }
   | { readonly page: 'settings' }
   /** The lab's norms: the two files that the agents read, to read and to edit. */
@@ -16,6 +18,7 @@ export type Route =
 export function parseRoute(hash: string): Route {
   const path = hash.replace(/^#\/?/, '');
   if (path === 'needs') return { page: 'needs' };
+  if (path === 'map') return { page: 'map' };
   if (path === 'settings') return { page: 'settings' };
   if (path === 'norms') return { page: 'norms' };
   if (path === 'dashboard') return { page: 'dashboard' };
@@ -30,6 +33,8 @@ export function href(route: Route): string {
   switch (route.page) {
     case 'lab':
       return '#/';
+    case 'map':
+      return '#/map';
     case 'needs':
       return '#/needs';
     case 'settings':

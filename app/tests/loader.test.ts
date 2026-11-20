@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { ApiError, NO_CANDIDATES } from '../src/api/client.ts';
+import { ApiError, NO_CANDIDATES, NO_MAP } from '../src/api/client.ts';
 import type { Api } from '../src/api/client.ts';
 import type { CandidatesView, LabView } from '../src/api/types.ts';
 import { EMPTY, LOST, createLoader, inOrder, settled } from '../src/ui/loader.ts';
@@ -47,6 +47,7 @@ function slowServer(): {
     candidates: () => answer('candidates', NO_CANDIDATES),
     dashboard: () => answer('dashboard', null),
     nameHeadline: () => answer('nameHeadline', labView()),
+    map: () => answer('map', NO_MAP),
     conversation: () =>
       answer('conversation', {
         coordinator: null,
@@ -147,6 +148,7 @@ describe('the loader', () => {
       'candidates',
       'conversation',
       'desk',
+      'map',
       'lab',
     ]);
     assert.equal(state.data().lab?.question, 'stopped');
@@ -179,6 +181,7 @@ describe('the loader', () => {
       'candidates',
       'conversation',
       'desk',
+      'map',
     ]);
     assert.equal(loader.stale(), false);
     assert.equal(state.data().error, null);

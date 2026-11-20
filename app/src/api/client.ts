@@ -14,6 +14,7 @@ import type {
   Invitation,
   InviteRequest,
   LabView,
+  MapView,
   NormsName,
   NormsView,
   PaceMove,
@@ -35,6 +36,9 @@ import type {
 
 /** The candidates of a lab where no agent has proposed an answer. */
 export const NO_CANDIDATES: CandidatesView = { standing: [], gone: [], closes_on: null };
+
+/** The map of a lab whose reading has no branches. */
+export const NO_MAP: MapView = { branches: [], sealed: 0, left_out: 0 };
 
 /** The panel for the desk of a lab without a desk, and of a lab before it starts. */
 export const NO_DESK: DeskView = { desk: null, thread: null, actions: [] };
@@ -101,6 +105,8 @@ export interface Api {
   dashboard(): Promise<DashboardPage | null>;
   /** Name the label of the lab's headline number. An empty label takes it back. */
   nameHeadline(label: string): Promise<LabView>;
+  /** The map of the lab: the branches of the question, each with its counts and its ideas. */
+  map(): Promise<MapView>;
   /** The text of a file that backs a post. */
   file(postId: string, path: string): Promise<FileText>;
   /**
@@ -315,6 +321,12 @@ export function createApi(
     candidates: () =>
       request<CandidatesView>('/candidates').catch((failure: unknown) => {
         if (failure instanceof ApiError && failure.status === 404) return NO_CANDIDATES;
+        throw failure;
+      }),
+    // A server from before this route has none, and the page must still load.
+    map: () =>
+      request<MapView>('/map').catch((failure: unknown) => {
+        if (failure instanceof ApiError && failure.status === 404) return NO_MAP;
         throw failure;
       }),
     file: (postId, path) =>
